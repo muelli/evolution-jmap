@@ -182,6 +182,28 @@ fn handle_method(
         "ContactCard/get" => crate::contacts::contact_card_get(state, arguments),
         "ContactCard/set" => crate::contacts::contact_card_set(state, arguments),
         "ContactCard/query" => crate::contacts::contact_card_query(state, arguments),
+        "Mailbox/changes"
+        | "Email/changes"
+        | "AddressBook/changes"
+        | "ContactCard/changes"
+        | "Calendar/changes"
+        | "CalendarEvent/changes" => {
+            let request: jmap_proto::methods::ChangesRequest = parse_arguments(arguments)?;
+            let account = account_mut(state, &request.account_id)?;
+            let response = match name {
+                "Mailbox/changes" => crate::setops::store_changes(&account.mailboxes, request),
+                "Email/changes" => crate::setops::store_changes(&account.emails, request),
+                "AddressBook/changes" => {
+                    crate::setops::store_changes(&account.address_books, request)
+                }
+                "ContactCard/changes" => {
+                    crate::setops::store_changes(&account.contact_cards, request)
+                }
+                "Calendar/changes" => crate::setops::store_changes(&account.calendars, request),
+                _ => crate::setops::store_changes(&account.calendar_events, request),
+            }?;
+            to_result(&response)
+        }
         "Calendar/get" => crate::calendars::calendar_get(state, arguments),
         "CalendarEvent/get" => crate::calendars::calendar_event_get(state, arguments),
         "CalendarEvent/set" => crate::calendars::calendar_event_set(state, arguments),

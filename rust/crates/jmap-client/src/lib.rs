@@ -14,6 +14,7 @@
 //! [`CancelFlag`]: transport::CancelFlag
 
 mod calendars;
+mod changes;
 mod client;
 mod contacts;
 mod error;
