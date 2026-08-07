@@ -54,6 +54,11 @@ pub struct AccountState {
     pub name: String,
     pub mailboxes: Store<jmap_proto::mail::Mailbox>,
     pub emails: Store<jmap_proto::mail::Email>,
+    pub identities: Store<jmap_proto::mail::Identity>,
+    pub submissions: Store<jmap_proto::mail::EmailSubmission>,
+    /// Every accepted `EmailSubmission` — what a real server would hand to
+    /// its SMTP queue. Tests assert against this.
+    pub outbox: Vec<RecordedSubmission>,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
 }
@@ -64,6 +69,9 @@ impl AccountState {
             name: name.into(),
             mailboxes: Store::new("M"),
             emails: Store::new("E"),
+            identities: Store::new("I"),
+            submissions: Store::new("S"),
+            outbox: Vec::new(),
             blobs: BTreeMap::new(),
             next_blob_id: 1,
         }
@@ -92,6 +100,14 @@ impl AccountState {
 pub struct Blob {
     pub content_type: String,
     pub data: Vec<u8>,
+}
+
+/// A submission the mock accepted for "delivery".
+pub struct RecordedSubmission {
+    pub id: Id,
+    pub email_id: Id,
+    pub identity_id: Id,
+    pub envelope: jmap_proto::mail::Envelope,
 }
 
 /// What happened to an object, for the changes log.

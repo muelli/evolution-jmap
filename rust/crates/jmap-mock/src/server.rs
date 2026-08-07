@@ -175,6 +175,53 @@ fn handle_request(
             drop(state);
             respond_json(request, status, &response);
         }
+        (tiny_http::Method::Post, _) if path.starts_with("/upload/") => {
+            // /upload/{accountId} (RFC 8620 §6.1)
+            let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            let ["upload", account_id] = segments.as_slice() else {
+                respond_json(
+                    request,
+                    404,
+                    &json!({"status": 404, "detail": "bad upload path"}),
+                );
+                return;
+            };
+            let account_id = jmap_proto::Id::new(*account_id);
+            let content_type = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("Content-Type"))
+                .map(|header| header.value.as_str().to_owned())
+                .unwrap_or_else(|| "application/octet-stream".to_owned());
+            let mut data = Vec::new();
+            if request.as_reader().read_to_end(&mut data).is_err() {
+                respond_json(request, 400, &json!({"detail": "unreadable body"}));
+                return;
+            }
+            let mut state = state.lock().expect("mock state lock");
+            let Some(account) = state.account_mut(&account_id) else {
+                drop(state);
+                respond_json(
+                    request,
+                    404,
+                    &json!({"status": 404, "detail": "no such account"}),
+                );
+                return;
+            };
+            let size = data.len() as u64;
+            let blob_id = account.add_blob(content_type.clone(), data);
+            drop(state);
+            respond_json(
+                request,
+                201,
+                &json!({
+                    "accountId": account_id,
+                    "blobId": blob_id,
+                    "type": content_type,
+                    "size": size,
+                }),
+            );
+        }
         (tiny_http::Method::Get, _) if path.starts_with("/download/") => {
             // /download/{accountId}/{blobId}/{name}
             let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();

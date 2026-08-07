@@ -26,14 +26,21 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
     };
 
     let mut responses: Vec<Invocation> = Vec::new();
+    // Creation-id → real id across the whole request, so later /set calls
+    // can reference earlier creations as `#creationId` (RFC 8620 §5.3).
+    let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
+        std::collections::BTreeMap::new();
     for call in &request.method_calls {
         let invocation = match resolve_references(call, &responses) {
-            Ok(arguments) => match handle_method(state, &call.name, arguments) {
-                Ok(result) => Invocation {
-                    name: call.name.clone(),
-                    arguments: result,
-                    call_id: call.call_id.clone(),
-                },
+            Ok(arguments) => match handle_method(state, &call.name, arguments, &created_ids) {
+                Ok(result) => {
+                    record_created_ids(&call.name, &result, &mut created_ids);
+                    Invocation {
+                        name: call.name.clone(),
+                        arguments: result,
+                        call_id: call.call_id.clone(),
+                    }
+                }
                 Err(method_error) => error_invocation(method_error, &call.call_id),
             },
             Err(method_error) => error_invocation(method_error, &call.call_id),
@@ -139,17 +146,40 @@ fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     walk(&tokens, value)
 }
 
+/// Collect `{creationId: {id: ...}}` pairs from a successful `/set` result.
+fn record_created_ids(
+    name: &str,
+    result: &Value,
+    created_ids: &mut std::collections::BTreeMap<String, jmap_proto::Id>,
+) {
+    if !name.ends_with("/set") {
+        return;
+    }
+    let Some(created) = result.get("created").and_then(Value::as_object) else {
+        return;
+    };
+    for (creation_id, object) in created {
+        if let Some(id) = object.get("id").and_then(Value::as_str) {
+            created_ids.insert(creation_id.clone(), jmap_proto::Id::new(id));
+        }
+    }
+}
+
 /// The method registry. Domain modules add their arms as milestones land.
 fn handle_method(
     state: &mut ServerState,
     name: &str,
     arguments: Value,
+    created_ids: &std::collections::BTreeMap<String, jmap_proto::Id>,
 ) -> Result<Value, MethodError> {
     match name {
         "Core/echo" => Ok(arguments),
         "Mailbox/get" => crate::mail::mailbox_get(state, arguments),
         "Email/get" => crate::mail::email_get(state, arguments),
         "Email/query" => crate::mail::email_query(state, arguments),
+        "Email/set" => crate::mail::email_set(state, arguments),
+        "Identity/get" => crate::mail::identity_get(state, arguments),
+        "EmailSubmission/set" => crate::mail::email_submission_set(state, arguments, created_ids),
         _ => Err(MethodError::new(error::method::UNKNOWN_METHOD)),
     }
 }

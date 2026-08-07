@@ -265,6 +265,20 @@ pub struct EmailSubmission {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// `EmailSubmission/set` arguments: the standard `/set` shape plus the
+/// `onSuccess*` extensions (RFC 8621 §7.5). Keys of `onSuccessUpdateEmail`
+/// are submission ids or `#`-prefixed creation ids from the same call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailSubmissionSetRequest {
+    #[serde(flatten)]
+    pub set: crate::methods::SetRequest<EmailSubmission>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_update_email: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_destroy_email: Option<Vec<String>>,
+}
+
 /// SMTP envelope (RFC 8621 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

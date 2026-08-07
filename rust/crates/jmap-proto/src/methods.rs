@@ -66,6 +66,7 @@ pub struct GetResponse<T> {
 /// new values — so they stay untyped here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::Deserialize<'de>"))]
 pub struct SetRequest<T> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,6 +118,7 @@ impl<T> SetRequest<T> {
 /// `Foo/set` response (RFC 8620 §5.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::Deserialize<'de>"))]
 pub struct SetResponse<T> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,6 +142,7 @@ pub struct SetResponse<T> {
 /// `Foo/query` arguments (RFC 8620 §5.5), minus anchors (unused so far).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(serialize = "F: Serialize", deserialize = "F: serde::Deserialize<'de>"))]
 pub struct QueryRequest<F> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,6 +245,17 @@ pub struct ChangesRequest {
     pub since_state: State,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_changes: Option<u64>,
+}
+
+/// Response of a binary upload (RFC 8620 §6.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadResponse {
+    pub account_id: Id,
+    pub blob_id: Id,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    pub size: u64,
 }
 
 /// `Foo/changes` response (RFC 8620 §5.2).

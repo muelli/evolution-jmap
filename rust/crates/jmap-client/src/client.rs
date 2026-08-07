@@ -231,14 +231,24 @@ impl Client {
         url: &str,
         body: Option<&[u8]>,
     ) -> Result<HttpResponse, Error> {
+        self.execute_with_content_type(method, url, body, body.map(|_| "application/json"))
+    }
+
+    pub(crate) fn execute_with_content_type(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        body: Option<&[u8]>,
+        content_type: Option<&str>,
+    ) -> Result<HttpResponse, Error> {
         if self.cancel.as_ref().is_some_and(CancelFlag::is_cancelled) {
             return Err(Error::Cancelled);
         }
 
         let mut headers: Vec<(String, String)> =
             vec![("Accept".to_owned(), "application/json".to_owned())];
-        if body.is_some() {
-            headers.push(("Content-Type".to_owned(), "application/json".to_owned()));
+        if let Some(content_type) = content_type {
+            headers.push(("Content-Type".to_owned(), content_type.to_owned()));
         }
         if let Some(authorization) = &self.authorization {
             headers.push(("Authorization".to_owned(), authorization.clone()));

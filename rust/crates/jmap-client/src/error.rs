@@ -3,7 +3,7 @@
 
 //! Client error type.
 
-use jmap_proto::error::{MethodError, RequestError};
+use jmap_proto::error::{MethodError, RequestError, SetError};
 
 #[derive(Debug)]
 pub enum Error {
@@ -17,6 +17,8 @@ pub enum Error {
     },
     /// A method-level `error` response (RFC 8620 §3.6.2).
     Method(MethodError),
+    /// A per-record `/set` failure (RFC 8620 §5.3), e.g. a rejected create.
+    Set(SetError),
     /// Response could not be (de)serialized.
     Json(serde_json::Error),
     /// Structurally valid JSON that violates the protocol (e.g. missing
@@ -42,6 +44,12 @@ impl std::fmt::Display for Error {
             Error::Method(error) => write!(
                 f,
                 "method error: {} ({})",
+                error.error_type,
+                error.description.as_deref().unwrap_or("no description")
+            ),
+            Error::Set(error) => write!(
+                f,
+                "set error: {} ({})",
                 error.error_type,
                 error.description.as_deref().unwrap_or("no description")
             ),

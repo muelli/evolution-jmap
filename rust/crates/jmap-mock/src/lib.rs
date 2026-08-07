@@ -15,9 +15,10 @@
 mod auth;
 mod dispatch;
 mod mail;
+mod patch;
 mod server;
 mod state;
 
 pub use mail::EmailSeed;
 pub use server::{DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME, MockServer, MockServerBuilder};
-pub use state::{AccountState, Blob, Change, ChangeKind, ServerState, Store};
+pub use state::{AccountState, Blob, Change, ChangeKind, RecordedSubmission, ServerState, Store};
