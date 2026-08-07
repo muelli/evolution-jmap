@@ -1,14 +1,38 @@
-[package]
-name = "example-module"
-version = "0.0.1"
-edition = "2021"
-license = "LGPL-2.1-or-later"
-description = "GNOME Evolution plugin template written in Rust"
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
 
-# Build a C-compatible shared library (.so) that Evolution loads as a plugin.
-[lib]
-name = "example_module"
-crate-type = ["cdylib"]
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# example-module needs Evolution development headers (pkg-config probe in its
+# build.rs); keep it out of the default set so `cargo test` works on machines
+# without them. CI builds `--workspace`.
+default-members = [
+    "crates/jmap-proto",
+    "crates/jmap-client",
+    "crates/jmap-mock",
+]
 
-[build-dependencies]
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.97"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "3"
+base64 = "0.22"
+tiny_http = "0.12"
 pkg-config = "0.3"
+
+evolution-jmap-proto = { path = "crates/jmap-proto" }
+evolution-jmap-client = { path = "crates/jmap-client" }
+evolution-jmap-mock = { path = "crates/jmap-mock" }
+
+# Reproducibility: deterministic codegen, no incremental state, no debug paths.
+[profile.release]
+codegen-units = 1
+strip = "debuginfo"
+incremental = false

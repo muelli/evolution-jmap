@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-proto"
+description = "JMAP protocol types: RFC 8620 core, RFC 8621 mail, RFC 9610 contacts, JMAP Calendars draft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_proto"
+
+[features]
+default = ["mail", "contacts", "calendars"]
+mail = []
+contacts = []
+calendars = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

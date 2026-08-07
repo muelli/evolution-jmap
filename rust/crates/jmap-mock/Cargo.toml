@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-mock"
+description = "Stateful in-memory mock JMAP server for testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_mock"
+
+[[bin]]
+name = "jmap-mockd"
+path = "src/bin/jmap-mockd.rs"
+
+[dependencies]
+evolution-jmap-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tiny_http = { workspace = true }
+base64 = { workspace = true }

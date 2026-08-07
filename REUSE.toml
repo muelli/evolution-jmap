@@ -1,0 +1,32 @@
+version = 1
+SPDX-PackageName = "evolution-jmap"
+SPDX-PackageDownloadLocation = "https://github.com/muelli/evolution-jmap"
+
+# The C example module and its CMake plumbing come from the GNOME Evolution
+# wiki (example-module.zip) and are Red Hat copyright, LGPL. The Rust crate in
+# rust/crates/example-module is a port of those files and stays under the same
+# license. Files are annotated here instead of editing third-party sources.
+[[annotations]]
+path = [
+    "src/**",
+    "CMakeLists.txt",
+    "cmake_uninstall.cmake.in",
+    "rust/crates/example-module/**",
+]
+precedence = "override"
+SPDX-FileCopyrightText = [
+    "2016 Red Hat, Inc. (www.redhat.com)",
+    "2026 Tobias Mueller <muelli@cryptobitch.de>",
+]
+SPDX-License-Identifier = "LGPL-2.1-or-later"
+
+# Machine-generated or trivial files that cannot carry comment headers.
+[[annotations]]
+path = [
+    "rust/Cargo.lock",
+    ".gitignore",
+    "rust/crates/*/tests/fixtures/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Tobias Mueller <muelli@cryptobitch.de>"
+SPDX-License-Identifier = "GPL-3.0-or-later"

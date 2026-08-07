@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Exact toolchain pin for reproducible builds. rustup installs this
+# automatically on the first cargo invocation inside rust/.
+
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
