@@ -42,16 +42,16 @@ pub type GObject = c_void;
 pub type GError = c_void;
 
 // Evolution opaque handles
-pub type EExtensible  = c_void;
-pub type EShellView   = c_void;
+pub type EExtensible = c_void;
+pub type EShellView = c_void;
 pub type EShellWindow = c_void;
 pub type EMsgComposer = c_void;
-pub type EHTMLEditor  = c_void;
+pub type EHTMLEditor = c_void;
 
 // GTK 3 opaque handles
-pub type GtkUIManager  = c_void;
+pub type GtkUIManager = c_void;
 pub type GtkActionGroup = c_void;
-pub type GtkAction      = c_void;
+pub type GtkAction = c_void;
 
 // ── GTypeClass / GTypeInstance ────────────────────────────────────────────────
 
@@ -75,26 +75,25 @@ pub struct GTypeInstance {
 
 #[repr(C)]
 pub struct GObjectClass {
-    pub g_type_class: GTypeClass,           // 8
-    pub construct_properties: *mut c_void,  // 8
-    pub constructor:
-        Option<unsafe extern "C" fn(GType, c_uint, *mut c_void) -> *mut GObject>, // 8
+    pub g_type_class: GTypeClass,          // 8
+    pub construct_properties: *mut c_void, // 8
+    pub constructor: Option<unsafe extern "C" fn(GType, c_uint, *mut c_void) -> *mut GObject>, // 8
     pub set_property:
         Option<unsafe extern "C" fn(*mut GObject, c_uint, *const c_void, *const c_void)>, // 8
     pub get_property:
-        Option<unsafe extern "C" fn(*mut GObject, c_uint, *mut c_void, *const c_void)>,   // 8
-    pub dispose:   Option<unsafe extern "C" fn(*mut GObject)>, // 8
-    pub finalize:  Option<unsafe extern "C" fn(*mut GObject)>, // 8
+        Option<unsafe extern "C" fn(*mut GObject, c_uint, *mut c_void, *const c_void)>, // 8
+    pub dispose: Option<unsafe extern "C" fn(*mut GObject)>, // 8
+    pub finalize: Option<unsafe extern "C" fn(*mut GObject)>, // 8
     pub dispatch_properties_changed:
         Option<unsafe extern "C" fn(*mut GObject, c_uint, *mut *mut c_void)>, // 8
-    pub notify:    Option<unsafe extern "C" fn(*mut GObject, *mut c_void)>,  // 8
-    pub constructed: Option<unsafe extern "C" fn(*mut GObject)>,             // 8
-    pub flags:     usize,                   // 8
-    pub n_construct_properties: usize,      // 8
-    pub pspecs:    *mut c_void,             // 8
-    pub n_pspecs:  usize,                   // 8
-    pub pdummy:    [*mut c_void; 3],        // 24
-    // total: 136
+    pub notify: Option<unsafe extern "C" fn(*mut GObject, *mut c_void)>, // 8
+    pub constructed: Option<unsafe extern "C" fn(*mut GObject)>, // 8
+    pub flags: usize,                      // 8
+    pub n_construct_properties: usize,     // 8
+    pub pspecs: *mut c_void,               // 8
+    pub n_pspecs: usize,                   // 8
+    pub pdummy: [*mut c_void; 3],          // 24
+                                           // total: 136
 }
 
 // ── EExtensionClass layout ────────────────────────────────────────────────────
@@ -109,9 +108,9 @@ pub struct GObjectClass {
 
 #[repr(C)]
 pub struct EExtensionClass {
-    pub parent_class:    GObjectClass,   // 136
-    pub extensible_type: GType,          //   8
-    pub _reserved:       [*mut c_void; 16], // 128
+    pub parent_class: GObjectClass,   // 136
+    pub extensible_type: GType,       //   8
+    pub _reserved: [*mut c_void; 16], // 128
 }
 
 // Safety: this struct is only written once during class initialisation (single-
@@ -125,16 +124,16 @@ unsafe impl Send for EExtensionClass {}
 
 #[repr(C)]
 pub struct GTypeInfo {
-    pub class_size:     u16,
-    pub base_init:      Option<unsafe extern "C" fn(*mut c_void)>,
-    pub base_finalize:  Option<unsafe extern "C" fn(*mut c_void)>,
-    pub class_init:     Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
+    pub class_size: u16,
+    pub base_init: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub base_finalize: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub class_init: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
     pub class_finalize: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
-    pub class_data:     *const c_void,
-    pub instance_size:  u16,
-    pub n_preallocs:    u16,
-    pub instance_init:  Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
-    pub value_table:    *const c_void,
+    pub class_data: *const c_void,
+    pub instance_size: u16,
+    pub n_preallocs: u16,
+    pub instance_init: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
+    pub value_table: *const c_void,
 }
 
 // Safety: GTypeInfo only contains function pointers and a *const to static
@@ -147,9 +146,9 @@ unsafe impl Sync for GTypeInfo {}
 
 #[repr(C)]
 pub struct GTypeQuery {
-    pub type_:         GType,
-    pub type_name:     *const c_char,
-    pub class_size:    c_uint,
+    pub type_: GType,
+    pub type_name: *const c_char,
+    pub class_size: c_uint,
     pub instance_size: c_uint,
 }
 
@@ -159,12 +158,12 @@ pub struct GTypeQuery {
 
 #[repr(C)]
 pub struct GtkActionEntry {
-    pub name:        *const c_char,
-    pub stock_id:    *const c_char,
-    pub label:       *const c_char,
+    pub name: *const c_char,
+    pub stock_id: *const c_char,
+    pub label: *const c_char,
     pub accelerator: *const c_char,
-    pub tooltip:     *const c_char,
-    pub callback:    Option<unsafe extern "C" fn(*mut GtkAction, *mut c_void)>,
+    pub tooltip: *const c_char,
+    pub callback: Option<unsafe extern "C" fn(*mut GtkAction, *mut c_void)>,
 }
 
 // Safety: all fields are either null or point to 'static string literals /
@@ -208,10 +207,7 @@ extern "C" {
     );
 
     /// Retrieve data previously attached with `g_object_set_data_full`.
-    pub fn g_object_get_data(
-        object: *mut GObject,
-        key: *const c_char,
-    ) -> *mut c_void;
+    pub fn g_object_get_data(object: *mut GObject, key: *const c_char) -> *mut c_void;
 
     /// Connect a callback to a GObject signal.
     pub fn g_signal_connect_data(

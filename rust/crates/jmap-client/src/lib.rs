@@ -7,9 +7,16 @@
 //! (`/.well-known/jmap`), method batching against the API endpoint, and blob
 //! upload/download. HTTP is abstracted behind the [`Transport`] trait so the
 //! default `ureq` implementation can later be replaced by a libsoup-backed
-//! one inside Evolution Data Server processes; the cancellation hook maps to
-//! `GCancellable` there.
+//! one inside Evolution Data Server processes; [`CancelFlag`] is the seam
+//! that will map to `GCancellable`.
 //!
 //! [`Transport`]: transport::Transport
+//! [`CancelFlag`]: transport::CancelFlag
 
-pub mod transport {}
+mod client;
+mod error;
+pub mod transport;
+
+pub use client::{Client, ClientBuilder, Credentials};
+pub use error::Error;
+pub use transport::CancelFlag;

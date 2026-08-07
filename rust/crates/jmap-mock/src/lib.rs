@@ -11,3 +11,11 @@
 //!
 //! Not a real server: single-threaded per connection via `tiny_http`,
 //! plaintext HTTP on `127.0.0.1`, everything held in memory.
+
+mod auth;
+mod dispatch;
+mod server;
+mod state;
+
+pub use server::{DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME, MockServer, MockServerBuilder};
+pub use state::{AccountState, Change, ChangeKind, ServerState, Store};

@@ -24,10 +24,7 @@ pub struct Response {
 impl Response {
     /// All responses belonging to the method call with the given call id (a
     /// single call may produce several responses).
-    pub fn responses_for<'a>(
-        &'a self,
-        call_id: &'a str,
-    ) -> impl Iterator<Item = &'a Invocation> {
+    pub fn responses_for<'a>(&'a self, call_id: &'a str) -> impl Iterator<Item = &'a Invocation> {
         self.method_responses
             .iter()
             .filter(move |invocation| invocation.call_id == call_id)

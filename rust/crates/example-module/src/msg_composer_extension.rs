@@ -40,10 +40,7 @@ const GETTEXT_PACKAGE: &[u8] = b"example-module\0";
 // ── Action callback ───────────────────────────────────────────────────────────
 
 /// Called when the user triggers "My Message Composer Action".
-unsafe extern "C" fn action_msg_composer_cb(
-    _action: *mut ffi::GtkAction,
-    extension: *mut c_void,
-) {
+unsafe extern "C" fn action_msg_composer_cb(_action: *mut ffi::GtkAction, extension: *mut c_void) {
     // Retrieve the composer window this extension is attached to.
     let composer = ffi::e_extension_get_extensible(extension) as *mut c_void;
     let title_ptr = ffi::gtk_window_get_title(composer);
@@ -63,24 +60,19 @@ unsafe extern "C" fn action_msg_composer_cb(
 // ── UI setup helper ───────────────────────────────────────────────────────────
 
 /// Add the plugin's actions and UI definition to `composer`.
-unsafe fn add_composer_ui(
-    extension: *mut ffi::GObject,
-    composer: *mut ffi::EMsgComposer,
-) {
-    let html_editor  = ffi::e_msg_composer_get_editor(composer);
-    let ui_manager   = ffi::e_html_editor_get_ui_manager(html_editor);
-    let action_group = ffi::e_html_editor_get_action_group(
-        html_editor,
-        b"core\0".as_ptr() as *const c_char,
-    );
+unsafe fn add_composer_ui(extension: *mut ffi::GObject, composer: *mut ffi::EMsgComposer) {
+    let html_editor = ffi::e_msg_composer_get_editor(composer);
+    let ui_manager = ffi::e_html_editor_get_ui_manager(html_editor);
+    let action_group =
+        ffi::e_html_editor_get_action_group(html_editor, b"core\0".as_ptr() as *const c_char);
 
     let entries: [ffi::GtkActionEntry; 1] = [ffi::GtkActionEntry {
-        name:        b"my-msg-composer-action\0".as_ptr() as *const c_char,
-        stock_id:    b"document-new\0".as_ptr() as *const c_char,
-        label:       b"M_y Message Composer Action...\0".as_ptr() as *const c_char,
+        name: b"my-msg-composer-action\0".as_ptr() as *const c_char,
+        stock_id: b"document-new\0".as_ptr() as *const c_char,
+        label: b"M_y Message Composer Action...\0".as_ptr() as *const c_char,
         accelerator: std::ptr::null(),
-        tooltip:     b"My Message Composer Action\0".as_ptr() as *const c_char,
-        callback:    Some(action_msg_composer_cb),
+        tooltip: b"My Message Composer Action\0".as_ptr() as *const c_char,
+        callback: Some(action_msg_composer_cb),
     }];
 
     ffi::e_action_group_add_actions_localized(
@@ -156,16 +148,16 @@ pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     let query = query.assume_init();
 
     let type_info = ffi::GTypeInfo {
-        class_size:     query.class_size as u16,
-        base_init:      None,
-        base_finalize:  None,
-        class_init:     Some(class_init),
+        class_size: query.class_size as u16,
+        base_init: None,
+        base_finalize: None,
+        class_init: Some(class_init),
         class_finalize: Some(class_finalize),
-        class_data:     std::ptr::null(),
-        instance_size:  query.instance_size as u16,
-        n_preallocs:    0,
-        instance_init:  Some(instance_init),
-        value_table:    std::ptr::null(),
+        class_data: std::ptr::null(),
+        instance_size: query.instance_size as u16,
+        n_preallocs: 0,
+        instance_init: Some(instance_init),
+        value_table: std::ptr::null(),
     };
 
     let type_id = ffi::g_type_module_register_type(

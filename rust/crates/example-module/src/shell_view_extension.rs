@@ -94,10 +94,7 @@ const GETTEXT_PACKAGE: &[u8] = b"example-module\0";
 // ── Action callbacks ──────────────────────────────────────────────────────────
 
 /// Triggered by the mail folder context-menu action.
-unsafe extern "C" fn action_mail_folder_cb(
-    _action: *mut ffi::GtkAction,
-    _shell_view: *mut c_void,
-) {
+unsafe extern "C" fn action_mail_folder_cb(_action: *mut ffi::GtkAction, _shell_view: *mut c_void) {
     eprintln!("action_mail_folder_cb: My Maildir Folder Action executed");
 }
 
@@ -147,27 +144,25 @@ unsafe fn init_view_ui(
 
     if ffi::g_type_is_a(view_gtype, ffi::e_mail_shell_view_get_type()) != 0 {
         // ── Mail view ─────────────────────────────────────────────────────────
-        let action_group = ffi::e_shell_window_get_action_group(
-            shell_window,
-            b"mail\0".as_ptr() as *const c_char,
-        );
+        let action_group =
+            ffi::e_shell_window_get_action_group(shell_window, b"mail\0".as_ptr() as *const c_char);
 
         let entries: [ffi::GtkActionEntry; 2] = [
             ffi::GtkActionEntry {
-                name:        b"my-mail-ui-folder-action\0".as_ptr() as *const c_char,
-                stock_id:    b"folder-new\0".as_ptr() as *const c_char,
-                label:       b"M_y Maildir Folder Action...\0".as_ptr() as *const c_char,
+                name: b"my-mail-ui-folder-action\0".as_ptr() as *const c_char,
+                stock_id: b"folder-new\0".as_ptr() as *const c_char,
+                label: b"M_y Maildir Folder Action...\0".as_ptr() as *const c_char,
                 accelerator: std::ptr::null(),
-                tooltip:     b"My Maildir Folder Action\0".as_ptr() as *const c_char,
-                callback:    Some(action_mail_folder_cb),
+                tooltip: b"My Maildir Folder Action\0".as_ptr() as *const c_char,
+                callback: Some(action_mail_folder_cb),
             },
             ffi::GtkActionEntry {
-                name:        b"my-mail-ui-message-action\0".as_ptr() as *const c_char,
-                stock_id:    b"document-new\0".as_ptr() as *const c_char,
-                label:       b"M_y Message Action...\0".as_ptr() as *const c_char,
+                name: b"my-mail-ui-message-action\0".as_ptr() as *const c_char,
+                stock_id: b"document-new\0".as_ptr() as *const c_char,
+                label: b"M_y Message Action...\0".as_ptr() as *const c_char,
                 accelerator: std::ptr::null(),
-                tooltip:     b"My Message Action\0".as_ptr() as *const c_char,
-                callback:    Some(action_mail_message_cb),
+                tooltip: b"My Message Action\0".as_ptr() as *const c_char,
+                callback: Some(action_mail_message_cb),
             },
         ];
 
@@ -189,20 +184,20 @@ unsafe fn init_view_ui(
 
         let entries: [ffi::GtkActionEntry; 2] = [
             ffi::GtkActionEntry {
-                name:        b"my-calendar-ui-event-action\0".as_ptr() as *const c_char,
-                stock_id:    b"folder-new\0".as_ptr() as *const c_char,
-                label:       b"M_y Event Action...\0".as_ptr() as *const c_char,
+                name: b"my-calendar-ui-event-action\0".as_ptr() as *const c_char,
+                stock_id: b"folder-new\0".as_ptr() as *const c_char,
+                label: b"M_y Event Action...\0".as_ptr() as *const c_char,
                 accelerator: std::ptr::null(),
-                tooltip:     b"My Event Action\0".as_ptr() as *const c_char,
-                callback:    Some(action_calendar_event_cb),
+                tooltip: b"My Event Action\0".as_ptr() as *const c_char,
+                callback: Some(action_calendar_event_cb),
             },
             ffi::GtkActionEntry {
-                name:        b"my-calendar-ui-action\0".as_ptr() as *const c_char,
-                stock_id:    b"document-new\0".as_ptr() as *const c_char,
-                label:       b"M_y Calendar Action...\0".as_ptr() as *const c_char,
+                name: b"my-calendar-ui-action\0".as_ptr() as *const c_char,
+                stock_id: b"document-new\0".as_ptr() as *const c_char,
+                label: b"M_y Calendar Action...\0".as_ptr() as *const c_char,
                 accelerator: std::ptr::null(),
-                tooltip:     b"My Calendar Action\0".as_ptr() as *const c_char,
-                callback:    Some(action_calendar_menu_cb),
+                tooltip: b"My Calendar Action\0".as_ptr() as *const c_char,
+                callback: Some(action_calendar_menu_cb),
             },
         ];
 
@@ -232,8 +227,8 @@ unsafe extern "C" fn shell_view_toggled_cb(
     extension: *mut ffi::GObject,
 ) {
     let shell_window = ffi::e_shell_view_get_shell_window(shell_view);
-    let ui_manager   = ffi::e_shell_window_get_ui_manager(shell_window);
-    let priv_        = get_private(extension);
+    let ui_manager = ffi::e_shell_window_get_ui_manager(shell_window);
+    let priv_ = get_private(extension);
 
     // Remove any UI we merged during a previous activation.
     let need_update = priv_.current_ui_id != 0;
@@ -252,7 +247,7 @@ unsafe extern "C" fn shell_view_toggled_cb(
 
     // On first activation: detect view type and register GtkActions.
     if !priv_.actions_initialized {
-        priv_.view_ui_def         = init_view_ui(shell_view, shell_window);
+        priv_.view_ui_def = init_view_ui(shell_view, shell_window);
         priv_.actions_initialized = true;
     }
 
@@ -290,8 +285,7 @@ unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     // Connect the "toggled" signal of the EShellView we are extending.
     let extensible = ffi::e_extension_get_extensible(object as *mut c_void);
     // `GCallback` is `void (*)(void)` — transmute the concrete type to it.
-    let cb: unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject) =
-        shell_view_toggled_cb;
+    let cb: unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject) = shell_view_toggled_cb;
     ffi::g_signal_connect_data(
         extensible as *mut c_void,
         b"toggled\0".as_ptr() as *const c_char,
@@ -328,7 +322,7 @@ unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
     // Override GObjectClass virtual methods.
     let obj_class = &mut *(klass as *mut ffi::GObjectClass);
     obj_class.constructed = Some(instance_constructed);
-    obj_class.finalize    = Some(instance_finalize);
+    obj_class.finalize = Some(instance_finalize);
 
     // Set the extensible type — the type of object this extension attaches to.
     let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
@@ -342,9 +336,9 @@ unsafe extern "C" fn class_finalize(_klass: *mut c_void, _data: *mut c_void) {}
 unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
     let obj = instance as *mut ffi::GObject;
     let priv_data = Box::new(Private {
-        current_ui_id:       0,
+        current_ui_id: 0,
         actions_initialized: false,
-        view_ui_def:         None,
+        view_ui_def: None,
     });
     ffi::g_object_set_data_full(
         obj,
@@ -369,16 +363,16 @@ pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     let query = query.assume_init();
 
     let type_info = ffi::GTypeInfo {
-        class_size:     query.class_size as u16,
-        base_init:      None,
-        base_finalize:  None,
-        class_init:     Some(class_init),
+        class_size: query.class_size as u16,
+        base_init: None,
+        base_finalize: None,
+        class_init: Some(class_init),
         class_finalize: Some(class_finalize),
-        class_data:     std::ptr::null(),
-        instance_size:  query.instance_size as u16,
-        n_preallocs:    0,
-        instance_init:  Some(instance_init),
-        value_table:    std::ptr::null(),
+        class_data: std::ptr::null(),
+        instance_size: query.instance_size as u16,
+        n_preallocs: 0,
+        instance_init: Some(instance_init),
+        value_table: std::ptr::null(),
     };
 
     let type_id = ffi::g_type_module_register_type(

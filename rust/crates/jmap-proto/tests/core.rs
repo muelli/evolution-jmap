@@ -80,7 +80,11 @@ fn session_object_roundtrip() {
     assert_eq!(roundtrip::<Session>(&value), value);
 
     let session: Session = serde_json::from_value(value).unwrap();
-    assert!(session.capabilities.contains_key(jmap_proto::session::CAPABILITY_MAIL));
+    assert!(
+        session
+            .capabilities
+            .contains_key(jmap_proto::session::CAPABILITY_MAIL)
+    );
     assert_eq!(
         session.primary_accounts[jmap_proto::session::CAPABILITY_MAIL].as_str(),
         "A13824"
