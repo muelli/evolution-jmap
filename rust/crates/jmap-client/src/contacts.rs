@@ -119,7 +119,7 @@ impl Client {
     }
 }
 
-fn set_failure(set_error: Option<&SetError>) -> Error {
+pub(crate) fn set_failure(set_error: Option<&SetError>) -> Error {
     match set_error {
         Some(set_error) => Error::Set(set_error.clone()),
         None => Error::Protocol("/set response reports neither success nor failure".to_owned()),

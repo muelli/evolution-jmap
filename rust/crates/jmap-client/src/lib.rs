@@ -13,6 +13,7 @@
 //! [`Transport`]: transport::Transport
 //! [`CancelFlag`]: transport::CancelFlag
 
+mod calendars;
 mod client;
 mod contacts;
 mod error;

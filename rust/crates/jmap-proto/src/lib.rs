@@ -22,6 +22,8 @@
 //! [RFC 8984]: https://www.rfc-editor.org/rfc/rfc8984
 //! [draft-ietf-jmap-calendars]: https://datatracker.ietf.org/doc/draft-ietf-jmap-calendars/
 
+#[cfg(feature = "calendars")]
+pub mod calendars;
 #[cfg(feature = "contacts")]
 pub mod contacts;
 pub mod error;

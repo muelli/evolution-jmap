@@ -1,0 +1,7 @@
+{
+  "@type": "RecurrenceRule",
+  "frequency": "monthly",
+  "interval": 2,
+  "count": 10,
+  "byDay": [{"@type": "NDay", "day": "we", "nthOfPeriod": 2}]
+}

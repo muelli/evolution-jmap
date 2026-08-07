@@ -13,6 +13,7 @@
 //! plaintext HTTP on `127.0.0.1`, everything held in memory.
 
 mod auth;
+mod calendars;
 mod contacts;
 mod dispatch;
 mod mail;

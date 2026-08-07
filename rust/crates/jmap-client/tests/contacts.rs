@@ -71,7 +71,9 @@ fn contact_get_by_id() {
         .unwrap();
     let id = created.id.unwrap();
 
-    let response = client.contact_get(&account_id, &[id.clone()]).unwrap();
+    let response = client
+        .contact_get(&account_id, std::slice::from_ref(&id))
+        .unwrap();
     assert_eq!(response.list.len(), 1);
     assert!(response.not_found.is_empty());
     let card = &response.list[0];
@@ -152,7 +154,9 @@ fn contact_destroy() {
 
     client.contact_destroy(&account_id, &id).unwrap();
 
-    let response = client.contact_get(&account_id, &[id.clone()]).unwrap();
+    let response = client
+        .contact_get(&account_id, std::slice::from_ref(&id))
+        .unwrap();
     assert!(response.list.is_empty());
     assert_eq!(response.not_found, vec![id.clone()]);
 

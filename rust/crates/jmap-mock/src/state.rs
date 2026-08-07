@@ -61,6 +61,8 @@ pub struct AccountState {
     pub outbox: Vec<RecordedSubmission>,
     pub address_books: Store<jmap_proto::contacts::AddressBook>,
     pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
+    pub calendars: Store<jmap_proto::calendars::Calendar>,
+    pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
 }
@@ -76,6 +78,8 @@ impl AccountState {
             outbox: Vec::new(),
             address_books: Store::new("AB"),
             contact_cards: Store::new("C"),
+            calendars: Store::new("CAL"),
+            calendar_events: Store::new("CE"),
             blobs: BTreeMap::new(),
             next_blob_id: 1,
         }
