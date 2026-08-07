@@ -49,16 +49,49 @@ impl Default for ServerState {
     }
 }
 
-/// One account's data. Domain stores are added as the protocol surface
-/// grows; milestone 3 only needs the account to exist.
+/// One account's data.
 pub struct AccountState {
     pub name: String,
+    pub mailboxes: Store<jmap_proto::mail::Mailbox>,
+    pub emails: Store<jmap_proto::mail::Email>,
+    pub blobs: BTreeMap<Id, Blob>,
+    next_blob_id: u64,
 }
 
 impl AccountState {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
+        Self {
+            name: name.into(),
+            mailboxes: Store::new("M"),
+            emails: Store::new("E"),
+            blobs: BTreeMap::new(),
+            next_blob_id: 1,
+        }
     }
+
+    pub fn alloc_blob_id(&mut self) -> Id {
+        let id = Id::new(format!("B{}", self.next_blob_id));
+        self.next_blob_id += 1;
+        id
+    }
+
+    pub fn add_blob(&mut self, content_type: impl Into<String>, data: Vec<u8>) -> Id {
+        let id = self.alloc_blob_id();
+        self.blobs.insert(
+            id.clone(),
+            Blob {
+                content_type: content_type.into(),
+                data,
+            },
+        );
+        id
+    }
+}
+
+/// An uploaded or seeded binary blob.
+pub struct Blob {
+    pub content_type: String,
+    pub data: Vec<u8>,
 }
 
 /// What happened to an object, for the changes log.

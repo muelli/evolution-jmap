@@ -15,6 +15,7 @@
 
 mod client;
 mod error;
+mod mail;
 pub mod transport;
 
 pub use client::{Client, ClientBuilder, Credentials};

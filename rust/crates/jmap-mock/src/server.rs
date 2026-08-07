@@ -175,6 +175,45 @@ fn handle_request(
             drop(state);
             respond_json(request, status, &response);
         }
+        (tiny_http::Method::Get, _) if path.starts_with("/download/") => {
+            // /download/{accountId}/{blobId}/{name}
+            let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            let ["download", account_id, blob_id, _name] = segments.as_slice() else {
+                respond_json(
+                    request,
+                    404,
+                    &json!({"status": 404, "detail": "bad download path"}),
+                );
+                return;
+            };
+            let state = state.lock().expect("mock state lock");
+            let blob = state
+                .account(&jmap_proto::Id::new(*account_id))
+                .and_then(|account| account.blobs.get(&jmap_proto::Id::new(*blob_id)));
+            match blob {
+                Some(blob) => {
+                    let response = tiny_http::Response::from_data(blob.data.clone())
+                        .with_status_code(200)
+                        .with_header(
+                            tiny_http::Header::from_bytes(
+                                &b"Content-Type"[..],
+                                blob.content_type.as_bytes(),
+                            )
+                            .expect("content type header"),
+                        );
+                    drop(state);
+                    let _ = request.respond(response);
+                }
+                None => {
+                    drop(state);
+                    respond_json(
+                        request,
+                        404,
+                        &json!({"status": 404, "detail": "no such blob"}),
+                    );
+                }
+            }
+        }
         _ => respond_json(
             request,
             404,

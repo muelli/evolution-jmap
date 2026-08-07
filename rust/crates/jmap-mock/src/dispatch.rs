@@ -145,11 +145,62 @@ fn handle_method(
     name: &str,
     arguments: Value,
 ) -> Result<Value, MethodError> {
-    let _ = state;
     match name {
         "Core/echo" => Ok(arguments),
+        "Mailbox/get" => crate::mail::mailbox_get(state, arguments),
+        "Email/get" => crate::mail::email_get(state, arguments),
+        "Email/query" => crate::mail::email_query(state, arguments),
         _ => Err(MethodError::new(error::method::UNKNOWN_METHOD)),
     }
+}
+
+// ── Helpers shared by method handlers ────────────────────────────────────────
+
+/// Parse method arguments into a typed request, mapping failures to
+/// `invalidArguments`.
+pub(crate) fn parse_arguments<T: serde::de::DeserializeOwned>(
+    arguments: Value,
+) -> Result<T, MethodError> {
+    serde_json::from_value(arguments).map_err(|parse_error| {
+        MethodError::new(error::method::INVALID_ARGUMENTS).with_description(parse_error.to_string())
+    })
+}
+
+/// Serialize a typed response, treating failure as a server bug.
+pub(crate) fn to_result(response: &impl serde::Serialize) -> Result<Value, MethodError> {
+    serde_json::to_value(response).map_err(|serialize_error| {
+        MethodError::new(error::method::SERVER_FAIL).with_description(serialize_error.to_string())
+    })
+}
+
+/// Look up an account or fail with `accountNotFound`.
+pub(crate) fn account_mut<'a>(
+    state: &'a mut ServerState,
+    account_id: &jmap_proto::Id,
+) -> Result<&'a mut crate::state::AccountState, MethodError> {
+    state
+        .account_mut(account_id)
+        .ok_or_else(|| MethodError::new(error::method::ACCOUNT_NOT_FOUND))
+}
+
+/// Apply `/get` property projection: keep only the requested properties
+/// (plus `id`, which is always returned).
+pub(crate) fn project_properties(
+    object: &impl serde::Serialize,
+    properties: Option<&[String]>,
+) -> Result<Value, MethodError> {
+    let full = to_result(object)?;
+    let Some(properties) = properties else {
+        return Ok(full);
+    };
+    let Value::Object(map) = full else {
+        return Ok(full);
+    };
+    let filtered = map
+        .into_iter()
+        .filter(|(key, _)| key == "id" || properties.iter().any(|property| property == key))
+        .collect();
+    Ok(Value::Object(filtered))
 }
 
 #[cfg(test)]

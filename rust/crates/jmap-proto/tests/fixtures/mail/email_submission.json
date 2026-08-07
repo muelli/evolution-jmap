@@ -1,0 +1,12 @@
+{
+  "id": "S1",
+  "identityId": "I1",
+  "emailId": "E5",
+  "threadId": "T5",
+  "envelope": {
+    "mailFrom": {"email": "alice@example.com", "parameters": null},
+    "rcptTo": [{"email": "bob@example.com", "parameters": null}]
+  },
+  "sendAt": "2026-08-01T10:00:00Z",
+  "undoStatus": "final"
+}

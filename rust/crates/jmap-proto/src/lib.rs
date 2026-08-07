@@ -24,6 +24,8 @@
 
 pub mod error;
 pub mod id;
+#[cfg(feature = "mail")]
+pub mod mail;
 pub mod methods;
 pub mod request;
 pub mod response;

@@ -22,10 +22,6 @@ impl AuthConfig {
         self.accepted.push(format!("Bearer {token}"));
     }
 
-    pub fn requires_auth(&self) -> bool {
-        !self.accepted.is_empty()
-    }
-
     /// Check an `Authorization` header value (or its absence).
     pub fn authorized(&self, authorization: Option<&str>) -> bool {
         if self.accepted.is_empty() {

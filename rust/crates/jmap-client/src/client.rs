@@ -225,7 +225,7 @@ impl Client {
         self.single_call(&[session::CAPABILITY_CORE], "Core/echo", &value)
     }
 
-    fn execute(
+    pub(crate) fn execute(
         &self,
         method: HttpMethod,
         url: &str,
