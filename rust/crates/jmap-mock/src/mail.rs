@@ -123,7 +123,7 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     let mut matches: Vec<(&Id, &Email)> = account
         .emails
         .iter()
-        .filter(|(id, email)| email_matches(id, email, &filter))
+        .filter(|(_, email)| email_matches(email, &filter))
         .collect();
 
     // Default order: receivedAt descending (RFC 8621 servers commonly do
@@ -175,63 +175,58 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-fn email_matches(mailbox_lookup_id: &Id, email: &Email, filter: &EmailQueryFilter) -> bool {
-    let _ = mailbox_lookup_id;
-    if let Some(mailbox_id) = &filter.in_mailbox {
-        if !email
+fn email_matches(email: &Email, filter: &EmailQueryFilter) -> bool {
+    if let Some(mailbox_id) = &filter.in_mailbox
+        && !email
             .mailbox_ids
             .as_ref()
             .is_some_and(|ids| ids.get(mailbox_id).copied().unwrap_or(false))
-        {
-            return false;
-        }
+    {
+        return false;
     }
-    if let Some(keyword) = &filter.has_keyword {
-        if !email
+    if let Some(keyword) = &filter.has_keyword
+        && !email
             .keywords
             .as_ref()
             .is_some_and(|keywords| keywords.contains_key(keyword))
-        {
-            return false;
-        }
+    {
+        return false;
     }
-    if let Some(keyword) = &filter.not_keyword {
-        if email
+    if let Some(keyword) = &filter.not_keyword
+        && email
             .keywords
             .as_ref()
             .is_some_and(|keywords| keywords.contains_key(keyword))
-        {
-            return false;
-        }
+    {
+        return false;
     }
-    if let Some(after) = &filter.after {
-        if email.received_at.as_ref().is_none_or(|at| at < after) {
-            return false;
-        }
+    if let Some(after) = &filter.after
+        && email.received_at.as_ref().is_none_or(|at| at < after)
+    {
+        return false;
     }
-    if let Some(before) = &filter.before {
-        if email.received_at.as_ref().is_none_or(|at| at >= before) {
-            return false;
-        }
+    if let Some(before) = &filter.before
+        && email.received_at.as_ref().is_none_or(|at| at >= before)
+    {
+        return false;
     }
-    if let Some(subject) = &filter.subject {
-        if !email
+    if let Some(subject) = &filter.subject
+        && !email
             .subject
             .as_ref()
             .is_some_and(|value| value.contains(subject.as_str()))
-        {
-            return false;
-        }
+    {
+        return false;
     }
-    if let Some(from) = &filter.from {
-        if !address_list_contains(email.from.as_deref(), from) {
-            return false;
-        }
+    if let Some(from) = &filter.from
+        && !address_list_contains(email.from.as_deref(), from)
+    {
+        return false;
     }
-    if let Some(to) = &filter.to {
-        if !address_list_contains(email.to.as_deref(), to) {
-            return false;
-        }
+    if let Some(to) = &filter.to
+        && !address_list_contains(email.to.as_deref(), to)
+    {
+        return false;
     }
     true
 }
