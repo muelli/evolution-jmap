@@ -130,11 +130,11 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     // newest-first; tests pass sort explicitly anyway).
     let mut sort_property = "receivedAt".to_owned();
     let mut ascending = false;
-    if let Some(comparators) = &request.sort {
-        if let Some(first) = comparators.first() {
-            sort_property = first.property.clone();
-            ascending = first.is_ascending;
-        }
+    if let Some(comparators) = &request.sort
+        && let Some(first) = comparators.first()
+    {
+        sort_property = first.property.clone();
+        ascending = first.is_ascending;
     }
     if sort_property != "receivedAt" {
         return Err(MethodError::new("unsupportedSort")
