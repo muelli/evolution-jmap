@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Release: build artifacts reproducibly (no caches), publish SHA256SUMS,
+# and attach Sigstore build provenance (recorded in the public Rekor
+# transparency log). Verify with:
+#   gh attestation verify <file> --repo muelli/evolution-jmap
+# See docs/verifying-artifacts.md.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release binaries (cacheless, remapped paths)
+        run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          cd rust
+          export RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=$HOME/.cargo=/cargo"
+          cargo build --release --locked -p evolution-jmap-mock
+
+      - name: Create dist tarball
+        run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          git archive --prefix="evolution-jmap-${GITHUB_REF_NAME}/" HEAD \
+            | xz -z > "evolution-jmap-${GITHUB_REF_NAME}.tar.xz"
+
+      - name: Collect artifacts and checksums
+        run: |
+          mkdir -p dist
+          cp rust/target/release/jmap-mockd dist/
+          cp "evolution-jmap-${GITHUB_REF_NAME}.tar.xz" dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Attest build provenance (Sigstore/Rekor)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/jmap-mockd
+            dist/evolution-jmap-*.tar.xz
+            dist/SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

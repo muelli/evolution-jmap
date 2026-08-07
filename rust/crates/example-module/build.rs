@@ -1,5 +1,5 @@
 fn main() {
-    let min_evo = "3.36.0";
+    let min_evo = "3.52.0";
 
     pkg_config::Config::new()
         .atleast_version(min_evo)

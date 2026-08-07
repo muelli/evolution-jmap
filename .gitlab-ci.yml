@@ -1,0 +1,147 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# GitLab CI mirror of .github/workflows/ci.yml. Pure-Rust jobs run in the
+# digest-pinned official Rust image matching rust/rust-toolchain.toml; the
+# full build (needs Evolution 3.52 headers) uses the shared CI image from
+# ghcr.io once its digest is pinned below.
+
+default:
+  image: docker.io/library/rust:1.97.1@sha256:3382bd20aa942806c533e9a73cd000474fb3ef173f71e684cc9b942675781769
+  interruptible: true
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+# Cargo registry + build tree, keyed on the lockfile.
+.cargo-cache: &cargo-cache
+  key:
+    files: [rust/Cargo.lock]
+  paths:
+    - .cargo/registry/index
+    - .cargo/registry/cache
+    - rust/target
+  policy: pull-push
+
+stages: [lint, test, build, verify, release]
+
+fmt:
+  stage: lint
+  cache: []
+  script:
+    - cd rust && cargo fmt --check
+
+clippy:
+  stage: lint
+  cache:
+    <<: *cargo-cache
+    key:
+      files: [rust/Cargo.lock]
+      prefix: lints
+  script:
+    - cd rust && cargo clippy --all-targets --locked -- -D warnings
+
+deny:
+  stage: lint
+  cache:
+    <<: *cargo-cache
+    key:
+      files: [rust/Cargo.lock]
+      prefix: deny
+    paths:
+      - .cargo/registry/index
+      - .cargo/registry/cache
+      - .cargo/bin
+      - rust/target
+  script:
+    # cargo-deny is compiled once and then served from the cache.
+    - command -v cargo-deny || cargo install cargo-deny --locked
+    - cd rust && cargo deny check
+
+reuse:
+  stage: lint
+  image: docker.io/fsfe/reuse:5.1.1@sha256:11eb8a423ea82776bc2890bb255b61736bec277ef6e2141f8c91d6d88864f9da
+  cache: []
+  script:
+    - reuse lint
+
+test:
+  stage: test
+  cache:
+    <<: *cargo-cache
+    key:
+      files: [rust/Cargo.lock]
+      prefix: test
+  script:
+    - cd rust && cargo test --locked
+  artifacts:
+    when: always
+    reports: {}
+
+# Full build incl. the Evolution example module and CMake glue. Uses the
+# shared CI image (built by GitHub's ci-image workflow, public on ghcr.io).
+# allow_failure until the image exists and its digest is pinned here.
+build-full:
+  stage: build
+  image: ghcr.io/muelli/evolution-jmap/ci:latest  # TODO: pin @sha256: digest
+  allow_failure: true
+  cache:
+    <<: *cargo-cache
+    key:
+      files: [rust/Cargo.lock]
+      prefix: build
+  variables:
+    RUNNER_GENERATE_ARTIFACTS_METADATA: "true"  # SLSA provenance for artifacts
+  script:
+    - cd rust && cargo build --workspace --locked --release && cd ..
+    - cmake -S . -B build -G Ninja
+    - cmake --build build
+    - ctest --test-dir build --output-on-failure
+  artifacts:
+    paths:
+      - rust/target/release/jmap-mockd
+      - rust/target/release/libexample_module.so
+
+# Two clean builds in different absolute paths must produce bit-identical
+# binaries. Deliberately cacheless.
+reproducible:
+  stage: verify
+  cache: []
+  script:
+    - export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+    - |
+      for d in /tmp/build-a /tmp/build-b; do
+        git clone --quiet . "$d"
+        (
+          cd "$d/rust"
+          export CARGO_HOME="$d/cargo-home"
+          export RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=$CARGO_HOME=/cargo"
+          cargo build --release --locked -p evolution-jmap-mock
+        )
+      done
+    - sha256sum /tmp/build-a/rust/target/release/jmap-mockd /tmp/build-b/rust/target/release/jmap-mockd
+    - test "$(sha256sum < /tmp/build-a/rust/target/release/jmap-mockd)" = "$(sha256sum < /tmp/build-b/rust/target/release/jmap-mockd)"
+
+# On tags: keyless-sign the checksums with cosign via the CI job's OIDC
+# identity; the signature lands in the public Rekor transparency log.
+attest:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG
+  cache: []
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  image:
+    name: gcr.io/projectsigstore/cosign:v2.5.0
+    entrypoint: [""]
+  script:
+    - sha256sum rust/target/release/jmap-mockd > SHA256SUMS || true
+    - cosign sign-blob --yes SHA256SUMS --bundle SHA256SUMS.sigstore.json
+  artifacts:
+    paths:
+      - SHA256SUMS
+      - SHA256SUMS.sigstore.json
+  needs: [build-full]

@@ -20,7 +20,9 @@ add_definitions(-DGETTEXT_PACKAGE=\"${GETTEXT_PACKAGE}\")
 set(ARCHIVE_BASE_NAME ${CMAKE_PROJECT_NAME}-${VERSION})
 set(ARCHIVE_FULL_NAME ${ARCHIVE_BASE_NAME}.tar.xz)
 
-set(REQUIRE_EVOLUTION_VERSION 3.36.0)
+set(REQUIRE_EVOLUTION_VERSION 3.52.0)
+
+enable_testing()
 
 find_package(PkgConfig REQUIRED)
 
@@ -51,6 +53,11 @@ check_c_compiler_flag(-Wno-deprecated-declarations HAVE_NO_DEPRECATED_DECLARATIO
 if(HAVE_NO_DEPRECATED_DECLARATIONS)
 	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-deprecated-declarations")
 endif()
+
+# Reproducible builds: keep absolute source paths out of C objects.
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffile-prefix-map=${CMAKE_SOURCE_DIR}=/build")
+
+include(cmake/Rust.cmake)
 
 # uninstall target
 configure_file(

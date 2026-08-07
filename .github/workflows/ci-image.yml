@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Builds the shared CI image and pushes it to ghcr.io. After a successful
+# run, copy the printed digest into ci.yml / .gitlab-ci.yml (the jobs
+# reference the image by digest, never by tag).
+
+name: CI image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - Containerfile.ci
+      - .github/workflows/ci-image.yml
+  schedule:
+    # Weekly rebuild pulls in Ubuntu security updates; bump the digest pin
+    # in a reviewed commit afterwards.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build image
+        run: docker build -f Containerfile.ci -t "ghcr.io/${{ github.repository }}/ci:latest" .
+
+      - name: Push image and record digest
+        run: |
+          docker push "ghcr.io/${{ github.repository }}/ci:latest"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "ghcr.io/${{ github.repository }}/ci:latest")
+          echo "Pushed: ${DIGEST}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Update the digest pin in .github/workflows/ci.yml and .gitlab-ci.yml." >> "$GITHUB_STEP_SUMMARY"

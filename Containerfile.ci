@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# CI image shared by GitHub Actions and GitLab CI. Build and push via
+# .github/workflows/ci-image.yml; reference it BY DIGEST in CI configs so
+# both platforms build in a byte-identical environment.
+#
+# Rebuild when: the Rust pin in rust/rust-toolchain.toml changes, EDS dev
+# packages need updating, or security updates are due (schedule: weekly).
+
+FROM docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    PATH=/opt/cargo/bin:/usr/local/bin:/usr/bin:/bin
+
+# Toolchains and Evolution development headers. libclang/clang are already
+# included for the next round (bindgen-generated EDS bindings).
+RUN apt-get update -q && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        clang \
+        cmake \
+        curl \
+        git \
+        libclang-dev \
+        ninja-build \
+        pkg-config \
+        pipx \
+        xz-utils \
+        libglib2.0-dev \
+        libgtk-3-dev \
+        libcamel1.2-dev \
+        libedataserver1.2-dev \
+        libebackend1.2-dev \
+        libebook1.2-dev \
+        libedata-book1.2-dev \
+        libecal2.0-dev \
+        libedata-cal2.0-dev \
+        evolution-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust, pinned to the same version as rust/rust-toolchain.toml.
+ARG RUST_VERSION=1.97.1
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION}" \
+          --component rustfmt --component clippy \
+    && rustc --version
+
+# cargo-deny (license/advisory gate) and the reuse tool (SPDX lint).
+ARG CARGO_DENY_VERSION=0.18.3
+RUN cargo install cargo-deny --locked --version "${CARGO_DENY_VERSION}" \
+    && rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git"
+ARG REUSE_VERSION=5.1.1
+RUN PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install "reuse==${REUSE_VERSION}"

@@ -22,6 +22,7 @@ pub const DEFAULT_ACCOUNT_NAME: &str = "alice@example.com";
 
 pub struct MockServerBuilder {
     auth: AuthConfig,
+    port: u16,
 }
 
 impl MockServerBuilder {
@@ -38,14 +39,21 @@ impl MockServerBuilder {
         self
     }
 
-    /// Bind to an ephemeral localhost port and start serving on a background
-    /// thread. The server stops when the returned handle is dropped.
+    /// Bind to a fixed localhost port instead of an ephemeral one.
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+
+    /// Bind to localhost and start serving on a background thread. The
+    /// server stops when the returned handle is dropped.
     pub fn start(self) -> MockServer {
         let mut state = ServerState::new();
         state.add_account(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME);
         let state = Arc::new(Mutex::new(state));
 
-        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind mock server to localhost");
+        let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
+            .expect("bind mock server to localhost");
         let port = server
             .server_addr()
             .to_ip()
@@ -82,6 +90,7 @@ impl MockServer {
     pub fn builder() -> MockServerBuilder {
         MockServerBuilder {
             auth: AuthConfig::default(),
+            port: 0,
         }
     }
 

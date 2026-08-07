@@ -1,0 +1,149 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Main CI. The pure-Rust jobs (fmt/clippy/deny/test/repro) need no
+# Evolution headers — the workspace's default-members exclude the
+# example-module crate — so they run on the stock runner with cargo caching.
+# The full build (CMake + example module + --workspace) needs EDS dev
+# headers; it installs them via apt until the ci-image digest is pinned
+# here (see ci-image.yml), at which point it should switch to
+#   container: ghcr.io/muelli/evolution-jmap/ci@sha256:<digest>
+# for a byte-identical environment with GitLab CI.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+        working-directory: rust
+
+  clippy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lints
+          workspaces: rust
+      - run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: rust
+
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Cache advisory database (refreshed weekly)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/advisory-db
+          key: advisory-db-${{ github.run_id }}
+          restore-keys: advisory-db-
+      - run: cargo deny check
+        working-directory: rust
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          workspaces: rust
+      - run: cargo test --locked
+        working-directory: rust
+
+  # Full build including the Evolution example module and the CMake glue.
+  build-full:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Evolution development packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config \
+            libglib2.0-dev libgtk-3-dev \
+            libcamel1.2-dev libedataserver1.2-dev libebackend1.2-dev \
+            libebook1.2-dev libedata-book1.2-dev \
+            libecal2.0-dev libedata-cal2.0-dev \
+            evolution-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+          workspaces: rust
+      - name: Build workspace (all members)
+        run: cargo build --workspace --locked --release
+        working-directory: rust
+      - name: Configure and build with CMake (runs cargo tests via CTest)
+        run: |
+          cmake -S . -B build -G Ninja
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-artifacts
+          path: |
+            rust/target/release/jmap-mockd
+            rust/target/release/libexample_module.so
+          if-no-files-found: error
+
+  # Two clean builds in different absolute paths must produce bit-identical
+  # binaries. Deliberately cacheless: caches could mask (or cause)
+  # irreproducibility.
+  reproducible:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: build-a/src
+      - uses: actions/checkout@v4
+        with:
+          path: build-b/src
+      - name: Build twice in distinct paths
+        run: |
+          export SOURCE_DATE_EPOCH=$(git -C build-a/src log -1 --format=%ct)
+          for d in build-a build-b; do
+            (
+              cd "$d/src/rust"
+              export CARGO_HOME="$GITHUB_WORKSPACE/$d/cargo-home"
+              export RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=$CARGO_HOME=/cargo"
+              cargo build --release --locked -p evolution-jmap-mock
+            )
+          done
+      - name: Compare checksums
+        run: |
+          sha256sum build-a/src/rust/target/release/jmap-mockd \
+                    build-b/src/rust/target/release/jmap-mockd
+          a=$(sha256sum build-a/src/rust/target/release/jmap-mockd | cut -d' ' -f1)
+          b=$(sha256sum build-b/src/rust/target/release/jmap-mockd | cut -d' ' -f1)
+          test "$a" = "$b"
+
+  reuse:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fsfe/reuse-action@v5
+
+  # Planned (next round): a workflow_dispatch-gated `integration` job that
+  # starts a digest-pinned Stalwart container (full JMAP mail + contacts +
+  # calendars support) and runs the same test suite against it via
+  # `cargo test --features live-server`.

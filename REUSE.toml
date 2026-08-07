@@ -20,12 +20,15 @@ SPDX-FileCopyrightText = [
 ]
 SPDX-License-Identifier = "LGPL-2.1-or-later"
 
-# Machine-generated or trivial files that cannot carry comment headers.
+# Machine-generated, trivial, or plain-prose files that do not carry
+# comment headers.
 [[annotations]]
 path = [
     "rust/Cargo.lock",
     ".gitignore",
     "rust/crates/*/tests/fixtures/**",
+    "README.md",
+    "docs/**",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Tobias Mueller <muelli@cryptobitch.de>"
