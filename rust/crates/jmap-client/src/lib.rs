@@ -14,6 +14,7 @@
 //! [`CancelFlag`]: transport::CancelFlag
 
 mod client;
+mod contacts;
 mod error;
 mod mail;
 pub mod transport;

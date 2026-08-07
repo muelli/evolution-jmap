@@ -59,6 +59,8 @@ pub struct AccountState {
     /// Every accepted `EmailSubmission` — what a real server would hand to
     /// its SMTP queue. Tests assert against this.
     pub outbox: Vec<RecordedSubmission>,
+    pub address_books: Store<jmap_proto::contacts::AddressBook>,
+    pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
 }
@@ -72,6 +74,8 @@ impl AccountState {
             identities: Store::new("I"),
             submissions: Store::new("S"),
             outbox: Vec::new(),
+            address_books: Store::new("AB"),
+            contact_cards: Store::new("C"),
             blobs: BTreeMap::new(),
             next_blob_id: 1,
         }
