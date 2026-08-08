@@ -16,7 +16,11 @@
 //! - `Authentication` — `host`, `port`, `user`. The same three keys every
 //!   remote EDS backend uses, so an account written by hand looks like a
 //!   CalDAV or IMAP one.
-//! - `Security` — `secure`. Selects the scheme.
+//! - `Security` — `secure`. Selects the scheme. In a keyfile that property is
+//!   spelled `Method=tls` or `Method=none`, *not* `Secure=`: `secure` is a
+//!   boolean over the `Method` string and only the string is stored. A
+//!   keyfile that says `Secure=true` is not rejected, it is ignored, and what
+//!   is left reads back as `none`.
 //! - `Resource` — `identity`. The JMAP address book id. "Resource identity"
 //!   is exactly what it is, and it is the extension EDS's own backends use
 //!   for a server-side object identifier.
@@ -32,7 +36,6 @@
 //! [Data Source]
 //! DisplayName=JMAP test
 //! Enabled=true
-//! Parent=
 //!
 //! [Address Book]
 //! BackendName=jmap
@@ -43,7 +46,7 @@
 //! Method=plain/password
 //!
 //! [Security]
-//! Secure=true
+//! Method=tls
 //!
 //! [Resource]
 //! Identity=Ab1
@@ -52,7 +55,12 @@
 //! `[Security]` may be left out entirely — it defaults to TLS here, not to
 //! `ESourceSecurity:secure`'s own FALSE — and `[Resource]` may be left out to
 //! get the account's default address book. Against `jmap-mockd`, `Host` is
-//! `127.0.0.1`, `Port` is the mock's port and `Secure=false`.
+//! `127.0.0.1`, `Port` is the mock's port and `[Security] Method` is `none`.
+//!
+//! The keyfile that runs against the mock is a file rather than a doc
+//! comment: `docs/examples/jmap-mock.source`, with the recipe around it in
+//! `docs/manual-test-book-backend.md` and both checked by
+//! `jmap-backend-book`'s `recipe` test.
 //!
 //! ## Why the host is validated
 //!
