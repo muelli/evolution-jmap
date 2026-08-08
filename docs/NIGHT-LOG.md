@@ -321,3 +321,106 @@ Next: the `EBookMetaBackend` subclass itself. Everything under it now exists —
 for the type, the trampolines and the error mapping — so what is left is the
 class struct, the vfunc slot overrides, and holding a `BookSync` across
 `connect_sync`/`disconnect_sync`.
+
+## 2026-08-08 (fifth session)
+
+M3, fourth increment: `rust/crates/jmap-backend-book` (`jmap-backend-book`,
+lib `jmap_backend_book`) — the two ends of the pipe the `EBookMetaBackend`
+subclass will sit in the middle of. 21 tests in two files (`connect` 10,
+`marshal` 11); `-p eds-sys -p jmap-backend-core -p jmap-backend-book` is now
+63, the default members are unchanged at 87, workspace total 150.
+
+The subclass itself was *not* written this session, deliberately. What was
+missing under it was not lifecycle but the two places where a mistake is a
+crash in `evolution-addressbook-factory` rather than a red assertion: the C
+ownership rules at the vfunc boundary, and the "should Evolution ask for the
+password again?" decision. Both are testable without a live `EBookBackend`,
+which needs an `ESourceRegistry` and hence the D-Bus source registry service;
+having them tested means the subclass on top can be a marshalling shell over
+calls that are already covered.
+
+- `connect` — `open_book(&SourceConfig, password, CancelFlag) -> BookSync`,
+  plus `ConnectError`.
+- `marshal` — `GSList`s of `EBookMetaBackendInfo` and of strings, vCard ↔
+  `EContact`, `ENamedParameters` → password, `gchar **` out-parameters.
+
+Decisions taken:
+
+- **The configured address book is checked against the server, never
+  trusted.** A typo in a hand-written `.source` would otherwise present as an
+  address book that is merely empty — indistinguishable, from the user's side,
+  from a server that lost their contacts. `ConnectError::NoSuchAddressBook`
+  names the id that was not found.
+- **"No address book configured" resolves to the one flagged `isDefault`, and
+  to nothing else.** Falling back to the first book in the list would be a
+  guess about where contacts get *written*. An account with no default is
+  `NoDefaultAddressBook`. The test fixture seeds the non-default book first
+  precisely so that the first-one-wins implementation fails visibly.
+- **A source that names a user is never tried anonymously.** With no password
+  yet, `open_book` fails with `CredentialsRequired` before opening a
+  connection, so the prompt happens before anything is sent. A source with no
+  user *is* anonymous on purpose — that is `jmap-mockd` and a development
+  Stalwart — and a real server answers it with the 401 that becomes a prompt.
+- **`REJECTED` is reserved for a 401.** It is the only `out_auth_result` that
+  makes Evolution discard the stored password and ask again, so it has to mean
+  "the server said these credentials are wrong" and nothing else: a 403 is
+  authenticated-but-not-permitted and a server that is down is neither. Those
+  are `ERROR`, which stops the loop instead of re-prompting for a password
+  that was never the problem.
+- **A stored-but-empty password is reported as present.** Reporting it absent
+  would ask EDS to prompt; a user who then enters nothing would be prompted
+  forever. Sending it and being told it is wrong terminates. Only a NULL
+  `ENamedParameters` — what EDS passes before it has asked libsecret anything
+  — is absent.
+- **An empty `UID` is not a uid.** `save_contact_sync` tells a create from an
+  edit by whether the `EContact` has one, and `EVCard` distinguishes two
+  spellings the backend must not: no `UID` line reads back as NULL, but `UID:`
+  with an empty value reads back as `""`, which would go to the server as the
+  identifier of a card to patch.
+- **Everything crossing the boundary is copied.** EDS frees an
+  `out_existing_objects` list with `e_book_meta_backend_info_free`, a
+  removed-uid list with `g_free` and `out_new_sync_tag` with `g_free`, so a
+  node pointing into a Rust `String` is not a leak, it is a double free in
+  another process. The `extra` field stays NULL: it is opaque per-object cache
+  state and this backend has none, since the JMAP id *is* the uid and the
+  revision already carries the change token.
+- **`contact_from_vcard` refuses text that is not a vCard.** `EVCard` parses
+  lazily and answers garbage with an empty card rather than an error, which
+  would surface in Evolution as a contact that exists and has no properties.
+  The guard is only the RFC 6350 §6.1.1 envelope — it is a check that the
+  input claims to be a vCard, not a second parser.
+- **`eds-sys` gained `e_named_parameters_*` and `E_SOURCE_CREDENTIAL_*`**, the
+  latter as vars for the same reason the extension names are: retyping
+  `"password"` in Rust makes a typo a credential that reads back as absent.
+  `cstring_lossy` in `jmap-backend-core::error` became public, since building
+  a `GError` is now done in two crates.
+
+On the TDD: both modules were `todo!()` stubs while the tests were written, so
+19 of the 21 failed at runtime for the right reason (the two that passed
+assert on constants). Eight mutations were then run. Six were killed
+immediately; the two survivors were real gaps and are now closed:
+`contact_uid` treating an empty string as a uid was unreachable from the test
+that only omitted the `UID` line — the empty-value spelling above is the case
+that reaches it — and `to_gerror` was only asserted non-NULL, so any
+`EClientError` code passed, including one that would have suppressed the
+password prompt. That test now pins the domain and the code per variant. A
+ninth mutation, dropping the NULL check in `set_out_string`, aborts the test
+binary rather than failing an assertion; counted as killed.
+
+Not verified locally, as in the previous four sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). All new
+files carry an SPDX `GPL-3.0-or-later` header and the crate adds no new
+external dependencies. `cargo fmt --check`, `cargo test` and `cargo clippy
+--all-targets -D warnings` are clean on the default members and on
+`-p eds-sys -p jmap-backend-core -p jmap-backend-book`, and
+`cargo build --workspace --locked` succeeds. `cmake/Rust.cmake`'s
+`rust-test-eds` target now runs the new crate too.
+
+No blockers hit.
+
+Next: the `EBookMetaBackend` subclass, which is now genuinely thin — the class
+struct, `register_dynamic` against the `GTypeModule`, a `Mutex<Option<BookSync>>`
+in the instance struct held across `connect_sync`/`disconnect_sync`, and seven
+vfunc bodies that are a `guard` plus a `marshal` call each. After that the
+`EBookBackendFactory`, the `e_module_load` entry point and the
+`add_cargo_cdylib` install rule.

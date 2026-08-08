@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "jmap-backend-book"
+description = "The JMAP address book backend for Evolution Data Server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_backend_book"
+
+[dependencies]
+eds-sys = { workspace = true }
+jmap-backend-core = { workspace = true }
+evolution-jmap-book-sync = { workspace = true }
+evolution-jmap-client = { workspace = true }
+evolution-jmap-proto = { workspace = true }
+glib-sys = { workspace = true }
+gobject-sys = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-mock = { workspace = true }

@@ -48,6 +48,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_contact_.*",
     "e_vcard_.*",
     "e_client_error_.*",
+    // How a backend is handed its credentials: EDS fetches them from
+    // libsecret and passes an ENamedParameters to connect_sync.
+    "e_named_parameters_.*",
     // Not an EDS symbol, but the entry point every loadable EDS module must
     // export; having the signature in scope keeps M2's trampoline honest.
     "e_module_.*",
@@ -56,8 +59,10 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
 /// The names an `ESource` extension is looked up by are `#define`d strings,
 /// not exported symbols, so a typo in one is not a link error — it is an
 /// address book that silently reports no host. Take them from the headers
-/// rather than retyping them.
-const ALLOWED_VARS: &[&str] = &["E_SOURCE_EXTENSION_.*"];
+/// rather than retyping them. `E_SOURCE_CREDENTIAL_*` are the same thing for
+/// the `ENamedParameters` a backend is authenticated with, where a typo is a
+/// password that reads back as absent.
+const ALLOWED_VARS: &[&str] = &["E_SOURCE_EXTENSION_.*", "E_SOURCE_CREDENTIAL_.*"];
 
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys
 /// interoperates with the wider glib ecosystem instead of minting its own
