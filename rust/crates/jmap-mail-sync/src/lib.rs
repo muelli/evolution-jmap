@@ -7,7 +7,8 @@
 //! means: which folders exist, what is in them, and what a message looks like.
 //! Each entry point corresponds to one Camel vfunc — [`MailSync::folder_tree`]
 //! to `get_folder_info_sync`, [`MailSync::messages`] to what a folder's
-//! `CamelFolderSummary` is filled from — and more as the store grows.
+//! `CamelFolderSummary` is filled from, [`MailSync::message_source`] to what
+//! `get_message_sync` parses — and more as the store grows.
 //!
 //! Like `jmap-book-sync` and `jmap-cal-sync`, it knows nothing about GObject
 //! or the Camel headers, so the interesting half of the provider is testable
@@ -32,7 +33,7 @@ use jmap_proto::{Id, State};
 
 pub use error::SyncError;
 pub use folder::{FolderInfo, FolderRole, FolderTree};
-pub use message::{MessageFlags, MessageSummary, SUMMARY_PROPERTIES};
+pub use message::{MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES};
 
 /// What a folder-list refresh found.
 ///
@@ -150,6 +151,60 @@ impl MailSync {
         // of the same race — a message that shifted position and came back on
         // two pages is listed once.
         Ok(ids.iter().filter_map(|id| by_uid.remove(id)).collect())
+    }
+
+    /// The RFC 5322 bytes of one message — what `get_message_sync` parses into
+    /// a `CamelMimeMessage`.
+    ///
+    /// ## Why the blob id is fetched rather than remembered
+    ///
+    /// [`MessageSummary`] carries one, and it is thrown away: a
+    /// `CamelFolderSummary` row has no field to keep it in, the same problem
+    /// the folder's own mailbox id has and without the folder's solution — a
+    /// summary row is Camel's struct, not ours, and there are as many of them
+    /// as there are messages in the account. So a uid is all this call can be
+    /// given, and the blob id is one `Email/get` away.
+    ///
+    /// That is a round trip per message opened, and it is also the only version
+    /// of this that stays correct: RFC 8621 §4.1 makes an `Email` immutable but
+    /// says nothing that stops a server reissuing blob ids, and RFC 8620 §6.2
+    /// lets it forget one at any time. A cached blob id would turn every such
+    /// server into a mailbox that reads fine until it suddenly does not.
+    ///
+    /// ## Failures
+    ///
+    /// A uid the account does not hold is [`SyncError::NoSuchMessage`] rather
+    /// than a client error — a summary row outliving its message is ordinary,
+    /// not a broken account. A message the server returns *without* a `blobId`
+    /// is the protocol violation it is; there is no fallback, because
+    /// reassembling a message out of its body parts would produce different
+    /// bytes than the ones it was signed as.
+    pub fn message_source(&self, uid: &Id) -> Result<Vec<u8>, SyncError> {
+        let email = self
+            .client
+            .email_get(
+                &self.account_id,
+                std::slice::from_ref(uid),
+                Some(SOURCE_PROPERTIES),
+            )?
+            .into_iter()
+            // An answer naming some *other* message is not this message's
+            // bytes, and a server that sends one has answered a question
+            // nobody asked; treated as the message being absent, which it is.
+            .find(|email| email.id.as_ref() == Some(uid))
+            .ok_or_else(|| SyncError::NoSuchMessage(uid.clone()))?;
+
+        let blob_id = email.blob_id.ok_or_else(|| {
+            SyncError::protocol(format!("Email/get returned {uid} without a blobId"))
+        })?;
+
+        // The `{name}` of the download template is a filename suggestion for a
+        // browser saving the response; nothing reads it back, and the uid is
+        // the one name that is certainly safe in a URL — RFC 8620 §1.2 limits
+        // an id to URL-safe characters.
+        Ok(self
+            .client
+            .download_blob(&self.account_id, &blob_id, uid.as_str())?)
     }
 
     /// The ids of a mailbox's messages, oldest first, however many pages the
