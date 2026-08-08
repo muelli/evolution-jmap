@@ -105,7 +105,7 @@ fn panic_message(payload: &Box<dyn Any + Send>) -> &str {
     }
 }
 
-fn log_critical(message: &str) {
+pub(crate) fn log_critical(message: &str) {
     let message = cstring_lossy(message);
     // SAFETY: g_log is variadic and takes a printf format; passing the text
     // as an argument to "%s" rather than as the format itself keeps a stray

@@ -424,3 +424,95 @@ in the instance struct held across `connect_sync`/`disconnect_sync`, and seven
 vfunc bodies that are a `guard` plus a `marshal` call each. After that the
 `EBookBackendFactory`, the `e_module_load` entry point and the
 `add_cargo_cdylib` install rule.
+
+## 2026-08-08 (sixth session)
+
+M3, fifth increment: `jmap-backend-core::instance` — owning a Rust value with
+a destructor inside a GObject instance struct, plus the `finalize` half of the
+subclassing scaffold that makes it possible. 7 new tests
+(`tests/instance.rs`); `-p eds-sys -p jmap-backend-core -p jmap-backend-book`
+is now 70, the default members are unchanged at 87, workspace total 157.
+
+This is the piece the `EBookMetaBackend` subclass was still missing. It has to
+hold a live `BookSync` between `connect_sync` and `disconnect_sync`, and
+GObject's instance memory does not allow that on its own: the struct arrives
+at `instance_init` zeroed and goes back to the allocator as soon as `finalize`
+returns, with no Rust destructor anywhere in between. Getting it wrong is a
+leak or a use-after-free in `evolution-addressbook-factory`, which is the same
+class of failure as last session's marshalling and wanted the same treatment.
+
+- `instance::Slot<T>` — an owning pointer whose **all-zero bytes are its empty
+  state**, which is exactly the state GObject leaves the field in.
+- `subclass::ObjectSubclass::finalize` — a defaulted hook, with registration
+  installing the `GObjectClass.finalize` override and doing the chain-up.
+
+Decisions taken:
+
+- **Every state a real instance can be in is defined, including the broken
+  ones.** Reading a slot before `instance_init` yields `None` rather than a
+  dangling reference, so a vfunc reached on a half-built instance can report a
+  clean error; clearing an empty slot is a no-op, because an instance whose
+  `instance_init` stored nothing is finalized all the same. That is the whole
+  reason for an owning pointer rather than a `MaybeUninit`: the zeroed state is
+  a *value*, not a hole.
+- **A second `init` is refused, not honoured.** Overwriting would free
+  something another thread may be holding a `get` borrow of. The newcomer is
+  dropped rather than leaked and the refusal is a GLib critical, since
+  reaching it at all is a bug in the caller.
+- **`clear` is `unsafe`, `init` and `get` are not.** With `&self` methods
+  throughout, `let v = slot.get().unwrap(); slot.clear(); use(v)` would
+  otherwise be a use-after-free with no `unsafe` in sight. `finalize`
+  discharges the obligation by construction — it runs once, after the last
+  reference is gone.
+- **`PhantomData<T>` alongside the `AtomicPtr<T>`.** `AtomicPtr` is
+  unconditionally `Send + Sync` regardless of `T`, and a `&Slot<T>` hands out a
+  `&T`; without the marker a `Slot<Rc<_>>` would be shareable across threads.
+- **The chain-up is outside the panic guard.** A panic in a Rust `finalize` is
+  already a bug; skipping the parent's `finalize` would turn it into a leak of
+  every instance from then on — for an `EBookMetaBackend` that is the
+  `ESource`, the offline cache and the connection state.
+- **The parent class is reached by `g_type_class_peek(T::parent_type())`, not
+  by `g_type_class_peek_parent` of the instance's class.** The latter is the
+  usual C shorthand and is wrong here: a further subclass would make it point
+  back at this same trampoline and recurse until the stack ran out. The test
+  hierarchy is two levels deep precisely so that this is observable.
+- **Registration is installed on every type, not opted into.** A type with
+  nothing to destroy pays one empty call; a type that forgot to opt in would
+  leak silently. The trait's safety contract now says the parent must derive
+  from `GObject`, which registration relies on for the class-struct cast.
+- **`register` resolves `T::parent_type()` before taking its lock.** A
+  hierarchy declared entirely in Rust bootstraps itself by registering the
+  parent from inside `parent_type`, which deadlocked on the very much
+  non-reentrant registration mutex. Found by writing the test that does it.
+
+On the TDD: the tests were written against a `jmap_backend_core::instance`
+that did not exist, so the first run failed to compile, and all 7 passed once
+`Slot` and the `finalize` hook landed. Six mutations were then run and all six
+died, though only two by assertion:
+
+- dropping the NULL check in `clear` → SIGABRT (freeing NULL);
+- `init` overwriting instead of refusing → SIGSEGV (double free);
+- chaining via `g_type_class_peek_parent` of the instance's class → stack
+  overflow, as reasoned above;
+- skipping the chain-up entirely → assertion, `["quiet"]` vs `["quiet",
+  "base"]`;
+- never installing the finalize override → two assertions;
+- resolving `parent_type()` inside the registration lock → hang (killed by a
+  90 s timeout).
+
+Not verified locally, as in the previous five sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The new
+files carry an SPDX `GPL-3.0-or-later` header and no dependency was added.
+`cargo fmt --check`, `cargo test` and `cargo clippy --all-targets -D warnings`
+are clean on the default members and on `-p eds-sys -p jmap-backend-core
+-p jmap-backend-book`, and `cargo build --workspace --locked` succeeds.
+
+No blockers hit.
+
+Next: the `EBookMetaBackend` subclass itself, which now has nothing left under
+it — `SourceConfig` for the account, `open_book` for the connection, `marshal`
+for the C boundary, `Slot` for the session, `register_dynamic` for the type.
+What remains is the instance and class structs, the seven vfunc slot
+overrides, and a body per vfunc that is a `guard_bool` around a `marshal`
+call. After that the `EBookBackendFactory`, the `e_module_load` entry point
+and the `add_cargo_cdylib` install rule.
