@@ -20,6 +20,22 @@ use crate::error::ICalError;
 /// Fold limit in octets, excluding the line break (RFC 5545 §3.1).
 const FOLD_AT: usize = 75;
 
+/// How deeply components may nest, `VCALENDAR` counted.
+///
+/// The parse loop below is iterative, so the *parse* is not what needs a limit;
+/// the tree it returns is what does. A [`Component`] owns a `Vec<Component>`,
+/// so the drop glue recurses once per level, and so does
+/// [`write_into`](Component::write_into). A document nested a hundred thousand
+/// deep therefore aborts the process — "thread has overflowed its stack" — on a
+/// path with no `unsafe` in it at all, and in the calendar factory that takes
+/// every other calendar the user has down with it. Refusing the document is the
+/// only answer that stays inside the error type.
+///
+/// The number is far above what the format uses: RFC 5545's deepest nesting is
+/// `VCALENDAR` > `VTIMEZONE` > `STANDARD`, or `VCALENDAR` > `VEVENT` >
+/// `VALARM`, which is three.
+pub const MAX_DEPTH: usize = 32;
+
 /// One iCalendar content line.
 ///
 /// The value is kept in its on-the-wire form so that structured values can be
@@ -224,6 +240,9 @@ pub fn parse(text: &str) -> Result<Component, ICalError> {
     let mut open = vec![Component::new("VCALENDAR")];
     while let Some(line) = lines.next() {
         if let Some(name) = begins(line) {
+            if open.len() >= MAX_DEPTH {
+                return Err(ICalError::TooDeep(name));
+            }
             open.push(Component::new(&name));
             continue;
         }
@@ -332,10 +351,26 @@ fn parse_line(line: &str) -> Result<Property, ICalError> {
 /// Append a content line, folded to [`FOLD_AT`] octets. Folds land on
 /// character boundaries: a continuation that split a UTF-8 sequence would make
 /// the whole calendar undecodable.
+///
+/// A CR or an LF in `line` is dropped, and that is a security property rather
+/// than tidiness. This is the single point every content line passes through —
+/// name, parameters and value alike — and a line break inside any of them does
+/// not mangle the property, it *ends* the content line: everything after it is
+/// read back by libical as a property of its own. The values are not all ours
+/// to trust, and the two shapes that skip [`escape`] are exactly the ones a
+/// server fills in: [`Property::raw`] keeps `DURATION` and an `RRULE`'s
+/// `FREQ` verbatim, and a quoted parameter value — `DTSTART;TZID=` — has no
+/// escape mechanism to sanitise with. Without this a server could write any
+/// iCalendar property it liked into the event Evolution stores. A caller that
+/// means a line break in a TEXT value spells it `\n`, which [`escape`]
+/// produces and this leaves alone.
 fn fold_into(out: &mut String, line: &str) {
     let mut budget = FOLD_AT;
     let mut used = 0;
     for character in line.chars() {
+        if character == '\r' || character == '\n' {
+            continue;
+        }
         if used + character.len_utf8() > budget {
             out.push_str("\r\n ");
             // The continuation's leading space counts against the limit.

@@ -234,10 +234,26 @@ fn parse_line(line: &str) -> Result<Property, VCardError> {
 /// Append a content line, folded to [`FOLD_AT`] octets. Folds land on
 /// character boundaries: a continuation that split a UTF-8 sequence would
 /// make the whole vCard undecodable.
+///
+/// A CR or an LF in `line` is dropped, and that is a security property rather
+/// than tidiness. This is the single point every content line passes through —
+/// name, parameters and value alike — and a line break inside any of them does
+/// not mangle the property, it *ends* the content line: everything after it is
+/// read back as a property of its own. The values are not all ours to trust.
+/// [`quote_param`] cannot escape its way out of the problem either, because a
+/// quoted parameter value has no escape mechanism at all, so a server that
+/// chooses the JSContact map key an `emails` entry is filed under — which
+/// reaches `X-JMAP-KEY` verbatim — would otherwise be able to write any vCard
+/// property it likes into the user's address book. A caller that means a line
+/// break in a value spells it `\n`, which [`escape`] produces and this leaves
+/// alone.
 fn fold_into(out: &mut String, line: &str) {
     let mut budget = FOLD_AT;
     let mut used = 0;
     for character in line.chars() {
+        if character == '\r' || character == '\n' {
+            continue;
+        }
         if used + character.len_utf8() > budget {
             out.push_str("\r\n ");
             // The continuation's leading space counts against the limit.
