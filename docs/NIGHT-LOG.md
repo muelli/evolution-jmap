@@ -745,3 +745,125 @@ Next: the `EBookBackendFactory` subclass (`E_BOOK_BACKEND_FACTORY` with
 libedata-book backend directory. After that the manual test recipe with a
 hand-written `.source` keyfile, which is the first time any of this runs
 against a real `evolution-source-registry`.
+
+## 2026-08-08 (ninth session)
+
+M3, eighth increment: the two pieces between `evolution-addressbook-factory`
+and the backend — `jmap-backend-book::factory`, the `EBookBackendFactory`
+subclass, and `jmap-backend-book::module`, the `e_module_load`/`e_module_unload`
+symbols EDS resolves out of the shared object. The crate now builds a `cdylib`
+as well as an rlib. 7 new tests (`tests/factory.rs`, plus one appended to
+`jmap-backend-core/tests/subclass.rs`); `-p eds-sys -p jmap-backend-core
+-p jmap-backend-book` is now 105, the default members are unchanged at 87.
+
+This is the layer EDS actually reaches first. It scans its backend directory,
+wraps each `.so` in an `EModule` and `g_type_module_use`s it — which dlopens
+the file and calls `e_module_load` — then looks for children of
+`EBookBackendFactory` among the types that appeared, and hands an `ESource` to
+whichever answers to the `BackendName` in its `[Address Book]` group. All a
+subclass has to say is its name and what to build, so `factory.rs` is two
+assignments in a `class_init` and `module.rs` is two registrations.
+
+- `factory::JmapBookFactory` — `EBookBackendFactory` with `factory_name`
+  `"jmap"` and `backend_type` `EBookBackendJmap`, registered as
+  `EBookBackendJmapFactory`.
+- `factory::remember_backend_type` — where that `GType` comes from.
+- `module::e_module_load` / `module::e_module_unload` — the exported entry
+  points, both under the panic guard.
+
+**The one real find: `register_dynamic` must register on every load, not only
+the first.** `register_static` has to short-circuit on an
+already-registered name because a second `g_type_register_static` is a fatal
+GLib error — and the same short-circuit was being applied to the module path,
+where it is exactly wrong. `g_type_module_unuse`, which EDS does as soon as the
+last backend a module provided goes away, marks every type that module
+registered as *unloaded*; the next use calls `e_module_load` again, and if that
+call does not re-register, GLib does not degrade gracefully. It aborts the
+process: `GLib-GObject-ERROR **: Fatal error - Could not reload previously
+loaded plugin`. That is the red this increment started from — a SIGTRAP in the
+test runner, not an assertion — and the fix is four lines in
+`jmap-backend-core::subclass::register`, guarding the early return with
+`module.is_null()`.
+
+Decisions taken:
+
+- **The backend type reaches the factory through a `static AtomicUsize`, not
+  through a `register_static` in `class_init`.** This is the Rust spelling of
+  what `G_DEFINE_DYNAMIC_TYPE` hands a C backend for free: `e_module_load`
+  registers the backend first and records the result, and `class_init` — which
+  runs much later, at the first `g_type_class_ref` — reads it. Registering from
+  inside `class_init` instead would register *statically*, and a statically
+  registered type keeps its class, and so pointers into this shared object,
+  alive after EDS has unloaded the module underneath it.
+- **…with `register_static` as the fallback when the atomic is still zero.**
+  That cannot happen under EDS and does happen in a test that references the
+  factory class without loading a module. The alternative is a factory with a
+  zero `backend_type`, which is a `g_object_new(0)` per address book: a GLib
+  critical, a NULL backend, and no hint as to why.
+- **`share_subprocess` is left at its default.** Setting it would put every
+  JMAP address book in the session into one
+  `evolution-addressbook-factory-subprocess`, and those books belong to
+  different accounts holding different credentials. The default gives each
+  source its own process: a process more, a blast radius less.
+- **`EBackendFactoryClass.e_module` is left alone.** It is what
+  `e_backend_factory_get_module_filename` reports and it is not a field the
+  EDS backends set for themselves; nothing in the headers or the GIR says a
+  subclass should, and inventing a value for it is not something a wrong guess
+  fails loudly at.
+- **`crate-type = ["cdylib", "rlib"]`, both.** The cdylib is what EDS dlopens;
+  the rlib is what the integration tests link. Building both is what keeps the
+  tested thing and the shipped thing from drifting apart. Verified with
+  `nm -D`: the built `.so` exports `e_module_load` and `e_module_unload` and
+  nothing else of ours.
+
+On the testing: `tests/factory.rs` drives the real path rather than the
+functions under it. A `GTypeModule` subclass — declared with this project's own
+`ObjectSubclass`, which is a pleasing amount of dogfooding — stands in for the
+`EModule` that would dlopen the built `.so`, and its `load` vfunc calls our
+entry point exactly as `EModule`'s does. The fixture uses that module, unuses
+it and uses it again, so the reload path is covered by construction; everything
+else is asserted through the class struct, as in `tests/backend.rs`. There is
+one module and one `OnceLock` because two `GTypeModule`s cannot register the
+same type name, and no test instantiates a factory: `EBookBackendFactory`
+derives from `EExtension`, so a real one needs the `EDataFactory` it extends.
+
+Five mutations were run and five died:
+
+- the early return in `register` not guarded by `module.is_null()` → the
+  process aborts in `tests/factory.rs`, and the new
+  `jmap-backend-core` test fails cleanly on the second `g_type_module_use`;
+- `factory_name` set to something other than `"jmap"` → assertion;
+- `backend_type` left unset → assertion;
+- the entry point registering the backend statically → assertion, via
+  `g_type_get_plugin`;
+- (from the same run) `e_module_load` doing nothing → four assertions.
+
+Swapping the order of the two registrations in `e_module_load` is *not*
+caught, and correctly so: `class_init` is lazy, so the atomic is set either
+way. The order stays as it is because it is the order the dependency runs in
+and a reader should not have to work that out.
+
+Drive-by: `jmap-backend-core`'s crate docs linked `jmap_client::error::Error`,
+which is private; `cargo doc` had been warning about it since M2. Now
+`jmap_client::Error`, and `cargo doc --no-deps` is warning-free again.
+
+Not verified locally, as in the previous eight sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The three
+new files carry an SPDX `GPL-3.0-or-later` header and no dependency was added.
+`cargo fmt --check`, `cargo test` and `cargo clippy --all-targets -D warnings`
+are clean on the default members (87 tests) and on `-p eds-sys
+-p jmap-backend-core -p jmap-backend-book` (105), and
+`cargo build --workspace --locked` succeeds.
+
+No blockers hit.
+
+Next, and deliberately not started here so this increment could be pushed
+green: the CMake side. `add_cargo_cdylib()` in `cmake/Rust.cmake` — the helper a comment
+in that file has been promising since M1 — installing
+`libjmap_backend_book.so` as `libebookbackendjmap.so` into
+`pkg_check_variable(backenddir libedata-book-1.2)`, which on this VM is
+`/usr/lib/evolution-data-server/addressbook-backends`. `cargo build
+--workspace` already builds the crate in the `rust-build` target, so the work
+is the install rule and the rename. After that the manual test recipe with a
+hand-written `.source` keyfile, which is the first time any of this runs
+against a real `evolution-source-registry`.
