@@ -14,16 +14,28 @@
 //!
 //! Camel itself constructs a store through `camel_session_add_service`, which
 //! in Evolution means an `EMailSession` over a source registry on the session
-//! bus. `g_object_new` with the three construct properties a `CamelService`
+//! bus. `g_initable_new` with the three construct properties a `CamelService`
 //! needs is the same object without any of that.
+//!
+//! `g_initable_new` rather than `g_object_new`, because a `CamelStore` is a
+//! `GInitable` and what its `init` does is open the summary database every
+//! folder of the store keeps its rows in. A store constructed the shorter way
+//! looks complete and has none: `camel_store_get_db` returns NULL, and the
+//! first row a folder removes takes the process down inside Camel. That is a
+//! property of the harness rather than of the provider — Camel constructs a
+//! service no other way — but it only becomes visible once a folder has a
+//! summary, which is why it is being fixed here rather than earlier.
 
 #![allow(dead_code)]
 
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{CamelProvider, CamelStore, camel_session_get_type};
-use glib_sys::gchar;
+use gio_sys::g_initable_new;
+use glib_sys::{GError, gchar};
 use gobject_sys::{GObject, g_object_new, g_object_unref};
 use jmap_mail::provider::register;
 use jmap_mail::store::{JmapStore, store_type};
@@ -37,7 +49,14 @@ use jmap_mail_sync::MailSync;
 pub struct Account {
     session: *mut GObject,
     pub store: *mut CamelStore,
+    directory: PathBuf,
 }
+
+/// Tells one account's directory from the next. A store's summary database is
+/// a file under its session's directories, and two accounts sharing one would
+/// be two tests sharing a folder's rows — including two tests running at once,
+/// which is what a Rust test binary does by default.
+static ACCOUNTS: AtomicUsize = AtomicUsize::new(0);
 
 impl Account {
     /// Constructs the session and the store on it. The provider struct
@@ -46,10 +65,16 @@ impl Account {
     /// uid.
     pub fn open() -> Self {
         let provider: *const CamelProvider = register();
-        let dir = CString::new(std::env::temp_dir().to_string_lossy().as_ref())
+        let directory = std::env::temp_dir().join(format!(
+            "jmap-mail-test-{}-{}",
+            std::process::id(),
+            ACCOUNTS.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&directory).expect("a directory for the account");
+        let dir = CString::new(directory.to_string_lossy().as_ref())
             .expect("a temporary directory path with no NUL in it");
 
-        // SAFETY: a variadic construct call. Every property named is one
+        // SAFETY: variadic construct calls. Every property named is one
         // `CamelSession` or `CamelService` declares, and each value has the
         // type that property carries — two strings for the session's
         // directories, the session and provider for the store, and a NULL
@@ -65,8 +90,11 @@ impl Account {
             );
             assert!(!session.is_null(), "g_object_new returned no session");
 
-            let store = g_object_new(
+            let mut error: *mut GError = ptr::null_mut();
+            let store = g_initable_new(
                 store_type(),
+                ptr::null_mut(),
+                ptr::addr_of_mut!(error),
                 c"session".as_ptr(),
                 session,
                 c"provider".as_ptr(),
@@ -75,11 +103,15 @@ impl Account {
                 c"jmap-test".as_ptr(),
                 ptr::null::<gchar>(),
             );
-            assert!(!store.is_null(), "g_object_new returned no store");
+            assert!(
+                !store.is_null() && error.is_null(),
+                "the store would not initialise"
+            );
 
             Self {
                 session,
                 store: store.cast::<CamelStore>(),
+                directory,
             }
         }
     }
@@ -99,11 +131,15 @@ impl Account {
 
 impl Drop for Account {
     fn drop(&mut self) {
-        // SAFETY: one reference each, taken by `g_object_new` and never handed
+        // SAFETY: one reference each, taken at construction and never handed
         // out; the store goes first because it references the session.
         unsafe {
             g_object_unref(self.store.cast());
             g_object_unref(self.session.cast());
         }
+        // The summary database the store just closed, and whatever else Camel
+        // put beside it. Best effort: a test that has already failed is not
+        // made better by a panic in its teardown.
+        let _ = std::fs::remove_dir_all(&self.directory);
     }
 }

@@ -3410,3 +3410,102 @@ not set. That is the increment `camel_folder_summary_.*` arrives with. The
 before they are a vfunc. Still unexercised against a real `CamelSession`:
 `service.rs`, which waits on M6 and M7. The README's architecture block still
 lists only the round-1 crates.
+
+## 2026-08-08 (thirty-seventh session)
+
+M5's seventeenth increment: `CamelFolderSummary`, the collection the rows of
+the previous increment go into — and with it the flag `folder.rs` had been
+deliberately withholding. New module `jmap-mail`'s `summary`, and the
+`camel_folder_summary_.*`, `camel_folder_(get|take)_folder_summary`,
+`camel_folder_has_summary_capability` and `camel_named_flags_.*` entries
+`eds-sys` had been deferring. The red step was ten tests that could not find
+the module.
+
+Decisions taken:
+
+- **No subclass, and that is the finding rather than the shortcut.** Camel's
+  own providers subclass `CamelFolderSummary`, so the plan named a subclass;
+  what the subclass exists for turns out to be building rows out of *messages*
+  — the three `message_info_new_from_*` vfuncs and `next_uid_string`, which
+  invents a uid for a message that arrived without one. A JMAP folder is
+  listed rather than parsed: the rows come from `Email/get` already
+  structured, each carrying the server's own immutable id, so all four would
+  be overrides of paths this provider does not take. The one thing the base
+  class decides for us is which message-info class to instantiate, and its
+  answer is `CamelMessageInfoBase` — exactly what the previous increment
+  built and pinned against, which is why that increment could pass NULL for
+  the summary and still be building the object it will really be. A subclass
+  becomes real when something local has to be numbered, which is `append` and
+  `EmailSubmission`.
+- **A refresh rewrites two columns and no others.** RFC 8621 §4.1 makes every
+  property of an `Email` immutable except `keywords` and `mailboxIds`, and the
+  mailbox is not a column of the row — it is which folder the row is in. So a
+  listing that meets a row already there sets the flags word and the user
+  flags and leaves the other dozen columns alone: it is what the server can
+  honestly be said to have changed, it saves re-deriving two MD5s and three
+  formatted address lists per message per refresh, and it is what keeps
+  `CAMEL_MESSAGE_DELETED` — a local mark JMAP has no keyword for — from being
+  undone by every refresh. The mutable half was factored out of
+  `new_message_info` as `update_message_info`, which the fresh-row path now
+  calls too, so the two can not drift.
+- **User flags are replaced wholesale, empty set included.** Labels are
+  keywords Camel has no bit for, and the keyword set is the whole truth about
+  them: a keyword the server stopped sending is one taken off in some other
+  client, and its absence is the only notice there is. Handing over an empty
+  `CamelNamedFlags` is therefore right rather than merely harmless — unlike
+  the text columns, where the summary database distinguishes an empty value
+  from an absent one, user flags are stored as one joined string with no way
+  to spell "absent". The test walks two labels down to one and then to none,
+  because the last one is the case a `return if empty` gets wrong.
+- **The reconciliation is the listing, not a delta.** A message the listing no
+  longer names has left the mailbox, and from inside one folder that is
+  indistinguishable from being deleted — JMAP moves mail by changing
+  `mailboxIds`. `Email/query` answering without it is the only notice, so the
+  row goes. The whole pass runs under the summary's (recursive) lock: half a
+  mailbox is a worse answer than the previous one.
+- **The test harness was building a store Camel never would.** `Account::open`
+  used `g_object_new`; a `CamelStore` is a `GInitable`, and what its `init`
+  does is open the summary database every folder writes its rows to. The
+  store looked complete and had none — `camel_store_get_db` returned NULL —
+  and the first row removed took the process down inside Camel with a
+  SIGSEGV. Now `g_initable_new`, with a temporary directory per account
+  (removed on drop) so that two tests running at once are not two tests
+  sharing one folder's rows. That was a harness defect all along; it only
+  became visible once a folder had a summary to remove something from.
+
+Mutation testing, seven mutants, six killed: rows never removed, no summary
+attached, the flag not set, an existing row replaced rather than updated, user
+flags left alone when the listing carries none (which *survived* the first
+round — the label test only ever went from two labels to one — and is what the
+third listing in that test was added for), and the flags mask widened to the
+whole word.
+
+The seventh survives, and the honest answer is that it cannot be killed here:
+`camel_folder_summary_add` with `force_keep_uid` FALSE renumbers only a uid
+that is empty or already loaded, and neither reaches that call — the second
+because `apply_message` checks first and takes the update path. TRUE is still
+what is passed, because it is the statement that a server-assigned id is not
+ours to change, and it is the value that stays right if the check above it
+ever stops holding. The code comment says that rather than claiming the flag
+is what prevents the renumbering.
+
+`eds-sys` grew one layout assertion, `CamelFolderSummary`.
+
+Not verified locally, as in the previous thirty-six sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The two new files —
+`jmap-mail/src/summary.rs` and `jmap-mail/tests/summary.rs` — carry SPDX
+`GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets, the five EDS crates included.
+
+Next in M5 is what now has somewhere to go: `refresh_info_sync` and
+`get_message_count`/`get_uids` on `CamelJmapFolder` — the vfuncs that call
+`MailSync::messages` and hand the result to `apply_listing`, which is the
+first time the two halves of this and the previous three increments meet a
+server. That increment is also where `CamelFolderChangeInfo` arrives: nothing
+yet tells Camel *which* rows a refresh added or dropped, so a folder open in
+Evolution would not redraw. `CamelSubscribable` remains the smaller unblocked
+piece; `get_trash_folder_sync` and `get_junk_folder_sync` are still a settings
+decision before they are a vfunc. Still unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's
+architecture block still lists only the round-1 crates.
