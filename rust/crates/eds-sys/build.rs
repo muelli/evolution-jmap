@@ -49,6 +49,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_(book|cal)_cache_.*",
     "e_cache_.*",
     "e_source_.*",
+    // The registry's own side of a `.source` file. No backend calls these —
+    // it is handed a finished `ESource` — but they are how a keyfile becomes
+    // one without a running `evolution-source-registry`, which is what lets
+    // the documented manual test recipe be checked by a test. M6's collection
+    // backend meets server-side sources for real.
+    "e_server_side_source_.*",
     "e_collection_backend_.*",
     "e_contact_.*",
     "e_vcard_.*",
