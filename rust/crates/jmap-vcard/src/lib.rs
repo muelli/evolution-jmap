@@ -19,5 +19,7 @@ pub mod contact;
 pub mod error;
 pub mod syntax;
 
-pub use contact::{card_to_vcard, vcard_to_card};
+pub use contact::{
+    card_to_vcard, maps_context, maps_name_component, maps_phone_feature, vcard_to_card,
+};
 pub use error::VCardError;
