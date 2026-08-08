@@ -34,6 +34,11 @@ const ALLOWED_TYPES: &[&str] = &[
     // not the whole EClient class: the backends produce these codes, they
     // never talk to an EClient.
     "EClientError",
+    // The address-book-specific half of it. `EBookMetaBackend` itself matches
+    // on `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND` — a load that fails with it
+    // means "drop this one from the cache" rather than "the sync failed" — so
+    // reporting a missing contact any other way is a stuck cache entry.
+    "EBookClientError",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -48,6 +53,7 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_contact_.*",
     "e_vcard_.*",
     "e_client_error_.*",
+    "e_book_client_error_.*",
     // How a backend is handed its credentials: EDS fetches them from
     // libsecret and passes an ENamedParameters to connect_sync.
     "e_named_parameters_.*",
