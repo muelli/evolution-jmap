@@ -234,3 +234,90 @@ against the `GTypeModule`, build a `BookSync` in `connect_sync` from
 `ESourceAuthentication` credentials (libsecret, never a config file), and
 marshal each vfunc onto the method of the same name through
 `jmap-backend-core`'s trampolines.
+
+## 2026-08-08 (fourth session)
+
+M3, third increment: `jmap_backend_core::source` — turning the `ESource` a
+backend is handed into the two things a JMAP client needs (an origin and a
+user) plus the address book id. 15 new tests (12 in `tests/source.rs` against
+a real `ESource`, 3 unit); `-p eds-sys -p jmap-backend-core` is now 42, the
+default members are unchanged at 87, workspace total 129.
+
+Decisions taken:
+
+- **The account lives in the standard `ESource` extensions, not a private
+  one.** `Authentication` carries host/port/user, `Security` the scheme,
+  `Resource:identity` the JMAP address book id. A JMAP-specific extension
+  needs an `ESourceExtension` subclass with keyfile-bound properties, which is
+  M6's business along with the collection backend; until then a hand-written
+  account looks exactly like a CalDAV or IMAP one, and the `.source` recipe M3
+  asks for is in the module docs.
+- **The password is not in the config at all.** It arrives at `connect_sync`
+  as an `ENamedParameters` EDS filled from libsecret. Reading a credential
+  from a keyfile would be the security failure the milestone specifically
+  rules out, so there is deliberately no field it could be put in.
+- **`ESourceSecurity:secure` defaults to FALSE, and `e_source_get_extension`
+  creates the extension it cannot find.** Together those mean the obvious
+  implementation — get the extension, read the flag — cannot distinguish "the
+  keyfile has no `[Security]` group" from "the user turned TLS off", and
+  answers the first with plain HTTP. `e_source_has_extension` is asked first,
+  before anything creates the extension; absent means TLS, present means what
+  it says. This was found by the test, which was written expecting the
+  opposite default.
+- **The host is validated, because the origin is built by concatenation.** A
+  `.source` file is a plain file in the user's home. A host field carrying
+  `http://evil.example.com` or `good.example.com/../evil` would aim the client
+  elsewhere, or slip a plaintext endpoint past the TLS check. Only a bare host
+  name or an IP literal is accepted; an IPv6 literal is bracketed so its
+  colons stay out of the port slot.
+- **Plaintext is refused unless the host is loopback.** 127/8, `::1` and
+  `localhost` — which is what keeps `jmap-mockd` and a local Stalwart usable
+  without weakening the rule for anything else. The near-misses
+  (`localhost.example.com`, `127.0.0.1.example.com`, `0.0.0.0`) have their own
+  test.
+- **The refusal is `E_CLIENT_ERROR_TLS_NOT_AVAILABLE`, a missing or malformed
+  host is `E_CLIENT_ERROR_INVALID_ARG`.** Same reasoning as M2's error
+  mapping: Evolution renders the TLS code as a message about a secure
+  connection, which is actionable, where `OTHER_ERROR` is not. These are
+  configuration faults, so they get their own `SourceError` rather than being
+  folded into the `jmap_client::Error` mapping — retrying will not help and
+  serving the offline cache is not the right answer either.
+- **`eds-sys` now allowlists vars.** The extension names are `#define`d
+  strings, not symbols, so retyping them in Rust makes a typo an address book
+  that silently reports no host instead of a link error. `generate_cstr` turns
+  them into `&CStr`, so passing one to a `*const gchar` parameter is
+  `.as_ptr()`.
+
+Also fixed, unrelated to the increment but found by running the suite
+repeatedly: `tests/subclass.rs` asserted the `class_init` counter without ever
+referencing a class, and GObject runs `class_init` lazily. It passed only when
+the instantiation test happened to run first, which cargo's concurrency made
+usual but not certain — roughly one run in five was red. It now refs the class
+itself.
+
+On the TDD: `from_source` and `SourceError`'s methods were `unimplemented!()`
+stubs while the tests were written, so all 11 failed at runtime for the right
+reason. Two then failed for substantive reasons once implemented — the
+`Security` default above, and a trailing-space host that `ESource` turns out
+to strip in the setter, so that case was replaced with an interior space,
+which it does not.
+
+Eight mutations were run against the implementation. Seven were killed. The
+survivor was treating an empty string as present: `ESource` normalises a
+cleared key to NULL, so the integration test could not reach that branch at
+all. There is now a unit test on the reader itself, the comment no longer
+claims EDS hands out empty strings, and the mutation dies.
+
+Not verified locally, as in the previous three sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). Both new
+files carry an SPDX `GPL-3.0-or-later` header and no dependency was added.
+`cargo fmt --check`, `cargo test` and `cargo clippy --all-targets -D warnings`
+are clean on the default members and on `-p eds-sys -p jmap-backend-core`.
+
+No blockers hit.
+
+Next: the `EBookMetaBackend` subclass itself. Everything under it now exists —
+`SourceConfig` for the account, `BookSync` for the protocol, `register_dynamic`
+for the type, the trampolines and the error mapping — so what is left is the
+class struct, the vfunc slot overrides, and holding a `BookSync` across
+`connect_sync`/`disconnect_sync`.
