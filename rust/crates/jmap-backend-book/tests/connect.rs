@@ -4,12 +4,21 @@
 //! `connect_sync`, minus the GObject: turning a [`SourceConfig`] and whatever
 //! EDS got out of libsecret into a [`BookSync`], against `jmap-mockd`.
 
+use std::ffi::CString;
+use std::ptr;
+
 use eds_sys::{
     E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_INVALID_ARG,
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_SOURCE_AUTHENTICATION_ACCEPTED,
     E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_AUTHENTICATION_REJECTED,
-    E_SOURCE_AUTHENTICATION_REQUIRED, e_client_error_quark,
+    E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_EXTENSION_AUTHENTICATION,
+    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceAuthenticationResult,
+    e_client_error_quark, e_source_authentication_set_host, e_source_authentication_set_port,
+    e_source_authentication_set_user, e_source_get_extension, e_source_new_with_uid,
+    e_source_security_set_secure,
 };
+use glib_sys::GError;
+use gobject_sys::g_object_unref;
 use jmap_backend_book::connect::{self, ConnectError};
 use jmap_backend_core::source::SourceConfig;
 use jmap_client::transport::CancelFlag;
@@ -210,4 +219,197 @@ fn each_failure_carries_the_client_error_code_evolution_routes_on() {
             glib_sys::g_error_free(gerror);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// `connect_sync` from the ESource down, which is everything the subclass does
+// not do itself.
+
+/// An `ESource` that is not backed by the registry. `e_source_new_with_uid`
+/// with a NULL D-Bus object is what EDS itself uses for a source read from a
+/// keyfile, so the extension machinery behaves as it does inside a backend.
+struct TestSource(*mut ESource);
+
+impl TestSource {
+    fn new() -> Self {
+        let uid = CString::new("jmap-connect-test").expect("no NUL in a literal");
+        let mut error = ptr::null_mut();
+        // SAFETY: a NUL-terminated uid, the default main context and a NULL
+        // GError out-parameter are the documented arguments.
+        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
+        assert!(!source.is_null(), "e_source_new_with_uid failed");
+        Self(source)
+    }
+
+    fn authentication(&self) -> *mut ESourceAuthentication {
+        // SAFETY: the source is alive and the name is a header constant; the
+        // extension is created on demand and owned by the source.
+        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }.cast()
+    }
+
+    /// Points the source at `origin`, which the mock server hands out as
+    /// `http://127.0.0.1:<port>`. TLS is switched off explicitly, which
+    /// `SourceConfig` only tolerates because the host is loopback.
+    fn at(self, origin: &str) -> Self {
+        let (host, port) = origin
+            .trim_start_matches("http://")
+            .split_once(':')
+            .expect("the mock origin has a port");
+        let host = CString::new(host).expect("no NUL in a host");
+        // SAFETY: live extensions and a NUL-terminated string the setter
+        // copies.
+        unsafe {
+            e_source_authentication_set_host(self.authentication(), host.as_ptr());
+            e_source_authentication_set_port(self.authentication(), port.parse().expect("a port"));
+            e_source_security_set_secure(
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast(),
+                0,
+            );
+        }
+        self
+    }
+
+    fn user(self, user: &str) -> Self {
+        let user = CString::new(user).expect("no NUL in a user");
+        // SAFETY: as `at`.
+        unsafe { e_source_authentication_set_user(self.authentication(), user.as_ptr()) };
+        self
+    }
+}
+
+impl Drop for TestSource {
+    fn drop(&mut self) {
+        // SAFETY: the reference from e_source_new_with_uid is given back once.
+        unsafe { g_object_unref(self.0.cast()) };
+    }
+}
+
+/// The out-parameters EDS hands `connect_sync`, started at values it never
+/// passes: a body that writes neither would otherwise be indistinguishable
+/// from one that answers correctly.
+struct ConnectOuts {
+    auth_result: ESourceAuthenticationResult,
+    error: *mut GError,
+}
+
+impl Default for ConnectOuts {
+    fn default() -> Self {
+        Self {
+            auth_result: E_SOURCE_AUTHENTICATION_REJECTED,
+            error: ptr::null_mut(),
+        }
+    }
+}
+
+impl ConnectOuts {
+    /// Asserts the reported domain and code, and frees the error.
+    unsafe fn take_error(&mut self, code: u32) {
+        unsafe {
+            assert!(!self.error.is_null(), "the call failed without an error");
+            assert_eq!((*self.error).domain, e_client_error_quark(), "domain");
+            assert_eq!((*self.error).code, code as i32, "code");
+            glib_sys::g_error_free(self.error);
+            self.error = ptr::null_mut();
+        }
+    }
+}
+
+#[test]
+fn connecting_from_a_source_opens_the_default_address_book_and_reports_accepted() {
+    let fixture = Fixture::start(true);
+    let source = TestSource::new().at(fixture.server.origin());
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: a live ESource, no credentials, no cancellable, and two
+    // writable out-parameters — what EDS passes on a first connect.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    let sync = sync.expect("the connection was refused");
+    assert_eq!(
+        sync.address_book_id(),
+        fixture.default_book.as_ref().expect("seeded")
+    );
+    assert!(outs.error.is_null(), "a successful connect set an error");
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+}
+
+/// The prompt has to happen before anything is sent, so a source that names a
+/// user and has no password yet must not reach the server at all — which is
+/// what asserting on a server that was never started proves.
+#[test]
+fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
+    let source = TestSource::new().at("http://127.0.0.1:1").user("vera");
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: as above.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    assert!(sync.is_none());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_REQUIRED);
+    // SAFETY: the call failed, so it owns an error it handed over.
+    unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
+}
+
+/// A source with no host is a misconfigured account: no password prompt fixes
+/// it, so it must not be reported as a credentials problem.
+#[test]
+fn a_source_that_names_no_server_is_an_error_rather_than_a_prompt() {
+    let source = TestSource::new();
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: as above.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    assert!(sync.is_none());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ERROR);
+    // SAFETY: as above.
+    unsafe { outs.take_error(E_CLIENT_ERROR_INVALID_ARG) };
+}
+
+/// EDS constructs a backend *from* a source, so this cannot happen — but a
+/// NULL dereference here takes `evolution-addressbook-factory` down and with
+/// it every other account in the process.
+#[test]
+fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: a NULL ESource is explicitly allowed by `connect`.
+    let sync = unsafe {
+        connect::connect(
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    assert!(sync.is_none());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ERROR);
+    // SAFETY: as above.
+    unsafe { outs.take_error(E_CLIENT_ERROR_INVALID_ARG) };
 }

@@ -21,9 +21,10 @@
 //!   makes them testable at all, since constructing one of those needs a
 //!   running `evolution-source-registry`.
 //!
-//! All three are exercised directly by the test suite, so the subclass on top
-//! can stay a panic guard and a slot lookup over calls that are already
-//! tested.
+//! All three are exercised directly by the test suite, so [`backend`] — the
+//! `EBookMetaBackend` subclass they exist for — stays what it was meant to be:
+//! an instance struct, seven vfunc slots, and a panic guard around a lookup of
+//! the connection the instance holds.
 //!
 //! [`BookSync`]: jmap_book_sync::BookSync
 //!
@@ -31,6 +32,7 @@
 //! stays out of the workspace's `default-members`; CMake runs its tests via
 //! the `rust-test-eds` target.
 
+pub mod backend;
 pub mod connect;
 pub mod marshal;
 pub mod ops;

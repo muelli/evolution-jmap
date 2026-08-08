@@ -622,3 +622,126 @@ the class struct, `register_dynamic`, and seven vfunc bodies that are a
 `Outcome` and chaining up on `ListInstead`. After that the
 `EBookBackendFactory`, the `e_module_load` entry point and the
 `add_cargo_cdylib` install rule.
+
+## 2026-08-08 (eighth session)
+
+M3, seventh increment: `jmap-backend-book::backend` — the `EBookMetaBackend`
+subclass, and the `connect::connect` layer under `connect_sync` that it
+delegates to. 13 new tests (`tests/backend.rs`, plus four appended to
+`tests/connect.rs`); `-p eds-sys -p jmap-backend-core -p jmap-backend-book` is
+now 98, the default members are unchanged at 87.
+
+The subclass is what the last six increments were clearing the way for, and it
+came out as small as it was supposed to be: an instance struct, a class struct,
+seven vfunc slots, and a body per slot that is `guard_bool` around a look in
+the session slot and a call into `ops`.
+
+- `backend::JmapBookBackend` — `EBookMetaBackend` plus a
+  `Slot<RwLock<Option<BookSync>>>`, registered as `EBookBackendJmap`.
+- `backend::parent_class` — the parent's class struct, for the one chain-up.
+- `connect::connect` — `ESource` + `ENamedParameters` + `GCancellable` →
+  `BookSync`, with `out_auth_result` and `error` written the way the vfunc has
+  to write them.
+
+Decisions taken:
+
+- **An operation with no connection reports `E_CLIENT_ERROR_REPOSITORY_OFFLINE`,
+  not `NOT_OPENED`.** EDS calls `connect_sync` before anything else, so the
+  realistic way to reach an operation without a connection is a
+  `disconnect_sync` racing it — which is what going offline looks like from
+  inside. Reported as offline, `EBookMetaBackend` serves its cache and the user
+  sees their contacts; reported as anything else they see an error for a state
+  they asked for. The cost is that a genuine bug in the dispatch would be
+  masked as an offline account, which is why every vfunc names itself in the
+  panic guard's log context.
+- **The connection lives behind an `RwLock`, not a `Mutex`.** EDS calls the
+  read-only vfuncs from several threads at once. One lock over all of them
+  would make a long `list_existing_sync` block every `load_contact_sync` behind
+  it, for no gain: only connect and disconnect replace the value.
+- **`connect_sync` on an already-connected backend answers ACCEPTED without
+  reconnecting.** EDS calls it whenever it suspects the connection is gone,
+  including when it is not; re-opening would drop a socket other threads are
+  mid-request on.
+- **`disconnect_sync` on a backend that never connected is a success.** It is
+  what EDS asks for on shutdown after a failed connect. There is nothing left
+  to do and nothing went wrong.
+- **`out_auth_result` is written on every path through `connect::connect`,
+  success included.** EDS reads it whenever the vfunc returns, and a stale
+  value left from a previous attempt is how an account ends up either never
+  prompting or prompting forever.
+- **`out_certificate_pem`/`out_certificate_errors` are left untouched.** They
+  describe a TLS certificate the user might be asked to accept, and the client
+  offers no way to get at one — a bad certificate reaches us as a transport
+  failure and nothing more. A made-up value would put a dialog in front of the
+  user that cannot be answered truthfully.
+- **`e_book_meta_backend_set_connected_writable(TRUE)` on a successful
+  connect.** Without it the address book is read-only in the UI. JMAP has no
+  per-book "may I write" flag, so the answer is the account's.
+- **A NULL `ESource` is refused rather than passed on.** EDS constructs a
+  backend *from* a source so it cannot happen, but a NULL dereference in
+  `evolution-addressbook-factory` takes every other account in that process
+  down with it.
+
+On the testing: everything goes *through the class struct* —
+`g_type_class_ref` and then the slot — because a vfunc that is correct but not
+installed is a backend that silently uses `EBookMetaBackend`'s defaults, and
+that is indistinguishable from an empty address book. The instance is
+`JmapBookBackend::detached()`: zeroed parent bytes, an initialised session
+slot, and a documented rule that nothing but that slot may be touched. It is
+not a shortcut — a real instance needs an `ESourceRegistry` and so
+`evolution-source-registry` on the session bus, which neither this VM nor CI
+has. That is also why `connect_sync` itself is tested one layer down, at
+`connect::connect`, where the input is an `ESource` a test can build with
+`e_source_new_with_uid`.
+
+Nine mutations were run and seven died:
+
+- `fail_offline` returning TRUE → assertion;
+- `class_init` skipping `get_changes_sync` → assertion;
+- `disconnect_sync` keeping the connection → assertion;
+- `finalize` not clearing the slot → assertion;
+- `store_connection` doing nothing → assertion;
+- `detached` leaving the slot empty → assertion;
+- `connect` not writing ACCEPTED on success → assertion;
+- a configuration failure reported as REJECTED rather than ERROR → assertion.
+
+Two survivors, both understood:
+
+- dropping the explicit NULL-`ESource` check still ends in
+  `E_CLIENT_ERROR_INVALID_ARG`, because EDS's own `g_return_if_fail` guards
+  turn every accessor into a NULL return and the config comes out with no
+  host. The check stays: it is four fewer GLib criticals and it does not
+  depend on those guards being there.
+- `connect_sync` re-opening a live connection survives because `connect_sync`
+  is the one vfunc with no test at all — it reads the parent's `ESource`, which
+  a detached instance does not have. Everything below it is covered; the vfunc
+  itself is six lines and will first run under a real registry when the module
+  loads.
+
+Known gap, deliberately not closed here: **cancellation reaches the connect but
+not the operations after it.** `Client` takes its `CancelFlag` when it is built
+and offers no way to re-point it, so a `GCancellable` handed to
+`list_existing_sync` is observed by nobody. Closing it means a resettable flag
+shared between the client and a per-operation `CancelBridge` — a change to
+`jmap-client`, not to this crate, and a separate increment.
+
+Not verified locally, as in the previous seven sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The two
+new files carry an SPDX `GPL-3.0-or-later` header and no external dependency
+was added — the one new entry is `gio-sys`, already a workspace dependency used
+by `jmap-backend-core`, for the `GCancellable` in the vfunc signatures.
+`cargo fmt --check`, `cargo test` and `cargo clippy --all-targets -D warnings`
+are clean on the default members and on `-p eds-sys -p jmap-backend-core
+-p jmap-backend-book`, `cargo doc` is warning-free, and
+`cargo build --workspace --locked` succeeds. `cmake/Rust.cmake` needed no
+change; `rust-test-eds` already runs this crate.
+
+No blockers hit.
+
+Next: the `EBookBackendFactory` subclass (`E_BOOK_BACKEND_FACTORY` with
+`factory_name = "jmap"` and `backend_type = JmapBookBackend`), the
+`e_module_load`/`e_module_unload` entry points that register both against the
+`GTypeModule`, and the `add_cargo_cdylib` install rule into the
+libedata-book backend directory. After that the manual test recipe with a
+hand-written `.source` keyfile, which is the first time any of this runs
+against a real `evolution-source-registry`.
