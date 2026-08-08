@@ -6,7 +6,8 @@
 //! One JMAP account is one `CamelJmapStore`, and this crate is what syncing it
 //! means: which folders exist, what is in them, and what a message looks like.
 //! Each entry point corresponds to one Camel vfunc — [`MailSync::folder_tree`]
-//! to `get_folder_info_sync`, and more as the store grows.
+//! to `get_folder_info_sync`, [`MailSync::messages`] to what a folder's
+//! `CamelFolderSummary` is filled from — and more as the store grows.
 //!
 //! Like `jmap-book-sync` and `jmap-cal-sync`, it knows nothing about GObject
 //! or the Camel headers, so the interesting half of the provider is testable
@@ -16,15 +17,22 @@
 //! Camel path is an identifier — and the tree itself, which JMAP models with parent
 //! pointers and Camel with a linked forest.
 
+pub(crate) mod date;
 pub mod error;
 pub mod folder;
+pub mod message;
 pub(crate) mod path;
 
+use std::collections::BTreeMap;
+
 use jmap_client::Client;
+use jmap_proto::mail::EmailQueryFilter;
+use jmap_proto::methods::Comparator;
 use jmap_proto::{Id, State};
 
 pub use error::SyncError;
 pub use folder::{FolderInfo, FolderRole, FolderTree};
+pub use message::{MessageFlags, MessageSummary, SUMMARY_PROPERTIES};
 
 /// What a folder-list refresh found.
 ///
@@ -106,4 +114,106 @@ impl MailSync {
         let (state, tree) = self.folder_tree()?;
         Ok(FolderUpdate::Rebuilt { state, tree })
     }
+
+    /// Every message in one mailbox, oldest first — what a folder's summary is
+    /// filled from.
+    ///
+    /// Two steps, not the one round-trip `Email/query`+`Email/get`
+    /// back-reference the client also offers: chaining them sends every
+    /// matching id straight into the `/get`, and a mailbox may hold more ids
+    /// than one `/get` is allowed to name. Asking first and fetching second is
+    /// what makes the fetch divisible.
+    ///
+    /// Oldest first because that is the order a summary is built in and the
+    /// order Camel numbers messages in, and `receivedAt` rather than the `Date`
+    /// header because the header is the sender's clock — a message with a wrong
+    /// one would sort into the wrong place forever.
+    pub fn messages(&self, mailbox: &Id) -> Result<Vec<MessageSummary>, SyncError> {
+        let ids = self.message_ids(mailbox)?;
+
+        // `/get` may answer in any order (RFC 8620 §5.1), so the query's order
+        // is restored below rather than assumed here.
+        let mut by_uid: BTreeMap<Id, MessageSummary> = BTreeMap::new();
+        for chunk in ids.chunks(self.objects_in_get()) {
+            for email in self
+                .client
+                .email_get(&self.account_id, chunk, Some(SUMMARY_PROPERTIES))?
+            {
+                let summary = MessageSummary::from_email(&email)?;
+                by_uid.insert(summary.uid.clone(), summary);
+            }
+        }
+
+        // An id the query named and the `/get` did not answer for is a message
+        // deleted between the two calls: it is gone, which is not a failure and
+        // not something to keep a row for. `remove` also settles the other side
+        // of the same race — a message that shifted position and came back on
+        // two pages is listed once.
+        Ok(ids.iter().filter_map(|id| by_uid.remove(id)).collect())
+    }
+
+    /// The ids of a mailbox's messages, oldest first, however many pages the
+    /// server answers in.
+    fn message_ids(&self, mailbox: &Id) -> Result<Vec<Id>, SyncError> {
+        let mut ids: Vec<Id> = Vec::new();
+
+        for _ in 0..MAX_QUERY_PAGES {
+            let response = self.client.email_query(
+                &self.account_id,
+                EmailQueryFilter::in_mailbox(mailbox.clone()),
+                Some(vec![Comparator::ascending("receivedAt")]),
+                None,
+                ids.len() as i64,
+            )?;
+            let capped = response.limit.is_some();
+            let answered = !response.ids.is_empty();
+            ids.extend(response.ids);
+            // No cap means the whole rest of the result set is in hand; a cap
+            // that came back empty means the rest of it is nothing.
+            if !capped || !answered {
+                return Ok(ids);
+            }
+        }
+        Err(SyncError::protocol(
+            "Email/query never stopped reporting a limited answer",
+        ))
+    }
+
+    /// How many ids one `Email/get` of this account may name.
+    ///
+    /// The server's `maxObjectsInGet` if it published one — asking for more is
+    /// a `requestTooLarge` that fails the whole call rather than a short
+    /// answer — and otherwise a conservative guess, because RFC 8620 §2
+    /// requires the limit to be there and a server that omits it has told us
+    /// nothing about what it will take.
+    ///
+    /// Capped from above as well as below: a server may advertise a limit far
+    /// larger than a mailbox, and one `/get` for fifty thousand messages is a
+    /// response Evolution waits on with the folder half-open. Chunking bounds
+    /// what is in flight at the cost of round-trips it would otherwise make
+    /// anyway.
+    fn objects_in_get(&self) -> usize {
+        let advertised = self
+            .client
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|limit| *limit > 0)
+            .unwrap_or(FALLBACK_OBJECTS_IN_GET);
+        advertised.min(MAX_OBJECTS_PER_GET)
+    }
 }
+
+/// A server that answers every `Email/query` with a limited page, without ever
+/// running out of ids, would otherwise hang the calling thread. Far above any
+/// real mailbox at any real page size; reaching it means the server is broken.
+const MAX_QUERY_PAGES: usize = 1024;
+
+/// What to assume when the server does not publish `maxObjectsInGet`. Small
+/// enough that no plausible server rejects it, at the price of more round-trips
+/// for a server that broke the rules.
+const FALLBACK_OBJECTS_IN_GET: usize = 50;
+
+/// The most this client asks for in one `Email/get`, however much the server
+/// allows.
+const MAX_OBJECTS_PER_GET: usize = 500;

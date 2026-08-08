@@ -21,11 +21,18 @@ use crate::state::ServerState;
 pub const DEFAULT_ACCOUNT_ID: &str = "A1";
 pub const DEFAULT_ACCOUNT_NAME: &str = "alice@example.com";
 
+/// The `maxObjectsInGet` the mock advertises and enforces unless a test asks
+/// for a different one. RFC 8620 §2 requires a server to name a limit, and one
+/// this size is out of the way of every test that is not about it.
+pub const DEFAULT_OBJECTS_IN_GET: u64 = 256;
+
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
     omitted_capabilities: BTreeSet<String>,
     changes_page_size: Option<u64>,
+    objects_in_get: Option<u64>,
+    query_page_size: Option<u64>,
 }
 
 impl MockServerBuilder {
@@ -67,6 +74,30 @@ impl MockServerBuilder {
         self
     }
 
+    /// Advertise — and enforce — `ids` as `maxObjectsInGet`, as a server with a
+    /// small appetite does.
+    ///
+    /// An `Email/get` naming more than this is answered with
+    /// `requestTooLarge`, which is what makes a client that fetches a large
+    /// mailbox in one call fail rather than work by luck. The default is far
+    /// above what any test seeds, so only a test about the limit sees it.
+    pub fn objects_in_get(mut self, ids: u64) -> Self {
+        self.objects_in_get = Some(ids);
+        self
+    }
+
+    /// Answer `Email/query` with at most `ids` identifiers per response, as a
+    /// server that caps a result set does.
+    ///
+    /// RFC 8620 §5.5 lets a server impose its own limit whether or not the
+    /// client sent one, and requires it to report the limit it applied. Without
+    /// this the mock always answers a query in full, which is the case that
+    /// hides a client stopping at the first page.
+    pub fn query_page_size(mut self, ids: u64) -> Self {
+        self.query_page_size = Some(ids);
+        self
+    }
+
     /// Bind to a fixed localhost port instead of an ephemeral one.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
@@ -80,6 +111,8 @@ impl MockServerBuilder {
         state.add_account(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME);
         state.omitted_capabilities = self.omitted_capabilities.clone();
         state.changes_page_size = self.changes_page_size;
+        state.objects_in_get = self.objects_in_get;
+        state.query_page_size = self.query_page_size;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -123,6 +156,8 @@ impl MockServer {
             port: 0,
             omitted_capabilities: BTreeSet::new(),
             changes_page_size: None,
+            objects_in_get: None,
+            query_page_size: None,
         }
     }
 
@@ -371,7 +406,7 @@ fn session_document(state: &ServerState, origin: &str) -> Session {
                 "maxSizeRequest": 10_000_000u64,
                 "maxConcurrentRequests": 4,
                 "maxCallsInRequest": 16,
-                "maxObjectsInGet": 256,
+                "maxObjectsInGet": state.objects_in_get(),
                 "maxObjectsInSet": 128,
                 "collationAlgorithms": ["i;ascii-casemap"],
             }),

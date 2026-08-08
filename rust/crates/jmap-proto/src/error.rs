@@ -93,6 +93,11 @@ pub mod method {
     /// The `since_state` of a `/changes` call is too old for the server to
     /// answer from its log; the client must resynchronise in full.
     pub const CANNOT_CALCULATE_CHANGES: &str = "cannotCalculateChanges";
+    /// The call asked for more objects than the server is willing to answer in
+    /// one — for `/get`, more ids than `maxObjectsInGet` (RFC 8620 §5.1). Not a
+    /// condition to report to the user: a client that reads the session
+    /// document's limits and keeps to them never sees it.
+    pub const REQUEST_TOO_LARGE: &str = "requestTooLarge";
 }
 
 /// Well-known set-level error types (RFC 8620 §5.3).
