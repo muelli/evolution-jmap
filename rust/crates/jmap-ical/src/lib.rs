@@ -10,13 +10,15 @@
 //! Evolution headers, so the mapping stays testable everywhere the workspace
 //! builds. It is the calendar-side counterpart of `jmap-vcard`.
 //!
-//! [`syntax`] is the byte-level layer; the semantic mapping lands on top of
-//! it.
+//! [`syntax`] is the byte-level layer; [`event`] is the semantic mapping on
+//! top of it.
 //!
 //! [RFC 5545]: https://www.rfc-editor.org/rfc/rfc5545
 //! [RFC 8984]: https://www.rfc-editor.org/rfc/rfc8984
 
 pub mod error;
+pub mod event;
 pub mod syntax;
 
 pub use error::ICalError;
+pub use event::{MAPPED_PROPERTIES, event_to_ical, ical_to_event, maps_recurrence_rule};

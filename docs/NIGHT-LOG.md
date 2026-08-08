@@ -1124,3 +1124,90 @@ UNTIL). JSCalendar's LocalDateTime (`2026-01-15T13:00:00`) and iCalendar's
 `20260115T130000` are the same instant spelled differently, and the `TZID`
 parameter is where `timeZone` lands; the RRULE mapping is the one that will
 want its own fixtures.
+
+## 2026-08-08 (thirteenth session)
+
+M4 continued: the semantic layer on top of the iCalendar lexer —
+`jmap_ical::event`, `CalendarEvent` ↔ `VEVENT` for the property set the
+roadmap names (UID, SUMMARY, DESCRIPTION, DTSTART with its zone, DURATION,
+STATUS, RRULE). 19 tests, taking the default set from 99 to 118; the EDS
+crates are untouched at 109. The crate now depends on `jmap-proto`, which it
+did not before — JSCalendar types live there.
+
+The shape is `jmap-vcard::contact`'s, deliberately: `event_to_ical` /
+`ical_to_event` mirror `card_to_vcard` / `vcard_to_card`, `UID` carries the
+JMAP id with the JSCalendar `uid` alongside in `X-JMAP-UID`, and unmapped
+properties are dropped rather than refused. Three things are genuinely
+calendar-shaped, and each got its own decision:
+
+- **The time zone is spelled three different ways in iCalendar, and picking
+  the wrong one moves the appointment.** `timeZone: null` is RFC 5545 form 1
+  (floating, no `TZID`, no `Z`), `Etc/UTC` is form 2 (`…T130000Z`, *not*
+  `TZID=Etc/UTC`, which would oblige us to ship a `VTIMEZONE` for it), and
+  anything else is form 3 (`DTSTART;TZID=Europe/Berlin:…`), leaning on
+  libical's built-in Olson table rather than an emitted `VTIMEZONE`. Reading
+  back inverts exactly that: a trailing `Z` wins over any `TZID`.
+- **`UNTIL` does not get converted to UTC, and that is a knowing deviation.**
+  RFC 5545 §3.3.10 wants a UTC instant when `DTSTART` carries a `TZID`;
+  JSCalendar's `until` is a local time in the event's own zone. Converting
+  needs a zone database, which this crate deliberately does not depend on, so
+  `UNTIL` is emitted the way `DTSTART` is — `Z`-suffixed for a UTC event,
+  local otherwise. It round-trips, and libical reads it in the event's zone.
+  Written down in the code, not just here.
+- **A `DTSTART` neither side can read is left out rather than guessed at.**
+  Both directions validate the shape (eight digits, `T`, six digits) before
+  converting; `VALUE=DATE:20260115` is the one exception and becomes midnight,
+  because an all-day event that lost its start entirely is worse than one
+  pinned to the top of the day. `showWithoutTime` is not modeled yet, which is
+  the honest cost of that choice.
+
+Decisions taken:
+
+- **Unmodeled RRULE parts are dropped, and the drop is made visible.**
+  `byDay` and the rest of RFC 8984 §4.3.3 cannot survive the trip (JSCalendar
+  spells `byDay` as an array of objects; copying `BYDAY=MO` across would be
+  rejected by the server), so `maps_recurrence_rule()` reports whether a rule
+  round-trips and `MAPPED_PROPERTIES` names the six properties a save may
+  patch. Same principle as `jmap-vcard`'s `maps_name_component()` & co: a
+  property we never mapped is a property we never overwrite — but
+  `recurrenceRules` is one property, so the save path has to ask first.
+- **`STATUS` is table-driven in both directions and unknown values are
+  dropped.** Both vocabularies are closed; passing `dithering` through
+  uppercased would put a value libical rejects into the component.
+- **All `RRULE` lines are mapped, not just the first.** RFC 5545 says `RRULE`
+  SHOULD NOT repeat, but honouring a repeat costs one loop and avoids losing
+  a rule the server sent.
+- **A calendar with no `VEVENT` is the mapping's one error** (`ICalError::
+  NoEvent`); everything else it cannot read is treated as absent.
+
+Thirteen mutations were run against a copy kept outside the tree: UTC emitted
+as a `TZID`, `INTERVAL=1` written out, `RRULE` escaped as TEXT, the JSCalendar
+uid preferred over the JMAP id, `TZID` ignored on the way back, a missing
+`VEVENT` tolerated, an unknown `STATUS` passed through, a date-only `DTSTART`
+dropped, `@type` left off a parsed rule, `SUMMARY`/`DESCRIPTION` emitted
+unescaped, `maps_recurrence_rule` always true, the separators left in the
+emitted date-time, and the digit/length checks removed from both converters.
+Eleven died at once. **The two that survived were the same gap:** nothing
+exercised a malformed start, so both converters could have accepted garbage —
+`a_start_that_is_not_a_date_time_is_left_out_rather_than_mangled` covers three
+bad values in each direction and both mutations now die.
+
+Not verified locally, as in the previous twelve sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The two
+new Rust files carry an SPDX `GPL-3.0-or-later` header and the new fixture is
+covered by `REUSE.toml`'s existing `rust/crates/*/tests/fixtures/**`
+annotation. No third-party dependency was added — the two new manifest entries
+are in-workspace. `cargo fmt --check`, `cargo test --locked` (118) and `cargo
+clippy --all-targets -D warnings` are clean on the default members and on
+`-p eds-sys -p jmap-backend-core -p jmap-backend-book` (109), `cargo doc -p
+evolution-jmap-ical --no-deps` is warning-free, and a clean `cmake -S . -B
+<fresh> && cmake --build && ctest` is 3/3.
+
+No blockers hit.
+
+Next, in M4: `jmap-cal-sync`, the calendar-side counterpart of
+`jmap-book-sync` — the pure sync logic (`list_existing`, `get_changes`,
+create/update/destroy against `CalendarEvent/*`) that the `ECalMetaBackend`
+subclass will call, tested against `jmap-mockd`. The update path is where
+`MAPPED_PROPERTIES` and `maps_recurrence_rule` earn their keep: the patch it
+builds must name only what the iCalendar round trip preserved.
