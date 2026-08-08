@@ -18,6 +18,8 @@
 //!   the same "FALSE means `error` is set" contract as the real vfuncs, minus
 //!   the `ECalMetaBackend *`, which is what makes them testable without a
 //!   session bus.
+//! - [`connect`] resolves the account and the calendar an `ESource` stands
+//!   for, over the shared `connect_sync` machinery in `jmap-backend-core`.
 //!
 //! The subclass and the module entry point follow.
 //!
@@ -25,5 +27,6 @@
 //! stays out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
 
+pub mod connect;
 pub mod marshal;
 pub mod ops;

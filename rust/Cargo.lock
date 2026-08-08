@@ -376,6 +376,7 @@ dependencies = [
  "evolution-jmap-ical",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "gio-sys",
  "glib-sys",
  "gobject-sys",
  "jmap-backend-core",
