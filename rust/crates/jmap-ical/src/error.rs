@@ -5,9 +5,10 @@
 
 /// Why a string could not be read as an iCalendar object.
 ///
-/// Only the syntax layer fails: the semantic mapping treats anything it does
-/// not recognise as absent rather than as an error, because an event that
-/// loses a property is still better than a calendar that refuses to open.
+/// The semantic mapping treats anything it does not recognise as absent
+/// rather than as an error, because an event that loses a property is still
+/// better than a calendar that refuses to open. It has exactly one failure of
+/// its own, [`NoEvent`](Self::NoEvent): a document with nothing in it to map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ICalError {
     /// The input does not start with `BEGIN:VCALENDAR`.
@@ -26,6 +27,9 @@ pub enum ICalError {
     /// Content follows the end of the calendar. Dropping it silently would
     /// lose whole events when a stream carries more than one `VCALENDAR`.
     Trailing(String),
+    /// A well-formed calendar that holds no `VEVENT` — a `VTODO` or a bare
+    /// `VTIMEZONE`. There is no event to hand back and nothing to store.
+    NoEvent,
 }
 
 impl std::fmt::Display for ICalError {
@@ -38,6 +42,7 @@ impl std::fmt::Display for ICalError {
             }
             Self::Malformed(line) => write!(f, "malformed iCalendar content line: {line}"),
             Self::Trailing(line) => write!(f, "content after END:VCALENDAR: {line}"),
+            Self::NoEvent => f.write_str("iCalendar object contains no VEVENT"),
         }
     }
 }

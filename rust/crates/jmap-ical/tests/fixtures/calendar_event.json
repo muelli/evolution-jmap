@@ -1,0 +1,20 @@
+{
+  "id": "E1",
+  "calendarIds": { "CAL1": true },
+  "@type": "Event",
+  "uid": "urn:uuid:8f2b1c94-0d3a-4f7e-9c11-2a6d5e8b7f30",
+  "title": "Sprint planning",
+  "description": "Agenda:\nreview; then plan",
+  "start": "2026-01-15T13:00:00",
+  "timeZone": "Europe/Berlin",
+  "duration": "PT1H30M",
+  "status": "confirmed",
+  "recurrenceRules": [
+    {
+      "@type": "RecurrenceRule",
+      "frequency": "weekly",
+      "interval": 2,
+      "count": 10
+    }
+  ]
+}
