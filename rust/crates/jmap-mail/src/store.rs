@@ -12,8 +12,9 @@
 //! read over it.
 //!
 //! The `CamelService` vfuncs that fill and empty the first of those slots are
-//! [`crate::service`], installed from `class_init` below; `CamelStoreClass`'s
-//! own folder vfuncs are still to come.
+//! [`crate::service`]; `CamelStoreClass`'s own `get_folder_info_sync`, which
+//! reads the second, is [`crate::folders`]. Both are installed from `class_init`
+//! below.
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
@@ -21,7 +22,7 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_REFRESH, CamelOfflineStore, CamelOfflineStoreClass, CamelServiceClass,
-    CamelStoreGetFolderInfoFlags, camel_offline_store_get_type,
+    CamelStoreClass, CamelStoreGetFolderInfoFlags, camel_offline_store_get_type,
 };
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
@@ -30,7 +31,6 @@ use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync};
 use jmap_proto::State;
 
 use crate::connect::StoreError;
-use crate::service::install_vfuncs;
 use crate::settings::settings_type;
 
 /// A folder listing, and the state it is current as of.
@@ -282,7 +282,16 @@ unsafe impl ObjectSubclass for JmapStore {
         // rather than here because what they do is one operation split across
         // three slots by Camel's re-prompt loop, and reads as one file.
         // SAFETY: as above.
-        unsafe { install_vfuncs(service) };
+        unsafe { crate::service::install_vfuncs(service) };
+
+        // And the folder listing. `CamelStore` leaves `get_folder_info_sync`
+        // NULL and `camel_store_get_folder_info_sync` refuses to call a store
+        // that has not filled it in, so this line is the difference between an
+        // account with folders and one with a runtime warning.
+        //
+        // SAFETY: the class leads with CamelOfflineStoreClass, which leads with
+        // CamelStoreClass — the contract above.
+        unsafe { crate::folders::install_vfuncs(class.cast::<CamelStoreClass>()) };
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
