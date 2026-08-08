@@ -1490,3 +1490,83 @@ rule. `connect.rs` is the piece to read first: `SourceConfig` reads an
 `address_book_id` out of `ESourceResource:identity`, and the calendar wants the
 same field to mean a calendar id — one field, two names, and renaming it touches
 the book.
+
+## 2026-08-08 (seventeenth session)
+
+M4 continues: `connect_sync` for the calendar. Three commits.
+
+**The increment was supposed to be one new module and turned out to be one
+moved one.** `jmap-backend-book::connect` is 258 lines, of which about eight
+are about contacts: the capability URN it resolves the account under, and the
+list it looks `[Resource] Identity` up in. Everything else — the NULL-source
+guard, the `SourceConfig` read, the credentials-or-prompt choice, the
+cancellable bridge, both out-parameters and the `ConnectError` classification
+behind them — is the same code the calendar needs, and copying it would have
+duplicated the one decision here that must not be made twice: which failures
+make Evolution discard the stored password and ask again. A rule written twice
+is a rule corrected once. So `jmap-backend-core::connect` now holds all of it,
+parameterised by a `Collection` that decides nothing except how the failure is
+worded, and both backends are down to `open_book` / `open_calendar`.
+
+Decisions taken:
+
+- **`ConnectError::NoSuchAddressBook` becomes `NoSuchCollection(Collection,
+  String)`**, rather than the enum growing a calendar-shaped twin of each
+  variant. `Collection` survives at all only because it reaches the user: "the
+  account names calendar \"Cal-1\", which the server does not have" is a
+  sentence someone can act on and "names collection \"Cal-1\"" is not. A core
+  unit test asserts the noun in the message for both, because a backend that
+  reported the other one's would send someone editing the wrong account.
+- **`SourceConfig::address_book_id` is now `resource_id`.** It is one keyfile
+  field, `[Resource] Identity`, that means an address book id under one backend
+  and a calendar id under the other. Naming it after the field rather than
+  after either meaning is the only name that is not wrong half the time. The
+  night log of the previous session flagged this as the piece to read first,
+  and it was right to: the rename touches the book, its recipe test and
+  `core::source`'s docs.
+- **`resolve` takes `(Option<&Id>, Option<bool>)` pairs**, not a slice of
+  `AddressBook` or `Calendar`. The two protocol structs have nothing else in
+  common that this code needs, and a trait to unify them would be three
+  impls to say "id and is_default". It also made room for a rule neither
+  backend had stated: a collection the server flagged default *without* giving
+  it an id is not a candidate, and must not shadow one that has an id.
+- **The capability constant stays in each backend**, which is the one line
+  `connect_with` could not absorb and the one line that had no test.
+
+**The mock could not tell the two capabilities apart, so it can now.** Halfway
+through, a mutation — the calendar backend asking the session for
+`urn:ietf:params:jmap:contacts` — survived the whole suite. It had to: every
+account `jmap-mockd` serves offers all four capabilities, so looking an
+account up under the wrong URN returns the right account. `MockServerBuilder::
+without_capability` drops a URN from all three places the session document
+mentions it (server capabilities, account capabilities, `primaryAccounts`),
+which is what a server offering only mail actually looks like. Both backends
+now have a test that points them at a server missing *their* capability; the
+mutation dies on the calendar's.
+
+Five mutations were run against a copy kept outside the tree: the unnamed
+default resolving to the first collection listed, the calendar ignoring
+`resource_id` entirely, a named user with no password connecting anonymously,
+the calendar asking for the contacts capability (twice — once before
+`without_capability` existed and once after). **All died, the capability one
+only after the mock could express the difference**, which is the honest version
+of what a green suite meant an hour earlier.
+
+Not verified locally, as in the previous sixteen sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The three
+new files carry an SPDX `GPL-3.0-or-later` header. `cargo fmt --check`,
+`cargo test --locked` (36 test binaries green across the default members and
+the four EDS crates) and `cargo clippy --all-targets -- -D warnings` are clean
+on both member sets, and a fresh `cmake -S . -B <tmp> -G Ninja && cmake --build
+&& ctest` is 3/3.
+
+No blockers hit.
+
+Next, in M4: the `ECalMetaBackend` subclass, the factory and the module entry
+point — `jmap-backend-book`'s `backend.rs`, `factory.rs` and `module.rs`, now
+that the layer under them exists on both sides. That is the point at which
+`jmap-backend-cal` grows its cdylib and the CMake install rule, and where the
+calendar's manual test recipe (the mirror of
+`docs/manual-test-book-backend.md`) becomes writable — its `.source` keyfile
+differs from the book's only in `[Calendar] BackendName=jmap` and what
+`Identity` names.
