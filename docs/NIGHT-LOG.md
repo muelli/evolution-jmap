@@ -1408,3 +1408,85 @@ saving (it has to come out of the instances, which is why `marshal` reports it),
 `get_changes_sync` takes an `is_repeat` flag, and both it and
 `remove_component_sync` carry an `EConflictResolution` this backend has no
 answer for yet.
+
+## 2026-08-08 (sixteenth session)
+
+M4 continues: `ops`, the calendar's vfunc bodies. Three commits.
+
+**`jmap-backend-core::marshal`, the boundary that is nobody's in particular.**
+`read_string`, `set_out_string`, `set_out_list`, `dup_string` and `password` are
+about out-parameters and libsecret, not about contacts, and the calendar needed
+all five. Moving them rather than copying them turned out to remove a copy that
+was already there: `core::source` had grown its own `read_string` with the same
+"" -reads-as-absent rule, so this is the third copy avoided rather than the
+second. What stayed in each backend's own `marshal` is the part that is not
+type-agnostic — an `EBookMetaBackendInfo` and an `ECalMetaBackendInfo` are
+neither the same struct nor freed by the same function.
+
+**`eds-sys` reaches the calendar's error domain.** `ECalClientError` and
+`e_cal_client_error_.*`, for `E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND`. The new
+`tests/errors.rs` pins the property the whole mapping rests on: the three client
+error domains are three *different* quarks, so the address book's
+`CONTACT_NOT_FOUND` cannot stand in for the calendar's not-found however equal
+the numbers look — `ECalMetaBackend` matches on the pair, and a near miss is a
+cache entry that never goes away.
+
+**`jmap-backend-cal::ops`** (17 tests), mirroring the book's five bodies over a
+`CalSync`.
+
+Decisions taken:
+
+- **Three vfunc arguments do not appear in these signatures.** `extra` is
+  per-object opaque cache state this backend has none of, as on the book side.
+  `EConflictResolution` is a promise `CalSync` cannot keep yet — JMAP can express
+  it as an `ifInState` on `CalendarEvent/set` and we do not send one, so taking
+  the argument and ignoring it would read as support. `ECalOperationFlags`
+  carries iTIP scheduling requests, which M4 does not implement.
+- **`is_repeat` is taken and ignored**, unlike those three, because the vfunc has
+  it where the book's does not and the omission would be the more surprising
+  reading. It cannot be true of anything this backend asked for: the paging
+  happens inside `CalSync::get_changes` and `out_repeat` is always FALSE. A test
+  calls with both values and asserts the same delta, which is what "the flag has
+  nothing to change" means concretely.
+- **Removals go out through `removed_info_list`**, so all three change lists are
+  `ECalMetaBackendInfo`s and the test frees all three with
+  `e_cal_meta_backend_info_free`. The assertion is on the whole node, not just
+  the uid: a removal must not claim a revision or an object either.
+
+Learned the hard way, and now the subject of a test comment:
+**`e_cal_component_new_from_string` invents a `UID`** when the text has none
+(`e_util_generate_uid`, a 40-hex-digit checksum). The first version of the
+"an edit without an identifier is refused" test built a `VEVENT` with no `UID`
+and got back a component EDS had named, so the save reached the server and failed
+as a not-found — the right shape of failure in the wrong domain. The test now
+empties the uid on the instance it hands over, which is the only way to reach the
+guard. That is also the argument for keeping the guard: what it defends against
+is a uid that reads back as nothing, and EDS's own generosity with identifiers is
+exactly what would otherwise hide it in testing.
+
+Six mutations were run against a copy kept outside the tree: the not-found
+reported in the generic client domain, `overwrite_existing` inverted,
+`out_repeat` never written, a master-less save returning TRUE, the empty sync tag
+passed on to the server as a state, and a load without an identifier defaulting
+to `""`. **All six died.** (The empty-tag mutation also took 30 s rather than the
+usual 0.07 s, because the fallback test stops the server first and the mutant
+actually went out on the network to find that out — the timing is a second signal
+that the test reaches what it claims to.)
+
+Not verified locally, as in the previous fifteen sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The four new
+files carry an SPDX `GPL-3.0-or-later` header. `cargo fmt --check`,
+`cargo test --locked` (138 on the default members, 150 across the four EDS
+crates) and `cargo clippy --all-targets --locked -- -D warnings` are clean both
+ways, and a fresh `cmake -S . -B <tmp> -G Ninja && cmake --build && ctest` is
+3/3.
+
+No blockers hit.
+
+Next, in M4: the `ECalMetaBackend` subclass and the module entry point — the
+mirror of `jmap-backend-book`'s `backend.rs`, `connect.rs`, `factory.rs` and
+`module.rs`, at which point the crate grows its cdylib and the CMake install
+rule. `connect.rs` is the piece to read first: `SourceConfig` reads an
+`address_book_id` out of `ESourceResource:identity`, and the calendar wants the
+same field to mean a calendar id — one field, two names, and renaming it touches
+the book.
