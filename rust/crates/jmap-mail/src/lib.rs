@@ -31,6 +31,7 @@
 //! `cdylib`, together with `libcameljmap.urls`, into Camel's provider
 //! directory.
 
+pub mod folder_info;
 pub mod module;
 pub mod provider;
 pub mod store;
