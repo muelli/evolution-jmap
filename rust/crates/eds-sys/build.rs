@@ -57,10 +57,7 @@ const ALLOWED_TYPES: &[&str] = &[
     // `libcameljmap.so` registers on load, and the rest is the object graph it
     // names: a store (offline, so the summary cache works disconnected), a
     // transport, their common `CamelService` parent, the settings objects a
-    // service is configured through and the session that owns it. Deliberately
-    // no `CamelFolder`/`CamelMimeMessage`/`CamelFolderSummary` yet — those
-    // arrive with the folder increment, and each new prefix here is another
-    // class struct tests/layout.rs has to vouch for.
+    // service is configured through and the session that owns it.
     "CamelProvider.*",
     "CamelService.*",
     "CamelStore.*",
@@ -70,6 +67,18 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelSettings.*",
     "CamelNetworkSettings.*",
     "CamelURL",
+    // The folder half of a store. `CamelFolderInfo` is what
+    // `get_folder_info_sync` returns — a plain struct, not an object, so it is
+    // named here to bring its flags enum along; `CamelFolder` is the object a
+    // later increment subclasses, and naming it is what brings its *class*
+    // struct for tests/layout.rs to vouch for. Exact names rather than a
+    // `CamelFolder.*` prefix, which would also pull in `CamelFolderSummary`,
+    // `CamelFolderSearch` and `CamelFolderThread` — three more class structs
+    // this layer would be claiming to have checked.
+    "CamelFolder",
+    "CamelFolderClass",
+    "CamelFolderInfo",
+    "CamelFolderInfoFlags",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -111,6 +120,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_service_.*",
     "camel_store_.*",
     "camel_offline_store_.*",
+    // `camel_folder_info_new` and `_free` are the allocator pair the folder
+    // tree is built and torn down with; the type accessor is what
+    // tests/layout.rs queries. Not all of `camel_folder_.*` yet — the folder
+    // object's own API arrives with the increment that subclasses it.
+    "camel_folder_info_.*",
+    "camel_folder_get_type",
     "camel_transport_.*",
     "camel_session_.*",
     "camel_settings_.*",
@@ -127,10 +142,16 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
 /// environment variable that points the provider loader at an uninstalled
 /// build, which the manual test recipe will need and which is a `#define`, so a
 /// typo is a provider directory that is silently never searched.
+/// `CAMEL_FOLDER_TYPE_BIT` and `_MASK` are the same class of thing again: a
+/// folder's type is a small integer packed into the flags word, and the shift
+/// and the mask are `#define`s. Retyping either is a folder that reads back as
+/// some other type.
 const ALLOWED_VARS: &[&str] = &[
     "E_SOURCE_EXTENSION_.*",
     "E_SOURCE_CREDENTIAL_.*",
     "EDS_CAMEL_PROVIDER_DIR",
+    "CAMEL_FOLDER_TYPE_BIT",
+    "CAMEL_FOLDER_TYPE_MASK",
 ];
 
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys
