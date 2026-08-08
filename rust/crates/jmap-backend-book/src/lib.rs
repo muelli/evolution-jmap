@@ -16,9 +16,14 @@
 //! - [`marshal`] converts between the Rust values and the C ones the vfuncs
 //!   traffic in: `GSList`s of `EBookMetaBackendInfo`, `EContact`, and the
 //!   `ENamedParameters` EDS fills from libsecret.
+//! - [`ops`] is the vfunc bodies themselves, in the shape EDS calls them but
+//!   over a [`BookSync`] rather than an `EBookMetaBackend *` — which is what
+//!   makes them testable at all, since constructing one of those needs a
+//!   running `evolution-source-registry`.
 //!
-//! Both are exercised directly by the test suite, so the subclass on top can
-//! stay a thin marshalling shell over calls that are already tested.
+//! All three are exercised directly by the test suite, so the subclass on top
+//! can stay a panic guard and a slot lookup over calls that are already
+//! tested.
 //!
 //! [`BookSync`]: jmap_book_sync::BookSync
 //!
@@ -28,3 +33,4 @@
 
 pub mod connect;
 pub mod marshal;
+pub mod ops;
