@@ -22,7 +22,7 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_REFRESH, CamelOfflineStore, CamelOfflineStoreClass, CamelServiceClass,
-    CamelStoreClass, CamelStoreGetFolderInfoFlags, camel_offline_store_get_type,
+    CamelStore, CamelStoreClass, CamelStoreGetFolderInfoFlags, camel_offline_store_get_type,
 };
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
@@ -213,6 +213,18 @@ impl JmapStore {
         store.connection.init(RwLock::new(None));
         store.folders.init(RwLock::new(None));
         store
+    }
+
+    /// The Rust view of a `CamelStore *` Camel handed over.
+    ///
+    /// # Safety
+    ///
+    /// `store` must be NULL or point at an instance of this type. Camel only
+    /// dispatches a class's vfuncs on instances of that class, so a vfunc's
+    /// argument satisfies this; anything else has to check with
+    /// `G_TYPE_CHECK_INSTANCE_TYPE` first.
+    pub unsafe fn borrow<'a>(store: *mut CamelStore) -> Option<&'a Self> {
+        unsafe { store.cast::<Self>().as_ref() }
     }
 
     /// The connection slot, or `None` on an instance whose `instance_init` has

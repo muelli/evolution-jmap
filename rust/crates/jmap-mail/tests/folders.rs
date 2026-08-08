@@ -22,21 +22,32 @@
 //! slot — a `Request` that is never built from a real `top`, or an
 //! implementation that never reaches the class, is a store with no folders and
 //! a suite that still passes.
+//!
+//! The fourth is the other direction: `get_folder_sync`, which takes a path out
+//! of that listing and gives back the folder it names. It needs a real store —
+//! a GObject one — because it is the first vfunc that builds something Camel
+//! keeps, and Camel refuses to build a folder on a store it cannot type-check.
+
+mod common;
 
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use common::Account;
 use eds_sys::{
-    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_INFO_RECURSIVE,
-    CAMEL_STORE_FOLDER_INFO_REFRESH, CamelFolderInfo, CamelStore, CamelStoreClass,
+    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_ERROR_NO_FOLDER,
+    CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_FOLDER_NONE,
+    CamelFolder, CamelFolderInfo, CamelStore, CamelStoreClass, camel_folder_get_full_name,
     camel_folder_info_free, camel_offline_store_get_type, camel_service_error_quark,
+    camel_store_error_quark, camel_store_get_folder_sync,
 };
 use glib_sys::GError;
-use gobject_sys::{g_type_class_peek, g_type_class_ref, g_type_class_unref};
+use gobject_sys::{g_object_unref, g_type_class_peek, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
+use jmap_mail::folder::JmapFolder;
 use jmap_mail::folders::Request;
 use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail_sync::{FolderTree, MailSync};
@@ -701,4 +712,219 @@ fn a_null_store_is_reported_rather_than_dereferenced() {
     assert!(!error.is_null(), "no reason given");
     // SAFETY: owned by us, set above.
     unsafe { glib_sys::g_error_free(error) };
+}
+
+// ---------------------------------------------------------------------------
+// opening one of them
+
+/// A real store — connected, with a nested mailbox to open — and the id of the
+/// mailbox the tests below ask for.
+///
+/// Real rather than [`JmapStore::detached`], which every test above uses,
+/// because this vfunc is the first one that *builds* something: Camel refuses
+/// to construct a folder whose parent is not a `CamelStore`, and a detached
+/// store is not a GObject at all.
+fn opened() -> (MockServer, Account, Id) {
+    let server = MockServer::builder().start();
+    let invoices = edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX));
+        let work = account.seed_mailbox("Work", None);
+        account.seed_child_mailbox("Invoices", None, &work)
+    });
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    (server, account, invoices)
+}
+
+/// One `get_folder_sync` call and both of its answers, owned the way Camel owns
+/// them: the folder unreffed, the error freed.
+struct Opened {
+    folder: *mut CamelFolder,
+    error: *mut GError,
+}
+
+impl Opened {
+    /// Calls the vfunc through the pointer in the class, as Camel does.
+    fn of(store: *mut CamelStore, path: &str) -> Self {
+        let path = CString::new(path).expect("a path with no NUL");
+        let mut error: *mut GError = ptr::null_mut();
+
+        // SAFETY: referencing the class runs the class_init that installs the
+        // vfunc. `store` is an instance of ours or NULL, which is what the
+        // tests below hand over deliberately; `path` is NUL-terminated and
+        // alive for the call, and `error` is writable and currently NULL.
+        unsafe {
+            let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
+            let vfunc = (*class)
+                .get_folder_sync
+                .expect("the store cannot open a folder");
+            let folder = vfunc(
+                store,
+                path.as_ptr(),
+                CAMEL_STORE_FOLDER_NONE,
+                ptr::null_mut(),
+                &mut error,
+            );
+            g_type_class_unref(class.cast());
+            Self { folder, error }
+        }
+    }
+
+    /// The path Camel keys the folder it got back by.
+    fn path(&self) -> String {
+        assert!(!self.folder.is_null(), "no folder to name");
+        // SAFETY: a live folder of ours, whose name it owns and outlives.
+        unsafe {
+            std::ffi::CStr::from_ptr(camel_folder_get_full_name(self.folder))
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+
+    /// The mailbox every request about that folder will filter on.
+    fn mailbox(&self) -> Id {
+        assert!(!self.folder.is_null(), "no folder to ask");
+        // SAFETY: as above; the borrow ends inside this function.
+        unsafe { JmapFolder::borrow(self.folder) }
+            .expect("a folder of ours")
+            .mailbox()
+            .expect("a folder with no mailbox behind it")
+            .clone()
+    }
+}
+
+impl Drop for Opened {
+    fn drop(&mut self) {
+        // SAFETY: the vfunc handed over one reference to the folder and
+        // ownership of the error.
+        unsafe {
+            if !self.folder.is_null() {
+                g_object_unref(self.folder.cast());
+            }
+            if !self.error.is_null() {
+                glib_sys::g_error_free(self.error);
+            }
+        }
+    }
+}
+
+/// The whole point of the vfunc: a path Camel took out of a folder listing goes
+/// back in, and the folder that comes out carries the JMAP mailbox id that path
+/// cannot be turned back into.
+#[test]
+fn the_vfunc_opens_the_folder_a_path_names() {
+    let (_server, account, invoices) = opened();
+
+    let opened = Opened::of(account.store, "Work/Invoices");
+
+    assert!(opened.error.is_null(), "opening a folder set an error");
+    assert_eq!(opened.path(), "Work/Invoices");
+    assert_eq!(opened.mailbox(), invoices);
+}
+
+/// A path no mailbox answers to. Unlike `get_folder_info_sync`, where an empty
+/// answer is a legitimate one, there is no such thing as half a folder: NULL is
+/// the only thing to return and an error is what says why.
+#[test]
+fn a_path_naming_no_mailbox_is_a_failure_with_a_reason() {
+    let (_server, account, _) = opened();
+
+    let opened = Opened::of(account.store, "Work/Nowhere");
+
+    assert!(opened.folder.is_null(), "a folder that does not exist");
+    assert!(!opened.error.is_null(), "no reason given");
+    // SAFETY: the error is the one the vfunc set, checked non-NULL above.
+    unsafe {
+        assert_eq!((*opened.error).domain, camel_store_error_quark());
+        assert_eq!((*opened.error).code, CAMEL_STORE_ERROR_NO_FOLDER as i32);
+    }
+}
+
+/// A folder that appeared after the listing the store is holding. Evolution
+/// reopens the folder the user last had selected at startup, from a URI in its
+/// settings, before anything asks the store to refresh — so a path that is not
+/// in the held tree is a reason to look again rather than to report a folder
+/// that plainly exists as missing.
+#[test]
+fn a_mailbox_created_since_the_listing_is_found_by_looking_again() {
+    let (server, account, _) = opened();
+    Opened::of(account.store, "Inbox");
+
+    edit(&server, |state| state.create_mailbox("Archive", None, None));
+
+    let opened = Opened::of(account.store, "Archive");
+    assert!(opened.error.is_null(), "opening a folder set an error");
+    assert_eq!(opened.path(), "Archive");
+}
+
+/// The other NULL, told apart from the one above by the error alone.
+/// `NOT_CONNECTED` is what makes Camel connect and ask again rather than show
+/// the account as broken.
+#[test]
+fn a_disconnected_store_has_no_folder_to_open() {
+    let account = Account::open();
+
+    let opened = Opened::of(account.store, "Inbox");
+
+    assert!(opened.folder.is_null(), "a disconnected store opened one");
+    assert!(!opened.error.is_null(), "no reason given");
+    // SAFETY: the error is the one the vfunc set, checked non-NULL above.
+    unsafe {
+        assert_eq!((*opened.error).domain, camel_service_error_quark());
+        assert_eq!(
+            (*opened.error).code,
+            CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
+        );
+    }
+}
+
+/// The same guard as the listing vfunc's, for the same reason.
+#[test]
+fn a_null_store_has_no_folder_to_open_either() {
+    let opened = Opened::of(ptr::null_mut(), "Inbox");
+
+    assert!(opened.folder.is_null());
+    assert!(!opened.error.is_null(), "no reason given");
+}
+
+/// Camel keeps the folder, and this provider must not keep a second one.
+/// `CamelStore` owns a `CamelObjectBag` of open folders — reachable as
+/// `camel_store_get_folders_bag`, keyed with the class's own
+/// `hash_folder_name` — which `camel_store_get_folder_sync` reserves in before
+/// it calls the vfunc at all. So the vfunc's contract is to build a folder
+/// every time it is reached, and reaching it twice for one path is Camel's
+/// business rather than ours. Called through the wrapper here, because the
+/// caching is the wrapper's and calling the vfunc directly would test nothing.
+#[test]
+fn camel_hands_back_the_folder_it_already_opened() {
+    let (_server, account, _) = opened();
+
+    // SAFETY: a live store of ours, a NUL-terminated path, and an error
+    // out-parameter that is NULL — the wrapper tolerates a NULL GError **.
+    let (first, second) = unsafe {
+        let first = camel_store_get_folder_sync(
+            account.store,
+            c"Work".as_ptr(),
+            CAMEL_STORE_FOLDER_NONE,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        );
+        let second = camel_store_get_folder_sync(
+            account.store,
+            c"Work".as_ptr(),
+            CAMEL_STORE_FOLDER_NONE,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        );
+        (first, second)
+    };
+
+    assert!(!first.is_null(), "the wrapper opened no folder");
+    assert_eq!(first, second, "a second folder over the same mailbox");
+
+    // SAFETY: one reference each, both handed over by the wrapper.
+    unsafe {
+        g_object_unref(first.cast());
+        g_object_unref(second.cast());
+    }
 }

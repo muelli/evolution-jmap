@@ -18,21 +18,20 @@
 //! and the one thing it is constructed *with*: the path Camel keys it by, the
 //! name the user sees, the store it belongs to, and the mailbox id underneath.
 
-use std::ffi::{CStr, CString};
-use std::ptr;
+mod common;
 
+use std::ffi::CStr;
+
+use common::Account;
 use eds_sys::{
-    CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CamelFolder, CamelProvider, CamelStore,
+    CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CamelFolder, CamelStore,
     camel_folder_get_display_name, camel_folder_get_flags, camel_folder_get_full_name,
     camel_folder_get_parent_store, camel_folder_get_type, camel_offline_folder_get_type,
-    camel_session_get_type,
 };
 use glib_sys::{GFALSE, gchar};
-use gobject_sys::{GObject, g_object_new, g_object_unref, g_type_is_a, g_type_name};
+use gobject_sys::{g_object_unref, g_type_is_a, g_type_name};
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_mail::folder::{JmapFolder, folder_type, new_folder};
-use jmap_mail::provider::register;
-use jmap_mail::store::store_type;
 use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
 
@@ -51,80 +50,17 @@ fn mailbox(path: &str, display_name: &str, role: Option<FolderRole>) -> FolderIn
     }
 }
 
-/// A session and the store that hangs off it.
+/// The folder for one mailbox, owned by the caller.
 ///
-/// The two are kept together because a `CamelService` holds only a weak
-/// reference to its session: a test that unreffed the session while the store
-/// lived would leave the store pointing at nothing. They are also both needed
-/// at all because Camel refuses to construct a folder without a real store —
-/// `folder_set_parent_store` asserts `CAMEL_IS_STORE` — and a `CamelService` is
-/// constructed with the session that owns it and the provider that named its
-/// type.
-struct Account {
-    session: *mut GObject,
-    store: *mut CamelStore,
-}
-
-impl Account {
-    fn open() -> Self {
-        let provider: *const CamelProvider = register();
-        let dir = CString::new(std::env::temp_dir().to_string_lossy().as_ref())
-            .expect("a temporary directory path with no NUL in it");
-
-        // SAFETY: a variadic construct call. Every property named is one
-        // `CamelSession` or `CamelService` declares, and each value has the
-        // type that property carries — two strings for the session's
-        // directories, the session and provider for the store, and a NULL
-        // terminating the list.
-        unsafe {
-            let session = g_object_new(
-                camel_session_get_type(),
-                c"user-data-dir".as_ptr(),
-                dir.as_ptr(),
-                c"user-cache-dir".as_ptr(),
-                dir.as_ptr(),
-                ptr::null::<gchar>(),
-            );
-            assert!(!session.is_null(), "g_object_new returned no session");
-
-            let store = g_object_new(
-                store_type(),
-                c"session".as_ptr(),
-                session,
-                c"provider".as_ptr(),
-                provider,
-                c"uid".as_ptr(),
-                c"jmap-folder-test".as_ptr(),
-                ptr::null::<gchar>(),
-            );
-            assert!(!store.is_null(), "g_object_new returned no store");
-
-            Self {
-                session,
-                store: store.cast::<CamelStore>(),
-            }
-        }
-    }
-
-    /// The folder for one mailbox, owned by the caller.
-    fn folder(&self, mailbox: &FolderInfo) -> *mut CamelFolder {
-        // SAFETY: `self.store` is a live `CamelStore` for as long as this
-        // `Account` is.
-        let folder = unsafe { new_folder(self.store, mailbox) };
-        assert!(!folder.is_null(), "no folder for {}", mailbox.path);
-        folder
-    }
-}
-
-impl Drop for Account {
-    fn drop(&mut self) {
-        // SAFETY: one reference each, taken by `g_object_new` and never handed
-        // out; the store goes first because it references the session.
-        unsafe {
-            g_object_unref(self.store.cast());
-            g_object_unref(self.session.cast());
-        }
-    }
+/// A real store is needed for this and not merely convenient: Camel refuses to
+/// construct a folder without one — `folder_set_parent_store` asserts
+/// `CAMEL_IS_STORE`.
+fn folder_of(account: &Account, mailbox: &FolderInfo) -> *mut CamelFolder {
+    // SAFETY: `account.store` is a live `CamelStore` for as long as the
+    // `Account` is.
+    let folder = unsafe { new_folder(account.store, mailbox) };
+    assert!(!folder.is_null(), "no folder for {}", mailbox.path);
+    folder
 }
 
 /// Reads a folder's name back the way Camel does, as a borrowed C string.
@@ -173,7 +109,7 @@ fn the_folder_type_is_an_offline_folder() {
 fn a_folder_is_the_camel_view_of_one_mailbox() {
     let account = Account::open();
     let mailbox = mailbox("Work/Q3 Plans", "Q3 Plans", None);
-    let folder = account.folder(&mailbox);
+    let folder = folder_of(&account, &mailbox);
 
     // SAFETY: `folder` is a live folder this test owns.
     unsafe {
@@ -195,7 +131,10 @@ fn a_folder_is_the_camel_view_of_one_mailbox() {
 #[test]
 fn a_folder_knows_the_mailbox_its_requests_filter_on() {
     let account = Account::open();
-    let folder = account.folder(&mailbox("Inbox", "Inbox", Some(FolderRole::Inbox)));
+    let folder = folder_of(
+        &account,
+        &mailbox("Inbox", "Inbox", Some(FolderRole::Inbox)),
+    );
 
     // SAFETY: `folder` is a live folder of this type, and the borrow ends
     // before the unref.
@@ -215,8 +154,11 @@ fn a_folder_knows_the_mailbox_its_requests_filter_on() {
 #[test]
 fn new_mail_is_filtered_where_it_arrives() {
     let account = Account::open();
-    let inbox = account.folder(&mailbox("Inbox", "Inbox", Some(FolderRole::Inbox)));
-    let ordinary = account.folder(&mailbox("Receipts", "Receipts", None));
+    let inbox = folder_of(
+        &account,
+        &mailbox("Inbox", "Inbox", Some(FolderRole::Inbox)),
+    );
+    let ordinary = folder_of(&account, &mailbox("Receipts", "Receipts", None));
 
     // SAFETY: both folders are live and owned here.
     unsafe {
@@ -243,7 +185,7 @@ fn new_mail_is_filtered_where_it_arrives() {
 #[test]
 fn a_name_with_a_nul_in_it_does_not_truncate_the_folder() {
     let account = Account::open();
-    let folder = account.folder(&mailbox("Work%2FSecret", "Work\0Secret", None));
+    let folder = folder_of(&account, &mailbox("Work%2FSecret", "Work\0Secret", None));
 
     // SAFETY: `folder` is a live folder this test owns.
     unsafe {

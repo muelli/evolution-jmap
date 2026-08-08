@@ -45,10 +45,10 @@ use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
     CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE, CAMEL_SERVICE_ERROR_INVALID,
     CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_SERVICE_ERROR_UNAVAILABLE,
-    CAMEL_SERVICE_ERROR_URL_INVALID, CamelAuthenticationResult, CamelServiceError,
-    camel_service_error_quark,
+    CAMEL_SERVICE_ERROR_URL_INVALID, CAMEL_STORE_ERROR_NO_FOLDER, CamelAuthenticationResult,
+    CamelServiceError, camel_service_error_quark, camel_store_error_quark,
 };
-use glib_sys::{GError, g_error_new_literal};
+use glib_sys::{GError, GQuark, g_error_new_literal};
 use jmap_backend_core::connect::is_wrong_password;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::source::SourceError;
@@ -83,6 +83,13 @@ pub enum StoreError {
     /// `CAMEL_SERVICE_ERROR_NOT_CONNECTED`, which is what makes Camel connect
     /// and ask again rather than show the account as broken.
     Disconnected,
+    /// Camel asked to open a folder the account does not have.
+    ///
+    /// Reported in `CAMEL_STORE_ERROR` rather than `CAMEL_SERVICE_ERROR`,
+    /// which is the one place this type leaves the service's domain: nothing
+    /// is wrong with the connection or the account, and a service error would
+    /// be a working account reported as broken because one folder went away.
+    NoFolder(String),
 }
 
 impl From<SourceError> for StoreError {
@@ -114,6 +121,7 @@ impl fmt::Display for StoreError {
             Self::Config(error) => error.fmt(f),
             Self::Client(error) => error.fmt(f),
             Self::Disconnected => f.write_str("not connected to the JMAP server"),
+            Self::NoFolder(path) => write!(f, "no such folder: {path}"),
         }
     }
 }
@@ -137,29 +145,40 @@ impl StoreError {
     /// caller, who must `g_error_free` it or hand it to a C caller that will.
     pub fn to_gerror(&self) -> *mut GError {
         let message = cstring_lossy(&self.to_string());
+        let (domain, code) = self.gerror_code();
 
-        // The user pressed Stop. Not Camel's domain and not ours: this is the
-        // one code every layer above agrees on, and reporting a service error
-        // instead would turn a cancelled folder refresh into an alert.
-        if matches!(self, Self::Client(Error::Cancelled)) {
-            // SAFETY: a live quark and a NUL-terminated message the call
-            // copies.
-            return unsafe {
-                g_error_new_literal(
-                    gio_sys::g_io_error_quark(),
-                    gio_sys::G_IO_ERROR_CANCELLED,
-                    message.as_ptr(),
+        // SAFETY: a live quark, a code from that domain's own enum, and a
+        // NUL-terminated message the call copies.
+        unsafe { g_error_new_literal(domain, code, message.as_ptr()) }
+    }
+
+    /// The domain and code a caller in C branches on.
+    fn gerror_code(&self) -> (GQuark, i32) {
+        match self {
+            // The user pressed Stop. Not Camel's domain and not ours: this is
+            // the one code every layer above agrees on, and reporting a service
+            // error instead would turn a cancelled folder refresh into an
+            // alert.
+            //
+            // SAFETY: the quark functions take no arguments and register
+            // themselves on first use.
+            Self::Client(Error::Cancelled) => unsafe {
+                (gio_sys::g_io_error_quark(), gio_sys::G_IO_ERROR_CANCELLED)
+            },
+            // SAFETY: as above.
+            Self::NoFolder(_) => unsafe {
+                (
+                    camel_store_error_quark(),
+                    CAMEL_STORE_ERROR_NO_FOLDER as i32,
                 )
-            };
-        }
-
-        // SAFETY: as above; the code is one of the enum's own values.
-        unsafe {
-            g_error_new_literal(
-                camel_service_error_quark(),
-                self.service_error_code() as i32,
-                message.as_ptr(),
-            )
+            },
+            // SAFETY: as above.
+            _ => unsafe {
+                (
+                    camel_service_error_quark(),
+                    self.service_error_code() as i32,
+                )
+            },
         }
     }
 
