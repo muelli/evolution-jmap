@@ -2118,3 +2118,122 @@ state string, for `Mailbox/changes` when folder refresh arrives, and the
 role-to-`CamelFolderInfoFlags` translation, which belongs on the C side. The
 README's architecture block still lists only the round-1 crates; it has been
 stale for three crates now and is worth a paragraph of its own some session.
+
+## 2026-08-08 (twenty-fourth session)
+
+M5's fourth increment, and the second half of what the twenty-second entry
+asked for — again split, and again along the line between "needs a `CamelStore`
+instance" and "does not". `eds-sys` learned `CamelFolder`/`CamelFolderInfo`, and
+`jmap-mail` gained `folder_info.rs`: the translation from `jmap-mail-sync`'s
+`FolderTree` into the `CamelFolderInfo` forest `get_folder_info_sync` returns.
+The vfunc override itself, and the `connect_sync` that resolves an account out
+of `CamelStoreSettings`, are still ahead — but they are now a few lines of
+marshalling over a mapping that is tested, instead of the whole thing at once.
+Two commits.
+
+`eds-sys` gained the exact names `CamelFolder`, `CamelFolderClass`,
+`CamelFolderInfo` and `CamelFolderInfoFlags`, the `camel_folder_info_.*` pair
+the forest is allocated and freed with, `camel_folder_get_type`, and the
+`CAMEL_FOLDER_TYPE_BIT`/`_MASK` `#define`s. `tests/layout.rs` vouches for
+`CamelFolder`'s class struct; `tests/camel.rs` gained three tests about the
+struct that is *not* an object. `jmap-mail/src/folder_info.rs` is
+`FolderInfoChain` — an owning wrapper with `from_tree`, `as_ptr`, `into_raw` and
+a `Drop` — and `tests/folder_info.rs` is 13 tests that build a chain and walk it
+back pointer by pointer.
+
+Decisions taken:
+
+- **Exact type names, not a `CamelFolder.*` prefix.** The prefix also matches
+  `CamelFolderSummary`, `CamelFolderSearch` and `CamelFolderThread` — three more
+  class structs `tests/layout.rs` would then be claiming to have checked against
+  `g_type_query` while checking nothing. Same for the functions:
+  `camel_folder_info_.*` and `camel_folder_get_type`, not `camel_folder_.*`. The
+  folder object's own API arrives with the increment that subclasses it.
+- **What stands in for a layout test on `CamelFolderInfo` is the allocator's
+  contract.** It is a plain struct behind a boxed `GType`, so `g_type_query`
+  reports zero sizes and `assert_layout!` would pass on anything — the same hole
+  `tests/camel.rs` was created for when `CamelProvider` hit it. The three things
+  the builder actually rests on are pinned instead: that
+  `camel_folder_info_new` hands back a *zeroed* struct (which is what lets the
+  builder write only the fields it has an answer for and trust `next`/`child` to
+  be NULL rather than garbage), that the two name fields survive a `g_strdup`
+  and a `camel_folder_info_free` (they are `g_free`d, so a `CString::into_raw`
+  there is heap corruption that surfaces elsewhere), and that a folder's *type*
+  is a small integer packed into a field of the flags word rather than a bit of
+  its own — which is what makes OR-ing one type in correct.
+- **Ownership is all-or-nothing and lives at the head.**
+  `camel_folder_info_free` walks `next` and `child` from the pointer it is
+  given, so there is exactly one owner for a whole forest.
+  `FolderInfoChain` is that owner while the chain is ours and `into_raw` is the
+  single point where it stops being — `std::mem::forget`, so the `Drop` cannot
+  also run. A NULL head is a legitimate value (an account with no folders is
+  how Camel reads a NULL return with no error set), so there is no `Option`
+  around it.
+- **A half-built forest has no owner, so building may not fail part-way.**
+  Nothing in `from_tree` can: `g_malloc` aborts rather than returning NULL, and
+  the one fallible step — a name with a NUL in it — is resolved by rewriting the
+  name rather than by returning an error. That is the reason `c_string` cannot
+  be `?`-shaped, and it is worth stating because the obvious refactor to
+  `Result` would introduce exactly the leak the current shape rules out.
+- **A NUL in a mailbox name becomes U+FFFD, not a truncation.** A JMAP string is
+  a JSON string and can carry a NUL even though RFC 8621 §2 forbids it. Passing
+  the bytes through would show `Work\0Secret` as `Work`, sitting in the tree
+  next to the real `Work` and indistinguishable from it. The replacement
+  character keeps the name distinct and visibly broken. The *path* needs nothing
+  here — `jmap-mail-sync` already encodes the NUL as `%00`, which is what that
+  encoding was for.
+- **Counts saturate a second time, now into a signed field.** Camel's `unread`
+  and `total` are `gint32` and it uses negative values for "not known yet", so a
+  count whose top bit survived a cast would read as *unknown* rather than as
+  implausibly large. `jmap-mail-sync` saturates the server's 64 bits into 32;
+  this is the signed half of the same argument.
+- **The build is iterative, with a stack of sibling groups.** Tree depth comes
+  from a `parentId` chain the server chose, so recursing over it is a stack
+  overflow a server can ask for — the same reasoning as the walk in
+  `jmap-mail-sync`. `camel_folder_info_free` recursing over the result is
+  Camel's own bound and not one this side can lift, which is why the deep-tree
+  test stops at 2000 levels: deeper would be testing Camel's stack, not ours.
+- **A role folder is a *system* folder; a leaf is `NOCHILDREN` and never
+  `NOINFERIORS`.** `SYSTEM` is what stops Evolution offering to rename or delete
+  the six role folders — the server would refuse, and on JMAP the refusal
+  arrives well after the user believed the folder was gone; it is also how
+  evolution-ews marks the same folders. `NOINFERIORS` is the stronger claim that
+  a folder can never *have* children, which is false for every JMAP mailbox, and
+  making it would remove "New Subfolder" from every leaf for the life of the
+  account.
+
+Mutation testing, nine mutants, no survivors: swapped `full_name` and
+`display_name`, the inbox losing `SYSTEM`, a truncating instead of saturating
+count, a NUL truncating the display name, the `parent` back-pointer left NULL,
+`CHILDREN`/`NOCHILDREN` swapped, `head` reassigned for every sibling group
+instead of only the roots (10 failures), the subscription flag never set, and
+`into_raw` leaving the `Drop` in place — which is a double free, and died
+because the test frees the chain itself, which is what that test is for.
+
+Not verified locally, as in the previous twenty-three sessions: `reuse lint` and
+`cargo deny`. Both new files carry SPDX `GPL-3.0-or-later` headers. Also not
+verified: that the forest is *leak*-free. There is no valgrind on this VM and no
+sanitizer on a stable toolchain, so the `Drop` in every test is an assertion only
+a leak checker can read; the suite was at least re-run under
+`G_SLICE=always-malloc MALLOC_CHECK_=3 MALLOC_PERTURB_=42`, which is what would
+catch the double free and the use-after-free. `cargo fmt --check`, `cargo test
+--locked` (40 test binaries green on the default members, the five EDS crates
+green on top, `jmap-mail` now 23 tests) and `cargo clippy --all-targets --locked
+-- -D warnings` are clean on both member sets, and a fresh `cmake -S . -B <tmp>
+-G Ninja && cmake --build && ctest` is 5/5. `example-module` still fails to link
+its lib test and still fails clippy on `manual_c_str_literals`, unchanged and
+outside both `default-members` and the set CI lints.
+
+No blockers hit.
+
+Next in M5: the store vfuncs, which now have somewhere to send their results.
+`connect_sync` first — resolving the JMAP account out of
+`CamelStoreSettings`/`CamelNetworkSettings` and the `CamelService`'s credentials
+the way `jmap-backend-core::source` does for an `ESource`, which is the piece
+with the security decisions in it (TLS for non-localhost, the token from
+libsecret and never from a URL) — and then `get_folder_info_sync` over
+`FolderInfoChain::into_raw`, mapping `SyncError` onto Camel's error codes.
+Deliberately still absent, and needed soon after: the `Mailbox/get` state string
+for `Mailbox/changes`, so a folder refresh is not a full re-list. The README's
+architecture block still lists only the round-1 crates; it has been stale for
+four crates now.
