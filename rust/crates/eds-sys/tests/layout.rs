@@ -109,6 +109,7 @@ fn camel_layouts_match_the_gtype_system() {
         CamelStoreSettings,
         CamelStoreSettingsClass
     );
+    assert_layout!(camel_folder_get_type, CamelFolder, CamelFolderClass);
 }
 
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the
