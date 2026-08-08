@@ -107,7 +107,7 @@ fn client_error_code(err: &Error) -> EClientError {
 
 /// `CString::new` refuses interior NULs, which a hostile or broken server
 /// could put in a description. Truncating there loses less than panicking.
-pub(crate) fn cstring_lossy(s: &str) -> CString {
+pub fn cstring_lossy(s: &str) -> CString {
     match CString::new(s) {
         Ok(c) => c,
         Err(e) => {

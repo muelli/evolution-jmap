@@ -4,7 +4,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-# example-module, eds-sys and jmap-backend-core need Evolution/EDS
+# example-module, eds-sys, jmap-backend-core and jmap-backend-book need Evolution/EDS
 # development headers (pkg-config probes in eds-sys's build.rs); keep them out
 # of the default set so `cargo test` works on machines without them. CI builds
 # `--workspace`, and CMake runs their tests via the rust-test-eds target.
@@ -40,6 +40,7 @@ evolution-jmap-client = { path = "crates/jmap-client" }
 evolution-jmap-mock = { path = "crates/jmap-mock" }
 evolution-jmap-vcard = { path = "crates/jmap-vcard" }
 evolution-jmap-book-sync = { path = "crates/jmap-book-sync" }
+jmap-backend-core = { path = "crates/jmap-backend-core" }
 
 # Reproducibility: deterministic codegen, no incremental state, no debug paths.
 [profile.release]
