@@ -222,19 +222,7 @@ impl SourceConfig {
         let port = unsafe { e_source_authentication_get_port(auth) };
         let resource_id = unsafe { read_string(e_source_resource_get_identity(resource)) };
 
-        let host = host.ok_or(SourceError::MissingHost)?;
-        let authority = authority(&host)?;
-        if !secure && !is_loopback(&host) {
-            return Err(SourceError::InsecureTransport(host));
-        }
-
-        let scheme = if secure { "https" } else { "http" };
-        let origin = match port {
-            // The keyfile writes 0 for "not set"; leaving it out lets the
-            // scheme's default apply instead of asking for port 0.
-            0 => format!("{scheme}://{authority}"),
-            port => format!("{scheme}://{authority}:{port}"),
-        };
+        let origin = origin(host.as_deref(), port, secure)?;
 
         Ok(Self {
             origin,
@@ -242,6 +230,39 @@ impl SourceConfig {
             resource_id,
         })
     }
+}
+
+/// Assembles the origin a JMAP client connects to, and refuses the two ways an
+/// account can point one somewhere it should not go.
+///
+/// Separate from [`SourceConfig::from_source`] because the mail side reaches
+/// the same decisions from a different place: Camel keeps a service's server on
+/// the `CamelNetworkSettings` interface rather than in `ESource` extensions, so
+/// `jmap-mail` reads different fields and must still get the same answer. The
+/// host validation and the TLS rule are the part that must not be duplicated —
+/// a second copy is a second thing to forget to fix.
+///
+/// `host` is the absent-or-non-empty form both sides already produce
+/// ([`read_string`] on the EDS side, the same normalisation over Camel's empty
+/// construct default on the mail side), and `port` is 0 for "not set", which
+/// is what both an unwritten keyfile key and an unconfigured settings object
+/// read back as.
+///
+/// [`read_string`]: crate::marshal::read_string
+pub fn origin(host: Option<&str>, port: u16, secure: bool) -> Result<String, SourceError> {
+    let host = host.ok_or(SourceError::MissingHost)?;
+    let authority = authority(host)?;
+    if !secure && !is_loopback(host) {
+        return Err(SourceError::InsecureTransport(host.to_owned()));
+    }
+
+    let scheme = if secure { "https" } else { "http" };
+    Ok(match port {
+        // The keyfile writes 0 for "not set"; leaving it out lets the
+        // scheme's default apply instead of asking for port 0.
+        0 => format!("{scheme}://{authority}"),
+        port => format!("{scheme}://{authority}:{port}"),
+    })
 }
 
 /// The host as it appears in a URL: an IPv6 literal has to be bracketed, or
@@ -297,6 +318,31 @@ mod tests {
         assert_eq!(
             authority("jmap.example.com").as_deref(),
             Ok("jmap.example.com")
+        );
+    }
+
+    /// The rules `jmap-mail` reaches this function for. `tests/source.rs`
+    /// drives them through an `ESource`; this pins them on the shared entry
+    /// point itself, which has a second caller that does not go near one.
+    #[test]
+    fn the_origin_applies_the_host_rules_whoever_supplies_the_host() {
+        assert_eq!(origin(None, 0, true), Err(SourceError::MissingHost));
+        assert_eq!(
+            origin(Some("evil.example.com/x"), 0, true),
+            Err(SourceError::InvalidHost("evil.example.com/x".into()))
+        );
+        assert_eq!(
+            origin(Some("jmap.example.com"), 0, false),
+            Err(SourceError::InsecureTransport("jmap.example.com".into()))
+        );
+        assert_eq!(
+            origin(Some("jmap.example.com"), 0, true).as_deref(),
+            Ok("https://jmap.example.com")
+        );
+        // A port nobody named is left out, so the scheme's default applies.
+        assert_eq!(
+            origin(Some("::1"), 8080, false).as_deref(),
+            Ok("http://[::1]:8080")
         );
     }
 
