@@ -85,22 +85,25 @@ jobs:
         with:
           shared-key: build
           workspaces: rust
-      - name: Build workspace (all members)
-        run: cargo build --workspace --locked --release
-        working-directory: rust
+      - name: Disk before build
+        run: df -h / | tail -1
+      # One build only: CMake's rust-build ALL target compiles the whole
+      # workspace (with reproducibility flags) into build/cargo-target.
+      # Building it a second time via a bare cargo invocation doubled the
+      # disk footprint and starved bindgen/libclang of I/O.
       - name: Configure and build with CMake (runs cargo tests via CTest)
         run: |
           cmake -S . -B build -G Ninja
           cmake --build build
+          df -h / | tail -1
           ctest --test-dir build --output-on-failure
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rust-artifacts
           path: |
-            rust/target/release/jmap-mockd
-            rust/target/release/libexample_module.so
-            rust/target/release/libjmap_backend_book.so
+            build/cargo-target/release/jmap-mockd
+            build/cargo-target/release/*.so
           if-no-files-found: error
 
   # Two clean builds in different absolute paths must produce bit-identical
