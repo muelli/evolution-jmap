@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-cal-sync"
+description = "Calendar synchronisation logic for the Evolution JMAP calendar backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_cal_sync"
+
+[dependencies]
+evolution-jmap-client = { workspace = true }
+evolution-jmap-ical = { workspace = true }
+evolution-jmap-proto = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-mock = { workspace = true }

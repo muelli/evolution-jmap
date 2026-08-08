@@ -1211,3 +1211,107 @@ create/update/destroy against `CalendarEvent/*`) that the `ECalMetaBackend`
 subclass will call, tested against `jmap-mockd`. The update path is where
 `MAPPED_PROPERTIES` and `maps_recurrence_rule` earn their keep: the patch it
 builds must name only what the iCalendar round trip preserved.
+
+## 2026-08-08 (fourteenth session)
+
+M4 continued: `jmap-cal-sync`, the calendar-side counterpart of
+`jmap-book-sync` — the pure sync logic an `ECalMetaBackend` subclass will
+call, tested against `jmap-mockd` rather than a fixture. 20 tests, taking the
+default set from 118 to 138; the EDS crates are untouched at 109. No new
+third-party dependency: the crate leans on `jmap-client`, `jmap-ical` and
+`jmap-proto`, all in-workspace.
+
+`CalSync` is `BookSync` with the nouns changed, deliberately and almost line
+for line — `list_existing`/`load_component`/`save_component`/
+`remove_component`/`get_changes` onto the five vfuncs, `ComponentInfo` for
+`ECalMetaBackendInfo`, the same `MAX_CHANGES_PAGES` guard, the same
+created/updated classification that turns an account-wide `/changes` into
+"changed here" and "gone from here", and the same FNV-1a digest of the
+rendered object as the revision. Two crates reading as one design is worth
+more here than the eight lines the shared digest would have saved; the
+comment on `revision_of` says so.
+
+The write path is where the calendar genuinely differs, and it came out
+*simpler* than the address book's rather than harder:
+
+- **The patch diffs against the round trip, not against the server.**
+  `jmap-book-sync::patch` compares the edited card to the stored card and then
+  handles each lossy property specially — merged `contexts`, preserved `pref`
+  ranks, carried-over name components. The calendar mapping is field for
+  field, so one move covers all of it: compute
+  `ical_to_event(event_to_ical(current))` and diff against *that*. The
+  baseline is by construction exactly what Evolution was shown, so a
+  difference from it is an edit and nothing else is. It falls out for free
+  that a `timeZone` of `UTC` is not rewritten to `Etc/UTC` because the `Z`
+  suffix reads back as the latter, that an `RRULE` which had to drop
+  `INTERVAL=1` does not come back with `interval` deleted, and that a
+  `status` outside the closed vocabulary is not cleared by a save that never
+  touched it.
+- **`recurrenceRules` is left alone entirely when the server holds a rule the
+  `RRULE` could not carry.** This is what `maps_recurrence_rule` was added
+  for last session. `recurrenceRules` is one property, so there is no way to
+  patch the part the user edited without restating the part `byDay` lives in;
+  ignoring the edit is the lesser harm, and the test says so in its name.
+- **`start` is never nulled.** RFC 8984 requires it, and a component whose
+  `DTSTART` the mapping cannot read yields no start — which is not the same
+  claim as "this event has no start". The server's start stands and the rest
+  of the edit still goes through.
+
+Decisions taken:
+
+- **A new event's iCalendar `UID` becomes the JSCalendar `uid`.** The book
+  side simply drops Evolution's locally invented `pas-id-…` and lets the
+  server name the card. A calendar `UID` is not the same kind of string: it
+  is the identity any iTIP correspondence already quotes, so it moves to
+  `uid` — the JSCalendar property that means what it means — while the JMAP
+  id stays the server's to assign.
+- **`list_existing` applies no time range.** `CalendarEventQueryFilter` has
+  `after`/`before` and it is tempting to bound the sync, but `ECalMetaBackend`
+  keeps a full local cache and answers ranged queries out of it; narrowing
+  here would hide events rather than save work.
+
+Nineteen mutations were run against a copy kept outside the tree: the
+baseline replaced by the raw server event, the `maps_recurrence_rule` guard
+dropped, that guard consulting the edited rules instead of the stored ones,
+`start` allowed to be nulled, each of `timeZone`/`duration`/`status` dropped
+from the diff, a cleared property written as `""` instead of `null`, the
+create keeping the local id, the create discarding the local uid, an empty
+patch sent anyway, `holds()` always true, the listing unfiltered, a created
+event elsewhere counted as removed, destroyed ids not reported, the revision
+constant, the revision ignoring the component text, and changed events
+rendered as empty. **Eighteen died.** Two gaps were found *before* the run,
+by asking which arms of the diff no test reached: nothing exercised
+`timeZone`, `duration` or `status` through the patch path, so all three could
+have been deleted silently —
+`moving_an_event_to_another_zone_lengthening_it_and_unconfirming_it_all_arrive`
+closes that, and the three mutations now die.
+
+**The one survivor is left alive knowingly.** Dropping the
+`delta.updated.contains(…)` filter on `/get`'s `not_found` changes behaviour
+only when an event is destroyed *between* the `/changes` call and the `/get`
+that follows it — a race the mock cannot be made to produce, because both
+calls happen inside `get_changes` with no hook between them. The branch is
+identical to `jmap-book-sync`'s and correct for the same reason; contorting
+the mock to reach it would test the mock. Noted here rather than papered
+over.
+
+Not verified locally, as in the previous thirteen sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The six
+new files carry an SPDX `GPL-3.0-or-later` header and `rust/Cargo.lock` is
+already covered by `REUSE.toml`. `cargo fmt --check`, `cargo test --locked`
+(138) and `cargo clippy --all-targets -D warnings` are clean on the default
+members and on `-p eds-sys -p jmap-backend-core -p jmap-backend-book` (109),
+`cargo doc -p evolution-jmap-cal-sync --no-deps` is warning-free, and a clean
+`cmake -S . -B <fresh> && cmake --build && ctest` is 3/3 — `rust-test` runs
+plain `cargo test`, so the new crate needed no build-system wiring.
+
+No blockers hit.
+
+Next, in M4: `jmap-backend-cal`, the `ECalMetaBackend` subclass — the mirror
+of `jmap-backend-book`, and the first calendar code that needs the EDS
+headers, so it goes into `rust/crates` but stays out of `default-members`.
+`e_cal_meta_backend_*` vfuncs take an `ICalComponent` where the book side
+took a `vCard` string, so the C boundary is `i_cal_component_new_from_string`
+/ `i_cal_component_as_ical_string` around what `CalSync` already returns;
+`get_changes_sync` has a wider signature than the book's (it hands back three
+`GSList`s rather than two) and is the piece to read the headers for first.

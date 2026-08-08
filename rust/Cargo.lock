@@ -158,6 +158,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "evolution-jmap-cal-sync"
+version = "0.1.0"
+dependencies = [
+ "evolution-jmap-client",
+ "evolution-jmap-ical",
+ "evolution-jmap-mock",
+ "evolution-jmap-proto",
+ "serde_json",
+]
+
+[[package]]
 name = "evolution-jmap-client"
 version = "0.1.0"
 dependencies = [

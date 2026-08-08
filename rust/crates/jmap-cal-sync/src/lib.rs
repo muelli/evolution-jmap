@@ -1,0 +1,312 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Calendar synchronisation, in the shape `ECalMetaBackend` asks for.
+//!
+//! One EDS calendar source is one JMAP calendar, and this crate is the whole
+//! of what syncing it means: which events exist, what an event looks like as
+//! an iCalendar object, what changed since a state string, and how an edit
+//! made in Evolution turns into a `CalendarEvent/set`. Each entry point
+//! corresponds to one vfunc — [`CalSync::list_existing`] to
+//! `list_existing_sync`, [`CalSync::save_component`] to
+//! `save_component_sync`, and so on.
+//!
+//! It deliberately knows nothing about GObject or the Evolution headers, so
+//! the interesting half of the backend is testable against `jmap-mockd` on
+//! any machine. The subclass on top is left with lifecycle and marshalling.
+//! It is the calendar-side counterpart of `jmap-book-sync`, and follows its
+//! shape closely enough that the two read as one design.
+
+pub mod error;
+pub mod patch;
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use jmap_client::Client;
+use jmap_ical::{event_to_ical, ical_to_event};
+use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
+use jmap_proto::{Id, State};
+use serde_json::Value;
+
+pub use error::SyncError;
+
+/// A server that answers `/changes` forever without ever clearing
+/// `hasMoreChanges` would otherwise hang the backend thread. The cap is far
+/// above any real paging depth; reaching it means the server is broken.
+const MAX_CHANGES_PAGES: usize = 1024;
+
+/// One event, as the meta backend wants it: an identifier, a change token and
+/// the object itself.
+///
+/// This is the payload of an `ECalMetaBackendInfo`. `uid` is the JMAP id —
+/// see the crate docs of `jmap-ical` for why it, and not the JSCalendar
+/// `uid`, is what EDS keys on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentInfo {
+    pub uid: String,
+    pub revision: String,
+    pub icalendar: String,
+}
+
+/// What changed in the calendar since a given state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Changes {
+    /// The state to pass to the next [`CalSync::get_changes`].
+    pub new_state: State,
+    /// Events that were created or modified, already rendered.
+    pub changed: Vec<ComponentInfo>,
+    /// Identifiers that are gone from *this* calendar, whether they were
+    /// destroyed or merely moved elsewhere.
+    pub removed: Vec<String>,
+}
+
+/// A `/changes` delta accumulated over however many pages the server needed.
+#[derive(Default)]
+struct Delta {
+    created: BTreeSet<Id>,
+    updated: BTreeSet<Id>,
+    destroyed: BTreeSet<Id>,
+}
+
+/// Synchronises one JMAP calendar.
+pub struct CalSync {
+    client: Client,
+    account_id: Id,
+    calendar_id: Id,
+}
+
+impl CalSync {
+    pub fn new(client: Client, account_id: Id, calendar_id: Id) -> Self {
+        Self {
+            client,
+            account_id,
+            calendar_id,
+        }
+    }
+
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    pub fn account_id(&self) -> &Id {
+        &self.account_id
+    }
+
+    pub fn calendar_id(&self) -> &Id {
+        &self.calendar_id
+    }
+
+    /// Every event in this calendar, with the state that listing is current
+    /// as of — `list_existing_sync`.
+    ///
+    /// No time range is applied. `ECalMetaBackend` keeps a full local cache
+    /// and answers ranged queries out of it, so narrowing here would hide
+    /// events rather than save work.
+    pub fn list_existing(&self) -> Result<(State, Vec<ComponentInfo>), SyncError> {
+        let query = self.client.event_query(
+            &self.account_id,
+            CalendarEventQueryFilter::in_calendar(self.calendar_id.clone()),
+        )?;
+        let response = self.client.event_get(&self.account_id, &query.ids)?;
+        let events = response
+            .list
+            .iter()
+            .map(ComponentInfo::render)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((response.state, events))
+    }
+
+    /// One event by identifier — `load_component_sync`.
+    ///
+    /// Membership of this calendar is not checked: EDS asks by the identity
+    /// it was given, and an event that has moved out is reported gone by
+    /// [`CalSync::get_changes`] rather than by making loads fail.
+    pub fn load_component(&self, uid: &str) -> Result<ComponentInfo, SyncError> {
+        ComponentInfo::render(&self.fetch(uid)?)
+    }
+
+    /// Store an iCalendar object — `save_component_sync`.
+    ///
+    /// With no `existing_uid` this is a create: the component's `UID` is a
+    /// name Evolution invented locally, never a JMAP id, so it does not
+    /// become one. It is not thrown away either — it moves to the JSCalendar
+    /// `uid`, which is the property that means what an iCalendar `UID` means,
+    /// so the identity any iTIP correspondence already quotes survives the
+    /// trip to the server. Otherwise this is an edit, sent as a PatchObject
+    /// that names only what the round trip preserved — see [`patch`].
+    pub fn save_component(
+        &self,
+        icalendar: &str,
+        existing_uid: Option<&str>,
+    ) -> Result<ComponentInfo, SyncError> {
+        let mut event = ical_to_event(icalendar)?;
+        let Some(uid) = existing_uid else {
+            let local = event.id.take();
+            event.uid = event.uid.take().or_else(|| local.map(|id| id.to_string()));
+            event.calendar_ids = Some(BTreeMap::from([(self.calendar_id.clone(), true)]));
+            let stored = self.client.event_create(&self.account_id, &event)?;
+            return ComponentInfo::render(&stored);
+        };
+
+        let current = self.fetch(uid)?;
+        let patch = patch::diff(&current, &event);
+        if patch.is_empty() {
+            return ComponentInfo::render(&current);
+        }
+        self.client
+            .event_update(&self.account_id, &Id::from(uid), Value::Object(patch))?;
+        self.load_component(uid)
+    }
+
+    /// Destroy an event — `remove_component_sync`.
+    pub fn remove_component(&self, uid: &str) -> Result<(), SyncError> {
+        Ok(self
+            .client
+            .event_destroy(&self.account_id, &Id::from(uid))?)
+    }
+
+    /// What changed since `since` — `get_changes_sync`.
+    ///
+    /// Fails with a [`SyncError::is_cannot_calculate_changes`] error if the
+    /// state is too old for the server, which the caller answers by listing
+    /// the calendar in full.
+    pub fn get_changes(&self, since: &State) -> Result<Changes, SyncError> {
+        let mut state = since.clone();
+        let mut delta = Delta::default();
+
+        for _ in 0..MAX_CHANGES_PAGES {
+            let response = self
+                .client
+                .changes(&self.account_id, "CalendarEvent", &state)?;
+            delta.created.extend(response.created);
+            delta.updated.extend(response.updated);
+            delta.destroyed.extend(response.destroyed);
+            let advanced = response.new_state != state;
+            state = response.new_state;
+            if !response.has_more_changes {
+                return self.classify(state, delta);
+            }
+            if !advanced {
+                return Err(SyncError::protocol(
+                    "CalendarEvent/changes reports more changes without advancing the state",
+                ));
+            }
+        }
+        Err(SyncError::protocol(
+            "CalendarEvent/changes never stopped reporting more changes",
+        ))
+    }
+
+    /// Turn a raw `/changes` delta into the two lists the meta backend takes.
+    ///
+    /// `CalendarEvent/changes` is account-wide, so most of the work is
+    /// deciding what an event that is *not* in this calendar means. The
+    /// created/updated distinction is what makes that decidable without
+    /// consulting the local cache: an event that shows up as **updated** and
+    /// is not ours may have just been moved out, and has to be reported gone
+    /// or Evolution keeps showing an appointment the calendar no longer
+    /// contains; an event that shows up as **created** and is not ours was
+    /// never in this calendar, so it is simply not our business.
+    fn classify(&self, new_state: State, delta: Delta) -> Result<Changes, SyncError> {
+        let mut removed: Vec<String> = delta.destroyed.iter().map(Id::to_string).collect();
+        let candidates: Vec<Id> = delta
+            .created
+            .union(&delta.updated)
+            .filter(|id| !delta.destroyed.contains(*id))
+            .cloned()
+            .collect();
+        let mut changed = Vec::new();
+
+        if !candidates.is_empty() {
+            let response = self.client.event_get(&self.account_id, &candidates)?;
+            for event in &response.list {
+                let Some(id) = &event.id else {
+                    return Err(SyncError::protocol(
+                        "CalendarEvent/get returned an event without an id",
+                    ));
+                };
+                if self.holds(event) {
+                    changed.push(ComponentInfo::render(event)?);
+                } else if delta.updated.contains(id) {
+                    removed.push(id.to_string());
+                }
+            }
+            // Gone between the /changes call and the /get: only interesting
+            // for an event that already existed.
+            removed.extend(
+                response
+                    .not_found
+                    .iter()
+                    .filter(|id| delta.updated.contains(*id))
+                    .map(Id::to_string),
+            );
+        }
+
+        Ok(Changes {
+            new_state,
+            changed,
+            removed,
+        })
+    }
+
+    /// Whether `event` is filed in the calendar this instance syncs.
+    fn holds(&self, event: &CalendarEvent) -> bool {
+        event
+            .calendar_ids
+            .as_ref()
+            .is_some_and(|calendars| calendars.get(&self.calendar_id).copied().unwrap_or(false))
+    }
+
+    fn fetch(&self, uid: &str) -> Result<CalendarEvent, SyncError> {
+        let id = Id::from(uid);
+        let response = self
+            .client
+            .event_get(&self.account_id, std::slice::from_ref(&id))?;
+        response
+            .list
+            .into_iter()
+            .next()
+            .ok_or_else(|| SyncError::NotFound(uid.to_owned()))
+    }
+}
+
+impl ComponentInfo {
+    /// Render an event, deriving its revision from the result.
+    fn render(event: &CalendarEvent) -> Result<Self, SyncError> {
+        let uid = event
+            .id
+            .as_ref()
+            .ok_or_else(|| {
+                SyncError::protocol("CalendarEvent/get returned an event without an id")
+            })?
+            .to_string();
+        let icalendar = event_to_ical(event);
+        Ok(Self {
+            revision: revision_of(&icalendar),
+            uid,
+            icalendar,
+        })
+    }
+}
+
+/// The change token for a rendered event.
+///
+/// JSCalendar's `updated` timestamp is the obvious candidate and the wrong
+/// one: RFC 8984 leaves it optional, so a server that omits it would make
+/// every event look unchanged forever. A digest of the component is always
+/// available, and it is a *better* token than a timestamp — it changes
+/// exactly when something EDS can see changes, so a server-side edit to a
+/// property this mapping drops does not churn every client's cache.
+///
+/// FNV-1a rather than `DefaultHasher`, and spelled out here rather than
+/// shared with `jmap-book-sync`: revisions are persisted in the EDS cache and
+/// compared across restarts, and `DefaultHasher`'s output is explicitly not
+/// stable between Rust releases.
+fn revision_of(icalendar: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in icalendar.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}

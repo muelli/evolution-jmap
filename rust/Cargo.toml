@@ -15,6 +15,7 @@ default-members = [
     "crates/jmap-vcard",
     "crates/jmap-ical",
     "crates/jmap-book-sync",
+    "crates/jmap-cal-sync",
 ]
 
 [workspace.package]
@@ -42,6 +43,7 @@ evolution-jmap-mock = { path = "crates/jmap-mock" }
 evolution-jmap-vcard = { path = "crates/jmap-vcard" }
 evolution-jmap-ical = { path = "crates/jmap-ical" }
 evolution-jmap-book-sync = { path = "crates/jmap-book-sync" }
+evolution-jmap-cal-sync = { path = "crates/jmap-cal-sync" }
 jmap-backend-core = { path = "crates/jmap-backend-core" }
 
 # Reproducibility: deterministic codegen, no incremental state, no debug paths.
