@@ -16,15 +16,19 @@ use eds_sys::{
     E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_INVALID_ARG,
     E_SOURCE_AUTHENTICATION_ACCEPTED, E_SOURCE_AUTHENTICATION_ERROR,
     E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_AUTHENTICATION_REQUIRED, EClientError,
-    ESourceAuthenticationResult, e_client_error_create,
+    ENamedParameters, ESource, ESourceAuthenticationResult, e_client_error_create,
 };
+use gio_sys::GCancellable;
 use glib_sys::GError;
-use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::cancel::CancelBridge;
+use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::source::SourceConfig;
 use jmap_book_sync::BookSync;
 use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, Credentials, Error};
 use jmap_proto::session::CAPABILITY_CONTACTS;
+
+use crate::marshal;
 
 /// What `connect_sync` writes into `out_auth_result` when it succeeds.
 pub const ACCEPTED_AUTH_RESULT: ESourceAuthenticationResult = E_SOURCE_AUTHENTICATION_ACCEPTED;
@@ -153,4 +157,103 @@ pub fn open_book(
     };
 
     Ok(BookSync::new(client, account_id, address_book_id))
+}
+
+/// The whole of `connect_sync` except the instance: from the `ESource` EDS
+/// hands the backend to a connection, with `out_auth_result` and `error`
+/// written the way the vfunc has to write them.
+///
+/// This is the layer the subclass calls, and it is here rather than in
+/// [`crate::ops`] because it is the only vfunc body whose input is an
+/// `ESource` — which a test can build with `e_source_new_with_uid`, where an
+/// `EBookMetaBackend` would need a registry.
+///
+/// `out_auth_result` is written on **every** path, success included: EDS reads
+/// it whenever the vfunc returns, and a stale value from a previous attempt is
+/// how an account ends up either never prompting or prompting forever.
+///
+/// # Safety
+///
+/// `source` must be NULL or a valid `ESource`, `credentials` NULL or a valid
+/// `ENamedParameters`, `cancellable` NULL or a valid `GCancellable`, and the
+/// two out-parameters NULL or writable — which is what an EDS vfunc receives.
+pub unsafe fn connect(
+    source: *mut ESource,
+    credentials: *const ENamedParameters,
+    cancellable: *mut GCancellable,
+    out_auth_result: *mut ESourceAuthenticationResult,
+    error: *mut *mut GError,
+) -> Option<BookSync> {
+    // A backend without a source cannot be configured, so no prompt helps. It
+    // should not happen — EDS constructs the backend *from* a source — but a
+    // NULL dereference in `evolution-addressbook-factory` takes every other
+    // account down with it.
+    if source.is_null() {
+        // SAFETY: the out-parameters satisfy the contract by this function's.
+        unsafe {
+            write_auth_result(out_auth_result, E_SOURCE_AUTHENTICATION_ERROR);
+            set_raw_gerror(error, no_source_gerror());
+        }
+        return None;
+    }
+
+    // SAFETY: `source` is a valid ESource, checked non-NULL above.
+    let config = match unsafe { SourceConfig::from_source(source) } {
+        Ok(config) => config,
+        Err(failure) => {
+            // A misconfigured account: re-prompting for a password cannot fix
+            // a missing host or a plaintext origin, so this is never REJECTED.
+            // SAFETY: as above.
+            unsafe {
+                write_auth_result(out_auth_result, E_SOURCE_AUTHENTICATION_ERROR);
+                set_raw_gerror(error, failure.to_gerror());
+            }
+            return None;
+        }
+    };
+
+    // SAFETY: `credentials` is NULL or a valid ENamedParameters, which
+    // outlives the call.
+    let password = unsafe { marshal::password(credentials) };
+    // SAFETY: `cancellable` is NULL or a valid GCancellable that EDS keeps
+    // alive for the duration of the vfunc, which outlives the bridge.
+    let bridge = unsafe { CancelBridge::new(cancellable) };
+
+    match open_book(&config, password.as_deref(), bridge.flag().clone()) {
+        Ok(sync) => {
+            // SAFETY: as above.
+            unsafe { write_auth_result(out_auth_result, ACCEPTED_AUTH_RESULT) };
+            Some(sync)
+        }
+        Err(failure) => {
+            // SAFETY: as above.
+            unsafe {
+                write_auth_result(out_auth_result, failure.auth_result());
+                set_raw_gerror(error, failure.to_gerror());
+            }
+            None
+        }
+    }
+}
+
+fn no_source_gerror() -> *mut GError {
+    let message = cstring_lossy("the address book backend has no account to connect to");
+    // SAFETY: the code is one of the enum's own values and the message is
+    // copied by the call.
+    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
+}
+
+/// Writes an `out_auth_result` the caller may not have asked for.
+///
+/// # Safety
+///
+/// `dest` must be NULL or point at a writable `ESourceAuthenticationResult`.
+pub unsafe fn write_auth_result(
+    dest: *mut ESourceAuthenticationResult,
+    value: ESourceAuthenticationResult,
+) {
+    if !dest.is_null() {
+        // SAFETY: `dest` is writable by the contract above.
+        unsafe { *dest = value };
+    }
 }
