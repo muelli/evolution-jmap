@@ -20,5 +20,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 eds-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
+evolution-jmap-mail-sync = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
+
+[dev-dependencies]
+# Only the tests build mailbox lists by hand; the provider is handed them by
+# the client, through `jmap-mail-sync`.
+evolution-jmap-proto = { workspace = true }
