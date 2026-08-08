@@ -71,7 +71,6 @@
 //! client at a different server, or slip a plaintext endpoint past the TLS
 //! check below. Only a bare host name or an IP literal is accepted.
 
-use std::ffi::{CStr, c_char};
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -87,6 +86,7 @@ use eds_sys::{
 use glib_sys::GError;
 
 use crate::error::cstring_lossy;
+use crate::marshal::read_string;
 
 /// What a backend needs from its `ESource` in order to build a client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -282,39 +282,9 @@ fn is_loopback(host: &str) -> bool {
     false
 }
 
-/// A C string that EDS owns, as an owned `Option<String>`.
-///
-/// "" is never a meaningful host, user or address book id, so it is reported
-/// absent rather than empty. In practice the `ESource` setters already
-/// normalise a cleared key to NULL — the integration tests pin that — but the
-/// two spellings meaning the same thing is not something the callers here
-/// should have to know.
-///
-/// # Safety
-///
-/// `s` must be NULL or a valid NUL-terminated string that outlives the call.
-unsafe fn read_string(s: *const c_char) -> Option<String> {
-    if s.is_null() {
-        return None;
-    }
-    // SAFETY: the caller guarantees a valid NUL-terminated string.
-    let value = unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned();
-    (!value.is_empty()).then_some(value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_null_and_an_empty_c_string_both_read_as_absent() {
-        // SAFETY: a null pointer and 'static NUL-terminated literals.
-        unsafe {
-            assert_eq!(read_string(std::ptr::null()), None);
-            assert_eq!(read_string(c"".as_ptr()), None);
-            assert_eq!(read_string(c"Ab1".as_ptr()).as_deref(), Some("Ab1"));
-        }
-    }
 
     #[test]
     fn an_ipv6_literal_is_bracketed_and_a_name_is_not() {
