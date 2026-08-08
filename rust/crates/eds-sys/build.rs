@@ -95,6 +95,24 @@ const ALLOWED_TYPES: &[&str] = &[
     // caught by naming both.
     "CamelFolderFlags",
     "CamelOfflineFolder.*",
+    // A folder's contents, a row at a time. `CamelMessageInfo` is the object
+    // Camel keeps one summary row in and `CamelMessageInfoBase` the subclass
+    // that actually stores the columns — the one a summary with no message-info
+    // type of its own instantiates, which is this provider's case.
+    // `CamelMessageFlags` is the row's flags word, a third flags enum with a
+    // third set of bits, and `CamelSummaryMessageID` the union that says how
+    // wide a stored message id is. `CamelNamedFlags` and `CamelNameValueArray`
+    // are what the user flags and the headers come back as.
+    "CamelMessageInfo.*",
+    "CamelMessageFlags",
+    "CamelSummaryMessageID",
+    "CamelNamedFlags",
+    "CamelNameValueArray",
+    // How an address list becomes the single string a summary row stores.
+    // `CamelInternetAddress` is the RFC 5322 one, `CamelAddress` its abstract
+    // parent, which is where the formatting entry point is declared.
+    "CamelAddress.*",
+    "CamelInternetAddress.*",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -150,6 +168,23 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_folder_(get|set)_(full_name|display_name|flags)",
     "camel_folder_get_parent_store",
     "camel_offline_folder_get_type",
+    // Filling and reading one summary row. `camel_message_info_new_from_headers`
+    // rides in on the same prefix although it is declared in
+    // camel-folder-summary.h, and that is wanted rather than tolerated: it is
+    // the path a message parsed locally takes, and therefore the only oracle
+    // there is for the two columns a provider has to *compute* — the 64-bit
+    // digests Camel threads on. A provider whose digests disagreed with it
+    // would split a conversation in two the moment the two met.
+    "camel_message_info_.*",
+    // Still not `camel_folder_summary_.*`: the summary object arrives with the
+    // increment that puts one on a folder. `camel_message_info_new` takes one,
+    // and NULL — a summary that declares no message-info type — is what this
+    // layer passes until then.
+    "camel_name_value_array_.*",
+    // Formatting an address list the way a summary row stores it: build a
+    // `CamelInternetAddress`, then `camel_address_format` on it.
+    "camel_address_.*",
+    "camel_internet_address_.*",
     "camel_transport_.*",
     "camel_session_.*",
     "camel_settings_.*",
