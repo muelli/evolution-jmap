@@ -2713,3 +2713,86 @@ by `FolderInfoChain::from_tree(&tree).into_raw()` and a `catch_unwind`. After
 that, the subscription flags `folders` deliberately does not read yet. The
 README's architecture block still lists only the round-1 crates; five crates
 stale.
+
+## 2026-08-08 (thirtieth session)
+
+M5's tenth increment: the `CamelService` vfuncs — `connect_sync`,
+`authenticate_sync` and `disconnect_sync` — and with them the answer to the
+question the last three sessions logged as open. One commit, a new
+`src/service.rs` and ten tests in `tests/service.rs`.
+
+The open question was which of `connect_sync` and `camel_session_authenticate_
+sync` drives the other, and Camel's answer is the counter-intuitive one: a
+service does **not** open its connection in `connect_sync`. It asks its
+`CamelSession` to authenticate it, and the session — the only object allowed to
+touch a stored password or put a prompt in front of the user — calls
+`authenticate_sync` back, once if the password it had works and once more for
+every password the user then types. IMAPX and POP3 are both built that way, and
+the reason is the re-prompt: a service that opened its own connection would
+have nowhere to send the user when the password turned out to be wrong. So
+`connect_sync` is a short-circuit and a delegation, and everything that happens
+happens in `authenticate_sync`.
+
+Decisions taken:
+
+- **Only an `ERROR` verdict carries a `GError`.** `authenticate_sync` answers
+  twice and the two answers are not independent: `camel_session_authenticate_
+  sync` reads `REJECTED` as "ask for another password and call me again" and
+  keeps looping, and only gives up — and only propagates an error — on `ERROR`.
+  An error set alongside a `REJECTED` is one reported for an attempt that has
+  not failed yet, leaked at best and shown to a user who is being asked for a
+  password at worst. `report_authentication` is the single place either answer
+  is produced, which is what makes the rule testable without a session.
+- **A failed attempt leaves a working connection alone.** Camel
+  re-authenticates a service it already has a connection for — a changed
+  password, a session that lost track — and a store that dropped its connection
+  on the way to being told the new password would stop serving folders it was
+  serving a moment ago, for a password nobody has typed yet. A *successful* one
+  does replace it, listing and all, which is `store_connection`'s existing rule.
+- **`connect_sync` short-circuits on an already-connected store**, the same
+  check the address book backend's makes and for the same reason: Camel
+  reconnects whenever it suspects the connection is gone, including when it is
+  not, and re-opening a live one would drop a socket other threads are
+  mid-request on.
+- **`disconnect_sync` drops ours first, then chains up.** The parent's
+  implementation is what marks the service disconnected; a connection still in
+  the slot after that is one a racing operation could pick up and use against a
+  service Camel believes is closed. Chaining up at all follows POP3 and IMAPX,
+  which both do.
+- **The password comes from `camel_service_get_password`**, i.e. from what the
+  session just put on the service, and from nowhere else. Nothing reads a
+  credential off the settings object, which Evolution serialises into a config
+  file.
+- **A NULL mechanism, and `query_auth_types_sync` left alone.** JMAP
+  authenticates over HTTP and offers no SASL mechanisms to choose between, so
+  there is nothing to advertise and nothing to branch on.
+- **A panicked `authenticate_sync` is `CAMEL_SERVICE_ERROR_INVALID`, not
+  `UNAVAILABLE`.** The guard cannot produce a verdict, so the vfunc reports one
+  itself; telling Camel the server is unreachable would have it retry the
+  account forever over a bug that is deterministic.
+
+Mutation testing, five mutants, none surviving: the error set for every verdict,
+every failure flattened to `ERROR`, the opened connection not installed, a
+failed attempt clearing the store, and a success reported as anything but
+`ACCEPTED` all die. The harness restores from a copy rather than with `git
+checkout --`, per the twenty-eighth session's lesson.
+
+Not verified locally, as in the previous twenty-nine sessions: `reuse lint` and
+`cargo deny`. The two new files carry SPDX `GPL-3.0-or-later` headers.
+`cargo fmt --check`, `cargo test --locked` (green on the default members, the
+five EDS crates green on top, `jmap-mail` now 78 tests) and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on both member sets. A fresh
+`cmake -S . -B <tmp> -G Ninja && cmake --build && ctest` is 5/5.
+`example-module` is unchanged and still outside both `default-members` and the
+set CI lints.
+
+Next in M5: `CamelStoreClass.get_folder_info_sync`, which is now `folders(flags)`
+followed by `FolderInfoChain::from_tree(&tree).into_raw()` and a guard that
+returns NULL — every piece exists, including the connection that finally gets
+installed. After that the subscription flags `folders` deliberately does not
+read, and then `CamelFolder` itself. Nothing about the service vfuncs has been
+exercised against a real `CamelSession` yet, and cannot be until M6 gives the
+account a collection backend and M7 a way to create one; the manual test recipe
+with a hand-written `.source` keyfile is where that will first be checked. The
+README's architecture block still lists only the round-1 crates; five crates
+stale.
