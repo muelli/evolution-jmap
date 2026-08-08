@@ -17,6 +17,9 @@
 //! - [`trampoline`] stops a Rust panic from unwinding into C, which is
 //!   undefined behaviour.
 //! - [`cancel`] bridges a `GCancellable` to the client's [`CancelFlag`].
+//! - [`connect`] is `connect_sync` minus the collection it opens: the
+//!   credentials, the `out_auth_result` classification and the resolution of
+//!   which server-side collection a source stands for.
 //! - [`error`] maps [`jmap_client::Error`] onto the `GError` domains
 //!   and codes Evolution actually routes on.
 //! - [`marshal`] reads and writes the strings and lists a vfunc's
@@ -29,6 +32,7 @@
 //! its tests via the `rust-test-eds` target.
 
 pub mod cancel;
+pub mod connect;
 pub mod error;
 pub mod instance;
 pub mod marshal;

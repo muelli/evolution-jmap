@@ -113,7 +113,7 @@ fn a_configured_source_yields_an_origin_a_user_and_an_address_book() {
 
     assert_eq!(config.origin, "https://jmap.example.com");
     assert_eq!(config.user.as_deref(), Some("vera@example.com"));
-    assert_eq!(config.address_book_id.as_deref(), Some("Ab1"));
+    assert_eq!(config.resource_id.as_deref(), Some("Ab1"));
 }
 
 #[test]
@@ -262,7 +262,7 @@ fn an_empty_user_or_identity_is_absent_rather_than_empty() {
         .expect("a source with cleared optional keys is still usable");
 
     assert_eq!(config.user, None);
-    assert_eq!(config.address_book_id, None);
+    assert_eq!(config.resource_id, None);
 }
 
 #[test]
