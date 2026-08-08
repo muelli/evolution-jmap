@@ -622,12 +622,29 @@ impl AccountState {
         id
     }
 
-    /// Seed a mailbox; returns its id. Does not bump state.
+    /// Seed a top-level mailbox; returns its id. Does not bump state.
     pub fn seed_mailbox(&mut self, name: &str, role: Option<&str>) -> Id {
+        self.seed_mailbox_with_parent(name, role, None)
+    }
+
+    /// Seed a mailbox nested under `parent`; returns its id. Does not bump
+    /// state. The parent is not checked to exist — a caller that wants to
+    /// serve a dangling `parentId` is exercising exactly that.
+    pub fn seed_child_mailbox(&mut self, name: &str, role: Option<&str>, parent: &Id) -> Id {
+        self.seed_mailbox_with_parent(name, role, Some(parent.clone()))
+    }
+
+    fn seed_mailbox_with_parent(
+        &mut self,
+        name: &str,
+        role: Option<&str>,
+        parent_id: Option<Id>,
+    ) -> Id {
         let id = self.mailboxes.alloc_id();
         let mailbox = Mailbox {
             id: Some(id.clone()),
             name: name.to_owned(),
+            parent_id,
             role: role.map(str::to_owned),
             sort_order: Some(0),
             is_subscribed: Some(true),
