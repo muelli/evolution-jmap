@@ -117,7 +117,7 @@ impl ConnectError {
     pub fn auth_result(&self) -> ESourceAuthenticationResult {
         match self {
             Self::CredentialsRequired => E_SOURCE_AUTHENTICATION_REQUIRED,
-            Self::Client(Error::Http { status: 401, .. }) => E_SOURCE_AUTHENTICATION_REJECTED,
+            Self::Client(error) if is_wrong_password(error) => E_SOURCE_AUTHENTICATION_REJECTED,
             _ => E_SOURCE_AUTHENTICATION_ERROR,
         }
     }
@@ -143,6 +143,25 @@ impl ConnectError {
             _ => E_CLIENT_ERROR_INVALID_ARG,
         }
     }
+}
+
+/// Whether this failure means the credentials themselves were wrong, and so
+/// whether asking the user for them again can help.
+///
+/// The one rule the EDS backends and the Camel provider must not answer
+/// differently, which is why it is a function rather than a match arm in each
+/// of them: the two report it through enums that have nothing in common
+/// (`ESourceAuthenticationResult` and `CamelAuthenticationResult`), but the
+/// question in front of the enum is the same one, and getting it wrong in
+/// either direction is a product failure. Re-prompting on a 403 is a loop no
+/// password ends; not re-prompting on a 401 is an account that is broken with
+/// no way to say so.
+///
+/// A 403 is deliberately excluded: the credentials *were* accepted and the
+/// account is not allowed to do this, which a different password does not fix.
+/// So is an unreachable server.
+pub fn is_wrong_password(error: &Error) -> bool {
+    matches!(error, Error::Http { status: 401, .. })
 }
 
 /// What to authenticate as, given the source's user name and whatever EDS got

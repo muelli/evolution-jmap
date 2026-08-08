@@ -408,8 +408,11 @@ name = "jmap-mail"
 version = "0.1.0"
 dependencies = [
  "eds-sys",
+ "evolution-jmap-client",
  "evolution-jmap-mail-sync",
+ "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "gio-sys",
  "glib-sys",
  "gobject-sys",
  "jmap-backend-core",
