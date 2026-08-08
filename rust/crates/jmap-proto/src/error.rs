@@ -90,6 +90,9 @@ pub mod method {
     pub const ACCOUNT_READ_ONLY: &str = "accountReadOnly";
     pub const SERVER_FAIL: &str = "serverFail";
     pub const STATE_MISMATCH: &str = "stateMismatch";
+    /// The `since_state` of a `/changes` call is too old for the server to
+    /// answer from its log; the client must resynchronise in full.
+    pub const CANNOT_CALCULATE_CHANGES: &str = "cannotCalculateChanges";
 }
 
 /// Well-known set-level error types (RFC 8620 §5.3).

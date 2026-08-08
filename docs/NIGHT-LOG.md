@@ -141,3 +141,96 @@ Next: the `EBookMetaBackend` subclass itself — `connect_sync` /
 `list_existing_sync` / `load_contact_sync` over the client, with
 `jmap-backend-core`'s trampolines, in `jmap-backend-*` out of
 `default-members`.
+
+## 2026-08-08 (third session)
+
+M3, second increment: `rust/crates/jmap-book-sync`
+(`evolution-jmap-book-sync`, lib `jmap_book_sync`) — everything
+`EBookMetaBackend` needs a JMAP address book to do, with none of the GObject
+lifecycle. One entry point per vfunc: `list_existing`, `load_contact`,
+`save_contact`, `remove_contact`, `get_changes`. 18 tests in two files
+(`sync` 8, `save` 10) against a mock server seeded with *two* address books,
+so "only this book" is observable rather than assumed. Workspace total is now
+87.
+
+Like `jmap-vcard`, it depends only on the client and the mapping, so it goes
+**into** `default-members` and its tests run anywhere. What is left for the
+subclass on top is lifecycle, credentials and marshalling — the parts that
+genuinely need EDS.
+
+Decisions taken:
+
+- **The revision is an FNV-1a digest of the rendered vCard**, not JSContact's
+  `updated`. RFC 9553 leaves `updated` optional, so a server that omits it
+  would make every card look permanently unchanged. The digest is also the
+  *better* token: it changes exactly when something EDS can see changes, so a
+  server-side edit to a property this mapping drops does not churn every
+  client's cache. FNV rather than `DefaultHasher` because revisions are
+  persisted in the EDS cache and compared across restarts, and
+  `DefaultHasher`'s output is explicitly unstable between Rust releases.
+- **`get_changes` distinguishes created from updated**, which is what makes
+  `ContactCard/changes` — an account-wide feed — usable for one book without
+  consulting the local cache. A card that shows up as *updated* and is no
+  longer in this book may have just been moved out, so it is reported
+  removed; leaving it out would strand a contact in Evolution's view forever.
+  A card that shows up as *created* and is not ours was never in this book,
+  so it is ignored rather than reported as a removal EDS has no record of.
+- **Saving is a read-modify-write PatchObject, and the merging is the point.**
+  A vCard is a lossy view, so a save that sent the parsed card back whole
+  would delete what it could not represent. That extends *inside* the mapped
+  properties, which is the part that is easy to get wrong: `contexts` and
+  `features` are merged so a context like `school` (no vCard `TYPE`) survives;
+  `pref` keeps a rank the server already had, because vCard 3.0's flag can
+  only introduce or remove a preference, never renumber one; unmapped
+  `name.components` kinds are carried across the replacement. Entries are
+  addressed by the `X-JMAP-KEY` the previous session preserved, so an edit
+  stays an edit. A save that changes nothing sends no request at all, rather
+  than bumping the server state and waking every other client.
+- **A property absent server-side is written whole, not reached into.** RFC
+  8620 §5.3 requires every path segment before the last to already exist. The
+  mock creates intermediates on demand and would not have caught this.
+- **`SyncError` keeps `jmap_client::Error` intact** rather than flattening it
+  to a string, so `jmap-backend-core`'s `E_CLIENT_ERROR` mapping still has
+  something to branch on. `is_cannot_calculate_changes()` is a predicate
+  rather than a string match at the call site: it is not really an error, it
+  is the signal to fall back to a full listing. Added
+  `error::method::CANNOT_CALCULATE_CHANGES` to `jmap-proto` for it.
+- **The mock now rejects a create that supplies `id`.** It previously
+  overwrote it silently, which meant nothing could detect the exact mistake
+  this code has to avoid — sending a vCard `UID` Evolution invented locally
+  (`pas-id-…`) as a JMAP id. RFC 8620 §5.3 makes `id` server-set.
+- **`jmap-vcard` grew three predicates** (`maps_name_component`,
+  `maps_context`, `maps_phone_feature`). The patch builder needs to know
+  exactly which JSContact fields a vCard can carry, and that knowledge belongs
+  next to the tables that answer for it, not duplicated in a second crate.
+
+On the TDD: `patch::diff` was a `todo!()` stub while the tests were written,
+so the seven save tests failed at runtime for the right reason. The read-path
+tests were a weaker red — two of the eight failed, but both for reasons worth
+having found: one asserted a destruction that a card created *and* destroyed
+inside the same window correctly appears in neither list, and the other
+exposed the created/updated question above, which is a design decision the
+test made me take rather than assume.
+
+Eight mutations were then run against the implementation to check the suite
+discriminates. Six failed immediately; two survived and both were real gaps,
+now closed: dropping the unmapped-name-component filter left the card with two
+surnames and no test noticed (the assertion checked membership, not the whole
+list), and removing `card.id = None` before a create changed nothing because
+the mock overwrote it — hence the mock fix above. Both are caught now.
+
+Not verified locally, same as the previous two sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). All new
+files carry an SPDX `GPL-3.0-or-later` header and the crate adds no new
+external dependencies. `cargo test` (87), `cargo clippy --all-targets -D
+warnings` and `cargo fmt --check` are clean on the default members, and
+`cargo test`/`clippy` are clean for `-p eds-sys -p jmap-backend-core` too,
+since this touched `jmap-proto` and `jmap-vcard`.
+
+No blockers hit.
+
+Next: the `EBookMetaBackend` subclass, now a thin shell — register the type
+against the `GTypeModule`, build a `BookSync` in `connect_sync` from
+`ESourceAuthentication` credentials (libsecret, never a config file), and
+marshal each vfunc onto the method of the same name through
+`jmap-backend-core`'s trampolines.
