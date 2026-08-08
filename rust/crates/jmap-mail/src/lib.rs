@@ -45,6 +45,10 @@
 //!   JMAP mailbox id that nothing in Camel's own model has a field for, and
 //!   which a Camel path — invented here out of a mailbox name — cannot be
 //!   turned back into.
+//! - [`message_info`] is one row of that folder's contents: the
+//!   `CamelMessageInfo` a `jmap-mail-sync` summary row becomes, and with it the
+//!   three columns that are a computation rather than a copy — the flags word,
+//!   the formatted address headers, and the 64-bit digests Camel threads on.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -60,6 +64,7 @@ pub mod connect;
 pub mod folder;
 pub mod folder_info;
 pub mod folders;
+pub mod message_info;
 pub mod module;
 pub mod provider;
 pub mod server;

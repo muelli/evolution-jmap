@@ -278,3 +278,22 @@ fn the_security_method_that_means_plaintext_is_the_zero_one() {
     assert_ne!(CAMEL_NETWORK_SECURITY_METHOD_SSL_ON_ALTERNATE_PORT, 0);
     assert_ne!(CAMEL_NETWORK_SECURITY_METHOD_STARTTLS_ON_STANDARD_PORT, 0);
 }
+
+/// How wide a stored message id is, straight from the union Camel declares it
+/// with. `CamelSummaryMessageID` overlays a `guint64` on eight bytes, and the
+/// digest a provider computes is those eight bytes read back as the integer —
+/// so the two views have to be the same size, and the size has to be eight.
+/// `jmap-mail`'s `message_id_digest` takes exactly that many bytes off the
+/// front of an MD5; a union that had grown would leave it filling half a field
+/// and every message threading on a truncated id.
+#[test]
+fn a_stored_message_id_is_eight_bytes_of_a_digest() {
+    let id = unsafe { std::mem::zeroed::<CamelSummaryMessageID>() };
+    assert_eq!(size_of_val(&id), size_of::<u64>());
+    // SAFETY: reading either arm of a fully-zeroed union is defined, and both
+    // arms are plain data.
+    unsafe {
+        assert_eq!(size_of_val(id.id.hash.as_ref()), size_of::<u64>());
+        assert_eq!(*id.id.id.as_ref(), 0);
+    }
+}
