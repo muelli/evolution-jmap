@@ -8,8 +8,13 @@
 #   RUNNER_TOKEN=<token> ./create-runner.sh
 #
 # Get the token from: https://github.com/muelli/evolution-jmap/settings/actions/runners/new
-# (short-lived, ~1 hour). The VM auto-shuts-down daily at 20:00 UTC; start
-# it again with `gcloud compute instances start <name>`.
+# (short-lived, ~1 hour).
+#
+# Shutdown policy: an idle watchdog powers the VM off once no CI job has
+# run for IDLE_MINUTES (default 60; boot counts as activity, so a freshly
+# started VM always gets a full grace period). A 03:33 UTC nightly
+# shutdown remains as a backstop should the watchdog break. Start the VM
+# again with `gcloud compute instances start <name>`.
 #
 # Trial-quota note: this uses 8 vCPUs — the whole per-region allowance on a
 # free-trial account. Keep other VMs in a different region.
@@ -20,6 +25,11 @@ NAME=${NAME:-gha-runner-1}
 ZONE=${ZONE:-europe-west1-b}
 MACHINE=${MACHINE:-c2d-standard-8}
 REPO=${REPO:-muelli/evolution-jmap}
+IDLE_MINUTES=${IDLE_MINUTES:-60}
+# 24.04 matches the hosted runners, the CI container, and the Evolution
+# 3.52 target. Override (e.g. IMAGE_FAMILY=ubuntu-2604-lts-amd64) to get a
+# newer-EDS build target once the backends exist.
+IMAGE_FAMILY=${IMAGE_FAMILY:-ubuntu-2404-lts-amd64}
 : "${RUNNER_TOKEN:?set RUNNER_TOKEN (repo settings → Actions → Runners → New self-hosted runner)}"
 
 STARTUP=$(mktemp)
@@ -28,17 +38,36 @@ cat > "$STARTUP" <<EOF
 #!/bin/bash
 set -eux
 
-# Daily auto-shutdown so idle time never burns credits.
-echo '0 20 * * * root /sbin/shutdown -h now' > /etc/cron.d/autoshutdown
+# Idle watchdog: while a job runs, the Actions runner has a Runner.Worker
+# child process. Refresh a timestamp whenever one is seen (and at boot);
+# power off once it is ${IDLE_MINUTES} minutes stale.
+cat > /usr/local/bin/idle-watchdog <<'WATCHDOG'
+#!/bin/bash
+STAMP=/run/runner-last-active
+[ -f "\$STAMP" ] || touch "\$STAMP"          # /run is tmpfs: boot = activity
+if pgrep -f Runner.Worker > /dev/null; then
+    touch "\$STAMP"
+fi
+if [ \$(( \$(date +%s) - \$(stat -c %Y "\$STAMP") )) -gt \$(( ${IDLE_MINUTES} * 60 )) ]; then
+    logger "idle-watchdog: no CI job for ${IDLE_MINUTES} minutes, shutting down"
+    /sbin/shutdown -h now
+fi
+WATCHDOG
+chmod +x /usr/local/bin/idle-watchdog
+echo '*/5 * * * * root /usr/local/bin/idle-watchdog' > /etc/cron.d/idle-watchdog
+# Backstop in case the watchdog ever breaks: absolute nightly shutdown.
+echo '33 3 * * * root /sbin/shutdown -h now' > /etc/cron.d/nightly-backstop
 
 apt-get update -q
 apt-get install -y --no-install-recommends \\
     build-essential cmake ninja-build pkg-config git curl ca-certificates \\
     libglib2.0-dev libgtk-3-dev libcamel1.2-dev libedataserver1.2-dev \\
     libebackend1.2-dev libebook1.2-dev libedata-book1.2-dev \\
-    libecal2.0-dev libedata-cal2.0-dev evolution-dev libclang-dev jq
+    libecal2.0-dev libedata-cal2.0-dev evolution-dev libclang-dev jq \\
+    cron docker.io
 
 useradd -m -s /bin/bash runner || true
+usermod -aG docker runner
 sudo -u runner bash -c '
     set -eux
     cd ~
@@ -57,7 +86,7 @@ gcloud compute instances create "$NAME" \
     --machine-type "$MACHINE" \
     --provisioning-model=SPOT \
     --instance-termination-action=STOP \
-    --image-family=ubuntu-2404-lts-amd64 \
+    --image-family="$IMAGE_FAMILY" \
     --image-project=ubuntu-os-cloud \
     --boot-disk-size=60GB \
     --boot-disk-type=pd-balanced \
