@@ -23,6 +23,15 @@ pub struct ServerState {
     /// [`crate::MockServerBuilder::changes_page_size`] asked. `None` answers
     /// every change at once.
     pub changes_page_size: Option<u64>,
+    /// How many ids one `Email/get` may name, as
+    /// [`crate::MockServerBuilder::objects_in_get`] asked — advertised in the
+    /// session document and enforced. `None` advertises
+    /// [`crate::DEFAULT_OBJECTS_IN_GET`] and enforces it just the same.
+    pub objects_in_get: Option<u64>,
+    /// How many ids one `Email/query` response may carry, as
+    /// [`crate::MockServerBuilder::query_page_size`] asked. `None` answers the
+    /// whole result at once.
+    pub query_page_size: Option<u64>,
 }
 
 impl ServerState {
@@ -32,6 +41,8 @@ impl ServerState {
             accounts: BTreeMap::new(),
             omitted_capabilities: BTreeSet::new(),
             changes_page_size: None,
+            objects_in_get: None,
+            query_page_size: None,
         }
     }
 
@@ -51,6 +62,14 @@ impl ServerState {
 
     pub fn session_state(&self) -> State {
         State::new(self.session_state.to_string())
+    }
+
+    /// The `maxObjectsInGet` this server advertises, which is also the one it
+    /// enforces. The two being one number is the point: a mock that advertised
+    /// a limit it did not apply would let a client that ignores the session
+    /// document pass.
+    pub fn objects_in_get(&self) -> u64 {
+        self.objects_in_get.unwrap_or(crate::DEFAULT_OBJECTS_IN_GET)
     }
 }
 

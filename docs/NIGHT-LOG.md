@@ -3087,3 +3087,134 @@ for. Still unexercised against a real `CamelSession`: `service.rs` — that wait
 on M6 for a collection backend and M7 for a way to create an account. The
 README's architecture block still lists only the round-1 crates; five crates
 stale.
+
+## 2026-08-08 (thirty-fourth session)
+
+M5's fourteenth increment, and the first one on the *contents* of a mailbox:
+`MessageSummary` — one `Email` as the row `CamelFolderSummary` keeps — and
+`MailSync::messages`, the `Email/query` + `Email/get` pair that produces them.
+All of it in `jmap-mail-sync`, so none of it needs the Camel headers to be
+tested; the GObject half, the summary object itself, is the next increment and
+is what the deferred `camel_folder_summary_*` binding in `eds-sys`'s allowlist
+is waiting for. The red step was `cargo test -p evolution-jmap-mail-sync`
+failing to compile on `MessageSummary`, which did not exist, followed by the
+two limit knobs the mock needed to make the paging tests fail for the right
+reason.
+
+Decisions taken:
+
+- **Not the one-round-trip `Email/query`+`Email/get` back-reference the client
+  already has.** Chaining them through `#ids` sends every matching id straight
+  into the `/get`, and `maxObjectsInGet` — 256 on the mock, and a number every
+  RFC 8620 server has to publish — is a hard cap: asking for more is a
+  `requestTooLarge` that fails the whole call, not a truncated answer. A
+  mailbox is exactly the JMAP type with no bound on how many objects match, so
+  the two calls stay separate and the fetch is chunked. `jmap-mock` now
+  advertises *and enforces* that limit (`MockServerBuilder::objects_in_get`),
+  which is what makes `more_messages_than_one_get_may_ask_about_are_fetched_in_
+  several` fail with the server's own error rather than with a bad assertion.
+- **A `/query` answer is read to the end, not to the first page.** RFC 8620
+  §5.5 lets a server cap a result set whether or not the client sent a `limit`,
+  and requires it to report the cap it applied in `limit`. So the loop asks
+  again from `position = ids.len()` for as long as the answer *says* it was
+  capped, which costs one call for the common case (no cap, one page, done) and
+  no extra call for a server that pages. The alternative — paging until an
+  empty answer — costs every folder open an extra round-trip forever.
+  `MockServerBuilder::query_page_size` is the knob that exercises it, mirroring
+  the `changes_page_size` one already there for the same class of bug.
+- **The query's order is restored after the fetch, because `/get` has none.**
+  RFC 8620 §5.1 does not promise the answer comes back in the order the ids
+  were named, and chunking makes that visible in a second way. So the rows are
+  collected by uid and then emitted in the order `Email/query` returned —
+  which also settles two races for free: an id the `/get` did not answer for is
+  a message deleted between the two calls and is dropped, and a message that
+  shifted position and arrived on two pages is listed once. The test seeds its
+  messages *newest first* so that creation order, id order and the required
+  order are all different; seeded the other way round, every one of those
+  mutants would have passed.
+- **`receivedAt` is the sort key, not the `Date` header.** `sentAt` is the
+  sender's clock at the sender's offset, and one message with a wrong one would
+  sort into the wrong place in the folder forever. Both are kept — Camel has a
+  field for each — but only the server's own timestamp orders the list.
+- **A date is a number here, not in the Camel layer.** Camel stores both dates
+  as `gint64` seconds since the epoch and JMAP sends both as text, and doing
+  the arithmetic in `jmap-mail-sync/src/date.rs` is what makes it testable
+  without the Evolution headers. Hand-rolled, against this project's standing
+  directive to outsource iCalendar/vCard parsing to `calcard`: the difference
+  is that the whole grammar is RFC 3339 plus the proleptic Gregorian calendar —
+  fixed, small, and pinned by 30-odd cases including the leap-year rule at 1900
+  and 2000 — where the directive is about text formats with decades of
+  accumulated deviation. `jmap-proto` keeps `UtcDate` a string on purpose (a
+  wire crate that reinterpreted values could lose them), so this is the layer
+  that gets to interpret one.
+- **An unreadable date leaves the message dateless rather than failing the
+  listing.** `epoch_seconds` returns `Option`, and one malformed `Date` header
+  cannot hide a mailbox. `None` rather than 0 so a caller can still tell "the
+  server said nothing" from "the server said the epoch".
+- **`CAMEL_MESSAGE_DELETED` has no field, and that is the finding.** JMAP has
+  no deleted keyword: deleting mail is `Email/set` taking the message out of
+  the mailbox. So the bit stays what Camel makes it — a local mark this
+  provider will have to turn into a mailbox change at expunge time — and
+  `MessageFlags` has a field only for the bits a keyword or property actually
+  says something about. `hasAttachment` is the one that is a property rather
+  than a keyword; `$notjunk` is kept distinct from the absence of `$junk`,
+  because it is what stops a filter reconsidering.
+- **Keywords are matched case-insensitively and `false` means unset.** RFC 8621
+  §4.1.1 restricts keywords to lower case and defines the value as always
+  `true`; a server that shouts `$Seen` should still not leave every message
+  unread and every mailbox labelled, and one that sends `false` is saying
+  nothing rather than something.
+- **The keywords with no flag become Camel's user flags, verbatim including the
+  `$`.** A flag change sends the keyword back to the server, and a normalised
+  one would not be the same keyword.
+- **Addresses stay structured; the 64-bit threading digests stay undecided.**
+  Camel's summary holds `from`/`to`/`cc` as one formatted string each, but
+  formatting an address list is where RFC 5322's quoting and encoded-word rules
+  live and `CamelInternetAddress` already has them — so this crate hands over
+  the parts. `message_id` and `references` stay text for the mirror-image
+  reason: Camel stores a truncated MD5 (`CamelSummaryMessageID`) with no public
+  function to compute one, and since those digests are only ever compared
+  against digests this provider wrote itself, the choice of hash belongs to the
+  layer that fills the summary. `In-Reply-To` is folded onto the end of
+  `References` when the chain does not already name it — a mailer that sends
+  the first and not the second is common, and its replies would otherwise
+  thread as new conversations.
+- **`SUMMARY_PROPERTIES` is named explicitly.** RFC 8621 §4.2 makes the default
+  property set *everything*, including `bodyStructure`, `textBody` and
+  `bodyValues`; listing a mailbox with the default would multiply the answer by
+  the size of the mail in it.
+- **`Email/query` grew a `position` argument rather than a second method**, and
+  `Session::max_objects_in_get` went on the session document in `jmap-proto`
+  next to `primary_account`, returning `Option` — what to fall back to when a
+  server breaks the rule and publishes no limit is the caller's decision, not
+  the protocol type's. `MailSync` falls back to 50 and caps the advertised
+  number at 500 either way: one `/get` for fifty thousand messages is a
+  response Evolution waits on with the folder half open.
+
+Mutation testing, twelve mutants, none surviving: the fetch unchunked, the
+query stopped after one page, the `/get` order handed back instead of the
+query's, the sort comparator dropped, the mailbox filter dropped,
+`hasAttachment` ignored, a `false` keyword counted as set, keywords matched
+case-sensitively, the size cast wrapping instead of saturating, `In-Reply-To`
+never folded in, the offset's sign flipped, and the two dates read from each
+other's field.
+
+Not verified locally, as in the previous thirty-three sessions: `reuse lint`
+and `cargo deny` (neither binary is installed on this VM). The four new files —
+`src/date.rs`, `src/message.rs`, `tests/summary.rs`, `tests/messages.rs` — all
+carry SPDX `GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test
+--locked` (green on the default members; `jmap-mail-sync` now 40 tests) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets, the five EDS crates included — `jmap-client`'s changed `email_query`
+signature has no other caller, and the mock's new `Email/get` limit is far
+above what any other test seeds.
+
+Next in M5: the Camel half of this — `CamelFolderSummary` on `CamelJmapFolder`,
+which means the `camel_folder_summary_*` and `camel_message_info_*` allowlist
+entries `eds-sys` has been deferring, a `CamelMessageInfo` per `MessageSummary`
+(where the 64-bit message-id digest gets decided), and the folder flag
+`CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` that `folder.rs` deliberately does not
+set yet. `get_inbox_folder_sync` and the `CamelSubscribable` interface are still
+the two smaller unblocked pieces if that stalls. Still unexercised against a
+real `CamelSession`: `service.rs`, which waits on M6 and M7. The README's
+architecture block still lists only the round-1 crates; five crates stale.

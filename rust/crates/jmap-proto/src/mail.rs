@@ -113,12 +113,16 @@ pub struct Email {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// Well-known keywords (RFC 8621 §4.1.1).
+/// Well-known keywords (RFC 8621 §4.1.1, which defers the rest of the set to
+/// the IMAP keywords registry of RFC 5788).
 pub mod keyword {
     pub const SEEN: &str = "$seen";
     pub const DRAFT: &str = "$draft";
     pub const FLAGGED: &str = "$flagged";
     pub const ANSWERED: &str = "$answered";
+    pub const FORWARDED: &str = "$forwarded";
+    pub const JUNK: &str = "$junk";
+    pub const NOT_JUNK: &str = "$notjunk";
 }
 
 /// A name/address pair (RFC 8621 §4.1.2.3). `name` is nullable but always

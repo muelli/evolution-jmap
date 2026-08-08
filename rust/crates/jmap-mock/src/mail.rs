@@ -95,6 +95,22 @@ pub fn mailbox_get(state: &mut ServerState, arguments: Value) -> Result<Value, M
 
 pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
+
+    // The one limit this mock enforces, because it is the one the client has to
+    // read out of the session document to avoid: asking for more objects than
+    // `maxObjectsInGet` fails the whole call (RFC 8620 §5.1). `Email` is where
+    // it bites — a mailbox has as many messages as it has — so it is enforced
+    // here rather than in every `/get`.
+    let limit = state.objects_in_get();
+    if request
+        .ids
+        .as_ref()
+        .is_some_and(|ids| ids.len() as u64 > limit)
+    {
+        return Err(MethodError::new(error::method::REQUEST_TOO_LARGE)
+            .with_description(format!("Email/get accepts at most {limit} ids")));
+    }
+
     let account = account_mut(state, &request.account_id)?;
 
     let mut list = Vec::new();
@@ -127,6 +143,7 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
 
 pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<EmailQueryFilter> = parse_arguments(arguments)?;
+    let page_size = state.query_page_size;
     let account = account_mut(state, &request.account_id)?;
 
     let filter = request.filter.unwrap_or_default();
@@ -167,12 +184,17 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
 
     let total = matches.len() as u64;
     let position = request.position.max(0) as usize;
+    // The server's own cap and the client's, whichever is lower. Only a cap
+    // this server imposed is reported back as `limit`: the client already knows
+    // about its own.
+    let asked = request.limit.unwrap_or(u64::MAX);
     let ids: Vec<Id> = matches
         .into_iter()
         .map(|(id, _)| id.clone())
         .skip(position)
-        .take(request.limit.unwrap_or(u64::MAX) as usize)
+        .take(asked.min(page_size.unwrap_or(u64::MAX)) as usize)
         .collect();
+    let capped = page_size.is_some_and(|page_size| page_size < asked);
 
     to_result(&QueryResponse {
         account_id: request.account_id,
@@ -181,7 +203,7 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
         position: position as u64,
         ids,
         total: request.calculate_total.then_some(total),
-        limit: None,
+        limit: capped.then(|| page_size.unwrap_or_default()),
     })
 }
 

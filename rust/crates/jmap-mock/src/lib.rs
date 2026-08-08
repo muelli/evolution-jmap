@@ -23,5 +23,7 @@ mod setops;
 mod state;
 
 pub use mail::EmailSeed;
-pub use server::{DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME, MockServer, MockServerBuilder};
+pub use server::{
+    DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME, DEFAULT_OBJECTS_IN_GET, MockServer, MockServerBuilder,
+};
 pub use state::{AccountState, Blob, Change, ChangeKind, RecordedSubmission, ServerState, Store};

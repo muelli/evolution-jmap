@@ -57,16 +57,24 @@ impl Client {
     }
 
     /// `Email/query`: matching email ids.
+    ///
+    /// `position` is the offset into the result set the answer should start at
+    /// (RFC 8620 §5.5) — 0 for the first page. A server may answer with fewer
+    /// ids than were asked for whether or not the client set a `limit`, and
+    /// reports the cap it applied in [`QueryResponse::limit`], so a caller that
+    /// wants the whole result set asks again from where the last answer ended.
     pub fn email_query(
         &self,
         account_id: &Id,
         filter: EmailQueryFilter,
         sort: Option<Vec<Comparator>>,
         limit: Option<u64>,
+        position: i64,
     ) -> Result<QueryResponse, Error> {
         let mut request = QueryRequest::new(account_id.clone()).filter(filter);
         request.sort = sort;
         request.limit = limit;
+        request.position = position;
         let arguments =
             self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/query", &request)?;
         Ok(serde_json::from_value(arguments)?)
