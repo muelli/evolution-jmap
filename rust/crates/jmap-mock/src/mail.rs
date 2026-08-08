@@ -629,6 +629,75 @@ impl EmailSeed {
     }
 }
 
+/// The RFC 5322 bytes a seeded message's `message/rfc822` blob serves.
+///
+/// A real server stores the message and derives the `Email` object from it;
+/// this mock has the `Email` and derives a message, which is backwards but
+/// gives a client something to parse that agrees with what `Email/get` says
+/// about the same message. That agreement is the point — a download that
+/// answered with the empty blob this used to seed would let a broken fetch
+/// look like a message with no content.
+///
+/// Single-part, always: a seed's attachments are their own blobs with their own
+/// ids, and building the multipart that would contain them would be writing a
+/// MIME composer inside a test server. A test about attachments reads the
+/// `Email`'s body parts, which is where the mock does model them.
+fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
+    let mut message = String::new();
+    message.push_str(&format!("From: {}\r\n", address(&seed.from)));
+    if !seed.to.is_empty() {
+        let to: Vec<String> = seed.to.iter().map(address).collect();
+        message.push_str(&format!("To: {}\r\n", to.join(", ")));
+    }
+    message.push_str(&format!("Subject: {}\r\n", seed.subject));
+    if let Some(date) = rfc5322_date(seed.received_at.as_str()) {
+        message.push_str(&format!("Date: {date}\r\n"));
+    }
+    message.push_str(&format!("Message-ID: <{id}@mock.invalid>\r\n"));
+    message.push_str("MIME-Version: 1.0\r\n");
+    message.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    message.push_str("Content-Transfer-Encoding: 8bit\r\n");
+    message.push_str("\r\n");
+    message.push_str(&seed.text_body.replace('\n', "\r\n"));
+    message.push_str("\r\n");
+    message
+}
+
+/// One address, as a message carries it.
+///
+/// No quoting and no encoded words: seeds use plain ASCII display names, and a
+/// mock that half-implemented RFC 2047 would be a worse test subject than one
+/// that visibly does not implement it at all.
+fn address(address: &EmailAddress) -> String {
+    match &address.name {
+        Some(name) => format!("{name} <{}>", address.email),
+        None => address.email.clone(),
+    }
+}
+
+/// A JMAP `UtcDate` as an RFC 5322 date, or `None` if it is not the shape JMAP
+/// requires (`YYYY-MM-DDTHH:MM:SSZ`, RFC 8620 §1.4) — a seed exercising a
+/// malformed date should not also get a wrong `Date` header.
+///
+/// The day of the week is left out, which RFC 5322 §3.3 allows: deriving it
+/// would need a calendar this server has no other use for, and getting it
+/// wrong would be worse than omitting it.
+fn rfc5322_date(utc: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (date, time) = utc.split_once('T')?;
+    let time = time.strip_suffix('Z')?;
+    let [year, month, day] = date.split('-').collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    let month = MONTHS.get(month.parse::<usize>().ok()?.checked_sub(1)?)?;
+    if time.len() != 8 || year.len() != 4 || day.len() != 2 {
+        return None;
+    }
+    Some(format!("{day} {month} {year} {time} +0000"))
+}
+
 impl AccountState {
     /// Seed a sending identity; returns its id. Does not bump state.
     pub fn seed_identity(&mut self, name: &str, email: &str) -> Id {
@@ -752,9 +821,10 @@ impl AccountState {
             })
             .collect();
 
+        let source = rfc5322(&id, &seed);
         let email = Email {
             id: Some(id.clone()),
-            blob_id: Some(self.add_blob("message/rfc822", Vec::new())),
+            blob_id: Some(self.add_blob("message/rfc822", source.into_bytes())),
             thread_id: Some(Id::new(format!("T{}", id.as_str()))),
             mailbox_ids: Some([(seed.mailbox_id, true)].into()),
             keywords: Some(

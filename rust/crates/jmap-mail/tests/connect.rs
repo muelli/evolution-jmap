@@ -15,8 +15,9 @@
 
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
-    CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE, CAMEL_SERVICE_ERROR_INVALID,
-    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_SERVICE_ERROR_URL_INVALID, camel_service_error_quark,
+    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
+    CAMEL_SERVICE_ERROR_INVALID, CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_SERVICE_ERROR_URL_INVALID,
+    camel_folder_error_quark, camel_service_error_quark,
 };
 use jmap_backend_core::source::SourceError;
 use jmap_client::transport::CancelFlag;
@@ -24,8 +25,9 @@ use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::store::JmapStore;
-use jmap_mail_sync::MailSync;
-use jmap_mock::MockServer;
+use jmap_mail_sync::{MailSync, SyncError};
+use jmap_mock::{EmailSeed, MockServer};
+use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_MAIL;
 
 fn config(server: &MockServer) -> ServerConfig {
@@ -232,6 +234,46 @@ fn each_failure_carries_the_camel_service_error_code_evolution_routes_on() {
     }
 }
 
+/// A uid the account no longer holds is the folder's domain, not the service's.
+///
+/// The same reasoning as [`StoreError::NoFolder`]'s, one level down: nothing is
+/// wrong with the connection, and a service error would report a working
+/// account as broken because one message went away between a listing and a
+/// click. `CAMEL_FOLDER_ERROR_INVALID_UID` is the code Camel's own providers
+/// use for it, and Evolution reads it as "that message is gone" rather than as
+/// a reason to take the account offline.
+#[test]
+fn a_message_the_account_no_longer_holds_is_reported_in_camels_folder_domain() {
+    let error = StoreError::NoMessage("E17".to_owned());
+    let gerror = error.to_gerror();
+    assert!(!gerror.is_null());
+
+    // SAFETY: `to_gerror` handed over an owned GError, freed below.
+    unsafe {
+        assert_eq!((*gerror).domain, camel_folder_error_quark());
+        assert_eq!((*gerror).code, CAMEL_FOLDER_ERROR_INVALID_UID as i32);
+        glib_sys::g_error_free(gerror);
+    }
+    // The uid is in the message: a mail folder holds thousands of them, and
+    // "invalid uid" without one is a report nobody can act on.
+    assert!(error.to_string().contains("E17"), "{error}");
+}
+
+/// The crate boundary the distinction has to survive: `jmap-mail-sync` answers
+/// a missing message with a variant of its own precisely so that this mapping
+/// can exist, and a `From` that flattened it into a client error would put the
+/// account back in the service domain without changing a line of the test
+/// above.
+#[test]
+fn a_sync_layers_missing_message_stays_a_missing_message() {
+    let error = StoreError::from(SyncError::NoSuchMessage(Id::new("E17")));
+
+    match error {
+        StoreError::NoMessage(uid) => assert_eq!(uid, "E17"),
+        other => panic!("expected a missing message, got {other}"),
+    }
+}
+
 /// The one failure that is not Camel's to classify: the user pressed Stop, and
 /// every caller in Camel tests for it with `g_error_matches (error, G_IO_ERROR,
 /// G_IO_ERROR_CANCELLED)` before deciding anything went wrong at all.
@@ -296,4 +338,45 @@ fn dropping_the_connection_reports_whether_there_was_one() {
     assert!(store.drop_connection());
     assert!(!store.is_connected());
     assert!(!store.drop_connection());
+}
+
+/// The store's side of reading a message: the folder holds the uid and the
+/// store holds the connection, so this is where the two meet — the same split
+/// a refresh already goes through.
+#[test]
+fn a_connected_store_hands_over_the_bytes_of_a_message() {
+    let server = MockServer::builder().start();
+    let uid = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&server.account_id()).unwrap();
+        let mailbox = account.seed_mailbox("Inbox", Some("inbox"));
+        account.seed_email(EmailSeed::new(
+            mailbox,
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ))
+    };
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+
+    let source = store.message_source(&uid).expect("the message was fetched");
+    let source = String::from_utf8(source).expect("a text message");
+    assert!(source.contains("Subject: Lunch?"), "{source}");
+}
+
+/// A message asked for over a store that has no connection is the disconnected
+/// case, not a missing message: Camel drives a store it believes is connected,
+/// and reporting the uid as gone would make Evolution drop a row that is fine.
+#[test]
+fn a_disconnected_store_has_no_message_to_hand_over() {
+    let store = JmapStore::detached();
+
+    match store.message_source(&Id::new("E1")) {
+        Err(StoreError::Disconnected) => {}
+        Err(other) => panic!("expected the store to report being disconnected, got {other}"),
+        Ok(_) => panic!("a store with no connection fetched a message"),
+    }
 }

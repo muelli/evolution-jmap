@@ -92,6 +92,12 @@ const ALLOWED_TYPES: &[&str] = &[
     // Plain struct behind a boxed type, like `CamelProvider`, so `g_type_query`
     // knows nothing of it and tests/camel.rs stands in for tests/layout.rs.
     "CamelFolderChangeInfo",
+    // A third error domain beside `CamelServiceError` and `CamelStoreError`,
+    // for the failures that are neither the account's nor the store's:
+    // `CAMEL_FOLDER_ERROR_INVALID_UID` in particular, which is how a message
+    // that was in the last listing and is not there now gets reported without
+    // the account being called broken.
+    "CamelFolderError",
     "CamelFolderInfo",
     "CamelFolderInfoFlags",
     "CamelFolderSummary",
@@ -168,6 +174,10 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // tests/layout.rs queries.
     "camel_folder_info_.*",
     "camel_folder_get_type",
+    // The quark of the domain above. Its siblings ride in on
+    // `camel_service_.*` and `camel_store_.*`; this one has to be named,
+    // because the folder prefix is deliberately not a wildcard.
+    "camel_folder_error_quark",
     // What a constructed folder is asked about itself: the path Camel keys it
     // by, the name the user sees, the store it hangs off, and the flags word
     // that says how Camel treats it. Still not all of `camel_folder_.*`, which

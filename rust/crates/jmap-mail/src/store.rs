@@ -204,6 +204,20 @@ impl JmapStore {
         Ok(sync.messages(mailbox)?)
     }
 
+    /// The RFC 5322 bytes of one message — what `get_message_sync` will parse.
+    ///
+    /// On the store for the same reason as [`JmapStore::messages`], and locked
+    /// the same way. It takes no mailbox: a JMAP email id identifies the
+    /// message in the account, not in a folder, so the folder a Camel uid was
+    /// read out of adds nothing to the question. The same message filed in two
+    /// mailboxes is one message here, which is what it is on the server.
+    pub fn message_source(&self, uid: &Id) -> Result<Vec<u8>, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        Ok(sync.message_source(uid)?)
+    }
+
     /// Drops the folder listing. Called with the connection lock held, by the
     /// two operations that make a listing stop describing the account the store
     /// is pointed at.
