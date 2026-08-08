@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Manual smoke test for the self-hosted GCP runner: full workspace build
+# (needs the EDS headers baked into the VM) plus the test suite.
+# Dispatch with: gh workflow run runner-smoke.yml
+
+name: Runner smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, gcp]
+    steps:
+      - uses: actions/checkout@v4
+      # The runner service does not inherit the login PATH; cargo lives in
+      # the runner user's ~/.cargo/bin.
+      - run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Toolchain and headers sanity
+        run: |
+          rustc --version
+          cargo --version
+          pkg-config --modversion evolution-shell-3.0 libebook-1.2 libecal-2.0
+      - run: cargo test --locked
+        working-directory: rust
+      - run: cargo build --workspace --locked --release
+        working-directory: rust

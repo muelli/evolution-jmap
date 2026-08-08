@@ -10,11 +10,12 @@
 # Get the token from: https://github.com/muelli/evolution-jmap/settings/actions/runners/new
 # (short-lived, ~1 hour).
 #
-# Shutdown policy: an idle watchdog powers the VM off once no CI job has
-# run for IDLE_MINUTES (default 60; boot counts as activity, so a freshly
-# started VM always gets a full grace period). A 03:33 UTC nightly
-# shutdown remains as a backstop should the watchdog break. Start the VM
-# again with `gcloud compute instances start <name>`.
+# Shutdown policy: an idle watchdog powers the VM off once there has been
+# no CI job, login session, or claude process for IDLE_MINUTES (default
+# 60; boot counts as activity, so a freshly started VM always gets a full
+# grace period). A 24h maximum-uptime guard caps runaway cost if the
+# activity signals misbehave. Start the VM again with
+# `gcloud compute instances start <name>`.
 #
 # Trial-quota note: this uses 8 vCPUs — the whole per-region allowance on a
 # free-trial account. Keep other VMs in a different region.
@@ -45,10 +46,16 @@ cat > /usr/local/bin/idle-watchdog <<'WATCHDOG'
 #!/bin/bash
 STAMP=/run/runner-last-active
 [ -f "\$STAMP" ] || touch "\$STAMP"          # /run is tmpfs: boot = activity
-# Activity = a CI job (Runner.Worker) or any interactive login (ssh/tmux
-# sessions, e.g. someone driving Claude Code on the box).
-if pgrep -f Runner.Worker > /dev/null || [ -n "\$(who)" ]; then
+# Activity = a CI job (Runner.Worker), any login session, or an agent at
+# work (claude in a detached tmux has no login session).
+if pgrep -f Runner.Worker > /dev/null || [ -n "\$(who)" ] || pgrep -f claude > /dev/null; then
     touch "\$STAMP"
+fi
+# Runaway guard: whatever the activity signals say, never run longer than
+# 24h in one stretch.
+if [ "\$(awk '{printf "%d", \$1}' /proc/uptime)" -gt 86400 ]; then
+    logger "idle-watchdog: 24h uptime cap reached, shutting down"
+    /sbin/shutdown -h now
 fi
 if [ \$(( \$(date +%s) - \$(stat -c %Y "\$STAMP") )) -gt \$(( ${IDLE_MINUTES} * 60 )) ]; then
     logger "idle-watchdog: no CI job for ${IDLE_MINUTES} minutes, shutting down"
@@ -57,8 +64,6 @@ fi
 WATCHDOG
 chmod +x /usr/local/bin/idle-watchdog
 echo '*/5 * * * * root /usr/local/bin/idle-watchdog' > /etc/cron.d/idle-watchdog
-# Backstop in case the watchdog ever breaks: absolute nightly shutdown.
-echo '33 3 * * * root /sbin/shutdown -h now' > /etc/cron.d/nightly-backstop
 
 apt-get update -q
 apt-get install -y --no-install-recommends \\
