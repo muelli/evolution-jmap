@@ -66,6 +66,14 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelSession.*",
     "CamelSettings.*",
     "CamelNetworkSettings.*",
+    // The settings object a JMAP service is configured through. Camel's stock
+    // classes stop at `CamelOfflineSettings` and none of them implements
+    // `CamelNetworkSettings` (tests/camel.rs pins that), so the provider
+    // declares its own subclass of the former that implements the latter —
+    // which needs both the parent's structs and the enum the `security-method`
+    // property carries.
+    "CamelOfflineSettings.*",
+    "CamelNetworkSecurityMethod",
     "CamelURL",
     // The folder half of a store. `CamelFolderInfo` is what
     // `get_folder_info_sync` returns — a plain struct, not an object, so it is
@@ -130,6 +138,7 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_session_.*",
     "camel_settings_.*",
     "camel_network_settings_.*",
+    "camel_offline_settings_.*",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,

@@ -218,3 +218,59 @@ fn the_folder_type_is_a_field_inside_the_flags_word() {
         | CAMEL_FOLDER_NOCHILDREN;
     assert_eq!(flags & CAMEL_FOLDER_TYPE_MASK as CamelFolderInfoFlags, 0);
 }
+
+/// Why the provider has to declare a settings type of its own rather than
+/// reuse `CamelOfflineSettings`, which is what `CamelOfflineStore` would
+/// otherwise instantiate: none of Camel's stock settings classes implements
+/// `CamelNetworkSettings`. Host, port, user and security method live on that
+/// interface, and every provider in the tree — IMAPx, POP, SMTP — implements it
+/// on its own settings subclass. A store whose settings do not is a store with
+/// no server to talk to, and the symptom is a NULL host at connect time rather
+/// than anything at build time.
+#[test]
+fn no_stock_camel_settings_class_carries_the_network_properties() {
+    // SAFETY: plain type accessors, and `g_type_is_a` only reads the type
+    // system.
+    unsafe {
+        let network = camel_network_settings_get_type();
+        for settings in [
+            camel_settings_get_type(),
+            camel_store_settings_get_type(),
+            camel_offline_settings_get_type(),
+        ] {
+            assert_eq!(
+                g_type_is_a(settings, network),
+                glib_sys::GFALSE,
+                "{:?} implements CamelNetworkSettings after all; the provider's \
+                 own settings type may be redundant",
+                std::ffi::CStr::from_ptr(gobject_sys::g_type_name(settings))
+            );
+        }
+
+        // ...and it is the *offline* one a `CamelOfflineStore` subclass would
+        // inherit, which is the default the provider's settings type has to
+        // replace and the parent it has to keep.
+        assert_ne!(
+            g_type_is_a(
+                camel_offline_settings_get_type(),
+                camel_store_settings_get_type()
+            ),
+            glib_sys::GFALSE
+        );
+    }
+}
+
+/// The three values `security-method` can take, and the only one that means
+/// "no encryption". `STARTTLS_ON_STANDARD_PORT` is Camel's recommended value
+/// and its name is about a protocol JMAP does not have — JMAP is HTTP, so both
+/// non-`NONE` values mean the same thing here, TLS. What matters is that
+/// `NONE` is 0 and therefore the value a zeroed or unset settings object reads
+/// back as, which is why the mapping treats "not configured" as insecure and
+/// refuses it for anything but loopback rather than defaulting to TLS the way
+/// an `ESource` does.
+#[test]
+fn the_security_method_that_means_plaintext_is_the_zero_one() {
+    assert_eq!(CAMEL_NETWORK_SECURITY_METHOD_NONE, 0);
+    assert_ne!(CAMEL_NETWORK_SECURITY_METHOD_SSL_ON_ALTERNATE_PORT, 0);
+    assert_ne!(CAMEL_NETWORK_SECURITY_METHOD_STARTTLS_ON_STANDARD_PORT, 0);
+}

@@ -109,6 +109,11 @@ fn camel_layouts_match_the_gtype_system() {
         CamelStoreSettings,
         CamelStoreSettingsClass
     );
+    assert_layout!(
+        camel_offline_settings_get_type,
+        CamelOfflineSettings,
+        CamelOfflineSettingsClass
+    );
     assert_layout!(camel_folder_get_type, CamelFolder, CamelFolderClass);
 }
 
