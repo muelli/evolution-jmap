@@ -2621,3 +2621,95 @@ unchanged from last session, and `get_folder_info_sync` over
 cheap way to find out it is still current. The store will want a field for the
 folder state next to its connection slot. The README's architecture block still
 lists only the round-1 crates; five crates stale.
+
+## 2026-08-08 (twenty-ninth session)
+
+M5's ninth increment: the folder listing a store keeps between calls, and what
+Camel's `CAMEL_STORE_FOLDER_INFO_REFRESH` bit asks of it. One commit.
+
+`jmap-mail-sync` already answered both halves — `folder_tree` lists,
+`folder_tree_since` says whether the listing still holds. What
+`get_folder_info_sync` needs and neither half provided is somewhere to keep the
+answer: Camel asks a store for its folder tree constantly, on every folder the
+user opens and every counter update, and sets `REFRESH` on the few of those
+calls that mean "go and look". `JmapStore` grows a second slot for it —
+`Slot<RwLock<Option<Listing>>>`, a tree and the state it is current as of — and
+`JmapStore::folders(flags)`, which takes Camel's flags word verbatim and returns
+an `Arc<FolderTree>`. Twelve tests in a new `tests/folders.rs`.
+
+Decisions taken:
+
+- **The first listing ignores the flags.** A store with nothing in hand has
+  nothing else to answer with, so it lists whether or not `REFRESH` was asked
+  for; the alternative is an account that opens empty and stays that way until
+  something happens to set the bit.
+- **A refresh that finds nothing keeps the same tree, not an equal one.**
+  `folders` hands out `Arc<FolderTree>` and an unchanged refresh reinstalls the
+  `Arc` it already had, so `Arc::ptr_eq` holds across it. Camel diffs the
+  `CamelFolderInfo` forests it is handed to decide which folders to announce as
+  created or deleted; a tree that is a new allocation every refresh is churn no
+  folder actually did. The `Arc` is also what lets the tree outlive the lock —
+  translating it into a forest must not hold the store's listing locked, and
+  copying it per call would be a walk of every mailbox for an answer that did
+  not change.
+- **A rebuilt listing carries the state to measure the *next* refresh against.**
+  Storing the listing's own state rather than the delta's is `jmap-mail-sync`'s
+  rule; the consequence here is that a store which kept asking from the state of
+  its first listing would rebuild the tree on every refresh forever after.
+- **The listing is a slot of its own, tied to the connection by an ordering
+  rule rather than by nesting.** Putting it inside the connection would make a
+  folder refresh and a reconnect queue behind each other, and would need an
+  identity to compare after re-taking the lock. Instead: a listing is written
+  while the connection it was read over is still read-locked, and
+  `store_connection` — which needs that lock exclusively — clears the listing
+  under it. So a reconnect racing a refresh cannot have its clearing undone by a
+  tree the previous connection produced.
+- **A reconnect discards the tree.** Camel reconnects because something about
+  the account changed, and the server behind the new connection may not be the
+  one the old tree — paths, counts, and the JMAP ids every later request is
+  built from — describes.
+- **`StoreError::Disconnected`, reported as `CAMEL_SERVICE_ERROR_NOT_CONNECTED`.**
+  Camel drives a store it *believes* is connected and the belief goes stale;
+  that code is what makes it connect and ask again rather than show the account
+  as broken. `SyncError` now converts into `StoreError`, which is where the
+  `jmap_client::Error` kept intact across two crate boundaries finally becomes a
+  `CAMEL_SERVICE_ERROR`.
+- **The other flags are documented as unread rather than silently ignored.**
+  `SUBSCRIBED`/`SUBSCRIPTION_LIST` are a filter on the tree, not a different
+  request, and `FAST` asks for it without counts JMAP includes in the mailbox
+  anyway.
+
+Mutation testing, six mutants, one deliberate survivor: the cache fast path
+never taken, an unchanged refresh cloning the tree, the refreshed listing not
+stored, `store_connection` keeping the old listing, and a store with no
+connection answering an empty tree all die. The survivor is `drop_connection`
+not clearing the listing — with no connection nothing can reach the tree and the
+reconnect clears it anyway, so freeing it there is memory and not behaviour. It
+stays (a disconnected account should not hold its mailbox tree until Evolution
+quits) and both the method's doc and the test say so rather than implying a test
+covers it.
+
+One thing worth recording for future tests: a request sent over a pooled
+connection whose mock server has just been dropped does not fail fast, it waits
+out the client's 30-second global timeout. `a_listing_that_fails_is_reported_
+rather_than_answered_empty` builds its client with a 500 ms one, which took the
+file from 30 s to 0.5 s.
+
+Not verified locally, as in the previous twenty-eight sessions: `reuse lint` and
+`cargo deny`. The one new file carries an SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` (green on the default members, the
+five EDS crates green on top, `jmap-mail` now 68 tests) and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on both member sets. A fresh
+`cmake -S . -B <tmp> -G Ninja && cmake --build && ctest` is 5/5.
+`example-module` is unchanged and still outside both `default-members` and the
+set CI lints.
+
+Next in M5: the vfuncs, now with everything they need behind them —
+`CamelServiceClass.connect_sync`/`authenticate_sync`/`disconnect_sync`, whose
+open question (which of `connect_sync` and `camel_session_authenticate_sync`
+drives the other) is unchanged from the last two sessions, and
+`CamelStoreClass.get_folder_info_sync`, which is now `folders(flags)` followed
+by `FolderInfoChain::from_tree(&tree).into_raw()` and a `catch_unwind`. After
+that, the subscription flags `folders` deliberately does not read yet. The
+README's architecture block still lists only the round-1 crates; five crates
+stale.

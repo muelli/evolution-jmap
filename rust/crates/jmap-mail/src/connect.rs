@@ -44,8 +44,9 @@ use std::fmt;
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
     CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE, CAMEL_SERVICE_ERROR_INVALID,
-    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_SERVICE_ERROR_URL_INVALID, CamelAuthenticationResult,
-    CamelServiceError, camel_service_error_quark,
+    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_SERVICE_ERROR_UNAVAILABLE,
+    CAMEL_SERVICE_ERROR_URL_INVALID, CamelAuthenticationResult, CamelServiceError,
+    camel_service_error_quark,
 };
 use glib_sys::{GError, g_error_new_literal};
 use jmap_backend_core::connect::is_wrong_password;
@@ -53,7 +54,7 @@ use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::source::SourceError;
 use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, Credentials, Error};
-use jmap_mail_sync::MailSync;
+use jmap_mail_sync::{MailSync, SyncError};
 use jmap_proto::session::CAPABILITY_MAIL;
 
 use crate::server::ServerConfig;
@@ -73,11 +74,31 @@ pub enum StoreError {
     Config(SourceError),
     /// The server refused, failed, or is unreachable.
     Client(Error),
+    /// The store was asked to do something that needs a server, and it has no
+    /// connection.
+    ///
+    /// Not a failure of the account: Camel drives a store it *believes* is
+    /// connected, and the belief goes stale — a `disconnect_sync` on another
+    /// thread, a reconnect that has not happened yet. Reported as
+    /// `CAMEL_SERVICE_ERROR_NOT_CONNECTED`, which is what makes Camel connect
+    /// and ask again rather than show the account as broken.
+    Disconnected,
 }
 
 impl From<SourceError> for StoreError {
     fn from(error: SourceError) -> Self {
         Self::Config(error)
+    }
+}
+
+impl From<SyncError> for StoreError {
+    /// A sync failure is a client failure: `SyncError` exists to keep
+    /// [`jmap_client::Error`] intact across the crate boundary, and this is the
+    /// end of that journey — the point where it becomes a `CAMEL_SERVICE_ERROR`.
+    fn from(error: SyncError) -> Self {
+        match error {
+            SyncError::Client(error) => Self::Client(error),
+        }
     }
 }
 
@@ -92,6 +113,7 @@ impl fmt::Display for StoreError {
         match self {
             Self::Config(error) => error.fmt(f),
             Self::Client(error) => error.fmt(f),
+            Self::Disconnected => f.write_str("not connected to the JMAP server"),
         }
     }
 }
@@ -144,6 +166,7 @@ impl StoreError {
     fn service_error_code(&self) -> CamelServiceError {
         match self {
             Self::Config(_) => CAMEL_SERVICE_ERROR_URL_INVALID,
+            Self::Disconnected => CAMEL_SERVICE_ERROR_NOT_CONNECTED,
             // The server could not be reached. This is the code Camel reads to
             // decide the store goes offline rather than the account being
             // wrong, so it is the one that must not be generic.
