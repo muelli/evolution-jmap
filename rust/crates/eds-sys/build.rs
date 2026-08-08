@@ -30,6 +30,10 @@ const ALLOWED_TYPES: &[&str] = &[
     "EContact.*",
     "EVCard.*",
     "EComponent.*",
+    // The error domain every EDS client speaks. Deliberately just the enum,
+    // not the whole EClient class: the backends produce these codes, they
+    // never talk to an EClient.
+    "EClientError",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -43,6 +47,7 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_collection_backend_.*",
     "e_contact_.*",
     "e_vcard_.*",
+    "e_client_error_.*",
     // Not an EDS symbol, but the entry point every loadable EDS module must
     // export; having the signature in scope keeps M2's trampoline honest.
     "e_module_.*",
