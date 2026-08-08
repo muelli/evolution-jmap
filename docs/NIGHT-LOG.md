@@ -1641,3 +1641,87 @@ rule into the libedata-cal backend directory. `ctest` gains an
 `install-cal-backend` next to the book's. After that the calendar's manual test
 recipe, the mirror of `docs/manual-test-book-backend.md`, differing only in
 `[Calendar] BackendName=jmap` and what `Identity` names.
+
+## 2026-08-08 (nineteenth session)
+
+M4 continues: the factory and the module entry point. One commit, and with it
+`jmap-backend-cal` becomes a shared object EDS can actually load.
+
+`factory.rs` is the `ECalBackendFactory` subclass and `module.rs` the
+`e_module_load` / `e_module_unload` pair; `cmake/Backends.cmake` installs the
+cdylib as `libecalbackendjmap.so` into the directory `libedata-cal-2.0` reports
+as its `backenddir`. Seven tests in `tests/factory.rs`, all of them asserted
+through the class struct and reached through a stand-in `GTypeModule` whose
+`load` calls our entry point — the same shape as the book's, because the thing
+being tested is the path EDS takes rather than the functions along it.
+
+Decisions taken:
+
+- **The calendar factory declares `component_kind`, and declares only
+  `I_CAL_VEVENT_COMPONENT`.** This is the one field `EBookBackendFactoryClass`
+  has no counterpart for, and it is the reason this file is not the book's with
+  the names changed. `ECalBackendFactory` keys itself by name *and* kind — the
+  hash key is `"jmap:VEVENT"` — so declaring events alone means a task list or a
+  memo list naming `BackendName=jmap` finds no factory at all. That is the
+  honest answer while `jmap-cal-sync` maps `CalendarEvent`s and JMAP has no
+  standardised task or note type: registering `VTODO` and `VJOURNAL` factories
+  would produce backends that connect, sync nothing, and look broken rather than
+  absent. The same field is what EDS passes to `g_object_new` as `kind`, so
+  `e_cal_backend_get_kind` reports it to every client — a test pins the value
+  rather than the hash key, because building a key needs an instantiated
+  `EBackendFactory`, which is an `EExtension` and needs something extensible to
+  attach to.
+- **Both backends are called `jmap` and both export `e_module_load`**, and
+  neither is a clash. They are dlopened by different factory processes out of
+  different backend directories (`addressbook-backends`, `calendar-backends`),
+  and collected into different hash tables. It also means one account can name
+  one backend for both of its collections, which is what M6 will write.
+- **`FORCE_INSTALL_PREFIX` is honoured for the calendar directory too**, by the
+  same `pkg_check_variable` + `string(REGEX REPLACE)` pair the book uses. Not
+  factored: the two differ in the pkg-config module, the variable and the
+  temporary, which is all three lines of it.
+
+Mutation testing, and the two that did *not* die:
+
+Three died as intended — `component_kind` left out of `class_init`, the factory
+answering to `jmap-calendar`, and the module registering its types statically
+instead of against the `GTypeModule`.
+
+- **Dropping `remember_backend_type` survived, and is an equivalent mutant
+  rather than a test gap.** With `BACKEND_TYPE` still zero, the factory's
+  fallback calls `register_static::<JmapCalBackend>()`, and
+  `jmap-backend-core::subclass::register` hands an already-registered name
+  straight back on the static path — so the fallback resolves to the very type
+  `register_dynamic` produced a moment earlier, and every observable is
+  unchanged. The memoisation still earns its place: it is what keeps the factory
+  from registering the backend *statically* if it is ever the first of the two to
+  be reached, which is the case the fallback's doc comment is about. The book's
+  factory has the same property.
+- **Reverting `crate-type` to `["rlib"]` survived in an incremental build tree
+  and died in a fresh one.** Cargo does not remove the `.so` it no longer
+  builds, so the install rule copied a stale artifact and `install-cal-backend`
+  passed. Deleting the file first and rebuilding failed the test as it should.
+  CI configures from scratch, so it is caught there; noted because the same hole
+  is in `install-book-backend`, and a `ctest` on a warm tree is weaker evidence
+  than it looks.
+
+Not verified locally, as in the previous eighteen sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The three
+new files carry an SPDX `GPL-3.0-or-later` header. `cargo fmt --check`,
+`cargo test --locked` (36 test binaries green on the default members, and the
+four EDS crates green on top, `jmap-backend-cal` now at 10 + 14 + 13 + 17 + 7)
+and `cargo clippy --all-targets --locked -- -D warnings` are clean on both
+member sets, and a fresh `cmake -S . -B <tmp> -G Ninja && cmake --build &&
+ctest` is 4/4 — `install-cal-backend` reports a 3.4 MB
+`libecalbackendjmap.so` in `/usr/lib/evolution-data-server/calendar-backends`
+exporting both entry points.
+
+No blockers hit.
+
+Next, in M4: the calendar's manual test recipe, the mirror of
+`docs/manual-test-book-backend.md`, and the `tests/recipe.rs` that checks it —
+the book's recipe test builds an `ESource` from the documented keyfile through
+`e_server_side_source_*` and asserts `core::source` reads back what the recipe
+promises, and the calendar's differs only in `[Calendar] BackendName=jmap` and
+what `Identity` names. That closes M4's acceptance criteria, and M5 (the Camel
+provider) is the next milestone.
