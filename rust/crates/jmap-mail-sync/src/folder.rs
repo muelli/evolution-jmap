@@ -11,6 +11,22 @@ use jmap_proto::mail::{Mailbox, role};
 use crate::error::SyncError;
 use crate::path::{encode_component, join};
 
+/// How deep a `parentId` chain may make the tree before the chain is cut.
+///
+/// Building the tree is iterative and so is walking it, so neither is what
+/// needs a limit. The tree itself is: a [`FolderInfo`] owns a
+/// `Vec<FolderInfo>`, so the drop glue recurses once per level, and the depth
+/// comes from `parentId`s a *server* chose. A few tens of thousands of
+/// mailboxes in one chain therefore abort the process — "thread has overflowed
+/// its stack" — on a path with no `unsafe` in it at all, and in Camel's case
+/// that is a process serving every other mail account the user has.
+///
+/// Cutting the chain rather than rejecting the account is the same answer this
+/// module already gives a `parentId` loop: no mailbox is lost, it just becomes
+/// top-level. The number is far above what a mail store uses — Camel's own
+/// folder paths become unusable long before it — so nothing real is reshaped.
+pub const MAX_DEPTH: usize = 64;
+
 /// The purpose Evolution treats a folder as having.
 ///
 /// Only the roles this crate can act on: everything else in the RFC 8457
@@ -227,6 +243,12 @@ impl FolderTree {
     /// removed. Repeating until nothing is unvisited terminates because each
     /// pass cuts one mailbox, and leaves a forest that mirrors the tree this
     /// returns an order for.
+    ///
+    /// A chain longer than [`MAX_DEPTH`] is cut the same way and for a reason
+    /// given there: the tree this describes is dropped recursively, so its depth
+    /// is a stack the server picks the size of. The cut mailbox becomes a root
+    /// and its own subtree starts counting again, so nothing is lost and the
+    /// depth of what comes out is bounded.
     fn walk(
         parent: &mut [Option<usize>],
         children: &mut [Vec<usize>],
@@ -234,17 +256,32 @@ impl FolderTree {
     ) -> Vec<usize> {
         let mut visited = vec![false; parent.len()];
         let mut order = Vec::with_capacity(parent.len());
-        let mut stack: Vec<usize> = roots.iter().rev().copied().collect();
+        let mut stack: Vec<(usize, usize)> = roots.iter().rev().map(|&index| (index, 1)).collect();
 
         let mut cut = 0;
         loop {
-            while let Some(index) = stack.pop() {
+            while let Some((index, depth)) = stack.pop() {
                 if visited[index] {
                     continue;
                 }
+                let depth = if depth > MAX_DEPTH {
+                    // Too deep: this mailbox becomes top-level, exactly as one
+                    // in a `parentId` loop does.
+                    if let Some(deep_parent) = parent[index].take() {
+                        children[deep_parent].retain(|&child| child != index);
+                    }
+                    1
+                } else {
+                    depth
+                };
                 visited[index] = true;
                 order.push(index);
-                stack.extend(children[index].iter().rev().copied());
+                stack.extend(
+                    children[index]
+                        .iter()
+                        .rev()
+                        .map(|&child| (child, depth + 1)),
+                );
             }
             let Some(orphan) = (cut..visited.len()).find(|&index| !visited[index]) else {
                 return order;
@@ -253,7 +290,7 @@ impl FolderTree {
             if let Some(looping_parent) = parent[orphan].take() {
                 children[looping_parent].retain(|&child| child != orphan);
             }
-            stack.push(orphan);
+            stack.push((orphan, 1));
         }
     }
 
