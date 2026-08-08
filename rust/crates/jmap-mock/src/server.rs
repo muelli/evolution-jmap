@@ -25,6 +25,7 @@ pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
     omitted_capabilities: BTreeSet<String>,
+    changes_page_size: Option<u64>,
 }
 
 impl MockServerBuilder {
@@ -53,6 +54,19 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer `/changes` in pages of at most `ids` identifiers, as a busy
+    /// server does with a long backlog.
+    ///
+    /// RFC 8620 §5.2 lets a server split a `/changes` answer whether or not the
+    /// client asked it to, so a client that stops at the first page silently
+    /// misses changes. Without this there is no way to make that happen on
+    /// purpose: the mock otherwise answers everything at once, which is the
+    /// case that hides the bug.
+    pub fn changes_page_size(mut self, ids: u64) -> Self {
+        self.changes_page_size = Some(ids);
+        self
+    }
+
     /// Bind to a fixed localhost port instead of an ephemeral one.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
@@ -65,6 +79,7 @@ impl MockServerBuilder {
         let mut state = ServerState::new();
         state.add_account(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME);
         state.omitted_capabilities = self.omitted_capabilities.clone();
+        state.changes_page_size = self.changes_page_size;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -107,6 +122,7 @@ impl MockServer {
             auth: AuthConfig::default(),
             port: 0,
             omitted_capabilities: BTreeSet::new(),
+            changes_page_size: None,
         }
     }
 

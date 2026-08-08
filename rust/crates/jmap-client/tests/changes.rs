@@ -3,8 +3,11 @@
 
 //! Incremental sync (`/changes`) semantics.
 
-use jmap_client::{Client, Credentials};
+use std::collections::BTreeSet;
+
+use jmap_client::{ChangeSet, Client, Credentials};
 use jmap_mock::MockServer;
+use jmap_proto::Id;
 use jmap_proto::contacts::ContactCard;
 use serde_json::json;
 
@@ -77,4 +80,142 @@ fn changes_since_state_tracks_crud() {
     // The response's newState equals the current state.
     let now = client.contact_state(&account_id).unwrap();
     assert_eq!(late.new_state, now);
+}
+
+/// One account's edit history, and the changes a client sees over it.
+struct Scenario {
+    changes: ChangeSet,
+    /// Created inside the window, then edited: visible as created.
+    kept: Id,
+    /// Created before the window, destroyed inside it: visible as destroyed.
+    doomed: Id,
+    /// Created and destroyed inside the window: visible not at all.
+    born_and_gone: Id,
+}
+
+/// Play the same edits against a server that answers `/changes` in pages of
+/// `page_size` — or, with `None`, one that never pages — and collect
+/// everything that changed.
+fn edit_history(page_size: Option<u64>) -> Scenario {
+    let mut builder = MockServer::builder();
+    if let Some(page_size) = page_size {
+        builder = builder.changes_page_size(page_size);
+    }
+    let server = builder.start();
+    let account_id = server.account_id();
+    let book = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_address_book("Personal", true)
+    };
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let create = |name: &str| {
+        client
+            .contact_create(
+                &account_id,
+                &ContactCard::simple(book.clone(), name, "someone@example.com"),
+            )
+            .unwrap()
+            .id
+            .unwrap()
+    };
+
+    let doomed = create("Doomed");
+    let since = client.contact_state(&account_id).unwrap();
+
+    let kept = create("Keep Me");
+    client
+        .contact_update(&account_id, &kept, json!({"name/full": "Keep Me Longer"}))
+        .unwrap();
+    let born_and_gone = create("Ephemeral");
+    client.contact_destroy(&account_id, &born_and_gone).unwrap();
+    client.contact_destroy(&account_id, &doomed).unwrap();
+
+    Scenario {
+        changes: client
+            .all_changes(&account_id, "ContactCard", &since)
+            .unwrap(),
+        kept,
+        doomed,
+        born_and_gone,
+    }
+}
+
+#[test]
+fn a_capped_response_says_there_is_more_and_where_to_resume() {
+    let server = MockServer::builder().changes_page_size(1).start();
+    let account_id = server.account_id();
+    let book = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_address_book("Personal", true)
+    };
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let since = client.contact_state(&account_id).unwrap();
+
+    let first_card = client
+        .contact_create(
+            &account_id,
+            &ContactCard::simple(book.clone(), "First", "first@example.com"),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+    let second_card = client
+        .contact_create(
+            &account_id,
+            &ContactCard::simple(book, "Second", "second@example.com"),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+
+    let first = client.changes(&account_id, "ContactCard", &since).unwrap();
+    assert_eq!(first.created, vec![first_card]);
+    assert!(first.has_more_changes, "one of two creates was withheld");
+    assert_ne!(
+        first.new_state, since,
+        "a page the client cannot resume from is a page it must re-fetch forever"
+    );
+
+    let second = client
+        .changes(&account_id, "ContactCard", &first.new_state)
+        .unwrap();
+    assert_eq!(second.created, vec![second_card]);
+    assert!(!second.has_more_changes);
+    assert_eq!(
+        second.new_state,
+        client.contact_state(&account_id).unwrap(),
+        "the last page ends at the current state"
+    );
+}
+
+#[test]
+fn following_every_page_answers_what_one_page_would_have() {
+    let whole = edit_history(None);
+
+    assert_eq!(
+        whole.changes.created,
+        BTreeSet::from([whole.kept.clone()]),
+        "a card created and then edited in-window is created, not updated"
+    );
+    assert!(whole.changes.updated.is_empty());
+    assert_eq!(whole.changes.destroyed, BTreeSet::from([whole.doomed]));
+    assert!(
+        !whole.changes.created.contains(&whole.born_and_gone)
+            && !whole.changes.destroyed.contains(&whole.born_and_gone),
+        "a card the client never saw exist is not a card it must be told about"
+    );
+
+    // The point of the whole exercise: how the server chose to split its
+    // answer is not something the caller can observe.
+    let paged = edit_history(Some(1));
+    assert_eq!(paged.changes, whole.changes);
 }

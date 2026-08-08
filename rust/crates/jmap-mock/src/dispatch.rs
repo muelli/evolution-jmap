@@ -189,18 +189,25 @@ fn handle_method(
         | "Calendar/changes"
         | "CalendarEvent/changes" => {
             let request: jmap_proto::methods::ChangesRequest = parse_arguments(arguments)?;
+            let page_size = state.changes_page_size;
             let account = account_mut(state, &request.account_id)?;
             let response = match name {
-                "Mailbox/changes" => crate::setops::store_changes(&account.mailboxes, request),
-                "Email/changes" => crate::setops::store_changes(&account.emails, request),
+                "Mailbox/changes" => {
+                    crate::setops::store_changes(&account.mailboxes, request, page_size)
+                }
+                "Email/changes" => {
+                    crate::setops::store_changes(&account.emails, request, page_size)
+                }
                 "AddressBook/changes" => {
-                    crate::setops::store_changes(&account.address_books, request)
+                    crate::setops::store_changes(&account.address_books, request, page_size)
                 }
                 "ContactCard/changes" => {
-                    crate::setops::store_changes(&account.contact_cards, request)
+                    crate::setops::store_changes(&account.contact_cards, request, page_size)
                 }
-                "Calendar/changes" => crate::setops::store_changes(&account.calendars, request),
-                _ => crate::setops::store_changes(&account.calendar_events, request),
+                "Calendar/changes" => {
+                    crate::setops::store_changes(&account.calendars, request, page_size)
+                }
+                _ => crate::setops::store_changes(&account.calendar_events, request, page_size),
             }?;
             to_result(&response)
         }
