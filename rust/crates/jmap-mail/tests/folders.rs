@@ -10,25 +10,47 @@
 //! — every folder the user clicks, every counter update — and passes
 //! `CAMEL_STORE_FOLDER_INFO_REFRESH` on the few of those that mean "go and
 //! look".
+//!
+//! The second part of the file is the other question the vfunc's arguments ask
+//! of that tree: not *whether it is current* but *which part of it the caller
+//! wants* — the `top` the answer is rooted at, and the depth
+//! `CAMEL_STORE_FOLDER_INFO_RECURSIVE` cuts it to.
+//!
+//! The third part is the vfunc itself, called the way Camel calls it: through
+//! the pointer in the class rather than by name. That is the only test that
+//! proves the two halves above are actually joined to each other and to the
+//! slot — a `Request` that is never built from a real `top`, or an
+//! implementation that never reaches the class, is a store with no folders and
+//! a suite that still passes.
 
+use std::ffi::CString;
+use std::ptr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use eds_sys::{
-    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_INFO_REFRESH, camel_service_error_quark,
+    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_INFO_RECURSIVE,
+    CAMEL_STORE_FOLDER_INFO_REFRESH, CamelFolderInfo, CamelStore, CamelStoreClass,
+    camel_folder_info_free, camel_offline_store_get_type, camel_service_error_quark,
 };
+use glib_sys::GError;
+use gobject_sys::{g_type_class_peek, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
-use jmap_mail::store::JmapStore;
+use jmap_mail::folders::Request;
+use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail_sync::{FolderTree, MailSync};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_proto::mail::role;
+use jmap_proto::mail::{Mailbox, role};
 
 /// No flags at all: what Camel passes when it wants the tree it was given last
 /// time.
 const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
 const REFRESH: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_REFRESH;
+/// Every real caller in Camel and Evolution sets this one; the two that do not
+/// are `camel_store_get_folder_info_sync`'s own virtual-folder paths.
+const RECURSIVE: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_RECURSIVE;
 
 fn sync_against(server: &MockServer) -> MailSync {
     let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
@@ -279,4 +301,404 @@ fn the_listing_is_the_connected_accounts() {
             .expect("the seeded mailbox")
     });
     assert_eq!(inbox.id, expected);
+}
+
+// ---------------------------------------------------------------------------
+// which part of the tree the call asks for
+
+/// A tree built by hand, for the questions that are about the request rather
+/// than about the server. Sibling order is RFC 8621's — `sortOrder`, then the
+/// name — so `Personal` comes before `Work`.
+fn hand_built() -> FolderTree {
+    let mailbox = |id: &str, name: &str, parent: Option<&str>| Mailbox {
+        id: Some(Id::new(id)),
+        name: name.to_owned(),
+        parent_id: parent.map(Id::new),
+        ..Mailbox::default()
+    };
+    FolderTree::from_mailboxes(&[
+        mailbox("M1", "Work", None),
+        mailbox("M2", "Personal", None),
+        mailbox("M3", "Invoices", Some("M1")),
+        mailbox("M4", "Paid", Some("M3")),
+    ])
+    .expect("a well-formed mailbox list")
+}
+
+/// The request one call makes, as something a test can compare: the paths it is
+/// rooted at, and how far down it goes.
+fn requested(
+    tree: &FolderTree,
+    top: Option<&str>,
+    flags: eds_sys::CamelStoreGetFolderInfoFlags,
+) -> (Vec<String>, Option<usize>) {
+    let request = Request::new(tree, top, flags);
+    let paths = request
+        .roots
+        .iter()
+        .map(|folder| folder.path.clone())
+        .collect();
+    (paths, request.depth)
+}
+
+/// `top` is nullable, and NULL means the account: Camel's own documentation
+/// calls it "the name of the folder to start from", and starting from nowhere
+/// is starting from the root.
+#[test]
+fn a_call_with_no_top_is_rooted_at_every_top_level_folder() {
+    let tree = hand_built();
+
+    let (paths, _) = requested(&tree, None, RECURSIVE);
+    assert_eq!(paths, ["Personal", "Work"]);
+}
+
+/// The empty string is the same thing, and not a folder whose path is empty:
+/// `camel_store_get_folder_info_sync` tests `top == NULL || *top == '\0'` for
+/// its own "start at root" decision, so a store that read the two differently
+/// would disagree with the wrapper calling it.
+#[test]
+fn an_empty_top_is_the_account_too() {
+    let tree = hand_built();
+
+    assert_eq!(
+        requested(&tree, Some(""), RECURSIVE).0,
+        ["Personal", "Work"]
+    );
+}
+
+/// A `top` roots the answer at that folder — which is *included*, not skipped:
+/// it is the head of the chain the caller gets back, the way IMAPX's is. Its
+/// siblings are not.
+#[test]
+fn a_top_is_answered_with_that_folder_at_the_root() {
+    let tree = hand_built();
+
+    let (paths, _) = requested(&tree, Some("Work"), RECURSIVE);
+    assert_eq!(paths, ["Work"]);
+}
+
+/// And it is matched on the Camel path, at any depth — not on the display name,
+/// and not only among the top-level folders. Camel keys every folder by the
+/// `full_name` this side produced, so that is the only string it can ask with.
+#[test]
+fn a_top_deeper_in_the_tree_is_found_by_its_path() {
+    let tree = hand_built();
+
+    let (paths, _) = requested(&tree, Some("Work/Invoices"), RECURSIVE);
+    assert_eq!(paths, ["Work/Invoices"]);
+}
+
+/// A `top` no folder answers to asks for nothing, which Camel reads as a NULL
+/// chain with no error set — its own documentation for the wrapper says the
+/// call "can return NULL without setting a GError if no folders match the
+/// search criteria". An error instead would turn a folder deleted by another
+/// client into a broken account.
+#[test]
+fn a_top_that_names_no_folder_asks_for_nothing() {
+    let tree = hand_built();
+
+    let (paths, _) = requested(&tree, Some("Nowhere"), RECURSIVE);
+    assert!(paths.is_empty());
+}
+
+/// The flag Camel documents as "the returned tree will include all levels of
+/// hierarchy below @top. If not, it will only include the immediate subfolders
+/// of @top".
+#[test]
+fn recursive_asks_for_every_level_below_the_root() {
+    let tree = hand_built();
+
+    assert_eq!(requested(&tree, None, RECURSIVE).1, None);
+    assert_eq!(requested(&tree, Some("Work"), RECURSIVE).1, None);
+}
+
+/// Without it, one level below `top` — and the two cases differ by one, because
+/// the folder `top` names is itself in the answer and the account's root is
+/// not. `top` = `Work` returns `Work` and its children; no `top` at all returns
+/// the top-level folders, which *are* the root's children, and nothing under
+/// them.
+#[test]
+fn without_recursive_only_the_level_below_top_is_asked_for() {
+    let tree = hand_built();
+
+    assert_eq!(requested(&tree, None, CACHED).1, Some(0));
+    assert_eq!(requested(&tree, Some("Work"), CACHED).1, Some(1));
+}
+
+/// The refresh flag is the listing's business and not the request's: a call
+/// that asks for one subtree still refreshes the whole tree, because JMAP has
+/// no way to ask for part of a `Mailbox/changes` and a partial answer would
+/// leave the store's state describing folders it did not fetch.
+#[test]
+fn the_refresh_flag_does_not_change_which_folders_are_asked_for() {
+    let tree = hand_built();
+
+    assert_eq!(
+        requested(&tree, Some("Work"), RECURSIVE),
+        requested(&tree, Some("Work"), RECURSIVE | REFRESH)
+    );
+}
+
+/// And the slot itself. `CamelStore` leaves `get_folder_info_sync` NULL and
+/// `camel_store_get_folder_info_sync` refuses to call a store that has not
+/// filled it in, so an override that never reached the class is an account with
+/// no folders and a runtime warning rather than a compile error.
+#[test]
+fn the_store_class_overrides_the_folder_listing_vfunc() {
+    // SAFETY: the store type is registered by `store_type`, and referencing its
+    // class is what runs the class_init that installs the vfunc; the reference
+    // is released below. Peeking the parent's class is safe because referencing
+    // the child's has initialised it.
+    unsafe {
+        let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
+        assert!(
+            (*class).get_folder_info_sync.is_some(),
+            "the store cannot list its folders"
+        );
+
+        let parent = g_type_class_peek(camel_offline_store_get_type()).cast::<CamelStoreClass>();
+        assert!(!parent.is_null(), "the parent class is not initialised");
+        assert!(
+            (*parent).get_folder_info_sync.is_none(),
+            "CamelOfflineStore grew an implementation of its own; the override \
+             above is no longer the only thing filling the slot"
+        );
+
+        g_type_class_unref(class.cast());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the vfunc, called the way Camel calls it
+
+/// One `get_folder_info_sync` call and both of its answers, owned the way
+/// Camel owns them: the chain freed with `camel_folder_info_free`, the error
+/// with `g_error_free`.
+struct Answered {
+    chain: *mut CamelFolderInfo,
+    error: *mut GError,
+}
+
+impl Answered {
+    /// Calls the vfunc through the pointer in the class, which is the only way
+    /// Camel ever reaches it — by name would test a function that might not be
+    /// installed anywhere.
+    fn of(
+        store: &JmapStore,
+        top: Option<&str>,
+        flags: eds_sys::CamelStoreGetFolderInfoFlags,
+    ) -> Self {
+        let top = top.map(|top| CString::new(top).expect("a top with no NUL"));
+        let mut error: *mut GError = ptr::null_mut();
+
+        // SAFETY: referencing the class runs the class_init that installs the
+        // vfunc. The store is an instance of ours, which is what the vfunc's
+        // contract asks for; `top` is NULL or a NUL-terminated string alive for
+        // the call, and `error` is writable and currently NULL. The class
+        // reference is released after the call, and the store outlives it.
+        unsafe {
+            let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
+            let vfunc = (*class)
+                .get_folder_info_sync
+                .expect("the store cannot list its folders");
+            let chain = vfunc(
+                (store as *const JmapStore).cast_mut().cast::<CamelStore>(),
+                top.as_ref().map_or(ptr::null(), |top| top.as_ptr()),
+                flags,
+                ptr::null_mut(),
+                &mut error,
+            );
+            g_type_class_unref(class.cast());
+            Self { chain, error }
+        }
+    }
+
+    /// The paths of the answer, parents before children, as Camel walks it.
+    fn paths(&self) -> Vec<String> {
+        let mut paths = Vec::new();
+        // SAFETY: the chain is the forest the vfunc just handed over, and every
+        // `full_name` in it was allocated from a Rust string.
+        unsafe { collect(self.chain, &mut paths) };
+        paths
+    }
+}
+
+/// Depth-first over a sibling chain and its children, appending `full_name`s.
+///
+/// # Safety
+///
+/// `head` is NULL or the head of a `CamelFolderInfo` sibling chain whose
+/// `full_name`s are non-NULL and NUL-terminated.
+unsafe fn collect(head: *mut CamelFolderInfo, paths: &mut Vec<String>) {
+    let mut info = head;
+    while !info.is_null() {
+        unsafe {
+            paths.push(
+                std::ffi::CStr::from_ptr((*info).full_name)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            collect((*info).child, paths);
+            info = (*info).next;
+        }
+    }
+}
+
+impl Drop for Answered {
+    fn drop(&mut self) {
+        // SAFETY: the vfunc handed over ownership of both, and Camel's contract
+        // is that the caller frees them with exactly these two functions.
+        unsafe {
+            if !self.chain.is_null() {
+                camel_folder_info_free(self.chain);
+            }
+            if !self.error.is_null() {
+                glib_sys::g_error_free(self.error);
+            }
+        }
+    }
+}
+
+/// A store with something worth rooting an answer at: `Work`, a child, and a
+/// grandchild, plus a sibling that must stay out of a `top`ped answer.
+fn nested() -> (MockServer, Box<JmapStore>) {
+    let server = MockServer::builder().start();
+    edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX));
+        let work = account.seed_mailbox("Work", None);
+        let invoices = account.seed_child_mailbox("Invoices", None, &work);
+        account.seed_child_mailbox("Paid", None, &invoices);
+    });
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    (server, store)
+}
+
+/// The whole point of the vfunc, end to end: a connected store, a NULL `top`,
+/// and the account's folders coming back as a C forest. Everything under it has
+/// its own test; this is the one that proves they are wired to each other and
+/// to the class.
+#[test]
+fn the_vfunc_answers_a_connected_store_with_its_folders() {
+    let (_server, store) = nested();
+
+    let answered = Answered::of(&store, None, RECURSIVE);
+
+    assert!(
+        answered.error.is_null(),
+        "a successful listing set an error"
+    );
+    assert_eq!(
+        answered.paths(),
+        ["Inbox", "Work", "Work/Invoices", "Work/Invoices/Paid"]
+    );
+}
+
+/// A NULL `top` and an empty one are the same question, and the vfunc has to
+/// read a C NULL as such rather than as a folder whose path is the empty
+/// string.
+#[test]
+fn the_vfunc_reads_an_empty_top_as_the_whole_account() {
+    let (_server, store) = nested();
+
+    assert_eq!(
+        Answered::of(&store, Some(""), RECURSIVE).paths(),
+        Answered::of(&store, None, RECURSIVE).paths()
+    );
+}
+
+/// The `top` reaching the answer, not just the [`Request`]: the folder named is
+/// the head of the chain, its sibling `Inbox` is absent, and the chain's head
+/// has no `next` — a root chain that still linked the siblings would hand Camel
+/// the whole account under the name of a subtree.
+#[test]
+fn the_vfunc_roots_the_answer_at_the_top_it_was_given() {
+    let (_server, store) = nested();
+
+    let answered = Answered::of(&store, Some("Work"), RECURSIVE);
+
+    assert_eq!(
+        answered.paths(),
+        ["Work", "Work/Invoices", "Work/Invoices/Paid"]
+    );
+    // SAFETY: the chain is the forest the vfunc handed over, and it is not
+    // empty — the assertion above walked it.
+    unsafe { assert!((*answered.chain).next.is_null(), "a sibling came along") };
+}
+
+/// And the depth reaching it. Without `RECURSIVE` the answer is `top` and its
+/// immediate children, which is the level below a folder that is itself in the
+/// answer — so `Paid`, a level further down, is left out.
+#[test]
+fn the_vfunc_cuts_the_answer_when_recursive_is_not_asked_for() {
+    let (_server, store) = nested();
+
+    let answered = Answered::of(&store, Some("Work"), CACHED);
+
+    assert_eq!(answered.paths(), ["Work", "Work/Invoices"]);
+}
+
+/// The case that must not be an error. Camel documents the wrapper as able to
+/// "return NULL without setting a GError if no folders match the search
+/// criteria", and a folder another client deleted between one call and the next
+/// is asked for once more before Camel notices; reporting that as a failure
+/// would turn someone else's tidying into a broken account.
+#[test]
+fn a_top_naming_no_folder_is_an_empty_answer_and_not_a_failure() {
+    let (_server, store) = nested();
+
+    let answered = Answered::of(&store, Some("Nowhere"), RECURSIVE);
+
+    assert!(answered.chain.is_null(), "a folder that does not exist");
+    assert!(answered.error.is_null(), "an empty answer set an error");
+}
+
+/// The other NULL, which *is* a failure and has to be told apart from the one
+/// above by the error alone. `NOT_CONNECTED` is the code that makes Camel
+/// connect and ask again rather than showing the account as broken.
+#[test]
+fn the_vfunc_answers_a_disconnected_store_with_null_and_an_error() {
+    let store = JmapStore::detached();
+
+    let answered = Answered::of(&store, None, RECURSIVE);
+
+    assert!(answered.chain.is_null(), "a disconnected store listed");
+    assert!(!answered.error.is_null(), "no reason given");
+    // SAFETY: the error is the one the vfunc set, checked non-NULL above.
+    unsafe {
+        assert_eq!((*answered.error).domain, camel_service_error_quark());
+        assert_eq!(
+            (*answered.error).code,
+            CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
+        );
+    }
+}
+
+/// A NULL instance pointer is not something Camel does, but it is what the
+/// guard's failure path looks like from here, and the vfunc must answer it with
+/// the same NULL-and-an-error rather than dereferencing it.
+#[test]
+fn a_null_store_is_reported_rather_than_dereferenced() {
+    let mut error: *mut GError = ptr::null_mut();
+
+    // SAFETY: referencing the class installs the vfunc; NULL is exactly the
+    // instance pointer under test, and `error` is writable and NULL.
+    let chain = unsafe {
+        let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
+        let vfunc = (*class).get_folder_info_sync.expect("the vfunc");
+        let chain = vfunc(
+            ptr::null_mut(),
+            ptr::null(),
+            RECURSIVE,
+            ptr::null_mut(),
+            &mut error,
+        );
+        g_type_class_unref(class.cast());
+        chain
+    };
+
+    assert!(chain.is_null());
+    assert!(!error.is_null(), "no reason given");
+    // SAFETY: owned by us, set above.
+    unsafe { glib_sys::g_error_free(error) };
 }

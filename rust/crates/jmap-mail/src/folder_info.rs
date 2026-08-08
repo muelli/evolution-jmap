@@ -23,7 +23,7 @@
 //!   single point where it stops being ours — a vfunc that returned the pointer
 //!   while a `Drop` still held it would be a double free.
 //! * A half-built forest has no owner, so building must not be able to fail
-//!   part-way. Nothing in [`FolderInfoChain::from_tree`] can: `g_malloc` aborts
+//!   part-way. Nothing in [`FolderInfoChain::from_forest`] can: `g_malloc` aborts
 //!   rather than returning NULL, and the one fallible conversion — a name with
 //!   a NUL in it — is resolved by rewriting the name, not by returning an
 //!   error.
@@ -54,7 +54,26 @@ pub struct FolderInfoChain {
 }
 
 impl FolderInfoChain {
-    /// Translate a whole tree.
+    /// Translate a whole tree: every folder of an account, at every depth.
+    pub fn from_tree(tree: &FolderTree) -> Self {
+        Self::from_forest(tree.roots(), None)
+    }
+
+    /// Translate one sibling chain and `depth` levels of descendants below it,
+    /// where `None` means all of them.
+    ///
+    /// The two arguments are what `get_folder_info_sync`'s `top` and
+    /// `CAMEL_STORE_FOLDER_INFO_RECURSIVE` come down to once
+    /// [`Request`](crate::folders::Request) has read them; this end only
+    /// allocates.
+    ///
+    /// The depth is applied while the forest is built rather than to a finished
+    /// one, because a cut that happened afterwards would have allocated — and
+    /// freed — every folder of a deep account to keep its first level. What it
+    /// deliberately does *not* touch is the flags: a folder whose children were
+    /// left out still says `CAMEL_FOLDER_CHILDREN`, since that flag is what
+    /// makes the folder tree draw the expander the cut level is fetched
+    /// through.
     ///
     /// Iteratively, with an explicit stack of sibling groups still to link.
     /// The depth of the tree comes from a `parentId` chain the server chose, so
@@ -62,14 +81,15 @@ impl FolderInfoChain {
     /// same reasoning that made the walk in `jmap-mail-sync` iterative.
     /// `camel_folder_info_free` recursing over the result is Camel's own
     /// bound and not one this side can lift.
-    pub fn from_tree(tree: &FolderTree) -> Self {
+    pub fn from_forest(siblings: &[FolderInfo], depth: Option<usize>) -> Self {
         let mut head: *mut CamelFolderInfo = ptr::null_mut();
-        // Each entry is a sibling list, and the info it hangs off: NULL for the
-        // roots, which is also how the head is recognised below.
-        let mut pending: Vec<(&[FolderInfo], *mut CamelFolderInfo)> =
-            vec![(tree.roots(), ptr::null_mut())];
+        // Each entry is a sibling list, the info it hangs off — NULL for the
+        // roots, which is also how the head is recognised below — and how many
+        // levels below it are still wanted.
+        let mut pending: Vec<(&[FolderInfo], *mut CamelFolderInfo, Option<usize>)> =
+            vec![(siblings, ptr::null_mut(), depth)];
 
-        while let Some((siblings, parent)) = pending.pop() {
+        while let Some((siblings, parent, depth)) = pending.pop() {
             let mut previous: *mut CamelFolderInfo = ptr::null_mut();
             for folder in siblings {
                 let info = alloc_info(folder, parent);
@@ -86,8 +106,8 @@ impl FolderInfoChain {
                     }
                 }
                 previous = info;
-                if !folder.children.is_empty() {
-                    pending.push((&folder.children, info));
+                if !folder.children.is_empty() && depth != Some(0) {
+                    pending.push((&folder.children, info, depth.map(|depth| depth - 1)));
                 }
             }
         }
