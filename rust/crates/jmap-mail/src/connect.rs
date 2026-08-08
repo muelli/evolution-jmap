@@ -43,10 +43,11 @@ use std::fmt;
 
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
-    CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE, CAMEL_SERVICE_ERROR_INVALID,
-    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_SERVICE_ERROR_UNAVAILABLE,
-    CAMEL_SERVICE_ERROR_URL_INVALID, CAMEL_STORE_ERROR_NO_FOLDER, CamelAuthenticationResult,
-    CamelServiceError, camel_service_error_quark, camel_store_error_quark,
+    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
+    CAMEL_SERVICE_ERROR_INVALID, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
+    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_SERVICE_ERROR_URL_INVALID, CAMEL_STORE_ERROR_NO_FOLDER,
+    CamelAuthenticationResult, CamelServiceError, camel_folder_error_quark,
+    camel_service_error_quark, camel_store_error_quark,
 };
 use glib_sys::{GError, GQuark, g_error_new_literal};
 use jmap_backend_core::connect::is_wrong_password;
@@ -98,6 +99,15 @@ pub enum StoreError {
     /// where the user's mail arrives. Reported like [`Self::NoFolder`], whose
     /// case this is: a folder Camel asked for that the account does not have.
     NoInbox,
+    /// Camel asked for a message the account does not hold, by uid.
+    ///
+    /// The folder's own domain rather than the store's: the store is fine and
+    /// so is the folder — a uid is a claim about the last listing, and another
+    /// client deleting the message since is ordinary rather than a fault.
+    /// Reported as `CAMEL_FOLDER_ERROR_INVALID_UID`, which is what Evolution
+    /// reads as "that message is gone" instead of as a reason to take the
+    /// account offline.
+    NoMessage(String),
 }
 
 impl From<SourceError> for StoreError {
@@ -113,6 +123,10 @@ impl From<SyncError> for StoreError {
     fn from(error: SyncError) -> Self {
         match error {
             SyncError::Client(error) => Self::Client(error),
+            // Not a client failure and not flattened into one: the sync layer
+            // gave this a variant of its own so that the mapping below could
+            // exist, and collapsing it here would undo that at the last step.
+            SyncError::NoSuchMessage(uid) => Self::NoMessage(uid.as_str().to_owned()),
         }
     }
 }
@@ -131,6 +145,7 @@ impl fmt::Display for StoreError {
             Self::Disconnected => f.write_str("not connected to the JMAP server"),
             Self::NoFolder(path) => write!(f, "no such folder: {path}"),
             Self::NoInbox => f.write_str("no mailbox of this account is the inbox"),
+            Self::NoMessage(uid) => write!(f, "no such message: {uid}"),
         }
     }
 }
@@ -179,6 +194,13 @@ impl StoreError {
                 (
                     camel_store_error_quark(),
                     CAMEL_STORE_ERROR_NO_FOLDER as i32,
+                )
+            },
+            // SAFETY: as above.
+            Self::NoMessage(_) => unsafe {
+                (
+                    camel_folder_error_quark(),
+                    CAMEL_FOLDER_ERROR_INVALID_UID as i32,
                 )
             },
             // SAFETY: as above.

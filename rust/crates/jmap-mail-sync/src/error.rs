@@ -15,6 +15,15 @@ pub enum SyncError {
     /// The server said no, could not be reached, or answered with something
     /// JMAP does not allow.
     Client(jmap_client::Error),
+    /// A message was asked for by id and the account does not have it.
+    ///
+    /// Its own variant because it is the one failure here that is not a
+    /// failure: a uid in a folder summary is a claim about the last listing,
+    /// and another client deleting the message in the meantime is ordinary.
+    /// Left as a client error it would be reported as a broken account —
+    /// Camel's vocabulary has a code for exactly this, and the layer above can
+    /// only reach for it if the distinction survives the crate boundary.
+    NoSuchMessage(jmap_proto::Id),
 }
 
 impl SyncError {
@@ -28,6 +37,9 @@ impl std::fmt::Display for SyncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Client(error) => write!(f, "{error}"),
+            Self::NoSuchMessage(uid) => {
+                write!(f, "the account no longer holds the message {uid}")
+            }
         }
     }
 }
@@ -36,6 +48,7 @@ impl std::error::Error for SyncError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Client(error) => Some(error),
+            Self::NoSuchMessage(_) => None,
         }
     }
 }

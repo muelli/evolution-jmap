@@ -68,6 +68,14 @@ pub const SUMMARY_PROPERTIES: &[&str] = &[
     "preview",
 ];
 
+/// The properties one `Email/get` has to ask for to find a message's bytes.
+///
+/// Two, and neither of them is any of the sixteen above: fetching a message is
+/// not fetching its summary again, and asking for a row's worth of properties
+/// to learn one id would be paying for the message list a second time on every
+/// message the user opens.
+pub const SOURCE_PROPERTIES: &[&str] = &["id", "blobId"];
+
 /// The bits of Camel's flags word this provider can honestly set.
 ///
 /// One field per `CamelMessageFlags` bit that a JMAP keyword or property says
