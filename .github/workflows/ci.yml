@@ -87,6 +87,11 @@ jobs:
           workspaces: rust
       - name: Disk before build
         run: df -h / | tail -1
+      # The checkout is owned by a different uid than the container user;
+      # without this, git inside CMake refuses to report the commit
+      # timestamp that seeds SOURCE_DATE_EPOCH.
+      - name: Trust the workspace checkout
+        run: git config --global --add safe.directory "$(pwd)"
       # One build only: CMake's rust-build ALL target compiles the whole
       # workspace (with reproducibility flags) into build/cargo-target.
       # Building it a second time via a bare cargo invocation doubled the
