@@ -19,6 +19,7 @@ jmap-backend-core = { workspace = true }
 evolution-jmap-book-sync = { workspace = true }
 evolution-jmap-client = { workspace = true }
 evolution-jmap-proto = { workspace = true }
+gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 
