@@ -22,6 +22,9 @@ allow = [
     "LGPL-2.1-or-later",
     "LGPL-3.0-or-later",
     "GPL-3.0-or-later",
+    # webpki-roots ships the Mozilla CA bundle under this permissive data
+    # license; GPLv3-compatible.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
@@ -32,6 +35,9 @@ unmaintained = "workspace"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Our own crates reference each other by path without versions; that is
+# not the supply-chain risk the wildcard ban is for.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
