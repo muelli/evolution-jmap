@@ -9,19 +9,35 @@ find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
 set(CARGO_TARGET_DIR "${CMAKE_BINARY_DIR}/cargo-target")
 
-# Reproducible builds: deterministic timestamp from the last commit, and
-# source/cargo paths remapped out of the binaries.
-execute_process(
-	COMMAND git -C "${CMAKE_SOURCE_DIR}" log -1 --format=%ct
-	OUTPUT_VARIABLE SOURCE_DATE_EPOCH
-	OUTPUT_STRIP_TRAILING_WHITESPACE
-	ERROR_QUIET
-)
+# Reproducible builds: deterministic timestamp from the environment or the
+# last commit, and source/cargo paths remapped out of the binaries.
+#
+# SOURCE_DATE_EPOCH must be a valid integer or entirely absent: clang
+# hard-errors on a malformed value, which surfaces as an inscrutable
+# "libclang error" from bindgen (this happened in CI, where git refuses
+# differently-owned checkouts and used to leave the variable empty).
+if(DEFINED ENV{SOURCE_DATE_EPOCH} AND NOT "$ENV{SOURCE_DATE_EPOCH}" STREQUAL "")
+	set(SOURCE_DATE_EPOCH "$ENV{SOURCE_DATE_EPOCH}")
+else()
+	execute_process(
+		COMMAND git -C "${CMAKE_SOURCE_DIR}" log -1 --format=%ct
+		OUTPUT_VARIABLE SOURCE_DATE_EPOCH
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+		ERROR_QUIET
+	)
+endif()
+
 set(CARGO_ENV
-	"SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"
 	"CARGO_INCREMENTAL=0"
 	"RUSTFLAGS=--remap-path-prefix=${CMAKE_SOURCE_DIR}=/build --remap-path-prefix=$ENV{HOME}/.cargo=/cargo"
 )
+if(SOURCE_DATE_EPOCH MATCHES "^[0-9]+$")
+	list(APPEND CARGO_ENV "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}")
+else()
+	message(WARNING
+		"SOURCE_DATE_EPOCH unavailable (not exported, and git gave no commit "
+		"timestamp) — the build will work but will not be reproducible")
+endif()
 
 # Build the whole workspace (all members — needs Evolution headers for the
 # example module). Part of ALL because the cdylibs add_cargo_cdylib()
