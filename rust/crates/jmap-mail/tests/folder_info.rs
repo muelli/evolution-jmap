@@ -437,13 +437,15 @@ fn into_raw_hands_the_chain_over_and_the_wrapper_stops_owning_it() {
     }
 }
 
-/// A tree deeper than the C recursion in `camel_folder_info_free` would like is
-/// still a tree this side has to build without a Rust stack overflow: the depth
-/// comes from a `parentId` chain the server chose. The build is iterative, so
-/// this is a test of that and not of Camel — which is also why the depth is
-/// modest enough for Camel's own recursive free.
+/// A `parentId` chain the server chose can be arbitrarily long, and every layer
+/// that walks it recursively is a stack the server sizes: `FolderTree`'s own
+/// `Drop`, and `camel_folder_info_free`'s recursion over `child` and `next`.
+/// `FolderTree` therefore caps the depth it will produce (see
+/// `jmap_mail_sync::folder::MAX_DEPTH` and `docs/AUDIT-FFI.md` F3), which is
+/// what this checks on the C side: the forest is broad rather than deep, and no
+/// folder was dropped to get there.
 #[test]
-fn a_deep_tree_does_not_overflow_the_stack() {
+fn a_deep_parent_chain_becomes_a_broad_forest_rather_than_a_deep_one() {
     const DEPTH: usize = 2_000;
     let mut mailboxes = vec![mailbox("M0", "Root")];
     for level in 1..DEPTH {
@@ -455,15 +457,27 @@ fn a_deep_tree_does_not_overflow_the_stack() {
     }
 
     let chain = chain(&mailboxes);
-    // Walking it back would recurse in `read_chain`, so count the levels
-    // iteratively instead.
-    let mut depth = 0;
-    let mut info = chain.as_ptr();
-    while !info.is_null() {
-        depth += 1;
-        // SAFETY: `info` is an entry of the chain the wrapper owns.
-        info = unsafe { (*info).child };
+    // Walking it back would recurse in `read_chain`, so count iteratively.
+    let mut deepest = 0;
+    let mut count = 0;
+    let mut roots = 0;
+    let mut root = chain.as_ptr();
+    while !root.is_null() {
+        roots += 1;
+        let mut depth = 0;
+        let mut info = root;
+        while !info.is_null() {
+            depth += 1;
+            count += 1;
+            // SAFETY: `info` is an entry of the chain the wrapper owns.
+            info = unsafe { (*info).child };
+        }
+        deepest = deepest.max(depth);
+        // SAFETY: as above.
+        root = unsafe { (*root).next };
     }
 
-    assert_eq!(depth, DEPTH);
+    assert_eq!(count, DEPTH, "a folder went missing");
+    assert_eq!(roots, DEPTH.div_ceil(jmap_mail_sync::folder::MAX_DEPTH));
+    assert_eq!(deepest, jmap_mail_sync::folder::MAX_DEPTH);
 }
