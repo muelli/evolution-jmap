@@ -24,3 +24,6 @@ gobject-sys = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
+# Only to name a VCardError variant when checking the error mapping; the
+# backend itself never sees one that jmap-book-sync has not already wrapped.
+evolution-jmap-vcard = { workspace = true }
