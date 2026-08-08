@@ -147,7 +147,7 @@ fn the_recipes_keyfile_describes_the_mock_server() {
     // No `[Resource]` group either: the address book `jmap-mockd` seeds gets
     // its id at startup, so the recipe cannot name one. The backend resolves
     // "the account's default" instead.
-    assert_eq!(config.address_book_id, None);
+    assert_eq!(config.resource_id, None);
 }
 
 #[test]

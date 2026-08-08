@@ -16,10 +16,8 @@ name = "jmap_backend_core"
 [dependencies]
 eds-sys = { workspace = true }
 evolution-jmap-client = { workspace = true }
+evolution-jmap-proto = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 gio-sys = { workspace = true }
 
-[dev-dependencies]
-# The GError mapping tests build the protocol error payloads by hand.
-evolution-jmap-proto = { workspace = true }
