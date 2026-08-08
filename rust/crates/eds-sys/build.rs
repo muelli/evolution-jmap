@@ -87,6 +87,11 @@ const ALLOWED_TYPES: &[&str] = &[
     // this layer would be claiming to have checked.
     "CamelFolder",
     "CamelFolderClass",
+    // What a folder tells Camel it has changed — four uid lists, and the
+    // argument of the `changed` signal Evolution redraws a message list on.
+    // Plain struct behind a boxed type, like `CamelProvider`, so `g_type_query`
+    // knows nothing of it and tests/camel.rs stands in for tests/layout.rs.
+    "CamelFolderChangeInfo",
     "CamelFolderInfo",
     "CamelFolderInfoFlags",
     "CamelFolderSummary",
@@ -177,6 +182,18 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // asks a folder for a message count.
     "camel_folder_(get|take)_folder_summary",
     "camel_folder_has_summary_capability",
+    // What a folder is asked for once it has a summary to answer from, and
+    // what it says back when a refresh changed something.
+    // `camel_folder_refresh_info_sync` is the wrapper around the vfunc this
+    // provider overrides — named so a test can call it the way Camel does —
+    // `get_message_count` and `get_uids` are the two questions the base class
+    // answers straight out of the summary, and `camel_folder_changed` is how
+    // the answer to them reaches a window that is already open.
+    "camel_folder_refresh_info_sync",
+    "camel_folder_get_message_count",
+    "camel_folder_(get|free)_uids",
+    "camel_folder_changed",
+    "camel_folder_change_info_.*",
     "camel_folder_summary_.*",
     "camel_offline_folder_get_type",
     // Filling and reading one summary row. `camel_message_info_new_from_headers`

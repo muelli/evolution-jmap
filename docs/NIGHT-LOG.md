@@ -3509,3 +3509,91 @@ piece; `get_trash_folder_sync` and `get_junk_folder_sync` are still a settings
 decision before they are a vfunc. Still unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's
 architecture block still lists only the round-1 crates.
+
+## 2026-08-08 (thirty-eighth session)
+
+M5's eighteenth increment: `refresh_info_sync`, the vfunc where the last four
+increments meet a server. New modules `jmap-mail`'s `refresh` and `changes`, a
+`JmapStore::messages` for the folder to ask its store through, a `class_init` on
+`CamelJmapFolder` — which had none until now — and the `CamelFolderChangeInfo`
+type plus `camel_folder_change_info_.*`, `camel_folder_changed`,
+`camel_folder_refresh_info_sync`, `camel_folder_get_message_count` and
+`camel_folder_(get|free)_uids` in `eds-sys`. The red step was eleven tests: six
+against `apply_listing`'s diff, four against the vfunc, one in `eds-sys` that
+could not find `camel_folder_change_info_free`.
+
+Decisions taken:
+
+- **The diff is returned, not emitted.** `apply_listing` is handed a summary and
+  now hands back a [`Changes`]; emitting is a fact about a `CamelFolder`, which
+  is one level up. That keeps every reconciliation rule testable without a
+  signal to listen for, and it is what let the six diff rules be written against
+  the same detached folder the previous increment used.
+- **A row is reported as changed only when it moved.** Both of Camel's setters
+  return whether they changed anything, so the verdict is Camel's rather than a
+  comparison of our own; `update_message_info` now passes it up. A refresh is a
+  poll, so nearly every row a listing meets is the row it left there — a folder
+  that announced all of them would redraw the message list the user is reading
+  every time the timer went off. The two setter calls are two statements joined
+  by `||` rather than one `||` expression, because `||` short-circuits and a row
+  whose flags moved must still have its labels written. That distinction was the
+  one mutant the first round did not kill, and
+  `a_row_that_moved_in_both_columns_has_both_of_them_written` is what was added
+  for it: read *and* relabelled in one listing is what Evolution's own "mark as
+  read and file it" rule does.
+- **Nothing is ever recent, deliberately.** Camel's fourth uid list is what runs
+  the user's incoming filters, and a JMAP listing cannot tell a message that has
+  just arrived from one that was always there — the first refresh of an account
+  finds the whole mailbox, so "added" and "recent" would be the same list and the
+  user's rules would file, forward or delete every message they already had.
+  `Email/changes` against a state kept across restarts is what could answer the
+  question honestly, and it needs somewhere on disk to keep that state.
+- **Two things Camel does that the tests had to be rewritten around, both found
+  by a red test that stayed red.** First, `camel_folder_refresh_info_sync`
+  connects the folder's parent store before it dispatches to the class — so the
+  disconnected case never reaches this vfunc through the wrapper, and its test
+  calls the class pointer directly the way `tests/folders.rs` calls
+  `get_folder_sync`. What made this visible was the error code: `URL_INVALID`
+  with "the account does not name a JMAP server", which is our own
+  `authenticate_sync` answering, not our refresh. Second,
+  `camel_folder_changed` does not emit where it is called — it queues the diff
+  and delivers it from the folder's main context, coalescing whatever else is
+  pending into one emission. A Rust test thread never iterates a main loop, so
+  the first version of the signal test observed silence and would have passed
+  no matter what the vfunc did; `emissions()` now pumps the default context
+  before it reads.
+- **The parent store is type-checked, unlike a vfunc's first argument.** The
+  store vfuncs get an instance GObject dispatched on the class, so
+  `JmapStore::borrow` on that argument is sound by construction; `parent-store`
+  is an ordinary construct property, so the folder asks
+  `g_type_check_instance_is_a` first. Reading a `JmapStore` out of someone
+  else's store would be undefined behaviour rather than a wrong answer.
+- **A whole listing per refresh, and that is the known cost.** `Email/changes`
+  would ask a much smaller question and is the same later increment as the
+  recent list. Listing is correct meanwhile.
+
+Mutation testing, seven mutants, six killed on the first round and the seventh
+after the test above was added: the signal emitted unconditionally (which killed
+*both* signal tests, so the coalescing had been understood correctly), every met
+row reported as changed, removals never reported, the vfunc not installed on the
+class, the recent list filled from the added one, and the `||` short-circuit.
+
+Not verified locally, as in the previous thirty-seven sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The three new files —
+`jmap-mail/src/changes.rs`, `jmap-mail/src/refresh.rs` and
+`jmap-mail/tests/refresh.rs` — carry SPDX `GPL-3.0-or-later` headers.
+`cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets, the five EDS crates included.
+
+Next in M5 is what a filled summary makes possible and what a refreshed folder
+still cannot do: `get_message_sync`, the body behind a row — `Email/get` with
+the body properties, or the blob download, turned into a `CamelMimeMessage` —
+which is the last thing between this provider and reading mail in Evolution.
+`synchronize_sync` is the other half of the same conversation, and the first
+thing in the crate that writes: a row Camel marked read or deleted is a
+`keywords` patch through `Email/set`. `CamelSubscribable` remains the smaller
+unblocked piece; `get_trash_folder_sync` and `get_junk_folder_sync` are still a
+settings decision before they are a vfunc. Still unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's
+architecture block still lists only the round-1 crates.

@@ -84,7 +84,10 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
         camel_message_info_freeze_notifications(info);
 
         camel_message_info_set_uid(info, c_string(message.uid.as_str()).as_ptr());
-        update_message_info(info, message);
+        // Whether the two mutable columns "changed" is meaningless on a row
+        // that did not exist a line ago; the whole row is the change, and its
+        // caller reports it as an addition.
+        let _ = update_message_info(info, message);
 
         set_string(
             info,
@@ -141,18 +144,26 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
 /// row that is already there. Everything else is written once, by
 /// [`new_message_info`], which calls this for the rest of the row.
 ///
+/// Reports whether either column actually moved, which is Camel's own answer
+/// rather than a comparison made here: both setters return whether they changed
+/// the value, and the summary needs that to decide whether the row belongs in
+/// the diff a refresh emits. Written as two statements and an `||` rather than
+/// the other way round, because `||` short-circuits — and a row whose flags
+/// moved must still have its labels written.
+///
 /// # Safety
 ///
 /// `info` must be a live message info.
-pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &MessageSummary) {
+pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &MessageSummary) -> bool {
     // SAFETY: the caller guarantees the info; the mask keeps the setter off the
     // bits this provider is not the authority on, and the flag set below is
     // handed over along with its ownership.
     unsafe {
         camel_message_info_freeze_notifications(info);
-        camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&message.flags));
-        set_user_flags(info, &message.tags);
+        let flags = camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&message.flags));
+        let labels = set_user_flags(info, &message.tags);
         camel_message_info_thaw_notifications(info);
+        flags != GFALSE || labels != GFALSE
     }
 }
 
@@ -167,10 +178,13 @@ pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &Message
 /// absent one are different things in the summary database, user flags are
 /// stored as one joined string with no way to spell "absent".
 ///
+/// Reports Camel's own verdict on whether the set it was handed differed from
+/// the one it had.
+///
 /// # Safety
 ///
 /// `info` must be a live message info.
-unsafe fn set_user_flags(info: *mut CamelMessageInfo, tags: &[String]) {
+unsafe fn set_user_flags(info: *mut CamelMessageInfo, tags: &[String]) -> glib_sys::gboolean {
     // SAFETY: the set is built here and handed to `take_user_flags`, which
     // consumes it whether or not it turned out to be a change; every name is a
     // NUL-terminated string the set copies.
@@ -179,7 +193,7 @@ unsafe fn set_user_flags(info: *mut CamelMessageInfo, tags: &[String]) {
         for tag in tags {
             camel_named_flags_insert(flags, c_string(tag).as_ptr());
         }
-        camel_message_info_take_user_flags(info, flags);
+        camel_message_info_take_user_flags(info, flags)
     }
 }
 
