@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "jmap-backend-cal"
+description = "The JMAP calendar backend for Evolution Data Server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_backend_cal"
+# An rlib for now. The cdylib EDS dlopens as libecalbackendjmap.so arrives
+# with the module entry point; building one before there is anything to
+# resolve out of it would install a shared object that loads and does nothing.
+crate-type = ["rlib"]
+
+[dependencies]
+eds-sys = { workspace = true }
+jmap-backend-core = { workspace = true }
+evolution-jmap-cal-sync = { workspace = true }
+glib-sys = { workspace = true }
+gobject-sys = { workspace = true }
