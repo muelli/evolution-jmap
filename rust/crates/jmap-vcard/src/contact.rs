@@ -45,6 +45,26 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("video", "VIDEO"),
 ];
 
+/// Whether the vCard mapping covers a JSContact `name.components` kind.
+///
+/// Anything that saves a card back to the server has to know exactly which
+/// JSContact fields a vCard can carry, or it will overwrite the ones it
+/// silently dropped on the way in. The predicates below are that knowledge,
+/// kept next to the tables they answer for.
+pub fn maps_name_component(kind: &str) -> bool {
+    NAME_COMPONENTS.iter().any(|(mapped, _)| *mapped == kind)
+}
+
+/// Whether the vCard mapping covers a JSContact `contexts` key.
+pub fn maps_context(key: &str) -> bool {
+    CONTEXTS.iter().any(|(mapped, _)| *mapped == key)
+}
+
+/// Whether the vCard mapping covers a JSContact phone `features` key.
+pub fn maps_phone_feature(key: &str) -> bool {
+    PHONE_FEATURES.iter().any(|(mapped, _)| *mapped == key)
+}
+
 /// Render a contact card as a vCard 3.0 string, ready for
 /// `e_contact_new_from_vcard()`.
 pub fn card_to_vcard(card: &ContactCard) -> String {

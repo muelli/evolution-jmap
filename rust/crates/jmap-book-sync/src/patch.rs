@@ -1,0 +1,236 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Turning an edited vCard back into a `ContactCard/set` PatchObject.
+//!
+//! The whole point of patching rather than replacing is that a vCard is a
+//! lossy view of a JSContact card. The mapping keeps UID, FN, N, EMAIL and
+//! TEL and drops everything else, so a save that sent the parsed card back
+//! whole would silently delete the properties it could not represent —
+//! organisations, addresses, notes — none of which the user ever saw, let
+//! alone asked to remove.
+//!
+//! The same lossiness recurs *inside* the properties that are mapped, and
+//! that is the subtler half of this module:
+//!
+//! - `emails`/`phones` are keyed maps, so an entry is patched by its key
+//!   (`emails/work/address`). The key survives the trip through vCard in
+//!   `X-JMAP-KEY`; without it every edit would be a remove-and-re-add, which
+//!   loses the entry's unmapped properties and its identity server-side.
+//! - `contexts` and `features` are boolean maps of which vCard 3.0 can spell
+//!   only some members. A context of `school` has no `TYPE`, so it is merged
+//!   back in rather than being replaced away.
+//! - `pref` is a rank from 1 to 100 and vCard 3.0 has only a flag. An
+//!   address that was already preferred keeps its rank; the flag can only
+//!   introduce or remove a preference, never renumber one.
+//! - `name.components` can hold kinds the `N` value has no field for, which
+//!   are carried across the replacement.
+//!
+//! RFC 8620 §5.3 requires every path segment before the last to exist on the
+//! object already, which is why a property that is absent server-side is
+//! written whole instead of being reached into.
+
+use std::collections::BTreeMap;
+
+use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Name};
+use jmap_vcard::{maps_context, maps_name_component, maps_phone_feature};
+use serde_json::{Map, Value};
+
+/// The patch that turns the card the server holds into the card Evolution
+/// just saved. Empty when the edit changed nothing this mapping can see.
+pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
+    let mut patch = Map::new();
+    diff_name(&mut patch, current.name.as_ref(), edited.name.as_ref());
+    diff_emails(&mut patch, current.emails.as_ref(), edited.emails.as_ref());
+    diff_phones(&mut patch, current.phones.as_ref(), edited.phones.as_ref());
+    patch
+}
+
+fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Option<&Name>) {
+    let (Some(current), Some(edited)) = (current, edited) else {
+        match (current, edited) {
+            (Some(_), None) => drop(patch.insert("name".to_owned(), Value::Null)),
+            (None, Some(edited)) => {
+                patch.insert("name".to_owned(), json_of(edited));
+            }
+            _ => {}
+        }
+        return;
+    };
+
+    if current.full != edited.full {
+        patch.insert("name/full".to_owned(), value_or_null(edited.full.as_ref()));
+    }
+
+    // Components of a kind the `N` value has no field for are not the user's
+    // to have deleted, so they are carried over. Their position among the
+    // mapped ones is not preserved — JSContact only ascribes meaning to the
+    // order when `isOrdered` is set, and the alternative is guessing.
+    let mut merged: Vec<_> = edited.components.clone().unwrap_or_default();
+    merged.extend(
+        current
+            .components
+            .iter()
+            .flatten()
+            .filter(|component| !maps_name_component(&component.kind))
+            .cloned(),
+    );
+    let merged = (!merged.is_empty()).then_some(merged);
+    if current.components != merged {
+        patch.insert(
+            "name/components".to_owned(),
+            merged.map_or(Value::Null, |components| json_of(&components)),
+        );
+    }
+}
+
+fn diff_emails(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, ContactEmail>>,
+    edited: Option<&BTreeMap<String, ContactEmail>>,
+) {
+    diff_entries(patch, "emails", current, edited, |patch, path, old, new| {
+        if old.address != new.address {
+            patch.insert(
+                format!("{path}/address"),
+                Value::String(new.address.clone()),
+            );
+        }
+        diff_flags(
+            patch,
+            path,
+            "contexts",
+            &old.contexts,
+            &new.contexts,
+            maps_context,
+        );
+        diff_pref(patch, path, old.pref, new.pref);
+    });
+}
+
+fn diff_phones(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, ContactPhone>>,
+    edited: Option<&BTreeMap<String, ContactPhone>>,
+) {
+    diff_entries(patch, "phones", current, edited, |patch, path, old, new| {
+        if old.number != new.number {
+            patch.insert(format!("{path}/number"), Value::String(new.number.clone()));
+        }
+        diff_flags(
+            patch,
+            path,
+            "contexts",
+            &old.contexts,
+            &new.contexts,
+            maps_context,
+        );
+        diff_flags(
+            patch,
+            path,
+            "features",
+            &old.features,
+            &new.features,
+            maps_phone_feature,
+        );
+    });
+}
+
+/// Shared shape of the two keyed maps: added entries are written whole,
+/// dropped entries are nulled, and surviving entries are handed to
+/// `diff_entry` to be compared field by field.
+fn diff_entries<T: serde::Serialize>(
+    patch: &mut Map<String, Value>,
+    property: &str,
+    current: Option<&BTreeMap<String, T>>,
+    edited: Option<&BTreeMap<String, T>>,
+    diff_entry: impl Fn(&mut Map<String, Value>, &str, &T, &T),
+) {
+    let empty = BTreeMap::new();
+    let current = current.unwrap_or(&empty);
+    let edited = edited.unwrap_or(&empty);
+
+    if current.is_empty() {
+        if !edited.is_empty() {
+            patch.insert(property.to_owned(), json_of(edited));
+        }
+        return;
+    }
+    if edited.is_empty() {
+        patch.insert(property.to_owned(), Value::Null);
+        return;
+    }
+
+    for (key, entry) in edited {
+        let path = format!("{property}/{}", escape(key));
+        match current.get(key) {
+            Some(existing) => diff_entry(patch, &path, existing, entry),
+            None => drop(patch.insert(path, json_of(entry))),
+        }
+    }
+    for key in current.keys().filter(|key| !edited.contains_key(*key)) {
+        patch.insert(format!("{property}/{}", escape(key)), Value::Null);
+    }
+}
+
+/// Replace the members of a boolean map this mapping can spell, keep the
+/// rest.
+fn diff_flags(
+    patch: &mut Map<String, Value>,
+    path: &str,
+    property: &str,
+    current: &Option<Value>,
+    edited: &Option<Value>,
+    is_mapped: impl Fn(&str) -> bool,
+) {
+    let mut merged: Map<String, Value> = match current {
+        Some(Value::Object(flags)) => flags.clone(),
+        _ => Map::new(),
+    };
+    merged.retain(|key, _| !is_mapped(key));
+    if let Some(Value::Object(flags)) = edited {
+        merged.extend(
+            flags
+                .iter()
+                .filter(|(key, _)| is_mapped(key))
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    }
+
+    let merged = (!merged.is_empty()).then_some(Value::Object(merged));
+    if current.as_ref() != merged.as_ref() {
+        patch.insert(format!("{path}/{property}"), merged.unwrap_or(Value::Null));
+    }
+}
+
+/// vCard 3.0 knows only that an entry is preferred, not how strongly, so a
+/// rank the server already has is left alone.
+fn diff_pref(
+    patch: &mut Map<String, Value>,
+    path: &str,
+    current: Option<u32>,
+    edited: Option<u32>,
+) {
+    let wanted = edited.and(current.or(edited));
+    if wanted != current {
+        patch.insert(
+            format!("{path}/pref"),
+            wanted.map_or(Value::Null, |rank| Value::Number(rank.into())),
+        );
+    }
+}
+
+/// JSON Pointer escaping (RFC 6901 §3) for a map key we did not choose.
+fn escape(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
+}
+
+fn value_or_null(value: Option<&String>) -> Value {
+    value.map_or(Value::Null, |value| Value::String(value.clone()))
+}
+
+/// Serialising a type built from a vCard cannot fail: it holds strings,
+/// numbers and maps of them.
+fn json_of<T: serde::Serialize>(value: &T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}

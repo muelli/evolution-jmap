@@ -79,6 +79,14 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     } = account;
 
     let response = simple_set(contact_cards, request, |id, card| {
+        // `id` is server-set (RFC 8620 §5.3): a client that names one in a
+        // create is confusing some other identifier for a JMAP id, which is
+        // exactly the mistake a backend makes with a vCard `UID` invented by
+        // the local cache. Silently overwriting it would hide that.
+        if card.id.is_some() {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("id is set by the server and must not be given in a create"));
+        }
         let Some(book_ids) = card
             .address_book_ids
             .as_ref()
