@@ -27,6 +27,12 @@ pub enum ICalError {
     /// Content follows the end of the calendar. Dropping it silently would
     /// lose whole events when a stream carries more than one `VCALENDAR`.
     Trailing(String),
+    /// Components nested past [`MAX_DEPTH`], naming the one that went too far.
+    /// The tree a parse returns is dropped recursively, so a document deeper
+    /// than the stack can hold would abort the process rather than fail.
+    ///
+    /// [`MAX_DEPTH`]: crate::syntax::MAX_DEPTH
+    TooDeep(String),
     /// A well-formed calendar that holds no `VEVENT` — a `VTODO` or a bare
     /// `VTIMEZONE`. There is no event to hand back and nothing to store.
     NoEvent,
@@ -42,6 +48,11 @@ impl std::fmt::Display for ICalError {
             }
             Self::Malformed(line) => write!(f, "malformed iCalendar content line: {line}"),
             Self::Trailing(line) => write!(f, "content after END:VCALENDAR: {line}"),
+            Self::TooDeep(name) => write!(
+                f,
+                "iCalendar components nested more than {} deep at BEGIN:{name}",
+                crate::syntax::MAX_DEPTH
+            ),
             Self::NoEvent => f.write_str("iCalendar object contains no VEVENT"),
         }
     }
