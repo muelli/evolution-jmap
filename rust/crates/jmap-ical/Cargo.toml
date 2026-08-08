@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-ical"
+description = "JSCalendar (RFC 8984) to iCalendar mapping for the Evolution calendar backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_ical"

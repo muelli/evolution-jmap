@@ -13,6 +13,7 @@ default-members = [
     "crates/jmap-client",
     "crates/jmap-mock",
     "crates/jmap-vcard",
+    "crates/jmap-ical",
     "crates/jmap-book-sync",
 ]
 
@@ -39,6 +40,7 @@ evolution-jmap-proto = { path = "crates/jmap-proto" }
 evolution-jmap-client = { path = "crates/jmap-client" }
 evolution-jmap-mock = { path = "crates/jmap-mock" }
 evolution-jmap-vcard = { path = "crates/jmap-vcard" }
+evolution-jmap-ical = { path = "crates/jmap-ical" }
 evolution-jmap-book-sync = { path = "crates/jmap-book-sync" }
 jmap-backend-core = { path = "crates/jmap-backend-core" }
 

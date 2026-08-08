@@ -170,6 +170,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "evolution-jmap-ical"
+version = "0.1.0"
+
+[[package]]
 name = "evolution-jmap-mock"
 version = "0.1.0"
 dependencies = [

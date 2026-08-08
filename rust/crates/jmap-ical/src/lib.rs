@@ -1,0 +1,22 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! JSCalendar ↔ iCalendar for the Evolution calendar backend.
+//!
+//! `ECalMetaBackend` speaks `ICalComponent`, which is built from and rendered
+//! to iCalendar text ([RFC 5545]); JMAP speaks JSCalendar Events
+//! ([RFC 8984]) wrapped in `CalendarEvent`. This crate is the translation
+//! between the two, and nothing else — it has no dependency on GLib or the
+//! Evolution headers, so the mapping stays testable everywhere the workspace
+//! builds. It is the calendar-side counterpart of `jmap-vcard`.
+//!
+//! [`syntax`] is the byte-level layer; the semantic mapping lands on top of
+//! it.
+//!
+//! [RFC 5545]: https://www.rfc-editor.org/rfc/rfc5545
+//! [RFC 8984]: https://www.rfc-editor.org/rfc/rfc8984
+
+pub mod error;
+pub mod syntax;
+
+pub use error::ICalError;
