@@ -40,6 +40,11 @@
 //!   reading of the two arguments that decide which part of the store's tree
 //!   one call is answered with — the `top` it is rooted at and the depth
 //!   `CAMEL_STORE_FOLDER_INFO_RECURSIVE` cuts it to.
+//! - [`folder`] is `CamelJmapFolder`, the object one of those folders *is*
+//!   rather than is described by: a `CamelOfflineFolder` subclass carrying the
+//!   JMAP mailbox id that nothing in Camel's own model has a field for, and
+//!   which a Camel path — invented here out of a mailbox name — cannot be
+//!   turned back into.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -52,6 +57,7 @@
 //! directory.
 
 pub mod connect;
+pub mod folder;
 pub mod folder_info;
 pub mod folders;
 pub mod module;

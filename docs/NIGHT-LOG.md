@@ -2897,3 +2897,102 @@ waits on M6 for a collection backend and M7 for a way to create an account, and
 the manual test recipe with a hand-written `.source` keyfile is where it will
 first be checked. The README's architecture block still lists only the round-1
 crates; five crates stale.
+
+## 2026-08-08 (thirty-second session)
+
+M5's twelfth increment: `CamelJmapFolder`, the object a store hands out for one
+mailbox. One commit, a new `src/folder.rs` and `tests/folder.rs`, and the
+`eds-sys` allowlist entries the type needs.
+
+Everything the store has produced so far describes folders from the outside — a
+`CamelFolderInfo` forest, plain structs Camel reads once and frees. This is the
+folder itself: a `CamelOfflineFolder` subclass, registered statically like the
+store, constructed from one `FolderInfo`. The red step was `cargo test -p
+jmap-mail --test folder` failing on `unresolved import jmap_mail::folder` and on
+four `camel_folder_*` accessors bindgen had never been asked for.
+
+Decisions taken:
+
+- **The folder carries the JMAP mailbox id, and that is the reason it is an
+  object at all.** Camel has no field for it and nothing can recover it later:
+  the path Camel keys the folder by is an identifier this crate invented out of
+  the mailbox's *name*, and `path.rs`'s encoding is not reversible by anything
+  holding only the result — while `Email/query`, which is where the folder's
+  contents will come from, filters on `inMailbox`. A folder that knew only its
+  path could describe itself and fetch nothing. It lives in a `Slot`, like the
+  store's connection, because the instance struct arrives zeroed and is freed
+  without a destructor running over it.
+- **The id is written after `g_object_new`, not through a property of our own.**
+  A GObject property would have to be construct-only to be equally safe, and
+  declaring one would put the id in the public API of a type whose only reader
+  is this crate. Nothing can observe the folder in between: the reference
+  `g_object_new` returned is still the only one.
+- **The three Camel properties are all set at construction**, because
+  `parent-store` is construct-only and a folder whose name arrived afterwards
+  would exist, briefly, as a nameless folder in a store keyed by name.
+- **`CamelFolderFlags` is not `CamelFolderInfoFlags`.** The info's word says what
+  kind of folder this is (its type field, subscribed, has children); the
+  object's says how Camel *treats* it. Two enums one word apart, with
+  overlapping bit positions and no type-level distinction once they are `u32`s
+  — which is why `CamelFolderFlags` is named in the allowlist rather than left
+  to arrive transitively.
+- **Only the inbox gets flags, and only two.** `FILTER_RECENT` and `FILTER_JUNK`
+  are what run the user's incoming filters and the junk test over new mail;
+  IMAPX sets exactly this pair on the folder it identifies by comparing its name
+  against `"INBOX"`, and this provider takes the same decision from the JMAP
+  role instead — from the account's data rather than from a convention about a
+  name.
+- **`HAS_SUMMARY_CAPABILITY` is deliberately absent.** It is a claim that the
+  folder keeps a `CamelFolderSummary`, which is the next increment; Camel reads
+  it to decide whether it may ask for a message count at all, so claiming it
+  early is a folder that says it can be counted and then cannot. `IS_TRASH` and
+  `IS_JUNK` are absent for a different reason: they are what
+  `camel_store_get_trash_folder_sync` and its junk counterpart mark the folder
+  they *return* with, not properties of a mailbox with that role.
+- **No `instance_init`.** A zeroed `Slot` is already an empty one, and there is
+  nothing else to fill until `new_folder` has the `FolderInfo`. `finalize` is
+  not optional the same way — by then the slot may hold an id.
+- **The NUL rewrite is shared with the folder-info forest**, not written a second
+  time: `folder_info::c_string` became `pub(crate)`. A mailbox name is a JSON
+  string and can carry a NUL that RFC 8621 forbids; handing the bytes to
+  `g_object_new` would truncate the name there, leaving a folder called `Work`
+  beside the real `Work`.
+
+The tests construct a real account rather than a detached instance, which is new
+for this crate: a `CamelSession` from `g_object_new`, and a `CamelJmapStore` on
+it with the provider struct `provider::register()` leaks. That is forced —
+Camel's `folder_set_parent_store` asserts `CAMEL_IS_STORE`, so there is no
+folder to test without one. The session and store are kept together in an
+`Account` with a `Drop`, because `CamelService` holds only a *weak* reference to
+its session and a test that unreffed the session first would leave the store
+pointing at nothing.
+
+Mutation testing, seven mutants, none surviving: the flags word always empty,
+the flags never reaching the folder, the mailbox id never stored, the parent
+type a plain `CamelFolder`, the path and display name swapped, the folder built
+with no `parent-store`, and a name with a NUL dropped rather than rewritten.
+The harness asserted each target string was present before writing, per last
+session's lesson. What no test covers is `finalize` clearing the slot: the only
+observable effect is a leak, and nothing in the suite can see one.
+
+Not verified locally, as in the previous thirty-one sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). Both new files carry SPDX
+`GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` (green on
+the default members; the five EDS crates green on top, `jmap-mail` now 104
+tests) and `cargo clippy --all-targets --locked -- -D warnings` are clean on
+both member sets. A fresh `cmake -S . -B <tmp> -G Ninja && cmake --build &&
+ctest` is 5/5. `example-module` is unchanged and still outside both
+`default-members` and the set CI lints.
+
+Next in M5: `CamelStoreClass.get_folder_sync`, which is now the store's side of
+the type this session added — and with it the folder cache, because Camel
+expects the same path to give back the same object (Evolution holds a folder
+open while the user reads it, and a second one for the same mailbox would be a
+second summary over the same mail). After that the summary itself:
+`CamelFolderSummary` filled from `Email/query` + `Email/get`, which is the
+increment `HAS_SUMMARY_CAPABILITY` and the folder's message-count vfuncs wait
+on. Still unexercised against a real `CamelSession`: `service.rs` and
+`folders.rs` — that waits on M6 for a collection backend and M7 for a way to
+create an account, though this session's `Account` helper shows how much of a
+session a test can stand up by hand. The README's architecture block still lists
+only the round-1 crates; five crates stale.
