@@ -29,6 +29,7 @@ path = [
     "rust/crates/*/tests/fixtures/**",
     "README.md",
     "docs/**",
+    "infra/night-shift/night-prompt.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Tobias Mueller <muelli@cryptobitch.de>"
