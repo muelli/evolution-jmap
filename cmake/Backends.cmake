@@ -51,3 +51,28 @@ add_cargo_cdylib(jmap_backend_cal
 	SYMBOLS e_module_load e_module_unload
 	VERIFY_DESTINATION_FROM libedata-cal-2.0 backenddir
 )
+
+# Where Camel scans for mail providers. A third directory, a third pkg-config
+# module — and a different loading story: Camel does not dlopen everything it
+# finds. It reads the `.urls` file beside each object to learn which protocols
+# that object claims, and opens the object only when one of them is asked for.
+pkg_check_modules(CAMEL REQUIRED camel-1.2>=${REQUIRE_EVOLUTION_VERSION})
+pkg_check_variable(CAMEL_PROVIDER_DIR camel-1.2 camel_providerdir)
+
+if(FORCE_INSTALL_PREFIX)
+	pkg_check_variable(camel_prefix camel-1.2 prefix)
+	string(REGEX REPLACE "^${camel_prefix}" "${CMAKE_INSTALL_PREFIX}" CAMEL_PROVIDER_DIR "${CAMEL_PROVIDER_DIR}")
+endif(FORCE_INSTALL_PREFIX)
+
+# The JMAP mail provider. libcamel<protocol>.so is Camel's own convention and
+# the name the `.urls` file has to match — Camel derives one from the other, so
+# libcameljmap.urls beside libcameljmap.so is not a style choice. One entry
+# point, and no unload counterpart: Camel never closes a provider module.
+add_cargo_cdylib(jmap_mail
+	OUTPUT_NAME libcameljmap.so
+	DESTINATION ${CAMEL_PROVIDER_DIR}
+	COMPONENT camel-provider
+	SYMBOLS camel_provider_module_init
+	DATA ${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls
+	VERIFY_DESTINATION_FROM camel-1.2 camel_providerdir
+)
