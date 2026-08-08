@@ -22,14 +22,13 @@
 //! - a NULL out-parameter means "not interested" and is skipped, which is why
 //!   the lists are not even built when nobody wants them.
 
-use std::ffi::CStr;
-
 use eds_sys::{
     E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, EContact,
     e_book_client_error_create, e_client_error_create,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
+use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
 use jmap_book_sync::{BookSync, SyncError};
 use jmap_proto::State;
 
@@ -73,7 +72,7 @@ pub unsafe fn list_existing(
     // SAFETY: as above for the out-parameters; both allocations are GLib ones
     // ownership of which passes to the caller.
     unsafe {
-        marshal::set_out_string(out_new_sync_tag, state.as_str());
+        set_out_string(out_new_sync_tag, state.as_str());
         set_out_list(out_existing_objects, || marshal::info_list(&contacts));
     }
     GTRUE
@@ -129,7 +128,7 @@ pub unsafe fn get_changes(
     // SAFETY: as above for the out-parameters; the allocations are GLib ones
     // ownership of which passes to the caller.
     unsafe {
-        marshal::set_out_string(out_new_sync_tag, changes.new_state.as_str());
+        set_out_string(out_new_sync_tag, changes.new_state.as_str());
         // The paging happens inside `BookSync::get_changes`, so there is never
         // anything left for EDS to ask again for.
         if !out_repeat.is_null() {
@@ -248,7 +247,7 @@ pub unsafe fn save_contact(
 
     // SAFETY: `out_new_uid` satisfies the contract by this function's own, and
     // ownership of the duplicate passes through it.
-    unsafe { marshal::set_out_string(out_new_uid, &info.uid) };
+    unsafe { set_out_string(out_new_uid, &info.uid) };
     GTRUE
 }
 
@@ -327,36 +326,4 @@ unsafe fn fail(error: *mut *mut GError, failure: &SyncError) -> gboolean {
 unsafe fn fail_invalid(error: *mut *mut GError, message: &str) -> gboolean {
     unsafe { set_raw_gerror(error, invalid_arg(message)) };
     GFALSE
-}
-
-/// Writes a list into a `GSList **` out-parameter, building it only if the
-/// caller wants one — a list built for a NULL out-parameter would have to be
-/// freed with the right per-node function, and not building it is simpler than
-/// getting that right twice.
-///
-/// # Safety
-///
-/// `dest` must be NULL or point at a writable `*mut GSList`, and `build` must
-/// yield a list ownership of which may pass to the caller.
-unsafe fn set_out_list(dest: *mut *mut GSList, build: impl FnOnce() -> *mut GSList) {
-    if !dest.is_null() {
-        // SAFETY: `dest` is writable by the contract above.
-        unsafe { *dest = build() };
-    }
-}
-
-/// A C string EDS owns, as an owned `Option<String>`. "" is never a meaningful
-/// identifier or sync tag, so it reads as absent — for the sync tag that is
-/// load-bearing, since an empty tag would be sent to the server as a state.
-///
-/// # Safety
-///
-/// `s` must be NULL or a valid NUL-terminated string that outlives the call.
-unsafe fn read_string(s: *const gchar) -> Option<String> {
-    if s.is_null() {
-        return None;
-    }
-    // SAFETY: the caller guarantees a valid NUL-terminated string.
-    let value = unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned();
-    (!value.is_empty()).then_some(value)
 }

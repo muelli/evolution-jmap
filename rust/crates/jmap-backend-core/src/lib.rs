@@ -19,6 +19,8 @@
 //! - [`cancel`] bridges a `GCancellable` to the client's [`CancelFlag`].
 //! - [`error`] maps [`jmap_client::Error`] onto the `GError` domains
 //!   and codes Evolution actually routes on.
+//! - [`marshal`] reads and writes the strings and lists a vfunc's
+//!   out-parameters carry, which every backend does identically.
 //!
 //! [`CancelFlag`]: jmap_client::transport::CancelFlag
 //!
@@ -29,6 +31,7 @@
 pub mod cancel;
 pub mod error;
 pub mod instance;
+pub mod marshal;
 pub mod source;
 pub mod subclass;
 pub mod trampoline;

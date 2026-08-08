@@ -6,12 +6,11 @@
 //! call, so a wrong node type or a missing copy shows up here rather than as
 //! a crash in `evolution-addressbook-factory`.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 use eds_sys::{
-    E_CONTACT_EMAIL_1, E_CONTACT_FULL_NAME, E_CONTACT_UID, E_SOURCE_CREDENTIAL_PASSWORD,
-    EBookMetaBackendInfo, e_book_meta_backend_info_free, e_contact_get_const,
-    e_named_parameters_free, e_named_parameters_new, e_named_parameters_set,
+    E_CONTACT_EMAIL_1, E_CONTACT_FULL_NAME, E_CONTACT_UID, EBookMetaBackendInfo,
+    e_book_meta_backend_info_free, e_contact_get_const,
 };
 use glib_sys::{GSList, g_free, g_slist_free_full, g_slist_length, g_slist_nth_data};
 use jmap_backend_book::marshal;
@@ -150,67 +149,4 @@ fn a_contact_without_a_uid_reports_none() {
 #[test]
 fn a_malformed_vcard_is_refused_rather_than_yielding_an_empty_contact() {
     assert!(marshal::contact_from_vcard("not a vcard at all").is_null());
-}
-
-#[test]
-fn the_password_is_read_out_of_the_named_parameters() {
-    unsafe {
-        let params = e_named_parameters_new();
-        let value = CString::new("hunter2").unwrap();
-        e_named_parameters_set(
-            params,
-            E_SOURCE_CREDENTIAL_PASSWORD.as_ptr(),
-            value.as_ptr(),
-        );
-        assert_eq!(marshal::password(params).as_deref(), Some("hunter2"));
-        e_named_parameters_free(params);
-    }
-}
-
-/// Reporting a stored-but-empty password as absent would make `connect_sync`
-/// ask for a prompt, and a user who enters nothing would be prompted again
-/// forever. Sending it and being told it is wrong terminates.
-#[test]
-fn an_empty_stored_password_is_present_not_absent() {
-    unsafe {
-        let params = e_named_parameters_new();
-        let value = CString::new("").unwrap();
-        e_named_parameters_set(
-            params,
-            E_SOURCE_CREDENTIAL_PASSWORD.as_ptr(),
-            value.as_ptr(),
-        );
-        assert_eq!(marshal::password(params).as_deref(), Some(""));
-        e_named_parameters_free(params);
-    }
-}
-
-#[test]
-fn credentials_without_a_password_report_none() {
-    unsafe {
-        let params = e_named_parameters_new();
-        assert_eq!(marshal::password(params), None);
-        e_named_parameters_free(params);
-    }
-}
-
-/// EDS calls `connect_sync` with NULL credentials on the first attempt, before
-/// it has asked libsecret for anything.
-#[test]
-fn null_credentials_report_none() {
-    unsafe {
-        assert_eq!(marshal::password(std::ptr::null()), None);
-    }
-}
-
-#[test]
-fn an_out_string_is_a_copy_the_caller_owns() {
-    let mut out: *mut i8 = std::ptr::null_mut();
-    unsafe {
-        marshal::set_out_string(&mut out, "state-7");
-        assert_eq!(CStr::from_ptr(out).to_str().unwrap(), "state-7");
-        g_free(out.cast());
-        // A NULL out-parameter is the GLib convention for "not interested".
-        marshal::set_out_string(std::ptr::null_mut(), "state-8");
-    }
 }

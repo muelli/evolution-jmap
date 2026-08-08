@@ -22,13 +22,12 @@ use gio_sys::GCancellable;
 use glib_sys::GError;
 use jmap_backend_core::cancel::CancelBridge;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
+use jmap_backend_core::marshal::password as stored_password;
 use jmap_backend_core::source::SourceConfig;
 use jmap_book_sync::BookSync;
 use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, Credentials, Error};
 use jmap_proto::session::CAPABILITY_CONTACTS;
-
-use crate::marshal;
 
 /// What `connect_sync` writes into `out_auth_result` when it succeeds.
 pub const ACCEPTED_AUTH_RESULT: ESourceAuthenticationResult = E_SOURCE_AUTHENTICATION_ACCEPTED;
@@ -214,7 +213,7 @@ pub unsafe fn connect(
 
     // SAFETY: `credentials` is NULL or a valid ENamedParameters, which
     // outlives the call.
-    let password = unsafe { marshal::password(credentials) };
+    let password = unsafe { stored_password(credentials) };
     // SAFETY: `cancellable` is NULL or a valid GCancellable that EDS keeps
     // alive for the duration of the vfunc, which outlives the bridge.
     let bridge = unsafe { CancelBridge::new(cancellable) };
