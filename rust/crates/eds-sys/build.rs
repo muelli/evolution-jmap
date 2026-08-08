@@ -48,6 +48,11 @@ const ALLOWED_TYPES: &[&str] = &[
     // means "drop this one from the cache" rather than "the sync failed" — so
     // reporting a missing contact any other way is a stuck cache entry.
     "EBookClientError",
+    // And the calendar's, for the same reason and the same match:
+    // `E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND` is how a component says it is gone.
+    // The two domains are separate quarks, so the book's code cannot stand in
+    // for it — tests/errors.rs pins that.
+    "ECalClientError",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -74,7 +79,7 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "i_cal_component_.*",
     "e_cal_component_.*",
     "e_client_error_.*",
-    "e_book_client_error_.*",
+    "e_(book|cal)_client_error_.*",
     // How a backend is handed its credentials: EDS fetches them from
     // libsecret and passes an ENamedParameters to connect_sync.
     "e_named_parameters_.*",
