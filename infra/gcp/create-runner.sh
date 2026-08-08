@@ -51,10 +51,11 @@ STAMP=/run/runner-last-active
 if pgrep -f Runner.Worker > /dev/null || [ -n "\$(who)" ] || pgrep -f claude > /dev/null; then
     touch "\$STAMP"
 fi
-# Runaway guard: whatever the activity signals say, never run longer than
-# 24h in one stretch.
+# Hard 24h uptime cap: cost hygiene and a periodic clean slate. This does
+# NOT end long-running work — an instance schedule restarts the VM within
+# the hour and @reboot cron entries resume the agent shifts.
 if [ "\$(awk '{printf "%d", \$1}' /proc/uptime)" -gt 86400 ]; then
-    logger "idle-watchdog: 24h uptime cap reached, shutting down"
+    logger "idle-watchdog: 24h uptime cap reached, shutting down (self-heal will restart)"
     /sbin/shutdown -h now
 fi
 if [ \$(( \$(date +%s) - \$(stat -c %Y "\$STAMP") )) -gt \$(( ${IDLE_MINUTES} * 60 )) ]; then

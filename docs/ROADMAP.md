@@ -71,6 +71,20 @@ the CMake install tree (CPack) so testing a nightly build is
 `apt install ./evolution-jmap.deb`. Wire into release.yml with
 attestation like the other artifacts.
 
+## Standing directives
+
+### Outsource iCalendar/vCard parsing to `calcard` (2026-08-08)
+Replace the hand-rolled RFC 5545/6350 text layers — `jmap-ical`'s
+lexer/emitter and `jmap-vcard`'s syntax module — with the
+[`calcard`](https://github.com/stalwartlabs/calcard) crate (MIT, Stalwart
+Labs): it parses and builds iCalendar, vCard, JSCalendar, and JSContact
+and converts between the pairs, and is production-hardened by Stalwart's
+CalDAV/CardDAV stack. Keep our semantic mapping decisions and ALL existing
+fixture/round-trip tests — they are the acceptance suite for the
+migration; a behaviour difference calcard introduces is a finding, not a
+nuisance. Rationale: outsource parsing liability; our code should carry
+only the JMAP/EDS integration it exists for.
+
 ## Integration testing (parallel track)
 Once M3 exists: gated CI job + local recipe against a real
 [Stalwart](https://stalw.art/) server (full JMAP mail/contacts/calendars)
