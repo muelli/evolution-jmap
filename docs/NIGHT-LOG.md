@@ -1725,3 +1725,94 @@ the book's recipe test builds an `ESource` from the documented keyfile through
 promises, and the calendar's differs only in `[Calendar] BackendName=jmap` and
 what `Identity` names. That closes M4's acceptance criteria, and M5 (the Camel
 provider) is the next milestone.
+
+## 2026-08-08 (twentieth session)
+
+M4's last acceptance criterion: the calendar's manual test recipe, and the
+tests that keep it from rotting. One commit, and with it M4 is complete.
+
+`docs/manual-test-cal-backend.md` and the keyfile it tells the reader to copy,
+`docs/examples/jmap-mock-calendar.source`, with four tests in
+`tests/recipe.rs` reading that keyfile through `e_server_side_source_new` — the
+call `evolution-source-registry` makes for every file in its sources directory,
+and one that needs neither a bus nor a running daemon. The shape is the book's
+`tests/recipe.rs`; what is new is the group the `BackendName` sits in.
+
+Decisions taken:
+
+- **The calendar-specific assertion is about the extension group, not the
+  backend name.** `ECalBackendFactory` keys itself by name *and* component
+  kind, and the keyfile spells the kind by choosing a group: `[Calendar]` is
+  `VEVENT`, `[Task List]` is `VTODO`, `[Memo List]` is `VJOURNAL`. Since the
+  module registers `jmap:VEVENT` alone, a recipe that said `[Task List]` would
+  document a source that parses, appears in the registry, and is claimed by no
+  factory — the silent failure the whole file exists to prevent. So the test
+  carries EDS's own kind → extension table and asserts the pair
+  (`factory::COMPONENT_KIND`, `[Calendar]`) agrees, rather than pinning the
+  group name on its own: the day a second factory is registered, the assertion
+  that fires is the one that says the document needs a second keyfile.
+- **`register_calendar_extensions` before every `has_extension` call.** The
+  negative half — no `[Task List]`, no `[Memo List]` — is worthless without it:
+  `e_source_has_extension` answers out of the table the source built while
+  parsing, and a group whose extension type was never registered leaves no
+  entry, so "the keyfile has no task list group" and "this binary never
+  mentioned task lists" would be the same answer.
+- **The `Method=none` versus `Secure=true` pair is not repeated here.** It is a
+  property of `SourceConfig`, which both backends share verbatim, and it is
+  pinned once in the book's recipe test. The document still explains it, with a
+  pointer to the long version.
+- **A second keyfile rather than a second group in the first.** One `.source`
+  file could carry both `[Address Book]` and `[Calendar]`, but its file name is
+  its UID, and the two recipes are meant to be runnable independently and in
+  either order.
+
+Two things in the recipe were wrong as first written and were fixed by checking
+them rather than by reasoning:
+
+- **The documented `curl` used `/jmap/api`.** The mock's `apiUrl` is `/jmap`;
+  `/jmap/api` answers `404 no route`. Run against `jmap-mockd` on a spare port,
+  corrected, and the real `Calendar/get` response (`"id":"CAL1"`,
+  `"isDefault":true`) is now quoted in the document. It also carried a
+  pointless `-u ignored:`, since the mock in this recipe is started without
+  credentials.
+- **`EDS_CALENDAR_MODULES` was a guess** and happens to be right: confirmed out
+  of `strings libedata-cal-2.0.so.2`, next to `EDS_ADDRESS_BOOK_MODULES` in the
+  book's library. Worth recording that the fenced `console` blocks are prose to
+  the test suite — only the `ini` block is checked against the keyfile — so
+  every command in a recipe is a claim that has to be run once by hand.
+
+Mutation testing: five mutants, all dead. `[Calendar]` → `[Task List]` in the
+keyfile (3 of 4 tests fail), `BackendName=jmap` → `jmap-calendar` (2),
+`Method=none` deleted (1 — the origin becomes `https://`), `extension_for`
+mapping `VEVENT` onto the task list (1), and one line of the recipe's quoted
+`ini` block edited away from the keyfile (1).
+
+Not verified locally, as in the previous nineteen sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The new
+`.rs` file carries an SPDX `GPL-3.0-or-later` header; the two `docs/` files are
+covered by the `docs/**` annotation in `REUSE.toml`, like the book's recipe and
+its keyfile. `cargo fmt --check`, `cargo test --locked` (36 test binaries green
+on the default members, and the four EDS crates green on top, `jmap-backend-cal`
+now at 10 + 14 + 13 + 17 + 7 + 4) and `cargo clippy --all-targets --locked --
+-D warnings` are clean on both member sets, and a fresh `cmake -S . -B <tmp> -G
+Ninja && cmake --build && ctest` is 4/4.
+
+One process note, since it cost a test run: the mutation script `cd`-ed to the
+repository root and ran `cargo` there, where there is no `Cargo.toml` — the
+workspace is `rust/`. Every mutant "passed" by printing nothing, which looked
+like five dead mutants until the greps came back empty. Re-run from `rust/`,
+where they died for real.
+
+No blockers hit.
+
+M4 is done: the backend, the factory, the module entry point, the install rule
+and now the recipe, against every acceptance criterion the roadmap names.
+Next is M5, the Camel mail provider — the largest milestone in the file. The
+first tractable increment is not `CamelJmapStore` but the crate and its entry
+point: Camel resolves `camel_provider_module_init`, not `e_module_load`, out of
+a `libcameljmap.so` in Camel's own provider directory (`camel-1.2`'s
+`camel_providerdir`) alongside a `.urls` file, and none of that machinery
+exists yet. `eds-sys` currently allowlists no `Camel*` type, so the increment
+before even that one is teaching its build script about `camel-1.2` and pinning
+`CamelProvider`'s layout in `tests/layout.rs` the way every other type crossed
+so far has been.
