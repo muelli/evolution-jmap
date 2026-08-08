@@ -56,7 +56,7 @@ fn the_folder_tree_carries_the_mailboxes_the_server_reports() {
         );
     }
 
-    let tree = fixture.sync().folder_tree().unwrap();
+    let (_, tree) = fixture.sync().folder_tree().unwrap();
 
     let inbox = tree.find("Inbox").expect("an inbox");
     assert_eq!(inbox.role, Some(FolderRole::Inbox));
@@ -79,7 +79,7 @@ fn a_nested_mailbox_comes_back_nested() {
         account.seed_child_mailbox("JMAP", None, &parent)
     };
 
-    let tree = fixture.sync().folder_tree().unwrap();
+    let (_, tree) = fixture.sync().folder_tree().unwrap();
 
     assert_eq!(tree.roots().len(), 1, "the child must not also be a root");
     let folder = tree.find("Projects/JMAP").expect("the nested folder");
@@ -91,7 +91,7 @@ fn a_nested_mailbox_comes_back_nested() {
 fn an_account_without_mailboxes_yields_an_empty_tree() {
     let fixture = Fixture::start();
 
-    let tree = fixture.sync().folder_tree().unwrap();
+    let (_, tree) = fixture.sync().folder_tree().unwrap();
 
     assert!(tree.is_empty());
 }

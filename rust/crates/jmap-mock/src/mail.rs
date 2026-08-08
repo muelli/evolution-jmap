@@ -654,6 +654,53 @@ impl AccountState {
         id
     }
 
+    /// Create a mailbox as a state transition — what another client's
+    /// `Mailbox/set` looks like from here.
+    ///
+    /// The difference from [`AccountState::seed_mailbox`] is the whole point:
+    /// a seeded mailbox predates every state a client has ever seen, so it
+    /// never shows up in a `/changes` answer, while this one does. There is no
+    /// `Mailbox/set` in this mock, and until something needs one, a test that
+    /// wants a folder to appear mid-session says so directly.
+    pub fn create_mailbox(&mut self, name: &str, role: Option<&str>, parent: Option<&Id>) -> Id {
+        let id = self.mailboxes.alloc_id();
+        let mailbox = Mailbox {
+            id: Some(id.clone()),
+            name: name.to_owned(),
+            parent_id: parent.cloned(),
+            role: role.map(str::to_owned),
+            sort_order: Some(0),
+            is_subscribed: Some(true),
+            ..Mailbox::default()
+        };
+        self.mailboxes
+            .transaction(|transaction| transaction.create(id.clone(), mailbox));
+        id
+    }
+
+    /// Rename a mailbox as a state transition. False if there is no such
+    /// mailbox.
+    pub fn rename_mailbox(&mut self, id: &Id, name: &str) -> bool {
+        self.mailboxes.transaction(|transaction| {
+            let Some(mailbox) = transaction.get(id) else {
+                return false;
+            };
+            let renamed = Mailbox {
+                name: name.to_owned(),
+                ..mailbox.clone()
+            };
+            transaction.update(id, renamed)
+        })
+    }
+
+    /// Destroy a mailbox as a state transition. False if there is no such
+    /// mailbox. Its children and its mail are left alone — this is a test
+    /// helper, not a server.
+    pub fn destroy_mailbox(&mut self, id: &Id) -> bool {
+        self.mailboxes
+            .transaction(|transaction| transaction.destroy(id))
+    }
+
     /// Seed a full email (with a text body and optional attachments);
     /// returns its id. Does not bump state.
     pub fn seed_email(&mut self, seed: EmailSeed) -> Id {
