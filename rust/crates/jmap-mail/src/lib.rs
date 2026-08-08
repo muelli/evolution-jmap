@@ -17,9 +17,13 @@
 //!
 //! This crate is that path, bottom up:
 //!
+//! - [`settings`] is `CamelJmapSettings`, the object a JMAP account's server
+//!   is configured on. Camel keeps host, port, user and security method on the
+//!   `CamelNetworkSettings` interface, which none of its stock settings classes
+//!   implements, so every provider declares a settings class of its own.
 //! - [`store`] is `CamelJmapStore`, the `CamelOfflineStore` subclass a JMAP
-//!   account's folders will hang off. Empty so far — registering the type and
-//!   picking its parent is the increment; `Mailbox/get` is the next one.
+//!   account's folders will hang off. It names the settings class above and
+//!   overrides nothing else so far; `Mailbox/get` is the next increment.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -34,4 +38,5 @@
 pub mod folder_info;
 pub mod module;
 pub mod provider;
+pub mod settings;
 pub mod store;
