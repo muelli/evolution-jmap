@@ -56,6 +56,11 @@ then discover the session the way any JMAP client would:
 curl -s http://127.0.0.1:8080/.well-known/jmap | jq .
 ```
 
+### Trying the address book backend in Evolution
+
+Against that same mock server, with a hand-written account:
+[docs/manual-test-book-backend.md](docs/manual-test-book-backend.md).
+
 ## Architecture
 
 ```
