@@ -1816,3 +1816,89 @@ exists yet. `eds-sys` currently allowlists no `Camel*` type, so the increment
 before even that one is teaching its build script about `camel-1.2` and pinning
 `CamelProvider`'s layout in `tests/layout.rs` the way every other type crossed
 so far has been.
+
+## 2026-08-08 (twenty-first session)
+
+M5's first increment, the one the previous entry named: `eds-sys` now probes
+`camel-1.2` and allowlists the mail provider's object graph, and the two types
+of check that pin it are in place. One commit.
+
+`build.rs` gains `camel-1.2` in the pkg-config loop (same 3.52 floor — Camel
+ships in the same tarball and carries the same version), `wrapper.h` gains
+`#include <camel/camel.h>`, and the allowlist gains `CamelProvider`,
+`CamelService`, `CamelStore`, `CamelOfflineStore`, `CamelTransport`,
+`CamelSession`, `CamelSettings`, `CamelNetworkSettings`, `CamelURL` and the
+matching function prefixes, plus `EDS_CAMEL_PROVIDER_DIR`. 207 `camel_*`
+functions and ~3.5k lines of bindings, which is the whole cost of the increment.
+New `tests/camel.rs` (4 tests) and a seventh test in `tests/layout.rs`.
+
+Decisions taken:
+
+- **`CamelProvider` cannot be layout-checked the way every other type has
+  been.** `camel_provider_get_type()` registers a **boxed** type, so
+  `g_type_query()` reports `instance_size == 0` and `class_size == 0`: the
+  `assert_layout!` macro would compare `size_of` against zero and pass whatever
+  the struct looked like. That is not a small hole — a provider is the one
+  struct the mail module hands to C *by value*, so it is the one place a wrong
+  offset cannot be caught by GObject at all. What stands in for it is a round
+  trip: build a provider in Rust with `'static` C literals, `camel_provider_
+  register` it under a protocol nobody else uses, and read it back out with
+  `camel_provider_get`. Verified this is really sensitive to offsets rather than
+  merely plausible: a scratch test registering a struct with one field removed
+  **segfaults inside `camel_provider_register`**. So a layout drift here is a
+  crash, not a wrong answer, which is the argument for the test existing.
+- **A first test whose whole content is the boxed-type finding.** It asserts
+  `G_TYPE_FUNDAMENTAL(camel_provider_get_type()) == G_TYPE_BOXED` and both
+  query sizes zero. It would be tempting to leave this out as a curiosity, but
+  it is the reason the file exists, and the day Camel makes the provider a
+  classed type it should fail and send the reader to `layout.rs`.
+- **Store, transport, service, session, settings — and deliberately no
+  `CamelFolder`, `CamelMimeMessage` or `CamelFolderSummary`.** The store's
+  folder work is the next increment and each prefix here is another class struct
+  the layout test has to vouch for. `CamelOfflineStore` rather than plain
+  `CamelStore` as the store parent, since the summary cache has to work
+  disconnected.
+- **`camel_provider_module_init` is allowlisted as a function even though Camel
+  only declares it.** Same reasoning as `e_module_load`: with the declaration
+  in scope, the module's `extern "C"` definition is a signature the compiler
+  checks rather than a guess.
+
+One comment was written wrong and corrected by running it rather than by
+re-reading it: it claimed registering into a table `camel_provider_init()` had
+not created was a no-op. Removing the `init` call leaves all four tests
+passing — the table is created lazily. The call stays, because it is the state a
+loaded `libcameljmap.so` finds itself in, but the comment now says what was
+observed. Repeated `camel_provider_init()` calls were checked separately (three
+in a row, from C) rather than assumed idempotent.
+
+Mutation testing: five mutants, all dead. Swapping the store and transport slots
+in `object_types` (1 test fails), a typo in `EDS_CAMEL_PROVIDER_DIR` (1),
+dropping `CamelOfflineStore.*` from the type allowlist (`layout.rs` stops
+compiling), dropping `EDS_CAMEL_PROVIDER_DIR` from the var allowlist (`camel.rs`
+stops compiling), and dropping `camel-1.2` from the pkg-config loop — which is
+worth recording: **bindgen still succeeds**, because Camel's headers sit under
+the same `-I/usr/include/evolution-data-server` the data-server packages
+already add, so the entry earns its place by emitting `-lcamel-1.2`, and its
+absence is a link error rather than a missing-type error.
+
+Not verified locally, as in the previous twenty sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The new
+`.rs` file carries an SPDX `GPL-3.0-or-later` header. `cargo fmt --check`,
+`cargo test --locked` (36 test binaries green on the default members, the four
+EDS crates green on top, `eds-sys` now at 2 + 6 + 7 + 4) and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default members and on
+each EDS crate, and a fresh `cmake -S . -B <tmp> -G Ninja && cmake --build &&
+ctest` is 4/4. `example-module` still fails clippy on `manual_c_str_literals`,
+as it did before this change; it is hand-written FFI, outside `default-members`
+and outside the set CI lints.
+
+No blockers hit.
+
+Next in M5: the `jmap-mail` crate — a `libcameljmap.so` exporting
+`camel_provider_module_init`, whose provider names a `CamelJmapStore` GType and
+nothing else yet, plus the CMake install rule into `camel-1.2`'s
+`camel_providerdir` (`/usr/lib/evolution-data-server/camel-providers` here,
+readable via `pkg_check_variable`) and the `ctest` that checks the artifact
+exports the entry point — the mirror of `install-cal-backend`. The `.urls` file
+belongs with it: Camel reads it to know which protocols a module provides
+without dlopening it.
