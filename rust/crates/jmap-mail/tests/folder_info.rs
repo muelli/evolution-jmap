@@ -106,6 +106,21 @@ fn chain(mailboxes: &[Mailbox]) -> FolderInfoChain {
     FolderInfoChain::from_tree(&tree)
 }
 
+/// The same, cut to `depth` levels of descendants below the top-level folders.
+fn forest(mailboxes: &[Mailbox], depth: Option<usize>) -> FolderInfoChain {
+    let tree = FolderTree::from_mailboxes(mailboxes).expect("a well-formed mailbox list");
+    FolderInfoChain::from_forest(tree.roots(), depth)
+}
+
+/// Three levels, to have something for a cut to leave out.
+fn three_levels() -> Vec<Mailbox> {
+    vec![
+        mailbox("M1", "Parent"),
+        child("M2", "Child", "M1"),
+        child("M3", "Grandchild", "M2"),
+    ]
+}
+
 /// The paths of a chain, parents before children, as Camel would collect them.
 fn full_names(chain: &[Read]) -> Vec<String> {
     chain
@@ -329,6 +344,77 @@ fn a_nul_in_a_mailbox_name_does_not_truncate_the_display_name() {
 
     assert_eq!(read[0].display_name, "Work\u{fffd}Secret");
     assert_eq!(read[0].full_name, "Work%00Secret");
+}
+
+/// `CAMEL_STORE_FOLDER_INFO_RECURSIVE` is the difference between the whole
+/// subtree and one level of it, and this is the end the depth is applied at:
+/// building the forest whole and pruning it afterwards would allocate every
+/// folder of a deep account to throw all but the first level away.
+#[test]
+fn no_depth_at_all_emits_every_level() {
+    let chain = forest(&three_levels(), None);
+
+    assert_eq!(
+        full_names(&read(&chain)),
+        ["Parent", "Parent/Child", "Parent/Child/Grandchild"]
+    );
+}
+
+/// What a non-recursive call with no `top` asks for: the account's top-level
+/// folders, and nothing under them.
+#[test]
+fn a_depth_of_zero_emits_the_roots_and_nothing_below_them() {
+    let chain = forest(&three_levels(), Some(0));
+
+    assert_eq!(full_names(&read(&chain)), ["Parent"]);
+}
+
+/// And what a non-recursive call with one does: the folder named, plus its
+/// immediate subfolders.
+#[test]
+fn a_depth_of_one_emits_the_immediate_children_and_stops() {
+    let chain = forest(&three_levels(), Some(1));
+
+    assert_eq!(full_names(&read(&chain)), ["Parent", "Parent/Child"]);
+}
+
+/// The cut is on what is emitted, not on what the folder *is*. A folder whose
+/// children were left out still carries `CHILDREN`, because that flag is what
+/// makes the folder tree draw an expander — and the expander is how the user
+/// asks for the level that was cut. A cut folder that reported itself a leaf
+/// would be a subtree nothing could ever go and fetch.
+#[test]
+fn a_folder_whose_children_were_cut_still_says_it_has_them() {
+    let chain = forest(&three_levels(), Some(0));
+    let read = read(&chain);
+
+    assert!(read[0].children.is_empty(), "the cut did not happen");
+    assert_ne!(read[0].flags & CAMEL_FOLDER_CHILDREN, 0, "CHILDREN");
+    assert_eq!(read[0].flags & CAMEL_FOLDER_NOCHILDREN, 0);
+}
+
+/// A chain rooted at one folder rather than at the account: what a call with a
+/// `top` is answered with. The folder's siblings are not in the answer, and the
+/// one that is has no `next` — a root chain that still linked the siblings
+/// would hand Camel the whole account under the name of a subtree.
+#[test]
+fn a_forest_of_one_folder_is_a_chain_of_one() {
+    let tree = FolderTree::from_mailboxes(&[
+        mailbox("M1", "Work"),
+        mailbox("M2", "Personal"),
+        child("M3", "Invoices", "M1"),
+    ])
+    .expect("a well-formed mailbox list");
+    let work = tree.find("Work").expect("the folder");
+
+    let chain = FolderInfoChain::from_forest(std::slice::from_ref(work), None);
+
+    assert_eq!(full_names(&read(&chain)), ["Work", "Work/Invoices"]);
+    // SAFETY: the chain owns the forest just built.
+    unsafe {
+        assert!((*chain.as_ptr()).next.is_null(), "a sibling came along");
+        assert!((*chain.as_ptr()).parent.is_null(), "the root has a parent");
+    }
 }
 
 /// The other half of the ownership story. `get_folder_info_sync` hands the

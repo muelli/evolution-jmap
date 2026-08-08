@@ -35,8 +35,11 @@
 //! - [`service`] is the `CamelService` half of that store as vfuncs:
 //!   `connect_sync`, which asks the session to authenticate rather than opening
 //!   anything itself, `authenticate_sync`, which is where the connection is
-//!   actually made, and `disconnect_sync`. `CamelStoreClass`'s own folder
-//!   vfuncs are the next increment.
+//!   actually made, and `disconnect_sync`.
+//! - [`folders`] is the `CamelStore` half: `get_folder_info_sync`, and the
+//!   reading of the two arguments that decide which part of the store's tree
+//!   one call is answered with — the `top` it is rooted at and the depth
+//!   `CAMEL_STORE_FOLDER_INFO_RECURSIVE` cuts it to.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -50,6 +53,7 @@
 
 pub mod connect;
 pub mod folder_info;
+pub mod folders;
 pub mod module;
 pub mod provider;
 pub mod server;

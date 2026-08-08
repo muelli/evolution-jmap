@@ -2796,3 +2796,104 @@ account a collection backend and M7 a way to create one; the manual test recipe
 with a hand-written `.source` keyfile is where that will first be checked. The
 README's architecture block still lists only the round-1 crates; five crates
 stale.
+
+## 2026-08-08 (thirty-first session)
+
+M5's eleventh increment: `CamelStoreClass.get_folder_info_sync`, the vfunc the
+last session named as next. One commit, a new `src/folders.rs`, and the wiring
+that turns the two halves already in the tree into an account with folders.
+
+This session opened on an unusual state: a previous session had left
+`src/folders.rs`, the depth argument on `FolderInfoChain`, and 13 tests
+uncommitted and **unwired** — `folders` was not in `lib.rs` and its
+`install_vfuncs` was not called from `class_init`. So the suite compiled without
+the module and passed without ever reaching the vfunc. Confirming that was the
+red step: `cargo test --test folders` failed on `unresolved import
+jmap_mail::folders`. Wiring it was the green one.
+
+Decisions taken:
+
+- **`RECURSIVE` is obeyed, although IMAPX has a `/* FIXME: obey other flags */`
+  where it would be.** Every real caller — Evolution's folder cache and
+  subscription editor, `camel_store_delete_folder_sync` — passes it, and the two
+  that do not are `camel_store_get_folder_info_sync`'s virtual-folder paths,
+  which strip it deliberately and want the top level back. Obeying the
+  documented contract costs nothing a caller depends on and saves a deep account
+  from marshalling its whole tree into C to answer a question about one level.
+- **The depth is applied while the forest is built, not to a finished one.** A
+  cut afterwards would have allocated — and freed — every folder of a deep
+  account to keep its first level. `FolderInfoChain::from_forest` therefore
+  carries the remaining depth on its explicit stack alongside each sibling
+  group.
+- **A cut folder still says `CHILDREN`.** The cut is on what is emitted, not on
+  what the folder *is*: that flag is what makes the folder tree draw the
+  expander, and the expander is how the user asks for the level that was cut. A
+  cut folder reporting itself a leaf would be a subtree nothing could fetch.
+- **The depth differs by one between the two `top` cases**, which is easy to
+  lose: "the immediate subfolders of `top`" is one level below a folder that is
+  itself in the answer, but the account's top-level folders *are* the root's
+  immediate subfolders — the root is not a folder and is not returned — so no
+  level is left below them. Hence `Some(1)` for a `top` and `Some(0)` without.
+- **A `top` that names no folder is an empty answer, not an error.** Camel
+  documents the wrapper as able to "return NULL without setting a GError if no
+  folders match the search criteria", and the case is ordinary: a folder another
+  client deleted is asked for once more before Camel notices. Reporting that as
+  a failure would turn someone else's tidying into a broken account. This is why
+  NULL-with-no-error and NULL-with-`NOT_CONNECTED` both have a test.
+- **A NULL and an empty `top` are the same question.** The wrapper itself tests
+  `top == NULL || *top == '\0'`, so a store reading the two spellings
+  differently would disagree with the function calling it.
+- **The refresh flag is the listing's business, not the request's.** A call for
+  one subtree still refreshes the whole tree: JMAP cannot ask for part of a
+  `Mailbox/changes`, and a partial answer would leave the store's state
+  describing folders it did not fetch.
+
+Three flags are still unread. `SUBSCRIBED` and `SUBSCRIPTION_LIST` want the tree
+filtered to what the user subscribed to — a filter on folders rather than a
+different request. `FAST` is documented as deprecated and as making no
+difference to most backends, which is true of this one because JMAP puts the
+counts in the mailbox anyway. `NO_VIRTUAL` is not this vfunc's business: the
+wrapper adds and removes vTrash and vJunk around the call.
+
+Added this session: a third part to `tests/folders.rs` that calls the vfunc
+**through the pointer in the class**, the way Camel does, rather than by name.
+That is the only test that can prove the two halves are joined to each other and
+to the slot — and it is exactly what the uncommitted state above would have
+passed without. Six tests: the whole account, an empty `top`, a `top` rooting
+the answer (with the head's `next` asserted NULL), the non-recursive cut, the
+empty-answer case, and the disconnected-store error; plus a NULL instance to
+exercise the guard. `Answered` owns both answers and frees them with
+`camel_folder_info_free` and `g_error_free`, as Camel's caller does.
+
+Mutation testing, six mutants, none surviving: the vfunc not installed on the
+class (8 tests), an empty `top` read as a folder named `""`, the top depth off by
+one, an unknown `top` falling back to the whole account, the depth ignored while
+building, and the vfunc ignoring `top` and depth altogether (3 tests).
+
+Lesson, at the cost of one false "survivor": **run the mutation harness after
+`cargo fmt`, and assert the target string was found.** Mutant 6 first reported
+as surviving because `cargo fmt` had split the line the patch matched on, so the
+edit silently did nothing. A mutation harness that cannot fail loudly on a
+missed target reports clean code and broken tests identically. The retry asserts
+the substring is present before writing.
+
+Not verified locally, as in the previous thirty sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The one new file,
+`src/folders.rs`, carries an SPDX `GPL-3.0-or-later` header. `cargo fmt --check`,
+`cargo test --locked` (green on the default members; the five EDS crates green on
+top, `jmap-mail` now 99 tests) and `cargo clippy --all-targets --locked -- -D
+warnings` are clean on both member sets. A fresh `cmake -S . -B <tmp> -G Ninja &&
+cmake --build && ctest` is 5/5. `example-module` is unchanged and still outside
+both `default-members` and the set CI lints.
+
+Next in M5: `CamelFolder` itself — `CamelJmapFolder` as a `CamelOfflineFolder`
+subclass, whose summary comes from `Email/query` + `Email/get`. The store's
+`get_folder_sync` is the slot that hands one out, and it is the first vfunc that
+needs a per-folder object rather than a view of the tree. The subscription flags
+this vfunc deliberately does not read want `CamelSubscribable`, which is an
+interface on the store and a separate increment. Still unexercised against a
+real `CamelSession`: everything in `service.rs` and now `folders.rs` — that
+waits on M6 for a collection backend and M7 for a way to create an account, and
+the manual test recipe with a hand-written `.source` keyfile is where it will
+first be checked. The README's architecture block still lists only the round-1
+crates; five crates stale.
