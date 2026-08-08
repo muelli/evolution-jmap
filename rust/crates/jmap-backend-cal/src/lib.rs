@@ -21,12 +21,17 @@
 //! - [`connect`] resolves the account and the calendar an `ESource` stands
 //!   for, over the shared `connect_sync` machinery in `jmap-backend-core`.
 //!
-//! The subclass and the module entry point follow.
+//! - [`backend`] is the `ECalMetaBackend` subclass those three hang off: the
+//!   instance and class structs, and the seven vfunc slots EDS dispatches
+//!   through.
+//!
+//! The factory and the module entry point follow.
 //!
 //! Like `jmap-backend-core`, this crate needs the installed EDS headers and so
 //! stays out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
 
+pub mod backend;
 pub mod connect;
 pub mod marshal;
 pub mod ops;
