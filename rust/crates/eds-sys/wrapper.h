@@ -10,3 +10,8 @@
 #include <libebackend/libebackend.h>
 #include <libedata-book/libedata-book.h>
 #include <libedata-cal/libedata-cal.h>
+/* Camel, for M5's mail provider. Already reachable through the two data-server
+ * headers above, but only as far as the types they mention; including it here
+ * is what puts CamelProvider and the store/transport classes in front of the
+ * allowlist. */
+#include <camel/camel.h>

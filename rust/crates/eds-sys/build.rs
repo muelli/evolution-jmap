@@ -53,6 +53,23 @@ const ALLOWED_TYPES: &[&str] = &[
     // The two domains are separate quarks, so the book's code cannot stand in
     // for it — tests/errors.rs pins that.
     "ECalClientError",
+    // M5's mail provider. `CamelProvider` is the static struct a
+    // `libcameljmap.so` registers on load, and the rest is the object graph it
+    // names: a store (offline, so the summary cache works disconnected), a
+    // transport, their common `CamelService` parent, the settings objects a
+    // service is configured through and the session that owns it. Deliberately
+    // no `CamelFolder`/`CamelMimeMessage`/`CamelFolderSummary` yet — those
+    // arrive with the folder increment, and each new prefix here is another
+    // class struct tests/layout.rs has to vouch for.
+    "CamelProvider.*",
+    "CamelService.*",
+    "CamelStore.*",
+    "CamelOfflineStore.*",
+    "CamelTransport.*",
+    "CamelSession.*",
+    "CamelSettings.*",
+    "CamelNetworkSettings.*",
+    "CamelURL",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -86,6 +103,18 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // Not an EDS symbol, but the entry point every loadable EDS module must
     // export; having the signature in scope keeps M2's trampoline honest.
     "e_module_.*",
+    // The mail provider's side. `camel_provider_module_init` is in here for the
+    // same reason as `e_module_load`: it is declared, not defined, by Camel, so
+    // having the declaration in scope is what makes the module's `extern "C"`
+    // definition a signature the compiler can check rather than a guess.
+    "camel_provider_.*",
+    "camel_service_.*",
+    "camel_store_.*",
+    "camel_offline_store_.*",
+    "camel_transport_.*",
+    "camel_session_.*",
+    "camel_settings_.*",
+    "camel_network_settings_.*",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,
@@ -94,7 +123,15 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
 /// rather than retyping them. `E_SOURCE_CREDENTIAL_*` are the same thing for
 /// the `ENamedParameters` a backend is authenticated with, where a typo is a
 /// password that reads back as absent.
-const ALLOWED_VARS: &[&str] = &["E_SOURCE_EXTENSION_.*", "E_SOURCE_CREDENTIAL_.*"];
+/// `EDS_CAMEL_PROVIDER_DIR` is the same kind of thing on Camel's side: the
+/// environment variable that points the provider loader at an uninstalled
+/// build, which the manual test recipe will need and which is a `#define`, so a
+/// typo is a provider directory that is silently never searched.
+const ALLOWED_VARS: &[&str] = &[
+    "E_SOURCE_EXTENSION_.*",
+    "E_SOURCE_CREDENTIAL_.*",
+    "EDS_CAMEL_PROVIDER_DIR",
+];
 
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys
 /// interoperates with the wider glib ecosystem instead of minting its own
@@ -122,7 +159,14 @@ fn main() {
     // The pkg_config crate emits the cargo:rustc-link-lib/-search lines for
     // us; we only need the include paths for clang.
     let mut clang_args = vec!["-DE_CAL_DISABLE_DEPRECATED".to_string()];
-    for pkg in ["libebackend-1.2", "libedata-book-1.2", "libedata-cal-2.0"] {
+    for pkg in [
+        "libebackend-1.2",
+        "libedata-book-1.2",
+        "libedata-cal-2.0",
+        // Camel ships in the same tarball and carries the same version, so the
+        // 3.52 floor applies unchanged.
+        "camel-1.2",
+    ] {
         let lib = pkg_config::Config::new()
             .atleast_version(MIN_EDS)
             .probe(pkg)
