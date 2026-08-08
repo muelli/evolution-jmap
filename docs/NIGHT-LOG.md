@@ -867,3 +867,94 @@ in that file has been promising since M1 — installing
 is the install rule and the rename. After that the manual test recipe with a
 hand-written `.source` keyfile, which is the first time any of this runs
 against a real `evolution-source-registry`.
+
+## 2026-08-08 (tenth session)
+
+M3, ninth increment: the CMake side. `add_cargo_cdylib()` in
+`cmake/Rust.cmake` — the helper a comment in that file has been promising
+since M1 — plus `cmake/Backends.cmake`, which uses it to install the cdylib
+cargo builds as `libjmap_backend_book.so` under the name and in the directory
+`evolution-addressbook-factory` looks for:
+`/usr/lib/evolution-data-server/addressbook-backends/libebookbackendjmap.so`
+on this VM. One new CTest, `install-book-backend`; `ctest` is now 3 tests, the
+Rust suites are unchanged at 87 and 105.
+
+Nothing about this is testable from Rust, so the test is a `cmake -P` script,
+`cmake/tests/check-installed-module.cmake`. It runs `cmake --install
+--component book-backend` with `DESTDIR` pointing at a scratch directory and
+then asks the three questions the build system cannot ask itself: did a file
+land at the expected absolute path, is it big enough to be a shared object,
+and does it export the entry points EDS resolves. The symbol check reads the
+NUL-separated `.dynstr` with `file(STRINGS ... REGEX)`, so it needs no `nm`
+and no extra build dependency.
+
+Decisions taken:
+
+- **`rust-build` is now part of `ALL`.** The installed cdylibs are *files* to
+  CMake, not targets, so nothing else would build them and `cmake --install`
+  on a fresh tree would copy nothing at all — the failure mode being that an
+  install rule which quietly installs nothing looks exactly like one that
+  works. The cost is that `cmake --build` now runs a release workspace build
+  in `${CMAKE_BINARY_DIR}/cargo-target`, which CI's `Swatinem/rust-cache` does
+  not cache; correctness first, and the alternative was an install target that
+  is a trap.
+- **`install(PROGRAMS)`, not `install(FILES)`.** A shared module wants mode
+  0755; `FILES` would install it 0644. Verified on the staged tree.
+- **The EDS wiring lives in `cmake/Backends.cmake`, not in
+  `CMakeLists.txt`.** The top-level file is derived from the GNOME Evolution
+  wiki's `example-module.zip` and `REUSE.toml` annotates it Red Hat /
+  LGPL-2.1-or-later; keeping our GPL-3 work in a file of our own leaves that
+  one line closer to upstream and the licence annotation honest. `CMakeLists.txt`
+  gains a single `include()`.
+- **The destination is checked against pkg-config, not against itself.** This
+  was the one thing the first green version got wrong, and mutation testing is
+  what found it: `EXPECTED` was computed from the same `DESTINATION` the
+  install rule used, so renaming the module to `libebookbackendxmpp.so` — or
+  installing it into the calendar backend directory — passed. The check script
+  now re-runs `pkg-config --variable=backenddir libedata-book-1.2` itself and
+  compares, via a `VERIFY_DESTINATION_FROM <module> <variable>` argument the
+  helper forwards. That argument is suppressed under `FORCE_INSTALL_PREFIX`,
+  where moving the destination is the whole point.
+- **The installed *name* is still not independently checked, and that is
+  honest rather than a gap.** EDS loads every `.so` in the backend directory
+  and then looks for `EBookBackendFactory` subclasses among the types that
+  appeared; the filename is convention, the directory and the entry points are
+  what load-bear. Both of the latter are now checked against their source.
+- **`add_cargo_cdylib()` refuses an empty or relative `DESTINATION` at
+  configure time.** `pkg_check_variable()` reports a missing variable as the
+  empty string, which would otherwise install into the prefix root.
+
+Five mutations were run; three died immediately, one exposed the tautology
+above and died after the fix, one survives by design:
+
+- the install rule deleted → the staged path does not exist;
+- `SYMBOLS` naming something the module does not export
+  (`camel_provider_module_init`) → "does not export";
+- `DESTINATION` set from an undefined variable → configure-time
+  `FATAL_ERROR`;
+- `DESTINATION` pointed at `calendar-backends` → survived the first version,
+  dies now on the pkg-config comparison;
+- `OUTPUT_NAME` changed to `libebookbackendxmpp.so` → survives, per the naming
+  decision above.
+
+Also verified: a clean `cmake -S . -B <fresh> && cmake --build && ctest` — the
+exact sequence CI's `build-full` job runs — goes green from an empty tree, and
+`-DFORCE_INSTALL_PREFIX=ON -DCMAKE_INSTALL_PREFIX=/opt/…` relocates the
+destination as it does for the example module. Drive-by:
+`libjmap_backend_book.so` is now in `ci.yml`'s uploaded artifacts, next to
+`jmap-mockd` and the example module.
+
+Not verified locally, as in the previous nine sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The two
+new files carry an SPDX `GPL-3.0-or-later` header and no dependency was added.
+No Rust source changed; `cargo fmt --check`, `cargo test` and `cargo clippy
+--all-targets -D warnings` are clean on the default members (87 tests) and on
+`-p eds-sys -p jmap-backend-core -p jmap-backend-book` (105).
+
+No blockers hit.
+
+Next: the manual test recipe — a hand-written `.source` keyfile under
+`~/.config/evolution/sources/`, the installed module, and a real
+`evolution-addressbook-factory` talking to `jmap-mockd`. That is the first
+time any of this runs outside a test harness, and the acceptance criterion M3
+still has open.
