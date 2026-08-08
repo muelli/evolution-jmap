@@ -4,7 +4,7 @@
 //! In-memory server state: per-account typed object stores with id
 //! allocation, per-type state counters, and an append-only changes log.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::{Id, State};
 
@@ -14,6 +14,11 @@ use jmap_proto::{Id, State};
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
+    /// Capability URNs to leave out of the session document, as
+    /// [`crate::MockServerBuilder::without_capability`] asked. A real account
+    /// need not offer all four, and a client that resolves an account under
+    /// the wrong capability has to be able to notice.
+    pub omitted_capabilities: BTreeSet<String>,
 }
 
 impl ServerState {
@@ -21,6 +26,7 @@ impl ServerState {
         Self {
             session_state: 1,
             accounts: BTreeMap::new(),
+            omitted_capabilities: BTreeSet::new(),
         }
     }
 

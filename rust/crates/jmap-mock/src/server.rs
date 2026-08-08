@@ -3,6 +3,7 @@
 
 //! HTTP surface: routing, session document, server lifecycle.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,6 +24,7 @@ pub const DEFAULT_ACCOUNT_NAME: &str = "alice@example.com";
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
+    omitted_capabilities: BTreeSet<String>,
 }
 
 impl MockServerBuilder {
@@ -39,6 +41,18 @@ impl MockServerBuilder {
         self
     }
 
+    /// Leave a capability URN out of the session document entirely — the
+    /// account will not list it, and no primary account resolves under it.
+    ///
+    /// A JMAP server need not offer all of mail, contacts and calendars, and a
+    /// client that looks its account up under the wrong capability would
+    /// otherwise be indistinguishable from one that looks it up under the
+    /// right one, because every account here answers to all four.
+    pub fn without_capability(mut self, capability: &str) -> Self {
+        self.omitted_capabilities.insert(capability.to_owned());
+        self
+    }
+
     /// Bind to a fixed localhost port instead of an ephemeral one.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
@@ -50,6 +64,7 @@ impl MockServerBuilder {
     pub fn start(self) -> MockServer {
         let mut state = ServerState::new();
         state.add_account(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME);
+        state.omitted_capabilities = self.omitted_capabilities.clone();
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -91,6 +106,7 @@ impl MockServer {
         MockServerBuilder {
             auth: AuthConfig::default(),
             port: 0,
+            omitted_capabilities: BTreeSet::new(),
         }
     }
 
@@ -290,6 +306,15 @@ fn respond_json(request: tiny_http::Request, status: u16, body: &Value) {
     let _ = request.respond(response);
 }
 
+/// The capabilities every account here offers, unless a test asked for one to
+/// be left out.
+const ACCOUNT_CAPABILITIES: &[&str] = &[
+    CAPABILITY_MAIL,
+    CAPABILITY_SUBMISSION,
+    CAPABILITY_CONTACTS,
+    CAPABILITY_CALENDARS,
+];
+
 /// Build the RFC 8620 §2 session document from current state.
 fn session_document(state: &ServerState, origin: &str) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
@@ -300,13 +325,11 @@ fn session_document(state: &ServerState, origin: &str) -> Session {
                 name: account.name.clone(),
                 is_personal: true,
                 is_read_only: false,
-                account_capabilities: [
-                    (CAPABILITY_MAIL.to_owned(), json!({})),
-                    (CAPABILITY_SUBMISSION.to_owned(), json!({})),
-                    (CAPABILITY_CONTACTS.to_owned(), json!({})),
-                    (CAPABILITY_CALENDARS.to_owned(), json!({})),
-                ]
-                .into(),
+                account_capabilities: ACCOUNT_CAPABILITIES
+                    .iter()
+                    .filter(|capability| !state.omitted_capabilities.contains(**capability))
+                    .map(|capability| ((*capability).to_owned(), json!({})))
+                    .collect(),
                 extra: Default::default(),
             },
         );
@@ -315,39 +338,36 @@ fn session_document(state: &ServerState, origin: &str) -> Session {
     let first_account = state.accounts.iter().next();
     let primary_accounts = first_account
         .map(|(id, _)| {
-            [
-                CAPABILITY_MAIL,
-                CAPABILITY_SUBMISSION,
-                CAPABILITY_CONTACTS,
-                CAPABILITY_CALENDARS,
-            ]
-            .into_iter()
-            .map(|capability| (capability.to_owned(), id.clone()))
-            .collect()
+            ACCOUNT_CAPABILITIES
+                .iter()
+                .filter(|capability| !state.omitted_capabilities.contains(**capability))
+                .map(|capability| ((*capability).to_owned(), id.clone()))
+                .collect()
         })
         .unwrap_or_default();
 
     Session {
-        capabilities: [
-            (
-                CAPABILITY_CORE.to_owned(),
-                json!({
-                    "maxSizeUpload": 50_000_000u64,
-                    "maxConcurrentUpload": 4,
-                    "maxSizeRequest": 10_000_000u64,
-                    "maxConcurrentRequests": 4,
-                    "maxCallsInRequest": 16,
-                    "maxObjectsInGet": 256,
-                    "maxObjectsInSet": 128,
-                    "collationAlgorithms": ["i;ascii-casemap"],
-                }),
-            ),
-            (CAPABILITY_MAIL.to_owned(), json!({})),
-            (CAPABILITY_SUBMISSION.to_owned(), json!({})),
-            (CAPABILITY_CONTACTS.to_owned(), json!({})),
-            (CAPABILITY_CALENDARS.to_owned(), json!({})),
-        ]
-        .into(),
+        capabilities: [(
+            CAPABILITY_CORE.to_owned(),
+            json!({
+                "maxSizeUpload": 50_000_000u64,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 10_000_000u64,
+                "maxConcurrentRequests": 4,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 256,
+                "maxObjectsInSet": 128,
+                "collationAlgorithms": ["i;ascii-casemap"],
+            }),
+        )]
+        .into_iter()
+        .chain(
+            ACCOUNT_CAPABILITIES
+                .iter()
+                .filter(|capability| !state.omitted_capabilities.contains(**capability))
+                .map(|capability| ((*capability).to_owned(), json!({}))),
+        )
+        .collect(),
         accounts,
         primary_accounts,
         username: first_account
