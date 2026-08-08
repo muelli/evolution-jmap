@@ -80,12 +80,14 @@ test:
     when: always
     reports: {}
 
-# Full build incl. the Evolution example module and CMake glue. Uses the
-# shared CI image (built by GitHub's ci-image workflow, public on ghcr.io).
-# allow_failure until the image exists and its digest is pinned here.
+# Full build incl. the Evolution example module and CMake glue, in the
+# shared CI image (built by GitHub's ci-image workflow). NOTE: the GitHub
+# repo is private, so this ghcr.io image needs a pull secret — set the
+# DOCKER_AUTH_CONFIG CI variable with ghcr.io credentials (a read:packages
+# PAT). allow_failure until a GitLab mirror with that secret exists.
 build-full:
   stage: build
-  image: ghcr.io/muelli/evolution-jmap/ci:latest  # TODO: pin @sha256: digest
+  image: ghcr.io/muelli/evolution-jmap/ci@sha256:e479fc1333c4b38ccf1afb47427d8e7e2d1fe307822347d743bc0a04fb5c126b
   allow_failure: true
   cache:
     <<: *cargo-cache

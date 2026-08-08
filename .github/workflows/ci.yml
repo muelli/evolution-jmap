@@ -4,11 +4,9 @@
 # Main CI. The pure-Rust jobs (fmt/clippy/deny/test/repro) need no
 # Evolution headers — the workspace's default-members exclude the
 # example-module crate — so they run on the stock runner with cargo caching.
-# The full build (CMake + example module + --workspace) needs EDS dev
-# headers; it installs them via apt until the ci-image digest is pinned
-# here (see ci-image.yml), at which point it should switch to
-#   container: ghcr.io/muelli/evolution-jmap/ci@sha256:<digest>
-# for a byte-identical environment with GitLab CI.
+# The full build (CMake + example module + --workspace) runs in the shared
+# CI image (see ci-image.yml), digest-pinned so GitHub and GitLab build in
+# a byte-identical environment. Bump the digest after image rebuilds.
 
 name: CI
 
@@ -73,18 +71,13 @@ jobs:
   # Full build including the Evolution example module and the CMake glue.
   build-full:
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/muelli/evolution-jmap/ci@sha256:e479fc1333c4b38ccf1afb47427d8e7e2d1fe307822347d743bc0a04fb5c126b
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Evolution development packages
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build pkg-config \
-            libglib2.0-dev libgtk-3-dev \
-            libcamel1.2-dev libedataserver1.2-dev libebackend1.2-dev \
-            libebook1.2-dev libedata-book1.2-dev \
-            libecal2.0-dev libedata-cal2.0-dev \
-            evolution-dev
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
