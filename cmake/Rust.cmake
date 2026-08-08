@@ -52,7 +52,8 @@ set_tests_properties(rust-test PROPERTIES
 # the only place eds-sys's g_type_query layout checks get exercised.
 add_test(
 	NAME rust-test-eds
-	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys -p jmap-backend-core -p jmap-backend-book
+	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys -p jmap-backend-core
+		-p jmap-backend-book -p jmap-backend-cal
 	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 )
 set_tests_properties(rust-test-eds PROPERTIES
