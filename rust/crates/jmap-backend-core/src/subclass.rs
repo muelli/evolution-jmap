@@ -93,8 +93,9 @@ pub unsafe trait ObjectSubclass: Sized {
 /// already been registered.
 ///
 /// Idempotence is not a convenience: a second `g_type_register_static` under
-/// the same name is a fatal GLib error, and module entry points do get
-/// reached more than once per process.
+/// the same name is a fatal GLib error, and a process does reach the same
+/// registration twice — a test suite from two threads, a Camel provider from
+/// two `camel_provider_module_init`s.
 pub fn register_static<T: ObjectSubclass>() -> GType {
     // SAFETY: a null GTypeModule selects the static path, which has no
     // pointer requirements of its own.
@@ -103,6 +104,10 @@ pub fn register_static<T: ObjectSubclass>() -> GType {
 
 /// Registers `T` against the `GTypeModule` EDS loaded us as, so the type is
 /// unregistered if the module is unloaded.
+///
+/// Call this on *every* load of the module, not only the first: unusing a
+/// module marks the types it registered as unloaded, and GLib will not hand
+/// one back until a later load has registered it again.
 ///
 /// # Safety
 ///
@@ -131,10 +136,20 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-    // SAFETY: NAME is a 'static NUL-terminated string.
-    let existing = unsafe { g_type_from_name(T::NAME.as_ptr()) };
-    if existing != 0 {
-        return existing;
+    // Only on the static path. A second `g_type_register_static` under the
+    // same name is a fatal GLib error, so an already-registered type has to be
+    // handed straight back; `g_type_module_register_type` is the opposite. It
+    // *has* to be called again on every load of the module, because unusing a
+    // module marks every type it registered as unloaded, and GLib refuses the
+    // module — and aborts the process, "Could not reload previously loaded
+    // plugin", as soon as one of those types is asked for — until a second
+    // registration has marked them loaded again.
+    if module.is_null() {
+        // SAFETY: NAME is a 'static NUL-terminated string.
+        let existing = unsafe { g_type_from_name(T::NAME.as_ptr()) };
+        if existing != 0 {
+            return existing;
+        }
     }
 
     let class_size = u16::try_from(size_of::<T::Class>())

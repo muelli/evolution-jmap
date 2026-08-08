@@ -17,7 +17,7 @@
 //! - [`trampoline`] stops a Rust panic from unwinding into C, which is
 //!   undefined behaviour.
 //! - [`cancel`] bridges a `GCancellable` to the client's [`CancelFlag`].
-//! - [`error`] maps [`jmap_client::error::Error`] onto the `GError` domains
+//! - [`error`] maps [`jmap_client::Error`] onto the `GError` domains
 //!   and codes Evolution actually routes on.
 //!
 //! [`CancelFlag`]: jmap_client::transport::CancelFlag
