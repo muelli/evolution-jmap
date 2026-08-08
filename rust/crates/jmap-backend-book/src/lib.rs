@@ -26,6 +26,11 @@
 //! an instance struct, seven vfunc slots, and a panic guard around a lookup of
 //! the connection the instance holds.
 //!
+//! On top of that sit the two pieces EDS actually reaches first: [`module`],
+//! the `e_module_load` symbol resolved out of the built shared object, and
+//! [`factory`], the `EBookBackendFactory` it registers — the thing that maps
+//! `BackendName=jmap` in a `.source` file onto a backend instance.
+//!
 //! [`BookSync`]: jmap_book_sync::BookSync
 //!
 //! Like `jmap-backend-core`, this crate needs the installed EDS headers and so
@@ -34,5 +39,7 @@
 
 pub mod backend;
 pub mod connect;
+pub mod factory;
 pub mod marshal;
+pub mod module;
 pub mod ops;
