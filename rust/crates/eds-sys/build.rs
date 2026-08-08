@@ -30,6 +30,15 @@ const ALLOWED_TYPES: &[&str] = &[
     "EContact.*",
     "EVCard.*",
     "EComponent.*",
+    // A calendar object, in the two shapes the `ECalMetaBackend` vfuncs use
+    // it: libical-glib's `ICalComponent`, which `load_component_sync` hands
+    // back, and libecal's `ECalComponent` wrapper, which is what
+    // `save_component_sync` is given a list of. Both are pulled in
+    // transitively already, as field and argument types; naming them here is
+    // what also brings their *class* structs, which tests/layout.rs checks
+    // against `g_type_query` like every other type we cross the ABI with.
+    "ICal.*",
+    "ECalComponent.*",
     // The error domain every EDS client speaks. Deliberately just the enum,
     // not the whole EClient class: the backends produce these codes, they
     // never talk to an EClient.
@@ -58,6 +67,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_collection_backend_.*",
     "e_contact_.*",
     "e_vcard_.*",
+    // Building, reading and rendering a calendar object. `i_cal_component_.*`
+    // rather than all of `i_cal_.*`: the mapping in `jmap-ical` does the
+    // property- and value-level work in Rust on the text, so the component is
+    // the only libical type that has to cross the boundary.
+    "i_cal_component_.*",
+    "e_cal_component_.*",
     "e_client_error_.*",
     "e_book_client_error_.*",
     // How a backend is handed its credentials: EDS fetches them from
