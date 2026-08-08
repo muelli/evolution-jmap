@@ -263,11 +263,15 @@ fn no_stock_camel_settings_class_carries_the_network_properties() {
 /// The three values `security-method` can take, and the only one that means
 /// "no encryption". `STARTTLS_ON_STANDARD_PORT` is Camel's recommended value
 /// and its name is about a protocol JMAP does not have — JMAP is HTTP, so both
-/// non-`NONE` values mean the same thing here, TLS. What matters is that
-/// `NONE` is 0 and therefore the value a zeroed or unset settings object reads
-/// back as, which is why the mapping treats "not configured" as insecure and
-/// refuses it for anything but loopback rather than defaulting to TLS the way
-/// an `ESource` does.
+/// non-`NONE` values mean the same thing here, TLS, and only `NONE` is a
+/// decision to send credentials in the clear.
+///
+/// That `NONE` is *zero* is worth pinning because it is what a settings object
+/// reads back as when nobody has set the property: an implementer that claims
+/// `CamelNetworkSettings` without overriding its properties never receives the
+/// interface's own default, and so silently starts out insecure. The default
+/// that applies once the overrides are in place is pinned where the overrides
+/// are, in `jmap-mail`'s `tests/settings.rs`.
 #[test]
 fn the_security_method_that_means_plaintext_is_the_zero_one() {
     assert_eq!(CAMEL_NETWORK_SECURITY_METHOD_NONE, 0);

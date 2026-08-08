@@ -3,17 +3,21 @@
 
 //! `CamelJmapStore`: the type Camel instantiates for a JMAP mail account.
 //!
-//! Nothing is overridden yet. The increment this file belongs to is about the
-//! module being loadable at all, and a store type that exists and has the right
-//! parent is what the provider needs to name. The parent is the part worth
-//! getting right now, because it is the part a later increment cannot change
-//! cheaply: every folder vfunc is declared on one of the two candidates.
+//! No vfunc is overridden yet. What the type does carry is the two things a
+//! later increment cannot change cheaply: its parent, because every folder
+//! vfunc is declared on one of the two candidates, and the settings class it
+//! is configured through — [`crate::settings`], without which a JMAP account
+//! has nowhere to keep a server.
 
 use std::ffi::CStr;
 
-use eds_sys::{CamelOfflineStore, CamelOfflineStoreClass, camel_offline_store_get_type};
+use eds_sys::{
+    CamelOfflineStore, CamelOfflineStoreClass, CamelServiceClass, camel_offline_store_get_type,
+};
 use glib_sys::GType;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+
+use crate::settings::settings_type;
 
 /// The instance struct. `#[repr(C)]` leading with the parent's instance struct
 /// is what makes a `*mut JmapStore` usable as the `CamelStore *` every Camel
@@ -47,6 +51,19 @@ unsafe impl ObjectSubclass for JmapStore {
     fn parent_type() -> GType {
         // SAFETY: no arguments, and the type initialises itself.
         unsafe { camel_offline_store_get_type() }
+    }
+
+    unsafe fn class_init(class: *mut Self::Class) {
+        // Which class `camel_service_ref_settings` instantiates when nothing
+        // has handed the service a settings object — and, more to the point,
+        // which class Evolution's account editor and
+        // `e_source_camel_configure_service` expect to configure. Inherited it
+        // would be `CamelOfflineSettings`, which carries no server at all, so
+        // this one line is what connects a JMAP account to a host.
+        //
+        // SAFETY: the class leads with CamelOfflineStoreClass, which derives
+        // from CamelStoreClass, from CamelServiceClass — the contract above.
+        unsafe { (*class.cast::<CamelServiceClass>()).settings_type = settings_type() };
     }
 }
 
