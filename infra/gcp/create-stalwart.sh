@@ -15,6 +15,12 @@
 #   ./create-stalwart.sh --update-firewall
 # when your IP changes.
 #
+# Cost: the VM naps itself after 60 minutes without logins or Stalwart
+# traffic (any packet on 8080 is genuine use — the firewall admits only
+# the operator). A stopped instance costs only its disk (~$2/month);
+# wake it with `gcloud compute instances start <name>`. NB: the ephemeral
+# external IP changes across restarts.
+#
 # The admin password is generated on the VM at first boot:
 #   gcloud compute ssh stalwart-1 --zone europe-west3-c -- sudo cat /opt/stalwart/admin-password
 
@@ -36,7 +42,35 @@ trap 'rm -f "$STARTUP"' EXIT
 cat > "$STARTUP" <<'EOF'
 #!/bin/bash
 set -eux
-apt-get update -q && apt-get install -y --no-install-recommends docker.io
+apt-get update -q && apt-get install -y --no-install-recommends docker.io cron
+
+# Counting rule: how many packets have reached Stalwart's HTTP port. The
+# GCP firewall only admits the operator's IP, so any count movement is
+# genuine use. (Startup scripts run on every boot; guard against dupes.)
+iptables -C INPUT -p tcp --dport 8080 -j ACCEPT 2>/dev/null \
+    || iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
+
+# Idle watchdog: shut down after 60 minutes with no login session and no
+# movement on the packet counter. Boot counts as activity (fresh /run).
+cat > /usr/local/bin/idle-watchdog <<'WATCHDOG'
+#!/bin/bash
+STAMP=/run/stalwart-last-active
+COUNTS=/run/stalwart-pkt-count
+[ -f "$STAMP" ] || touch "$STAMP"
+pkts=$(iptables -nvxL INPUT | awk '/tcp dpt:8080/ {print $1; exit}')
+prev=$(cat "$COUNTS" 2>/dev/null || echo -1)
+if [ -n "$(who)" ] || [ "$pkts" != "$prev" ]; then
+    touch "$STAMP"
+fi
+echo "$pkts" > "$COUNTS"
+if [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -gt 3600 ]; then
+    logger "idle-watchdog: no Stalwart traffic or logins for 60 minutes, shutting down"
+    /sbin/shutdown -h now
+fi
+WATCHDOG
+chmod +x /usr/local/bin/idle-watchdog
+echo '*/5 * * * * root /usr/local/bin/idle-watchdog' > /etc/cron.d/idle-watchdog
+
 mkdir -p /opt/stalwart
 if [ ! -f /opt/stalwart/admin-password ]; then
     tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 > /opt/stalwart/admin-password
