@@ -2433,3 +2433,93 @@ Then `get_folder_info_sync` over `FolderInfoChain::into_raw`. Still absent and
 needed soon after: the `Mailbox/get` state string for `Mailbox/changes`. The
 README's architecture block still lists only the round-1 crates; five crates
 stale.
+
+## 2026-08-08 (twenty-seventh session)
+
+M5's seventh increment: the half of `connect_sync` that has no GObject in it —
+opening a JMAP mail account from the origin the previous session learned to
+read, and the slot on the store that holds the result between connect and
+disconnect. One commit.
+
+`jmap-mail/src/connect.rs` is `open_mail` plus `StoreError`, the mail-side
+counterpart of `jmap-backend-core`'s `connect` module; `store.rs` grows a
+`Slot<RwLock<Option<MailSync>>>` and the three accessors around it, mirroring
+`JmapBookBackend`. Fifteen new tests in `jmap-mail`, against `jmap-mockd`.
+
+Decisions taken:
+
+- **Camel's authentication enum has no `REQUIRED`, so the store does not refuse
+  in advance.** `ESourceAuthenticationResult` has four values and the EDS
+  backends use the fourth to say "prompt before anything is sent";
+  `CamelAuthenticationResult` has three, and the only thing that produces a
+  prompt is `REJECTED`. So an account that names a user and has no password yet
+  must *reach* the server, take the 401, and report that — the exact opposite of
+  what `SourceConfig`'s side does, and right on both sides for the machinery
+  each answers to.
+- **No password means no credentials, not an empty one.** The tempting reading
+  of "user configured, password absent" is `Basic user:`, which is not a weaker
+  credential but a wrong one, and a server that counts failed attempts counts
+  it. `no_password_means_no_credentials_rather_than_an_empty_one` runs against a
+  mock that *would* accept `vera` with an empty password, so the refusal is
+  evidence rather than a coincidence.
+- **The error domain is Camel's, not EDS's.** Camel does not read
+  `E_CLIENT_ERROR`. What it branches on is `CAMEL_SERVICE_ERROR`, and
+  `UNAVAILABLE` is the mail-side equivalent of `E_CLIENT_ERROR_REPOSITORY_OFFLINE`
+  — the difference between a store that serves its summary cache and one that
+  reports the account as broken. `URL_INVALID` for a misconfigured account is
+  the other half of the same decision: it says "edit the account" where
+  `UNAVAILABLE` says "try later", and reporting a missing host as unavailable
+  would be a store Evolution reconnects to forever.
+- **`G_IO_ERROR_CANCELLED` stays GLib's on both sides.** It is not Camel's
+  domain and not EDS's; every caller above tests for it before deciding
+  anything went wrong at all, so it is the one code that is not translated.
+- **The shared half is, again, the security half.** What must not differ
+  between the two stacks is *which failure means the password was wrong*, so it
+  was lifted out of `ConnectError::auth_result` into
+  `jmap_backend_core::connect::is_wrong_password` and is asked from both. The
+  two enums have nothing in common; the question in front of them is one
+  question, and a 403 treated as a bad password is a prompt loop no password
+  ends.
+- **`StoreError` is not `ConnectError`.** Reuse was considered and rejected:
+  two of `ConnectError`'s four variants name a *collection*, which a store —
+  being the whole account — does not stand for, and its `to_gerror` speaks a
+  domain Camel ignores. What is genuinely common is one predicate, and that is
+  what is shared.
+- **The connection lives in the instance struct, before the vfuncs that use
+  it.** Adding a field later is cheap in Rust and not cheap here: the layout is
+  what `g_type_register_static` was told the instance size is, and every vfunc
+  reads the connection through it. `instance_init`/`finalize` are wired now so
+  that the socket cannot outlive the account even once, rather than after the
+  first increment that forgets.
+
+Mutation testing, eight mutants, no survivors: `is_wrong_password` matching 403
+instead of 401 (kills tests on both sides), the mail capability swapped for
+contacts, the empty-basic credential reintroduced, the transport arm of
+`service_error_code` deleted, a misconfigured account reported as unavailable,
+the cancellation special case removed, `store_connection` made a no-op, and
+`drop_connection` reporting the opposite.
+
+Not verified locally, as in the previous twenty-six sessions: `reuse lint` and
+`cargo deny`. Both new files carry SPDX `GPL-3.0-or-later` headers.
+`cargo fmt --check`, `cargo test --locked` (green on the default members, the
+five EDS crates green on top, `jmap-mail` now 56 tests) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets. A fresh `cmake -S . -B <tmp> -G Ninja && cmake --build && ctest` is 5/5.
+`example-module` is unchanged and still outside both `default-members` and the
+set CI lints.
+
+No blockers hit.
+
+Next in M5: the vfuncs themselves — `CamelServiceClass.connect_sync`,
+`authenticate_sync` and `disconnect_sync`, which is now only the GObject half:
+read the settings, hand `ServerConfig` and the password to `open_mail`, put the
+result in the slot. The open design question there is which of the two drives
+the other: Camel's own providers have `connect_sync` call
+`camel_session_authenticate_sync`, which prompts and then calls back into
+`authenticate_sync` with the password on `camel_service_get_password` — that is
+the idiom, and it is what makes a JMAP account prompt like an IMAP one, but it
+is also the first thing in this crate that cannot be tested without a
+`CamelSession`. Then `get_folder_info_sync` over `FolderInfoChain::into_raw`.
+Still absent and needed soon after: the `Mailbox/get` state string for
+`Mailbox/changes`. The README's architecture block still lists only the round-1
+crates; five crates stale.
