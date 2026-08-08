@@ -367,6 +367,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmap-backend-cal"
+version = "0.1.0"
+dependencies = [
+ "eds-sys",
+ "evolution-jmap-cal-sync",
+ "glib-sys",
+ "gobject-sys",
+ "jmap-backend-core",
+]
+
+[[package]]
 name = "jmap-backend-core"
 version = "0.1.0"
 dependencies = [
