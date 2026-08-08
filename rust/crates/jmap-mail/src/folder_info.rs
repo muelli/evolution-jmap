@@ -225,7 +225,7 @@ fn count(count: u32) -> i32 {
 /// `Work` and indistinguishable from it. U+FFFD keeps the name distinct and
 /// visibly broken, and it cannot fail, which is what lets the build above have
 /// no error path and therefore no half-built forest to clean up.
-fn c_string(text: &str) -> CString {
+pub(crate) fn c_string(text: &str) -> CString {
     match CString::new(text) {
         Ok(string) => string,
         Err(_) => CString::new(text.replace('\0', "\u{fffd}"))
