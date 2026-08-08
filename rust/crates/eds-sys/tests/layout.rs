@@ -73,6 +73,52 @@ fn cal_backend_layouts_match_the_gtype_system() {
     assert_layout!(e_cal_cache_get_type, ECalCache, ECalCacheClass);
 }
 
+/// The factories, which are subclassed exactly like the backends and were the
+/// gap in this file: `jmap-backend-book` and `jmap-backend-cal` each declare a
+/// `#[repr(C)]` class struct leading with one of these and then *write into the
+/// parent half* — `factory_name`, `backend_type`, and on the calendar side
+/// `component_kind`. Those writes land at offsets bindgen computed from the
+/// header, and what EDS reads them back at is decided by the compiled library.
+/// The size check is what says the two agree; without it the whole factory
+/// mechanism is an unverified bet, and the symptom of losing it is a
+/// `g_object_new(0)` per address book with no hint as to why.
+#[test]
+fn backend_factory_layouts_match_the_gtype_system() {
+    // `EExtension`, the factories' own parent, has no accessor in the
+    // allowlist — the backends never name it — so it is covered only as the
+    // leading bytes of the structs below, which is where they use it.
+    assert_layout!(
+        e_backend_factory_get_type,
+        EBackendFactory,
+        EBackendFactoryClass
+    );
+    assert_layout!(
+        e_book_backend_factory_get_type,
+        EBookBackendFactory,
+        EBookBackendFactoryClass
+    );
+    assert_layout!(
+        e_cal_backend_factory_get_type,
+        ECalBackendFactory,
+        ECalBackendFactoryClass
+    );
+}
+
+/// The contact types. `jmap-backend-book` casts an `EContact *` it was handed to
+/// `EVCard *` to render it — the C upcast, which is only an upcast while
+/// `EVCard` really is the first member of `EContact`. That is a claim about a
+/// layout, so it belongs here rather than in a comment.
+#[test]
+fn contact_layouts_match_the_gtype_system_and_a_contact_leads_with_its_vcard() {
+    assert_layout!(e_vcard_get_type, EVCard, EVCardClass);
+    assert_layout!(e_contact_get_type, EContact, EContactClass);
+
+    let contact = unsafe { std::mem::zeroed::<EContact>() };
+    let _: EVCard = contact.parent;
+    let class = unsafe { std::mem::zeroed::<EContactClass>() };
+    let _: EVCardClass = class.parent_class;
+}
+
 /// The two component types the calendar vfuncs pass across the boundary. They
 /// come from libical-glib and libecal rather than from the backend libraries
 /// the rest of this file checks, so their layouts are a separate bet on a
