@@ -105,9 +105,14 @@ current master, and:
    `AUDIT COMPLETE`, fixing clear-cut bugs (each with a red-first test)
    and documenting design concerns.
 
-Cadence: launch after each milestone completes, or weekly, whichever comes
-first. Same isolation rules as the original audit stream (own clone, own
-branch, never master, never touch other streams' checkouts).
+Cadence: launched automatically after the mail surface settles. A VM-side
+watcher (`infra/night-shift/reaudit-trigger.sh`) polls `docs/MILESTONES.md`
+and fires the re-audit exactly once, when `M5 COMPLETE` appears (and folds
+in the calcard surface whether or not `CALCARD COMPLETE` has landed yet —
+the prompt audits calcard code if present). Further passes are launched
+per-milestone by hand or via the documented weekly cron. Same isolation
+rules as the original audit stream (own clone, own branch, never master,
+never touch other streams' checkouts).
 
 ## Integration testing (parallel track)
 Once M3 exists: gated CI job + local recipe against a real
@@ -132,3 +137,11 @@ default test target.
 - Keep a running log in `docs/NIGHT-LOG.md`: what was done, decisions
   taken, blockers hit. If blocked on a milestone, log it and take the
   next tractable item instead of spinning.
+- **Signal milestone completion.** When a milestone's acceptance
+  criteria are fully met (or a standing directive is fully carried out),
+  append one line to `docs/MILESTONES.md` and commit it with the work:
+  `<TAG> COMPLETE <short-sha> <ISO-date>` — e.g. `M5 COMPLETE a1b2c3d
+  2026-08-10`, or `CALCARD COMPLETE …` for the calcard directive. This
+  file is a machine-readable trigger (the re-audit watcher watches it);
+  write a tag only when you would defend the milestone as genuinely
+  done, and never remove or edit prior lines.
