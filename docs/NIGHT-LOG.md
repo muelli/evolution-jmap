@@ -1570,3 +1570,74 @@ calendar's manual test recipe (the mirror of
 `docs/manual-test-book-backend.md`) becomes writable — its `.source` keyfile
 differs from the book's only in `[Calendar] BackendName=jmap` and what
 `Identity` names.
+
+## 2026-08-08 (eighteenth session)
+
+M4 continues: the `ECalMetaBackend` subclass. One commit.
+
+`jmap-backend-cal::backend` is the calendar's `JmapCalBackend` /
+`JmapCalBackendClass` pair, its seven vfunc slots, and the connection slot
+those slots read — the layer that had nothing under it three sessions ago and
+now has all of it. Ten tests, every one of them dispatching *through the class
+struct* rather than at the Rust functions, because a vfunc that is correct and
+not installed is the failure this file exists to make impossible.
+
+Decisions taken:
+
+- **The book's `backend.rs` was copied, not shared**, and this is the one place
+  in the crate where that is the right answer. What the two files have in common
+  is a shape; what they do not have in common is a single line that could be
+  called from both — every signature names `ECalMetaBackend`, `ICalComponent`
+  and the calendar's own class struct, and there is no slot both backends could
+  be installed into. The decisions worth writing once — how a failure is
+  classified, when the stored password is discarded, what an unnamed default
+  resolves to — already live in `jmap-backend-core`, which is why the previous
+  session moved them there. Factoring the residue would mean a trait with two
+  implementors and one caller each.
+- **`search_sync` and `search_components_sync` stay the parent's**, and there is
+  now a test that asserts the slots are still literally the pointers
+  `ECalMetaBackendClass` shipped. `ECalMetaBackend` answers a query by running
+  the S-expression over the offline cache, which for a just-synced calendar is a
+  complete answer; JMAP's `CalendarEvent/query` cannot express an S-expression
+  at all, so anything installed there would be a narrower filter replacing a
+  working one. The book has no equivalent test because `EBookMetaBackend` has no
+  equivalent slot — this is the one structural difference between the two
+  backends, rather than a naming one.
+- **`fail_offline` reports in the *client* error domain**, not the calendar's,
+  which is the opposite of `ops::to_gerror`'s choice for a missing component.
+  The rule behind both: `E_CAL_CLIENT_ERROR` is for statements about a
+  component, and "there is no connection" is not one — it also has no offline
+  code to make it in. `E_CLIENT_ERROR_REPOSITORY_OFFLINE` is what makes
+  `ECalMetaBackend` serve its cache instead of showing the user a broken
+  calendar.
+- **`is_repeat` is passed to `ops::get_changes` even though it ignores it.**
+  The alternative — dropping it at the boundary — would put the reasoning for
+  why the flag has nothing to change in a file that no longer receives it. It
+  is also what the chain-up needs, unchanged, if the answer is `ListInstead`.
+
+Five mutations were run against a copy kept outside the tree: the
+`load_component_sync` slot left uninstalled, `fail_offline` returning TRUE, a
+`finalize` that leaves the slot alone, `parent_type` answering with
+`e_book_meta_backend_get_type`, and `search_sync` nulled out in `class_init`.
+**All five died** — the last one only because of the slot-identity test written
+in this session, which is the point of writing it.
+
+Not verified locally, as in the previous seventeen sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The two new
+files carry an SPDX `GPL-3.0-or-later` header. `cargo fmt --check`,
+`cargo test --locked` (36 test binaries green on the default members, and the
+four EDS crates green on top, `jmap-backend-cal` now at 10 + 10 + 15 + 17) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets, and a fresh `cmake -S . -B <tmp> -G Ninja && cmake --build && ctest` is
+3/3.
+
+No blockers hit.
+
+Next, in M4: the factory and the module entry point — `jmap-backend-book`'s
+`factory.rs` and `module.rs`, which is where `jmap-backend-cal` grows its
+cdylib (`crate-type` is still `["rlib"]`, deliberately, because a shared object
+that loads and resolves to nothing is worse than none) and its CMake install
+rule into the libedata-cal backend directory. `ctest` gains an
+`install-cal-backend` next to the book's. After that the calendar's manual test
+recipe, the mirror of `docs/manual-test-book-backend.md`, differing only in
+`[Calendar] BackendName=jmap` and what `Identity` names.
