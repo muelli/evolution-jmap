@@ -2344,3 +2344,92 @@ values, so it is a sibling of `source.rs` rather than a caller of it. Then
 `get_folder_info_sync` over `FolderInfoChain::into_raw`. Still absent and needed
 soon after: the `Mailbox/get` state string for `Mailbox/changes`. The README's
 architecture block still lists only the round-1 crates; five crates stale.
+
+## 2026-08-08 (twenty-sixth session)
+
+M5's sixth increment: the mapping the previous session left as "next" — host,
+port, user and security method off a `CamelJmapSettings`, into the origin a
+JMAP client is built from. One commit.
+
+`jmap-mail/src/server.rs` is `ServerConfig::from_settings`, the Camel-side
+sibling of `jmap-backend-core`'s `SourceConfig::from_source`. The two sides
+carry the same account in different shapes — `ESource` extensions there, the
+`CamelNetworkSettings` interface here — so they read different fields, and the
+rules they must agree on were lifted out of `from_source` into
+`jmap_backend_core::source::origin(host, port, secure)`: the host validation
+and the refusal to speak plaintext to anything but loopback, in one place, with
+one caller on each side. Eleven new tests in `jmap-mail`, one in
+`jmap-backend-core` on the extracted function itself.
+
+Decisions taken:
+
+- **The shared half is the security half.** What is duplicated between the two
+  sides is cheap to write and expensive to get subtly different: a second copy
+  of `is_bare_host_name` or of the loopback exception is a second thing to
+  forget when one of them is fixed. What is *not* shared is the reading, which
+  is genuinely different — and that split is why `server.rs` is short.
+- **"Not configured" really is two different values.** An unset `ESource` key
+  reads back NULL; a `CamelNetworkSettings` property, being
+  `G_PARAM_CONSTRUCT`, reads back `""`. `read_string` already folds both to
+  `None`, which is the whole reason `origin` takes an `Option<&str>` rather
+  than a `&str` — an unconfigured account must be "no server", not a request
+  to `https://`.
+- **The security method is one bit, read as one bit.** Its three values name a
+  protocol JMAP does not have: JMAP is HTTP, so there is no STARTTLS handshake
+  and no alternate port. `NONE` or not `NONE` is all that is in that field, and
+  `every_security_method_but_none_is_just_tls` is what says so.
+- **The host is punycoded before it is validated, not after.** Camel offers
+  `dup_host_ensure_ascii` because an account editor accepts an
+  internationalised name while the wire does not, and the validator accepts
+  ASCII only — so reading the plain `dup_host` would reject a working account.
+  Converting first also keeps the string that is checked and the string that is
+  used the same one, which after-the-fact conversion would not.
+- **That accessor never fails, it falls back**, which was checked rather than
+  assumed: `dup_host_ensure_ascii` hands back the configured spelling unchanged
+  when it cannot convert one — not NULL. The first draft had an arm for the
+  NULL case, mapping it to `InvalidHost` so an unconvertible host would not be
+  reported as an absent one; probing glib showed the arm was unreachable (it
+  punycodes over-long labels happily, and returns the original for input that
+  is not even UTF-8), so it went, and
+  `a_host_camel_cannot_convert_is_rejected_rather_than_lost` pins the fallback
+  instead. Same outcome, no dead branch.
+- **Settings of the wrong class answer "no server" rather than asserting.**
+  Camel only ever hands a service settings of the class its `settings_type`
+  names, so this is defence in depth — but the alternative to the type check is
+  not a wrong answer, it is four `g_return_if_fail`s and four NULLs, which
+  produce the same result with criticals attached. The check makes the quiet
+  answer the deliberate one, and `settings_that_carry_no_network_name_no_server`
+  is a test that would otherwise be a crash.
+- **`take_string` is local, not in `marshal`.** It is `read_string` plus the
+  `g_free` a `dup_` accessor's ownership demands; the `dup_` accessors are a
+  Camel idiom and this is so far the only crate calling them, so it stays here
+  until there is a second caller to share it with.
+
+Mutation testing, seven mutants, no survivors: the plain `dup_host` (dies on
+the punycode test), the security comparison inverted, the user dropped, the
+port ignored, the type check removed (no test *fails* — it comes back as ten
+GLib criticals, which is exactly the difference the check exists to remove, and
+which `G_DEBUG=fatal-criticals` turns into a failure), and, on the extracted
+shared function, the TLS rule and the host validation each deleted.
+
+Not verified locally, as in the previous twenty-five sessions: `reuse lint` and
+`cargo deny`. Both new files carry SPDX `GPL-3.0-or-later` headers.
+`cargo fmt --check`, `cargo test --locked` (green on the default members, the
+five EDS crates green on top, `jmap-mail` now 41 tests) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets; the `jmap-mail` suite was also run under `G_DEBUG=fatal-criticals`, which
+is what says the wrong-class path logs nothing. A fresh
+`cmake -S . -B <tmp> -G Ninja && cmake --build && ctest` is 5/5.
+`example-module` is unchanged and still outside both `default-members` and the
+set CI lints.
+
+No blockers hit.
+
+Next in M5: `connect_sync` itself, which now has both halves it was waiting for
+— a settings object with a server on it and a mapping from that to an origin —
+plus the password, which comes from the `CamelSession` rather than from the
+settings, and `CamelServiceClass.connect_sync`/`disconnect_sync` to hang it on.
+Then `get_folder_info_sync` over `FolderInfoChain::into_raw`. Still absent and
+needed soon after: the `Mailbox/get` state string for `Mailbox/changes`. The
+README's architecture block still lists only the round-1 crates; five crates
+stale.
