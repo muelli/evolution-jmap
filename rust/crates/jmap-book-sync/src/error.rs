@@ -30,11 +30,7 @@ impl SyncError {
     /// whole book, which is why it gets its own predicate rather than being
     /// left for callers to string-match.
     pub fn is_cannot_calculate_changes(&self) -> bool {
-        matches!(
-            self,
-            Self::Client(jmap_client::Error::Method(error))
-                if error.error_type == jmap_proto::error::method::CANNOT_CALCULATE_CHANGES
-        )
+        matches!(self, Self::Client(error) if error.is_cannot_calculate_changes())
     }
 
     /// A protocol violation, phrased as a client error so it maps like one.

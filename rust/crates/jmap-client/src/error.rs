@@ -28,6 +28,22 @@ pub enum Error {
     Cancelled,
 }
 
+impl Error {
+    /// Whether the server refused an incremental sync because the state it was
+    /// given is too old, or was never one of its own (RFC 8620 §5.2).
+    ///
+    /// Not really an error: every caller's answer is to list the collection in
+    /// full and carry on, so the question is asked here rather than left for
+    /// each of them to string-match.
+    pub fn is_cannot_calculate_changes(&self) -> bool {
+        matches!(
+            self,
+            Self::Method(error)
+                if error.error_type == jmap_proto::error::method::CANNOT_CALCULATE_CHANGES
+        )
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
