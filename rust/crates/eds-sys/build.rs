@@ -53,6 +53,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_module_.*",
 ];
 
+/// The names an `ESource` extension is looked up by are `#define`d strings,
+/// not exported symbols, so a typo in one is not a link error — it is an
+/// address book that silently reports no host. Take them from the headers
+/// rather than retyping them.
+const ALLOWED_VARS: &[&str] = &["E_SOURCE_EXTENSION_.*"];
+
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys
 /// interoperates with the wider glib ecosystem instead of minting its own
 /// incompatible `GObject`. Anything matching these is emitted as a bare name
@@ -109,6 +115,10 @@ fn main() {
         // makes bindgen refer to them as `GSomeFlags::Type`, which does not
         // exist there.
         .default_enum_style(bindgen::EnumVariation::Consts)
+        // String `#define`s come out as `&CStr`, so passing one to a
+        // `*const gchar` parameter is `.as_ptr()` and not a cast from a byte
+        // array that may or may not carry its NUL.
+        .generate_cstr(true)
         // Edition 2024 denies unsafe ops in unsafe fns; let bindgen write the
         // inner `unsafe` blocks instead of blanket-allowing the lint.
         .wrap_unsafe_ops(true)
@@ -128,6 +138,9 @@ fn main() {
     }
     for f in ALLOWED_FUNCTIONS {
         builder = builder.allowlist_function(f);
+    }
+    for v in ALLOWED_VARS {
+        builder = builder.allowlist_var(v);
     }
     for t in BLOCKED_TYPES {
         builder = builder.blocklist_type(t);
