@@ -21,6 +21,9 @@
 //!   is configured on. Camel keeps host, port, user and security method on the
 //!   `CamelNetworkSettings` interface, which none of its stock settings classes
 //!   implements, so every provider declares a settings class of its own.
+//! - [`server`] reads that object back the other way round: the origin and
+//!   user name a client is built from, with the host validation and the TLS
+//!   rule shared with the EDS backends rather than written a second time.
 //! - [`store`] is `CamelJmapStore`, the `CamelOfflineStore` subclass a JMAP
 //!   account's folders will hang off. It names the settings class above and
 //!   overrides nothing else so far; `Mailbox/get` is the next increment.
@@ -38,5 +41,6 @@
 pub mod folder_info;
 pub mod module;
 pub mod provider;
+pub mod server;
 pub mod settings;
 pub mod store;
