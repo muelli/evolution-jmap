@@ -1315,3 +1315,96 @@ took a `vCard` string, so the C boundary is `i_cal_component_new_from_string`
 / `i_cal_component_as_ical_string` around what `CalSync` already returns;
 `get_changes_sync` has a wider signature than the book's (it hands back three
 `GSList`s rather than two) and is the piece to read the headers for first.
+
+## 2026-08-08 (fifteenth session)
+
+M4 continues: the calendar backend's **C boundary**, which is where the
+calendar stops being a translation of the address book. Two commits.
+
+**`eds-sys` reaches libical-glib and `ECalComponent`.** The `ECalMetaBackend`
+vfuncs do not traffic in strings the way the book's do: `load_component_sync`
+hands back an `ICalComponent *` and `save_component_sync` is given a `GSList`
+of `ECalComponent *`. Both types were already in the bindings — pulled in
+transitively as fields and arguments — but none of their *functions* were, so
+nothing could be done with either. Allowlisted `i_cal_component_.*` and
+`e_cal_component_.*` (not all of `i_cal_.*`: `jmap-ical` does the property- and
+value-level work in Rust on the text, so the component is the only libical type
+that has to cross at all), plus the `ICal.*` / `ECalComponent.*` type families,
+which is what brings the class structs `tests/layout.rs` checks against
+`g_type_query`. No pkg-config change was needed: `libedata-cal-2.0` already
+carries libical-glib's include path in its Cflags and `-lical-glib` in its
+Libs.
+
+The new `tests/ical.rs` pins the ownership rules the marshalling rests on, and
+one of them was learned the hard way: `i_cal_component_take_component` takes
+ownership, so a component reached through its parent — which is every component
+the vfuncs hand us, since an `ECalComponent` only *lends* its own out — has to
+be cloned before it can be given to another one. The first version of that test
+aborted the process on a double free.
+
+**`jmap-backend-cal`, so far just `marshal`** (13 tests). Out of
+`default-members`, in `rust-test-eds`, rlib only for now — the cdylib arrives
+with the module entry point, and installing a shared object that loads and
+resolves nothing would be worse than not installing one.
+
+Decisions taken:
+
+- **An envelope with no `VEVENT` in it is refused.** libical reports junk as
+  NULL, which `EVCard` did not, but it parses an empty `VCALENDAR` happily; and
+  `load_component_sync` handing that back would reach Evolution as an
+  appointment that exists and has no properties.
+- **The master instance is found by having no `RECURRENCE-ID`, not by
+  position.** EDS passes every instance of one uid; taking the first node would
+  map a single moved occurrence as if it were the whole series. The overrides
+  are then dropped, which is the mapping's existing story rather than a new
+  loss — JSCalendar keeps them in `recurrenceOverrides`, which `jmap-ical` does
+  not cover, so a save never names that property and never overwrites what the
+  server holds. A set of instances with **no** master is refused rather than
+  guessed at: a visible failure beats rewriting a series to look like one moved
+  day.
+- **Removals are `ECalMetaBackendInfo`s carrying only a uid.** This is a real
+  divergence from `EBookMetaBackend`, whose `out_removed_objects` is a list of
+  bare strings; the same list here would be read as structs, dereferencing the
+  first bytes of a uid as pointers. `e_cal_meta_backend_info_new` documents
+  `revision`, `object` and `extra` as nullable and the uid as not, which is
+  exactly what a component that is gone can say.
+
+Eight mutations were run against a copy kept outside the tree: the master taken
+by position, the master handed to `take_component` instead of a clone, the
+eventless-envelope guard dropped, an empty uid let through, removals rendered
+as `g_strdup`'d strings, the info list built in reverse, and the uid read
+without descending into the envelope. **Seven died.** The eighth was not a
+missing test but a redundant branch: `component_uid` descended into the
+`VCALENDAR` by hand, and libical already does that — `icalcomponent_get_uid`
+reads the first *real* component of whatever it is given — so the branch was
+deleted and the two tests that cover both shapes now pin libical's behaviour
+instead of ours. The empty-uid guard also needed a test that reaches it: a
+parsed `UID:` line folds to absent, so only a uid *set* to `""` stays empty,
+and the test says so.
+
+Noticed in passing, not fixed: `cargo clippy --all-targets --workspace` reports
+five `manual_c_str_literals` errors in `example-module`, which predate this
+session and are invisible to CI because it clippies the default members only.
+Left alone deliberately — it is not this milestone's crate and the rule is one
+increment per session.
+
+Not verified locally, as in the previous fourteen sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The five
+new files carry an SPDX `GPL-3.0-or-later` header. `cargo fmt --check`,
+`cargo test --locked` (138 on the default members, 129 across the four EDS
+crates) and `cargo clippy --all-targets --locked -- -D warnings` are clean both
+ways, and a fresh `cmake -S . -B <tmp> && cmake --build && ctest` is 3/3 with
+the new crate wired into `rust-test-eds`.
+
+No blockers hit.
+
+Next, in M4: `ops`, the vfunc bodies over a `CalSync`. Three of the four
+helpers the book's `ops` uses are not calendar-specific — `set_out_string`,
+`read_string` and `password` — so that is the moment to move them into
+`jmap-backend-core::marshal` rather than copy them; this session did not need
+any of them and so left the book alone. The signatures differ from the book's
+in more than the object type: `save_component_sync` is not told which uid it is
+saving (it has to come out of the instances, which is why `marshal` reports it),
+`get_changes_sync` takes an `is_repeat` flag, and both it and
+`remove_component_sync` carry an `EConflictResolution` this backend has no
+answer for yet.
