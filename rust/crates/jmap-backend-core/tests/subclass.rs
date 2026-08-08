@@ -88,6 +88,14 @@ fn registering_twice_returns_the_same_type_instead_of_aborting() {
     let first = register_static::<Test>();
     let second = register_static::<Test>();
     assert_eq!(first, second);
-    // Still exactly one class_init: the second call registered nothing.
+
+    // GObject runs class_init lazily, when the class is first referenced —
+    // which the test above happens to do via g_object_new. Asserting the
+    // counter without forcing it makes this test depend on which of the two
+    // ran first, and cargo runs them concurrently. Reference the class here
+    // instead; with only one registration in the process it can only ever
+    // have run once.
+    let class = unsafe { gobject_sys::g_type_class_ref(first) };
     assert_eq!(CLASS_INITS.load(Ordering::SeqCst), 1);
+    unsafe { gobject_sys::g_type_class_unref(class) };
 }
