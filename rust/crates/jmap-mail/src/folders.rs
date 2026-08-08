@@ -1,17 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `CamelStore` folder vfunc: `get_folder_info_sync`.
+//! The `CamelStore` folder vfuncs: `get_folder_info_sync`, which describes the
+//! account's folders, and `get_folder_sync`, which opens one of them.
+//!
+//! They are one module because they are one question asked twice: both read the
+//! folder listing [`JmapStore::folders`] keeps, and the second exists to turn a
+//! path out of the first back into the mailbox it came from. What they do with
+//! the answer is where they part — the listing marshals a whole subtree into C
+//! structs Camel frees, while opening builds the [`crate::folder`] object Camel
+//! keeps.
+//!
+//! ## The listing
 //!
 //! Everything it answers with exists already — [`JmapStore::folders`] keeps the
 //! tree and decides whether to go and look, [`FolderInfoChain`] turns a tree
-//! into the C forest Camel frees. What is left, and what this module is, is the
-//! reading of the two arguments those pieces do not take: `top`, the folder the
-//! answer is rooted at, and `CAMEL_STORE_FOLDER_INFO_RECURSIVE`, the depth it
-//! is cut to. [`Request`] is that reading, and it is a type of its own so that
-//! the decision can be tested without a `CamelStore` to call the vfunc on.
+//! into the C forest Camel frees. What is left is the reading of the two
+//! arguments those pieces do not take: `top`, the folder the answer is rooted
+//! at, and `CAMEL_STORE_FOLDER_INFO_RECURSIVE`, the depth it is cut to.
+//! [`Request`] is that reading, and it is a type of its own so that the decision
+//! can be tested without a `CamelStore` to call the vfunc on.
 //!
-//! ## What Camel means by the arguments
+//! ### What Camel means by the arguments
 //!
 //! `camel_store_get_folder_info_sync`'s own documentation: "This fetches
 //! information about the folder structure of @store, starting with @top […] If
@@ -43,9 +53,11 @@
 //! and removes vTrash and vJunk around the call.
 
 use std::ptr;
+use std::sync::Arc;
 
 use eds_sys::{
-    CAMEL_STORE_FOLDER_INFO_RECURSIVE, CamelFolderInfo, CamelStore, CamelStoreClass,
+    CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH, CamelFolder,
+    CamelFolderInfo, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
     CamelStoreGetFolderInfoFlags,
 };
 use gio_sys::GCancellable;
@@ -56,6 +68,7 @@ use jmap_backend_core::trampoline::guard_ptr;
 use jmap_mail_sync::{FolderInfo, FolderTree};
 
 use crate::connect::StoreError;
+use crate::folder::new_folder;
 use crate::folder_info::FolderInfoChain;
 use crate::store::JmapStore;
 
@@ -126,6 +139,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
     vfuncs.get_folder_info_sync = Some(get_folder_info_sync);
+    vfuncs.get_folder_sync = Some(get_folder_sync);
 }
 
 /// Answers with the account's folders, or the part of them Camel asked for.
@@ -156,7 +170,7 @@ unsafe extern "C" fn get_folder_info_sync(
     // currently NULL.
     unsafe {
         guard_ptr("get_folder_info_sync", error, || {
-            let Some(store) = instance(store) else {
+            let Some(store) = JmapStore::borrow(store) else {
                 return fail(error, &StoreError::Disconnected);
             };
             // Borrowed from Camel and NUL-terminated; `read_string` copies.
@@ -177,22 +191,89 @@ unsafe extern "C" fn get_folder_info_sync(
     }
 }
 
-/// The Rust view of the instance pointer Camel handed us.
+/// Opens one folder of the store: `camel_store_get_folder_sync`'s vfunc.
 ///
-/// # Safety
+/// What it must *not* do is keep the folder. `CamelStore` owns a
+/// `CamelObjectBag` of the folders it has open — public as
+/// `camel_store_get_folders_bag`, keyed with the class's own
+/// `hash_folder_name`/`equal_folder_name` — and the wrapper reserves this
+/// folder's name in it before it reaches this function at all, so a second call
+/// for the same path never gets here. A cache of our own would be a second
+/// answer to a question Camel has already answered, and the way two
+/// `CamelFolder`s over one mailbox — two summaries, two sets of flags — get
+/// handed out.
 ///
-/// `store` must be NULL or point at an instance of [`JmapStore`]. Camel only
-/// dispatches a class's vfuncs on instances of that class.
-unsafe fn instance<'a>(store: *mut CamelStore) -> Option<&'a JmapStore> {
-    unsafe { store.cast::<JmapStore>().as_ref() }
+/// The flags are not read. `CREATE` asks for a folder that does not exist to be
+/// made, which for JMAP is a `Mailbox/set` and belongs to `create_folder_sync`;
+/// `BODY_INDEX` asks for a body index this provider does not build; `PRIVATE`
+/// is about vFolder membership, which is the wrapper's business; and `EXCL` is
+/// documented as not honoured.
+///
+/// `cancellable` is not observed, the same gap [`get_folder_info_sync`]
+/// documents and for the same reason.
+unsafe extern "C" fn get_folder_sync(
+    store: *mut CamelStore,
+    folder_name: *const gchar,
+    _flags: CamelStoreGetFolderFlags,
+    _cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> *mut CamelFolder {
+    // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a
+    // NUL-terminated string, and an out-parameter that is NULL or writable and
+    // currently NULL.
+    unsafe {
+        guard_ptr("get_folder_sync", error, || {
+            let Some(instance) = JmapStore::borrow(store) else {
+                return fail(error, &StoreError::Disconnected);
+            };
+            // Borrowed from Camel and NUL-terminated; `read_string` copies, and
+            // reads a NULL or empty name as no name — which no mailbox answers
+            // to, because a path always has a component in it.
+            let path = read_string(folder_name).unwrap_or_default();
+
+            let tree = match tree_naming(instance, &path) {
+                Ok(tree) => tree,
+                Err(failure) => return fail(error, &failure),
+            };
+            let Some(mailbox) = tree.find(&path) else {
+                return fail(error, &StoreError::NoFolder(path));
+            };
+
+            // SAFETY: `store` is the live `CamelStore` borrowed above, which is
+            // what `new_folder` asks for.
+            new_folder(store, mailbox)
+        })
+    }
 }
 
-/// Reports a failure and answers with no forest.
+/// The store's folder tree, looked at again if `path` is not in the one it
+/// holds.
+///
+/// The second look is what makes a mailbox created since the last listing
+/// openable. Evolution reopens the folder the user last had selected when it
+/// starts, from a URI in its own settings, before anything has asked the store
+/// to refresh — and another client creating a folder while this one has an
+/// account open is ordinary. Reporting a folder that plainly exists as missing
+/// because our tree predates it would be a bug the user can only clear by
+/// restarting.
+///
+/// The cost is one `Mailbox/changes` on the path that is about to fail anyway;
+/// a hit — every folder the user clicks — is answered out of the held tree with
+/// no request at all.
+fn tree_naming(store: &JmapStore, path: &str) -> Result<Arc<FolderTree>, StoreError> {
+    let held = store.folders(0)?;
+    if held.find(path).is_some() {
+        return Ok(held);
+    }
+    store.folders(CAMEL_STORE_FOLDER_INFO_REFRESH)
+}
+
+/// Reports a failure and answers with nothing.
 ///
 /// # Safety
 ///
 /// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &StoreError) -> *mut CamelFolderInfo {
+unsafe fn fail<T>(error: *mut *mut GError, failure: &StoreError) -> *mut T {
     // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
     // `set_raw_gerror`'s contract by this function's.
     unsafe { set_raw_gerror(error, failure.to_gerror()) };

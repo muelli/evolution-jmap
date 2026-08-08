@@ -2996,3 +2996,94 @@ on. Still unexercised against a real `CamelSession`: `service.rs` and
 create an account, though this session's `Account` helper shows how much of a
 session a test can stand up by hand. The README's architecture block still lists
 only the round-1 crates; five crates stale.
+
+## 2026-08-08 (thirty-third session)
+
+M5's thirteenth increment: `CamelStoreClass.get_folder_sync`, the store's side
+of the folder type the last session added. One commit; `src/folders.rs` grew a
+second vfunc, `StoreError` grew a variant, and the tests grew a
+`tests/common/mod.rs` for the real store this one needs. The red step was
+`cargo test -p jmap-mail --test folders` failing on `JmapStore::borrow`, which
+did not exist.
+
+Decisions taken:
+
+- **No folder cache of our own — Camel already has one, and the plan to write
+  a second was wrong.** `CamelStore` owns a `CamelObjectBag` of the folders it
+  has open; it is public as `camel_store_get_folders_bag`, and the two
+  `CamelStoreClass` fields nothing else explains — `hash_folder_name` and
+  `equal_folder_name` — are the hash and equality it is keyed with.
+  `camel_store_get_folder_sync` reserves the name in that bag *before* it
+  dispatches, so the vfunc is only ever reached on a miss and its contract is
+  to build a folder every time. A cache here would be a second answer to a
+  question already answered, and the way two `CamelFolder`s over one mailbox —
+  two summaries, two flag words — get handed out. `camel_hands_back_the_folder_
+  it_already_opened` calls the wrapper twice and asserts one pointer, which is
+  the only way to test a decision whose whole content is *not* writing code.
+  Incidental confirmation from the mutation run: with the vfunc uninstalled
+  that test does not fail, it *deadlocks* — the wrapper's
+  `g_return_val_if_fail` leaves the reservation standing and the second
+  `camel_object_bag_reserve` waits on it forever.
+- **A path the held listing does not know is a reason to look again, not to
+  report a missing folder.** Evolution reopens the folder the user last had
+  selected when it starts, from a URI in its own settings, before anything has
+  asked the store to refresh; another client creating a mailbox mid-session is
+  ordinary. So a miss retries once with `CAMEL_STORE_FOLDER_INFO_REFRESH` —
+  one `Mailbox/changes` on the path that was about to fail anyway — and a hit,
+  which is every folder the user clicks, is answered out of the tree with no
+  request at all. Without it, a folder that plainly exists stays unopenable
+  until Evolution restarts.
+- **`CAMEL_STORE_ERROR_NO_FOLDER`, which is the one place `StoreError` leaves
+  the service domain.** Nothing is wrong with the connection or the account
+  when one folder is gone, and a `CAMEL_SERVICE_ERROR` is what Camel reads to
+  decide the account is broken or offline. That made `to_gerror` pick a
+  (domain, code) pair rather than a code, which is also where the cancelled
+  case already lived.
+- **Unlike the listing vfunc, NULL is not a legitimate answer here.** There is
+  no such thing as half a folder, so NULL always means failure and always
+  carries an error — the opposite of `get_folder_info_sync`, where a `top`
+  naming nothing is an empty answer with no error at all.
+- **The flags word is not read, and each bit has its own reason.** `CREATE`
+  asks for a mailbox to be made, which is a `Mailbox/set` and belongs to
+  `create_folder_sync`; `BODY_INDEX` asks for an index this provider does not
+  build; `PRIVATE` is about vFolder membership, which is the wrapper's
+  business; `EXCL` is documented as not honoured.
+- **Both store vfuncs stayed in one module.** They are one question asked in
+  two directions — the listing hands out paths, this turns a path back into the
+  mailbox it came from — and both read the same `JmapStore::folders`. Splitting
+  them would have duplicated the instance borrow, the failure path and the
+  `install_vfuncs` call for no separation that exists.
+- **`tests/common/mod.rs`.** This is the second test file that needs a *real*
+  store: `JmapStore::detached` is not a GObject, and Camel type-checks the
+  store it is asked to build a folder on. The session-and-store helper moved
+  there out of `tests/folder.rs` rather than being written twice, and
+  `JmapStore::borrow` — the same accessor the vfuncs use, now public — is how a
+  test installs a connection on one.
+
+Mutation testing, six mutants, none surviving: the vfunc never installed, no
+second look on a miss, a missing folder reported as `NOT_CONNECTED`, the first
+root returned instead of the folder named, the path never read, and the
+no-folder error raised in the service domain. Each target string was asserted
+present before writing.
+
+Not verified locally, as in the previous thirty-two sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The one new file,
+`tests/common/mod.rs`, carries an SPDX `GPL-3.0-or-later` header. `cargo fmt
+--check`, `cargo test --locked` (green on the default members; the five EDS
+crates green on top, `jmap-mail` now 110 tests) and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on both member sets. A fresh `cmake -S . -B
+<tmp> -G Ninja && cmake --build && ctest` is 5/5. `example-module` is unchanged
+and still outside both `default-members` and the set CI lints.
+
+Next in M5: the summary. `CamelFolderSummary` filled from `Email/query` +
+`Email/get`, which is what `CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` and the
+folder's message-count vfuncs wait on, and the first thing the mailbox id this
+folder carries is actually spent on. Two smaller pieces are now also unblocked
+and are worth taking before it if the summary stalls: `get_inbox_folder_sync`,
+whose inherited implementation opens the folder literally named `INBOX` while
+this provider knows the inbox from its JMAP role, and the `CamelSubscribable`
+interface, which is what the subscription flags in the folder-info forest are
+for. Still unexercised against a real `CamelSession`: `service.rs` — that waits
+on M6 for a collection backend and M7 for a way to create an account. The
+README's architecture block still lists only the round-1 crates; five crates
+stale.
