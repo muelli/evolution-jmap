@@ -58,6 +58,7 @@ endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffile-prefix-map=${CMAKE_SOURCE_DIR}=/build")
 
 include(cmake/Rust.cmake)
+include(cmake/Backends.cmake)
 
 # uninstall target
 configure_file(
