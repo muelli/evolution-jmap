@@ -1046,3 +1046,81 @@ backend, which is M3's shape again on `ECalMetaBackend` with JSCalendar ↔
 iCalendar in place of JSContact ↔ vCard — or, first and much smaller, run
 this recipe for real on a machine with the EDS daemons installed. Everything
 it claims past step 3 is reasoned from the EDS sources, not observed.
+
+## 2026-08-08 (twelfth session)
+
+M3 is closed, so this session opens M4 at the bottom: `jmap-ical`, the
+calendar-side counterpart of `jmap-vcard`, starting with the layer everything
+above it stands on — the iCalendar lexer/emitter. New default member (it needs
+no EDS headers, so `cargo test` picks it up everywhere), 12 tests, taking the
+default set from 87 to 99; the EDS crates are untouched at 109.
+
+The shape is `jmap-vcard::syntax`'s, because the two grammars are cousins —
+folding at 75 octets, `;`-separated parameters with quoted values, the same
+four TEXT escapes. Two things are genuinely different, and both are where the
+bugs would live:
+
+- **Components nest.** vCard is a flat property list between `BEGIN` and
+  `END`; iCalendar is a tree — `VALARM` inside `VEVENT` inside `VCALENDAR`,
+  and `VTIMEZONE` with its `STANDARD`/`DAYLIGHT` children waiting in M4. So
+  `parse` keeps a stack of open components and `Component` carries
+  `children`. An `END` that names something other than the innermost open
+  component is `Mismatched` rather than a quiet pop, and content after the
+  calendar closes is `Trailing` rather than a silent truncation: a stream
+  with two `VCALENDAR`s would otherwise lose the second one without a word.
+- **Only TEXT is escaped.** `DTSTART`, `DURATION`, `RRULE` and `TRIGGER`
+  carry their own punctuation — `FREQ=WEEKLY;BYDAY=MO,TU` is structure, not
+  a semicolon and a comma that need backslashes. Hence two constructors,
+  `Property::new` (escapes) and `Property::raw` (verbatim), and two readers,
+  `text()`/`texts()` and `raw_value()`. Getting this backwards would corrupt
+  every recurring event M4 touches, which is exactly the RRULE the milestone
+  names.
+
+Decisions taken:
+
+- **No vCard-style group prefix, and no bare parameter values.** RFC 5545 has
+  neither. `item1.TEL:` has no iCalendar analogue, and where vCard 2.1's
+  `EMAIL;INTERNET:` forced `jmap-vcard` to read a bare token as `TYPE`, a
+  parameter without `=` here is a malformed line and is rejected. Being
+  forgiving in the vCard case bought compatibility with real exporters;
+  being forgiving here would only invent a parameter nobody wrote.
+- **`Component::text()` returns `Option<String>`, and absence is not an
+  error.** Same principle as the vCard mapping: an event missing a property
+  is better than a calendar that refuses to open. Only the syntax layer
+  fails, and `ICalError` enumerates exactly the five ways it can.
+- **The crate is `evolution-jmap-ical`/`jmap_ical`,** matching the
+  `evolution-jmap-vcard`/`jmap_vcard` pair, and it has no dependencies at
+  all yet — JSCalendar types live in `jmap-proto::calendars` and only the
+  semantic layer will need them.
+
+Eight mutations were run against the suite, all against a copy kept outside
+the tree (the lesson from the eleventh session): `escape` leaving `;` alone,
+`END` closing any component, trailing content ignored, `FOLD_AT` at 76,
+`texts()` collapsed to one value, `Component::text` handing out the raw
+value, and `Component::new`/`Property::new` not upper-casing their names.
+Six died immediately. **The seventh and eighth survived, and that was a real
+gap:** every name in the tests reached the accessors through `parse`, which
+upper-cases while lexing, so nothing pinned the *constructors*' upper-casing
+— a caller writing `Component::new("vevent")` would have emitted
+`BEGIN:vevent` and then failed to find it with `child("VEVENT")`.
+`names_are_upper_cased_on_the_way_in_too` closes that, and both mutations now
+die.
+
+Not verified locally, as in the previous eleven sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The four
+new files carry an SPDX `GPL-3.0-or-later` header and no dependency was
+added. `cargo fmt --check`, `cargo test --locked` (99) and `cargo clippy
+--all-targets -D warnings` are clean on the default members and on
+`-p eds-sys -p jmap-backend-core -p jmap-backend-book` (109), and a clean
+`cmake -S . -B <fresh> && cmake --build && ctest` is 3/3 — `rust-test` runs
+plain `cargo test`, so the new crate needed no build-system wiring.
+
+No blockers hit.
+
+Next, in M4: the semantic layer on top of this one — `CalendarEvent` ↔
+`VEVENT` for the minimal set the roadmap names (UID, SUMMARY, DESCRIPTION,
+DTSTART with `timeZone`, DURATION, STATUS, RRULE with FREQ/INTERVAL/COUNT/
+UNTIL). JSCalendar's LocalDateTime (`2026-01-15T13:00:00`) and iCalendar's
+`20260115T130000` are the same instant spelled differently, and the `TZID`
+parameter is where `timeZone` lands; the RRULE mapping is the one that will
+want its own fixtures.
