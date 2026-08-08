@@ -17,14 +17,23 @@ use crate::state::Store;
 /// Answer a standard `/changes` request from the store's changes log
 /// (RFC 8620 §5.2). An id appears in at most one list: objects created and
 /// destroyed inside the window appear in neither.
+///
+/// `page_size` is the server's own cap on how many ids one response may carry
+/// ([`crate::MockServerBuilder::changes_page_size`]); the client's
+/// `maxChanges` caps it further. Either way the answer is truncated at a state
+/// boundary — `newState` has to be a state the client can ask again from, and
+/// half of a transition is not one.
 pub(crate) fn store_changes<T>(
     store: &Store<T>,
     request: jmap_proto::methods::ChangesRequest,
+    page_size: Option<u64>,
 ) -> Result<jmap_proto::methods::ChangesResponse, MethodError> {
     let since: u64 = request.since_state.as_str().parse().map_err(|_| {
         MethodError::new("cannotCalculateChanges")
             .with_description("sinceState was not issued by this server")
     })?;
+    let cap = [page_size, request.max_changes].into_iter().flatten().min();
+    let (window_end, has_more_changes) = window(store, since, cap);
 
     #[derive(Default)]
     struct Disposition {
@@ -33,7 +42,10 @@ pub(crate) fn store_changes<T>(
         destroyed: bool,
     }
     let mut by_id: BTreeMap<Id, Disposition> = BTreeMap::new();
-    for change in store.changes_since(since) {
+    for change in store
+        .changes_since(since)
+        .filter(|change| change.state <= window_end)
+    {
         let disposition = by_id.entry(change.id.clone()).or_default();
         match change.kind {
             crate::state::ChangeKind::Created => disposition.created = true,
@@ -58,12 +70,46 @@ pub(crate) fn store_changes<T>(
     Ok(jmap_proto::methods::ChangesResponse {
         account_id: request.account_id,
         old_state: request.since_state,
-        new_state: store.state(),
-        has_more_changes: false,
+        new_state: jmap_proto::State::new(window_end.to_string()),
+        has_more_changes,
         created,
         updated,
         destroyed,
     })
+}
+
+/// How far past `since` this response reaches, and whether anything is left
+/// beyond it.
+///
+/// The window ends at a state boundary, so it grows one whole transition at a
+/// time. The first transition is served however large it is: a cap that could
+/// withhold all of it would be a client that asks again from the same state
+/// forever.
+fn window<T>(store: &Store<T>, since: u64, cap: Option<u64>) -> (u64, bool) {
+    let Some(cap) = cap else {
+        return (store.state_counter(), false);
+    };
+
+    // The log in transition order: one entry per state, with how many objects
+    // that transition touched.
+    let mut transitions: Vec<(u64, u64)> = Vec::new();
+    for change in store.changes_since(since) {
+        match transitions.last_mut() {
+            Some((state, count)) if *state == change.state => *count += 1,
+            _ => transitions.push((change.state, 1)),
+        }
+    }
+
+    let mut end = store.state_counter();
+    let mut taken: u64 = 0;
+    for (index, (state, count)) in transitions.iter().enumerate() {
+        if index > 0 && taken + count > cap {
+            return (transitions[index - 1].0, true);
+        }
+        taken += count;
+        end = *state;
+    }
+    (end, false)
 }
 
 /// Apply a standard `/set` request to `store`.

@@ -19,6 +19,10 @@ pub struct ServerState {
     /// need not offer all four, and a client that resolves an account under
     /// the wrong capability has to be able to notice.
     pub omitted_capabilities: BTreeSet<String>,
+    /// How many ids one `/changes` response may carry, as
+    /// [`crate::MockServerBuilder::changes_page_size`] asked. `None` answers
+    /// every change at once.
+    pub changes_page_size: Option<u64>,
 }
 
 impl ServerState {
@@ -27,6 +31,7 @@ impl ServerState {
             session_state: 1,
             accounts: BTreeMap::new(),
             omitted_capabilities: BTreeSet::new(),
+            changes_page_size: None,
         }
     }
 
