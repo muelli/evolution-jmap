@@ -372,6 +372,10 @@ version = "0.1.0"
 dependencies = [
  "eds-sys",
  "evolution-jmap-cal-sync",
+ "evolution-jmap-client",
+ "evolution-jmap-ical",
+ "evolution-jmap-mock",
+ "evolution-jmap-proto",
  "glib-sys",
  "gobject-sys",
  "jmap-backend-core",

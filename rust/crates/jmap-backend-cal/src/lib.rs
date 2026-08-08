@@ -14,11 +14,16 @@
 //!   directions, here a component crosses as an `ICalComponent *`, a save
 //!   arrives as a `GSList` of `ECalComponent *` that EDS still owns, and even
 //!   the removals are `ECalMetaBackendInfo`s.
+//! - [`ops`] is the vfunc bodies over a `CalSync` — the same out-parameters and
+//!   the same "FALSE means `error` is set" contract as the real vfuncs, minus
+//!   the `ECalMetaBackend *`, which is what makes them testable without a
+//!   session bus.
 //!
-//! The vfunc bodies, the subclass and the module entry point follow.
+//! The subclass and the module entry point follow.
 //!
 //! Like `jmap-backend-core`, this crate needs the installed EDS headers and so
 //! stays out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
 
 pub mod marshal;
+pub mod ops;
