@@ -3,13 +3,17 @@
 
 //! `CamelJmapStore`: the type Camel instantiates for a JMAP mail account.
 //!
-//! No vfunc is overridden yet. What the type does carry is the things a later
-//! increment cannot change cheaply: its parent, because every folder vfunc is
-//! declared on one of the two candidates; the settings class it is configured
-//! through — [`crate::settings`], without which a JMAP account has nowhere to
-//! keep a server; and the two slots its state lives in, which are fields of the
-//! instance struct and therefore part of a layout the vfuncs will be reading
-//! through — the connection, and the folder listing read over it.
+//! What it carries is the things a later increment cannot change cheaply: its
+//! parent, because every folder vfunc is declared on one of the two candidates;
+//! the settings class it is configured through — [`crate::settings`], without
+//! which a JMAP account has nowhere to keep a server; and the two slots its
+//! state lives in, which are fields of the instance struct and therefore part
+//! of a layout the vfuncs read through — the connection, and the folder listing
+//! read over it.
+//!
+//! The `CamelService` vfuncs that fill and empty the first of those slots are
+//! [`crate::service`], installed from `class_init` below; `CamelStoreClass`'s
+//! own folder vfuncs are still to come.
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
@@ -26,6 +30,7 @@ use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync};
 use jmap_proto::State;
 
 use crate::connect::StoreError;
+use crate::service::install_vfuncs;
 use crate::settings::settings_type;
 
 /// A folder listing, and the state it is current as of.
@@ -270,7 +275,14 @@ unsafe impl ObjectSubclass for JmapStore {
         //
         // SAFETY: the class leads with CamelOfflineStoreClass, which derives
         // from CamelStoreClass, from CamelServiceClass — the contract above.
-        unsafe { (*class.cast::<CamelServiceClass>()).settings_type = settings_type() };
+        let service = class.cast::<CamelServiceClass>();
+        unsafe { (*service).settings_type = settings_type() };
+
+        // Connect, authenticate, disconnect. They live in `crate::service`
+        // rather than here because what they do is one operation split across
+        // three slots by Camel's re-prompt loop, and reads as one file.
+        // SAFETY: as above.
+        unsafe { install_vfuncs(service) };
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
