@@ -19,7 +19,8 @@ use eds_sys::{
 };
 use glib_sys::GError;
 use gobject_sys::g_object_unref;
-use jmap_backend_book::connect::{self, ConnectError};
+use jmap_backend_book::connect;
+use jmap_backend_core::connect::{Collection, ConnectError};
 use jmap_backend_core::source::SourceConfig;
 use jmap_client::transport::CancelFlag;
 use jmap_mock::MockServer;
@@ -63,7 +64,7 @@ impl Fixture {
         SourceConfig {
             origin: self.server.origin().to_owned(),
             user: None,
-            address_book_id: None,
+            resource_id: None,
         }
     }
 }
@@ -97,7 +98,7 @@ fn a_source_that_names_no_address_book_gets_the_default_one() {
 fn a_source_that_names_an_address_book_gets_that_one() {
     let fixture = Fixture::start(true);
     let mut config = fixture.config();
-    config.address_book_id = Some(fixture.other_book.to_string());
+    config.resource_id = Some(fixture.other_book.to_string());
 
     let sync = open(&config, None).expect("connected");
     assert_eq!(sync.address_book_id(), &fixture.other_book);
@@ -110,11 +111,13 @@ fn a_source_that_names_an_address_book_gets_that_one() {
 fn an_address_book_the_server_does_not_have_is_refused() {
     let fixture = Fixture::start(true);
     let mut config = fixture.config();
-    config.address_book_id = Some("AB-nonesuch".to_owned());
+    config.resource_id = Some("AB-nonesuch".to_owned());
 
     match expect_error(open(&config, None)) {
-        ConnectError::NoSuchAddressBook(id) => assert_eq!(id, "AB-nonesuch"),
-        other => panic!("expected NoSuchAddressBook, got {other:?}"),
+        ConnectError::NoSuchCollection(Collection::AddressBook, id) => {
+            assert_eq!(id, "AB-nonesuch")
+        }
+        other => panic!("expected NoSuchCollection(AddressBook), got {other:?}"),
     }
 }
 
@@ -122,9 +125,31 @@ fn an_address_book_the_server_does_not_have_is_refused() {
 fn an_account_with_no_default_address_book_is_an_error_not_a_guess() {
     let fixture = Fixture::start(false);
     match expect_error(open(&fixture.config(), None)) {
-        ConnectError::NoDefaultAddressBook => {}
-        other => panic!("expected NoDefaultAddressBook, got {other:?}"),
+        ConnectError::NoDefaultCollection(Collection::AddressBook) => {}
+        other => panic!("expected NoDefaultCollection(AddressBook), got {other:?}"),
     }
+}
+
+/// The address book resolves its account under `urn:ietf:params:jmap:contacts`
+/// — the mirror of the calendar backend's check, and the reason the mock can
+/// leave a capability out at all.
+#[test]
+fn an_account_that_offers_no_contacts_is_refused() {
+    let server = MockServer::builder()
+        .without_capability(jmap_proto::session::CAPABILITY_CONTACTS)
+        .start();
+    let config = SourceConfig {
+        origin: server.origin().to_owned(),
+        user: None,
+        resource_id: None,
+    };
+
+    let error = expect_error(open(&config, None));
+    assert!(
+        matches!(error, ConnectError::Client(_)),
+        "expected a client error, got {error:?}"
+    );
+    assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
 }
 
 #[test]
@@ -166,7 +191,7 @@ fn an_unreachable_server_is_an_error_not_a_credentials_problem() {
         // Port 1 is reserved and nothing listens there.
         origin: "http://127.0.0.1:1".to_owned(),
         user: None,
-        address_book_id: None,
+        resource_id: None,
     };
     let error = expect_error(open(&config, None));
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
@@ -192,11 +217,11 @@ fn each_failure_carries_the_client_error_code_evolution_routes_on() {
             E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
         ),
         (
-            ConnectError::NoDefaultAddressBook,
+            ConnectError::NoDefaultCollection(Collection::AddressBook),
             E_CLIENT_ERROR_INVALID_ARG,
         ),
         (
-            ConnectError::NoSuchAddressBook("AB-nonesuch".to_owned()),
+            ConnectError::NoSuchCollection(Collection::AddressBook, "AB-nonesuch".to_owned()),
             E_CLIENT_ERROR_INVALID_ARG,
         ),
         (

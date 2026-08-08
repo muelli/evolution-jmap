@@ -6,8 +6,8 @@
 //! An EDS backend is handed one `ESource` and nothing else; it is the whole
 //! description of the account. This module turns it into the two pieces a
 //! JMAP client needs — the origin to fetch `/.well-known/jmap` from, and the
-//! user name to authenticate as — plus the identifier of the address book the
-//! source stands for.
+//! user name to authenticate as — plus the identifier of the address book or
+//! calendar the source stands for.
 //!
 //! Which extension holds what is a decision, not a lookup, because there is
 //! no JMAP extension in EDS yet (M6 introduces one along with the collection
@@ -21,9 +21,11 @@
 //!   boolean over the `Method` string and only the string is stored. A
 //!   keyfile that says `Secure=true` is not rejected, it is ignored, and what
 //!   is left reads back as `none`.
-//! - `Resource` — `identity`. The JMAP address book id. "Resource identity"
-//!   is exactly what it is, and it is the extension EDS's own backends use
-//!   for a server-side object identifier.
+//! - `Resource` — `identity`. The JMAP identifier of the object this source
+//!   stands for: an address book id under the address book backend, a
+//!   calendar id under the calendar one. "Resource identity" is exactly what
+//!   it is, and it is the extension EDS's own backends use for a server-side
+//!   object identifier.
 //!
 //! The password is deliberately *not* here. It arrives at `connect_sync` as
 //! an `ENamedParameters` that EDS filled from libsecret, and a JMAP account
@@ -54,7 +56,7 @@
 //!
 //! `[Security]` may be left out entirely — it defaults to TLS here, not to
 //! `ESourceSecurity:secure`'s own FALSE — and `[Resource]` may be left out to
-//! get the account's default address book. Against `jmap-mockd`, `Host` is
+//! get the account's default address book, or default calendar. Against `jmap-mockd`, `Host` is
 //! `127.0.0.1`, `Port` is the mock's port and `[Security] Method` is `none`.
 //!
 //! The keyfile that runs against the mock is a file rather than a doc
@@ -96,9 +98,12 @@ pub struct SourceConfig {
     pub origin: String,
     /// The user name to authenticate as, if the source names one.
     pub user: Option<String>,
-    /// The JMAP address book this source stands for. Absent means "the
-    /// account's default", which the backend resolves at connect time.
-    pub address_book_id: Option<String>,
+    /// The JMAP object this source stands for — an address book id in the
+    /// address book backend, a calendar id in the calendar one. It is one
+    /// keyfile field with two meanings, so it is named after the field rather
+    /// than after either meaning. Absent means "the account's default", which
+    /// the backend resolves at connect time.
+    pub resource_id: Option<String>,
 }
 
 /// A source that cannot be turned into a connection.
@@ -215,7 +220,7 @@ impl SourceConfig {
         let host = unsafe { read_string(e_source_authentication_get_host(auth)) };
         let user = unsafe { read_string(e_source_authentication_get_user(auth)) };
         let port = unsafe { e_source_authentication_get_port(auth) };
-        let address_book_id = unsafe { read_string(e_source_resource_get_identity(resource)) };
+        let resource_id = unsafe { read_string(e_source_resource_get_identity(resource)) };
 
         let host = host.ok_or(SourceError::MissingHost)?;
         let authority = authority(&host)?;
@@ -234,7 +239,7 @@ impl SourceConfig {
         Ok(Self {
             origin,
             user,
-            address_book_id,
+            resource_id,
         })
     }
 }
