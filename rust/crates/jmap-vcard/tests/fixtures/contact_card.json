@@ -1,0 +1,31 @@
+{
+  "id": "C1",
+  "addressBookIds": {"AB1": true},
+  "@type": "Card",
+  "version": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667",
+  "name": {
+    "components": [
+      {"kind": "given", "value": "Vera"},
+      {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "full": "Vera Oldenburg"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+      "features": {"mobile": true},
+      "number": "+49 30 123456"
+    }
+  },
+  "organizations": {
+    "o1": {"name": "Example GmbH"}
+  }
+}

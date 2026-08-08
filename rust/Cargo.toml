@@ -12,6 +12,7 @@ default-members = [
     "crates/jmap-proto",
     "crates/jmap-client",
     "crates/jmap-mock",
+    "crates/jmap-vcard",
 ]
 
 [workspace.package]
@@ -36,6 +37,7 @@ eds-sys = { path = "crates/eds-sys" }
 evolution-jmap-proto = { path = "crates/jmap-proto" }
 evolution-jmap-client = { path = "crates/jmap-client" }
 evolution-jmap-mock = { path = "crates/jmap-mock" }
+evolution-jmap-vcard = { path = "crates/jmap-vcard" }
 
 # Reproducibility: deterministic codegen, no incremental state, no debug paths.
 [profile.release]

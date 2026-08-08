@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-vcard"
+description = "JSContact (RFC 9553) to vCard 3.0 mapping for the Evolution address book backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_vcard"
+
+[dependencies]
+evolution-jmap-proto = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The mapping is also exercised against what the mock server really returns,
+# not only against checked-in fixtures.
+evolution-jmap-client = { workspace = true }
+evolution-jmap-mock = { workspace = true }
