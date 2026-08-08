@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "jmap-mail"
+description = "The JMAP Camel provider for Evolution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_mail"
+# cdylib is what Camel dlopens (installed as libcameljmap.so); rlib is what
+# the integration tests link against, and building both keeps the two from
+# drifting apart.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+eds-sys = { workspace = true }
+jmap-backend-core = { workspace = true }
+glib-sys = { workspace = true }
+gobject-sys = { workspace = true }

@@ -53,7 +53,7 @@ set_tests_properties(rust-test PROPERTIES
 add_test(
 	NAME rust-test-eds
 	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys -p jmap-backend-core
-		-p jmap-backend-book -p jmap-backend-cal
+		-p jmap-backend-book -p jmap-backend-cal -p jmap-mail
 	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 )
 set_tests_properties(rust-test-eds PROPERTIES
@@ -72,9 +72,15 @@ set_tests_properties(rust-test-eds PROPERTIES
 #       DESTINATION <absolute directory>
 #       COMPONENT   <install component>
 #       SYMBOLS     <entry point> ...
+#       [DATA <file> ...]
 #       [VERIFY_DESTINATION_FROM <pkg-config module> <variable>])
+#
+# DATA names files installed beside the module and checked to have arrived —
+# Camel's `.urls` file is one, and it is not optional decoration: Camel reads
+# it to decide whether to dlopen the module at all, so a component that
+# installs the `.so` alone is a provider that is never loaded.
 function(add_cargo_cdylib _lib_name)
-	cmake_parse_arguments(_arg "" "OUTPUT_NAME;DESTINATION;COMPONENT" "SYMBOLS;VERIFY_DESTINATION_FROM" ${ARGN})
+	cmake_parse_arguments(_arg "" "OUTPUT_NAME;DESTINATION;COMPONENT" "SYMBOLS;DATA;VERIFY_DESTINATION_FROM" ${ARGN})
 
 	foreach(_required OUTPUT_NAME DESTINATION COMPONENT SYMBOLS)
 		if(NOT _arg_${_required})
@@ -95,6 +101,20 @@ function(add_cargo_cdylib _lib_name)
 		COMPONENT "${_arg_COMPONENT}"
 	)
 
+	# FILES rather than PROGRAMS: these are read, not executed.
+	set(_expected_data)
+	foreach(_data IN LISTS _arg_DATA)
+		if(NOT EXISTS "${_data}")
+			message(FATAL_ERROR "add_cargo_cdylib(${_lib_name}): DATA file '${_data}' does not exist")
+		endif()
+		install(FILES "${_data}"
+			DESTINATION "${_arg_DESTINATION}"
+			COMPONENT "${_arg_COMPONENT}"
+		)
+		get_filename_component(_data_name "${_data}" NAME)
+		list(APPEND _expected_data "${_arg_DESTINATION}/${_data_name}")
+	endforeach()
+
 	# Let the test re-derive the directory from pkg-config, so DESTINATION
 	# is checked against its source. Not under FORCE_INSTALL_PREFIX, where
 	# the point is that the destination has deliberately been moved.
@@ -109,11 +129,18 @@ function(add_cargo_cdylib _lib_name)
 		list(APPEND _pkg_args "-DPKG_MODULE=${_pkg_module}" "-DPKG_VARIABLE=${_pkg_variable}")
 	endif()
 
+	set(_data_args)
+	if(_expected_data)
+		string(REPLACE ";" "|" _expected_data "${_expected_data}")
+		list(APPEND _data_args "-DEXPECTED_DATA=${_expected_data}")
+	endif()
+
 	string(REPLACE ";" "|" _symbols "${_arg_SYMBOLS}")
 	add_test(
 		NAME install-${_arg_COMPONENT}
 		COMMAND ${CMAKE_COMMAND}
 			${_pkg_args}
+			${_data_args}
 			"-DBUILD_DIR=${CMAKE_BINARY_DIR}"
 			"-DSTAGE_DIR=${CMAKE_BINARY_DIR}/install-test/${_arg_COMPONENT}"
 			"-DCOMPONENT=${_arg_COMPONENT}"
