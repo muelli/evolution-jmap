@@ -83,6 +83,34 @@ fn component_layouts_match_the_gtype_system() {
     assert_layout!(e_cal_component_get_type, ECalComponent, ECalComponentClass);
 }
 
+/// The classed types M5's mail provider subclasses or is handed. These come
+/// from `libcamel-1.2`, a third library with a third ABI, and unlike the
+/// backend libraries Camel's own `CamelProvider` is *not* in this list: it is a
+/// boxed type with no size GObject can report, so tests/camel.rs pins it by a
+/// round trip through the provider registry instead.
+#[test]
+fn camel_layouts_match_the_gtype_system() {
+    assert_layout!(camel_service_get_type, CamelService, CamelServiceClass);
+    assert_layout!(camel_store_get_type, CamelStore, CamelStoreClass);
+    assert_layout!(
+        camel_offline_store_get_type,
+        CamelOfflineStore,
+        CamelOfflineStoreClass
+    );
+    assert_layout!(
+        camel_transport_get_type,
+        CamelTransport,
+        CamelTransportClass
+    );
+    assert_layout!(camel_session_get_type, CamelSession, CamelSessionClass);
+    assert_layout!(camel_settings_get_type, CamelSettings, CamelSettingsClass);
+    assert_layout!(
+        camel_store_settings_get_type,
+        CamelStoreSettings,
+        CamelStoreSettingsClass
+    );
+}
+
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the
 /// EDS headers. The layouts would still match, so the tests above would still
 /// pass — but the types would be *distinct* from the gtk-rs ones, and every
