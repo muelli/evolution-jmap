@@ -5,22 +5,27 @@
 //!
 //! Every function here allocates with GLib and hands ownership to the caller,
 //! because that is what the vfunc contract says: EDS frees an
-//! `out_existing_objects` list with `e_book_meta_backend_info_free`, a
-//! removed-uid list with `g_free`, and an `out_new_sync_tag` with `g_free`.
-//! Pointing a node at a Rust `String` instead of copying it would therefore
-//! not be a leak, it would be a double free in someone else's process.
+//! `out_existing_objects` list with `e_book_meta_backend_info_free` and a
+//! removed-uid list with `g_free`. Pointing a node at a Rust `String` instead
+//! of copying it would therefore not be a leak, it would be a double free in
+//! someone else's process.
+//!
+//! What is *not* here is the half of the boundary that has nothing to do with
+//! contacts — reading and writing out-parameters, and finding the password EDS
+//! fetched from libsecret. That lives in [`jmap_backend_core::marshal`], where
+//! the calendar backend reaches the same code rather than a copy of it.
 
 use std::ffi::CStr;
 use std::ptr;
 
 use eds_sys::{
-    E_CONTACT_UID, E_SOURCE_CREDENTIAL_PASSWORD, EContact, ENamedParameters, EVC_FORMAT_VCARD_30,
-    EVCard, e_book_meta_backend_info_new, e_contact_get_const, e_contact_new_from_vcard,
-    e_named_parameters_get, e_vcard_to_string,
+    E_CONTACT_UID, EContact, EVC_FORMAT_VCARD_30, EVCard, e_book_meta_backend_info_new,
+    e_contact_get_const, e_contact_new_from_vcard, e_vcard_to_string,
 };
-use glib_sys::{GSList, g_free, g_slist_prepend, g_strdup, gchar};
+use glib_sys::{GSList, g_free, g_slist_prepend, gchar};
 use gobject_sys::g_object_unref;
 use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::marshal::dup_string;
 use jmap_book_sync::ContactInfo;
 
 /// Wraps `infos` as a `GSList` of `EBookMetaBackendInfo`, the payload
@@ -152,61 +157,4 @@ pub unsafe fn contact_unref(contact: *mut EContact) {
         // SAFETY: EContact is a GObject and the caller owns the reference.
         unsafe { g_object_unref(contact.cast()) }
     }
-}
-
-/// The password EDS fetched from libsecret, if it has one yet.
-///
-/// An empty stored password is reported as present, not as absent: answering
-/// "absent" would make `connect_sync` ask EDS to prompt, and a user who then
-/// enters nothing would be prompted again forever. Sending it and being told
-/// it is wrong terminates.
-///
-/// # Safety
-///
-/// `credentials` must be NULL — which is what EDS passes before it has asked
-/// libsecret for anything — or a valid `ENamedParameters`.
-pub unsafe fn password(credentials: *const ENamedParameters) -> Option<String> {
-    if credentials.is_null() {
-        return None;
-    }
-    // SAFETY: the name is a header constant and the returned string is owned
-    // by the parameters, which outlive this call.
-    let value = unsafe {
-        e_named_parameters_get(credentials, E_SOURCE_CREDENTIAL_PASSWORD.as_ptr()).cast::<gchar>()
-    };
-    if value.is_null() {
-        return None;
-    }
-    Some(
-        unsafe { CStr::from_ptr(value) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-/// Writes a copy of `value` into a `gchar **` out-parameter, which the caller
-/// frees with `g_free`. A NULL `dest` is the GLib convention for "the caller
-/// does not want this one" and is ignored.
-///
-/// # Safety
-///
-/// `dest` must be NULL or point at a writable `*mut gchar`.
-pub unsafe fn set_out_string(dest: *mut *mut gchar, value: &str) {
-    if dest.is_null() {
-        return;
-    }
-    // SAFETY: `dest` is writable by the contract above, and ownership of the
-    // duplicate passes through it to the caller.
-    unsafe { *dest = dup_string(value) }
-}
-
-/// `g_strdup` of a Rust string.
-///
-/// # Safety
-///
-/// The result is a GLib allocation the caller must `g_free`.
-unsafe fn dup_string(value: &str) -> *mut gchar {
-    let text = cstring_lossy(value);
-    // SAFETY: `text` is NUL-terminated and valid for the call.
-    unsafe { g_strdup(text.as_ptr()) }
 }
