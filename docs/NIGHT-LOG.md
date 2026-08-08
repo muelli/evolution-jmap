@@ -516,3 +516,109 @@ What remains is the instance and class structs, the seven vfunc slot
 overrides, and a body per vfunc that is a `guard_bool` around a `marshal`
 call. After that the `EBookBackendFactory`, the `e_module_load` entry point
 and the `add_cargo_cdylib` install rule.
+
+## 2026-08-08 (seventh session)
+
+M3, sixth increment: `jmap-backend-book::ops` — the bodies of the
+`EBookMetaBackend` sync vfuncs, plus the `SyncError` half of the error mapping
+and the `EBookClientError` domain in `eds-sys` that it needs. 15 new tests
+(`tests/ops.rs`); `-p eds-sys -p jmap-backend-core -p jmap-backend-book` is now
+85, the default members are unchanged at 87, workspace total 172.
+
+The subclass was the obvious next item and turned out to have a layer left
+under it. Constructing a real `EBookMetaBackend` needs an `ESourceRegistry`,
+which needs `evolution-source-registry` on the session bus — so anything
+written *inside* a vfunc body is untestable on this VM and in CI. Splitting the
+bodies out into functions that take a `&BookSync` and the same out-parameters
+EDS passes keeps every one of them under test, and leaves the subclass as the
+thing it was always supposed to be: a panic guard and a slot lookup.
+
+- `ops::{list_existing, get_changes, load_contact, save_contact,
+  remove_contact}` — the vfunc signatures minus the `EBookMetaBackend *`.
+- `ops::to_gerror` — `SyncError` → `GError`, over
+  `jmap_backend_core::error::to_gerror` for the client half.
+- `eds-sys`: `EBookClientError` and `e_book_client_error_*` allowlisted.
+
+Decisions taken:
+
+- **A missing card is reported in the `E_BOOK_CLIENT_ERROR` domain, not
+  `E_CLIENT_ERROR`.** `EBookMetaBackend` matches on exactly
+  `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND` to decide that a card is gone rather
+  than that the sync failed; any other code and the cache entry never goes
+  away. That is what the `eds-sys` allowlist change is for — the enum was not
+  bound, and `EClientError` has no equivalent.
+- **`get_changes` returns a three-valued `Outcome`, not a `gboolean`.** Two
+  situations are neither success nor failure: no sync tag (the first sync) and
+  a tag the server will not diff from (RFC 8620 §5.2,
+  `cannotCalculateChanges`). Both mean "chain up to `EBookMetaBackend`'s own
+  `get_changes_sync`", which lists the book and diffs it against the cache.
+  Reporting either as an error would leave the address book empty until
+  someone deleted the cache by hand. The chain-up itself needs the parent class
+  pointer, so it stays in the subclass; the *decision* is here, where it can be
+  tested.
+- **An absent sync tag is answered without asking the server.** Sending `""`
+  on as a `sinceState` happens to produce the same fallback against the mock,
+  because the mock rejects a state it did not issue — which is exactly why the
+  test stops the server before calling. A real server that accepted an empty
+  state would have answered the first sync with an empty delta.
+- **An edit whose contact carries no identifier is refused.** Falling through
+  to a create would silently duplicate the user's contact on the server, which
+  is worse than a visible failure. `overwrite_existing` is EDS's word for "this
+  is a modify", and the uid it implies has to be there.
+- **Everything changed is reported as *modified*, and `out_created_objects`
+  is left empty.** JMAP does distinguish created from updated, but
+  `BookSync::get_changes` has already spent that distinction on a question only
+  it can answer — a card that shows up as *updated* and is no longer filed in
+  this book has been moved out and must be reported gone, whereas a *created*
+  one that is not ours never was our business. EDS runs both lists through the
+  same loader, so the split is presentational; inventing one would be a guess
+  dressed up as information.
+- **A NULL out-parameter does not just skip the write, it skips the work.**
+  Building a `GSList` for an out-parameter nobody reads would need freeing with
+  the right per-node function, and not building it is simpler than getting that
+  right in two places.
+- **Nothing is written on failure.** EDS only frees the outputs of a call that
+  returned TRUE, so an out-parameter filled in before an error is a leak.
+
+On the TDD: the tests were written against a `jmap_backend_book::ops` that did
+not exist, so the first run failed to compile; 14 passed once the module
+landed, and two more tests were added for the NULL and empty-string branches.
+Ten mutations were then run and eight died:
+
+- `NotFound` mapped to `E_CLIENT_ERROR_INVALID_ARG` → two assertions;
+- an edit without a uid falling through to a create → assertion;
+- `cannotCalculateChanges` treated as a failure → assertion;
+- an absent sync tag sent on as an empty state → assertion (the
+  stopped-server test above; it survived the first version of that test, which
+  is what prompted rewriting it);
+- `read_string` accepting `""` as present → assertion;
+- removals never reported → assertion;
+- `save_contact` not writing `out_new_uid` → two assertions;
+- `out_repeat` never written → assertion (which needed the test fixture to
+  start it at TRUE rather than at the FALSE EDS passes; otherwise a body that
+  never answers is indistinguishable from one that answers correctly).
+
+Two survivors, both judged equivalent rather than gaps: dropping the explicit
+NULL-contact check in `save_contact` still ends in
+`E_CLIENT_ERROR_INVALID_ARG` via `vcard_to_card("")`, differing only in the
+message text, and pinning message strings is brittle for what it buys.
+
+Not verified locally, as in the previous six sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The new
+files carry an SPDX `GPL-3.0-or-later` header and no external dependency was
+added — the one new entry is `evolution-jmap-vcard` as a dev-dependency, to
+name a `VCardError` variant in the error-mapping test. `cargo fmt --check`,
+`cargo test` and `cargo clippy --all-targets -D warnings` are clean on the
+default members and on `-p eds-sys -p jmap-backend-core -p jmap-backend-book`,
+and `cargo build --workspace --locked` succeeds. `cmake/Rust.cmake` needed no
+change; `rust-test-eds` already runs this crate.
+
+No blockers hit.
+
+Next: the `EBookMetaBackend` subclass, which now really is the last thin
+piece — the instance struct (parent plus a `Slot<Mutex<Option<BookSync>>>`),
+the class struct, `register_dynamic`, and seven vfunc bodies that are a
+`guard_bool` around an `ops` call, with `get_changes_sync` matching on
+`Outcome` and chaining up on `ListInstead`. After that the
+`EBookBackendFactory`, the `e_module_load` entry point and the
+`add_cargo_cdylib` install rule.
