@@ -73,6 +73,16 @@ fn cal_backend_layouts_match_the_gtype_system() {
     assert_layout!(e_cal_cache_get_type, ECalCache, ECalCacheClass);
 }
 
+/// The two component types the calendar vfuncs pass across the boundary. They
+/// come from libical-glib and libecal rather than from the backend libraries
+/// the rest of this file checks, so their layouts are a separate bet on a
+/// separate library's ABI.
+#[test]
+fn component_layouts_match_the_gtype_system() {
+    assert_layout!(i_cal_component_get_type, ICalComponent, ICalComponentClass);
+    assert_layout!(e_cal_component_get_type, ECalComponent, ECalComponentClass);
+}
+
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the
 /// EDS headers. The layouts would still match, so the tests above would still
 /// pass — but the types would be *distinct* from the gtk-rs ones, and every
