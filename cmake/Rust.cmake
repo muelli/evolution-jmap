@@ -43,3 +43,16 @@ add_test(
 set_tests_properties(rust-test PROPERTIES
 	ENVIRONMENT "CARGO_INCREMENTAL=0"
 )
+
+# Crates kept out of the workspace's default-members because they need the
+# EDS/Evolution development headers, so plain `cargo test` skips them. CMake
+# has already established the headers are present, so run them here — this is
+# the only place eds-sys's g_type_query layout checks get exercised.
+add_test(
+	NAME rust-test-eds
+	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys
+	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+)
+set_tests_properties(rust-test-eds PROPERTIES
+	ENVIRONMENT "CARGO_INCREMENTAL=0"
+)
