@@ -41,7 +41,7 @@ use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_FOLDER_NONE,
     CamelFolder, CamelFolderInfo, CamelStore, CamelStoreClass, camel_folder_get_full_name,
     camel_folder_info_free, camel_offline_store_get_type, camel_service_error_quark,
-    camel_store_error_quark, camel_store_get_folder_sync,
+    camel_store_error_quark, camel_store_get_folder_sync, camel_store_get_inbox_folder_sync,
 };
 use glib_sys::GError;
 use gobject_sys::{g_object_unref, g_type_class_peek, g_type_class_ref, g_type_class_unref};
@@ -927,4 +927,224 @@ fn camel_hands_back_the_folder_it_already_opened() {
         g_object_unref(first.cast());
         g_object_unref(second.cast());
     }
+}
+
+// ---------------------------------------------------------------------------
+// and the one folder Camel asks for by purpose rather than by name
+
+/// A store whose inbox is not where a name-matching provider would look for
+/// it: nested under another mailbox, called something else entirely, and with a
+/// decoy mailbox named `inbox` sitting at the top level.
+///
+/// The decoy is what `CamelStoreClass`'s *inherited* implementation opens — it
+/// asks `get_folder_sync` for the folder called `inbox`, in exactly that case —
+/// so an account laid out like this is the one that tells the override apart
+/// from the default it replaces. Camel's own IMAPX does the same thing one
+/// spelling up, matching a folder's name against `"INBOX"`. Both are IMAP
+/// conventions rather than facts about mail stores: RFC 8621 §2 gives a mailbox
+/// a `role`, and says nothing about its name or where in the hierarchy it sits.
+fn with_inbox() -> (MockServer, Account, Id) {
+    let server = MockServer::builder().start();
+    let inbox = edit(&server, |account| {
+        let accounts = account.seed_mailbox("Accounts", None);
+        account.seed_mailbox("inbox", None);
+        account.seed_child_mailbox("Posteingang", Some(role::INBOX), &accounts)
+    });
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    (server, account, inbox)
+}
+
+/// One `camel_store_get_inbox_folder_sync` call and both of its answers, owned
+/// the way Camel owns them.
+struct Inbox {
+    folder: *mut CamelFolder,
+    error: *mut GError,
+}
+
+impl Inbox {
+    /// Through the public wrapper, which is how Evolution asks — and which
+    /// returns NULL without even reaching the store if the class left the vfunc
+    /// unset, so calling it is also what pins the override.
+    fn of(store: *mut CamelStore) -> Self {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: `store` is a live store of ours, and `error` is writable and
+        // currently NULL.
+        let folder =
+            unsafe { camel_store_get_inbox_folder_sync(store, ptr::null_mut(), &mut error) };
+        Self { folder, error }
+    }
+
+    fn path(&self) -> String {
+        assert!(!self.folder.is_null(), "no folder to name");
+        // SAFETY: a live folder of ours, whose name it owns and outlives.
+        unsafe {
+            std::ffi::CStr::from_ptr(camel_folder_get_full_name(self.folder))
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+
+    fn mailbox(&self) -> Id {
+        assert!(!self.folder.is_null(), "no folder to ask");
+        // SAFETY: as above; the borrow ends inside this function.
+        unsafe { JmapFolder::borrow(self.folder) }
+            .expect("a folder of ours")
+            .mailbox()
+            .expect("a folder with no mailbox behind it")
+            .clone()
+    }
+}
+
+impl Drop for Inbox {
+    fn drop(&mut self) {
+        // SAFETY: the call handed over one reference to the folder and
+        // ownership of the error.
+        unsafe {
+            if !self.folder.is_null() {
+                g_object_unref(self.folder.cast());
+            }
+            if !self.error.is_null() {
+                glib_sys::g_error_free(self.error);
+            }
+        }
+    }
+}
+
+/// The account's inbox is the mailbox whose role says so — not the one whose
+/// name does, and not a top-level one. Left to the inherited implementation
+/// this account opens the decoy instead, which is a folder the user's incoming
+/// filters would then run over.
+#[test]
+fn the_inbox_is_the_mailbox_holding_the_inbox_role() {
+    let (_server, account, inbox) = with_inbox();
+
+    let opened = Inbox::of(account.store);
+
+    assert!(opened.error.is_null(), "opening the inbox set an error");
+    assert_eq!(opened.path(), "Accounts/Posteingang");
+    assert_eq!(opened.mailbox(), inbox);
+}
+
+/// Evolution opens the inbox both ways — by purpose at startup and by path
+/// when the user clicks it in the folder tree — and two `CamelFolder`s over one
+/// mailbox would be two summaries and two sets of flags. Going through
+/// `camel_store_get_folder_sync` rather than building a folder here is what
+/// puts the answer through the store's folder bag, where the first of the two
+/// calls left it.
+#[test]
+fn the_inbox_is_the_folder_camel_already_has_open_for_that_path() {
+    let (_server, account, _) = with_inbox();
+
+    let by_purpose = Inbox::of(account.store);
+    // SAFETY: a live store of ours, a NUL-terminated path, and a NULL GError **
+    // which the wrapper tolerates.
+    let by_path = unsafe {
+        camel_store_get_folder_sync(
+            account.store,
+            c"Accounts/Posteingang".as_ptr(),
+            CAMEL_STORE_FOLDER_NONE,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+
+    assert!(!by_path.is_null(), "the path opened no folder");
+    assert_eq!(
+        by_purpose.folder, by_path,
+        "a second folder over the same mailbox"
+    );
+
+    // SAFETY: one reference, handed over by the wrapper.
+    unsafe { g_object_unref(by_path.cast()) };
+}
+
+/// An account whose server assigns no roles. RFC 8621 §2 makes `role`
+/// nullable, so this is a legal account rather than a broken one — but Camel
+/// asked for the inbox, and there is no such thing as half a folder. Picking
+/// the mailbox called "Inbox" would be the provider guessing where the user's
+/// mail arrives, and guessing wrong means new mail filtered into a folder
+/// nobody reads.
+#[test]
+fn an_account_with_no_inbox_role_has_no_inbox_to_open() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| account.seed_mailbox("Inbox", None));
+    let account = Account::open();
+    account.connect(sync_against(&server));
+
+    let opened = Inbox::of(account.store);
+
+    assert!(opened.folder.is_null(), "a folder for a role nobody claims");
+    assert!(!opened.error.is_null(), "no reason given");
+    // SAFETY: the error is the one the vfunc set, checked non-NULL above.
+    unsafe {
+        assert_eq!((*opened.error).domain, camel_store_error_quark());
+        assert_eq!((*opened.error).code, CAMEL_STORE_ERROR_NO_FOLDER as i32);
+    }
+}
+
+/// The same second look `get_folder_sync` takes, for the same reason: Camel
+/// asks a store for its inbox early — it is where the incoming filters run —
+/// and an account whose inbox arrived after the listing this store is holding
+/// would otherwise report having none until something else refreshed it.
+#[test]
+fn an_inbox_that_appeared_since_the_listing_is_found_by_looking_again() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| account.seed_mailbox("Work", None));
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    assert!(
+        Inbox::of(account.store).folder.is_null(),
+        "an inbox before there was one"
+    );
+
+    edit(&server, |state| {
+        state.create_mailbox("Inbox", Some(role::INBOX), None)
+    });
+
+    let opened = Inbox::of(account.store);
+    assert!(opened.error.is_null(), "opening the inbox set an error");
+    assert_eq!(opened.path(), "Inbox");
+}
+
+/// The other NULL, told apart from the one above by the error alone.
+#[test]
+fn a_disconnected_store_has_no_inbox_to_open() {
+    let account = Account::open();
+
+    let opened = Inbox::of(account.store);
+
+    assert!(opened.folder.is_null(), "a disconnected store opened one");
+    assert!(!opened.error.is_null(), "no reason given");
+    // SAFETY: the error is the one the vfunc set, checked non-NULL above.
+    unsafe {
+        assert_eq!((*opened.error).domain, camel_service_error_quark());
+        assert_eq!(
+            (*opened.error).code,
+            CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
+        );
+    }
+}
+
+/// The same guard as the other two vfuncs', reached the same way: the wrapper
+/// asserts `CAMEL_IS_STORE`, so a NULL instance can only arrive through the
+/// class pointer.
+#[test]
+fn a_null_store_has_no_inbox_either() {
+    let mut error: *mut GError = ptr::null_mut();
+
+    // SAFETY: referencing the class installs the vfunc; NULL is exactly the
+    // instance pointer under test, and `error` is writable and NULL.
+    let folder = unsafe {
+        let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
+        let vfunc = (*class).get_inbox_folder_sync.expect("the vfunc");
+        let folder = vfunc(ptr::null_mut(), ptr::null_mut(), &mut error);
+        g_type_class_unref(class.cast());
+        folder
+    };
+
+    assert!(folder.is_null());
+    assert!(!error.is_null(), "no reason given");
+    // SAFETY: owned by us, set above.
+    unsafe { glib_sys::g_error_free(error) };
 }

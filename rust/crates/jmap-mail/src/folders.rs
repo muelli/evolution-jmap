@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The `CamelStore` folder vfuncs: `get_folder_info_sync`, which describes the
-//! account's folders, and `get_folder_sync`, which opens one of them.
+//! account's folders, `get_folder_sync`, which opens one of them by path, and
+//! `get_inbox_folder_sync`, which opens the one Camel asks for by purpose.
 //!
-//! They are one module because they are one question asked twice: both read the
-//! folder listing [`JmapStore::folders`] keeps, and the second exists to turn a
-//! path out of the first back into the mailbox it came from. What they do with
-//! the answer is where they part — the listing marshals a whole subtree into C
-//! structs Camel frees, while opening builds the [`crate::folder`] object Camel
-//! keeps.
+//! They are one module because they are one question asked three ways: all
+//! three read the folder listing [`JmapStore::folders`] keeps, and the last two
+//! exist to turn something out of the first — a path, a role — back into the
+//! mailbox it came from. What they do with the answer is where they part: the
+//! listing marshals a whole subtree into C structs Camel frees, opening builds
+//! the [`crate::folder`] object Camel keeps, and the inbox delegates to the
+//! opening so that both ways of asking reach the same object.
 //!
 //! ## The listing
 //!
@@ -58,18 +60,18 @@ use std::sync::Arc;
 use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH, CamelFolder,
     CamelFolderInfo, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
-    CamelStoreGetFolderInfoFlags,
+    CamelStoreGetFolderInfoFlags, camel_store_get_folder_sync,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, gchar};
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_ptr;
-use jmap_mail_sync::{FolderInfo, FolderTree};
+use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
 
 use crate::connect::StoreError;
 use crate::folder::new_folder;
-use crate::folder_info::FolderInfoChain;
+use crate::folder_info::{FolderInfoChain, c_string};
 use crate::store::JmapStore;
 
 /// The part of a store's folder tree one `get_folder_info_sync` call asks for.
@@ -140,6 +142,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
     let vfuncs = unsafe { &mut *class };
     vfuncs.get_folder_info_sync = Some(get_folder_info_sync);
     vfuncs.get_folder_sync = Some(get_folder_sync);
+    vfuncs.get_inbox_folder_sync = Some(get_inbox_folder_sync);
 }
 
 /// Answers with the account's folders, or the part of them Camel asked for.
@@ -231,7 +234,7 @@ unsafe extern "C" fn get_folder_sync(
             // to, because a path always has a component in it.
             let path = read_string(folder_name).unwrap_or_default();
 
-            let tree = match tree_naming(instance, &path) {
+            let tree = match tree_holding(instance, |tree| tree.find(&path).is_some()) {
                 Ok(tree) => tree,
                 Err(failure) => return fail(error, &failure),
             };
@@ -246,8 +249,64 @@ unsafe extern "C" fn get_folder_sync(
     }
 }
 
-/// The store's folder tree, looked at again if `path` is not in the one it
-/// holds.
+/// Opens the account's inbox: `camel_store_get_inbox_folder_sync`'s vfunc.
+///
+/// Camel asks a store for this folder by *purpose*, and the purpose is the only
+/// thing it can be answered from — which is why the vfunc is overridden rather
+/// than inherited. `CamelStoreClass` does supply an implementation: it asks the
+/// store's own `get_folder_sync` for a folder named `inbox`, in that case, and
+/// IMAPX does the same thing one spelling up against `"INBOX"`. Both are IMAP
+/// conventions rather than facts about mail stores. RFC 8621 §2 gives a mailbox
+/// a `role` instead, and says nothing about that mailbox's name or where in the
+/// hierarchy it sits: a JMAP account may perfectly well keep its inbox under a
+/// per-address parent and call it something in the user's own language. An
+/// account that *also* has an ordinary mailbox named "inbox" is the one the
+/// inherited version gets quietly wrong, by running the user's incoming filters
+/// over the wrong folder.
+///
+/// The folder itself is not built here. It is asked for by path through
+/// `camel_store_get_folder_sync`, so that the answer goes through the store's
+/// folder bag: Evolution opens the inbox both ways — by purpose at startup, by
+/// path when the user clicks it — and two `CamelFolder`s over one mailbox would
+/// be two summaries and two sets of flags. Building one here would be that bug.
+///
+/// `cancellable` *is* passed on, unlike in the two vfuncs above: it is not
+/// observed by the listing this function does itself, for the reason
+/// [`get_folder_info_sync`] documents, but the call it delegates to is Camel's
+/// own and has no such gap.
+unsafe extern "C" fn get_inbox_folder_sync(
+    store: *mut CamelStore,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> *mut CamelFolder {
+    // SAFETY: Camel's contract for the vfunc: a valid instance of ours, and an
+    // out-parameter that is NULL or writable and currently NULL.
+    unsafe {
+        guard_ptr("get_inbox_folder_sync", error, || {
+            let Some(instance) = JmapStore::borrow(store) else {
+                return fail(error, &StoreError::Disconnected);
+            };
+
+            let tree = match tree_holding(instance, |tree| tree.role(FolderRole::Inbox).is_some()) {
+                Ok(tree) => tree,
+                Err(failure) => return fail(error, &failure),
+            };
+            let Some(inbox) = tree.role(FolderRole::Inbox) else {
+                return fail(error, &StoreError::NoInbox);
+            };
+            let path = c_string(&inbox.path);
+
+            // SAFETY: `store` is the live `CamelStore` borrowed above, `path`
+            // is NUL-terminated and alive across the call, and `error` meets
+            // this function's contract. No flags: `CREATE` would make a mailbox
+            // the tree says already exists.
+            camel_store_get_folder_sync(store, path.as_ptr(), 0, cancellable, error)
+        })
+    }
+}
+
+/// The store's folder tree, looked at again if it does not hold the folder the
+/// caller is after.
 ///
 /// The second look is what makes a mailbox created since the last listing
 /// openable. Evolution reopens the folder the user last had selected when it
@@ -260,9 +319,16 @@ unsafe extern "C" fn get_folder_sync(
 /// The cost is one `Mailbox/changes` on the path that is about to fail anyway;
 /// a hit — every folder the user clicks — is answered out of the held tree with
 /// no request at all.
-fn tree_naming(store: &JmapStore, path: &str) -> Result<Arc<FolderTree>, StoreError> {
+///
+/// `wanted` is a question about the whole tree rather than a path, because the
+/// two callers ask different ones: opening a folder wants the path Camel named,
+/// while opening the inbox wants whichever mailbox claims the role.
+fn tree_holding(
+    store: &JmapStore,
+    wanted: impl Fn(&FolderTree) -> bool,
+) -> Result<Arc<FolderTree>, StoreError> {
     let held = store.folders(0)?;
-    if held.find(path).is_some() {
+    if wanted(&held) {
         return Ok(held);
     }
     store.folders(CAMEL_STORE_FOLDER_INFO_REFRESH)

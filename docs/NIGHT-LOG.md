@@ -3218,3 +3218,100 @@ set yet. `get_inbox_folder_sync` and the `CamelSubscribable` interface are still
 the two smaller unblocked pieces if that stalls. Still unexercised against a
 real `CamelSession`: `service.rs`, which waits on M6 and M7. The README's
 architecture block still lists only the round-1 crates; five crates stale.
+
+## 2026-08-08 (thirty-fifth session)
+
+M5's fifteenth increment: `get_inbox_folder_sync`, the third and last of
+`CamelStoreClass`'s folder vfuncs this provider can answer without a folder
+summary. It is the one folder Camel asks for by *purpose* rather than by name,
+and answering it needed one new thing underneath — `FolderTree::role`, the
+lookup from a `FolderRole` back to the folder holding it — plus the vfunc that
+turns the answer into an open `CamelFolder`. The red step was three
+`FolderTree::role` tests failing to compile in `jmap-mail-sync`, then seven
+`jmap-mail` tests against a store whose inbox is nested, foreign-named, and
+shadowed by a decoy.
+
+Decisions taken:
+
+- **The inherited implementation is wrong for this provider, and the test says
+  so by name.** `CamelStoreClass` is not one of the classes that leaves this
+  slot NULL: its default asks the store's own `get_folder_sync` for a folder
+  literally named `inbox`, and IMAPX overrides it to do the same thing one
+  spelling up against `"INBOX"`. Both are IMAP conventions rather than facts
+  about mail stores. RFC 8621 §2 puts a `role` on the mailbox and says nothing
+  about its name or its place in the hierarchy, so the fixture is the account
+  that tells the two apart — the real inbox is `Accounts/Posteingang`, and a
+  top-level decoy is named `inbox` in exactly the case the default looks for.
+  That the default *does* open the decoy was measured, not assumed: a throwaway
+  test called the parent class's slot directly and printed the folder it came
+  back with. Without the override this account runs the user's incoming filters
+  over the decoy — silently, since both folders exist and both open.
+- **The folder is not built here; it is asked for by path through
+  `camel_store_get_folder_sync`.** Evolution opens the inbox both ways — by
+  purpose at startup, where the filters are wired up, and by path when the user
+  clicks it — and building one here would hand out a second `CamelFolder` over
+  the same mailbox, with a second summary and a second set of flags, bypassing
+  the `CamelObjectBag` the store keeps precisely to stop that. Delegating also
+  means the inbox inherits every later fix to the opening path for free. The
+  cost is one extra hash lookup; `the_inbox_is_the_folder_camel_already_has_
+  open_for_that_path` is what pins it, by asserting pointer equality.
+- **An account with no `role: "inbox"` has no inbox, and that is an error
+  rather than a guess.** `role` is nullable on every mailbox, so this is a legal
+  account, but Camel asked a question with no half-answer. Falling back to a
+  mailbox *named* Inbox would be the provider guessing where the user's mail
+  arrives, and guessing wrong means new mail filtered into a folder nobody
+  reads — the same failure the inherited default has, reintroduced. New variant
+  `StoreError::NoInbox`, reported in `CAMEL_STORE_ERROR_NO_FOLDER` beside
+  `NoFolder`, whose case it is: a folder Camel asked for that the account does
+  not have.
+- **`tree_naming` became `tree_holding`, taking a question about the tree
+  rather than a path.** The "look again if the held listing does not have it"
+  rule is the same for both callers and the reason is the same — Evolution
+  reopens the last-selected folder from its own settings before anything asks
+  the store to refresh, and another client creating a mailbox mid-session is
+  ordinary — but the question differs: a path for one, a role for the other. A
+  closure keeps one implementation of the rule instead of two that drift.
+- **`FolderTree::role` reads the role this crate assigned, not the mailbox's own
+  property.** `claim_roles` already settles the two-inboxes case by giving the
+  role to the first mailbox in sibling order; a lookup that re-derived it from
+  `Mailbox::role` could pick the other one, and then the folder Camel opens as
+  the inbox would not be the folder the listing marked `CAMEL_FOLDER_TYPE_INBOX`
+  and `CAMEL_FOLDER_FILTER_RECENT`. It walks the whole tree rather than the
+  roots, because nothing in RFC 8621 puts the inbox at the top level.
+- **`cancellable` is passed on, for the first time in this module.** The two
+  older vfuncs document why they cannot observe it — `Client` takes its
+  `CancelFlag` at construction — and the listing this one does itself has the
+  same gap. But the call it delegates to is Camel's own and has no such gap, so
+  dropping the argument on the floor would be a regression against a caller
+  that is already doing the right thing.
+
+Mutation testing, six mutants, five killed and one equivalent: the vfunc left
+unset (three behavioural failures now, not just the null-store crash), the
+folder built here instead of through the bag, the role searched among the roots
+only, the second look at the tree removed, and a mailbox named `Inbox` standing
+in for the role. The equivalent one — taking the last mailbox claiming the role
+rather than the first — changes nothing, because `claim_roles` has already left
+exactly one folder carrying it; that it is equivalent is the invariant, not a
+gap.
+
+Not verified locally, as in the previous thirty-four sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files this time,
+so every file touched already carries its SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on both member sets — the default eight and
+the five EDS crates the `rust-test-eds` target names.
+
+Next in M5 is still the Camel half of the message work: `CamelFolderSummary` on
+`CamelJmapFolder`, which needs the `camel_folder_summary_*` and
+`camel_message_info_*` allowlist entries `eds-sys` has been deferring, a
+`CamelMessageInfo` per `MessageSummary` (where the 64-bit message-id digest gets
+decided), and the folder flag `CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` that
+`folder.rs` deliberately does not set yet. `get_trash_folder_sync` and
+`get_junk_folder_sync` are *not* the obvious follow-on to this increment even
+though they share its signature: Camel's defaults build virtual folders
+(vTrash/vJunk) rather than failing, and overriding them to return the real JMAP
+mailbox is a behaviour change that IMAPX gates behind a `use-real-trash-path`
+setting — so it is a settings decision first and a vfunc second. The
+`CamelSubscribable` interface remains the smaller unblocked piece. Still
+unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.
