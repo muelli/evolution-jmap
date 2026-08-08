@@ -197,3 +197,92 @@ fn a_dynamic_type_is_registered_again_every_time_its_module_is_loaded() {
         g_type_module_unuse(module);
     }
 }
+
+// ---------------------------------------------------------------------------
+// interfaces
+
+/// A type that implements an interface as well as deriving from one.
+///
+/// `GTypePlugin` rather than anything from EDS: it is a GObject interface with
+/// no properties and four vfuncs nothing but GLib's own type loader ever calls,
+/// which makes it the one interface a test can implement without also having to
+/// satisfy it. The interface the Camel provider's settings type actually
+/// implements, `CamelNetworkSettings`, carries five properties an implementer
+/// must override — that belongs to the type that implements it, not here.
+struct Implementor;
+
+// SAFETY: as `Test`; the structs are shared with it.
+unsafe impl ObjectSubclass for Implementor {
+    const NAME: &'static CStr = c"JmapBackendCoreTestImplementor";
+    type Instance = TestInstance;
+    type Class = TestClass;
+
+    fn parent_type() -> glib_sys::GType {
+        gobject_sys::G_TYPE_OBJECT
+    }
+
+    fn interfaces() -> Vec<glib_sys::GType> {
+        // SAFETY: no arguments, and the type initialises itself.
+        vec![unsafe { gobject_sys::g_type_plugin_get_type() }]
+    }
+}
+
+/// An interface a Rust-declared type claims has to be added to the type before
+/// anything can look at its class — `g_object_class_override_property`, which
+/// is how an implementer satisfies an interface's properties, runs in
+/// `class_init` and can only find a property of an interface the type is
+/// already known to implement. So this is the trait's job and not the caller's:
+/// a caller that added the interface after `register_static` returned would
+/// have handed out a `GType` that, for one window, implements nothing.
+#[test]
+fn a_declared_interface_is_added_before_the_type_is_handed_back() {
+    let gtype = register_static::<Implementor>();
+    // SAFETY: plain type-system reads on a type we just registered.
+    unsafe {
+        assert_ne!(
+            gobject_sys::g_type_is_a(gtype, gobject_sys::g_type_plugin_get_type()),
+            GFALSE,
+            "the type does not implement the interface it declared"
+        );
+
+        // The class initialises — which is where an implementer's property
+        // overrides would run — and an instance really is an instance of the
+        // interface.
+        let obj = g_object_new(gtype, ptr::null());
+        assert!(!obj.is_null(), "g_object_new returned NULL");
+        assert_ne!(
+            gobject_sys::g_type_check_instance_is_a(
+                obj.cast::<GTypeInstance>(),
+                gobject_sys::g_type_plugin_get_type()
+            ),
+            GFALSE
+        );
+        g_object_unref(obj);
+    }
+}
+
+/// Registration is idempotent, and adding the same interface to the same type
+/// twice is a GLib error rather than a no-op. The second call has to take the
+/// same "already there" exit the type itself takes.
+#[test]
+fn registering_an_implementor_twice_does_not_add_the_interface_again() {
+    assert_eq!(
+        register_static::<Implementor>(),
+        register_static::<Implementor>()
+    );
+}
+
+/// A type with nothing to declare is the common case and must not pay for the
+/// hook — nor acquire an interface list GObject would then have to walk.
+#[test]
+fn a_type_that_declares_no_interfaces_implements_none() {
+    let gtype = register_static::<Test>();
+    let mut n = 0;
+    // SAFETY: `g_type_interfaces` fills a count we own and returns a
+    // g_malloc'd array the caller frees.
+    unsafe {
+        let interfaces = gobject_sys::g_type_interfaces(gtype, &mut n);
+        glib_sys::g_free(interfaces.cast());
+    }
+    assert_eq!(n, 0);
+}

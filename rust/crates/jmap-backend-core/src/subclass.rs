@@ -13,7 +13,10 @@
 //! Both registration flavours exist because backends need both: an EDS module
 //! registers its types against the `GTypeModule` it is loaded as, so they can
 //! be unloaded again, while anything created outside a module (tests, and the
-//! Camel provider's own types) registers statically.
+//! Camel provider's own types) registers statically. A type may also declare
+//! the interfaces it implements — the `G_IMPLEMENT_INTERFACE` half of
+//! `G_DEFINE_TYPE_WITH_CODE` — which registration adds before it hands the
+//! `GType` back, because an interface added later is one the class never saw.
 
 use std::ffi::CStr;
 use std::mem::size_of;
@@ -22,8 +25,9 @@ use std::sync::Mutex;
 
 use glib_sys::{GType, gpointer};
 use gobject_sys::{
-    GObject, GObjectClass, GTypeInfo, GTypeInstance, GTypeModule, g_type_class_peek,
-    g_type_from_name, g_type_module_register_type, g_type_register_static,
+    GInterfaceInfo, GObject, GObjectClass, GTypeInfo, GTypeInstance, GTypeModule,
+    g_type_add_interface_static, g_type_class_peek, g_type_from_name, g_type_module_add_interface,
+    g_type_module_register_type, g_type_register_static,
 };
 
 use crate::trampoline::{guard, log_critical};
@@ -55,6 +59,28 @@ pub unsafe trait ObjectSubclass: Sized {
     type Class;
 
     fn parent_type() -> GType;
+
+    /// The interfaces this type implements, added to it before registration
+    /// hands the `GType` back.
+    ///
+    /// Timing is the reason this is declared rather than done by the caller.
+    /// An interface has to be on the type before its class is initialised:
+    /// `g_object_class_override_property`, which is how an implementer
+    /// satisfies an interface's properties, runs in
+    /// [`class_init`](ObjectSubclass::class_init) and only finds properties of
+    /// interfaces the type already implements. A caller adding the interface
+    /// after registration returned would be holding a `GType` that, for one
+    /// window, implements nothing — and anything that referenced its class in
+    /// that window would fix the omission permanently.
+    ///
+    /// The interfaces are registered with a NULL `interface_init`, which is
+    /// the whole implementation for an interface whose vfunc slots this type
+    /// does not fill. A type that *does* need to fill one overrides them in
+    /// `class_init`, where the interface struct is reachable through
+    /// `g_type_interface_peek`.
+    fn interfaces() -> Vec<GType> {
+        Vec::new()
+    }
 
     /// Runs once, before any instance exists. This is where vfunc slots in
     /// `Class` (and in the parent class reachable through it) get overridden.
@@ -127,8 +153,10 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
     // Resolved before the lock is taken, not inside the GTypeInfo below: a
     // parent_type() that registers another of our types — which is how a
     // hierarchy declared entirely in Rust bootstraps itself — would otherwise
-    // deadlock on this very much non-reentrant mutex.
+    // deadlock on this very much non-reentrant mutex. The same goes for the
+    // interfaces, which are resolved through type accessors of their own.
     let parent = T::parent_type();
+    let interfaces = T::interfaces();
 
     // A poisoned lock means some other registration panicked; the type system
     // itself is untouched by that, so carry on rather than panic in turn.
@@ -172,13 +200,43 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
 
     // SAFETY: `info` describes structs whose layout the ObjectSubclass
     // contract pins to the parent's, and it only has to outlive the call.
-    unsafe {
+    let gtype = unsafe {
         if module.is_null() {
             g_type_register_static(parent, T::NAME.as_ptr(), &info, 0)
         } else {
             g_type_module_register_type(module, parent, T::NAME.as_ptr(), &info, 0)
         }
+    };
+
+    // Before the type is handed back, and so before anything can reference its
+    // class: an interface added after class_init has run is an interface whose
+    // properties the class never overrode.
+    //
+    // A NULL `interface_init` leaves the interface's vfunc slots at whatever
+    // its `default_init` put there, which is the right implementation for an
+    // interface that is all properties — `CamelNetworkSettings`, the one this
+    // hook exists for, declares no vfuncs at all.
+    let interface_info = GInterfaceInfo {
+        interface_init: None,
+        interface_finalize: None,
+        interface_data: ptr::null_mut(),
+    };
+    for interface in interfaces {
+        // SAFETY: `gtype` was just registered and `interface` came from a type
+        // accessor; `interface_info` outlives both calls. On the static path
+        // the type is new, so the interface cannot already be on it; on the
+        // dynamic path `g_type_module_add_interface` is documented to be
+        // called again on every load, like the registration above.
+        unsafe {
+            if module.is_null() {
+                g_type_add_interface_static(gtype, interface, &interface_info);
+            } else {
+                g_type_module_add_interface(module, gtype, interface, &interface_info);
+            }
+        }
     }
+
+    gtype
 }
 
 /// GObject calls these from C, so they are guarded: a panic in a user
