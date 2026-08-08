@@ -57,6 +57,7 @@ use glib_sys::{GFALSE, GTRUE, gchar};
 use gobject_sys::g_object_unref;
 use jmap_mail_sync::MessageSummary;
 
+use crate::changes::Changes;
 use crate::folder_info::c_string;
 use crate::message_info::{new_message_info, update_message_info};
 
@@ -83,31 +84,46 @@ pub unsafe fn attach_summary(folder: *mut CamelFolder) {
     }
 }
 
-/// Brings the summary in line with what one listing of the mailbox found.
+/// Brings the summary in line with what one listing of the mailbox found, and
+/// reports what moved.
 ///
 /// The whole reconciliation happens under the summary's lock, so a reader
 /// never sees the folder mid-refresh — half a mailbox is a worse answer than
 /// the previous one.
 ///
+/// The [`Changes`] that come back are the other half of the answer: rewriting
+/// the rows brings a folder that is *opened* up to date, and the diff is the
+/// only thing that brings one that is already open up to date. It is returned
+/// rather than emitted here because emitting is a fact about a `CamelFolder`
+/// and this function is given a summary — the same separation the rest of the
+/// module keeps, and what lets every rule below be tested without a signal to
+/// listen for.
+///
 /// # Safety
 ///
 /// `summary` must point at a live `CamelFolderSummary`.
-pub unsafe fn apply_listing(summary: *mut CamelFolderSummary, messages: &[MessageSummary]) {
+pub unsafe fn apply_listing(
+    summary: *mut CamelFolderSummary,
+    messages: &[MessageSummary],
+) -> Changes {
     let listed: BTreeSet<&str> = messages
         .iter()
         .map(|message| message.uid.as_str())
         .collect();
+    let mut changes = Changes::new();
 
     // SAFETY: the summary is live by this function's contract, and Camel's
     // summary lock is recursive — the calls below take it again themselves.
     unsafe {
         camel_folder_summary_lock(summary);
-        remove_absent(summary, &listed);
+        remove_absent(summary, &listed, &mut changes);
         for message in messages {
-            apply_message(summary, message);
+            apply_message(summary, message, &mut changes);
         }
         camel_folder_summary_unlock(summary);
     }
+
+    changes
 }
 
 /// Drops the rows for messages the listing did not name.
@@ -115,7 +131,11 @@ pub unsafe fn apply_listing(summary: *mut CamelFolderSummary, messages: &[Messag
 /// # Safety
 ///
 /// `summary` must be live and locked.
-unsafe fn remove_absent(summary: *mut CamelFolderSummary, listed: &BTreeSet<&str>) {
+unsafe fn remove_absent(
+    summary: *mut CamelFolderSummary,
+    listed: &BTreeSet<&str>,
+    changes: &mut Changes,
+) {
     // SAFETY: `get_array` hands back a snapshot the caller owns, holding a
     // reference of its own to every uid in it — so removing a row while
     // walking it neither frees the string being read nor disturbs the walk.
@@ -131,11 +151,16 @@ unsafe fn remove_absent(summary: *mut CamelFolderSummary, listed: &BTreeSet<&str
             }
             // A uid Camel stored and we cannot read back as text is not one
             // this listing can have named either, so it goes with the rest.
-            let known = std::ffi::CStr::from_ptr(uid)
-                .to_str()
-                .is_ok_and(|uid| listed.contains(uid));
-            if !known {
-                camel_folder_summary_remove_uid(summary, uid);
+            let text = std::ffi::CStr::from_ptr(uid).to_str();
+            if text.is_ok_and(|uid| listed.contains(uid)) {
+                continue;
+            }
+            camel_folder_summary_remove_uid(summary, uid);
+            // Reported under the name Camel keeps it by, when there is one: a
+            // removal announced under a name the message list never held is a
+            // line that stays on screen.
+            if let Ok(text) = text {
+                changes.remove(text);
             }
         }
         camel_folder_summary_free_array(existing);
@@ -147,7 +172,11 @@ unsafe fn remove_absent(summary: *mut CamelFolderSummary, listed: &BTreeSet<&str
 /// # Safety
 ///
 /// `summary` must be live and locked.
-unsafe fn apply_message(summary: *mut CamelFolderSummary, message: &MessageSummary) {
+unsafe fn apply_message(
+    summary: *mut CamelFolderSummary,
+    message: &MessageSummary,
+    changes: &mut Changes,
+) {
     let uid = c_string(message.uid.as_str());
 
     // SAFETY: the uid outlives every call it is passed to; `summary_get`
@@ -157,7 +186,13 @@ unsafe fn apply_message(summary: *mut CamelFolderSummary, message: &MessageSumma
         if camel_folder_summary_check_uid(summary, uid.as_ptr()) != GFALSE {
             let info = camel_folder_summary_get(summary, uid.as_ptr());
             if !info.is_null() {
-                update_message_info(info, message);
+                // Reported only when the row really moved. A refresh is a poll,
+                // so nearly every row it meets is the row it left there, and a
+                // folder that announced all of them would redraw the message
+                // list the user is reading every time the timer went off.
+                if update_message_info(info, message) {
+                    changes.change(message.uid.as_str());
+                }
                 g_object_unref(info.cast());
                 return;
             }
@@ -179,5 +214,6 @@ unsafe fn apply_message(summary: *mut CamelFolderSummary, message: &MessageSumma
         // one that stays right if it ever does.
         camel_folder_summary_add(summary, info, GTRUE);
         g_object_unref(info.cast());
+        changes.add(message.uid.as_str());
     }
 }

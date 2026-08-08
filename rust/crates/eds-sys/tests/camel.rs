@@ -297,3 +297,52 @@ fn a_stored_message_id_is_eight_bytes_of_a_digest() {
         assert_eq!(*id.id.id.as_ref(), 0);
     }
 }
+
+/// The other plain struct this provider hands across the boundary:
+/// `CamelFolderChangeInfo`, which is what a folder tells Camel it has changed.
+/// Like `CamelProvider` it sits behind a boxed type, so `g_type_query` knows
+/// nothing of its size and `tests/layout.rs` has nothing to check — and unlike
+/// `CamelProvider` it has both public fields *and* accessors for the same four
+/// arrays, which is the layout check standing in for the one GObject would
+/// have given us. A field at the wrong offset is an added uid read out of the
+/// removed list.
+///
+/// The emptiness half is the contract the refresh vfunc is built on: a fresh
+/// change info reports no changes, so "nothing came back different" and
+/// "nothing to tell Camel about" are the same test — and a folder that emitted
+/// its `changed` signal regardless would redraw the user's message list on
+/// every poll.
+#[test]
+fn a_change_info_is_empty_until_something_is_put_in_it() {
+    // SAFETY: the change info is allocated, filled and freed here; the uid is
+    // a NUL-terminated literal the call copies.
+    unsafe {
+        let changes = camel_folder_change_info_new();
+        assert!(!changes.is_null());
+        assert_eq!(
+            camel_folder_change_info_changed(changes),
+            glib_sys::GFALSE,
+            "a fresh change info claims to carry a change"
+        );
+
+        camel_folder_change_info_add_uid(changes, c"M1001".as_ptr());
+        assert_ne!(camel_folder_change_info_changed(changes), glib_sys::GFALSE);
+
+        let added = camel_folder_change_info_get_added_uids(changes);
+        assert_eq!(
+            added,
+            (*changes).uid_added,
+            "uid_added is not the added list"
+        );
+        assert_eq!((*added).len, 1);
+        assert_eq!(
+            std::ffi::CStr::from_ptr((*added).pdata.read().cast()),
+            c"M1001"
+        );
+        assert_eq!((*(*changes).uid_removed).len, 0);
+        assert_eq!((*(*changes).uid_changed).len, 0);
+        assert_eq!((*(*changes).uid_recent).len, 0);
+
+        camel_folder_change_info_free(changes);
+    }
+}

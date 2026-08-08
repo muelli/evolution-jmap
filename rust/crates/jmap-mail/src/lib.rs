@@ -49,6 +49,12 @@
 //!   folder is given at construction, what a listing of the mailbox does to the
 //!   rows already in it, and the flag that lets Camel ask a folder how much it
 //!   holds.
+//! - [`changes`] is the other half of that answer: the uids one listing moved,
+//!   in the `CamelFolderChangeInfo` Camel's `changed` signal carries — which is
+//!   how a message list that is already on screen learns about new mail.
+//! - [`refresh`] is `refresh_info_sync`, the folder vfunc that joins the three
+//!   above to a server: the mailbox listed over the store's connection, the
+//!   rows reconciled against what the folder holds, and the diff emitted.
 //! - [`message_info`] is one row of that folder's contents: the
 //!   `CamelMessageInfo` a `jmap-mail-sync` summary row becomes, and with it the
 //!   three columns that are a computation rather than a copy — the flags word,
@@ -64,6 +70,7 @@
 //! `cdylib`, together with `libcameljmap.urls`, into Camel's provider
 //! directory.
 
+pub mod changes;
 pub mod connect;
 pub mod folder;
 pub mod folder_info;
@@ -71,6 +78,7 @@ pub mod folders;
 pub mod message_info;
 pub mod module;
 pub mod provider;
+pub mod refresh;
 pub mod server;
 pub mod service;
 pub mod settings;

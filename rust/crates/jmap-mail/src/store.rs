@@ -27,8 +27,8 @@ use eds_sys::{
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync};
-use jmap_proto::State;
+use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync, MessageSummary};
+use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
 use crate::settings::settings_type;
@@ -183,6 +183,25 @@ impl JmapStore {
         *write(folders) = Some(listing);
         drop(connection);
         Ok(tree)
+    }
+
+    /// Every message in one of the account's mailboxes — what a folder's
+    /// `refresh_info_sync` fills its summary from.
+    ///
+    /// It is a method on the store rather than on the folder because the
+    /// connection is: a `CamelFolder` holds a mailbox id and a back-pointer to
+    /// the store it hangs off, and every request it makes goes out over the
+    /// store's client. Nothing is cached here — a listing *is* the folder's
+    /// state, and the summary is where it lives.
+    ///
+    /// The connection is read-locked across the request, which is what makes a
+    /// disconnect that arrives mid-refresh wait rather than pull the client out
+    /// from under it. Read-locked, so several folders may refresh at once.
+    pub fn messages(&self, mailbox: &Id) -> Result<Vec<MessageSummary>, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        Ok(sync.messages(mailbox)?)
     }
 
     /// Drops the folder listing. Called with the connection lock held, by the

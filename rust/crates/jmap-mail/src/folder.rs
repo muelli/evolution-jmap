@@ -38,8 +38,8 @@ use std::ptr;
 
 use eds_sys::{
     CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY,
-    CamelFolder, CamelFolderFlags, CamelOfflineFolder, CamelOfflineFolderClass, CamelStore,
-    camel_folder_set_flags, camel_offline_folder_get_type,
+    CamelFolder, CamelFolderClass, CamelFolderFlags, CamelOfflineFolder, CamelOfflineFolderClass,
+    CamelStore, camel_folder_set_flags, camel_offline_folder_get_type,
 };
 use glib_sys::{GType, gchar};
 use gobject_sys::g_object_new;
@@ -91,10 +91,10 @@ impl JmapFolder {
     }
 }
 
-/// The class struct, same rule one level up. It carries nothing of its own
-/// yet — the folder's vfuncs arrive with the summary they read — which is
-/// still not the same as *being* `CamelOfflineFolderClass`: the type needs a
-/// class of its own for those overrides to have somewhere to go.
+/// The class struct, same rule one level up. It carries nothing of its own —
+/// what it carries is the parent's vfunc slots with our functions in them,
+/// which is still not the same as *being* `CamelOfflineFolderClass`: the type
+/// needs a class of its own for those overrides to have somewhere to go.
 #[repr(C)]
 pub struct JmapFolderClass {
     parent_class: CamelOfflineFolderClass,
@@ -115,6 +115,18 @@ unsafe impl ObjectSubclass for JmapFolder {
     fn parent_type() -> GType {
         // SAFETY: no arguments, and the type initialises itself.
         unsafe { camel_offline_folder_get_type() }
+    }
+
+    unsafe fn class_init(class: *mut Self::Class) {
+        // What the folder is asked about its contents. `CamelFolder` leaves
+        // `refresh_info_sync` NULL and its wrapper answers TRUE without doing
+        // anything for a class that has not filled it in — so without this line
+        // a JMAP folder is one that reports every refresh as a success and
+        // stays permanently empty.
+        //
+        // SAFETY: the class leads with CamelOfflineFolderClass, which leads
+        // with CamelFolderClass — the contract above.
+        unsafe { crate::refresh::install_vfuncs(class.cast::<CamelFolderClass>()) };
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.
