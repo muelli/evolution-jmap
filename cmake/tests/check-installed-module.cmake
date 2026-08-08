@@ -10,8 +10,12 @@
 #   EXPECTED   absolute path of the module inside the install prefix
 #   SYMBOLS    '|'-separated symbol names the module must export
 #
-# and optionally, to check the destination against something other than
-# itself:
+# and optionally:
+#
+#   EXPECTED_DATA '|'-separated absolute paths of files installed beside the
+#                 module that must also have arrived
+#
+# and, to check the destination against something other than itself:
 #
 #   PKG_MODULE    pkg-config module owning the directory
 #   PKG_VARIABLE  variable in it naming the directory
@@ -78,15 +82,72 @@ if(_size LESS 1024)
 	message(FATAL_ERROR "${_module} is ${_size} bytes; that is not a shared module")
 endif()
 
-# The dynamic symbol table is NUL-separated ASCII, which file(STRINGS)
-# splits into one element per name — no nm(1) needed.
+# nm(1) rather than scanning the file for the name. `.dynstr` holds the
+# *undefined* symbols too, so a file(STRINGS) match proves only that the
+# module mentions the entry point — which every module that includes the
+# header declaring it does, whether or not it defines it. Mutation-checked:
+# renaming the definition to `camel_provider_module_lnit` left the string
+# behind and the scan happily passed. --defined-only is the whole point.
+find_program(NM_EXECUTABLE nm REQUIRED)
+execute_process(
+	COMMAND ${NM_EXECUTABLE} --dynamic --defined-only --format=posix "${_module}"
+	OUTPUT_VARIABLE _nm_output
+	ERROR_VARIABLE _nm_error
+	RESULT_VARIABLE _result
+)
+if(NOT _result EQUAL 0)
+	message(FATAL_ERROR "nm failed on ${_module} (${_result}):\n${_nm_error}")
+endif()
+
+# POSIX format is one `name type value size` line per symbol.
+set(_exported)
+string(REPLACE "\n" ";" _nm_lines "${_nm_output}")
+foreach(_line IN LISTS _nm_lines)
+	if(_line MATCHES "^([^ ]+) ")
+		list(APPEND _exported "${CMAKE_MATCH_1}")
+	endif()
+endforeach()
+
 string(REPLACE "|" ";" _wanted "${SYMBOLS}")
-list(JOIN _wanted "|" _pattern)
-file(STRINGS "${_module}" _found REGEX "^(${_pattern})$")
 foreach(_symbol IN LISTS _wanted)
-	if(NOT "${_symbol}" IN_LIST _found)
+	if(NOT "${_symbol}" IN_LIST _exported)
 		message(FATAL_ERROR "${_module} does not export ${_symbol}")
 	endif()
 endforeach()
 
 message(STATUS "${_module}: ${_size} bytes, exports ${SYMBOLS}")
+
+# Files installed alongside — Camel's `.urls`, which is what decides whether
+# the module beside it is ever dlopened. An empty one is as bad as a missing
+# one and looks the same from the build system's side, so check the size too.
+if(DEFINED EXPECTED_DATA)
+	string(REPLACE "|" ";" _data_files "${EXPECTED_DATA}")
+	foreach(_data IN LISTS _data_files)
+		if(NOT EXISTS "${STAGE_DIR}${_data}")
+			message(FATAL_ERROR
+				"component '${COMPONENT}' installed nothing at ${STAGE_DIR}${_data}")
+		endif()
+		file(SIZE "${STAGE_DIR}${_data}" _data_size)
+		if(_data_size EQUAL 0)
+			message(FATAL_ERROR "${STAGE_DIR}${_data} is empty")
+		endif()
+		message(STATUS "${STAGE_DIR}${_data}: ${_data_size} bytes")
+	endforeach()
+endif()
+
+# The check above only inspects what the caller declared, so a build that
+# simply forgot to declare its `.urls` passes it. For a Camel provider that
+# is not a gap in the check, it is the failure: Camel decides whether to
+# dlopen libcamel<protocol>.so by reading libcamel<protocol>.urls beside it,
+# and a module without one is installed, correct, and never loaded. So state
+# Camel's rule here rather than trusting the caller to remember it.
+get_filename_component(_module_name "${EXPECTED}" NAME)
+if(_module_name MATCHES "^libcamel(.+)\\.so$")
+	get_filename_component(_module_dir "${EXPECTED}" DIRECTORY)
+	set(_urls "${STAGE_DIR}${_module_dir}/libcamel${CMAKE_MATCH_1}.urls")
+	if(NOT EXISTS "${_urls}")
+		message(FATAL_ERROR
+			"${_module_name} is a Camel provider, but no ${_urls} was "
+			"installed beside it; Camel would never dlopen it")
+	endif()
+endif()

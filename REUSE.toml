@@ -27,6 +27,9 @@ path = [
     "rust/Cargo.lock",
     ".gitignore",
     "rust/crates/*/tests/fixtures/**",
+    # Camel reads every line of a `.urls` file as a protocol name, so a comment
+    # header in it would register a provider called "# SPDX-...".
+    "rust/crates/jmap-mail/libcameljmap.urls",
     "README.md",
     "docs/**",
     "infra/night-shift/night-prompt.md",

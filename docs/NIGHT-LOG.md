@@ -1902,3 +1902,101 @@ readable via `pkg_check_variable`) and the `ctest` that checks the artifact
 exports the entry point — the mirror of `install-cal-backend`. The `.urls` file
 belongs with it: Camel reads it to know which protocols a module provides
 without dlopening it.
+
+## 2026-08-08 (twenty-second session)
+
+M5's second increment, the one the previous entry named: `jmap-mail`, a
+`libcameljmap.so` that exports `camel_provider_module_init` and registers a JMAP
+provider naming a `CamelJmapStore`, plus the `.urls` file beside it, the CMake
+install rule into Camel's provider directory and the CTest that checks both
+arrived. One commit.
+
+The crate is four small files. `store.rs` is the `CamelOfflineStore` subclass,
+registered statically; `provider.rs` builds the `CamelProvider` and hands it to
+`camel_provider_register`; `module.rs` is the exported symbol, guarded like every
+other C entry point here; `libcameljmap.urls` is the one line Camel reads to
+decide whether to dlopen the object at all. `tests/provider.rs` is 10 tests.
+`cmake/Backends.cmake` gains the `camel-1.2` probe and the install rule,
+`cmake/Rust.cmake` a `DATA` argument to `add_cargo_cdylib` and `-p jmap-mail` in
+`rust-test-eds`, and `REUSE.toml` an annotation for the `.urls` file.
+
+Decisions taken:
+
+- **The provider struct is leaked on purpose.** `camel_provider_register` takes
+  the pointer and keeps it in a table it never clears, without copying, so the
+  struct has to outlive anything that can still reach it — which is the process.
+  A `Box::into_raw` behind a `OnceLock` is the honest spelling of that: the
+  `OnceLock` is not an optimisation, it is what stops a second
+  `camel_provider_module_init` from leaving Camel's table pointing at one struct
+  while an earlier caller holds another.
+- **The transport slot stays `G_TYPE_INVALID`.** Sending is
+  `EmailSubmission/set` and a `CamelJmapTransport` that does not exist. A type
+  named there before it works is a crash the first time a user hits Send, which
+  is worse than an account that visibly cannot send yet.
+- **`translation_domain` is `evolution-jmap`, not NULL.** NULL means, in this
+  struct, "a provider inside the EDS source tree, translated from EDS's
+  catalogue". These strings are not. There is no catalogue installed under the
+  domain yet and gettext falls back to the untranslated string, which is the
+  right outcome and not a silent misattribution.
+- **`SUPPORTS_SSL` is not a security claim.** It says the user *may choose* an
+  encrypted connection, which is what puts the security options in the account
+  dialog. Refusing plaintext to anywhere but localhost stays in the client,
+  where it can be enforced rather than advertised.
+- **`camel_provider_module_init` is a safe `extern "C"`, unlike
+  `e_module_load`.** It takes no arguments, so there is no pointer whose
+  validity a caller has to promise, and an `unsafe fn` would be claiming a
+  contract that does not exist. The declaration is still in scope through
+  `eds-sys`, and a test coerces both it and the definition to the same function
+  pointer type, so the signature is checked rather than assumed.
+
+Mutation testing found a real bug in the *existing* test infrastructure, which
+is the part of this session worth reading. Ten mutants, the last two of which
+did not die on the first attempt:
+
+- Six against the Rust: `.urls` claiming `imap` (1 test fails), the store
+  parenting on plain `CamelStore` (1), the transport slot filled with the store
+  type (1), `domain` spelled `Mail` (1), `NEED_HOST` downgraded to `ALLOW_HOST`
+  (1), `IS_STORAGE` dropped (1). All dead.
+- A typo in the `DATA` path dies at configure time, because
+  `add_cargo_cdylib` checks the file exists.
+- **Dropping the `DATA` argument altogether survived.** The install check only
+  ever inspected what the caller declared, so a build that simply forgot the
+  `.urls` file passed. Fixed by stating Camel's own rule in
+  `check-installed-module.cmake`: a module installed as `libcamel<x>.so` needs a
+  `libcamel<x>.urls` beside it, full stop. Re-run, the mutant dies.
+- **Renaming the exported entry point survived, and this one was not new.**
+  `check-installed-module.cmake` looked for the symbol with `file(STRINGS ...
+  REGEX)`, on the stated assumption that a match means the dynamic symbol table
+  contains the name. It does not: `.dynstr` holds *undefined* symbols too, so
+  every module that merely includes the header declaring an entry point passes
+  the check for exporting it. `libjmap_mail.so` with the definition renamed to
+  `camel_provider_module_lnit` still carried the string once, from `eds-sys`'s
+  declaration, and the check was satisfied. The book and calendar backends had
+  been passing the same non-check since the rule was written. Replaced with
+  `nm --dynamic --defined-only --format=posix`; both the camel mutant and an
+  `e_module_unload` rename in `jmap-backend-book` now die on it. `nm` is
+  binutils, already in the CI image via `build-essential`.
+
+Not verified locally, as in the previous twenty-one sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The five new
+`.rs` files carry SPDX `GPL-3.0-or-later` headers; `libcameljmap.urls` cannot —
+Camel reads every line of it as a protocol name, so a comment header would
+register a provider called `# SPDX-FileCopyrightText: ...` — and is annotated in
+`REUSE.toml` instead, which the test for its contents also says out loud.
+`cargo fmt --check`, `cargo test --locked` (36 test binaries green on the default
+members, the five EDS crates green on top, `jmap-mail` at 10) and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on both member sets, and a fresh
+`cmake -S . -B <tmp> -G Ninja && cmake --build && ctest` is 5/5 — the fifth being
+the new `install-camel-provider`.
+
+No blockers hit.
+
+Next in M5: `CamelJmapStore` doing something. The store's own increment is
+`connect_sync` plus `get_folder_info_sync` over `Mailbox/get` — the settings
+object a service is configured through (`CamelStoreSettings` and
+`CamelNetworkSettings` are already allowlisted in `eds-sys`), resolving the JMAP
+account out of them the way `jmap-backend-core::source` does for an `ESource`,
+and mapping the mailbox tree onto the `CamelFolderInfo` chain Camel expects. That
+needs `CamelFolder` and `CamelFolderInfo` in the allowlist, which the previous
+session deliberately deferred, so teaching `eds-sys` about them — and the layout
+test about the two new class structs — comes first or with it.
