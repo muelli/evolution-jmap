@@ -26,5 +26,6 @@
 
 pub mod cancel;
 pub mod error;
+pub mod source;
 pub mod subclass;
 pub mod trampoline;
