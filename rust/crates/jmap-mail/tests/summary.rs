@@ -452,3 +452,171 @@ fn a_mailbox_that_emptied_empties_the_summary() {
         g_object_unref(folder.cast());
     }
 }
+
+// ---------------------------------------------------------------------------
+// what the listing is reported to have changed
+
+/// The rows are only half of what a listing produces. The other half is the
+/// diff: Camel draws a message list once and then redraws it from the `changed`
+/// signal, so a folder that filled its summary and said nothing is a folder
+/// whose new mail appears when the user next clicks away and back.
+#[test]
+fn a_first_listing_reports_every_row_as_added() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        let changes = apply_listing(summary, &[message("M1001"), message("M1002")]);
+
+        assert!(!changes.is_empty());
+        assert_eq!(changes.added(), ["M1001", "M1002"]);
+        assert!(changes.removed().is_empty());
+        assert!(changes.changed().is_empty());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The listing that found what it found last time. A refresh is a poll — Camel
+/// runs one on a timer and one every time the folder is opened — so the common
+/// answer is that nothing happened, and reporting it as a change would redraw
+/// the user's message list, and lose their scroll position, every minute.
+#[test]
+fn a_listing_that_found_nothing_new_reports_nothing() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001"), message("M1002")]);
+        let changes = apply_listing(summary, &[message("M1001"), message("M1002")]);
+
+        assert!(changes.is_empty(), "an unchanged mailbox reported a change");
+        assert!(changes.added().is_empty());
+        assert!(changes.removed().is_empty());
+        assert!(changes.changed().is_empty());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The two columns a refresh may rewrite are the two it may report. A message
+/// read in another client is the row Camel has to redraw in bold-no-longer, and
+/// nothing else about it moved.
+#[test]
+fn a_row_whose_flags_moved_is_reported_as_changed() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    let mut read = message("M1001");
+    read.flags.seen = true;
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001"), message("M1002")]);
+        let changes = apply_listing(summary, &[read, message("M1002")]);
+
+        assert_eq!(changes.changed(), ["M1001"]);
+        assert!(changes.added().is_empty());
+        assert!(changes.removed().is_empty());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A label is the same kind of change through a column Camel has no bit for,
+/// and it has to count as one: Evolution colours the message list by label.
+#[test]
+fn a_row_whose_labels_moved_is_reported_as_changed() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    let mut labelled = message("M1001");
+    labelled.tags = vec!["urgent".to_owned()];
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001")]);
+        let changes = apply_listing(summary, &[labelled]);
+
+        assert_eq!(changes.changed(), ["M1001"]);
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The row that went. Camel takes a message off the list on this and no other
+/// notice, so a removal reported as nothing is a line the user can click and
+/// not open.
+#[test]
+fn a_message_that_left_the_mailbox_is_reported_as_removed() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001"), message("M1002")]);
+        let changes = apply_listing(summary, &[message("M1002")]);
+
+        assert_eq!(changes.removed(), ["M1001"]);
+        assert!(changes.added().is_empty());
+        assert!(changes.changed().is_empty());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// Nothing is ever recent, and that is a decision rather than an omission.
+/// Camel's fourth list is what runs the user's incoming filters, and a JMAP
+/// listing cannot tell a message that just arrived from one that was always
+/// there: the first refresh of an account finds the whole mailbox. Reporting
+/// those as recent would file, or delete, every message the user already had.
+#[test]
+fn nothing_a_listing_found_is_recent() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        let changes = apply_listing(summary, &[message("M1001")]);
+
+        assert!(changes.recent().is_empty());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// Both mutable columns in one listing. A message read *and* relabelled between
+/// two refreshes is ordinary — Evolution's own "mark as read and file it" rule
+/// does both at once — and it is the case a verdict built with `||` gets wrong:
+/// short-circuiting on the flags means the labels are never written at all, and
+/// the row keeps a label that was taken off days ago.
+#[test]
+fn a_row_that_moved_in_both_columns_has_both_of_them_written() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    let mut labelled = message("M1001");
+    labelled.tags = vec!["urgent".to_owned()];
+    let mut read = message("M1001");
+    read.flags.seen = true;
+
+    // SAFETY: `folder` is live and every row taken is unreffed.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[labelled]);
+        let changes = apply_listing(summary, &[read]);
+
+        let info = row(summary, "M1001").expect("a row for the message");
+        assert_ne!(camel_message_info_get_flags(info) & CAMEL_MESSAGE_SEEN, 0);
+        assert_eq!(
+            camel_message_info_get_user_flag(info, c"urgent".as_ptr()),
+            GFALSE,
+            "the flags were written and the labels were not"
+        );
+        assert_eq!(changes.changed(), ["M1001"]);
+        g_object_unref(info.cast());
+        g_object_unref(folder.cast());
+    }
+}
