@@ -354,3 +354,53 @@ fn a_mailbox_without_a_name_is_a_protocol_error() {
 
     assert!(error.to_string().contains("name"), "{error}");
 }
+
+// ---------------------------------------------------------------------------
+// finding the folder a role names
+
+/// What `camel_store_get_inbox_folder_sync` is answered from. The role is a
+/// property of the mailbox, not of its name or its place in the tree, so the
+/// lookup has to reach every level — a JMAP server is free to put the inbox
+/// under another mailbox, and several do.
+#[test]
+fn a_role_finds_its_folder_wherever_it_sits() {
+    let tree = tree(&[
+        mailbox("M1", "Accounts"),
+        with_role(child("M2", "Inbox", "M1"), role::INBOX),
+    ]);
+
+    let inbox = tree.role(FolderRole::Inbox).expect("the account's inbox");
+    assert_eq!(inbox.path, "Accounts/Inbox");
+    assert_eq!(inbox.id, Id::new("M2"));
+}
+
+/// An account whose server assigns no roles at all — legal, since RFC 8621 §2
+/// makes `role` nullable on every mailbox. There is no inbox to answer with,
+/// and inventing one out of a mailbox called "Inbox" would be this provider
+/// guessing where the user's mail arrives.
+#[test]
+fn a_role_no_mailbox_claims_is_not_found() {
+    let tree = tree(&[mailbox("M1", "Inbox"), mailbox("M2", "Sent")]);
+
+    assert!(tree.role(FolderRole::Inbox).is_none());
+    assert!(tree.role(FolderRole::Trash).is_none());
+}
+
+/// Two mailboxes claiming one role is a server bug, and the tree already
+/// settles it by giving the role to the first in sibling order. The lookup must
+/// agree with that decision rather than take the first mailbox whose *JMAP*
+/// role says inbox, or the folder Camel opens as the inbox would not be the one
+/// the folder listing marked `CAMEL_FOLDER_TYPE_INBOX`.
+#[test]
+fn the_role_is_found_on_the_folder_that_kept_it() {
+    let tree = tree(&[
+        with_role(
+            with_sort_order(mailbox("M1", "Second inbox"), 5),
+            role::INBOX,
+        ),
+        with_role(with_sort_order(mailbox("M2", "Real inbox"), 1), role::INBOX),
+    ]);
+
+    let inbox = tree.role(FolderRole::Inbox).expect("the account's inbox");
+    assert_eq!(inbox.display_name, "Real inbox");
+}

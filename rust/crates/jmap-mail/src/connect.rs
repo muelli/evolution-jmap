@@ -90,6 +90,14 @@ pub enum StoreError {
     /// is wrong with the connection or the account, and a service error would
     /// be a working account reported as broken because one folder went away.
     NoFolder(String),
+    /// Camel asked for the account's inbox and no mailbox claims that role.
+    ///
+    /// A legal account rather than a broken one — RFC 8621 §2 makes `role`
+    /// nullable on every mailbox — but the question still has no answer, and
+    /// falling back to a mailbox *named* "Inbox" would be the provider guessing
+    /// where the user's mail arrives. Reported like [`Self::NoFolder`], whose
+    /// case this is: a folder Camel asked for that the account does not have.
+    NoInbox,
 }
 
 impl From<SourceError> for StoreError {
@@ -122,6 +130,7 @@ impl fmt::Display for StoreError {
             Self::Client(error) => error.fmt(f),
             Self::Disconnected => f.write_str("not connected to the JMAP server"),
             Self::NoFolder(path) => write!(f, "no such folder: {path}"),
+            Self::NoInbox => f.write_str("no mailbox of this account is the inbox"),
         }
     }
 }
@@ -166,7 +175,7 @@ impl StoreError {
                 (gio_sys::g_io_error_quark(), gio_sys::G_IO_ERROR_CANCELLED)
             },
             // SAFETY: as above.
-            Self::NoFolder(_) => unsafe {
+            Self::NoFolder(_) | Self::NoInbox => unsafe {
                 (
                     camel_store_error_quark(),
                     CAMEL_STORE_ERROR_NO_FOLDER as i32,
