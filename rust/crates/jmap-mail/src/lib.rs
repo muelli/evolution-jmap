@@ -28,8 +28,10 @@
 //!   account id its mail lives in, and the two answers a failure has to give in
 //!   Camel's vocabulary rather than EDS's.
 //! - [`store`] is `CamelJmapStore`, the `CamelOfflineStore` subclass a JMAP
-//!   account's folders will hang off. It names the settings class above and
-//!   holds the connection between `connect_sync` and `disconnect_sync`; the
+//!   account's folders hang off. It names the settings class above, holds the
+//!   connection between `connect_sync` and `disconnect_sync`, and keeps the
+//!   folder listing read over it — what `get_folder_info_sync` answers with,
+//!   and what Camel's `REFRESH` flag decides whether to go and check. The
 //!   vfuncs themselves are the next increment.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.

@@ -3,27 +3,41 @@
 
 //! `CamelJmapStore`: the type Camel instantiates for a JMAP mail account.
 //!
-//! No vfunc is overridden yet. What the type does carry is the three things a
-//! later increment cannot change cheaply: its parent, because every folder
-//! vfunc is declared on one of the two candidates; the settings class it is
-//! configured through — [`crate::settings`], without which a JMAP account has
-//! nowhere to keep a server; and the slot the connection lives in, which is a
-//! field of the instance struct and therefore part of a layout the vfuncs will
-//! be reading through.
+//! No vfunc is overridden yet. What the type does carry is the things a later
+//! increment cannot change cheaply: its parent, because every folder vfunc is
+//! declared on one of the two candidates; the settings class it is configured
+//! through — [`crate::settings`], without which a JMAP account has nowhere to
+//! keep a server; and the two slots its state lives in, which are fields of the
+//! instance struct and therefore part of a layout the vfuncs will be reading
+//! through — the connection, and the folder listing read over it.
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
-use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    CamelOfflineStore, CamelOfflineStoreClass, CamelServiceClass, camel_offline_store_get_type,
+    CAMEL_STORE_FOLDER_INFO_REFRESH, CamelOfflineStore, CamelOfflineStoreClass, CamelServiceClass,
+    CamelStoreGetFolderInfoFlags, camel_offline_store_get_type,
 };
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_mail_sync::MailSync;
+use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync};
+use jmap_proto::State;
 
+use crate::connect::StoreError;
 use crate::settings::settings_type;
+
+/// A folder listing, and the state it is current as of.
+///
+/// The tree is behind an [`Arc`] because it outlives the lock: a caller
+/// translating it into a `CamelFolderInfo` forest must not hold the store's
+/// listing locked while it does, and copying the tree per call would be a walk
+/// of every mailbox for an answer that did not change.
+struct Listing {
+    state: State,
+    tree: Arc<FolderTree>,
+}
 
 /// The instance struct. `#[repr(C)]` leading with the parent's instance struct
 /// is what makes a `*mut JmapStore` usable as the `CamelStore *` every Camel
@@ -40,6 +54,16 @@ pub struct JmapStore {
     /// behind one lock would make each wait on the slowest. Only connect and
     /// disconnect, which replace the value, need exclusive access.
     connection: Slot<RwLock<Option<MailSync>>>,
+    /// The folder tree the connection last answered with, and when.
+    ///
+    /// A slot of its own rather than a field of the connection, so that a
+    /// folder refresh and a reconnect do not queue behind each other. What ties
+    /// the two together is an ordering rule instead: a listing is stored while
+    /// the connection it was read over is still read-locked, so a
+    /// [`store_connection`](JmapStore::store_connection) — which needs that
+    /// lock exclusively — cannot slip in between the request and the write and
+    /// have its clearing undone by a tree the previous connection produced.
+    folders: Slot<RwLock<Option<Listing>>>,
 }
 
 impl JmapStore {
@@ -48,10 +72,16 @@ impl JmapStore {
     /// Replacing rather than refusing: Camel reconnects a store it believes has
     /// gone away, and the connection being replaced is exactly the one it
     /// believes that about. The old one is dropped — and its socket closed —
-    /// when this returns.
+    /// when this returns, and the folder listing read over it goes too: a
+    /// reconnect happens because something about the account changed, and the
+    /// server behind the new connection may not be the one the old tree —
+    /// paths, message counts, and the JMAP ids every later request is built
+    /// from — describes.
     pub fn store_connection(&self, sync: MailSync) {
         if let Some(connection) = self.connection() {
-            *write(connection) = Some(sync);
+            let mut connection = write(connection);
+            self.forget_folders();
+            *connection = Some(sync);
         }
     }
 
@@ -61,9 +91,19 @@ impl JmapStore {
     /// connected, so "there was none" is a normal outcome rather than a
     /// failure; it is still reported, because `disconnect_sync` is the caller
     /// that wants to know whether it did anything.
+    ///
+    /// The folder listing goes with it. That changes no answer — with no
+    /// connection there is nothing that could serve a tree, and the reconnect
+    /// clears it again anyway — but a disconnected account holding its whole
+    /// mailbox tree in memory until Evolution quits is dead weight, and the
+    /// point of a disconnect is that the account is not in use.
     pub fn drop_connection(&self) -> bool {
         match self.connection() {
-            Some(connection) => write(connection).take().is_some(),
+            Some(connection) => {
+                let mut connection = write(connection);
+                self.forget_folders();
+                connection.take().is_some()
+            }
             None => false,
         }
     }
@@ -74,23 +114,99 @@ impl JmapStore {
             .is_some_and(|connection| read(connection).is_some())
     }
 
-    /// An instance outside the GObject type system: zeroed parent bytes and an
-    /// initialised connection slot, which is what `instance_init` leaves behind
-    /// minus the GObject.
+    /// The account's folder tree — what `get_folder_info_sync` answers with.
+    ///
+    /// `flags` is Camel's word verbatim, and the bit that matters here is
+    /// `CAMEL_STORE_FOLDER_INFO_REFRESH`: Camel asks a store for its folder
+    /// tree constantly, and sets that bit on the few of those calls that mean
+    /// "go and look". Without it the listing already in hand is the answer, and
+    /// no request is made at all. With it, one `Mailbox/changes` decides
+    /// whether the tree has to be walked again — see
+    /// [`MailSync::folder_tree_since`], which is where the rule that a mailbox
+    /// delta cannot be applied folder by folder lives.
+    ///
+    /// The first call has nothing in hand and therefore lists whatever the
+    /// flags say: an account that opened empty until something asked it to
+    /// refresh would be an account with no mail in it.
+    ///
+    /// The other flags are not read yet. `SUBSCRIBED` and `SUBSCRIPTION_LIST`
+    /// ask for the tree filtered to what the user subscribed to, which is a
+    /// filter on the tree rather than a different request, and `FAST` asks for
+    /// it without message counts, which JMAP includes in the mailbox anyway.
+    pub fn folders(
+        &self,
+        flags: CamelStoreGetFolderInfoFlags,
+    ) -> Result<Arc<FolderTree>, StoreError> {
+        let (connection, folders) = self
+            .connection()
+            .zip(self.folder_listing())
+            .ok_or(StoreError::Disconnected)?;
+
+        // Held across the request, which is the ordering rule the `folders`
+        // field documents: the connection a listing was read over is still ours
+        // when the listing is written.
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+
+        let held = read(folders)
+            .as_ref()
+            .map(|listing| (listing.state.clone(), Arc::clone(&listing.tree)));
+
+        let listing = match held {
+            Some((_, tree)) if flags & CAMEL_STORE_FOLDER_INFO_REFRESH == 0 => return Ok(tree),
+            Some((state, tree)) => match sync.folder_tree_since(&state)? {
+                // The tree is kept, not rebuilt from an equal one: Camel diffs
+                // the forests it is handed to decide which folders to announce
+                // as created or deleted, and every caller above holds the same
+                // `Arc` as before.
+                FolderUpdate::Unchanged(state) => Listing { state, tree },
+                FolderUpdate::Rebuilt { state, tree } => Listing {
+                    state,
+                    tree: Arc::new(tree),
+                },
+            },
+            None => {
+                let (state, tree) = sync.folder_tree()?;
+                Listing {
+                    state,
+                    tree: Arc::new(tree),
+                }
+            }
+        };
+
+        let tree = Arc::clone(&listing.tree);
+        *write(folders) = Some(listing);
+        drop(connection);
+        Ok(tree)
+    }
+
+    /// Drops the folder listing. Called with the connection lock held, by the
+    /// two operations that make a listing stop describing the account the store
+    /// is pointed at.
+    fn forget_folders(&self) {
+        if let Some(folders) = self.folder_listing() {
+            *write(folders) = None;
+        }
+    }
+
+    /// An instance outside the GObject type system: zeroed parent bytes and
+    /// initialised slots, which is what `instance_init` leaves behind minus the
+    /// GObject.
     ///
     /// This exists for the tests, and it is not a shortcut — Camel constructs a
     /// store through `camel_session_add_service`, which needs a `CamelSession`,
     /// which in Evolution is an `EMailSession` over a source registry on the
-    /// session bus. Nothing but the connection slot may be touched through the
-    /// result: the parent bytes are a valid bit pattern (every field is a
-    /// pointer or an integer, and NULL is a pointer) but they are not a
-    /// GObject, so passing one to any Camel function is undefined behaviour.
+    /// session bus. Nothing but the slots may be touched through the result: the
+    /// parent bytes are a valid bit pattern (every field is a pointer or an
+    /// integer, and NULL is a pointer) but they are not a GObject, so passing
+    /// one to any Camel function is undefined behaviour.
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value, and an all-zero `Slot` is its
         // documented empty state.
         let store: Box<Self> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
         store.connection.init(RwLock::new(None));
+        store.folders.init(RwLock::new(None));
         store
     }
 
@@ -99,17 +215,22 @@ impl JmapStore {
     fn connection(&self) -> Option<&RwLock<Option<MailSync>>> {
         self.connection.get()
     }
+
+    /// The folder listing slot, with the same caveat.
+    fn folder_listing(&self) -> Option<&RwLock<Option<Listing>>> {
+        self.folders.get()
+    }
 }
 
-/// A poisoned lock means some other operation panicked while holding it. The
-/// connection it guards is not damaged by that — a `MailSync` is an HTTP client
-/// and an account id — so carrying on is better than taking the store down with
-/// whatever already went wrong.
-fn read(lock: &RwLock<Option<MailSync>>) -> RwLockReadGuard<'_, Option<MailSync>> {
+/// A poisoned lock means some other operation panicked while holding it. What
+/// it guards is not damaged by that — a `MailSync` is an HTTP client and an
+/// account id, a `Listing` is a tree and a state string — so carrying on is
+/// better than taking the store down with whatever already went wrong.
+fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
     lock.read().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn write(lock: &RwLock<Option<MailSync>>) -> RwLockWriteGuard<'_, Option<MailSync>> {
+fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     lock.write().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -155,14 +276,21 @@ unsafe impl ObjectSubclass for JmapStore {
     unsafe fn instance_init(instance: *mut Self::Instance) {
         // SAFETY: `instance` points at a zeroed instance struct of ours, and a
         // zeroed `Slot` is an empty one.
-        unsafe { (*instance).connection.init(RwLock::new(None)) };
+        unsafe {
+            (*instance).connection.init(RwLock::new(None));
+            (*instance).folders.init(RwLock::new(None));
+        };
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
         // SAFETY: the instance is being finalized, so nothing can still reach
         // it and no borrow handed out by `get` is alive. Without this the
-        // connection — and its socket — outlives the account.
-        unsafe { (*instance).connection.clear() };
+        // connection — and its socket — outlives the account, and the folder
+        // listing leaks with it.
+        unsafe {
+            (*instance).connection.clear();
+            (*instance).folders.clear();
+        };
     }
 }
 
