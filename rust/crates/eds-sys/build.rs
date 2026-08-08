@@ -77,16 +77,24 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelURL",
     // The folder half of a store. `CamelFolderInfo` is what
     // `get_folder_info_sync` returns — a plain struct, not an object, so it is
-    // named here to bring its flags enum along; `CamelFolder` is the object a
-    // later increment subclasses, and naming it is what brings its *class*
-    // struct for tests/layout.rs to vouch for. Exact names rather than a
-    // `CamelFolder.*` prefix, which would also pull in `CamelFolderSummary`,
-    // `CamelFolderSearch` and `CamelFolderThread` — three more class structs
-    // this layer would be claiming to have checked.
+    // named here to bring its flags enum along; `CamelFolder` is the object the
+    // provider's own folder derives from, through `CamelOfflineFolder`, which
+    // is where a folder's disconnected copy of its content lives. Exact names
+    // rather than a `CamelFolder.*` prefix, which would also pull in
+    // `CamelFolderSummary`, `CamelFolderSearch` and `CamelFolderThread` — three
+    // more class structs this layer would be claiming to have checked.
     "CamelFolder",
     "CamelFolderClass",
     "CamelFolderInfo",
     "CamelFolderInfoFlags",
+    // The flags word of the folder *object*, which is a different word from
+    // `CamelFolderInfoFlags` with different bits in it: the info's flags say
+    // what kind of folder this is, the folder's say how Camel treats it —
+    // whether new mail in it is filtered, whether it is the account's trash.
+    // Two enums one bit-width apart is exactly the kind of thing that is only
+    // caught by naming both.
+    "CamelFolderFlags",
+    "CamelOfflineFolder.*",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -130,10 +138,18 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_offline_store_.*",
     // `camel_folder_info_new` and `_free` are the allocator pair the folder
     // tree is built and torn down with; the type accessor is what
-    // tests/layout.rs queries. Not all of `camel_folder_.*` yet — the folder
-    // object's own API arrives with the increment that subclasses it.
+    // tests/layout.rs queries.
     "camel_folder_info_.*",
     "camel_folder_get_type",
+    // What a constructed folder is asked about itself: the path Camel keys it
+    // by, the name the user sees, the store it hangs off, and the flags word
+    // that says how Camel treats it. Still not all of `camel_folder_.*`, which
+    // would match every `camel_folder_summary_*` and `camel_folder_search_*`
+    // function too and drag their class structs in behind them — the summary
+    // arrives with the increment that fills one.
+    "camel_folder_(get|set)_(full_name|display_name|flags)",
+    "camel_folder_get_parent_store",
+    "camel_offline_folder_get_type",
     "camel_transport_.*",
     "camel_session_.*",
     "camel_settings_.*",

@@ -115,6 +115,11 @@ fn camel_layouts_match_the_gtype_system() {
         CamelOfflineSettingsClass
     );
     assert_layout!(camel_folder_get_type, CamelFolder, CamelFolderClass);
+    assert_layout!(
+        camel_offline_folder_get_type,
+        CamelOfflineFolder,
+        CamelOfflineFolderClass
+    );
 }
 
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the
