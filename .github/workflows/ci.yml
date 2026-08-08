@@ -17,6 +17,9 @@ on:
 
 permissions:
   contents: read
+  # The build-full container is pulled from this repo's (private) ghcr
+  # package with the job token.
+  packages: read
 
 env:
   CARGO_TERM_COLOR: always
