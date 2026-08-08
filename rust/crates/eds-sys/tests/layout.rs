@@ -120,6 +120,22 @@ fn camel_layouts_match_the_gtype_system() {
         CamelOfflineFolder,
         CamelOfflineFolderClass
     );
+    assert_layout!(
+        camel_message_info_get_type,
+        CamelMessageInfo,
+        CamelMessageInfoClass
+    );
+    assert_layout!(
+        camel_message_info_base_get_type,
+        CamelMessageInfoBase,
+        CamelMessageInfoBaseClass
+    );
+    assert_layout!(camel_address_get_type, CamelAddress, CamelAddressClass);
+    assert_layout!(
+        camel_internet_address_get_type,
+        CamelInternetAddress,
+        CamelInternetAddressClass
+    );
 }
 
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the

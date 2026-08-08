@@ -3315,3 +3315,98 @@ setting — so it is a settings decision first and a vfunc second. The
 `CamelSubscribable` interface remains the smaller unblocked piece. Still
 unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-08 (thirty-sixth session)
+
+M5's sixteenth increment: `CamelMessageInfo`, the object one summary row is
+kept in — the first half of the Camel side of the message work the previous two
+sessions prepared in `jmap-mail-sync`. New module `jmap-mail`'s
+`message_info`, and with it the `camel_message_info_*`, `camel_address_*`,
+`camel_internet_address_*` and `camel_name_value_array_*` entries `eds-sys` has
+been deferring. The red step was eleven tests that could not find the module.
+
+Most of a row is a copy. Three columns are not, and they are what the increment
+is about: the flags word, the formatted address headers, and the two 64-bit
+digests Camel threads on.
+
+Decisions taken:
+
+- **The digests are checked against Camel, not against a constant.** Camel
+  stores a message id as eight bytes of an MD5 over the `Message-ID` value with
+  the brackets off — `CamelSummaryMessageID` — and there is no public function
+  to compute one, which is why `jmap-mail-sync` left the choice to this layer.
+  The layer's answer is that there is no choice: `camel_message_info_new_from_
+  headers` is the path a message parsed locally takes, it lands in the same
+  summary as a row built here, and two digests for one `Message-ID` thread one
+  conversation as two. So the two tests that cover this hand Camel the headers
+  the JMAP properties came from and assert that its digest is ours. That the
+  function is declared in camel-folder-summary.h and rides in on the
+  `camel_message_info_.*` prefix is noted in the allowlist as wanted rather than
+  tolerated: it is the oracle.
+- **The ancestors go in reversed, and that was measured.** `MessageSummary`
+  holds the chain oldest first with the `In-Reply-To` parent appended, which is
+  header order. Camel's own builder stores it the other way round — nearest
+  ancestor at the front — and its threader walks from the front taking the first
+  ancestor the folder actually holds. Filled in header order every reply in a
+  long thread hangs off the root of its conversation instead of off its parent,
+  which is a thread that looks flat rather than one that looks broken. The
+  oracle test compares the whole array, order included.
+- **No ancestors is a NULL array, not an empty one.** Camel leaves the column
+  unset for a message with neither header, and an empty `GArray` is one the
+  threader allocates, walks and finds nothing in on every rebuild. The same rule
+  one column over: a header the message did not carry leaves the column unset
+  rather than empty, because the summary goes to a database and reads back, and
+  an empty `Cc` there is a `Cc:` that was present and blank.
+- **The addresses are formatted by `CamelInternetAddress`, not by joining
+  strings.** JMAP sends name/address pairs; Camel stores one display string per
+  header. A display name may hold a comma, a quote or a backslash, and the rules
+  for which have to be quoted are RFC 5322's, already implemented once in Camel
+  — so the mapping builds an address object and asks it. The test that pins this
+  has a comma in a display name, which naive joining turns into a second
+  recipient.
+- **`set_flags` is given a mask, not just a word.** The mask is the eight bits
+  JMAP can speak to. `DELETED` and `FOLDER_FLAGGED` are local marks the user
+  made — JMAP has no deleted keyword — and a refresh that cleared them because
+  the server said nothing about them would undo a deletion the user is waiting
+  to have expunged. On a fresh row the mask is invisible; it is there for the
+  caller this function does not have yet.
+- **The row is built with no summary behind it, and that is not a placeholder.**
+  `camel_message_info_new` consults the summary only to learn which message-info
+  type to instantiate. A summary that declares none — which is what this
+  provider's will be — gets `CamelMessageInfoBase`, the same class NULL
+  produces, so the row is the object it will be when there is a summary to add
+  it to. `camel_folder_summary_.*` therefore stays off the allowlist for one
+  more increment.
+- **Notifications are frozen while the row is filled.** Every setter emits a
+  property notification and marks the row dirty; a row filled column by column
+  under a watching summary is a dozen changes to a message that has not been
+  listed yet. Camel's own builders do the same.
+
+Mutation testing, eight mutants, all eight killed: the ancestors not reversed,
+the digest read big-endian, an empty array where NULL belongs, the two dates
+read from each other's field, `$notjunk` mapped onto the junk bit, the flags
+mask missing `ATTACHMENTS`, an absent address header stored as an empty column,
+and the user flags never set.
+
+`eds-sys` grew four layout assertions — `CamelMessageInfo`,
+`CamelMessageInfoBase`, `CamelAddress`, `CamelInternetAddress` — and one test
+that pins `CamelSummaryMessageID` at eight bytes, which is the contract
+`message_id_digest` takes off the front of a sixteen-byte MD5.
+
+Not verified locally, as in the previous thirty-five sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The two new files —
+`jmap-mail/src/message_info.rs` and `jmap-mail/tests/message_info.rs` — carry
+SPDX `GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets, the five EDS crates included.
+
+Next in M5 is the other half of the same work: `CamelFolderSummary` on
+`CamelJmapFolder` — the summary subclass, the folder's `summary` property, the
+rows above added to it from `MailSync::messages`, and the
+`CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` flag `folder.rs` still deliberately does
+not set. That is the increment `camel_folder_summary_.*` arrives with. The
+`CamelSubscribable` interface remains the smaller unblocked piece;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc. Still unexercised against a real `CamelSession`:
+`service.rs`, which waits on M6 and M7. The README's architecture block still
+lists only the round-1 crates.
