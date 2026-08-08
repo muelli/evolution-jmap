@@ -1,0 +1,788 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The `ECalMetaBackend` vfunc bodies, called the way EDS calls them:
+//! out-parameters that start NULL, a `GError **` that starts NULL, and a return
+//! value that says which of the two was written.
+//!
+//! Every test runs against `jmap-mockd`, so the assertions are about what the
+//! server was actually told. What is deliberately *not* here is a live
+//! `ECalMetaBackend`: constructing one needs an `ESourceRegistry` and so a
+//! running `evolution-source-registry` on the session bus. Keeping the vfunc
+//! bodies in a layer that takes a `&CalSync` is what lets them be tested at all.
+
+use std::ffi::{CStr, CString};
+use std::ptr;
+
+use eds_sys::{
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalComponent, ECalMetaBackendInfo, ICalComponent,
+    e_cal_client_error_quark, e_cal_component_get_icalcomponent, e_cal_component_new_from_string,
+    e_cal_meta_backend_info_free, e_client_error_quark, i_cal_component_set_uid,
+};
+use glib_sys::{
+    GError, GFALSE, GSList, GTRUE, g_error_free, g_free, g_slist_free, g_slist_free_full,
+    g_slist_length, g_slist_nth_data, g_slist_prepend, gboolean, gchar,
+};
+use gobject_sys::g_object_unref;
+use jmap_backend_cal::marshal;
+use jmap_backend_cal::ops::{self, Outcome};
+use jmap_cal_sync::{CalSync, SyncError};
+use jmap_client::{Client, Credentials};
+use jmap_mock::MockServer;
+use jmap_proto::Id;
+use jmap_proto::calendars::CalendarEvent;
+
+/// A mock server with two calendars, so "only this calendar" stays observable,
+/// and the `CalSync` over the one the backend syncs.
+struct Fixture {
+    server: MockServer,
+    account_id: Id,
+    ours: Id,
+    theirs: Id,
+}
+
+impl Fixture {
+    fn start() -> Self {
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        let (ours, theirs) = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            (
+                account.seed_calendar("Personal", true),
+                account.seed_calendar("Team", false),
+            )
+        };
+        Self {
+            server,
+            account_id,
+            ours,
+            theirs,
+        }
+    }
+
+    fn client(&self) -> Client {
+        Client::connect(self.server.origin(), Credentials::none()).unwrap()
+    }
+
+    fn sync(&self) -> CalSync {
+        CalSync::new(self.client(), self.account_id.clone(), self.ours.clone())
+    }
+
+    /// Create an event directly, bypassing the code under test.
+    fn seed(&self, calendar: &Id, title: &str, start: &str) -> Id {
+        self.client()
+            .event_create(
+                &self.account_id,
+                &CalendarEvent::simple(calendar.clone(), title, start, "PT1H"),
+            )
+            .unwrap()
+            .id
+            .expect("server assigned id")
+    }
+
+    /// The uids the calendar holds, as the server sees them.
+    fn uids(&self) -> Vec<String> {
+        let (_, events) = self.sync().list_existing().unwrap();
+        let mut uids: Vec<String> = events.into_iter().map(|info| info.uid).collect();
+        uids.sort();
+        uids
+    }
+}
+
+/// The four out-parameters EDS hands `get_changes_sync`, plus the sync tag.
+struct ChangeOuts {
+    tag: *mut gchar,
+    repeat: gboolean,
+    created: *mut GSList,
+    modified: *mut GSList,
+    removed: *mut GSList,
+}
+
+impl Default for ChangeOuts {
+    /// `repeat` starts TRUE, which is *not* what EDS does — it passes a FALSE
+    /// it initialised itself. Starting from the other value is what makes "the
+    /// answer is always no" an assertion rather than a coincidence: a body that
+    /// never writes the parameter would otherwise look identical to one that
+    /// answers correctly.
+    fn default() -> Self {
+        Self {
+            tag: ptr::null_mut(),
+            repeat: GTRUE,
+            created: ptr::null_mut(),
+            modified: ptr::null_mut(),
+            removed: ptr::null_mut(),
+        }
+    }
+}
+
+impl Drop for ChangeOuts {
+    /// All three lists are freed as `ECalMetaBackendInfo`s — including the
+    /// removals, which is where the calendar differs from the address book.
+    fn drop(&mut self) {
+        unsafe {
+            g_free(self.tag.cast());
+            g_slist_free_full(self.created, Some(e_cal_meta_backend_info_free));
+            g_slist_free_full(self.modified, Some(e_cal_meta_backend_info_free));
+            g_slist_free_full(self.removed, Some(e_cal_meta_backend_info_free));
+        }
+    }
+}
+
+/// Reads a `GSList` node as an `ECalMetaBackendInfo`, the way
+/// `e_cal_meta_backend_process_changes_sync` does.
+unsafe fn nth_info(list: *mut GSList, n: u32) -> (String, Option<String>, Option<String>) {
+    unsafe {
+        let node = g_slist_nth_data(list, n).cast::<ECalMetaBackendInfo>();
+        assert!(!node.is_null(), "no node {n}");
+        let text = |p: *mut gchar| {
+            (!p.is_null()).then(|| CStr::from_ptr(p).to_string_lossy().into_owned())
+        };
+        (
+            text((*node).uid).expect("an info without a uid identifies nothing"),
+            text((*node).revision),
+            text((*node).object),
+        )
+    }
+}
+
+unsafe fn take_string(out: &mut *mut gchar) -> String {
+    unsafe {
+        assert!(!out.is_null(), "the out-parameter was left NULL");
+        let text = CStr::from_ptr(*out).to_string_lossy().into_owned();
+        g_free(out.cast());
+        *out = ptr::null_mut();
+        text
+    }
+}
+
+/// Asserts that a failed call set an error of exactly this domain and code, and
+/// frees it. Getting it wrong is not cosmetic: Evolution branches on the pair,
+/// and `ECalMetaBackend` itself branches on `OBJECT_NOT_FOUND`.
+unsafe fn assert_error(error: &mut *mut GError, domain: u32, code: i32) {
+    unsafe {
+        assert!(!error.is_null(), "the call failed without setting an error");
+        assert_eq!((**error).domain, domain, "error domain");
+        assert_eq!((**error).code, code, "error code");
+        assert!(!(**error).message.is_null(), "the error has no message");
+        g_error_free(*error);
+        *error = ptr::null_mut();
+    }
+}
+
+/// One instance of an event, as `save_component_sync` receives them.
+fn instance(vevent: &str) -> *mut ECalComponent {
+    let text = CString::new(vevent).unwrap();
+    // SAFETY: the text is NUL-terminated and valid for the call.
+    let component = unsafe { e_cal_component_new_from_string(text.as_ptr()) };
+    assert!(!component.is_null(), "the instance did not parse: {vevent}");
+    component
+}
+
+/// The `GSList` of instances EDS passes. The components stay owned by the
+/// caller, which is the ownership the vfunc has.
+fn instance_list(components: &[*mut ECalComponent]) -> *mut GSList {
+    let mut list = ptr::null_mut();
+    for component in components.iter().rev() {
+        // SAFETY: `list` is a valid GSList and the payload outlives it.
+        list = unsafe { g_slist_prepend(list, component.cast()) };
+    }
+    list
+}
+
+/// Frees the list and the instances in it, which is EDS's half of the contract.
+unsafe fn drop_instances(list: *mut GSList, components: &[*mut ECalComponent]) {
+    unsafe {
+        g_slist_free(list);
+        for component in components {
+            g_object_unref(component.cast());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// list_existing_sync
+
+#[test]
+fn list_existing_hands_back_one_node_per_event_in_this_calendar() {
+    let fixture = Fixture::start();
+    let mine = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.seed(&fixture.theirs, "Their offsite", "2026-01-15T10:00:00");
+
+    let mut tag: *mut gchar = ptr::null_mut();
+    let mut objects: *mut GSList = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::list_existing(&fixture.sync(), &mut tag, &mut objects, &mut error);
+
+        assert_eq!(ok, GTRUE);
+        assert!(error.is_null(), "a successful call must not set an error");
+        assert_eq!(g_slist_length(objects), 1, "the other calendar leaked in");
+
+        let (uid, revision, object) = nth_info(objects, 0);
+        assert_eq!(uid, mine.to_string());
+        assert!(revision.is_some_and(|r| !r.is_empty()), "no change token");
+        let object = object.expect("a listed event carries its object");
+        assert!(object.contains("SUMMARY:Standup"), "{object}");
+
+        assert!(!take_string(&mut tag).is_empty(), "no sync tag");
+        g_slist_free_full(objects, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+/// EDS reads "no objects" as a NULL list; the sync tag is still needed, or the
+/// next sync has no state to go from.
+#[test]
+fn an_empty_calendar_lists_as_a_null_list_with_a_sync_tag() {
+    let fixture = Fixture::start();
+    fixture.seed(&fixture.theirs, "Their offsite", "2026-01-15T10:00:00");
+
+    let mut tag: *mut gchar = ptr::null_mut();
+    let mut objects: *mut GSList = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        assert_eq!(
+            ops::list_existing(&fixture.sync(), &mut tag, &mut objects, &mut error),
+            GTRUE
+        );
+        assert!(objects.is_null());
+        assert!(!take_string(&mut tag).is_empty());
+    }
+}
+
+/// A NULL out-parameter is GLib's "the caller does not want this one". It has
+/// to be skipped rather than written through, and the list it would have held
+/// must not be built at all — there would be nobody to free it.
+#[test]
+fn out_parameters_the_caller_did_not_ask_for_are_skipped() {
+    let fixture = Fixture::start();
+    fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::list_existing(
+            &fixture.sync(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(ok, GTRUE);
+        assert!(error.is_null());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// load_component_sync
+
+#[test]
+fn load_component_yields_an_icalcomponent_keyed_by_the_jmap_id() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let uid = CString::new(id.to_string()).unwrap();
+
+    let mut component: *mut ICalComponent = ptr::null_mut();
+    let mut extra: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::load_component(
+            &fixture.sync(),
+            uid.as_ptr(),
+            &mut component,
+            &mut extra,
+            &mut error,
+        );
+
+        assert_eq!(ok, GTRUE);
+        assert!(error.is_null());
+        assert!(!component.is_null(), "no component was written");
+        assert_eq!(
+            marshal::component_uid(component).as_deref(),
+            Some(id.as_str())
+        );
+        let text = marshal::ical_from_component(component).expect("rendered");
+        assert!(text.contains("SUMMARY:Standup"), "{text}");
+        marshal::component_unref(component);
+    }
+}
+
+/// `ECalMetaBackend` matches on this exact domain and code to decide that a
+/// component is gone rather than that the sync failed, so a not-found reported
+/// any other way is a cache entry that never goes away.
+#[test]
+fn loading_an_unknown_component_reports_object_not_found_and_writes_nothing() {
+    let fixture = Fixture::start();
+    let uid = CString::new("no-such-event").unwrap();
+
+    let mut component: *mut ICalComponent = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::load_component(
+            &fixture.sync(),
+            uid.as_ptr(),
+            &mut component,
+            ptr::null_mut(),
+            &mut error,
+        );
+
+        assert_eq!(ok, GFALSE);
+        assert!(component.is_null(), "a failed load must leave the out NULL");
+        assert_error(
+            &mut error,
+            e_cal_client_error_quark(),
+            E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND as i32,
+        );
+    }
+}
+
+#[test]
+fn loading_without_an_identifier_is_an_invalid_argument_not_a_null_dereference() {
+    let fixture = Fixture::start();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::load_component(
+            &fixture.sync(),
+            ptr::null(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(ok, GFALSE);
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_INVALID_ARG as i32,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// save_component_sync
+
+/// What Evolution hands a backend for a brand-new appointment: instances
+/// carrying a `UID` it invented locally, which is not a JMAP id and must not
+/// become one.
+const NEW_EVENT: &str = "BEGIN:VEVENT\r\n\
+                         UID:20260810T090000-1234@evolution\r\n\
+                         SUMMARY:Standup\r\n\
+                         DTSTART:20260810T070000Z\r\n\
+                         DURATION:PT30M\r\n\
+                         END:VEVENT\r\n";
+
+#[test]
+fn saving_a_new_component_creates_it_under_the_identifier_the_server_assigns() {
+    let fixture = Fixture::start();
+    let components = [instance(NEW_EVENT)];
+    let list = instance_list(&components);
+
+    let mut new_uid: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::save_component(
+            &fixture.sync(),
+            GFALSE,
+            list,
+            &mut new_uid,
+            ptr::null_mut(),
+            &mut error,
+        );
+
+        assert_eq!(ok, GTRUE);
+        assert!(error.is_null());
+        let assigned = take_string(&mut new_uid);
+        assert_ne!(
+            assigned, "20260810T090000-1234@evolution",
+            "the local uid reached the server"
+        );
+        assert_eq!(fixture.uids(), vec![assigned]);
+        drop_instances(list, &components);
+    }
+}
+
+#[test]
+fn saving_an_existing_component_patches_it_rather_than_adding_a_second() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let stored = sync.load_component(id.as_str()).unwrap().icalendar;
+    // The master as EDS holds it: the cached object, edited, handed back as an
+    // instance rather than as the envelope it was cached in.
+    let edited = stored
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (short)")
+        .replace("BEGIN:VCALENDAR\r\n", "")
+        .replace("END:VCALENDAR\r\n", "");
+    let vevent = edited
+        .split_once("BEGIN:VEVENT")
+        .map(|(_, rest)| format!("BEGIN:VEVENT{rest}"))
+        .expect("the cached object holds an event");
+    let components = [instance(&vevent)];
+    let list = instance_list(&components);
+
+    let mut new_uid: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::save_component(
+            &sync,
+            GTRUE,
+            list,
+            &mut new_uid,
+            ptr::null_mut(),
+            &mut error,
+        );
+
+        assert_eq!(ok, GTRUE);
+        assert!(error.is_null());
+        assert_eq!(take_string(&mut new_uid), id.to_string());
+        assert_eq!(fixture.uids(), vec![id.to_string()], "a duplicate was made");
+        assert!(
+            sync.load_component(id.as_str())
+                .unwrap()
+                .icalendar
+                .contains("SUMMARY:Standup (short)")
+        );
+        drop_instances(list, &components);
+    }
+}
+
+/// An edit whose master carries no identifier would otherwise be sent as a
+/// create, which silently duplicates the user's appointment on the server. A
+/// visible failure is the better answer.
+///
+/// The uid has to be *emptied* to get here, and that is the point: an
+/// `ECalComponent` built from text with no `UID` invents one — `e_util_generate_uid`
+/// — so a component that reached EDS intact always has an identifier of some
+/// kind. Which is exactly why this guard cannot be dropped as unreachable: what
+/// it defends against is a uid that reads back as nothing, and EDS's own
+/// generosity is what would otherwise hide that.
+#[test]
+fn an_edit_without_an_identifier_is_refused_rather_than_duplicating() {
+    let fixture = Fixture::start();
+    let components = [instance(
+        "BEGIN:VEVENT\r\nSUMMARY:Nameless\r\nDTSTART:20260810T070000Z\r\nEND:VEVENT\r\n",
+    )];
+    // SAFETY: the component is live and lends out the one it carries.
+    unsafe {
+        let inner = e_cal_component_get_icalcomponent(components[0]);
+        i_cal_component_set_uid(inner, c"".as_ptr());
+    }
+    let list = instance_list(&components);
+
+    let mut new_uid: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::save_component(
+            &fixture.sync(),
+            GTRUE,
+            list,
+            &mut new_uid,
+            ptr::null_mut(),
+            &mut error,
+        );
+
+        assert_eq!(ok, GFALSE);
+        assert!(new_uid.is_null());
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_INVALID_ARG as i32,
+        );
+        assert!(
+            fixture.uids().is_empty(),
+            "the calendar was written to anyway"
+        );
+        drop_instances(list, &components);
+    }
+}
+
+/// No master among the instances — only a detached occurrence, or no instances
+/// at all. There is nothing honest to send, and the marshalling says so; the
+/// vfunc has to turn that into a failure rather than into a silent no-op.
+#[test]
+fn saving_instances_with_no_master_is_an_invalid_argument() {
+    let fixture = Fixture::start();
+    let components = [instance(
+        "BEGIN:VEVENT\r\nUID:K1\r\nRECURRENCE-ID:20260812T070000Z\r\n\
+         SUMMARY:Standup, moved\r\nDTSTART:20260812T080000Z\r\nEND:VEVENT\r\n",
+    )];
+    let list = instance_list(&components);
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::save_component(
+            &fixture.sync(),
+            GFALSE,
+            list,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(ok, GFALSE);
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_INVALID_ARG as i32,
+        );
+        assert!(fixture.uids().is_empty());
+        drop_instances(list, &components);
+    }
+
+    let mut error: *mut GError = ptr::null_mut();
+    unsafe {
+        let ok = ops::save_component(
+            &fixture.sync(),
+            GFALSE,
+            ptr::null(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(ok, GFALSE);
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_INVALID_ARG as i32,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// remove_component_sync
+
+#[test]
+fn removing_a_component_destroys_it_on_the_server() {
+    let fixture = Fixture::start();
+    let doomed = fixture.seed(&fixture.ours, "Cancelled offsite", "2026-01-16T09:00:00");
+    let kept = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let uid = CString::new(doomed.to_string()).unwrap();
+
+    let mut error: *mut GError = ptr::null_mut();
+    unsafe {
+        assert_eq!(
+            ops::remove_component(&fixture.sync(), uid.as_ptr(), &mut error),
+            GTRUE
+        );
+        assert!(error.is_null());
+    }
+    assert_eq!(fixture.uids(), vec![kept.to_string()]);
+}
+
+#[test]
+fn removing_nothing_is_an_invalid_argument_not_a_null_dereference() {
+    let fixture = Fixture::start();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let ok = ops::remove_component(&fixture.sync(), ptr::null(), &mut error);
+        assert_eq!(ok, GFALSE);
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_INVALID_ARG as i32,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// get_changes_sync
+
+#[test]
+fn get_changes_reports_changed_events_and_the_ones_that_are_gone() {
+    let fixture = Fixture::start();
+    let doomed = fixture.seed(&fixture.ours, "Cancelled offsite", "2026-01-16T09:00:00");
+    let sync = fixture.sync();
+    let (state, _) = sync.list_existing().unwrap();
+    let tag = CString::new(state.as_str()).unwrap();
+
+    let created = fixture.seed(&fixture.ours, "Retro", "2026-01-17T15:00:00");
+    sync.remove_component(doomed.as_str()).unwrap();
+
+    let mut outs = ChangeOuts::default();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let outcome = ops::get_changes(
+            &sync,
+            tag.as_ptr(),
+            GFALSE,
+            &mut outs.tag,
+            &mut outs.repeat,
+            &mut outs.created,
+            &mut outs.modified,
+            &mut outs.removed,
+            &mut error,
+        );
+
+        assert!(matches!(outcome, Outcome::Reported), "{outcome:?}");
+        assert!(error.is_null());
+        assert_eq!(outs.repeat, GFALSE, "the paging is done inside get_changes");
+        assert!(!outs.tag.is_null(), "no sync tag for the next round");
+
+        assert_eq!(g_slist_length(outs.modified), 1);
+        assert_eq!(nth_info(outs.modified, 0).0, created.to_string());
+        assert_eq!(g_slist_length(outs.removed), 1);
+        // A removal is an info carrying only its uid, not a bare string.
+        assert_eq!(
+            nth_info(outs.removed, 0),
+            (doomed.to_string(), None, None),
+            "a removal must not claim a revision or an object"
+        );
+    }
+}
+
+/// EDS sets `is_repeat` when it is coming back for the rest of a delta. This
+/// backend never asks it to — the paging happens inside `CalSync::get_changes`
+/// and `out_repeat` is always FALSE — so the flag can only arrive as a caller's
+/// own bookkeeping, and the delta a tag names is the same either way.
+#[test]
+fn a_repeat_call_answers_from_the_tag_just_like_the_first_one() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let (state, _) = sync.list_existing().unwrap();
+    let tag = CString::new(state.as_str()).unwrap();
+    let created = fixture.seed(&fixture.ours, "Retro", "2026-01-17T15:00:00");
+
+    for is_repeat in [GFALSE, GTRUE] {
+        let mut outs = ChangeOuts::default();
+        let mut error: *mut GError = ptr::null_mut();
+
+        unsafe {
+            let outcome = ops::get_changes(
+                &sync,
+                tag.as_ptr(),
+                is_repeat,
+                &mut outs.tag,
+                &mut outs.repeat,
+                &mut outs.created,
+                &mut outs.modified,
+                &mut outs.removed,
+                &mut error,
+            );
+
+            assert!(matches!(outcome, Outcome::Reported), "{outcome:?}");
+            assert_eq!(outs.repeat, GFALSE);
+            assert_eq!(g_slist_length(outs.modified), 1);
+            assert_eq!(nth_info(outs.modified, 0).0, created.to_string());
+        }
+    }
+}
+
+/// The first sync has no tag to go from. Answering it with an empty delta would
+/// leave the calendar permanently empty, so the meta backend's own
+/// implementation — list the calendar and diff it against the cache — has to
+/// run.
+///
+/// The server is stopped first, which is what makes this an assertion rather
+/// than a coincidence: an absent tag sent on as an empty `sinceState` would
+/// come back a transport failure.
+///
+/// Both spellings of "absent" are checked. The EDS cache writes NULL, but an
+/// empty string reaches the same place through a hand-edited cache — and `""`
+/// handed back as a `sinceState` is a state, not the absence of one.
+#[test]
+fn get_changes_without_a_sync_tag_asks_for_a_full_listing_without_asking_the_server() {
+    let fixture = Fixture::start();
+    fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    drop(fixture);
+
+    let empty = CString::new("").unwrap();
+    for tag in [ptr::null(), empty.as_ptr()] {
+        let mut outs = ChangeOuts::default();
+        let mut error: *mut GError = ptr::null_mut();
+
+        unsafe {
+            let outcome = ops::get_changes(
+                &sync,
+                tag,
+                GFALSE,
+                &mut outs.tag,
+                &mut outs.repeat,
+                &mut outs.created,
+                &mut outs.modified,
+                &mut outs.removed,
+                &mut error,
+            );
+
+            assert!(matches!(outcome, Outcome::ListInstead), "{outcome:?}");
+            assert!(error.is_null(), "the fallback is not a failure");
+            assert!(
+                outs.tag.is_null(),
+                "nothing may be written before the fallback"
+            );
+            assert!(outs.modified.is_null() && outs.removed.is_null());
+        }
+    }
+}
+
+/// RFC 8620 §5.2: a server may refuse a state it can no longer diff from. That
+/// is not an error either — it is the same full listing, and reporting it as a
+/// failure would strand the calendar until someone deleted the cache.
+#[test]
+fn a_state_the_server_cannot_diff_from_falls_back_to_a_full_listing() {
+    let fixture = Fixture::start();
+    fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let tag = CString::new("state-from-another-server").unwrap();
+
+    let mut outs = ChangeOuts::default();
+    let mut error: *mut GError = ptr::null_mut();
+
+    unsafe {
+        let outcome = ops::get_changes(
+            &fixture.sync(),
+            tag.as_ptr(),
+            GFALSE,
+            &mut outs.tag,
+            &mut outs.repeat,
+            &mut outs.created,
+            &mut outs.modified,
+            &mut outs.removed,
+            &mut error,
+        );
+
+        assert!(matches!(outcome, Outcome::ListInstead), "{outcome:?}");
+        assert!(error.is_null(), "the fallback is not a failure");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the error mapping itself
+
+/// Each `SyncError` has to reach Evolution as the domain and code it routes on:
+/// `REPOSITORY_OFFLINE` is what makes the meta backend serve its cache,
+/// `OBJECT_NOT_FOUND` is what makes it drop a component, and an iCalendar we
+/// cannot map is a bad argument rather than a server fault.
+#[test]
+fn each_sync_error_carries_the_code_evolution_routes_on() {
+    let cases: Vec<(SyncError, u32, i32)> = vec![
+        (
+            SyncError::NotFound("K1".to_owned()),
+            unsafe { e_cal_client_error_quark() },
+            E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND as i32,
+        ),
+        (
+            SyncError::Client(jmap_client::Error::Transport("down".to_owned())),
+            unsafe { e_client_error_quark() },
+            E_CLIENT_ERROR_REPOSITORY_OFFLINE as i32,
+        ),
+        (
+            SyncError::ICal(jmap_ical::ICalError::NotACalendar),
+            unsafe { e_client_error_quark() },
+            E_CLIENT_ERROR_INVALID_ARG as i32,
+        ),
+    ];
+
+    for (error, domain, code) in cases {
+        let mut gerror = ops::to_gerror(&error);
+        // SAFETY: to_gerror hands ownership of a fresh GError over.
+        unsafe { assert_error(&mut gerror, domain, code) };
+    }
+}

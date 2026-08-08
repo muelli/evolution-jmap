@@ -21,5 +21,13 @@ crate-type = ["rlib"]
 eds-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
 evolution-jmap-cal-sync = { workspace = true }
+evolution-jmap-proto = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-client = { workspace = true }
+evolution-jmap-mock = { workspace = true }
+# Only to name an ICalError variant when checking the error mapping; the
+# backend itself never sees one that jmap-cal-sync has not already wrapped.
+evolution-jmap-ical = { workspace = true }
