@@ -2237,3 +2237,110 @@ Deliberately still absent, and needed soon after: the `Mailbox/get` state string
 for `Mailbox/changes`, so a folder refresh is not a full re-list. The README's
 architecture block still lists only the round-1 crates; it has been stale for
 four crates now.
+
+## 2026-08-08 (twenty-fifth session)
+
+M5's fifth increment, and a detour the previous entry did not see coming.
+`connect_sync` was next, "resolving the JMAP account out of
+`CamelStoreSettings`/`CamelNetworkSettings`" — except that a `CamelJmapStore`
+has no `CamelNetworkSettings` to resolve anything out of. A `CamelService` is
+configured through a settings object whose class its own class names, and
+inherited from `CamelOfflineStore` that class is `CamelOfflineSettings`, which
+knows about offline synchronisation and nothing about a network. Host, port,
+user and security method live on the `CamelNetworkSettings` *interface*, and no
+stock Camel settings class implements it: IMAPx, POP and SMTP each declare a
+settings subclass that does. So this session built the one thing `connect_sync`
+was going to read from. Three commits.
+
+`eds-sys` gained `CamelOfflineSettings` and its class struct, the accessors, and
+`CamelNetworkSecurityMethod`. `jmap-backend-core::subclass` gained
+`ObjectSubclass::interfaces` — the `G_IMPLEMENT_INTERFACE` half of
+`G_DEFINE_TYPE_WITH_CODE`. `jmap-mail/src/settings.rs` is `CamelJmapSettings`,
+a `CamelOfflineSettings` that implements the interface and overrides its five
+properties, and `store.rs` names it in `CamelServiceClass.settings_type`. Seven
+new tests in `jmap-mail`, three in `jmap-backend-core`, two in `eds-sys`.
+
+Decisions taken:
+
+- **Interfaces are declared on the trait, not added by the caller.** The timing
+  is the whole point. `g_object_class_override_property` — how an implementer
+  satisfies an interface's properties — runs in `class_init` and only finds
+  properties of interfaces the type already implements. A caller that added the
+  interface after `register_static` returned would be holding a `GType` that,
+  for one window, implements nothing, and anything that referenced the class in
+  that window makes the omission permanent. Resolved before the registration
+  mutex is taken, like `parent_type`, so an interface accessor that registers
+  something cannot deadlock.
+- **A NULL `interface_init` is a complete implementation here.**
+  `CamelNetworkSettings` declares no vfuncs at all — its interface struct is
+  twenty pointers of padding — so there is no slot to fill. A type that did need
+  one would fill it in `class_init` through `g_type_interface_peek`.
+- **The tests drive the properties, not the interface.** Claiming the interface
+  and overriding its properties are two halves and only the first shows up in
+  the type system. Skip the second and the type still passes
+  `CAMEL_IS_NETWORK_SETTINGS`, the accessors still work — the interface keeps
+  its values in per-object data, not a struct field — and the only complaint is
+  five criticals at class-init time that nothing fails on. What breaks is
+  everything going *through* the property system, which on this path is
+  everything: `e_source_camel_configure_service` binds an `ESource`'s extension
+  properties to these by name, and `camel_settings_clone`/`_equal` walk the
+  property list, so two accounts on different servers would compare equal.
+  `cloning_carries_the_server_along` is the test that says so.
+- **The overrides are a security property, and the previous guess was
+  backwards.** The interface's properties are `G_PARAM_CONSTRUCT`, so
+  `g_object_new` pushes each declared default through the class's
+  `set_property`: a class that overrides them starts at the interface's own
+  default of TLS, and a class that does not is never told and starts at the
+  enum's zero value, which is plaintext. The `eds-sys` test written earlier in
+  this same session claimed the opposite — that an unconfigured settings object
+  reads back `NONE` — and its comment was corrected in the third commit rather
+  than left to mislead. The enum values themselves are still worth pinning:
+  `NONE` being zero is exactly what makes the un-overridden case insecure.
+- **"Not configured" is the empty string, not NULL.** The construct default for
+  `host` is `""`, where an unset `ESource` field reads back as NULL. The origin
+  mapping still ahead has to treat the two alike, or an account nobody
+  configured becomes a request to `https://`. Pinned in
+  `an_unconfigured_settings_object_already_asks_for_tls`.
+- **`STARTTLS_ON_STANDARD_PORT` is a name about a protocol JMAP does not have.**
+  JMAP is HTTP, so both non-`NONE` values mean the same thing — TLS — and the
+  only bit really in that field is `NONE` or not.
+- **The overrides forward to the interface's accessors rather than to storage of
+  their own**, which is what Camel's providers do and what keeps the property
+  door and the accessor door looking at one value instead of two. The string
+  reads use the `dup_` accessors with `g_value_take_string`, so the `GValue`
+  takes a copy rather than pointing into storage another thread may replace.
+- **`log_critical` is public now.** It was `pub(crate)` in
+  `jmap-backend-core::trampoline`; the unknown-property-id arm of a
+  `set_property` is exactly the case it exists for — GObject is the caller and
+  there is no `GError` to hand anything to.
+- **Property IDs are local and dense from 1.** They cannot collide with the
+  parent's: `g_object_set_property` dispatches to the class that *owns* the
+  pspec, so `filter-inbox` goes to `CamelStoreSettings`'s own `set_property` and
+  never reaches ours. That is also why nothing chains up.
+
+Mutation testing, five mutants, no survivors: the interface not declared (dies
+with a SIGSEGV, since Camel's accessors assert on a type that is not one), the
+override loop removed, `settings_type` left inherited on the store, `host` and
+`user` swapped in `set_property`, and `get_property` handing back NULL for the
+host.
+
+Not verified locally, as in the previous twenty-four sessions: `reuse lint` and
+`cargo deny`. Both new files carry SPDX `GPL-3.0-or-later` headers. `cargo fmt
+--check`, `cargo test --locked` (green on the default members, the five EDS
+crates green on top, `jmap-mail` now 30 tests) and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on both member sets; the settings suite was
+also run under `G_DEBUG=fatal-criticals`, which is the check that matters for a
+class whose failure mode is a critical nothing fails on. A fresh `cmake -S . -B
+<tmp> -G Ninja && cmake --build && ctest` is 5/5. `example-module` is unchanged
+and still outside both `default-members` and the set CI lints.
+
+No blockers hit.
+
+Next in M5: `connect_sync` on the store, which now has settings to read. The
+mapping from host/port/user/security-method to an origin is `jmap-backend-core`'s
+`SourceConfig` argument again — the same host validation and the same refusal to
+speak plaintext to anything but loopback — but over a different pair of empty
+values, so it is a sibling of `source.rs` rather than a caller of it. Then
+`get_folder_info_sync` over `FolderInfoChain::into_raw`. Still absent and needed
+soon after: the `Mailbox/get` state string for `Mailbox/changes`. The README's
+architecture block still lists only the round-1 crates; five crates stale.
