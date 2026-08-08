@@ -3597,3 +3597,94 @@ unblocked piece; `get_trash_folder_sync` and `get_junk_folder_sync` are still a
 settings decision before they are a vfunc. Still unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's
 architecture block still lists only the round-1 crates.
+
+## 2026-08-08 (thirty-ninth session)
+
+M5's nineteenth increment: `MailSync::message_source`, the RFC 5322 bytes
+behind one summary row — the fetch half of `get_message_sync`, without the
+`CamelMimeMessage` construction that is the other half. With it, the store
+accessor the folder vfunc will reach it through, the error a uid that outlived
+its message becomes on the way up, and a mock that serves a real message
+instead of an empty blob. Also, unplanned: the fix for an intermittent failure
+in `tests/refresh.rs` that turned out to be a misunderstanding of GLib rather
+than of Camel.
+
+Decisions taken:
+
+- **The blob id is fetched, not remembered.** `MessageSummary` carries one and
+  the folder throws it away, because a `CamelFolderSummary` row has nowhere to
+  keep it — the same problem the folder's own mailbox id has, without the
+  folder's solution: a row is Camel's struct, not ours, and there is one per
+  message in the account rather than one per folder. So a uid is all the call
+  can be given and the blob id is one `Email/get` away. That is a round trip
+  per message opened and it is also the only version that stays correct: RFC
+  8621 §4.1 makes an `Email` immutable but nothing stops a server reissuing
+  blob ids, and RFC 8620 §6.2 lets it forget one whenever it likes. A cached
+  blob id turns such a server into a mailbox that reads fine until it suddenly
+  does not. `SOURCE_PROPERTIES` is two properties and not the summary's
+  sixteen, for the same reason the summary's list is not the server's default
+  set.
+- **A missing message is not a client error.** `SyncError::NoSuchMessage` is a
+  variant of its own, and it exists so that `StoreError::NoMessage` can map it
+  to `CAMEL_FOLDER_ERROR_INVALID_UID` — a third Camel error domain beside the
+  service's and the store's, added to `eds-sys` for it. A uid is a claim about
+  the last listing; another client deleting the message since is ordinary, and
+  reported as a service error it would be a working account shown as broken
+  because one message went away between a listing and a click. Two tests hold
+  that line: the domain and code of the `GError`, and the `From` that must not
+  flatten the variant back into a client error on the way through.
+- **Three ways to have no answer, told apart.** A uid the account does not hold
+  is gone. A message returned *without* a `blobId` is the protocol violation it
+  is, with no fallback — reassembling the message from its body parts would
+  produce different bytes than the ones it was signed as. A blob the server
+  will not serve is the download's own failure, which is neither of the first
+  two: the row is fine and retrying is not hopeless. `tests/source.rs` asserts
+  each, and asserts that the third is *not* reported as the first.
+- **The mock now serves a message.** A seeded email's `message/rfc822` blob was
+  `Vec::new()`, so a download that worked and one that silently returned
+  nothing looked identical. It is now rendered from the seed: headers, a blank
+  line, the body, CRLF throughout. Single-part deliberately — attachments are
+  their own blobs with their own ids, and building the multipart to contain
+  them would be writing a MIME composer inside a test server. The `Date` header
+  carries no day of the week, which RFC 5322 §3.3 permits: deriving it needs a
+  calendar the mock has no other use for, and a wrong one would be worse than
+  none.
+
+The unplanned half. `tests/refresh.rs` had been failing roughly one run in
+four since it landed last session, on both of the tests that assert about the
+`changed` signal — and on master, so it was not this increment's doing. The
+previous session's diagnosis was right about Camel (the signal is queued and
+delivered from a main context) and wrong about GLib: `g_main_context_iteration`
+*acquires* the context first, and returns immediately having dispatched nothing
+when another thread already owns it. A Rust test binary runs its tests on
+threads of one process, all pumping the one global default context, so a test's
+pump could be a no-op — its emission then arriving one pump too late, read as
+silence by the test waiting for it and as an unexplained emission by whichever
+test pumped next. Camel queues onto whatever context was thread-default when
+`camel_folder_changed` was called, so a `Context` pushed at the top of each such
+test is a queue per test that no other thread can take a turn on. Eight
+consecutive runs green afterwards; the record of emissions stays a thread local,
+because with the contexts separated the pumping thread is the only one that can
+deliver.
+
+Not verified locally, as in the previous thirty-eight sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The one new file —
+`jmap-mail-sync/tests/source.rs` — carries an SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets, the five EDS crates included. (`example-module` fails clippy on
+pre-existing `manual_c_str_literals` findings; it is in neither CI clippy
+invocation and was not touched.)
+
+Next in M5 is the half this increment stopped short of: `get_message_sync`
+itself — `CamelMimeMessage`, a `CamelStream` over the bytes, and
+`camel_data_wrapper_construct_from_stream_sync`, none of which are in `eds-sys`
+yet — and the offline cache question that comes with it, since a message fetched
+once should not be fetched again. `synchronize_sync` is the first thing in the
+crate that writes: a row Camel marked read is a `keywords` patch through
+`Email/set`. `CamelSubscribable` remains the smaller unblocked piece;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc. `Email/changes` against a state kept on disk is still
+what the empty `recent` list and the whole-mailbox refresh are both waiting for.
+Still unexercised against a real `CamelSession`: `service.rs`, which waits on M6
+and M7. The README's architecture block still lists only the round-1 crates.
