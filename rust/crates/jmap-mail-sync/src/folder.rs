@@ -173,6 +173,23 @@ impl FolderTree {
         self.iter().find(|folder| folder.path == path)
     }
 
+    /// The folder a role names, if any mailbox of the account claims it.
+    ///
+    /// The role that has a caller today is [`FolderRole::Inbox`], which is what
+    /// `camel_store_get_inbox_folder_sync` is answered from. The lookup walks
+    /// the whole tree rather than the roots: RFC 8621 §2 puts `role` on the
+    /// mailbox, with nothing said about where in the hierarchy it sits, and an
+    /// account whose inbox hangs under a per-address parent is ordinary.
+    ///
+    /// It reads the role this crate *assigned* — see
+    /// [`claim_roles`](Self::claim_roles), which gives a contested role to the
+    /// first mailbox in sibling order — rather than the mailbox's own `role`
+    /// property. That is what keeps the answer the same folder as the one the
+    /// listing marked `CAMEL_FOLDER_TYPE_INBOX`.
+    pub fn role(&self, role: FolderRole) -> Option<&FolderInfo> {
+        self.iter().find(|folder| folder.role == Some(role))
+    }
+
     /// How many folders the account has, at any depth.
     pub fn len(&self) -> usize {
         self.iter().count()
