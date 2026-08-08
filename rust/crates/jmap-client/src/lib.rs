@@ -21,6 +21,7 @@ mod error;
 mod mail;
 pub mod transport;
 
+pub use changes::ChangeSet;
 pub use client::{Client, ClientBuilder, Credentials};
 pub use error::Error;
 pub use transport::CancelFlag;

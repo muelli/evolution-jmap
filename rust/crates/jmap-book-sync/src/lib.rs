@@ -17,20 +17,15 @@
 pub mod error;
 pub mod patch;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use jmap_client::Client;
+use jmap_client::{ChangeSet, Client};
 use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
 use jmap_proto::{Id, State};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::Value;
 
 pub use error::SyncError;
-
-/// A server that answers `/changes` forever without ever clearing
-/// `hasMoreChanges` would otherwise hang the backend thread. The cap is far
-/// above any real paging depth; reaching it means the server is broken.
-const MAX_CHANGES_PAGES: usize = 1024;
 
 /// One contact, as the meta backend wants it: an identifier, a change token
 /// and the object itself.
@@ -55,14 +50,6 @@ pub struct Changes {
     /// Identifiers that are gone from *this* address book, whether they were
     /// destroyed or merely moved elsewhere.
     pub removed: Vec<String>,
-}
-
-/// A `/changes` delta accumulated over however many pages the server needed.
-#[derive(Default)]
-struct Delta {
-    created: BTreeSet<Id>,
-    updated: BTreeSet<Id>,
-    destroyed: BTreeSet<Id>,
 }
 
 /// Synchronises one JMAP address book.
@@ -161,30 +148,10 @@ impl BookSync {
     /// state is too old for the server, which the caller answers by listing
     /// the book in full.
     pub fn get_changes(&self, since: &State) -> Result<Changes, SyncError> {
-        let mut state = since.clone();
-        let mut delta = Delta::default();
-
-        for _ in 0..MAX_CHANGES_PAGES {
-            let response = self
-                .client
-                .changes(&self.account_id, "ContactCard", &state)?;
-            delta.created.extend(response.created);
-            delta.updated.extend(response.updated);
-            delta.destroyed.extend(response.destroyed);
-            let advanced = response.new_state != state;
-            state = response.new_state;
-            if !response.has_more_changes {
-                return self.classify(state, delta);
-            }
-            if !advanced {
-                return Err(SyncError::protocol(
-                    "ContactCard/changes reports more changes without advancing the state",
-                ));
-            }
-        }
-        Err(SyncError::protocol(
-            "ContactCard/changes never stopped reporting more changes",
-        ))
+        self.classify(
+            self.client
+                .all_changes(&self.account_id, "ContactCard", since)?,
+        )
     }
 
     /// Turn a raw `/changes` delta into the two lists the meta backend takes.
@@ -197,14 +164,13 @@ impl BookSync {
     /// showing a contact the book no longer contains; a card that shows up as
     /// **created** and is not ours was never in this book, so it is simply
     /// not our business.
-    fn classify(&self, new_state: State, delta: Delta) -> Result<Changes, SyncError> {
+    ///
+    /// The delta arrives normalised — [`jmap_client::Client::all_changes`] has
+    /// already decided what an id named by several pages is — so no card is
+    /// both a candidate and a removal.
+    fn classify(&self, delta: ChangeSet) -> Result<Changes, SyncError> {
         let mut removed: Vec<String> = delta.destroyed.iter().map(Id::to_string).collect();
-        let candidates: Vec<Id> = delta
-            .created
-            .union(&delta.updated)
-            .filter(|id| !delta.destroyed.contains(*id))
-            .cloned()
-            .collect();
+        let candidates: Vec<Id> = delta.created.union(&delta.updated).cloned().collect();
         let mut changed = Vec::new();
 
         if !candidates.is_empty() {
@@ -233,7 +199,7 @@ impl BookSync {
         }
 
         Ok(Changes {
-            new_state,
+            new_state: delta.new_state,
             changed,
             removed,
         })
