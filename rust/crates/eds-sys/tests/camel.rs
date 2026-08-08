@@ -127,3 +127,94 @@ fn the_object_types_array_is_indexed_by_provider_type() {
 fn the_provider_directory_override_is_the_variable_camel_reads() {
     assert_eq!(EDS_CAMEL_PROVIDER_DIR, c"EDS_CAMEL_PROVIDER_DIR");
 }
+
+/// `CamelFolderInfo` is the second struct this layer hands to C by value, and
+/// like `CamelProvider` it is not a GObject — `camel_folder_info_get_type` is a
+/// boxed type, so there is no instance size to compare against. What the
+/// builder in `jmap-mail` relies on instead is the allocator's contract:
+/// `camel_folder_info_new` hands back a struct with every field zeroed, so the
+/// builder can fill in only the fields it has something to say about and trust
+/// that `next`, `parent` and `child` are NULL rather than garbage. A
+/// `g_slice_new` instead of a `g_slice_new0` upstream would turn that into a
+/// chain that walks into freed memory the first time Camel follows it.
+#[test]
+fn a_fresh_folder_info_is_zeroed() {
+    // SAFETY: no arguments; the returned struct is ours until we free it, and
+    // `camel_folder_info_free` walks the (empty) chain and frees the names.
+    unsafe {
+        let info = camel_folder_info_new();
+        assert!(!info.is_null(), "camel_folder_info_new returned NULL");
+
+        assert!((*info).next.is_null(), "next is not NULL on a fresh info");
+        assert!((*info).parent.is_null(), "parent is not NULL");
+        assert!((*info).child.is_null(), "child is not NULL");
+        assert!((*info).full_name.is_null(), "full_name is not NULL");
+        assert!((*info).display_name.is_null(), "display_name is not NULL");
+        assert_eq!((*info).flags, 0);
+        assert_eq!((*info).total, 0);
+        assert_eq!((*info).unread, 0);
+
+        camel_folder_info_free(info);
+    }
+}
+
+/// The names in a `CamelFolderInfo` are freed with `g_free`, so they have to be
+/// allocated with `g_malloc` and not with a Rust allocator. Nothing in the type
+/// system says so — both are `*mut gchar` — which makes this the assumption most
+/// worth writing down: the round trip below is what a leak checker looks at, and
+/// a `CString::into_raw` in its place is a heap corruption that usually survives
+/// long enough to corrupt something else.
+#[test]
+fn folder_info_names_survive_a_g_strdup_and_a_free() {
+    // SAFETY: `g_strdup` allocates with g_malloc, which is what
+    // `camel_folder_info_free` releases the two name fields with.
+    unsafe {
+        let info = camel_folder_info_new();
+        (*info).full_name = glib_sys::g_strdup(c"Parent/Child".as_ptr());
+        (*info).display_name = glib_sys::g_strdup(c"Child".as_ptr());
+
+        assert_eq!(
+            std::ffi::CStr::from_ptr((*info).full_name),
+            c"Parent/Child",
+            "the full_name field reads back from the wrong offset"
+        );
+        assert_eq!(std::ffi::CStr::from_ptr((*info).display_name), c"Child");
+
+        camel_folder_info_free(info);
+    }
+}
+
+/// A folder's *type* is a small integer packed into the flags word, not a bit
+/// per type: `CAMEL_FOLDER_TYPE_MASK` isolates it and the ordinary bit flags
+/// live outside the mask. Setting a type by OR-ing it in — which is what the
+/// role mapping does — is only correct while those two facts hold, and both are
+/// `#define`s in a header rather than anything the compiler checks.
+#[test]
+fn the_folder_type_is_a_field_inside_the_flags_word() {
+    assert_eq!(CAMEL_FOLDER_TYPE_MASK, 0x3F << CAMEL_FOLDER_TYPE_BIT);
+
+    let types = [
+        CAMEL_FOLDER_TYPE_NORMAL,
+        CAMEL_FOLDER_TYPE_INBOX,
+        CAMEL_FOLDER_TYPE_TRASH,
+        CAMEL_FOLDER_TYPE_JUNK,
+        CAMEL_FOLDER_TYPE_SENT,
+        CAMEL_FOLDER_TYPE_ARCHIVE,
+        CAMEL_FOLDER_TYPE_DRAFTS,
+    ];
+    for folder_type in types {
+        assert_eq!(
+            folder_type & CAMEL_FOLDER_TYPE_MASK as CamelFolderInfoFlags,
+            folder_type,
+            "a folder type has bits outside CAMEL_FOLDER_TYPE_MASK"
+        );
+    }
+
+    // ...and the flags a JMAP folder also carries do not land in the type
+    // field, so OR-ing them together cannot change the type.
+    let flags = CAMEL_FOLDER_SUBSCRIBED
+        | CAMEL_FOLDER_SYSTEM
+        | CAMEL_FOLDER_CHILDREN
+        | CAMEL_FOLDER_NOCHILDREN;
+    assert_eq!(flags & CAMEL_FOLDER_TYPE_MASK as CamelFolderInfoFlags, 0);
+}
