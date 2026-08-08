@@ -43,14 +43,17 @@ fn expect_created<T: Clone>(response: &SetResponse<T>, creation_id: &str) -> Res
 
 impl Client {
     /// Fetch all mailboxes of an account (`Mailbox/get` with `ids: null`).
-    pub fn mailboxes(&self, account_id: &Id) -> Result<Vec<Mailbox>, Error> {
+    ///
+    /// The whole response, not just the list: its `state` is what
+    /// `Mailbox/changes` is asked from, and a folder list without the state it
+    /// was current at is one that can only ever be re-fetched in full.
+    pub fn mailbox_get(&self, account_id: &Id) -> Result<GetResponse<Mailbox>, Error> {
         let arguments = self.single_call(
             &[CAPABILITY_CORE, CAPABILITY_MAIL],
             "Mailbox/get",
             &GetRequest::all(account_id.clone()),
         )?;
-        let response: GetResponse<Mailbox> = serde_json::from_value(arguments)?;
-        Ok(response.list)
+        Ok(serde_json::from_value(arguments)?)
     }
 
     /// `Email/query`: matching email ids.

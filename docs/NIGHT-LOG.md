@@ -2523,3 +2523,101 @@ is also the first thing in this crate that cannot be tested without a
 Still absent and needed soon after: the `Mailbox/get` state string for
 `Mailbox/changes`. The README's architecture block still lists only the round-1
 crates; five crates stale.
+
+## 2026-08-08 (twenty-eighth session)
+
+M5's eighth increment: the state a folder listing is current as of, and
+noticing that it moved. Two commits, one of them the paging primitive the
+whole repo had three unexercised copies of.
+
+**`jmap-client`: `all_changes`.** RFC 8620 §5.2 lets a server truncate a
+`/changes` answer whenever it likes; `maxChanges` is the client's cap, not the
+only reason for one. `Client::all_changes` follows `hasMoreChanges` to the end
+and returns a `ChangeSet` — three `BTreeSet<Id>`s and the state to resume from.
+`jmap-book-sync` and `jmap-cal-sync` had a loop each doing this; both now call
+the one implementation. `MockServerBuilder::changes_page_size` makes the mock
+page, which is what turned that loop from untested into tested.
+
+**`jmap-mail-sync`: `folder_tree` keeps its state, and `folder_tree_since`.**
+`Mailbox/get` was throwing the response's `state` away, which made the folder
+tree something that could only ever be re-fetched in full. It now comes back
+with the tree, and `folder_tree_since` spends one `Mailbox/changes` to find out
+whether anything happened. Six tests in a new `tests/refresh.rs`, plus three
+mock helpers (`create_mailbox`, `rename_mailbox`, `destroy_mailbox`) that
+mutate as state transitions rather than seeding.
+
+Decisions taken:
+
+- **Paging must not change the answer.** `all_changes` folds the pages back
+  into what one response would have carried, by the rule RFC 8620 states for
+  one: an object created and destroyed inside the window is reported neither
+  way, because the caller never learned it existed, and one created and then
+  modified is created. Without this, whether a client hears about an object
+  that came and went depends on where the server happened to split — a
+  difference no caller can do anything sensible with.
+  `following_every_page_answers_what_one_page_would_have` asserts it as an
+  equality between the capped and uncapped servers, which is the property
+  stated directly rather than a proxy for it.
+- **The mock truncates at a state boundary, and always serves the first
+  transition whole.** `newState` has to be a state the client can ask again
+  from, and half a `/set` is not one. The first transition goes out however
+  large it is, because a cap that could withhold all of it is a client asking
+  again from the same state forever.
+- **A mailbox delta is not applied folder by folder.** A Camel path is built
+  from a mailbox's ancestors, so `Mailbox/changes` reporting a renamed parent
+  says nothing about the descendants whose paths just moved with it — and the
+  delta names only the parent.
+  `renaming_a_parent_moves_children_the_delta_never_names` is that case. The
+  account's mailbox list is one `Mailbox/get`, so the honest answer to any
+  change at all is the tree again; what the delta is genuinely worth is the
+  answer *no*, which is what it gives nearly every time it is asked. Hence
+  `FolderUpdate::Unchanged`/`Rebuilt` rather than lists of ids the caller
+  could not apply.
+- **A rebuilt tree is labelled with the listing's state, not the delta's.**
+  The tree is what was walked, and the account may have moved again between the
+  two calls; taking the delta's state would record the account as current at a
+  point the tree does not reflect, and lose whatever happened in between.
+- **`cannotCalculateChanges` is answered, not reported — on the mail side.**
+  The EDS meta backends pass it up because EDS knows how to diff a collection
+  against its cache. Camel has nothing of the kind, so a store that reported it
+  would be a folder tree that never recovers: `folder_tree_since` lists the
+  account instead. The predicate itself moved to
+  `jmap_client::Error::is_cannot_calculate_changes`, with book and cal
+  delegating — three callers now ask the same question, and a state that is too
+  old must not mean different things to mail and to contacts.
+- **The mock grows mailbox mutators rather than a `Mailbox/set`.** Nothing in
+  the client sends one, and a `/set` implementation nobody calls is a second
+  server to keep correct. What the tests need is for a folder to appear, be
+  renamed or vanish *as a state transition* — the thing `seed_mailbox`
+  deliberately does not do, since a seeded mailbox predates every state a
+  client has seen.
+
+Mutation testing, eight mutants, no survivors: the mock ignoring the page cap,
+`all_changes` stopping after the first page, created-then-destroyed reported as
+created, `cannotCalculateChanges` back to being an error, the mock creating a
+mailbox without a transition, a non-empty delta not rebuilding, an empty delta
+rebuilding anyway, the listing inventing its state, and the mock's mailbox
+destroy and rename each staging nothing.
+
+One self-inflicted blocker, worth recording: the mutation harness reverted each
+mutant with `git checkout --`, which on *uncommitted* work reverts the work
+too. Two files were lost that way and rewritten from the session's own context;
+the harness now restores from a copy. Mutation testing against a dirty tree
+needs a revert that knows nothing about git.
+
+Not verified locally, as in the previous twenty-seven sessions: `reuse lint`
+and `cargo deny`. The one new file carries an SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` (green on the default members, the
+five EDS crates green on top) and `cargo clippy --all-targets --locked -D
+warnings` are clean on both member sets. A fresh `cmake -S . -B <tmp> -G Ninja
+&& cmake --build && ctest` is 5/5. `example-module` is unchanged and still
+outside both `default-members` and the set CI lints.
+
+Next in M5: still the vfuncs — `CamelServiceClass.connect_sync`,
+`authenticate_sync` and `disconnect_sync`, whose open question (which of
+`connect_sync` and `camel_session_authenticate_sync` drives the other) is
+unchanged from last session, and `get_folder_info_sync` over
+`FolderInfoChain::into_raw`, which now has both halves it needs: a tree, and a
+cheap way to find out it is still current. The store will want a field for the
+folder state next to its connection slot. The README's architecture block still
+lists only the round-1 crates; five crates stale.

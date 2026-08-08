@@ -38,7 +38,7 @@ fn receive_email_query_then_fetch() {
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
     // The client finds the inbox by role, like a real mail client would.
-    let mailboxes = client.mailboxes(&account_id).unwrap();
+    let mailboxes = client.mailbox_get(&account_id).unwrap().list;
     let inbox_from_server = mailboxes
         .iter()
         .find(|mailbox| mailbox.role.as_deref() == Some(role::INBOX))
