@@ -1,0 +1,13 @@
+Recurring adversarial security re-audit session. You are REVIEWING, not building features. Repo clone: ~/audit-ffi/evolution-jmap (cwd). Work on the branch the driver checked out (audit/reaudit-<date>); never master. Iterative: if this run's dated report already exists, continue where it leaves off.
+
+Read first: docs/ROADMAP.md ("Recurring security re-audit" directive), the most recent prior report (docs/AUDIT-FFI.md and any docs/AUDIT-FFI-*.md), and `git log --oneline` since the prior report's base commit.
+
+Do, in order:
+1. REGRESSION CHECK. For each prior finding F1..Fn: confirm its disposition still holds on current code. For F1–F4 (fixed): the named regression tests in the *hostile.rs suites must still exist and still pass (run them). For findings marked CLEAN or INFO: re-read that code and confirm the judgement is still true — new commits may have invalidated it. Any regression is a NEW finding at the original severity.
+2. NEW-CODE AUDIT. Audit everything added/changed since the prior report's base commit (state the commit you diff against). Same hunt list as the original: struct-layout vs headers, vfunc trampoline panic/NULL paths, GObject refcount/ownership/GError leaks, `unsafe impl Send/Sync` justification, integer truncation, parser robustness on hostile input, and the ROADMAP security rules (TLS-by-default, plaintext-to-loopback-only, credentials only via ESourceAuthentication). NOTE: if the calcard migration has replaced jmap-ical/jmap-vcard parsing, audit the new mapping code and confirm F1/F2's injection class cannot reappear through calcard's API; the old hostile.rs payloads must still be run against whatever renders vCard/iCalendar now.
+
+Method: read, then PROVE each suspected defect with a failing/asserting test before fixing. Fix clear-cut bugs (each its own commit, referencing the finding); document design-level concerns rather than refactoring.
+
+Output: docs/AUDIT-FFI-<date>.md (the driver exports $REAUDIT_REPORT with the exact filename — write that file). Structure: a findings table (id/severity/where/status), one section per finding (severity, file:line, why exploitable, evidence test name, fix commit or recommendation), a "regression check" section stating each prior finding re-verified with the evidence, an "audited and CLEAN" section (absence of findings must be distinguishable from absence of looking), and the base commit diffed against. End the file with the single line: AUDIT COMPLETE
+
+Rules: commit style per docs/ROADMAP.md (SPDX GPL-3.0-or-later headers, no Co-Authored-By trailers, clippy/test/fmt green before push). NEVER push to master. NEVER touch ~/evolution-jmap. End the session promptly once the increment is pushed.

@@ -85,6 +85,30 @@ migration; a behaviour difference calcard introduces is a finding, not a
 nuisance. Rationale: outsource parsing liability; our code should carry
 only the JMAP/EDS integration it exists for.
 
+### Recurring security re-audit (2026-08-08)
+The first FFI audit (`docs/AUDIT-FFI.md`, branch `audit/ffi`) found F1–F10;
+F1–F4 are fixed on master with regression tests that run in CI, so those
+specific issues cannot silently return. But new code lands continuously,
+and CI only catches regressions of *known* bugs — not novel ones. So the
+adversarial audit runs again periodically, as its own stream (NOT roadmap
+feature work — the roadmap agent must not attempt it).
+
+Each re-audit (driver `infra/night-shift/start-reaudit.sh`, prompt
+`infra/night-shift/reaudit-prompt.md`) forks a fresh dated branch off
+current master, and:
+1. Re-verifies every prior finding's disposition still holds — the F1–F4
+   regression tests exist and pass, and the F5–F10 "clean"/"info"
+   judgements are still true of the current code.
+2. Audits everything added since the last audit's base commit (recorded
+   in the previous report) with the same hunt list as the original.
+3. Writes a dated report `docs/AUDIT-FFI-<date>.md` ending in
+   `AUDIT COMPLETE`, fixing clear-cut bugs (each with a red-first test)
+   and documenting design concerns.
+
+Cadence: launch after each milestone completes, or weekly, whichever comes
+first. Same isolation rules as the original audit stream (own clone, own
+branch, never master, never touch other streams' checkouts).
+
 ## Integration testing (parallel track)
 Once M3 exists: gated CI job + local recipe against a real
 [Stalwart](https://stalw.art/) server (full JMAP mail/contacts/calendars)
