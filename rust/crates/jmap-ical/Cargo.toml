@@ -12,3 +12,9 @@ publish = false
 
 [lib]
 name = "jmap_ical"
+
+[dependencies]
+evolution-jmap-proto = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
