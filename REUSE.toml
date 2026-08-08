@@ -32,7 +32,7 @@ path = [
     "rust/crates/jmap-mail/libcameljmap.urls",
     "README.md",
     "docs/**",
-    "infra/night-shift/night-prompt.md",
+    "infra/night-shift/*.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Tobias Mueller <muelli@cryptobitch.de>"
