@@ -25,7 +25,13 @@
 //!   instance and class structs, and the seven vfunc slots EDS dispatches
 //!   through.
 //!
-//! The factory and the module entry point follow.
+//! On top of that sit the two pieces EDS actually reaches first: [`module`], the
+//! `e_module_load` symbol resolved out of the built shared object, and
+//! [`factory`], the `ECalBackendFactory` it registers — the thing that maps
+//! `BackendName=jmap` in a `.source` file onto a backend instance. The
+//! calendar's factory declares one field the address book's has no counterpart
+//! for, and it is the field that decides which of a calendar, a task list and a
+//! memo list this backend can be: see [`factory::COMPONENT_KIND`].
 //!
 //! Like `jmap-backend-core`, this crate needs the installed EDS headers and so
 //! stays out of the workspace's `default-members`; CMake runs its tests via the
@@ -33,5 +39,7 @@
 
 pub mod backend;
 pub mod connect;
+pub mod factory;
 pub mod marshal;
+pub mod module;
 pub mod ops;
