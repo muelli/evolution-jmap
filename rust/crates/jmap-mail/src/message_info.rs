@@ -44,11 +44,12 @@ use eds_sys::{
     camel_message_info_set_date_received, camel_message_info_set_date_sent,
     camel_message_info_set_flags, camel_message_info_set_from, camel_message_info_set_message_id,
     camel_message_info_set_preview, camel_message_info_set_size, camel_message_info_set_subject,
-    camel_message_info_set_to, camel_message_info_set_uid, camel_message_info_set_user_flag,
-    camel_message_info_take_references, camel_message_info_thaw_notifications,
+    camel_message_info_set_to, camel_message_info_set_uid, camel_message_info_take_references,
+    camel_message_info_take_user_flags, camel_message_info_thaw_notifications,
+    camel_named_flags_insert, camel_named_flags_new,
 };
 use glib_sys::{
-    G_CHECKSUM_MD5, GArray, GFALSE, GTRUE, g_array_append_vals, g_array_sized_new, g_checksum_free,
+    G_CHECKSUM_MD5, GArray, GFALSE, g_array_append_vals, g_array_sized_new, g_checksum_free,
     g_checksum_get_digest, g_checksum_new, g_checksum_update, g_free,
 };
 use gobject_sys::g_object_unref;
@@ -83,10 +84,7 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
         camel_message_info_freeze_notifications(info);
 
         camel_message_info_set_uid(info, c_string(message.uid.as_str()).as_ptr());
-        camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&message.flags));
-        for tag in &message.tags {
-            camel_message_info_set_user_flag(info, c_string(tag).as_ptr(), GTRUE);
-        }
+        update_message_info(info, message);
 
         set_string(
             info,
@@ -130,6 +128,59 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
     }
 
     info
+}
+
+/// Writes the columns a later listing of the same message may have changed.
+///
+/// Every property of a JMAP `Email` is immutable except `keywords` and
+/// `mailboxIds` (RFC 8621 §4.1) — a message does not get a new subject, a new
+/// sender or a new `Message-ID` — and the mailbox it is in is not a column of
+/// the row, it is which folder the row is in. So a refresh is these two
+/// columns and nothing else, which is both what the server can honestly be
+/// said to have changed and what [`crate::summary`] rewrites when it meets a
+/// row that is already there. Everything else is written once, by
+/// [`new_message_info`], which calls this for the rest of the row.
+///
+/// # Safety
+///
+/// `info` must be a live message info.
+pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &MessageSummary) {
+    // SAFETY: the caller guarantees the info; the mask keeps the setter off the
+    // bits this provider is not the authority on, and the flag set below is
+    // handed over along with its ownership.
+    unsafe {
+        camel_message_info_freeze_notifications(info);
+        camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&message.flags));
+        set_user_flags(info, &message.tags);
+        camel_message_info_thaw_notifications(info);
+    }
+}
+
+/// Replaces the row's user flags — Evolution's labels — with the ones the
+/// listing carries.
+///
+/// Wholesale rather than name by name, because the keyword set is the whole
+/// truth about a message's labels: a keyword the server has stopped sending is
+/// one that was taken off somewhere else, and Camel is told about it only by
+/// its absence. Handing over an empty set is therefore right rather than
+/// merely harmless — unlike the text columns, where an empty value and an
+/// absent one are different things in the summary database, user flags are
+/// stored as one joined string with no way to spell "absent".
+///
+/// # Safety
+///
+/// `info` must be a live message info.
+unsafe fn set_user_flags(info: *mut CamelMessageInfo, tags: &[String]) {
+    // SAFETY: the set is built here and handed to `take_user_flags`, which
+    // consumes it whether or not it turned out to be a change; every name is a
+    // NUL-terminated string the set copies.
+    unsafe {
+        let flags = camel_named_flags_new();
+        for tag in tags {
+            camel_named_flags_insert(flags, c_string(tag).as_ptr());
+        }
+        camel_message_info_take_user_flags(info, flags);
+    }
 }
 
 /// Sets one text column, or leaves it unset when the message did not carry it.

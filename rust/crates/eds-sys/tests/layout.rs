@@ -121,6 +121,11 @@ fn camel_layouts_match_the_gtype_system() {
         CamelOfflineFolderClass
     );
     assert_layout!(
+        camel_folder_summary_get_type,
+        CamelFolderSummary,
+        CamelFolderSummaryClass
+    );
+    assert_layout!(
         camel_message_info_get_type,
         CamelMessageInfo,
         CamelMessageInfoClass

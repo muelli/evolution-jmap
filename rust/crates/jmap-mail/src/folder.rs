@@ -37,9 +37,9 @@ use std::ffi::CStr;
 use std::ptr;
 
 use eds_sys::{
-    CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CamelFolder, CamelFolderFlags,
-    CamelOfflineFolder, CamelOfflineFolderClass, CamelStore, camel_folder_set_flags,
-    camel_offline_folder_get_type,
+    CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY,
+    CamelFolder, CamelFolderFlags, CamelOfflineFolder, CamelOfflineFolderClass, CamelStore,
+    camel_folder_set_flags, camel_offline_folder_get_type,
 };
 use glib_sys::{GType, gchar};
 use gobject_sys::g_object_new;
@@ -49,6 +49,7 @@ use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
 
 use crate::folder_info::c_string;
+use crate::summary::attach_summary;
 
 /// The instance struct. `#[repr(C)]` leading with the parent's instance struct
 /// is what makes a `*mut JmapFolder` usable as the `CamelFolder *` every Camel
@@ -190,6 +191,7 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
             .mailbox
             .init(mailbox.id.clone());
         camel_folder_set_flags(folder, flags(mailbox));
+        attach_summary(folder);
     }
 
     folder
@@ -197,26 +199,29 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
 
 /// How Camel should treat this folder.
 ///
-/// Only the inbox gets anything, and it gets the two bits that make new mail
-/// arriving in it run through the user's rules: `FILTER_RECENT` for the
-/// incoming filters, `FILTER_JUNK` for the junk test. Camel's own IMAPX sets
-/// exactly this pair, on the folder it identifies by comparing its name against
-/// `"INBOX"`; this provider knows which mailbox is the inbox from its JMAP role
-/// instead — the same decision taken from the account's data rather than from a
-/// convention about a name.
+/// `HAS_SUMMARY_CAPABILITY` is on every folder, because every folder is given a
+/// summary by [`new_folder`] a line after this is read. It is the flag Camel
+/// tests before it asks a folder for a message count or a uid list at all, so
+/// the two have to be set together: the flag without the summary is a folder
+/// that says it can be counted and then cannot, and the summary without the
+/// flag is a folder whose contents are never asked for.
 ///
-/// The other bits of the word are deliberately absent. `HAS_SUMMARY_CAPABILITY`
-/// is a claim that the folder keeps a `CamelFolderSummary`, which is the next
-/// increment and not this one, and Camel reads that flag to decide whether it
-/// may ask for a message count at all — claiming it early is a folder that says
-/// it can be counted and then cannot. `IS_TRASH` and `IS_JUNK` are not set from
-/// the role either: they are what `camel_store_get_trash_folder_sync` and its
-/// junk counterpart mark the folder they *return* with, and marking a folder
-/// with them here would tell Camel to treat the mailbox as the account's trash
-/// before anything asked for one.
+/// Beyond that only the inbox gets anything, and it gets the two bits that make
+/// new mail arriving in it run through the user's rules: `FILTER_RECENT` for
+/// the incoming filters, `FILTER_JUNK` for the junk test. Camel's own IMAPX
+/// sets exactly this pair, on the folder it identifies by comparing its name
+/// against `"INBOX"`; this provider knows which mailbox is the inbox from its
+/// JMAP role instead — the same decision taken from the account's data rather
+/// than from a convention about a name.
+///
+/// `IS_TRASH` and `IS_JUNK` are still not set from the role: they are what
+/// `camel_store_get_trash_folder_sync` and its junk counterpart mark the folder
+/// they *return* with, and marking a folder with them here would tell Camel to
+/// treat the mailbox as the account's trash before anything asked for one.
 fn flags(mailbox: &FolderInfo) -> CamelFolderFlags {
-    match mailbox.role {
+    let role = match mailbox.role {
         Some(FolderRole::Inbox) => CAMEL_FOLDER_FILTER_RECENT | CAMEL_FOLDER_FILTER_JUNK,
         _ => 0,
-    }
+    };
+    CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY | role
 }

@@ -79,14 +79,18 @@ const ALLOWED_TYPES: &[&str] = &[
     // `get_folder_info_sync` returns — a plain struct, not an object, so it is
     // named here to bring its flags enum along; `CamelFolder` is the object the
     // provider's own folder derives from, through `CamelOfflineFolder`, which
-    // is where a folder's disconnected copy of its content lives. Exact names
-    // rather than a `CamelFolder.*` prefix, which would also pull in
-    // `CamelFolderSummary`, `CamelFolderSearch` and `CamelFolderThread` — three
-    // more class structs this layer would be claiming to have checked.
+    // is where a folder's disconnected copy of its content lives.
+    // `CamelFolderSummary` is what that folder's rows live in — the object a
+    // message count, a uid list and a `CamelMessageInfo` all come out of.
+    // Exact names rather than a `CamelFolder.*` prefix, which would also pull
+    // in `CamelFolderSearch` and `CamelFolderThread` — two more class structs
+    // this layer would be claiming to have checked.
     "CamelFolder",
     "CamelFolderClass",
     "CamelFolderInfo",
     "CamelFolderInfoFlags",
+    "CamelFolderSummary",
+    "CamelFolderSummaryClass",
     // The flags word of the folder *object*, which is a different word from
     // `CamelFolderInfoFlags` with different bits in it: the info's flags say
     // what kind of folder this is, the folder's say how Camel treats it —
@@ -162,11 +166,18 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // What a constructed folder is asked about itself: the path Camel keys it
     // by, the name the user sees, the store it hangs off, and the flags word
     // that says how Camel treats it. Still not all of `camel_folder_.*`, which
-    // would match every `camel_folder_summary_*` and `camel_folder_search_*`
-    // function too and drag their class structs in behind them — the summary
-    // arrives with the increment that fills one.
+    // would match every `camel_folder_search_*` function too and drag its class
+    // struct in behind them.
     "camel_folder_(get|set)_(full_name|display_name|flags)",
     "camel_folder_get_parent_store",
+    // The summary a folder keeps its rows in: `take_folder_summary` is how one
+    // is put on a folder — it takes the reference rather than adding to it —
+    // `get_folder_summary` how it is read back, and
+    // `has_summary_capability` is the flag test Camel itself makes before it
+    // asks a folder for a message count.
+    "camel_folder_(get|take)_folder_summary",
+    "camel_folder_has_summary_capability",
+    "camel_folder_summary_.*",
     "camel_offline_folder_get_type",
     // Filling and reading one summary row. `camel_message_info_new_from_headers`
     // rides in on the same prefix although it is declared in
@@ -176,10 +187,11 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // digests Camel threads on. A provider whose digests disagreed with it
     // would split a conversation in two the moment the two met.
     "camel_message_info_.*",
-    // Still not `camel_folder_summary_.*`: the summary object arrives with the
-    // increment that puts one on a folder. `camel_message_info_new` takes one,
-    // and NULL — a summary that declares no message-info type — is what this
-    // layer passes until then.
+    // The set a row's user flags — Evolution's labels — are kept in. Replaced
+    // wholesale rather than flag by flag, because JMAP's `keywords` is the
+    // whole truth about a message's labels: a keyword the server stopped
+    // sending is one the user took off somewhere else.
+    "camel_named_flags_.*",
     "camel_name_value_array_.*",
     // Formatting an address list the way a summary row stores it: build a
     // `CamelInternetAddress`, then `camel_address_format` on it.

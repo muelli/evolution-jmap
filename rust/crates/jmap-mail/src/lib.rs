@@ -45,6 +45,10 @@
 //!   JMAP mailbox id that nothing in Camel's own model has a field for, and
 //!   which a Camel path — invented here out of a mailbox name — cannot be
 //!   turned back into.
+//! - [`summary`] is where those rows live: the `CamelFolderSummary` every
+//!   folder is given at construction, what a listing of the mailbox does to the
+//!   rows already in it, and the flag that lets Camel ask a folder how much it
+//!   holds.
 //! - [`message_info`] is one row of that folder's contents: the
 //!   `CamelMessageInfo` a `jmap-mail-sync` summary row becomes, and with it the
 //!   three columns that are a computation rather than a copy — the flags word,
@@ -71,3 +75,4 @@ pub mod server;
 pub mod service;
 pub mod settings;
 pub mod store;
+pub mod summary;
