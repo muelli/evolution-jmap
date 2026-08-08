@@ -42,8 +42,9 @@
 //! `camel_folder_changed` queues the diff and emits it from the folder's main
 //! context, coalescing whatever else is pending into the same emission.
 //! Nothing arrives on a thread that never iterates a main loop — which a Rust
-//! test thread does not — so [`emissions`] pumps the default context before it
-//! reads. A test that did not would observe silence and call it a pass.
+//! test thread does not — so [`emissions`] pumps a context before it reads. A
+//! test that did not would observe silence and call it a pass. Which context
+//! is not a detail either: see [`Context`].
 
 mod common;
 
@@ -59,7 +60,11 @@ use eds_sys::{
     camel_folder_free_uids, camel_folder_get_message_count, camel_folder_get_uids,
     camel_folder_refresh_info_sync, camel_service_error_quark, camel_store_get_folder_sync,
 };
-use glib_sys::{GError, GFALSE, GPtrArray, g_main_context_iteration, gboolean, gpointer};
+use glib_sys::{
+    GError, GFALSE, GMainContext, GPtrArray, g_main_context_iteration, g_main_context_new,
+    g_main_context_pop_thread_default, g_main_context_push_thread_default, g_main_context_unref,
+    gboolean, gpointer,
+};
 use gobject_sys::{g_object_unref, g_signal_connect_data, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
@@ -211,10 +216,55 @@ struct Emission {
 
 thread_local! {
     /// Every emission the folder made, in order. A thread local rather than
-    /// user data threaded through the handler because a Rust test binary runs
-    /// each test on a thread of its own, and the emission is delivered from a
-    /// main context this thread is the only one iterating.
+    /// user data threaded through the handler, which is sound because
+    /// [`Context`] makes the pumping thread the only one that can deliver.
     static EMISSIONS: RefCell<Vec<Emission>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A main context of this test's own, pushed as the thread default for as long
+/// as it is held.
+///
+/// Not a convenience. `g_main_context_iteration` on the *global* default
+/// acquires it first and returns immediately, dispatching nothing, when another
+/// thread already owns it — and a Rust test binary runs its tests on threads of
+/// one process, so the tests here pump the same context concurrently and steal
+/// each other's turn. A queued emission then arrives one pump too late, or not
+/// within the test at all, which is where this file's intermittent failures
+/// came from. Camel queues the `changed` signal onto the context that was
+/// thread-default when `camel_folder_changed` was called, so a context per test
+/// is a queue per test.
+struct Context(*mut GMainContext);
+
+impl Context {
+    /// Pushed before anything else a test does, because what matters is which
+    /// context is current when Camel queues, not when the test reads.
+    fn push() -> Self {
+        // SAFETY: a fresh context, pushed on this thread and popped in `drop`
+        // — the stack discipline `g_main_context_pop_thread_default` requires.
+        unsafe {
+            let context = g_main_context_new();
+            g_main_context_push_thread_default(context);
+            Self(context)
+        }
+    }
+
+    /// Delivers everything queued, without blocking on anything that is not.
+    fn pump(&self) {
+        // SAFETY: a live context this thread is the only user of, and FALSE is
+        // what asks it not to wait for a source to become ready.
+        unsafe { while g_main_context_iteration(self.0, GFALSE) != GFALSE {} }
+    }
+}
+
+impl Drop for Context {
+    fn drop(&mut self) {
+        // SAFETY: this is the context pushed in `push`, and the reference taken
+        // there is the one released here.
+        unsafe {
+            g_main_context_pop_thread_default(self.0);
+            g_main_context_unref(self.0);
+        }
+    }
 }
 
 /// Listens the way Evolution's message list listens.
@@ -277,14 +327,12 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<String> {
     }
 }
 
-/// Everything the folder has announced since [`watch`], after giving the main
-/// context the chance to deliver it. See this file's header:
+/// Everything the folder has announced since [`watch`], after giving the
+/// test's main context the chance to deliver it. See this file's header:
 /// `camel_folder_changed` queues, so reading without pumping reads nothing,
 /// always.
-fn emissions() -> Vec<Emission> {
-    // SAFETY: iterating the default main context — NULL — without blocking on a
-    // source becoming ready, which is what FALSE asks for.
-    unsafe { while g_main_context_iteration(ptr::null_mut(), GFALSE) != GFALSE {} }
+fn emissions(context: &Context) -> Vec<Emission> {
+    context.pump();
     EMISSIONS.with(|seen| seen.take())
 }
 
@@ -326,12 +374,13 @@ fn a_refresh_fills_the_folder_from_the_mailbox() {
 /// and from nothing else.
 #[test]
 fn a_refresh_tells_camel_what_arrived() {
+    let context = Context::push();
     let (_server, _account, folder) = with_mail();
     watch(folder);
 
     Refreshed::of(folder).expect_ok();
 
-    let emissions = emissions();
+    let emissions = emissions(&context);
     assert_eq!(emissions.len(), 1, "the folder emitted {emissions:?}");
     assert_eq!(emissions[0].added.len(), 2);
     assert!(emissions[0].removed.is_empty());
@@ -347,14 +396,15 @@ fn a_refresh_tells_camel_what_arrived() {
 /// where they were in it, every minute.
 #[test]
 fn a_refresh_that_found_nothing_new_says_nothing() {
+    let context = Context::push();
     let (_server, _account, folder) = with_mail();
 
     Refreshed::of(folder).expect_ok();
-    emissions();
+    emissions(&context);
     watch(folder);
     Refreshed::of(folder).expect_ok();
 
-    let emissions = emissions();
+    let emissions = emissions(&context);
     assert!(
         emissions.is_empty(),
         "an unchanged mailbox emitted {emissions:?}"
