@@ -45,7 +45,9 @@ cat > /usr/local/bin/idle-watchdog <<'WATCHDOG'
 #!/bin/bash
 STAMP=/run/runner-last-active
 [ -f "\$STAMP" ] || touch "\$STAMP"          # /run is tmpfs: boot = activity
-if pgrep -f Runner.Worker > /dev/null; then
+# Activity = a CI job (Runner.Worker) or any interactive login (ssh/tmux
+# sessions, e.g. someone driving Claude Code on the box).
+if pgrep -f Runner.Worker > /dev/null || [ -n "\$(who)" ]; then
     touch "\$STAMP"
 fi
 if [ \$(( \$(date +%s) - \$(stat -c %Y "\$STAMP") )) -gt \$(( ${IDLE_MINUTES} * 60 )) ]; then
