@@ -6,11 +6,16 @@
 // hangs off this, so the test drives a real `g_object_new` rather than only
 // checking that registration returned a non-zero GType.
 
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::subclass::{ObjectSubclass, register_dynamic, register_static};
 use std::ffi::CStr;
+use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use gobject_sys::{GObject, GObjectClass, GTypeInstance, g_object_new, g_object_unref};
+use glib_sys::{GFALSE, GTRUE, gboolean};
+use gobject_sys::{
+    GObject, GObjectClass, GTypeInstance, GTypeModule, GTypeModuleClass, g_object_new,
+    g_object_unref, g_type_module_get_type, g_type_module_unuse, g_type_module_use,
+};
 
 /// Counts how often each trampoline ran, so the test can tell "the vfunc was
 /// wired up" from "nothing was called and the defaults happened to work".
@@ -98,4 +103,97 @@ fn registering_twice_returns_the_same_type_instead_of_aborting() {
     let class = unsafe { gobject_sys::g_type_class_ref(first) };
     assert_eq!(CLASS_INITS.load(Ordering::SeqCst), 1);
     unsafe { gobject_sys::g_type_class_unref(class) };
+}
+
+// ---------------------------------------------------------------------------
+// the dynamic half
+
+/// Registered against the module below rather than statically, so that the
+/// module has a type to hand back.
+struct Dynamic;
+
+// SAFETY: as `Test`; the structs are shared with it.
+unsafe impl ObjectSubclass for Dynamic {
+    const NAME: &'static CStr = c"JmapBackendCoreTestDynamicObject";
+    type Instance = TestInstance;
+    type Class = TestClass;
+
+    fn parent_type() -> glib_sys::GType {
+        gobject_sys::G_TYPE_OBJECT
+    }
+}
+
+/// A `GTypeModule` that registers [`Dynamic`] whenever GLib loads it — which
+/// is what an EDS backend module does, and the only way to exercise the
+/// dynamic path without a shared object to dlopen.
+#[repr(C)]
+struct TestModule {
+    parent: GTypeModule,
+}
+
+#[repr(C)]
+struct TestModuleClass {
+    parent_class: GTypeModuleClass,
+}
+
+// SAFETY: both structs are #[repr(C)] and lead with the GTypeModule instance
+// and class structs, and GTypeModule derives from GObject.
+unsafe impl ObjectSubclass for TestModule {
+    const NAME: &'static CStr = c"JmapBackendCoreTestModule";
+    type Instance = TestModule;
+    type Class = TestModuleClass;
+
+    fn parent_type() -> glib_sys::GType {
+        // SAFETY: no arguments, and the type initialises itself.
+        unsafe { g_type_module_get_type() }
+    }
+
+    unsafe fn class_init(class: *mut Self::Class) {
+        // SAFETY: `class` leads with GTypeModuleClass, where both slots live.
+        let vfuncs = unsafe { &mut (*class).parent_class };
+        vfuncs.load = Some(module_load);
+        vfuncs.unload = Some(module_unload);
+    }
+}
+
+unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
+    // SAFETY: GLib passes the module it is loading.
+    unsafe { register_dynamic::<Dynamic>(module) };
+    GTRUE
+}
+
+unsafe extern "C" fn module_unload(_module: *mut GTypeModule) {}
+
+/// The reason [`register_dynamic`] cannot take the same "already registered,
+/// nothing to do" shortcut [`register_static`] has to take.
+///
+/// Unusing a module — which EDS does as soon as the last backend it provided
+/// goes away — marks every type that module registered as unloaded. Using it
+/// again calls the entry point a second time, and if that call does not
+/// re-register, GLib does not fail gracefully: it aborts the whole process
+/// with "Could not reload previously loaded plugin".
+#[test]
+fn a_dynamic_type_is_registered_again_every_time_its_module_is_loaded() {
+    let gtype = register_static::<TestModule>();
+    // SAFETY: the type is registered and GTypeModule has no construct
+    // properties of its own.
+    let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
+    assert!(!module.is_null(), "g_object_new returned NULL");
+
+    // SAFETY: `module` is a GTypeModule, and every use below is balanced by
+    // an unuse.
+    unsafe {
+        assert_ne!(
+            g_type_module_use(module),
+            GFALSE,
+            "the module would not load"
+        );
+        g_type_module_unuse(module);
+        assert_ne!(
+            g_type_module_use(module),
+            GFALSE,
+            "the second load did not re-register the module's types"
+        );
+        g_type_module_unuse(module);
+    }
 }
