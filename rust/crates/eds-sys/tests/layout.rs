@@ -1,0 +1,120 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The bindings are generated from whatever EDS headers are installed, so
+// nothing guarantees on its own that the Rust `struct` we will subclass has
+// the same shape as the C one the runtime allocates. Ask the type system
+// itself: `g_type_query()` reports the instance and class sizes GObject uses
+// for `g_type_register_static()`, and those must match our `size_of`. If they
+// ever drift, every vfunc override in the backends silently writes into the
+// wrong offset, so this is the load-bearing test of the whole FFI layer.
+
+use eds_sys::*;
+use std::mem::size_of;
+
+/// `g_type_query()` only fills the struct for classed types whose class has
+/// been referenced at least once, so take a class ref first. Abstract types
+/// (all the meta backends) can be class-ref'd; only instantiating them fails.
+fn query(gtype: GType) -> GTypeQuery {
+    unsafe {
+        let klass = g_type_class_ref(gtype);
+        assert!(!klass.is_null(), "g_type_class_ref returned NULL");
+        let mut q = std::mem::zeroed::<GTypeQuery>();
+        g_type_query(gtype, &mut q);
+        g_type_class_unref(klass);
+        assert_ne!(q.type_, 0, "g_type_query left the query zeroed");
+        q
+    }
+}
+
+/// Checks one instance/class struct pair against the registered type.
+macro_rules! assert_layout {
+    ($get_type:expr, $instance:ty, $class:ty) => {{
+        let name = stringify!($instance);
+        let q = query(unsafe { $get_type() });
+        assert_eq!(
+            q.instance_size as usize,
+            size_of::<$instance>(),
+            "{name}: instance size disagrees with g_type_query"
+        );
+        assert_eq!(
+            q.class_size as usize,
+            size_of::<$class>(),
+            "{name}: class size disagrees with g_type_query"
+        );
+    }};
+}
+
+#[test]
+fn backend_layouts_match_the_gtype_system() {
+    assert_layout!(e_backend_get_type, EBackend, EBackendClass);
+    assert_layout!(e_source_get_type, ESource, ESourceClass);
+}
+
+#[test]
+fn book_backend_layouts_match_the_gtype_system() {
+    assert_layout!(e_book_backend_get_type, EBookBackend, EBookBackendClass);
+    assert_layout!(
+        e_book_meta_backend_get_type,
+        EBookMetaBackend,
+        EBookMetaBackendClass
+    );
+    assert_layout!(e_book_cache_get_type, EBookCache, EBookCacheClass);
+}
+
+#[test]
+fn cal_backend_layouts_match_the_gtype_system() {
+    assert_layout!(e_cal_backend_get_type, ECalBackend, ECalBackendClass);
+    assert_layout!(
+        e_cal_meta_backend_get_type,
+        ECalMetaBackend,
+        ECalMetaBackendClass
+    );
+    assert_layout!(e_cal_cache_get_type, ECalCache, ECalCacheClass);
+}
+
+/// bindgen will happily regenerate `GObject`, `GError` and friends from the
+/// EDS headers. The layouts would still match, so the tests above would still
+/// pass — but the types would be *distinct* from the gtk-rs ones, and every
+/// pointer crossing between eds-sys and the `glib` crate would need a cast
+/// that silences exactly the mismatch a cast should be catching. These
+/// assignments only compile while the re-exports are the real thing.
+#[test]
+fn glib_types_are_the_gtk_rs_ones_not_regenerated_copies() {
+    let obj: *mut GObject = std::ptr::null_mut();
+    let _: *mut gobject_sys::GObject = obj;
+
+    let err: *mut GError = std::ptr::null_mut();
+    let _: *mut glib_sys::GError = err;
+
+    let cancellable: *mut GCancellable = std::ptr::null_mut();
+    let _: *mut gio_sys::GCancellable = cancellable;
+
+    // ...and the parent slot of an EDS instance really is that GObject.
+    let backend = unsafe { std::mem::zeroed::<EBackend>() };
+    let _: gobject_sys::GObject = backend.parent;
+}
+
+/// The whole point of the meta backends is that they hand us a cache and an
+/// offline/online story for free; make sure the vfuncs we will override in M3
+/// and M4 actually exist in the generated class structs.
+#[test]
+fn meta_backend_classes_expose_the_vfuncs_the_backends_override() {
+    let book = unsafe { std::mem::zeroed::<EBookMetaBackendClass>() };
+    assert!(book.connect_sync.is_none());
+    assert!(book.disconnect_sync.is_none());
+    assert!(book.get_changes_sync.is_none());
+    assert!(book.list_existing_sync.is_none());
+    assert!(book.load_contact_sync.is_none());
+    assert!(book.save_contact_sync.is_none());
+    assert!(book.remove_contact_sync.is_none());
+
+    let cal = unsafe { std::mem::zeroed::<ECalMetaBackendClass>() };
+    assert!(cal.connect_sync.is_none());
+    assert!(cal.disconnect_sync.is_none());
+    assert!(cal.get_changes_sync.is_none());
+    assert!(cal.list_existing_sync.is_none());
+    assert!(cal.load_component_sync.is_none());
+    assert!(cal.save_component_sync.is_none());
+    assert!(cal.remove_component_sync.is_none());
+}
