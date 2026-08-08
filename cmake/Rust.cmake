@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Cargo integration: reproducibility plumbing and test registration.
-# The `add_cargo_cdylib()` helper for installable backend modules lands
-# with the first EDS backend.
+# Cargo integration: reproducibility plumbing, test registration, and
+# `add_cargo_cdylib()` — the install rule for the backend modules EDS and
+# Camel dlopen out of their own module directories.
 
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
@@ -24,8 +24,10 @@ set(CARGO_ENV
 )
 
 # Build the whole workspace (all members — needs Evolution headers for the
-# example module).
-add_custom_target(rust-build
+# example module). Part of ALL because the cdylibs add_cargo_cdylib()
+# installs are files, not CMake targets: nothing else would build them, and
+# `cmake --install` would find nothing to copy.
+add_custom_target(rust-build ALL
 	COMMAND ${CMAKE_COMMAND} -E env ${CARGO_ENV}
 		${CARGO_EXECUTABLE} build --workspace --locked --release
 		--target-dir "${CARGO_TARGET_DIR}"
@@ -56,3 +58,66 @@ add_test(
 set_tests_properties(rust-test-eds PROPERTIES
 	ENVIRONMENT "CARGO_INCREMENTAL=0"
 )
+
+# Install a cdylib built by `rust-build` as a loadable module of some host —
+# EDS names its address book backends libebookbackend<name>.so and looks for
+# them in one directory, Camel has its own convention, and cargo knows about
+# neither. Also registers a CTest that stages the install and checks the
+# module came out the far end loadable, because an install rule that quietly
+# copies nothing looks exactly like one that works.
+#
+#   add_cargo_cdylib(<cargo-lib-name>
+#       OUTPUT_NAME <installed file name>
+#       DESTINATION <absolute directory>
+#       COMPONENT   <install component>
+#       SYMBOLS     <entry point> ...
+#       [VERIFY_DESTINATION_FROM <pkg-config module> <variable>])
+function(add_cargo_cdylib _lib_name)
+	cmake_parse_arguments(_arg "" "OUTPUT_NAME;DESTINATION;COMPONENT" "SYMBOLS;VERIFY_DESTINATION_FROM" ${ARGN})
+
+	foreach(_required OUTPUT_NAME DESTINATION COMPONENT SYMBOLS)
+		if(NOT _arg_${_required})
+			message(FATAL_ERROR "add_cargo_cdylib(${_lib_name}): ${_required} is required and must not be empty")
+		endif()
+	endforeach()
+	# The destinations come from pkg_check_variable(), which reports a
+	# missing variable as the empty string; that would silently install
+	# into the prefix root.
+	if(NOT IS_ABSOLUTE "${_arg_DESTINATION}")
+		message(FATAL_ERROR "add_cargo_cdylib(${_lib_name}): DESTINATION '${_arg_DESTINATION}' is not an absolute path")
+	endif()
+
+	# PROGRAMS rather than FILES: a shared module wants mode 0755.
+	install(PROGRAMS "${CARGO_TARGET_DIR}/release/lib${_lib_name}.so"
+		DESTINATION "${_arg_DESTINATION}"
+		RENAME "${_arg_OUTPUT_NAME}"
+		COMPONENT "${_arg_COMPONENT}"
+	)
+
+	# Let the test re-derive the directory from pkg-config, so DESTINATION
+	# is checked against its source. Not under FORCE_INSTALL_PREFIX, where
+	# the point is that the destination has deliberately been moved.
+	set(_pkg_args)
+	if(_arg_VERIFY_DESTINATION_FROM AND NOT FORCE_INSTALL_PREFIX)
+		list(LENGTH _arg_VERIFY_DESTINATION_FROM _count)
+		if(NOT _count EQUAL 2)
+			message(FATAL_ERROR "add_cargo_cdylib(${_lib_name}): VERIFY_DESTINATION_FROM takes a pkg-config module and a variable name")
+		endif()
+		list(GET _arg_VERIFY_DESTINATION_FROM 0 _pkg_module)
+		list(GET _arg_VERIFY_DESTINATION_FROM 1 _pkg_variable)
+		list(APPEND _pkg_args "-DPKG_MODULE=${_pkg_module}" "-DPKG_VARIABLE=${_pkg_variable}")
+	endif()
+
+	string(REPLACE ";" "|" _symbols "${_arg_SYMBOLS}")
+	add_test(
+		NAME install-${_arg_COMPONENT}
+		COMMAND ${CMAKE_COMMAND}
+			${_pkg_args}
+			"-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+			"-DSTAGE_DIR=${CMAKE_BINARY_DIR}/install-test/${_arg_COMPONENT}"
+			"-DCOMPONENT=${_arg_COMPONENT}"
+			"-DEXPECTED=${_arg_DESTINATION}/${_arg_OUTPUT_NAME}"
+			"-DSYMBOLS=${_symbols}"
+			-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-installed-module.cmake"
+	)
+endfunction()
