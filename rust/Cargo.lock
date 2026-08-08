@@ -189,6 +189,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "evolution-jmap-mail-sync"
+version = "0.1.0"
+dependencies = [
+ "evolution-jmap-client",
+ "evolution-jmap-mock",
+ "evolution-jmap-proto",
+]
+
+[[package]]
 name = "evolution-jmap-mock"
 version = "0.1.0"
 dependencies = [

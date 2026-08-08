@@ -2000,3 +2000,121 @@ and mapping the mailbox tree onto the `CamelFolderInfo` chain Camel expects. Tha
 needs `CamelFolder` and `CamelFolderInfo` in the allowlist, which the previous
 session deliberately deferred, so teaching `eds-sys` about them — and the layout
 test about the two new class structs — comes first or with it.
+
+## 2026-08-08 (twenty-third session)
+
+M5's third increment, and a deliberate split of the one the previous entry
+named. That entry asked for `eds-sys` learning `CamelFolder`/`CamelFolderInfo`
+*and* the store's `connect_sync` *and* `get_folder_info_sync` over
+`Mailbox/get`. Doing all three at once would have meant writing the mailbox tree
+mapping — the part with the real decisions in it — inside a crate that cannot be
+tested without EDS headers. So this session did the mapping first, as
+`jmap-mail-sync`: the third pure-Rust sync crate, alongside `jmap-book-sync` and
+`jmap-cal-sync`, in `default-members` and testable anywhere. One commit.
+
+`MailSync::folder_tree` is `get_folder_info_sync` minus the C: one
+`Mailbox/get`, mapped onto a `FolderTree` of `FolderInfo` — id, Camel path,
+display name, role, counts, subscription, children. `path.rs` is the
+name-to-path encoding, `folder.rs` the tree building, `error.rs` the usual
+`SyncError` that keeps `jmap_client::Error` intact for the layer that maps it
+onto Camel's error codes. `tests/tree.rs` is 22 tests on hand-written mailbox
+lists, `tests/folders.rs` 3 against a live mock. `jmap-mock` gained
+`seed_child_mailbox`, so nesting is something a test can set up.
+
+Decisions taken:
+
+- **A mailbox name is not a folder path, and the mapping has to be injective.**
+  Camel identifies a folder by a `/`-separated path: it is the key
+  `camel_store_get_folder` takes, it is in the `folder://` URIs Evolution saves
+  in filters, and it names the folder's directory in the summary cache. A JMAP
+  mailbox name is a display string that may hold any character but NUL, unique
+  only among siblings. Two mailboxes that map onto one path is a store that
+  hands back the wrong folder's mail, so `/` and `%` are percent-encoded per
+  component — `%` because it is the escape itself, which is what makes the
+  encoding reversible and distinct names stay distinct.
+- **`.`, `..` and NUL are encoded because of where the path ends up.** A
+  mailbox called `..` is legal JMAP and a directory traversal in the summary
+  cache; a NUL truncates the path on the way into C, silently naming a
+  different folder. Both are the same class of bug as the `/`, so they get the
+  same treatment. `...` is not a filesystem special case and survives verbatim
+  — encoding it would make paths noisy for no gain.
+- **The illegal duplicate sibling name is settled with the id, not left to
+  collide.** `<encoded name>%23<id>`, which no encoded name can produce because
+  a `%` in a name is escaped. Which of the two keeps the plain path is decided
+  by sibling order and not by reply order, because the path is persisted in the
+  cache and in saved filters and may not move between sessions — that is what
+  the id tie-break in the sort is for, and a test feeds the same two mailboxes
+  in both orders.
+- **A broken tree may not lose a mailbox.** A `parentId` naming a mailbox the
+  account cannot see, and a `parentId` cycle, both end up as extra top-level
+  folders rather than as folders missing from the tree, because a missing
+  folder is mail the user cannot reach. Only a violation that leaves nothing to
+  show — no id, no name, an id used twice — is an error.
+- **Cycles are cut, not detected-and-rejected, and the cut is what makes the
+  walk terminate.** After walking the real roots, any unvisited mailbox is in a
+  loop or hangs off one; cutting the first such mailbox's parent link makes it
+  a root and walks it and everything below it, including the rest of its cycle.
+  Each pass cuts one mailbox, so it terminates, and what it leaves is a forest.
+  This subsumes the self-parent case — a cycle of one — which is why there is
+  no separate check for it; the test for a self-parented mailbox stayed, and now
+  also asserts it is not its own subfolder.
+- **The walk is iterative.** A pre-order over a server-supplied parent chain is
+  a stack overflow waiting for a server with 100k nested mailboxes. Same
+  reasoning as `MAX_CHANGES_PAGES` in the other two sync crates: the input is
+  not ours.
+- **An absent `isSubscribed` means subscribed, and an absent count means zero.**
+  A server that does not model subscriptions must not end up with every folder
+  hidden. Counts saturate into Camel's 32 bits rather than wrapping, because a
+  wrap reads as a nearly-empty folder.
+- **Only the six roles this crate can act on are mapped.** The rest of the RFC
+  8457 registry (`\Important`, `\Flagged`) describes a view, not a folder type
+  Camel has. Roles are matched case-insensitively although RFC 8621 §2 requires
+  lower-case: a server that shouts `Inbox` is broken, but the user's inbox
+  should still be the inbox. A role claimed twice goes to the first claimant in
+  sibling order, because `camel_store_get_inbox_folder` has to answer with one
+  folder and the answer should be the same on every run.
+
+Mutation testing, twelve mutants, one survivor worth recording:
+
+- Ten died on the first attempt: dropping the `%` escape, the `..` encoding or
+  the NUL encoding (2 test failures each), `isSubscribed` defaulting to false,
+  every role claimant keeping its role, subfolder order not restored after the
+  reverse assembly, the id tie-break dropped, duplicate paths left colliding,
+  `sortOrder` ignored, root order not restored (13 failures), and an orphan
+  marked visited instead of promoted to a root.
+- **Wrapping the counts instead of saturating survived**, because the test used
+  `u64::MAX` — which casts to exactly `u32::MAX`, so a wrapping cast and a
+  saturating one agree on it. The test now uses `u32::MAX + 5`, where a wrap
+  reports five messages: a plausible-looking lie rather than an obvious one.
+  Re-run, the mutant dies. A reminder that a pathological test value can be
+  pathological in the wrong direction.
+- Two tests were added because a mutant showed nothing covered them:
+  `subfolders_are_ordered_among_themselves` (no earlier test had two children
+  under one parent) and the reversed-input half of the duplicate-name test.
+
+Not verified locally, as in the previous twenty-two sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). All six new
+files carry SPDX `GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test
+--locked` (40 test binaries green on the default members, up from 36 — the new
+crate is 22 + 3 — and the five EDS crates green on top) and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on both member sets, and a
+fresh `cmake -S . -B <tmp> -G Ninja && cmake --build && ctest` is 5/5.
+`example-module` still fails to link its lib test and still fails clippy on
+`manual_c_str_literals`, as it did before this change; it is hand-written FFI,
+outside `default-members` and outside the set CI lints.
+
+No blockers hit.
+
+Next in M5: the other half of what the previous entry asked for, now with the
+mapping already written and tested. `eds-sys` learns `CamelFolder` and
+`CamelFolderInfo` (and `tests/layout.rs` learns their class structs), and
+`CamelJmapStore` gets `connect_sync` plus `get_folder_info_sync`: resolving the
+JMAP account out of `CamelStoreSettings`/`CamelNetworkSettings` the way
+`jmap-backend-core::source` does for an `ESource`, then turning a `FolderTree`
+into the `CamelFolderInfo` chain — a `g_malloc`ed linked forest whose ownership
+rules (`camel_folder_info_free` walks it) are the part to get right. Two things
+this crate deliberately does not carry yet and will need: the `Mailbox/get`
+state string, for `Mailbox/changes` when folder refresh arrives, and the
+role-to-`CamelFolderInfoFlags` translation, which belongs on the C side. The
+README's architecture block still lists only the round-1 crates; it has been
+stale for three crates now and is worth a paragraph of its own some session.
