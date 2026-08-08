@@ -958,3 +958,91 @@ Next: the manual test recipe — a hand-written `.source` keyfile under
 `evolution-addressbook-factory` talking to `jmap-mockd`. That is the first
 time any of this runs outside a test harness, and the acceptance criterion M3
 still has open.
+
+## 2026-08-08 (eleventh session)
+
+M3's last acceptance criterion: "a documented manual test recipe with a
+hand-written `.source` keyfile". `docs/manual-test-book-backend.md` is the
+recipe, `docs/examples/jmap-mock.source` is the keyfile it says to copy, and
+`rust/crates/jmap-backend-book/tests/recipe.rs` is what keeps the two honest —
+four tests, so `-p …-book` is 16 and the EDS crates together are 109; the
+default members are unchanged at 87.
+
+A recipe is prose, and prose is the one thing in this repository nothing
+fails over. The failure it invites is also the quietest one there is: a
+`BackendName` no factory claims is not an error, it is an address book
+Evolution never tries to open. So the keyfile is a *file*, and the tests read
+it the way the registry does — `e_server_side_source_new` on a `GFile` is what
+`evolution-source-registry` calls for every file in its sources directory, and
+it turns out to need neither a bus nor a daemon, only an
+`ESourceRegistryServer` that is never run. What the reader copies is therefore
+parsed by EDS's own keyfile code and handed to the same
+`SourceConfig::from_source` the backend calls.
+
+**That test found a real bug on its first run, in a place that had been
+reviewed twice: `[Security] Secure=true` does nothing.** `ESourceSecurity:secure`
+is a boolean *over* a string property, and the keyfile only ever stores the
+string: EDS writes `Method=tls` / `Method=none`, and a group saying
+`Secure=true` sets no property EDS knows. It is not rejected — it is ignored,
+and what is left reads back as "no method", which is `none`. The recipe in
+`jmap-backend-core::source`'s module docs had said `Secure=true` since the
+sixth session, and following it against a real server would have produced an
+account that refuses to connect while complaining about TLS. Confirmed
+in plain C against the installed libraries before believing it, then fixed in
+the doc comment and pinned by
+`the_keyfile_spelling_that_turns_tls_on_is_method_not_secure`, which asserts
+both directions: `Method=tls` on a remote host yields an `https://` origin,
+and `Secure=true` on the same host is still refused as insecure transport.
+
+Decisions taken:
+
+- **The recipe's account is anonymous.** `jmap-mockd` with no `--basic` wants
+  no credentials, and a source that names a `User` makes the backend ask EDS
+  for a password *before* it sends anything — so a recipe with one would open
+  with a password prompt instead of a connection, which is not the thing being
+  tested. The credential path is documented as the variant: add `User=`,
+  `Method=plain/password`, and start the mock with `--basic`.
+- **The document quotes the keyfile verbatim, and a test says so.** The reader
+  copies the file but reads the document; if they drift, whichever one was
+  trusted is the wrong one. `the_recipe_quotes_the_keyfile_verbatim` extracts
+  the single ```ini block and compares it byte for byte.
+- **`e_server_side_source_.*` is now in the eds-sys allowlist.** No backend
+  calls it — a backend is handed a finished `ESource` — but it is the only way
+  to turn a keyfile into one without a running registry. M6's collection
+  backend meets server-side sources for real.
+- **The installed name is *not* what the recipe leans on.** As in the tenth
+  session: the directory and the entry points load-bear, and `BackendName`
+  selects the factory. Those three are checked; the `.so` name is convention.
+- **What is not verified, and honestly labelled as such in the document:
+  everything past the keyfile.** This VM has EDS 3.52 dev headers but not the
+  `evolution-data-server` runtime package, so `evolution-source-registry` and
+  `evolution-addressbook-factory` are not here and the recipe has never been
+  executed end to end. It is written from the EDS 3.52 sources (fetched to
+  confirm, in particular, that `EDS_ADDRESS_BOOK_MODULES` *replaces* the
+  backend directory rather than adding to it — the no-sudo path).
+
+Six mutations were run, all of them fatal to at least one test: the fixture
+switched to `Method=tls`, to `Secure=false`, to `BackendName=jmapx`, its
+`[Address Book]` group misspelled, the document's port drifted from the
+file's, and `FACTORY_NAME` changed to `jmap2`. The first mutation round of the
+session was contaminated — `git checkout` cannot restore an untracked file, so
+the mutations accumulated — which is worth remembering: for new files, keep a
+copy outside the tree.
+
+Not verified locally, as in the previous ten sessions: `reuse lint` and
+`cargo deny` (neither tool is installed on this VM; both run in CI). The new
+Rust file carries an SPDX `GPL-3.0-or-later` header; the two new `docs/` files
+are covered by `REUSE.toml`'s existing `docs/**` annotation, which is why the
+keyfile can be copied as-is. No dependency was added. `cargo fmt --check`,
+`cargo test` and `cargo clippy --all-targets -D warnings` are clean on the
+default members and on `-p eds-sys -p jmap-backend-core -p jmap-backend-book`,
+`cargo doc -p jmap-backend-core --no-deps` is warning-free, and a clean
+`cmake -S . -B <fresh> && cmake --build && ctest` is 3/3.
+
+No blockers hit.
+
+Next: M3 has no open acceptance criteria left. Either M4 — the calendar
+backend, which is M3's shape again on `ECalMetaBackend` with JSCalendar ↔
+iCalendar in place of JSContact ↔ vCard — or, first and much smaller, run
+this recipe for real on a machine with the EDS daemons installed. Everything
+it claims past step 3 is reasoned from the EDS sources, not observed.
