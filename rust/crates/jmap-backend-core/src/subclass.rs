@@ -22,11 +22,11 @@ use std::sync::Mutex;
 
 use glib_sys::{GType, gpointer};
 use gobject_sys::{
-    GTypeInfo, GTypeInstance, GTypeModule, g_type_from_name, g_type_module_register_type,
-    g_type_register_static,
+    GObject, GObjectClass, GTypeInfo, GTypeInstance, GTypeModule, g_type_class_peek,
+    g_type_from_name, g_type_module_register_type, g_type_register_static,
 };
 
-use crate::trampoline::guard;
+use crate::trampoline::{guard, log_critical};
 
 /// A type this crate can register.
 ///
@@ -40,7 +40,9 @@ use crate::trampoline::guard;
 /// - `Class` is `#[repr(C)]` and its first field is the parent type's class
 ///   struct.
 /// - [`parent_type`](ObjectSubclass::parent_type) returns the `GType` those
-///   two parent structs actually belong to.
+///   two parent structs actually belong to, and that type derives from
+///   `GObject` — registration overrides `GObjectClass.finalize` through the
+///   leading bytes of `Class`.
 ///
 /// Getting any of that wrong misplaces every field and vfunc slot, which the
 /// compiler cannot catch — it is the same hazard `eds-sys`'s `g_type_query`
@@ -69,6 +71,22 @@ pub unsafe trait ObjectSubclass: Sized {
     ///
     /// `instance` points at a zeroed instance struct of this type.
     unsafe fn instance_init(_instance: *mut Self::Instance) {}
+
+    /// Runs once per instance, when the last reference to it is dropped and
+    /// before the parent's `finalize`. This is where anything
+    /// [`instance_init`](ObjectSubclass::instance_init) created is destroyed —
+    /// GObject frees the instance struct itself without running a Rust
+    /// destructor over it, so a [`Slot`](crate::instance::Slot) that is not
+    /// cleared here leaks its contents.
+    ///
+    /// Chaining up is not this method's job: registration does it, whatever
+    /// happens here.
+    ///
+    /// # Safety
+    ///
+    /// `instance` points at an instance struct of this type that is being
+    /// finalized; nothing else can still reach it.
+    unsafe fn finalize(_instance: *mut Self::Instance) {}
 }
 
 /// Registers `T` as a static type, or returns the existing `GType` if it has
@@ -101,6 +119,12 @@ pub unsafe fn register_dynamic<T: ObjectSubclass>(module: *mut GTypeModule) -> G
 static REGISTRATION: Mutex<()> = Mutex::new(());
 
 unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
+    // Resolved before the lock is taken, not inside the GTypeInfo below: a
+    // parent_type() that registers another of our types — which is how a
+    // hierarchy declared entirely in Rust bootstraps itself — would otherwise
+    // deadlock on this very much non-reentrant mutex.
+    let parent = T::parent_type();
+
     // A poisoned lock means some other registration panicked; the type system
     // itself is untouched by that, so carry on rather than panic in turn.
     let _guard = REGISTRATION
@@ -135,9 +159,9 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
     // contract pins to the parent's, and it only has to outlive the call.
     unsafe {
         if module.is_null() {
-            g_type_register_static(T::parent_type(), T::NAME.as_ptr(), &info, 0)
+            g_type_register_static(parent, T::NAME.as_ptr(), &info, 0)
         } else {
-            g_type_module_register_type(module, T::parent_type(), T::NAME.as_ptr(), &info, 0)
+            g_type_module_register_type(module, parent, T::NAME.as_ptr(), &info, 0)
         }
     }
 }
@@ -146,9 +170,47 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
 /// `class_init` would otherwise unwind through the type system's own frames
 /// while it holds its global lock.
 unsafe extern "C" fn class_init_trampoline<T: ObjectSubclass>(class: gpointer, _data: gpointer) {
+    // Installed before `T::class_init` runs, so a subclass that wants the slot
+    // for itself can still take it — and installed unconditionally, because a
+    // type with nothing to destroy pays only an empty call.
+    //
+    // SAFETY: `class` leads with the parent's class struct, which the trait's
+    // contract requires to derive from GObjectClass.
+    unsafe { (*class.cast::<GObjectClass>()).finalize = Some(finalize_trampoline::<T>) };
+
     guard("class_init", (), || unsafe {
         T::class_init(class.cast::<T::Class>())
     });
+}
+
+/// Drops what `instance_init` created, then hands the instance to the parent,
+/// which is what eventually frees it.
+///
+/// The chain-up is outside the guard on purpose: a panic in `T::finalize` is
+/// already a bug, and skipping the parent's finalize would turn it into a leak
+/// of every instance from then on — including, for an `EBookMetaBackend`, the
+/// `ESource` and the offline cache.
+unsafe extern "C" fn finalize_trampoline<T: ObjectSubclass>(object: *mut GObject) {
+    guard("finalize", (), || unsafe {
+        T::finalize(object.cast::<T::Instance>())
+    });
+
+    // The parent class rather than `g_type_class_peek_parent` of the
+    // instance's class: a further subclass of ours would make that one point
+    // back at this same trampoline and recurse until the stack ran out.
+    //
+    // SAFETY: an instance of this type exists, so its class does, so the class
+    // it derives from is initialised and alive.
+    let parent = unsafe { g_type_class_peek(T::parent_type()) }.cast::<GObjectClass>();
+    match unsafe { parent.as_ref() }.and_then(|class| class.finalize) {
+        // SAFETY: this is the parent's own finalize, called on an instance of
+        // a type derived from it, which is what chaining up means in C.
+        Some(finalize) => unsafe { finalize(object) },
+        None => log_critical(&format!(
+            "{:?}: the parent class has no finalize to chain up to; the instance is leaked",
+            T::NAME
+        )),
+    }
 }
 
 unsafe extern "C" fn instance_init_trampoline<T: ObjectSubclass>(

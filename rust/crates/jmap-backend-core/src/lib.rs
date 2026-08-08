@@ -12,6 +12,8 @@
 //!
 //! - [`subclass`] registers a Rust-declared type with the GObject type system,
 //!   statically or against a `GTypeModule`.
+//! - [`instance`] lets such a type own a Rust value with a destructor, which
+//!   GObject's zero-it-then-free-it instance memory otherwise does not allow.
 //! - [`trampoline`] stops a Rust panic from unwinding into C, which is
 //!   undefined behaviour.
 //! - [`cancel`] bridges a `GCancellable` to the client's [`CancelFlag`].
@@ -26,6 +28,7 @@
 
 pub mod cancel;
 pub mod error;
+pub mod instance;
 pub mod source;
 pub mod subclass;
 pub mod trampoline;
