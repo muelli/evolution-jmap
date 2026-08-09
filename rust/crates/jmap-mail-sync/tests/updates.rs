@@ -130,9 +130,9 @@ fn a_mailbox_nobody_touched_reports_nothing() {
     let inbox = fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
     fixture.seed(&inbox, "First", 9);
     let sync = fixture.sync();
-    let (state, _) = sync.messages(&inbox).unwrap();
+    let (state, held) = sync.messages(&inbox).unwrap();
 
-    match sync.messages_since(&inbox, &state).unwrap() {
+    match sync.messages_since(&inbox, &state, held.len()).unwrap() {
         MessageUpdate::Unchanged(unchanged) => assert_eq!(unchanged, state),
         other => panic!("nothing changed, and the delta was {other:?}"),
     }
@@ -145,12 +145,12 @@ fn a_message_that_arrived_comes_back_as_a_row() {
     let inbox = fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
     fixture.seed(&inbox, "Old", 9);
     let sync = fixture.sync();
-    let (state, _) = sync.messages(&inbox).unwrap();
+    let (state, held) = sync.messages(&inbox).unwrap();
 
     let arrived =
         fixture.edit(|account| account.deliver_email(Fixture::message(&inbox, "New", 10)));
 
-    let (_, present, absent) = changed(sync.messages_since(&inbox, &state).unwrap());
+    let (_, present, absent) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
     assert_eq!(Fixture::subjects(&present), ["New"]);
     assert_eq!(uids(&present), [&arrived]);
     assert!(absent.is_empty(), "nothing left the mailbox: {absent:?}");
@@ -170,11 +170,11 @@ fn a_message_that_arrived_elsewhere_is_not_a_row_of_this_mailbox() {
     });
     fixture.seed(&inbox, "Old", 9);
     let sync = fixture.sync();
-    let (state, _) = sync.messages(&inbox).unwrap();
+    let (state, held) = sync.messages(&inbox).unwrap();
 
     fixture.edit(|account| account.deliver_email(Fixture::message(&other, "Receipt", 10)));
 
-    let (_, present, _) = changed(sync.messages_since(&inbox, &state).unwrap());
+    let (_, present, _) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
     assert!(
         present.is_empty(),
         "a message of another mailbox was listed as this one's: {:?}",
@@ -196,14 +196,14 @@ fn a_message_moved_out_of_the_mailbox_is_reported_absent() {
     let moved = fixture.seed(&inbox, "Filed away", 9);
     fixture.seed(&inbox, "Staying", 10);
     let sync = fixture.sync();
-    let (state, _) = sync.messages(&inbox).unwrap();
+    let (state, held) = sync.messages(&inbox).unwrap();
 
     fixture
         .sync()
         .file_message(&moved, &Filing::moved(inbox.clone(), archive))
         .unwrap();
 
-    let (_, present, absent) = changed(sync.messages_since(&inbox, &state).unwrap());
+    let (_, present, absent) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
     assert_eq!(absent, [moved]);
     assert!(
         present.is_empty(),
@@ -234,7 +234,8 @@ fn a_message_moved_into_the_mailbox_is_reported_as_a_row() {
         .file_message(&moved, &Filing::moved(inbox, archive.clone()))
         .unwrap();
 
-    let (_, present, absent) = changed(sync.messages_since(&archive, &state).unwrap());
+    let (_, present, absent) =
+        changed(sync.messages_since(&archive, &state, before.len()).unwrap());
     assert_eq!(uids(&present), [&moved]);
     assert_eq!(
         Fixture::subjects(&present),
@@ -253,11 +254,11 @@ fn a_destroyed_message_is_reported_absent() {
     let inbox = fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
     let doomed = fixture.seed(&inbox, "Deleted elsewhere", 9);
     let sync = fixture.sync();
-    let (state, _) = sync.messages(&inbox).unwrap();
+    let (state, held) = sync.messages(&inbox).unwrap();
 
     assert!(fixture.edit(|account| account.destroy_email(&doomed)));
 
-    let (_, present, absent) = changed(sync.messages_since(&inbox, &state).unwrap());
+    let (_, present, absent) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
     assert_eq!(absent, [doomed]);
     assert!(present.is_empty());
 }
@@ -287,7 +288,7 @@ fn a_flag_another_client_set_comes_back_on_the_row() {
         .set_keywords(&read, &KeywordChange::between(&unread, &read_now))
         .unwrap();
 
-    let (_, present, absent) = changed(sync.messages_since(&inbox, &state).unwrap());
+    let (_, present, absent) = changed(sync.messages_since(&inbox, &state, before.len()).unwrap());
     assert_eq!(uids(&present), [&read]);
     assert!(present[0].flags.seen, "the row did not come back read");
     assert!(absent.is_empty(), "a re-flagged message did not leave");
@@ -301,13 +302,13 @@ fn the_state_a_delta_carries_is_the_one_to_ask_from_next() {
     let fixture = Fixture::start();
     let inbox = fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
     let sync = fixture.sync();
-    let (state, _) = sync.messages(&inbox).unwrap();
+    let (state, held) = sync.messages(&inbox).unwrap();
     fixture.edit(|account| account.deliver_email(Fixture::message(&inbox, "New", 10)));
 
-    let (next, _, _) = changed(sync.messages_since(&inbox, &state).unwrap());
+    let (next, _, _) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
     assert_ne!(next, state);
 
-    match sync.messages_since(&inbox, &next).unwrap() {
+    match sync.messages_since(&inbox, &next, held.len()).unwrap() {
         MessageUpdate::Unchanged(unchanged) => assert_eq!(unchanged, next),
         other => panic!("the same change was reported twice: {other:?}"),
     }
@@ -327,7 +328,7 @@ fn a_state_the_server_cannot_calculate_from_lists_the_mailbox_again() {
     let sync = fixture.sync();
 
     match sync
-        .messages_since(&inbox, &State::new("nonsense"))
+        .messages_since(&inbox, &State::new("nonsense"), 2)
         .unwrap()
     {
         MessageUpdate::Relisted { state, messages } => {
@@ -346,7 +347,7 @@ fn the_rows_a_delta_produces_are_oldest_first() {
     let fixture = Fixture::start();
     let inbox = fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
     let sync = fixture.sync();
-    let (state, _) = sync.messages(&inbox).unwrap();
+    let (state, held) = sync.messages(&inbox).unwrap();
 
     // Delivered newest first, so that the order they were created in — which is
     // also the order their ids sort in — is the reverse of the right answer.
@@ -356,7 +357,7 @@ fn the_rows_a_delta_produces_are_oldest_first() {
         });
     }
 
-    let (_, present, _) = changed(sync.messages_since(&inbox, &state).unwrap());
+    let (_, present, _) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
     assert_eq!(
         Fixture::subjects(&present),
         ["Message 2", "Message 1", "Message 0"]
@@ -367,12 +368,20 @@ fn the_rows_a_delta_produces_are_oldest_first() {
 /// — a mailbox that was moved wholesale is exactly that — and asking for more
 /// than the server's `maxObjectsInGet` fails the whole call rather than
 /// answering short.
+///
+/// The mailbox is seeded first so that the delta stays worth following: a folder
+/// holding fewer rows than the delta names would list it again instead, which is
+/// [`a_delta_costlier_than_the_mailbox_lists_it_again`] and not this.
 #[test]
 fn more_changed_messages_than_one_get_may_ask_about_are_fetched_in_several() {
     let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
     let inbox = fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
+    for index in 0..5u32 {
+        fixture.seed(&inbox, &format!("Seeded {index}"), index);
+    }
     let sync = fixture.sync();
-    let (state, _) = sync.messages(&inbox).unwrap();
+    let (state, held) = sync.messages(&inbox).unwrap();
+    assert_eq!(held.len(), 5);
 
     for index in 0..5u32 {
         fixture.edit(|account| {
@@ -384,7 +393,7 @@ fn more_changed_messages_than_one_get_may_ask_about_are_fetched_in_several() {
         });
     }
 
-    let (_, present, _) = changed(sync.messages_since(&inbox, &state).unwrap());
+    let (_, present, _) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
     assert_eq!(present.len(), 5);
     assert_eq!(
         Fixture::subjects(&present),
@@ -396,5 +405,177 @@ fn more_changed_messages_than_one_get_may_ask_about_are_fetched_in_several() {
             "Message 4"
         ],
         "chunking must not reorder or drop a row"
+    );
+}
+
+/// The bound on catching up. A delta is asked from a state, and a folder that
+/// has been closed for a week is asked from a week-old one: what comes back is
+/// every message the *account* touched since — most of them in mailboxes this
+/// folder is not, each one of them still an id this call has to look up before
+/// it can say so. Listing the one mailbox is the cheaper answer well before
+/// that, so a delta that names more messages than the folder holds rows is not
+/// followed.
+///
+/// Asserted on the wire rather than on the answer, because a delta and a listing
+/// leave the caller holding the same rows: what differs is only what was asked.
+#[test]
+fn a_delta_costlier_than_the_mailbox_lists_it_again() {
+    let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
+    let (inbox, archive) = fixture.edit(|account| {
+        (
+            account.seed_mailbox("Inbox", Some(role::INBOX)),
+            account.seed_mailbox("Archive", Some(role::ARCHIVE)),
+        )
+    });
+    fixture.seed(&inbox, "First", 9);
+    fixture.seed(&inbox, "Second", 10);
+    let sync = fixture.sync();
+    let (state, held) = sync.messages(&inbox).unwrap();
+    assert_eq!(held.len(), 2);
+
+    // Five messages the account touched and this mailbox does not hold: the
+    // delta would look every one of them up to conclude the inbox is unchanged.
+    for index in 0..5u32 {
+        fixture.edit(|account| {
+            account.deliver_email(Fixture::message(
+                &archive,
+                &format!("Filed {index}"),
+                11 + index,
+            ))
+        });
+    }
+
+    let asked = fixture.server.method_calls().len();
+    match sync.messages_since(&inbox, &state, held.len()).unwrap() {
+        MessageUpdate::Relisted { state, messages } => {
+            assert_eq!(Fixture::subjects(&messages), ["First", "Second"]);
+            assert_eq!(state, fixture.edit(|account| account.emails.state()));
+        }
+        other => panic!("a delta the mailbox is smaller than produced {other:?}"),
+    }
+
+    let calls = fixture.server.method_calls().split_off(asked);
+    assert!(
+        calls.iter().any(|call| call == "Email/query"),
+        "the mailbox was not listed again: {calls:?}"
+    );
+}
+
+/// The other side of the same bound, and the case that matters far more often: a
+/// mailbox big enough that catching up is the cheap answer stays caught up, one
+/// `Email/get` of the messages that moved, without the whole mailbox being
+/// fetched again.
+#[test]
+fn a_delta_smaller_than_the_mailbox_is_followed() {
+    let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
+    let (inbox, archive) = fixture.edit(|account| {
+        (
+            account.seed_mailbox("Inbox", Some(role::INBOX)),
+            account.seed_mailbox("Archive", Some(role::ARCHIVE)),
+        )
+    });
+    for index in 0..4u32 {
+        fixture.seed(&inbox, &format!("Held {index}"), index);
+    }
+    let sync = fixture.sync();
+    let (state, held) = sync.messages(&inbox).unwrap();
+    assert_eq!(held.len(), 4);
+
+    for index in 0..3u32 {
+        fixture.edit(|account| {
+            account.deliver_email(Fixture::message(
+                &archive,
+                &format!("Filed {index}"),
+                11 + index,
+            ))
+        });
+    }
+
+    let asked = fixture.server.method_calls().len();
+    let (_, present, absent) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
+    assert!(present.is_empty(), "nothing reached the inbox: {present:?}");
+    assert_eq!(absent.len(), 3, "the messages filed elsewhere: {absent:?}");
+
+    let calls = fixture.server.method_calls().split_off(asked);
+    assert!(
+        !calls.iter().any(|call| call == "Email/query"),
+        "the mailbox was listed again for a delta it is bigger than: {calls:?}"
+    );
+}
+
+/// The floor under the bound. A listing is never one round trip — it is the
+/// state, the query, and a `/get` per page — so a delta that fits in a single
+/// `Email/get` is cheaper than relisting whatever the mailbox holds, including
+/// the nearly empty mailbox that would otherwise relist on every message the
+/// account touches anywhere.
+#[test]
+fn a_delta_that_fits_in_one_get_is_followed_however_small_the_mailbox() {
+    let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
+    let (inbox, archive) = fixture.edit(|account| {
+        (
+            account.seed_mailbox("Inbox", Some(role::INBOX)),
+            account.seed_mailbox("Archive", Some(role::ARCHIVE)),
+        )
+    });
+    fixture.seed(&inbox, "Only", 9);
+    let sync = fixture.sync();
+    let (state, held) = sync.messages(&inbox).unwrap();
+    assert_eq!(held.len(), 1);
+
+    for index in 0..2u32 {
+        fixture.edit(|account| {
+            account.deliver_email(Fixture::message(
+                &archive,
+                &format!("Filed {index}"),
+                11 + index,
+            ))
+        });
+    }
+
+    let asked = fixture.server.method_calls().len();
+    let (_, _, absent) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
+    assert_eq!(absent.len(), 2);
+
+    let calls = fixture.server.method_calls().split_off(asked);
+    assert!(
+        !calls.iter().any(|call| call == "Email/query"),
+        "a delta of one `Email/get` listed the mailbox instead: {calls:?}"
+    );
+}
+
+/// What the bound counts is what has to be looked up. A destroyed message is
+/// taken at the delta's word — it is gone from every mailbox and there is
+/// nothing left to fetch — so a hundred of them cost the same one round trip as
+/// none, and a mailbox that emptied elsewhere must not relist for them.
+#[test]
+fn messages_the_delta_only_reports_gone_do_not_count_toward_the_bound() {
+    let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
+    let (inbox, archive) = fixture.edit(|account| {
+        (
+            account.seed_mailbox("Inbox", Some(role::INBOX)),
+            account.seed_mailbox("Archive", Some(role::ARCHIVE)),
+        )
+    });
+    fixture.seed(&inbox, "Only", 9);
+    let doomed: Vec<Id> = (0..5u32)
+        .map(|index| fixture.seed(&archive, &format!("Doomed {index}"), 11 + index))
+        .collect();
+    let sync = fixture.sync();
+    let (state, held) = sync.messages(&inbox).unwrap();
+    assert_eq!(held.len(), 1);
+
+    for uid in &doomed {
+        assert!(fixture.edit(|account| account.destroy_email(uid)));
+    }
+
+    let asked = fixture.server.method_calls().len();
+    let (_, present, absent) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
+    assert!(present.is_empty());
+    assert_eq!(absent.len(), 5, "the destroyed messages: {absent:?}");
+
+    let calls = fixture.server.method_calls().split_off(asked);
+    assert!(
+        !calls.iter().any(|call| call == "Email/query"),
+        "destroyed messages counted as messages to fetch: {calls:?}"
     );
 }

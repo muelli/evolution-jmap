@@ -57,11 +57,17 @@
 //! why that matters more than it looks: recent is what runs the user's incoming
 //! filters.
 //!
-//! ## What is not here yet
+//! ## How far behind is too far
 //!
-//! A delta that names a great many messages is still one `Email/get` per chunk
-//! of them, which is the right shape but says nothing about how far behind a
-//! folder may fall before relisting would be cheaper than catching up.
+//! A folder that has been closed for a fortnight asks a fortnight-old question,
+//! and `Email/changes` answers it for the whole *account*: every message anyone
+//! touched anywhere, each one an id that has to be fetched before this mailbox
+//! can say whether it holds it. Past some size the listing this was avoiding is
+//! the cheaper answer, and the size is the mailbox's own — which is why the
+//! summary's row count is passed down with the state it was current at. The
+//! judgement itself is `jmap-mail-sync`'s, in `catch_up_limit`.
+//!
+//! ## What is not here yet
 //!
 //! `cancellable` is not observed, the same gap [`crate::folders`] documents and
 //! for the same reason: [`Client`] takes its [`CancelFlag`] when it is built.
@@ -87,7 +93,7 @@ use jmap_proto::Id;
 use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, parent_store};
-use crate::summary::{apply_delta, apply_listing, set_summary_state, summary_state};
+use crate::summary::{apply_delta, apply_listing, set_summary_state, summary_rows, summary_state};
 
 /// Installs the folder's own vfuncs on a class whose first member is a
 /// `CamelFolderClass`.
@@ -132,8 +138,13 @@ unsafe extern "C" fn refresh_info_sync(
             // by a version of this provider that kept no state — has nothing
             // to ask from and lists, which is the same answer phrased as the
             // update the two paths share.
+            //
+            // The row count goes with the state because the two are one
+            // question — what this folder holds, and when it was true — and
+            // because the folder is the only side that has the count without
+            // asking for it.
             let update = match summary_state(summary) {
-                Some(since) => store.messages_since(mailbox, &since),
+                Some(since) => store.messages_since(mailbox, &since, summary_rows(summary)),
                 None => store
                     .messages(mailbox)
                     .map(|(state, messages)| MessageUpdate::Relisted { state, messages }),

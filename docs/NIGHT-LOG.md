@@ -4904,3 +4904,105 @@ and that decision is what `expunge_sync` waits on; cross-store transfers want
 `Email/import` for an `append_message_sync`. Unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's
 architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (fifty-third session)
+
+M5's thirty-third increment, across `jmap-mail-sync` and `jmap-mail`: **bounding
+the catching up**. A refresh now asks how *much* a delta would cost before it
+follows one, and lists the mailbox instead when catching up has stopped being
+the cheap answer.
+
+The gap the last session left. `Email/changes` answers for the whole account, so
+a folder that has been closed for a fortnight is handed every message anyone
+touched anywhere — each one an id that must be fetched before this mailbox can
+say whether it holds it. `messages_since` followed that however long it was,
+which turns the cheap path into the expensive one exactly when a user opens
+Evolution after a holiday.
+
+The rule is `catch_up_limit(held, objects_in_get) = held.max(objects_in_get)`,
+and both halves are cost comparisons rather than tuning knobs:
+
+- **`held` — the caller's row count.** Catching up fetches what the delta names;
+  listing fetches the mailbox. The mailbox's size is not something this layer
+  knows, and asking the server for it costs the round trip the bound exists to
+  save — but the *caller* has it for free, and it is exactly the set a listing
+  would fetch again. So `messages_since` grew a `held` parameter, threaded
+  through `JmapStore::messages_since`, and `refresh_info_sync` fills it from the
+  new `summary::summary_rows` (`camel_folder_summary_count`). It passes with the
+  state, because the two are one fact: what the folder holds, and when it was
+  true.
+- **The floor of one `Email/get`.** A listing is never a single round trip — the
+  state, then a query, then a `/get` per page — so a delta that fits in one
+  `/get` is cheaper than any listing whatsoever. Without the floor an empty
+  mailbox would relist itself every time the account was touched anywhere, which
+  is the opposite of the point.
+- **`destroyed` does not count.** Those ids are taken at the delta's word and
+  never fetched, so a hundred of them cost what none do.
+
+Red first, at both layers, and each new guard was checked by breaking the
+implementation on purpose:
+
+- `jmap-mail-sync` (four tests, `objects_in_get(2)` so the bound is reachable):
+  the over-the-bound case was red for the right reason before the check existed.
+  Dropping the floor breaks the "fits in one `/get`" test (and three older ones);
+  counting `destroyed` breaks the "only reports gone" test; a limit of
+  `usize::MAX` breaks the relist test.
+- `jmap-mail` (two tests): a folder holding two rows relists when three messages
+  moved elsewhere; the same folder holding four rows still follows the same
+  three-message delta. The pair is what pins the number being passed down to the
+  folder's *own* count — passing 0 breaks the second, passing `usize::MAX` breaks
+  the first. Both assert on the wire (`Email/query` asked or not) rather than on
+  the rows, because a delta and a listing leave the folder holding the same rows;
+  `with_mail_on` is the new harness that builds the mock to order.
+
+One existing test changed and it is worth being explicit about: 
+`more_changed_messages_than_one_get_may_ask_about_are_fetched_in_several` seeds
+its mailbox with five messages before delivering five more. It is about chunking
+a delta across `Email/get` calls, and with the bound in place a folder holding
+nothing would relist instead of chunking anything — so the setup gives it a
+mailbox big enough for the delta to still be followed. The behaviour under test
+is unchanged; what changed is that the folder now has rows, which is the only
+state a real folder would be in when a delta of five arrives.
+
+Decisions taken:
+
+- **The bound lives in `jmap-mail-sync`, the measurement in `jmap-mail`.** The
+  judgement is about JMAP round trips and belongs beside the code that makes
+  them; the row count is a Camel fact and belongs beside the summary. Passing a
+  wrong `held` can only ever cost round trips — it is a cost estimate, never an
+  input to what rows come back — which is what makes it safe to ask a caller for.
+- **The limit is relative, not a constant.** A fixed threshold would be wrong in
+  the dangerous direction: a hundred-thousand-message inbox would relist itself
+  for a four-hundred-message delta, which is far worse than the problem being
+  fixed. Anchoring it to what the folder holds means the answer scales with the
+  mailbox.
+- **The mailbox size is not asked of the server.** `Email/query` with
+  `calculateTotal`, or `Mailbox/get`'s `totalEmails`, would both be authoritative
+  and both cost a round trip on the path that exists to avoid one. The folder's
+  row count is the free estimate, and it is stale only in the direction that
+  matters least.
+
+Not verified locally, as in the previous fifty-two sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and
+on the five EDS crates; `jmap-mail`'s refresh suite is at 13 tests and
+`jmap-mail-sync`'s updates suite at 16.
+
+Next in M5. The cheap-refresh path is now complete end to end — ask what
+changed, apply it, and stop following a delta that has outgrown the mailbox — so
+the next tractable thing is one of the items that have been open for several
+sessions rather than a new part of refresh. **Bounding the cache** is the
+closest relative of this increment (unbounded on disk, and nothing evicts), and
+the `changed` signal a transfer emits is still not asserted by a test, which
+wants `tests/refresh.rs`'s emission harness lifted into `tests/common`.
+
+Still open from earlier sessions: the other half of the cache's atomicity
+problem (an entry is written by `write_all` and close rather than to a temporary
+name and renamed); `CamelSubscribable` still wants `Mailbox/set`, which the
+client does not have; `get_trash_folder_sync` and `get_junk_folder_sync` are
+still a settings decision before they are a vfunc, and that decision is what
+`expunge_sync` waits on; cross-store transfers want `Email/import` for an
+`append_message_sync`. Unexercised against a real `CamelSession`: `service.rs`,
+which waits on M6 and M7. The README's architecture block still lists only the
+round-1 crates.

@@ -71,7 +71,7 @@ use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
 use jmap_mail::summary::{set_summary_state, summary_state};
 use jmap_mail_sync::MailSync;
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
 use jmap_proto::mail::role;
 use jmap_proto::{Id, State};
 
@@ -105,7 +105,15 @@ struct Mailbox {
 }
 
 fn with_mail() -> Mailbox {
-    let server = MockServer::builder().start();
+    with_mail_on(MockServer::builder())
+}
+
+/// The same account on a server built to order — which the tests about *how
+/// much* a refresh fetches need, because the bound they exercise is measured in
+/// `Email/get` calls and this mock will answer for two hundred and fifty-six
+/// messages in one.
+fn with_mail_on(builder: MockServerBuilder) -> Mailbox {
+    let server = builder.start();
     let (inbox, archive) = edit(&server, |account| {
         let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
         let archive = account.seed_mailbox("Archive", None);
@@ -738,6 +746,96 @@ fn a_refresh_from_a_state_the_server_will_not_calculate_from_lists_again() {
             1,
             "the listing that recovered from a refused delta was not reconciled"
         );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The bound on catching up, from the folder's side: the row count it holds is
+/// what says whether following a delta is still the cheap answer, and it is the
+/// one number the layer below cannot know without paying a round trip for it.
+///
+/// Two mailboxes and a small `Email/get` limit make the difference observable.
+/// The account moves by three messages that are none of this folder's business;
+/// the folder holds two rows, so catching up would fetch more messages than
+/// listing the mailbox would, and it lists instead.
+#[test]
+fn a_delta_bigger_than_the_folder_lists_the_mailbox_again() {
+    let mail = with_mail_on(MockServer::builder().objects_in_get(2));
+    let folder = mail.folder;
+    Refreshed::of(folder).expect_ok();
+    // SAFETY: `folder` is live.
+    assert_eq!(unsafe { camel_folder_get_message_count(folder) }, 2);
+
+    for index in 0..3 {
+        deliver(
+            &mail.server,
+            &mail.archive,
+            &format!("Filed {index}"),
+            &format!("2026-01-03T{:02}:00:00Z", 9 + index),
+        );
+    }
+
+    let before = mail.server.method_calls().len();
+    Refreshed::of(folder).expect_ok();
+
+    let calls = mail.server.method_calls().split_off(before);
+    assert!(
+        calls.iter().any(|call| call == "Email/query"),
+        "a delta costlier than the mailbox was followed anyway: {calls:?}"
+    );
+    // SAFETY: `folder` is live.
+    unsafe {
+        assert_eq!(
+            camel_folder_get_message_count(folder),
+            2,
+            "the listing that replaced the delta lost the folder's rows"
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// And the same folder once it holds enough rows for the delta to be worth
+/// following again — which is what pins the number being passed down to the
+/// folder's own count rather than to nothing at all: the account moves by the
+/// same three messages, and this time the mailbox is bigger than they are.
+#[test]
+fn a_delta_smaller_than_the_folder_is_still_followed() {
+    let mail = with_mail_on(MockServer::builder().objects_in_get(2));
+    let folder = mail.folder;
+    Refreshed::of(folder).expect_ok();
+
+    for index in 0..2 {
+        deliver(
+            &mail.server,
+            &mail.inbox,
+            &format!("Arrived {index}"),
+            &format!("2026-01-03T{:02}:00:00Z", 9 + index),
+        );
+    }
+    Refreshed::of(folder).expect_ok();
+    // SAFETY: `folder` is live.
+    assert_eq!(unsafe { camel_folder_get_message_count(folder) }, 4);
+
+    for index in 0..3 {
+        deliver(
+            &mail.server,
+            &mail.archive,
+            &format!("Filed {index}"),
+            &format!("2026-01-04T{:02}:00:00Z", 9 + index),
+        );
+    }
+
+    let before = mail.server.method_calls().len();
+    Refreshed::of(folder).expect_ok();
+
+    let calls = mail.server.method_calls().split_off(before);
+    assert!(
+        !calls.iter().any(|call| call == "Email/query"),
+        "a folder bigger than the delta listed itself again: {calls:?}"
+    );
+    // SAFETY: `folder` is live.
+    unsafe {
+        assert_eq!(camel_folder_get_message_count(folder), 4);
         g_object_unref(folder.cast());
     }
 }
