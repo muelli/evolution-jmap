@@ -56,11 +56,14 @@
 //!   `authenticate_sync` — and a panic guard in front of each. It is also where
 //!   the live `ECollectionBackend` finally appears, as the one implementation of
 //!   [`populate::Populating`] and [`fan_out::Collection`] that is not a test's.
-//!
-//! Still missing, and all that is left of M6: the module entry point
-//! (`e_module_load`) that registers the type with
-//! `evolution-source-registry`, and the CMake target that installs the
-//! resulting `.so` where the registry looks for it.
+//! - [`factory`] is what the registry actually looks up, because it never
+//!   instantiates a backend itself: an `ECollectionBackendFactory` subclass whose
+//!   two fields say which `BackendName` this is and which type to build. Both
+//!   have working defaults underneath them, so an unwritten factory is an account
+//!   that belongs to somebody else or one that fans out to nothing.
+//! - [`module`] is the pair of symbols the registry dlopens the built
+//!   `module-jmap-backend.so` for, and the only code in this crate the registry
+//!   calls by name.
 //!
 //! `dup_resource_id` came first because [`populate`] cannot be written without
 //! it — EDS loads the cached children and asks their resource ids *before* it
@@ -73,6 +76,15 @@
 //! [`Fanout::discover`]: jmap_collection_sync::Fanout::discover
 //! [`Fanout::is_obsolete`]: jmap_collection_sync::Fanout::is_obsolete
 //!
+//! Still missing, and the one part of M6 the roadmap asks for that is not here:
+//! the *mail* child. An account fans out to address books and calendars; the
+//! mail account, identity and transport sources M5's Camel provider would serve
+//! are not written, which is why [`fan_out::Collection::existing_children`] has
+//! no opinion about them and why [`factory`] leaves `prepare_mail` — the hook a
+//! vendor backend fills those three in through — at the inherited default.
+//! `docs/manual-test-collection-backend.md` is the recipe for what does work,
+//! and the account it documents has `MailEnabled=false` for this reason.
+//!
 //! Like `jmap-backend-core`, this crate needs the installed EDS headers and so
 //! stays out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
@@ -81,7 +93,9 @@ pub mod authenticate;
 pub mod backend;
 pub mod child_source;
 pub mod collection_source;
+pub mod factory;
 pub mod fan_out;
+pub mod module;
 pub mod populate;
 pub mod removal;
 pub mod resource_id;
