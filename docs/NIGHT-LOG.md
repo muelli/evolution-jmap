@@ -10327,3 +10327,124 @@ Next: the two items left over are `child_source.rs`'s five dead
 last session, still harmless), and M7 — which is what creates the mail sources
 `prepare_mail` fills in and `child_added` now binds, and which is GUI/config code
 this VM cannot verify.
+
+## 2026-08-09 (hundred-and-second session)
+
+**M7 opens with the account itself: a new crate `jmap-config`, and the
+collection `ESource` a setup commits.** Last session's log named M7 as the
+natural continuation — "it is what creates the mail sources `prepare_mail` fills
+in and `child_added` now binds" — with the caveat that it is GUI/config code
+this VM cannot verify. That caveat is what decided the shape of this increment:
+the parts of M7 that *decide* anything are `ESource` writes, and an `ESource`
+can be built and read back in a plain test with no display, no session bus and
+no Evolution. So they come first, and the `EMailConfigServiceBackend` subclass
+that calls them comes after. The smaller the part of M7 that is GUI, the more of
+M7 is actually checked rather than merely compiled.
+
+Thirteen tests, red first, in `rust/crates/jmap-config/tests/account.rs`. New
+crate, kept out of `default-members` like the other five that need the headers,
+and added to CMake's `rust-test-eds` target.
+
+**Everything in this repository so far reads an account; nothing wrote one.**
+Every backend test starts from a `.source` keyfile written by hand, because in
+Evolution the account file is the setup UI's to write and this project had none.
+`account::apply` is that write, and it is the exact inverse of
+`jmap-backend-collection`'s `collection_source` — which is why the tests write
+with this crate and read back with *that* one. `collection_source` is tested
+against sources built by hand with the EDS setters and would go on passing if
+this crate wrote the host into the wrong group; this crate could asseverate that
+it wrote what it meant to and be equally blind. The join is the thing: an
+account the setup commits has to be an account the registry's backend
+recognises, and a gap there is not a failed operation — it is an account that
+appears in the sidebar, produces no child, and leaves nothing in any log.
+
+**Decisions, and why:**
+
+- **Every field is written every time, including the absent ones** — NULL for a
+  string the account does not have, 0 for a port it does not name. This is the
+  opposite of `child_source::apply`, which is handed a *fresh* child and may
+  leave alone a property it has nothing to say about. A setup commits onto a
+  source that already says something: an account being edited says the old
+  server. So "the user cleared the login name" has to reach the file as an empty
+  `User=`, and a conditional write would leave the old one there — an account
+  the user made anonymous that goes on asking libsecret for a password under a
+  name they deleted. `committing_an_account_that_dropped_its_user_clears_the_one_that_was_there`
+  is the test for it, and it is the one both mutants below trip.
+- **`[Authentication] Method` has no unset state, and the test says so rather
+  than pretending otherwise.** Checked directly against the installed EDS, not
+  assumed: a fresh `ESourceAuthentication` already reads `"none"`, and both NULL
+  and `""` set it *back* to that string. So an `Account` with `auth_method:
+  None` reads back as `Some("none")` — the right meaning, since "none" is what
+  EDS's credentials provider resolves to the ordinary password impl, but not the
+  identity. The round-trip assertions name it explicitly instead of quietly
+  choosing an input that hides it. (It applies to children too: the conditional
+  `Method` write in `Child::settings` is a distinction the keyfile cannot hold.)
+- **The writer is not the security gate, and must not quietly become one.**
+  Writing an account with TLS off and a public host succeeds; `server_of` then
+  refuses it with `InsecureTransport`, because the `origin` rules every backend
+  shares allow plain text for loopback and nothing else.
+  `a_public_host_in_the_clear_is_written_faithfully_and_refused_by_the_reader`
+  pins both halves. An account the writer silently "fixed" to TLS would be a
+  file that disagrees with what the user was shown. Telling the user *before*
+  they commit is `check_complete`'s job and is not written yet — noted here so
+  it is not mistaken for done.
+- **`[Security]` is written as the method string, read back as the boolean**,
+  the same way `child_source` does it and for the same reason: the keyfile holds
+  the string, so the string is the spelling that has to be right, and a test
+  that reads `ESourceSecurity:secure` back is what catches it when it is not.
+- **`BackendName` is held against the factory's registered name by a test.** It
+  is not a description: the registry files each collection factory under
+  `"<factory_name>:Collection"`, so a value that does not match is not an error
+  anywhere. `jmap-backend-collection` is a dev-dependency of this crate for
+  exactly this — the tests link it, the library must not, which is also why the
+  doc links to it are paths into the generated documentation rather than
+  intra-doc links.
+- **What is deliberately not written:** `DisplayName` (the assistant's page
+  sets it; writing it here would rename the account on every commit), `Enabled`
+  (the user's answer to "show this account"), and the three mail sources — which
+  are separate *sources*, not more groups in this one, and are the next
+  increment.
+
+**Mutation-checked.** Replacing the unconditional `set_user` with a
+`if let Some(user)` turns exactly one test red, the edit-an-account one; the
+same substitution on `set_port` turns the same one red and nothing else. Both
+are the mutants the "every field, every time" decision exists to stop, and
+before that test was written neither was caught by anything.
+
+**Two tests were wrong about the world and were corrected, not the code.** The
+first draft expected `http://jmap.example.com:8443` to round-trip and
+`auth_method: None` to come back as `None`. Neither is true of EDS or of this
+project's own `origin` rules, and finding that out is what the round-trip
+against the real reader is for.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Nothing calls `apply` yet.** There is no `EMailConfigServiceBackend`
+   subclass and no `module-jmap-configuration.so`; the crate is an rlib on
+   purpose, since a cdylib with no entry point would install a file no host ever
+   opens. So this is verified as a function, not as a thing Evolution does.
+2. **No account has been created through Evolution's UI** — the milestone's
+   actual acceptance, and not something this VM can do. M7 carries no completion
+   tag and will not until someone runs it.
+3. **The mail sources still do not exist**, so
+   `docs/manual-test-collection-backend.md` still documents `MailEnabled=false`.
+   Unchanged from last session; this increment moved the boundary of what is
+   written, not of what exists.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Four new files, all with SPDX headers.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as are `clippy`/`test` over the seven EDS crates — `jmap-config`'s 13 included.
+`RUSTDOCFLAGS=-D warnings cargo doc` clean for the new crate. `example-module`
+— the pre-existing C-plus-Rust scaffold, in no default set and untouched here —
+still fails `clippy -D warnings` on `manual_c_str_literals`, as it did before.
+
+No milestone tag.
+
+Next: the three mail sources — `[Mail Account]`, `[Mail Identity]`,
+`[Mail Transport]` — written the same way and read back through
+`prepare_mail`'s vfunc, which is the other end of the same pipe and the reason
+that vfunc has had no caller. After that, the module and the
+`EMailConfigServiceBackend` subclass, which is where the part this VM cannot
+verify begins.
