@@ -21,6 +21,7 @@
 pub(crate) mod date;
 pub mod error;
 pub mod folder;
+pub mod keywords;
 pub mod message;
 pub(crate) mod path;
 
@@ -33,6 +34,7 @@ use jmap_proto::{Id, State};
 
 pub use error::SyncError;
 pub use folder::{FolderInfo, FolderRole, FolderTree};
+pub use keywords::{KeywordChange, Keywords};
 pub use message::{MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES};
 
 /// What a folder-list refresh found.
@@ -205,6 +207,44 @@ impl MailSync {
         Ok(self
             .client
             .download_blob(&self.account_id, &blob_id, uid.as_str())?)
+    }
+
+    /// Puts one message's keyword change on the server — the write half of
+    /// what a folder synchronises.
+    ///
+    /// A row Camel marked read, important, or labelled is this: an `Email/set`
+    /// update carrying only the keywords that differ, for the reasons
+    /// [`crate::keywords`] gives. A change with nothing in it costs no request
+    /// at all, because Camel marks a row as needing a write for reasons that
+    /// are not keywords and a provider that asked the server about each of them
+    /// would spend a round trip per row on every synchronisation.
+    ///
+    /// A uid the account no longer holds is [`SyncError::NoSuchMessage`], the
+    /// same judgement [`MailSync::message_source`] makes about the same
+    /// situation: another client destroying the message is ordinary, and the
+    /// flag change is simply moot. Every other refusal stays the server's own
+    /// [`SyncError::Client`] — a keyword the server will not accept and a
+    /// mailbox gone read-only are things the user has to be told about.
+    ///
+    /// Not `ifInState`: the state a folder holds is its listing's, and a
+    /// conditional write would fail for any change to any *other* message in
+    /// the account. Keyword changes commute — this is a patch of named members,
+    /// not a replacement — so the concurrency that matters is per keyword, and
+    /// sending only what changed is what handles it.
+    pub fn set_keywords(&self, uid: &Id, change: &KeywordChange) -> Result<(), SyncError> {
+        if change.is_empty() {
+            return Ok(());
+        }
+        self.client
+            .email_update(&self.account_id, uid, change.patch())
+            .map_err(|error| match &error {
+                jmap_client::Error::Set(set_error)
+                    if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
+                {
+                    SyncError::NoSuchMessage(uid.clone())
+                }
+                _ => SyncError::Client(error),
+            })
     }
 
     /// The ids of a mailbox's messages, oldest first, however many pages the

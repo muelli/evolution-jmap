@@ -3899,3 +3899,100 @@ state kept on disk is what the empty `recent` list and the whole-mailbox
 refresh are both still waiting for. Unexercised against a real `CamelSession`:
 `service.rs`, which waits on M6 and M7. The README's architecture block still
 lists only the round-1 crates.
+
+## 2026-08-09 (forty-second session)
+
+M5's twenty-second increment, and the first thing `jmap-mail-sync` does that is
+not a read: the `Email/set` a changed flag becomes. `MailSync::set_keywords`
+takes one message id and a `KeywordChange` — the difference between the keywords
+the last listing found and the keywords the row claims now — and patches exactly
+those members of the server's `keywords` object. Everything the Camel side needs
+to turn a row Camel marked read or important into a request now exists; what is
+still missing is `synchronize_sync`, the vfunc that decides *which* rows and
+holds the two ends of the difference.
+
+Red first: `tests/keywords.rs`, twelve tests against a `jmap_mail_sync::keywords`
+that did not exist — seven on the mapping itself, five against a live mock.
+
+Decisions taken:
+
+- **A difference, not a state.** The obvious shape — send the row's whole
+  keyword set and let the server replace what it has — says something about
+  every keyword on the message, and what it says is "gone" for any that arrived
+  after the listing the row came from: a label from the user's phone, a
+  `$phishing` verdict from the server's own filter, a keyword this provider has
+  no name for. A patch of named members leaves everything neither side mentions
+  as it was, which is the only thing a client that holds no lock can honestly
+  claim about them. It is also the cheap shape: Camel hands the folder a row
+  that changed, and the keywords it *had* are what its summary was filled from.
+  Two of the twelve tests are about this and nothing else — a keyword seeded on
+  the server that neither side of the diff names survives the write, and a
+  keyword in both halves appears in neither half of the patch.
+- **No `ifInState`.** The state a folder holds is its listing's, so a
+  conditional write would fail for any change to any *other* message in the
+  account — a mailbox with traffic would refuse every flag change the user
+  makes. Keyword changes commute, being a patch of named members rather than a
+  replacement, so the concurrency that matters is per keyword, and sending only
+  what changed is what handles it.
+- **Keys are JSON pointers, and a keyword may contain the two characters that
+  makes special.** RFC 8620 §5.3 makes each `PatchObject` key a pointer (RFC
+  6901) into the object, and an RFC 5788 keyword is an IMAP atom — which permits
+  `/` and `~`. Unescaped, a user's `home/todo` label would address a `todo`
+  member of a `home` object inside `keywords`, inventing structure instead of
+  setting a keyword. Escaped in RFC 6901's order, `~` before `/`, or the `~1`
+  produced for a slash would be read again. Tested both as a patch shape and as
+  a round trip through the mock, which comes back holding one keyword named
+  `home/todo`.
+- **Keywords are compared folded, removed as spelled.** RFC 8621 §4.1.1 takes
+  its vocabulary from RFC 5788, whose keywords are case-insensitive, so a server
+  that stores `Work` and a row that spells it `work` hold the same keyword and a
+  diff that missed that would rewrite it on every synchronisation. `Keywords` is
+  therefore keyed by the folded name and remembers the spelling it arrived with:
+  an addition quotes the row's spelling, a removal quotes the *server's*, because
+  the key a patch takes off an object has to be the key the object has.
+- **`hasAttachment` is not a keyword.** It is the one bit of `MessageFlags` that
+  comes from a property RFC 8621 §4.1.1 has the server compute, not from a label,
+  and sending it back as one would put a label on the message that every other
+  client would then show. One test asserts the empty set.
+- **An empty change is not a request.** Camel marks a row as needing a write for
+  reasons that are not keywords, and a provider that asked the server about each
+  of them would spend a round trip per row on every synchronisation. The test
+  that proves it is the one that succeeds for a uid the account has never
+  held — the neighbouring test shows the same call *with* a change reports that
+  uid as gone.
+- **`notFound` is `SyncError::NoSuchMessage`, everything else stays the
+  server's.** The same judgement `message_source` already makes about the same
+  situation: a uid in a folder summary is a claim about the last listing, and
+  another client destroying the message makes the flag change moot rather than
+  the account broken. A keyword the server will not accept or a mailbox gone
+  read-only are things the user has to be told about, so they stay
+  `SyncError::Client` with the server's own reason inside.
+- **`Client::email_update` takes a `PatchObject`, not an `Email`.** Mirrors
+  `contact_update`. Most of what an `Email` holds is immutable (RFC 8621 §4.1)
+  and the two members that are not are sets other clients write to, so there is
+  no correct whole-object update to offer.
+
+Not verified locally, as in the previous forty-one sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The two new files —
+`jmap-mail-sync/src/keywords.rs` and `jmap-mail-sync/tests/keywords.rs` — carry
+SPDX `GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates. `example-module` does not link on this
+VM — `e_mail_shell_view_get_type` is in Evolution's mail shell library, which is
+not installed here — and it is outside both sets this session touched; nothing in
+this increment reaches it.
+
+Next in M5. **`synchronize_sync`** is now the missing half of what landed today:
+the vfunc that walks the folder's summary for rows Camel marked dirty, builds
+the two keyword sets a `KeywordChange` is made from, and clears the dirty bit on
+the ones the server accepted. The hard part is the *before* set — a summary row
+is mutated in place by the user, so the keywords the listing found are gone by
+the time the write happens unless the folder keeps them; IMAPX solves this with
+a server-flags field in its own message-info subclass, which is a decision for
+that increment. **Bounding the cache** is still open from the forty-first
+session. `CamelSubscribable` remains the smaller unblocked piece;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc. `Email/changes` against a state kept on disk is what the
+empty `recent` list and the whole-mailbox refresh are both still waiting for.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.
