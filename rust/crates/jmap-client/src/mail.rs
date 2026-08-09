@@ -152,6 +152,42 @@ impl Client {
             .collect())
     }
 
+    /// Apply a patch to one message (`Email/set` with a single `update`).
+    ///
+    /// A `PatchObject` (RFC 8620 §5.3), not a whole `Email`: most of what an
+    /// `Email` holds is immutable (RFC 8621 §4.1), and the two members that are
+    /// not — `keywords` and `mailboxIds` — are sets other clients change too.
+    /// Sending either of them whole would overwrite whatever happened to the
+    /// message since it was last read.
+    ///
+    /// A rejection is [`Error::Set`] with the server's own reason, which is how
+    /// `notFound` — the message was destroyed between the read and the write —
+    /// stays distinguishable from a refusal.
+    pub fn email_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
+        let request = SetRequest::<Email>::new(account_id.clone()).update(id.clone(), patch);
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/set", &request)?;
+        let response: SetResponse<Email> = serde_json::from_value(arguments)?;
+
+        if response
+            .updated
+            .as_ref()
+            .is_some_and(|updated| updated.contains_key(id))
+        {
+            return Ok(());
+        }
+        if let Some(set_error) = response
+            .not_updated
+            .as_ref()
+            .and_then(|not_updated| not_updated.get(id))
+        {
+            return Err(Error::Set(set_error.clone()));
+        }
+        Err(Error::Protocol(format!(
+            "Email/set answered neither updated nor notUpdated for {id}"
+        )))
+    }
+
     /// Fetch the account's sending identities (`Identity/get`).
     pub fn identities(&self, account_id: &Id) -> Result<Vec<Identity>, Error> {
         let arguments = self.single_call(

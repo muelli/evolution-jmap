@@ -16,6 +16,8 @@ name = "jmap_mail_sync"
 [dependencies]
 evolution-jmap-client = { workspace = true }
 evolution-jmap-proto = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
+serde_json = { workspace = true }
