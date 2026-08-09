@@ -20,6 +20,14 @@
 //!   account with this and reads it back with that, because two descriptions of
 //!   one keyfile that are only checked separately are two descriptions that
 //!   drift.
+//! - [`mail`] is the three sources that hang off it — `[Mail Account]`,
+//!   `[Mail Identity]`, `[Mail Transport]`. Separate sources rather than three
+//!   more groups in the account's file, and not children of the collection
+//!   *backend* either, which is why writing them is a different operation from
+//!   writing the account rather than a longer version of it. Here the other
+//!   side of the join is not a reader but a second *writer*: the collection
+//!   backend's `prepare_mail` writes the same three sources from the registry,
+//!   and `tests/mail.rs` holds the two against each other.
 //!
 //! ## Why an rlib with no module in it yet
 //!
@@ -39,17 +47,20 @@
 //!
 //! ## What is not here yet
 //!
-//! The three mail sources — `[Mail Account]`, `[Mail Identity]`,
-//! `[Mail Transport]` — which are the sources
-//! `jmap-backend-collection`'s `prepare_mail` fills in and which nothing yet
-//! creates. They are a separate increment because they are separate sources:
-//! they belong to the registry's own directory rather than to the collection's
-//! cache (see that module for why they cannot be cached children), so writing
-//! them is a different operation from writing the account, not a longer version
-//! of it.
+//! **The Camel settings the mail account connects with** — host, port,
+//! security and user, which reach a Camel service through an `ESourceCamel`
+//! extension generated for the provider's own settings type. Until they are
+//! written, an account committed by this crate names the `jmap` provider
+//! without naming a server for it; see [`mail`] for why they need `jmap-mail`'s
+//! `CamelJmapSettings` GType and therefore an increment of their own.
+//!
+//! And **the module**: no `EMailConfigServiceBackend` subclass calls any of
+//! this yet, so what is verified here is the functions, not a thing Evolution
+//! does.
 //!
 //! Like the backends, this crate needs the installed EDS headers and so stays
 //! out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
 
 pub mod account;
+pub mod mail;
