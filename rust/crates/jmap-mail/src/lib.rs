@@ -92,6 +92,13 @@
 //!   folder the user adds to an account and the one they take away — one
 //!   `Mailbox/set` each, and the edit to the store's held listing that keeps
 //!   the folder Camel was just handed openable.
+//! - [`envelope`] is the first piece of the half that has no store in it at
+//!   all: the SMTP envelope a `CamelTransport`'s `send_to_sync` is handed as
+//!   two `CamelAddress` arguments, turned into the `envelope` property RFC 8621
+//!   §7 puts on an `EmailSubmission`. Its own module because it is the one part
+//!   of sending that is a pure reading of Camel's objects — and because it is
+//!   where the rule lives that an address with nothing deliverable in it
+//!   refuses the send rather than shortening it.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -107,6 +114,7 @@ pub mod append;
 pub mod cache;
 pub mod changes;
 pub mod connect;
+pub mod envelope;
 pub mod expunge;
 pub mod folder;
 pub mod folder_info;
