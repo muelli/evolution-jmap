@@ -14,6 +14,16 @@ use jmap_proto::{Id, State};
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
+    /// The name of every method call this server has answered, in the order it
+    /// answered them — `Mailbox/get`, `Email/query`, `Email/changes`.
+    ///
+    /// What it is for is the assertions no amount of reading the account's
+    /// objects can make: whether a client asked at all, and which question it
+    /// asked. A folder refresh that lists the whole mailbox and one that asks
+    /// for a delta leave the account in exactly the same place — the
+    /// difference between them is entirely in what went over the wire, and
+    /// cheapness that is not asserted is cheapness that quietly goes away.
+    pub method_calls: Vec<String>,
     /// Capability URNs to leave out of the session document, as
     /// [`crate::MockServerBuilder::without_capability`] asked. A real account
     /// need not offer all four, and a client that resolves an account under
@@ -39,6 +49,7 @@ impl ServerState {
         Self {
             session_state: 1,
             accounts: BTreeMap::new(),
+            method_calls: Vec::new(),
             omitted_capabilities: BTreeSet::new(),
             changes_page_size: None,
             objects_in_get: None,

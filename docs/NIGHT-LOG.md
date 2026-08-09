@@ -4813,3 +4813,94 @@ and that decision is what `expunge_sync` waits on; cross-store transfers want
 `Email/import` for an `append_message_sync`. Unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's
 architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (fifty-second session)
+
+M5's thirty-second increment, in `jmap-mail`: **the join**. `refresh_info_sync`
+now asks what *changed* since the state its summary recorded, and dispatches on
+`MessageUpdate`'s three answers instead of listing the whole mailbox every time.
+`JmapStore::messages_since` is the new call beside `messages`, locked the same
+way; `messages` stays, because a folder that has never listed has no "since" to
+ask from and a refused delta has to fall back to something.
+
+Every piece of this existed already — `messages_since` asks, the summary keeps
+the state across a restart, `apply_delta` applies the answer — and the vfunc was
+the one place they were not wired together. With it, Camel's fourth list is
+filled for the first time: a delta names a message this folder has no row for,
+which means it arrived since the state the folder recorded, which is what
+`recent` means.
+
+Red first, and the first test needed something the mock did not have. A listing
+and a delta leave the folder holding exactly the same rows — the entire
+difference between them is what went over the wire — so **the mock now records
+the name of every method call it answers** (`ServerState::method_calls`,
+`MockServer::method_calls()`), and the test asserts the second refresh asked
+`Email/changes` and did *not* ask `Email/query`. Cheapness that is not asserted
+is cheapness that quietly goes away. Two tests were red against the old vfunc
+for the right reasons (`Email/changes` never asked; new mail not called recent);
+three more are guards, and each was checked by breaking the implementation on
+purpose:
+
+- reconciling a delta as if it were a listing — caught by three tests, including
+  the one where mail delivered to the *archive* must not empty the inbox;
+- applying a relist as if it were a delta — caught by the recovery test, which
+  destroys a message before planting an unusable state, so the listing that
+  recovers has to be *reconciled* rather than merely written;
+- never asking for a delta at all — caught by the two red tests above.
+
+Decisions taken:
+
+- **The first refresh is phrased as `Relisted`, not as a fourth case.** A folder
+  with no state lists, and a listing *is* one of the three answers — mapping
+  `store.messages` into `MessageUpdate::Relisted` means one dispatch below
+  rather than two paths that must be kept in step.
+- **A refused delta relists rather than fails.** That judgement is `jmap-mail-sync`'s
+  and this vfunc inherits it; what is new here is the test for it, and the
+  reason it matters at the Camel layer: `refresh_info_sync` has nowhere to
+  report "your state is too old" to, so a folder that failed would be one that
+  never comes back.
+- **The mock records call names, not full requests.** Enough for "did it ask,
+  and what did it ask", nothing that would make a test depend on argument
+  shapes that are the client's business. Recorded before the call is answered,
+  so a request that errored still counts as the round trip it was.
+
+One arm is **not covered by a test, and honestly so**: `Unchanged` records the
+state the delta came back with. Against this mock that is always the state the
+folder asked with — an empty `Email/changes` here carries `sinceState` back
+unchanged — so `set_summary_state`'s equality check makes the arm a no-op and
+there is nothing observable to assert. It is written the way a server that
+advances the state on an empty delta would need, and left untested rather than
+tested against a mock behaviour that does not exist.
+
+Also worth recording: the `recent` test logs a `camel-CRITICAL` about
+`camel_session_get_filter_driver`. That is not a fault — it is Camel's own
+`changed` handler reacting to a recent uid on a folder that carries
+`CAMEL_FOLDER_FILTER_RECENT`, and the test's stand-in `CamelSession` does not
+implement the vfunc. It is the first direct evidence the recent list reaches
+the code path it exists for. Whether the user's filters then do the right thing
+*needs human verification in real Evolution*.
+
+Not verified locally, as in the previous fifty-one sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and
+on the five EDS crates; `jmap-mail`'s refresh suite is at 11 tests.
+
+Next in M5. A refresh is now cheap and correct; what it still does not do is
+**bound the catching up** — a folder that has been closed for a week gets a
+delta naming every message the account touched, fetched one `Email/get` chunk
+at a time, where relisting the one mailbox might be cheaper. That wants a
+threshold and a test that a delta over it relists instead.
+
+Still open from earlier sessions: **bounding the cache**; the other half of the
+cache's atomicity problem (an entry is written by `write_all` and close rather
+than to a temporary name and renamed); the `changed` signal a transfer emits is
+still not asserted by a test, and lifting `tests/refresh.rs`'s emission harness
+into `tests/common` is what that wants — the harness has now grown a fourth
+list, which makes the case stronger; `CamelSubscribable` still wants
+`Mailbox/set`, which the client does not have; `get_trash_folder_sync` and
+`get_junk_folder_sync` are still a settings decision before they are a vfunc,
+and that decision is what `expunge_sync` waits on; cross-store transfers want
+`Email/import` for an `append_message_sync`. Unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's
+architecture block still lists only the round-1 crates.
