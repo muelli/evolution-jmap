@@ -14,7 +14,9 @@
 //! The `CamelService` vfuncs that fill and empty the first of those slots are
 //! [`crate::service`]; `CamelStoreClass`'s own `get_folder_info_sync`, which
 //! reads the second, is [`crate::folders`]. Both are installed from `class_init`
-//! below.
+//! below, and `CamelSubscribable`'s three — which read and write the second slot
+//! too — are [`crate::subscribe`], declared from `interfaces` because an
+//! interface's vtable is filled through GObject rather than through our class.
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
@@ -26,7 +28,7 @@ use eds_sys::{
 };
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_mail_sync::{
     Filing, FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary, MessageUpdate,
 };
@@ -34,6 +36,7 @@ use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
 use crate::settings::settings_type;
+use crate::subscribe::Subscribable;
 
 /// A folder listing, and the state it is current as of.
 ///
@@ -333,6 +336,23 @@ impl JmapStore {
         Ok(())
     }
 
+    /// The folder listing the store is holding, if it is holding one — and
+    /// nothing else: no request, and no connection needed to ask.
+    ///
+    /// [`JmapStore::folders`] answers the same question for a caller that may
+    /// block, and lists the account when it has nothing in hand. This one is
+    /// for the caller that may not: `CamelSubscribable`'s
+    /// `folder_is_subscribed` is declared non-blocking and Evolution asks it
+    /// once per folder while drawing the tree, so a request from in there would
+    /// be a folder tree that stalls the UI thread once per row. `None` is
+    /// therefore an answer — "nothing is known about this account yet" — and
+    /// not a case to go and fix.
+    pub fn held_folders(&self) -> Option<Arc<FolderTree>> {
+        let folders = self.folder_listing()?;
+        let listing = read(folders);
+        listing.as_ref().map(|listing| Arc::clone(&listing.tree))
+    }
+
     /// Drops the folder listing. Called with the connection lock held, by the
     /// two operations that make a listing stop describing the account the store
     /// is pointed at.
@@ -423,6 +443,15 @@ unsafe impl ObjectSubclass for JmapStore {
     fn parent_type() -> GType {
         // SAFETY: no arguments, and the type initialises itself.
         unsafe { camel_offline_store_get_type() }
+    }
+
+    fn interfaces() -> Vec<InterfaceDecl> {
+        // `CamelSubscribable` is three vfuncs and no properties, and Camel puts
+        // no default behind any of them — so unlike the settings class's
+        // `CamelNetworkSettings`, claiming this one without filling its vtable
+        // would be a store whose subscription methods are calls through NULL.
+        // [`crate::subscribe`] is what fills it.
+        vec![InterfaceDecl::filled_by::<Subscribable>()]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
