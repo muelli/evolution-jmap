@@ -174,11 +174,13 @@ fn a_written_child_is_read_back_as_the_child_it_was_written_from() {
 
 #[test]
 fn a_written_child_reaches_the_server_its_account_named() {
-    // A child inherits none of the account's connection — EDS binds
+    // A child inherits none of the account's connection from EDS, which binds
     // `oauth2-support` and nothing else — and it is the *child* the address
     // book and calendar backends are handed. So the settings copied here are
     // the whole of what those backends have to work from, and this is them
-    // reading it.
+    // reading it. What follows the account *afterwards* is this backend's own
+    // doing and is `tests/child_added.rs`'s subject; the copy below is what a
+    // child starts life with.
     let child = child(ChildKind::AddressBook, "AB1", "Personal");
     let source = TestSource::new().written(&child, &connection());
 

@@ -10199,3 +10199,131 @@ alternatives are the `child_added` binding EWS uses to keep a child's host, user
 and method following the collection's (this backend copies once at populate
 instead, so an account whose server changes leaves stale children), and the
 `child_source.rs` cleanup noted above.
+
+## 2026-08-09 (hundred-and-first session)
+
+**`child_added`: a child's connection follows its account, instead of being a
+copy taken once and never looked at again.** Last session's log named this as
+one of the two tractable items left in M6 — "the `child_added` binding EWS uses
+to keep a child's host, user and method following the collection's (this backend
+copies once at populate instead, so an account whose server changes leaves stale
+children)" — and it is what this session did.
+
+Ten tests, red first, in `tests/child_added.rs`; two more in `tests/backend.rs`
+for the slot. `jmap-backend-collection` is now 111 tests, up from 99.
+
+**The bug it fixes has no symptom.** `child_source::apply` writes the account's
+`Connection` onto a child at the moment the child is created, and nothing copies
+it again: a populate only writes children it *creates*, and a child that already
+exists is claimed from the cache untouched. So an account whose host, port, user
+or TLS setting the user edits afterwards keeps address books and calendars that
+name the old one. Nothing about such a child looks wrong — it has a host, it
+connects, it authenticates — it is simply talking to last week's server, or over
+plain text against an account that has since been given TLS.
+
+**What was read.** `libebackend/e-collection-backend.c` (3.52.3) and
+evolution-ews's `src/EWS/registry/e-ews-backend.c`, both fetched rather than
+guessed, plus `libedataserver/e-source-security.c` and the `e_binding_bind_property`
+doc comment in `e-data-server-util.c`.
+
+- EDS's own `collection_backend_child_added` binds only `display-name` (and only
+  for mail children) and `oauth2-support`. Nothing of the connection.
+- `ews_backend_child_added` binds the collection's `[Authentication]` **host**,
+  **user** and **method** onto each child's, with `G_BINDING_SYNC_CREATE`, for
+  every child that has an `[Authentication]` group — it does not filter for mail
+  — and then chains up. That is the shape adopted here.
+- `e_binding_bind_property` is EDS's own "thread safe variant of
+  `g_object_bind_property()`", `(transfer none)`. Used rather than the GLib call
+  it wraps, and `e_binding_.*` added to `eds-sys`'s function allowlist for it;
+  the sources a registry binds are touched from more than one thread.
+- `e_source_security_set_method` notifies **both** `method` and `secure`. That is
+  what makes binding the boolean sound, which is what this does — `secure` is the
+  property every JMAP backend actually reads (`SourceConfig::from_source`), so an
+  account set to some third method spelling reaches its children as the answer
+  they will act on rather than as a string they would have to agree about.
+
+**Decisions, and why:**
+
+- **Five properties, not three.** EWS binds host, user and method; this binds
+  those plus `[Authentication] port` and `[Security] secure` — exactly the five
+  fields a `Connection` is, so what `apply` writes once and what `child_added`
+  keeps true afterwards are the same list. EWS can leave port and TLS out
+  because an EWS account's server comes from its URL; a JMAP account's is these
+  fields.
+- **A group is bound only when *both* sources already have it** — a deliberate
+  deviation from EWS, which fetches the collection's `[Authentication]`
+  unconditionally. `e_source_get_extension` *creates* what it cannot find, and on
+  the collection that means writing a group into the user's own account file,
+  which `collection_source.rs` goes out of its way never to do; on the child it
+  would mean this backend editing a source belonging to another part of
+  Evolution. A source with no `[Authentication]` names no host anyway, so there
+  is nothing a binding could carry to it.
+- **The chain-up goes first**, which is the other way round from EWS. The
+  parent's `child_added` is what puts the child in the backend's own table — and
+  so what makes `e_collection_backend_list_*_sources` know about it, which is
+  what the next fan-out's removal pass reads. A panic in our binding must not
+  cost the child that.
+- **One-way.** The binding carries the account to the child and never back; a
+  child that could write to the account could, through it, rewrite every other
+  child.
+- **Mail sources are bound too, and that is wanted.** `child_added` fires for
+  every source parented to the collection, the mail account and transport
+  `prepare_mail` fills in included. They reach the same server as the address
+  books, so they should follow the same fields — and the "both sides have the
+  group" rule is what keeps that from turning into this backend inventing groups
+  on sources it did not write. `tests/child_added.rs` covers the mail-shaped
+  cases: a source with `[Authentication]` and no `[Security]` follows the host
+  and is not given a `[Security]` group, and one with neither is left alone
+  entirely.
+
+**Red first, and mutation-checked.** The ten new tests were run against a
+`follow_collection` whose body returned immediately: six failed on the
+propagation assertions, four (the negative-space ones) passed, which is what
+they should do against a function that does nothing. Removing
+`vfuncs.child_added = Some(child_added)` from `class_init` turns
+`class_init_replaces_the_default_child_added_rather_than_leaving_it` red and
+nothing else, which is why that test exists — an uninstalled override here is
+not a backend that breaks, it is one whose children quietly stay stale.
+
+`the_bound_properties_exist_on_the_extensions_they_are_named_under` is the
+guard for the failure mode particular to this module: a property name is a
+string on `e_binding_bind_property`, so a misspelling is a `g_critical` at
+runtime and a binding that was never made — the same silent staleness the module
+exists to remove. It asks `g_object_class_find_property` rather than relying on
+some other test happening to exercise that property.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The vfunc itself is still only checked at the slot.** Calling it needs a
+   live `ECollectionBackend`, and so a running `evolution-source-registry`;
+   `follow_collection` is where the decisions are, and that is driven against
+   real `ESource`s. Unchanged from `populate` and `authenticate_sync`.
+2. **That EDS writes a bound child back to disk is asserted only in the manual
+   recipe**, not by a test — `EServerSideSource` is what persists a changed
+   child, and there is none here. `docs/manual-test-collection-backend.md` gained
+   the step: edit the account's `.source`, restart the registry, and every child
+   file names the new value.
+3. **A child bound twice** — if EDS ever emitted `child-added` twice for one
+   source — would carry two identical bindings. Harmless (both write the same
+   value) and the same in evolution-ews, but not something this code prevents.
+4. **Still no run inside a real `evolution-source-registry`**, unchanged, and
+   still the reason M6 carries no completion tag.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new source files, both with SPDX headers.
+`cargo fmt --check`, `cargo test --locked` (default members, unchanged) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean, as is
+`clippy`/`test` over the five EDS crates this touches;
+`RUSTDOCFLAGS=-D warnings cargo doc` clean for the changed crate. `example-module`
+— the pre-existing C-plus-Rust scaffold, in no default set and untouched here —
+fails `clippy -D warnings` on `manual_c_str_literals` and did so before this
+session too.
+
+No milestone tag. Nothing about M6's open question changed: none of it has been
+observed inside a running registry.
+
+Next: the two items left over are `child_source.rs`'s five dead
+`e_source_*_get_type()` calls, whose comment overstates their necessity (noted
+last session, still harmless), and M7 — which is what creates the mail sources
+`prepare_mail` fills in and `child_added` now binds, and which is GUI/config code
+this VM cannot verify.

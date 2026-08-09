@@ -24,6 +24,13 @@
 //!   hands back. Everything a child is, it is because this wrote it there —
 //!   including the two properties whose absence loses the cache file or points
 //!   the child at no server.
+//! - [`child_added`] is what keeps that write true afterwards, and the answer to
+//!   the question [`child_source`] does not ask: an account's server, port, user
+//!   and TLS setting are copied onto a child once, when the child is created,
+//!   and the user may edit any of them the next day. So the copy is turned into
+//!   a binding at the vfunc EDS calls for every source that appears under the
+//!   collection — the same thing evolution-ews does, over the properties a JMAP
+//!   child's connection is made of.
 //! - [`removal`] is the other thing a populate does with a fan-out, and the one
 //!   that destroys rather than creates: the children this collection has and no
 //!   longer warrants, read back off their sources and removed. The decision is
@@ -98,6 +105,7 @@
 
 pub mod authenticate;
 pub mod backend;
+pub mod child_added;
 pub mod child_source;
 pub mod collection_source;
 pub mod factory;

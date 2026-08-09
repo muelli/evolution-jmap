@@ -180,6 +180,15 @@ book under it in the Contacts view and a calendar in the Calendar view.
   the cached children, claims them, and adds nothing.
 - Setting `ContactsEnabled=false` and restarting removes the address book
   children, and their `.source` files with them.
+- Moving the account moves its children with it: change `[Authentication] Host`
+  (or `Port`, `User`, or `[Security] Method`) in the account's own `.source`,
+  restart the registry, and every child file under
+  `~/.config/evolution/sources/` names the new value too. Nothing rewrites the
+  children — `child_added` binds those four properties plus the TLS flag from
+  the account onto each child as it appears, and EDS writes the changed child
+  back out. A child left naming the old server is the bug that binding exists
+  to prevent, and is the one thing here whose absence is invisible in Evolution
+  until the old server stops answering.
 
 Anything short of that is a bug in this repository, not in the recipe;
 `docs/NIGHT-LOG.md` is where the ones found this way get written down.

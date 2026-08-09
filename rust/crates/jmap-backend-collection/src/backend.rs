@@ -43,6 +43,7 @@ use jmap_backend_core::trampoline::{guard, guard_value, log_critical};
 use jmap_collection_sync::Parts;
 
 use crate::authenticate::authenticate_with;
+use crate::child_added::follow_collection;
 use crate::collection_source::{parts_of, user_of};
 use crate::fan_out::{Collection, Populated, fan_out};
 use crate::populate::Populating;
@@ -108,6 +109,7 @@ unsafe impl ObjectSubclass for JmapCollectionBackend {
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.dup_resource_id = Some(dup_resource_id);
         vfuncs.populate = Some(populate);
+        vfuncs.child_added = Some(child_added);
         // A grandparent's slot, not the collection backend's own: EDS's own
         // default for it accepts every account without contacting anything, so
         // the one thing worse than not writing here is writing to the wrong
@@ -213,6 +215,52 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
             report.children.len(),
             report.asked
         ));
+    });
+}
+
+/// What EDS calls for every source that appears under this collection — the
+/// children a fan-out just wrote, the cached ones a populate exported, and the
+/// mail sources this backend neither creates nor caches.
+///
+/// The decisions are [`crate::child_added::follow_collection`]'s; what is here
+/// is the account source the vfunc is not handed, and the chain-up.
+///
+/// The chain-up goes **first**, which is the other way round from
+/// `e_ews_backend_child_added`. The parent's implementation is what puts the
+/// child in the backend's own table and binds its enabled flag to the account's
+/// — so it is what makes `e_collection_backend_list_*_sources` know about it,
+/// which is what the next fan-out's removal pass reads. A panic in the binding
+/// below must not cost the child that; a panic in the chain-up, which is EDS's
+/// own code, is not a thing this order can help with either way.
+///
+/// A missing account source is a logged critical and no binding, as in
+/// `populate`: the child is already exported by then and works with whatever it
+/// was written with; what it loses is only its following of an account this code
+/// cannot find.
+unsafe extern "C" fn child_added(backend: *mut ECollectionBackend, child_source: *mut ESource) {
+    guard("child_added", (), || {
+        match parent_class().and_then(|class| class.child_added) {
+            // SAFETY: the parent's own child_added, called on an instance of a
+            // type derived from it, which is what chaining up means in C.
+            Some(child_added) => unsafe { child_added(backend, child_source) },
+            // EDS installs its own, so this cannot happen; if it ever does, the
+            // binding below is still worth making.
+            None => log_critical("child_added: the parent class has no child_added to chain up to"),
+        }
+
+        // `(transfer none)`, and NULL only for a backend EDS did not construct
+        // from a source.
+        // SAFETY: EDS hands us one of its own backends, alive for the call, and
+        // `ECollectionBackend` derives from `EBackend`.
+        let source = unsafe { e_backend_get_source(backend.cast()) };
+        if source.is_null() {
+            log_critical("child_added: the collection backend has no account source");
+            return;
+        }
+
+        // SAFETY: the account source EDS owns and one of its child sources, both
+        // alive for the length of the vfunc.
+        unsafe { follow_collection(source, child_source) };
     });
 }
 
