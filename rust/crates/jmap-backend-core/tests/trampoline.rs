@@ -8,7 +8,7 @@
 
 use glib_sys::{GError, g_error_free};
 use jmap_backend_core::error::JMAP_BACKEND_ERROR_INTERNAL;
-use jmap_backend_core::trampoline::{guard, guard_bool, guard_ptr};
+use jmap_backend_core::trampoline::{guard, guard_bool, guard_ptr, guard_value};
 use std::ptr;
 
 #[test]
@@ -65,4 +65,42 @@ fn guard_ptr_reports_a_panic_as_null_plus_an_error() {
     assert!(obj.is_null());
     assert!(!error.is_null());
     unsafe { g_error_free(error) };
+}
+
+/// `EBackendClass::authenticate_sync` answers with neither a boolean nor a
+/// pointer but with an `ESourceAuthenticationResult`, whose failure value is
+/// one of five and so cannot be picked by the guard. It still needs the error
+/// set, for the same reason [`guard_bool`] does: every non-accepting result
+/// EDS sees is turned into an `ESourceCredentialsReason` and shown to the user,
+/// and the `GError` is the only part of that a person can read.
+#[test]
+fn guard_value_reports_a_panic_as_the_callers_fallback_plus_an_internal_error() {
+    let mut error: *mut GError = ptr::null_mut();
+    let result = unsafe { guard_value("authenticate_sync", &mut error, 42u32, || panic!("boom")) };
+
+    assert_eq!(result, 42);
+    assert!(!error.is_null(), "panic left the GError unset");
+    unsafe {
+        assert_eq!((*error).code, JMAP_BACKEND_ERROR_INTERNAL);
+        let message = std::ffi::CStr::from_ptr((*error).message).to_string_lossy();
+        assert!(message.contains("authenticate_sync"), "{message}");
+        assert!(message.contains("boom"), "{message}");
+        g_error_free(error);
+    }
+}
+
+#[test]
+fn guard_value_passes_the_answer_through_and_leaves_the_error_alone() {
+    let mut error: *mut GError = ptr::null_mut();
+    let result = unsafe { guard_value("authenticate_sync", &mut error, 42u32, || 7) };
+
+    assert_eq!(result, 7);
+    assert!(error.is_null());
+}
+
+#[test]
+fn guard_value_tolerates_a_null_error_out_parameter() {
+    let result =
+        unsafe { guard_value("authenticate_sync", ptr::null_mut(), 42u32, || panic!("x")) };
+    assert_eq!(result, 42);
 }

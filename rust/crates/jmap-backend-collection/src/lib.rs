@@ -52,17 +52,20 @@
 //!   call that asks EDS to authenticate the account — which is what eventually
 //!   produces a fan-out, one vfunc later.
 //! - [`backend`] is the subclass those functions exist for: an instance struct,
-//!   the vfunc slots, and a panic guard in front of each.
+//!   the three vfunc slots — `dup_resource_id`, `populate` and
+//!   `authenticate_sync` — and a panic guard in front of each. It is also where
+//!   the live `ECollectionBackend` finally appears, as the one implementation of
+//!   [`populate::Populating`] and [`fan_out::Collection`] that is not a test's.
 //!
-//! Still missing, and the reason there is no module entry point yet: the
-//! `authenticate_sync` slot, which runs [`fan_out::fan_out`] with the
-//! [`Collection`](fan_out::Collection) the instance implements. It is small, and
-//! it cannot be driven here — it needs a live `ECollectionBackend`, which needs a
-//! running `evolution-source-registry` on a session bus.
-//! `dup_resource_id` came first because [`populate`] cannot be written without it
-//! — EDS loads the cached children and asks their resource ids *before* it calls
-//! `populate`, and a populate that ran against a mis-loaded child list would
-//! create duplicates of children that are already there.
+//! Still missing, and all that is left of M6: the module entry point
+//! (`e_module_load`) that registers the type with
+//! `evolution-source-registry`, and the CMake target that installs the
+//! resulting `.so` where the registry looks for it.
+//!
+//! `dup_resource_id` came first because [`populate`] cannot be written without
+//! it — EDS loads the cached children and asks their resource ids *before* it
+//! calls `populate`, and a populate that ran against a mis-loaded child list
+//! would create duplicates of children that are already there.
 //!
 //! [`Child`]: jmap_collection_sync::Child
 //! [`Child::settings`]: jmap_collection_sync::Child::settings
