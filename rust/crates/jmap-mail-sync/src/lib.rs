@@ -78,7 +78,8 @@ pub enum FolderUpdate {
 ///   that are not in it any more, whether they were destroyed, filed elsewhere,
 ///   or never in it at all.
 /// - [`MessageUpdate::Relisted`] is the whole mailbox, for a state the server
-///   cannot calculate from.
+///   cannot calculate from — or for a delta so large that listing is the
+///   cheaper way to answer the same question, per [`catch_up_limit`].
 ///
 /// The caller diffs `present` and `absent` against the rows it already has,
 /// because it is the only side that knows them: a message that moved into this
@@ -241,7 +242,20 @@ impl MailSync {
     /// judgement [`MailSync::folder_tree_since`] makes about the same condition
     /// and for the same reason: Camel has nowhere to report it to, so a folder
     /// that failed here would be one that never recovers.
-    pub fn messages_since(&self, mailbox: &Id, since: &State) -> Result<MessageUpdate, SyncError> {
+    ///
+    /// `held` is how many rows the caller already has for this mailbox, and it
+    /// is used for one thing: deciding when catching up has stopped being the
+    /// cheap answer, per [`catch_up_limit`]. It is asked of the caller rather
+    /// than of the server because the caller has it for free and the server
+    /// would charge a round trip for it, and it is only ever a *cost* estimate —
+    /// a caller that passes a wrong one gets the same rows by a more expensive
+    /// route, never different rows.
+    pub fn messages_since(
+        &self,
+        mailbox: &Id,
+        since: &State,
+        held: usize,
+    ) -> Result<MessageUpdate, SyncError> {
         let changes = match self.client.all_changes(&self.account_id, "Email", since) {
             Ok(changes) if changes.is_empty() => {
                 return Ok(MessageUpdate::Unchanged(changes.new_state));
@@ -260,6 +274,18 @@ impl MailSync {
             .chain(changes.updated.iter())
             .cloned()
             .collect();
+
+        // How far this is worth following. Every id above is one the fetch
+        // below has to look up before it can say whether the mailbox holds it,
+        // so a delta from a state a fortnight old is every message the account
+        // touched in a fortnight — and listing the one mailbox answers the same
+        // question for the price of the rows it actually has.
+        //
+        // `destroyed` is not counted, because it costs nothing: those ids are
+        // taken at the delta's word and never fetched.
+        if touched.len() > catch_up_limit(held, self.objects_in_get()) {
+            return self.relist(mailbox);
+        }
 
         let mut absent = changes.destroyed;
         let mut present = Vec::new();
@@ -523,6 +549,28 @@ fn filing_properties() -> Vec<&'static str> {
     let mut properties = SUMMARY_PROPERTIES.to_vec();
     properties.push("mailboxIds");
     properties
+}
+
+/// The most messages a delta may name before listing the mailbox is the cheaper
+/// way to find out what it holds.
+///
+/// Both sides of the comparison are round trips of `Email/get`, which is what a
+/// refresh spends nearly all of its time in. Catching up fetches the messages
+/// the delta names — `held` is not a bound on that, because `Email/changes`
+/// reports on the whole *account* and most of what it names may be in mailboxes
+/// this folder is not. Listing fetches the mailbox, whose size the caller's row
+/// count is the one free estimate of: it is what the folder last saw there, and
+/// it is exactly the set a listing would fetch again. So a delta that names more
+/// messages than the mailbox has rows is a delta that costs more than the
+/// listing it saves.
+///
+/// The floor is one `Email/get`, because a listing is never a single round trip
+/// — it is the state, then a query, then a `/get` per page — so a delta that
+/// fits in one is cheaper than any listing whatsoever. Without it, an empty or
+/// nearly empty mailbox would list itself again every time the account was
+/// touched anywhere, which is the opposite of what this bound is for.
+fn catch_up_limit(held: usize, objects_in_get: usize) -> usize {
+    held.max(objects_in_get)
 }
 
 /// A server that answers every `Email/query` with a limited page, without ever

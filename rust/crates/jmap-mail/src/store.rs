@@ -225,11 +225,22 @@ impl JmapStore {
     /// dispatches on — the folder is the side that holds the rows, so it is the
     /// only side that can tell a message that moved *into* the mailbox from one
     /// that was sitting in it when its flags changed.
-    pub fn messages_since(&self, mailbox: &Id, since: &State) -> Result<MessageUpdate, StoreError> {
+    ///
+    /// `held` is how many rows the folder already has, passed through to
+    /// `MailSync::messages_since` and used there for one thing: deciding when a
+    /// delta has grown so large that listing the mailbox is the cheaper way to
+    /// find out what is in it. The folder counts its own summary for free; the
+    /// layer below would have to ask the server.
+    pub fn messages_since(
+        &self,
+        mailbox: &Id,
+        since: &State,
+        held: usize,
+    ) -> Result<MessageUpdate, StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        Ok(sync.messages_since(mailbox, since)?)
+        Ok(sync.messages_since(mailbox, since, held)?)
     }
 
     /// The RFC 5322 bytes of one message — what `get_message_sync` will parse.
