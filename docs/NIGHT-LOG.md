@@ -8604,3 +8604,122 @@ reads the id back out of `[Resource] Identity`. The open question above — whic
 extension sits on which mail child — has to be answered there, and this VM
 cannot answer it; it needs a real Evolution account to compare against, and the
 increment that writes it must be marked *needs human verification*.
+
+## 2026-08-09 (eighty-eighth session)
+
+**The name a child is created under, and why it is not the JMAP id.** The
+previous session ended with a `Fanout` — which account serves what, and which
+address books and calendars are in it — and the note that the next thing is the
+EDS side. This session did the half of that which is decidable *here*: what a
+`populate` makes of a fan-out, up to but not including the `ESource` calls.
+
+The pairing the header states, and the whole reason this increment exists:
+`e_collection_backend_new_child (backend, resource_id)` takes a resource id and
+hands back the child source, and `ECollectionBackendClass.dup_resource_id` has
+to return that same string for that same child. That is how EDS knows, on the
+*next* populate, that a collection already has a source. Get the string wrong
+and every populate creates a second source for a collection that already has
+one.
+
+New module `jmap-collection-sync/src/children.rs`: `ChildKind`, `Child`
+(resource id, kind, display name, account id, collection id, is_default,
+read_only), `Fanout::children()` and `parse_resource_id()`.
+
+Red first, and recorded as red: with `children()`, `parse_resource_id()` and
+`ChildKind::resource_id()` stubbed, 7 of the 11 unit tests failed. The other 4
+assert *absence* (no children for a mail-only login, no mail children, a foreign
+resource id is not read as ours) and so pass vacuously against a stub — noted
+rather than papered over; they are load-bearing only against the real
+implementation, which is why the mutation checks below matter more for them.
+
+Then green, then three deliberately wrong implementations checked against the
+suite: dropping the kind prefix, dropping the duplicate filter, and pointing the
+calendar children at the contacts account are each caught by exactly the tests
+named for them.
+
+Decisions taken:
+
+- **A resource id is `addressbook:<id>` / `calendar:<id>`, not the bare JMAP
+  id.** Ids in JMAP are scoped to an account *and an object type* (RFC 8620
+  §1.2), so an `AddressBook` and a `Calendar` may both be called `a` — on a
+  server that numbers its objects from one, that is the expected case rather
+  than a corner one. The resource id namespace is flat, being every child of
+  this one collection, so the bare id would have the calendar resolve to the
+  address book's child: the account comes up one source short, with a calendar's
+  data reached through a contacts backend.
+- **Parsing splits at the first colon and keeps the rest whole.** The id charset
+  in RFC 8620 §1.2 has no colon in it, but nothing at this layer is in a
+  position to insist on that, and a server that sends one should get a
+  wrong-*looking* source rather than one silently pointed at another collection.
+  A round-trip test covers an id containing a colon for exactly this.
+- **An unparseable resource id is `None`, which the vfunc will turn into
+  `NULL`.** `dup_resource_id` is called for children this backend may never have
+  created; answering for one is claiming a source that belongs to another
+  collection backend.
+- **A collection the server listed twice becomes one child, first listing
+  winning.** Two children under one resource id are not two sources — the second
+  `new_child` resolves to the first one's source — so the second child is at
+  best ignored and at worst overwrites the first one's display name. First-wins
+  also keeps the child list independent of which duplicate the server sent last.
+- **Each child carries its own `accountId`.** `CollectionLayout` resolves
+  contacts and calendars independently and they can land in different accounts;
+  a child that carries the collection's "the" account fails every call it makes.
+- **`ServiceAccount::read_only` now reaches something.** It is copied onto each
+  child of *that* account only — the previous session's limit 2, closed on the
+  account-level half. Per-collection `myRights` is still not read, so a child
+  that is not marked read-only is not thereby known to be writable; the doc
+  comment on the field says so.
+- **The mail children are deliberately absent.** Whether the mail account,
+  identity and transport sources come from this backend's populate or from the
+  account-setup module (M7), and which of `[Mail Account]`/`[Mail Identity]`/
+  `[Mail Submission]`/`[Mail Transport]` sits on which, is Evolution convention;
+  the installed 3.52 headers do not state it and this VM has no reference
+  account to read it off. A guess here would produce a child list whose tests
+  only confirm the guess. There is a test asserting the absence, so that anyone
+  adding mail children has to settle the question first rather than discover it.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no collection backend.** Nothing calls `e_collection_backend_new_child`
+   with these strings, nothing writes an `ESource` keyfile from a `Child`, and
+   nothing has been loaded by `evolution-source-registry`. `Child` is the input
+   that layer will take; that it is the *right* input is argued from the header,
+   not demonstrated.
+2. **`ChildKind` has no task-list variant.** JMAP has no task collection in the
+   calendars draft this repo tracks, and `ECalMetaBackend` sources come in three
+   flavours (events, tasks, notes). If tasks arrive, the prefix set grows, and
+   old resource ids must keep parsing — the parse is closed against unknown
+   prefixes precisely so that a future prefix is a `None` rather than a
+   mis-typed child.
+3. **The resource id is not known to be constrained by EDS.** The header takes a
+   `const gchar *` and says nothing more; whether EDS puts it in a filename or a
+   keyfile key (which would rule out some characters) is not visible from the
+   headers here, and the colon is chosen on the assumption that it is opaque.
+   Worth re-checking against the EDS source before the backend crate lands.
+4. **Untested against any real server.** The mock's ids are the mock's.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files — `src/children.rs` and
+`tests/children.rs` — each with the SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` (470 tests, up from 457) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set, and clippy is clean on the five EDS crates, which this change does
+not touch.
+
+Noticed in passing, not fixed: `cargo clippy --workspace --all-targets --
+-D warnings` fails on `example-module` with 26 pre-existing
+`manual_c_str_literals` warnings. CI is unaffected — both `.github/workflows/ci.yml`
+and `.gitlab-ci.yml` run clippy without `--workspace`, so it sees the default
+member set — and example-module is scaffolding, so this is a note rather than a
+finding.
+
+No milestone tag: M5 still wants the provider exercised through a real
+Evolution, and M6 has three decision layers and no backend.
+
+Next in M6: the backend crate itself — `ECollectionBackend` subclassed in
+`jmap-backend-collection`, `populate` calling `e_collection_backend_new_child`
+once per `Child` and writing the `[Address Book]`/`[Calendar]`/`[Resource]`
+extensions, `dup_resource_id` reading the id back off the child source through
+`parse_resource_id`. Limit 3 above is the first thing to check there, from the
+EDS source rather than the headers. The mail-children question stays open and
+the increment that answers it must be marked *needs human verification*.
