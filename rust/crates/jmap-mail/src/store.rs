@@ -27,7 +27,9 @@ use eds_sys::{
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_mail_sync::{Filing, FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary};
+use jmap_mail_sync::{
+    Filing, FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary, MessageUpdate,
+};
 use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
@@ -198,16 +200,36 @@ impl JmapStore {
     /// disconnect that arrives mid-refresh wait rather than pull the client out
     /// from under it. Read-locked, so several folders may refresh at once.
     ///
-    /// The state the listing comes with is the one a later refresh could ask
-    /// `Email/changes` from instead of listing again. It is handed straight on
-    /// to the caller and, for now, dropped there: keeping it means keeping it
-    /// across a restart, which is the summary's own on-disk header and an
-    /// increment of its own.
+    /// The state the listing comes with is the one the *next* refresh asks
+    /// [`JmapStore::messages_since`] from; the folder keeps it in its summary,
+    /// which is what carries it across a restart.
+    ///
+    /// This call is what a folder with no state to ask from makes — its first
+    /// refresh of a mailbox, and the recovery from a state the server will not
+    /// calculate a delta from.
     pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         Ok(sync.messages(mailbox)?)
+    }
+
+    /// What one mailbox looks like now, given the state a folder's summary says
+    /// its rows are current as of — the refresh every one after the first
+    /// makes.
+    ///
+    /// On the store and locked exactly like [`JmapStore::messages`], and it is
+    /// the same question asked more cheaply: one `Email/changes` where a
+    /// listing is one query plus one `Email/get` per page of the whole mailbox.
+    /// What comes back is [`MessageUpdate`], whose three answers the caller
+    /// dispatches on — the folder is the side that holds the rows, so it is the
+    /// only side that can tell a message that moved *into* the mailbox from one
+    /// that was sitting in it when its flags changed.
+    pub fn messages_since(&self, mailbox: &Id, since: &State) -> Result<MessageUpdate, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        Ok(sync.messages_since(mailbox, since)?)
     }
 
     /// The RFC 5322 bytes of one message — what `get_message_sync` will parse.

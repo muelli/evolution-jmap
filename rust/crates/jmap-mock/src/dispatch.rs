@@ -31,6 +31,10 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
     let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
         std::collections::BTreeMap::new();
     for call in &request.method_calls {
+        // Recorded before the call is answered, and whatever the answer is: a
+        // request that failed is still a round trip the client spent, which is
+        // what a test counting them is asking about.
+        state.method_calls.push(call.name.clone());
         let invocation = match resolve_references(call, &responses) {
             Ok(arguments) => match handle_method(state, &call.name, arguments, &created_ids) {
                 Ok(result) => {
