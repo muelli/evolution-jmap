@@ -56,7 +56,7 @@ pub enum ChildKind {
 
 impl ChildKind {
     /// The part of a resource id before the colon.
-    fn prefix(self) -> &'static str {
+    pub(crate) fn prefix(self) -> &'static str {
         match self {
             Self::AddressBook => "addressbook",
             Self::Calendar => "calendar",
