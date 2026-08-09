@@ -71,28 +71,62 @@
 //! [`load`]: MessageCache::load
 //! [`store`]: MessageCache::store
 //!
+//! ## The bound: an entry survives being ignored, not being forgotten
+//!
+//! A cache that only grows is a cache that ends as a full disk, so an entry
+//! nobody has opened for [`UNUSED_FOR`] is dropped. Of the two clocks
+//! `CamelDataCache` can be given, that is `set_expire_access` — the file's atime
+//! — rather than `set_expire_age`, which is its mtime, and an `Email` being
+//! immutable means its mtime is the moment it was *downloaded* and nothing else.
+//! A bound on age alone would therefore drop the message the user reads every
+//! week on the same schedule as the one they read once, which is the wrong one
+//! to spend a round trip on.
+//!
+//! atime is a weaker signal than it looks — `relatime`, the usual mount option,
+//! only updates it once a day, and `noatime` never does — but both fail in the
+//! conservative direction here: a day's resolution is nothing against a bound of
+//! a month, and on `noatime` the atime stays at the moment the file was written,
+//! so the bound quietly becomes the age one. An entry kept too long is a file;
+//! an entry dropped too early is a round trip.
+//!
+//! **The sweep is lazy and this is not a quota.** Camel expires a bucket when a
+//! lookup lands in it, at most once an hour, so an account nobody opens is an
+//! account nothing is swept from, and a cache is only ever as small as its bound
+//! makes it — not as small as a number of megabytes. A real quota would have to
+//! be ours to write (`camel_data_cache_foreach_remove` is the hook), and the
+//! number it enforced would be one to ask the user about; this bound needs no
+//! question answered.
+//!
 //! ## What is not here yet
 //!
-//! **A bound.** Nothing removes an entry that is merely old, so the cache grows
-//! with every message the user has ever opened. `CamelDataCache` has the
-//! machinery — `set_expire_age` and `set_expire_enabled`, evaluated when an entry
-//! is added — and Evolution's own "empty cache" is `camel_data_cache_clear`;
-//! which of the two this provider should use is a settings question rather than a
-//! mechanism one, and it is its own increment.
+//! **A knob.** [`UNUSED_FOR`] is a constant rather than a setting, because Camel
+//! has nowhere to put it: `CamelOfflineSettings`'s `limit-by-age` is about which
+//! messages get *downloaded* for offline use, not how long a downloaded one is
+//! kept, and reading it as the latter would be an account's offline window
+//! silently doubling as its cache's. A setting of our own is a field in an
+//! account editor, which is M7's business rather than this file's.
+//!
+//! **Writing an entry under a temporary name and renaming it into place**, which
+//! is what would make a half-written entry impossible rather than merely
+//! detected (see the size check above). EDS 3.62 grew
+//! `camel_data_cache_add_atomic`/`commit_atomic` for exactly this; 3.52, which
+//! this builds against, has neither, so the check stays the answer here.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use eds_sys::{
     CamelDataCache, camel_data_cache_add, camel_data_cache_get, camel_data_cache_new,
-    camel_data_cache_remove,
+    camel_data_cache_remove, camel_data_cache_set_expire_access,
+    camel_data_cache_set_expire_enabled, time_t,
 };
 use gio_sys::{
     g_input_stream_read, g_io_stream_close, g_io_stream_get_input_stream,
     g_io_stream_get_output_stream, g_output_stream_write_all,
 };
-use glib_sys::{GError, GFALSE, g_clear_error};
+use glib_sys::{GError, GFALSE, GTRUE, g_clear_error};
 use gobject_sys::g_object_unref;
 use jmap_backend_core::trampoline::log_critical;
 
@@ -108,6 +142,17 @@ const MESSAGES: &CStr = c"messages";
 /// How much is read from an entry at a time. A message is one file and is read
 /// whole; the buffer only decides how many `read` calls that takes.
 const CHUNK: usize = 64 * 1024;
+
+/// How long an entry survives without being opened, before the next lookup in
+/// its neighbourhood sweeps it. See the module docs for why this is an atime and
+/// why it is a constant.
+///
+/// Thirty days: long enough that "the message I was reading last month" is still
+/// there, short enough that a year of mail is not. What it costs when it is
+/// wrong is one `Email/get` and one blob download for a message the user has
+/// come back to — which is exactly what every open cost before this cache
+/// existed, so the failure mode of the bound is the behaviour it replaced.
+const UNUSED_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// The account's message cache.
 pub struct MessageCache {
@@ -138,6 +183,16 @@ impl MessageCache {
     /// made is a broken installation rather than a passing condition, and the
     /// symptom without a log line would be mail that is merely slow.
     pub fn open(directory: &str) -> Option<Self> {
+        Self::open_bounded(directory, UNUSED_FOR)
+    }
+
+    /// The same, with the bound given rather than taken from [`UNUSED_FOR`].
+    ///
+    /// The policy lives in one constant and the mechanism takes a parameter, so
+    /// that a test can watch an entry go without waiting a month or writing an
+    /// atime of its own — the age Camel reads is the filesystem's, and forging
+    /// one would be testing `utimes` rather than this.
+    pub fn open_bounded(directory: &str, unused_for: Duration) -> Option<Self> {
         let path = CString::new(directory).ok()?;
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: a NUL-terminated path alive across the call, and an
@@ -159,6 +214,22 @@ impl MessageCache {
         // GError left behind by a call that succeeded would leak.
         // SAFETY: as above.
         unsafe { g_clear_error(&mut error) };
+
+        // Camel reads the bound as a `time_t` and spells "no bound" as -1, so a
+        // duration too large for one is clamped to the largest bound rather than
+        // wrapped into the value that turns the sweep off. Both calls are
+        // saying what is already the default — expiry is enabled on a fresh
+        // `CamelDataCache` — except for the bound itself, which starts at -1.
+        // SAFETY: the cache is the live object just created, and neither call
+        // borrows anything.
+        unsafe {
+            camel_data_cache_set_expire_enabled(cache, GTRUE);
+            camel_data_cache_set_expire_access(
+                cache,
+                time_t::try_from(unused_for.as_secs()).unwrap_or(time_t::MAX),
+            );
+        }
+
         Some(Self {
             cache: Mutex::new(cache),
         })
@@ -225,9 +296,10 @@ impl MessageCache {
         log_critical(&format!(
             "the cached copy of message {uid} was dropped: {damage}"
         ));
-        // Dropped rather than merely refused: nothing will ever serve it, and
-        // the cache has no bound of its own, so leaving it is leaving a file
-        // that costs disk and produces this log line at every open. A fetch that
+        // Dropped rather than merely refused: nothing will ever serve it, so
+        // leaving it is leaving a file that costs disk and produces this log
+        // line at every open until the bound gets round to it — and the bound is
+        // measured in the opens that would each produce one. A fetch that
         // succeeds writes the entry again; one that does not leaves the cache
         // where it should be — empty of this message.
         // SAFETY: as above, and the removal's own failure is nothing this can

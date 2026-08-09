@@ -7193,3 +7193,102 @@ still listing only the round-1 crates.
 
 Next in M5: the mail cache items, or the delete-versus-trash question if a
 human has answered it.
+
+## 2026-08-09 (seventy-fifth session)
+
+**The mail cache stops growing.** `cache.rs` had carried a "what is not here
+yet" note since it was written: nothing removed an entry that was merely old, so
+an account's message cache grew by every message the user had ever opened and
+stopped growing when the disk was full. The note called the missing piece a
+settings question rather than a mechanism one, and that turned out to be the
+useful half of the work.
+
+Red first: two tests. One stores two messages, opens a second cache over the
+same directory with a bound of nothing, opens one of the two — and expects the
+*other* to be gone. One does the same with the default bound and expects it
+still to be there, which is the test that separates a bound from
+`camel_data_cache_clear`. The first failed (the entry was still on disk); it was
+re-checked against a build with `expire_enabled` forced to FALSE afterwards, so
+what it pins is the mechanism rather than the API.
+
+What landed:
+
+- **`camel_data_cache_set_expire_access`**, set in `MessageCache::open` along
+  with an explicit `set_expire_enabled(TRUE)`. Thirty days.
+- **`MessageCache::open_bounded(directory, Duration)`** — the mechanism takes
+  the bound, `open` supplies the policy constant.
+- The stale "what is not here yet" note replaced by what the bound is and what
+  it is not, and the two `no bound of its own` asides elsewhere in the file
+  corrected.
+
+Decisions taken:
+
+- **atime, not mtime — `set_expire_access` rather than `set_expire_age`.** An
+  `Email` is immutable (RFC 8621 §4.1), so a cache entry's mtime is the moment
+  it was downloaded and never changes again; a bound on it would drop the
+  message the user reads every week on the same schedule as the one they read
+  once. atime is the weaker signal — `relatime` updates it once a day,
+  `noatime` never — but both fail in the conservative direction against a bound
+  of a month: on `noatime` the atime stays at the write, so the access bound
+  quietly degrades into the age bound, which is the one we would otherwise have
+  chosen.
+- **A constant, not a setting, and that is the settings question answered.**
+  Camel has nowhere to put this: `CamelOfflineSettings`'s `limit-by-age` /
+  `limit-unit` / `limit-value` govern which messages are *downloaded* for
+  offline use, not how long a downloaded one is kept, and reading it as the
+  latter would silently make an account's offline window double as its cache's.
+  A knob of our own is a field in an account editor, which is M7.
+- **Thirty days**, on the ground that when the bound is wrong it costs exactly
+  one `Email/get` and one blob download for a message the user came back to —
+  which is what every open cost before the cache existed, so the bound's failure
+  mode is the behaviour it replaced.
+- **The test drives Camel's sweep rather than forging a file's atime.** Camel
+  expires lazily: a bucket is swept when a lookup lands in it, at most once an
+  hour per `CamelDataCache` instance, and the key being looked up is skipped. So
+  the test needs a *second* key in the same one of the sixty-four buckets, and a
+  *fresh* cache instance to do the sweeping (the first one's hourly slot is
+  already spent by the second `store`). `M1` and `M2` share a bucket; that is a
+  fact about `g_str_hash`, not a promise, so `share_a_bucket` asserts it and a
+  Camel that rehashed would fail the tests with a sentence instead of quietly
+  making them prove nothing.
+
+**Not covered by a test, and the honest limits:**
+
+1. **This is not a quota.** A cache is only ever as small as its bound makes it,
+   not as small as a number of megabytes, and an account nobody opens is an
+   account nothing is swept from — Camel sweeps on lookup. A real size cap would
+   be ours to write over `camel_data_cache_foreach_remove`, and the number it
+   enforced is the question this bound was chosen to avoid needing answered.
+2. **Thirty days is not verified against anything.** No user has said it is
+   right; it is a defensible first number with its cost written down.
+3. **Nothing here has been seen in Evolution** — *needs human verification in
+   real Evolution*, like everything else on this surface.
+
+Found while reading Camel's source, and worth recording: EDS **3.62** grew
+`camel_data_cache_add_atomic` / `commit_atomic` / `discard_atomic`, which write
+an entry under a temporary name and rename it into place. That is exactly the
+open item this log has carried as "the cache entry written by `write_all` rather
+than to a temporary name and renamed" — so the answer is a version bump rather
+than code of ours, and 3.52 (what this builds against) has neither call. The
+size check stays the answer here. Noted in the module docs.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). No new files, so no new SPDX headers. `cargo fmt
+--check`, `cargo test --locked` and `cargo clippy --all-targets --locked -- -D
+warnings` are clean on the default member set (393 tests, unchanged) and on the
+five EDS crates (589, up from 587).
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `get_folder_info_sync`'s NULL-versus-GError
+question; `maxSizeRequest`, `maxCallsInRequest` and `maxConcurrentUpload` still
+unread; `service.rs` unexercised against a real `CamelSession`; and the README's
+architecture block still listing only the round-1 crates. The atomic-write item
+is now answered rather than open (see above), and the cache bound is done.
+
+Next in M5: `maxCallsInRequest` is the smallest remaining protocol item — the
+client builds two-call requests in `search_emails` and `send_email`, and a
+server that advertised a limit of one would fail both. After that,
+`get_folder_info_sync`'s NULL-versus-GError question, or the README.
