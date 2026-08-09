@@ -33,15 +33,17 @@
 //!   this one. Without it Evolution's folder tree keeps showing what it last
 //!   drew until something else refreshes it.
 //!
-//! ## What is not covered by a test
+//! ## Where the two halves are tested
 //!
-//! Everything above the emission is: `tests/subscriptions.rs` drives
+//! Everything above the emission is `tests/subscriptions.rs`, which drives
 //! `folder_is_subscribed` through the vtable and [`set_subscribed`] against the
-//! mock server. The `g_signal_emit` at the end of the two sync vfuncs is not —
-//! it needs a store instantiated through a `CamelSession`, which in Evolution
-//! is an `EMailSession` over a source registry on the session bus, and the
-//! stores these tests use are [`JmapStore::detached`] instances that are not
-//! GObjects. It is two lines, and they are the two lines IMAPX has.
+//! mock server with [`JmapStore::detached`] stores.
+//!
+//! The emission itself is `tests/emissions.rs`, and it needs more: a store
+//! instantiated through a `CamelSession`, because `camel_subscribable_folder_*`
+//! queues the signal on the session's main context rather than emitting it. A
+//! detached store is not even a GObject, so the two lines went untested until
+//! that file's harness existed.
 
 use std::slice;
 

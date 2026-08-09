@@ -28,6 +28,8 @@
 
 #![allow(dead_code)]
 
+pub mod signals;
+
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::ptr;
