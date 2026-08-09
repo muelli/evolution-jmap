@@ -205,6 +205,15 @@ unsafe impl ObjectSubclass for JmapFolder {
         //
         // SAFETY: as above.
         unsafe { crate::transfer::install_vfuncs(class.cast::<CamelFolderClass>()) };
+
+        // And the arrival the one above cannot serve: a message that is not in
+        // the account yet. `CamelFolder` leaves `append_message_sync` NULL and
+        // `camel_folder_append_message_sync` refuses to call a class that has
+        // not filled it in — so without this line a message dragged in from
+        // another account, or a draft the composer saves, fails inside Camel.
+        //
+        // SAFETY: as above.
+        unsafe { crate::append::install_vfuncs(class.cast::<CamelFolderClass>()) };
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.

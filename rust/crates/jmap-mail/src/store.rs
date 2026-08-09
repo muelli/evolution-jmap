@@ -30,8 +30,8 @@ use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_mail_sync::{
-    Filing, FolderInfo, FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary,
-    MessageUpdate,
+    Filing, FolderInfo, FolderTree, FolderUpdate, KeywordChange, Keywords, MailSync,
+    MessageSummary, MessageUpdate,
 };
 use jmap_proto::{Id, State};
 
@@ -292,6 +292,30 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         Ok(sync.file_message(uid, filing)?)
+    }
+
+    /// Puts a message the account does not have into one of its mailboxes —
+    /// the write behind `append_message_sync`.
+    ///
+    /// On the store and locked exactly like [`JmapStore::file_message`], and it
+    /// is the one write here that takes a mailbox: `Email/import` names the
+    /// message by the blob it uploads rather than by an id the account already
+    /// holds, so where it is to be filed is the only thing identifying it.
+    ///
+    /// Read-locked although it uploads. It is the longest request this store
+    /// makes, and holding the connection exclusively for it would stall every
+    /// folder refresh in the account for the length of an attachment.
+    pub fn import_message(
+        &self,
+        mailbox: &Id,
+        source: Vec<u8>,
+        keywords: &Keywords,
+        received_at: Option<i64>,
+    ) -> Result<Id, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        Ok(sync.import_message(mailbox, source, keywords, received_at)?)
     }
 
     /// Says whether the user wants to see a folder — the write behind

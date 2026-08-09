@@ -104,11 +104,10 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 /// `camel_folder_transfer_messages_to_sync` answers a transfer into the folder
 /// the messages are already in and one of no messages itself, and sends
 /// anything crossing stores down its own path of `get_message` and
-/// `append_message`. That path is not this provider's yet: `Email/import` (RFC
-/// 8621 §4.8) is the method a JMAP account is appended to through, and the
-/// client and the mock now have it, but no `append_message_sync` vfunc calls it —
-/// so a drag from an IMAP account into a JMAP one still fails, and does so in
-/// Camel rather than here.
+/// `append_message`. That path ends at [`crate::append`], which uploads the
+/// message and files it with `Email/import` (RFC 8621 §4.8) — a different
+/// request entirely, because a message from another account is one this one has
+/// never seen.
 unsafe extern "C" fn transfer_messages_to_sync(
     source: *mut CamelFolder,
     message_uids: *mut GPtrArray,
