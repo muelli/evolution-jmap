@@ -7751,3 +7751,111 @@ Next in M5: `CamelJmapTransport` itself — the `CamelTransport` subclass, its
 `send_to_sync` turning Camel's `CamelAddress` arguments into the envelope above,
 the identity lookup, and the provider's transport slot. It is the largest single
 object left in M5 and wants a session of its own.
+
+## 2026-08-09 (eightieth session)
+
+**The two arguments that are not in the message.** Last session left
+`CamelJmapTransport` as the next thing and called it a session of its own. It is
+still that; this session took the first piece of it that can be finished and
+tested to the end here — `jmap-mail/src/envelope.rs`, the SMTP envelope read out
+of the two `CamelAddress` arguments `CamelTransportClass::send_to_sync` is
+handed, in the shape `Outgoing::envelope` already takes.
+
+It is a module rather than a few lines inside a vfunc that does not exist yet
+because it is the one part of sending that is a pure reading of Camel's objects:
+no connection, no request, no GObject of ours, and therefore ten tests that run
+against real `CamelInternetAddress` objects and assert on the whole answer.
+
+Red first: `jmap-mail/tests/envelope.rs`, failing to compile against a module
+that did not exist. Because a compile failure is a weak red, two of the tests
+were then re-checked against a deliberately broken implementation — with the
+unusable-recipient refusal turned into a skip,
+`a_recipient_with_no_address_is_refused_rather_than_dropped` fails with a
+two-recipient envelope where a three-recipient list went in; with the
+`CamelInternetAddress` type check dropped,
+`an_address_that_is_not_an_internet_address_is_refused` fails with `NoSender` in
+place of `NotInternet("sender")`.
+
+Decisions taken:
+
+- **Refuse, never shorten.** Every failure in this module is a refusal to send
+  at all. The alternative to refusing an entry with no addr-spec is dropping it,
+  and a submission with a shorter `rcptTo` is a perfectly valid submission —
+  nothing below this point could notice, so the user would be told the message
+  went and one recipient would never hear from them. `UnusableRecipient` carries
+  the position and the display name so the sentence can name who.
+- **The display names go, and nothing else does.** RFC 5321's `RCPT TO` takes an
+  addr-spec and RFC 8621 §7's `EnvelopeAddress` has one field, so the name has
+  nowhere to go — it is in the headers, which are uploaded verbatim. The list is
+  not deduplicated (whether a repeated `RCPT TO` delivers twice is the server's
+  rule, and editing the list would be quietly changing who the user addressed),
+  not reordered, and not completed from the headers.
+- **No fallback to the `From` header.** An absent sender is a refusal rather
+  than a lookup: which identity a message goes out as is the caller's decision,
+  and a transport that read one out of the message would be choosing who the
+  mail is from. A sender listed with a display name and no address is the same
+  refusal — `MAIL FROM:<>` is the null reverse-path a bounce is sent with.
+- **The first sender wins.** SMTP's reverse-path is one address; every Camel
+  transport reads entry zero and every caller in Evolution passes exactly one.
+  Refusing a list of two would refuse a send Evolution cannot produce, over a
+  rule SMTP applies to the transaction and not to the client. Pinned so the
+  choice is visible rather than accidental.
+- **The type is checked although Camel's own transports do not check it.**
+  `send_to_sync` is declared over `CamelAddress`, which has other subclasses, and
+  reading one of those through `camel_internet_address_get` is undefined
+  behaviour rather than an empty answer. The check is ordered *before* the
+  emptiness test, so a wrong-typed argument is reported as wrong-typed and not
+  as an absent sender — which is what the test asserts, since the two are
+  otherwise indistinguishable from the outside.
+- **NULL is empty, not an error of its own.** A NULL `from` answers `NoSender`
+  and a NULL recipient list answers `NoRecipients`: absent is absent, however
+  Camel spells it. Only a non-NULL argument of the wrong class is
+  `NotInternet`.
+- **`CAMEL_SERVICE_ERROR_INVALID`,** in the transport's own domain, since a
+  `CamelTransport` is a `CamelService`. Deliberately not `UNAVAILABLE`, which is
+  what Evolution reads to put an account offline: nothing is wrong with the
+  account or the connection, and this send would fail identically against a
+  working server.
+
+**Not covered by a test, and the honest limits:**
+
+1. **There is still no `CamelJmapTransport`,** and `provider.rs` still leaves
+   the transport slot at `G_TYPE_INVALID`. Nothing in this session changes what
+   the user sees; Evolution still cannot send through a JMAP account. What it
+   changes is that the vfunc a later session writes has its address handling
+   done and pinned.
+2. **No caller yet, so no test that the envelope reaches the wire.** The
+   round trip from `read_envelope` through `Outgoing::envelope` into
+   `EmailSubmission/set` is two tested halves with nothing joining them, and
+   the join is the transport's `send_to_sync`.
+3. **`camel_internet_address_get`'s behaviour is taken from the running
+   Camel,** not from reading 3.52's source, which is not on this VM. The tests
+   exercise it directly — an entry added with an empty address really does come
+   back as one — so the assumption is checked rather than assumed, but only
+   against the EDS installed here.
+4. **Nothing about `out_sent_message_saved`, identity selection, or the
+   staging/destination mailbox lookup.** Those are the transport's, and item 3
+   of the previous session's list (which identity to submit through) is still
+   unanswered.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, `jmap-mail/src/envelope.rs` and
+`jmap-mail/tests/envelope.rs`, both with the SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (417 tests,
+unchanged — nothing there was touched) and on the five EDS crates (602, up from
+592).
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Next in M5: the rest of `CamelJmapTransport` — the `CamelTransport` subclass and
+its own connection, `send_to_sync` joining `envelope` to
+`MailSync::send_message`, the identity lookup, the Drafts/Sent lookup out of the
+folder tree, and the provider's transport slot. The addresses are no longer part
+of that work.
