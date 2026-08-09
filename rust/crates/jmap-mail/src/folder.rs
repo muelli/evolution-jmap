@@ -348,10 +348,17 @@ unsafe fn account_cache(store: *mut CamelStore) -> Option<MessageCache> {
 /// JMAP role instead — the same decision taken from the account's data rather
 /// than from a convention about a name.
 ///
-/// `IS_TRASH` and `IS_JUNK` are still not set from the role: they are what
-/// `camel_store_get_trash_folder_sync` and its junk counterpart mark the folder
-/// they *return* with, and marking a folder with them here would tell Camel to
-/// treat the mailbox as the account's trash before anything asked for one.
+/// `IS_TRASH` and `IS_JUNK` are still not set from the role, and they are the
+/// one open question this function has left. The guess when it was written was
+/// that `camel_store_get_trash_folder_sync` marks the folder it *returns* with
+/// them; that is true of the virtual folder Camel builds itself and false of
+/// anything a store hands over — `tests/folders.rs` pins the flags word of the
+/// folder [`crate::folders`] answers that call with, and it is this one
+/// unchanged. So nothing in this provider tells Camel which folder is the trash
+/// beyond the answer to the question, and whether that is enough is decided by
+/// what reads the bit: it belongs with the increment that makes a delete file
+/// the message into the trash, not with one that only says which mailbox that
+/// is.
 fn flags(mailbox: &FolderInfo) -> CamelFolderFlags {
     let role = match mailbox.role {
         Some(FolderRole::Inbox) => CAMEL_FOLDER_FILTER_RECENT | CAMEL_FOLDER_FILTER_JUNK,

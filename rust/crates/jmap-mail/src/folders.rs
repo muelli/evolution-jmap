@@ -3,15 +3,16 @@
 
 //! The `CamelStore` folder vfuncs: `get_folder_info_sync`, which describes the
 //! account's folders, `get_folder_sync`, which opens one of them by path, and
-//! `get_inbox_folder_sync`, which opens the one Camel asks for by purpose.
+//! the three — `get_inbox_folder_sync`, `get_trash_folder_sync`,
+//! `get_junk_folder_sync` — that open one by purpose.
 //!
-//! They are one module because they are one question asked three ways: all
-//! three read the folder listing [`JmapStore::folders`] keeps, and the last two
-//! exist to turn something out of the first — a path, a role — back into the
-//! mailbox it came from. What they do with the answer is where they part: the
-//! listing marshals a whole subtree into C structs Camel frees, opening builds
-//! the [`crate::folder`] object Camel keeps, and the inbox delegates to the
-//! opening so that both ways of asking reach the same object.
+//! They are one module because they are one question asked five ways: all five
+//! read the folder listing [`JmapStore::folders`] keeps, and the last four exist
+//! to turn something out of the first — a path, a role — back into the mailbox
+//! it came from. What they do with the answer is where they part: the listing
+//! marshals a whole subtree into C structs Camel frees, opening builds the
+//! [`crate::folder`] object Camel keeps, and the three purposes delegate to the
+//! opening so that every way of asking reaches the same object.
 //!
 //! ## The listing
 //!
@@ -261,6 +262,8 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
     vfuncs.get_folder_info_sync = Some(get_folder_info_sync);
     vfuncs.get_folder_sync = Some(get_folder_sync);
     vfuncs.get_inbox_folder_sync = Some(get_inbox_folder_sync);
+    vfuncs.get_trash_folder_sync = Some(get_trash_folder_sync);
+    vfuncs.get_junk_folder_sync = Some(get_junk_folder_sync);
 }
 
 /// Answers with the account's folders, or the part of them Camel asked for.
@@ -381,45 +384,137 @@ unsafe extern "C" fn get_folder_sync(
 /// account that *also* has an ordinary mailbox named "inbox" is the one the
 /// inherited version gets quietly wrong, by running the user's incoming filters
 /// over the wrong folder.
-///
-/// The folder itself is not built here. It is asked for by path through
-/// `camel_store_get_folder_sync`, so that the answer goes through the store's
-/// folder bag: Evolution opens the inbox both ways — by purpose at startup, by
-/// path when the user clicks it — and two `CamelFolder`s over one mailbox would
-/// be two summaries and two sets of flags. Building one here would be that bug.
-///
-/// `cancellable` *is* passed on, unlike in the two vfuncs above: it is not
-/// observed by the listing this function does itself, for the reason
-/// [`get_folder_info_sync`] documents, but the call it delegates to is Camel's
-/// own and has no such gap.
 unsafe extern "C" fn get_inbox_folder_sync(
     store: *mut CamelStore,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> *mut CamelFolder {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, and an
-    // out-parameter that is NULL or writable and currently NULL.
+    // out-parameter that is NULL or writable and currently NULL — which is
+    // [`open_by_role`]'s contract too.
     unsafe {
         guard_ptr("get_inbox_folder_sync", error, || {
-            let Some(instance) = JmapStore::borrow(store) else {
-                return fail(error, &StoreError::Disconnected);
-            };
-
-            let tree = match tree_holding(instance, |tree| tree.role(FolderRole::Inbox).is_some()) {
-                Ok(tree) => tree,
-                Err(failure) => return fail(error, &failure),
-            };
-            let Some(inbox) = tree.role(FolderRole::Inbox) else {
-                return fail(error, &StoreError::NoInbox);
-            };
-            let path = c_string(&inbox.path);
-
-            // SAFETY: `store` is the live `CamelStore` borrowed above, `path`
-            // is NUL-terminated and alive across the call, and `error` meets
-            // this function's contract. No flags: `CREATE` would make a mailbox
-            // the tree says already exists.
-            camel_store_get_folder_sync(store, path.as_ptr(), 0, cancellable, error)
+            open_by_role(store, FolderRole::Inbox, cancellable, error)
         })
+    }
+}
+
+/// Opens the folder deleted mail is delivered into:
+/// `camel_store_get_trash_folder_sync`'s vfunc.
+///
+/// The inherited implementation answers with a *virtual* folder — Camel's
+/// vTrash, a search across the account for messages carrying the
+/// `CAMEL_MESSAGE_DELETED` flag — and for a JMAP account that is the wrong
+/// answer twice over. JMAP has no deleted keyword ([`crate::message_info`]'s
+/// `FLAGS_FROM_JMAP` is where that is written down), so the flag is local to
+/// this client: a message deleted here is in a folder no other client can see,
+/// and a message another client moved to trash is not in it. Meanwhile the
+/// account's *own* trash — the mailbox holding the `trash` role, which is where
+/// the server and every other client put deleted mail — would sit next to it
+/// under its own name.
+///
+/// So the role is the answer, and the virtual folders are turned off with it:
+/// [`crate::store`]'s `instance_init` clears `CAMEL_STORE_VTRASH` and
+/// `CAMEL_STORE_VJUNK`, because `camel_store_get_folder_info_sync` appends both
+/// to every listing a store with those flags answers with.
+///
+/// What this vfunc does *not* do is make the mailbox. An account whose server
+/// assigns no `trash` role has no trash folder, and `Mailbox/set` from in here
+/// would be the provider inventing a folder in the user's account on the way to
+/// answering a question about one.
+unsafe extern "C" fn get_trash_folder_sync(
+    store: *mut CamelStore,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> *mut CamelFolder {
+    // SAFETY: as [`get_inbox_folder_sync`].
+    unsafe {
+        guard_ptr("get_trash_folder_sync", error, || {
+            open_by_role(store, FolderRole::Trash, cancellable, error)
+        })
+    }
+}
+
+/// And the folder spam is delivered into:
+/// `camel_store_get_junk_folder_sync`'s vfunc.
+///
+/// The mirror of [`get_trash_folder_sync`], with one difference in the
+/// reasoning: `$junk` *is* a JMAP keyword, so the vJunk folder the inherited
+/// implementation answers with would not be empty — it would be a second spam
+/// folder, populated differently from the account's own, and the two would
+/// disagree the moment a server filed a message into the junk mailbox without
+/// keywording it. The mailbox holding the `junk` role is the one the user sees
+/// everywhere else.
+unsafe extern "C" fn get_junk_folder_sync(
+    store: *mut CamelStore,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> *mut CamelFolder {
+    // SAFETY: as [`get_inbox_folder_sync`].
+    unsafe {
+        guard_ptr("get_junk_folder_sync", error, || {
+            open_by_role(store, FolderRole::Junk, cancellable, error)
+        })
+    }
+}
+
+/// The mailbox claiming `role`, as the folder Camel keeps for its path.
+///
+/// The three vfuncs above are this function under three names, because Camel
+/// asks the same question three times: which of the account's mailboxes serves
+/// this purpose. The role lookup is [`FolderTree::role`], which reads the role
+/// this provider *assigned* — a contested role goes to one mailbox and only
+/// one, so the folder opened here is the folder the listing gave that role's
+/// `CAMEL_FOLDER_TYPE_*` to, and not a second mailbox claiming the same thing.
+///
+/// The folder itself is not built here. It is asked for by path through
+/// `camel_store_get_folder_sync`, so that the answer goes through the store's
+/// folder bag: Evolution reaches these folders both ways — by purpose when it
+/// files or empties, by path when the user clicks one — and two `CamelFolder`s
+/// over one mailbox would be two summaries and two sets of flags. Building one
+/// here would be that bug.
+///
+/// A role no mailbox claims is reported rather than answered with a silent NULL,
+/// although Camel documents NULL as meaning "no such folder exists" as well as
+/// "it failed". The store knows *why* — the account has mailboxes, none of them
+/// carries the role — and that is the difference between a user who can see
+/// what to fix in their account and one whose deletes go nowhere for no stated
+/// reason. It also keeps all three vfuncs answering alike.
+///
+/// `cancellable` *is* passed on, unlike in the two vfuncs above this section: it
+/// is not observed by the listing this function may do itself, for the reason
+/// [`get_folder_info_sync`] documents, but the call it delegates to is Camel's
+/// own and has no such gap.
+///
+/// # Safety
+///
+/// `store` must be NULL or point at a live [`JmapStore`], and `error` must be
+/// NULL or a writable location currently holding NULL.
+unsafe fn open_by_role(
+    store: *mut CamelStore,
+    role: FolderRole,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> *mut CamelFolder {
+    // SAFETY: the contract above is what `JmapStore::borrow` and `fail` ask
+    // for, and `camel_store_get_folder_sync` is handed the store borrowed here
+    // with a NUL-terminated path that outlives the call. No flags on it:
+    // `CREATE` would make a mailbox the tree says already exists.
+    unsafe {
+        let Some(instance) = JmapStore::borrow(store) else {
+            return fail(error, &StoreError::Disconnected);
+        };
+
+        let tree = match tree_holding(instance, |tree| tree.role(role).is_some()) {
+            Ok(tree) => tree,
+            Err(failure) => return fail(error, &failure),
+        };
+        let Some(folder) = tree.role(role) else {
+            return fail(error, &StoreError::NoRole(role));
+        };
+        let path = c_string(&folder.path);
+
+        camel_store_get_folder_sync(store, path.as_ptr(), 0, cancellable, error)
     }
 }
 
