@@ -564,3 +564,157 @@ fn removing_a_mailbox_the_tree_does_not_have_changes_nothing() {
 
     assert_eq!(paths(&tree), ["Inbox"]);
 }
+
+// ---------------------------------------------------------------------------
+// the folder a user renames, which is also the one they drag somewhere else
+
+/// The other half of `rename_folder_sync`, and the reason the tree needs an
+/// edit of its own rather than a remove and an insert: a folder's path is where
+/// it sits, so renaming one moves every path underneath it.
+#[test]
+fn a_renamed_folder_takes_its_new_name_and_path() {
+    let mut tree = tree(&[mailbox("M1", "Inbox"), mailbox("M2", "Projects")]);
+
+    assert!(tree.rename(&Id::new("M2"), "Work", "Work"));
+
+    assert_eq!(paths(&tree), ["Inbox", "Work"]);
+    assert_eq!(
+        tree.find("Work").map(|folder| folder.display_name.as_str()),
+        Some("Work")
+    );
+}
+
+/// The name is passed beside the path because the path cannot be read back into
+/// one: the encoding this crate applies to a mailbox name has no decoder here,
+/// and the caller has the name it just sent to the server.
+#[test]
+fn a_renamed_folder_shows_the_name_rather_than_the_path_component() {
+    let mut tree = tree(&[mailbox("M1", "Projects")]);
+
+    assert!(tree.rename(&Id::new("M1"), "and%2For", "and/or"));
+
+    assert_eq!(paths(&tree), ["and%2For"]);
+    assert_eq!(
+        tree.find("and%2For")
+            .map(|folder| folder.display_name.as_str()),
+        Some("and/or")
+    );
+}
+
+/// A move: the new path names some other parent, and the folder hangs under it
+/// afterwards — the same reading of a path [`FolderTree::insert`] has.
+#[test]
+fn a_moved_folder_joins_the_children_of_the_folder_its_new_path_names() {
+    let mut tree = tree(&[mailbox("M1", "Notes"), mailbox("M2", "Work")]);
+
+    assert!(tree.rename(&Id::new("M1"), "Work/Notes", "Notes"));
+
+    assert_eq!(paths(&tree), ["Work", "Work/Notes"]);
+}
+
+/// And back up to the account's top level, which is the move that has no parent
+/// in its path at all. It joins its new siblings at the end of them, as a
+/// created folder does: sibling order is the server's — sortOrder, then name —
+/// and this side has just been told about one folder, not about the order the
+/// account puts it in.
+#[test]
+fn a_folder_moved_to_the_top_level_joins_the_roots() {
+    let mut tree = tree(&[mailbox("M1", "Work"), child("M2", "Notes", "M1")]);
+
+    assert!(tree.rename(&Id::new("M2"), "Notes", "Notes"));
+
+    assert_eq!(paths(&tree), ["Work", "Notes"]);
+}
+
+/// What hangs under the folder goes with it, and every one of those paths is
+/// rewritten: a descendant left at its old path is a folder Camel would key by
+/// a string that names nothing.
+#[test]
+fn a_moved_folder_brings_its_subtree_to_the_new_path() {
+    let mut tree = tree(&[
+        mailbox("M1", "Projects"),
+        child("M2", "JMAP", "M1"),
+        child("M3", "Drafts", "M2"),
+        mailbox("M4", "Archive"),
+    ]);
+
+    assert!(tree.rename(&Id::new("M2"), "Archive/JMAP", "JMAP"));
+
+    assert_eq!(
+        paths(&tree),
+        ["Archive", "Archive/JMAP", "Archive/JMAP/Drafts", "Projects"]
+    );
+}
+
+/// Everything a rename does not touch survives it. The server changed two
+/// properties of one mailbox; the counts, the role, the subscription and the id
+/// are the same folder's as before.
+#[test]
+fn a_renamed_folder_keeps_what_the_rename_did_not_change() {
+    let mut tree = tree(&[Mailbox {
+        total_emails: Some(12),
+        unread_emails: Some(3),
+        is_subscribed: Some(false),
+        ..with_role(mailbox("M1", "Inbox"), role::INBOX)
+    }]);
+
+    assert!(tree.rename(&Id::new("M1"), "Post", "Post"));
+
+    let folder = tree.find("Post").expect("the renamed folder");
+    assert_eq!(folder.id, Id::new("M1"));
+    assert_eq!((folder.total, folder.unread), (12, 3));
+    assert!(!folder.subscribed);
+    assert_eq!(folder.role, Some(FolderRole::Inbox));
+}
+
+/// A new path whose parent is not in the tree is reported rather than guessed
+/// at, the answer [`FolderTree::insert`] gives the same question — and here the
+/// folder must also still be where it was, because the alternative to guessing
+/// is not "lose it".
+#[test]
+fn a_rename_under_a_parent_the_tree_does_not_have_changes_nothing() {
+    let mut tree = tree(&[mailbox("M1", "Notes")]);
+
+    assert!(!tree.rename(&Id::new("M1"), "Work/Notes", "Notes"));
+
+    assert_eq!(paths(&tree), ["Notes"]);
+}
+
+/// A folder cannot be moved inside itself. The server refuses it, so this only
+/// happens to a tree asked to do something the account never did — and the one
+/// thing it must not do is take the subtree out and have nowhere to put it back.
+#[test]
+fn a_move_into_the_folders_own_subtree_changes_nothing() {
+    let mut tree = tree(&[mailbox("M1", "Work"), child("M2", "Notes", "M1")]);
+
+    assert!(!tree.rename(&Id::new("M1"), "Work/Notes/Work", "Work"));
+
+    assert_eq!(paths(&tree), ["Work", "Work/Notes"]);
+}
+
+/// The stale namesake a create can find at its destination, which a move can
+/// find at its own: of two folders at one path, the one the server has just
+/// confirmed is the one that stays.
+#[test]
+fn a_moved_folder_replaces_a_stale_namesake() {
+    let mut tree = tree(&[mailbox("M1", "Notes"), mailbox("M2", "Work")]);
+
+    assert!(tree.rename(&Id::new("M2"), "Notes", "Notes"));
+
+    assert_eq!(paths(&tree), ["Notes"]);
+    assert_eq!(
+        tree.find("Notes").map(|folder| folder.id.as_str()),
+        Some("M2")
+    );
+}
+
+/// And a mailbox the tree does not have is reported rather than ignored, as
+/// every other edit here reports one.
+#[test]
+fn renaming_a_mailbox_the_tree_does_not_have_changes_nothing() {
+    let mut tree = tree(&[mailbox("M1", "Inbox")]);
+
+    assert!(!tree.rename(&Id::new("M404"), "Work", "Work"));
+
+    assert_eq!(paths(&tree), ["Inbox"]);
+}

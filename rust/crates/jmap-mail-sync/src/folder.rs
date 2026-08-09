@@ -209,13 +209,14 @@ impl FolderTree {
     /// Records that a mailbox is now subscribed, or is not, reporting whether
     /// the tree had it at all.
     ///
-    /// The one edit this type offers, and it exists because the property is the
-    /// one thing in a folder listing a *client* decides. Everything else here
-    /// is the server's — counts, roles, where a mailbox hangs — and the honest
-    /// way to bring any of it up to date is to list the account again. A
+    /// The first edit this type offers, and it exists because the property is
+    /// the one thing in a folder listing a *client* decides. Everything else
+    /// here is the server's — counts, roles, where a mailbox hangs — and the
+    /// honest way to bring any of it up to date is to list the account again. A
     /// subscription is different: the client has just been told what the new
     /// value is by the server accepting its write, so re-listing to learn it
-    /// would be asking a question already answered.
+    /// would be asking a question already answered — which is the reason every
+    /// edit below it is here too.
     ///
     /// By mailbox id rather than by path, because the caller is a write that
     /// named a mailbox and paths are this crate's invention: a folder whose
@@ -276,6 +277,61 @@ impl FolderTree {
         true
     }
 
+    /// Moves a folder to the path it now has, reporting whether the tree could
+    /// put it there.
+    ///
+    /// The third edit, and the one that could not be spelled as the other two:
+    /// a folder's path is *where it is*, so renaming one rewrites the path of
+    /// everything under it as well, and a remove followed by an insert would
+    /// have to rebuild that subtree by hand from a listing nobody has taken.
+    ///
+    /// A rename and a move are one operation here because they are one to the
+    /// caller — Camel names a folder by path, so the folder's name and its
+    /// parent both live in the string it is handed, and it never says which of
+    /// the two the user changed.
+    ///
+    /// `display_name` comes beside the path rather than out of it. The path's
+    /// last component is the name with this crate's encoding applied, and this
+    /// crate has no decoder — while the caller has the name it just sent to the
+    /// server, which is the same name the next listing will report.
+    ///
+    /// Where the folder ends up is read out of the new path, exactly as
+    /// [`insert`](Self::insert) reads one, and the two refusals are the same:
+    /// a parent path no folder answers to moves nothing, and a folder already
+    /// at the destination path is dropped in favour of this one. A move *into*
+    /// the folder's own subtree is refused too — the server will not do it, and
+    /// a tree that tried would be lifting a subtree out and having nowhere left
+    /// to put it back.
+    pub fn rename(&mut self, id: &Id, path: &str, display_name: &str) -> bool {
+        let Some(from) = self.iter().find(|folder| folder.id == *id) else {
+            return false;
+        };
+        let from = from.path.clone();
+
+        // Both checks happen before the folder is lifted out, because a folder
+        // taken out of the tree and refused at its destination is one that has
+        // simply disappeared.
+        if let Some((parent, _)) = path.rsplit_once(SEPARATOR)
+            && (within(parent, &from) || self.find(parent).is_none())
+        {
+            return false;
+        }
+
+        let Some(mut folder) = self.take(id) else {
+            return false;
+        };
+        folder.display_name = display_name.to_owned();
+        repath(&mut folder, path.to_owned());
+
+        // The destination was there a moment ago and the only thing removed
+        // since is this folder, which the check above kept out of its own
+        // subtree — so this cannot be the refusal `insert` reports. If it
+        // somehow were, the folder waits for the next listing rather than
+        // hanging at the top level of an account that has it elsewhere, which
+        // is the judgement `insert` already makes.
+        self.insert(folder)
+    }
+
     /// Takes a folder out of the tree, reporting whether it was in it.
     ///
     /// By mailbox id, and for the reason [`set_subscribed`](Self::set_subscribed)
@@ -287,15 +343,21 @@ impl FolderTree {
     /// ones another client removed first. Keeping them would leave folders
     /// under a parent that is not there, at paths nothing answers to.
     pub fn remove(&mut self, id: &Id) -> bool {
+        self.take(id).is_some()
+    }
+
+    /// The same, handing back what was taken: what [`rename`](Self::rename)
+    /// needs, since a move is a removal that puts the subtree down again
+    /// somewhere else.
+    fn take(&mut self, id: &Id) -> Option<FolderInfo> {
         let mut stack: Vec<&mut Vec<FolderInfo>> = vec![&mut self.roots];
         while let Some(siblings) = stack.pop() {
             if let Some(index) = siblings.iter().position(|folder| folder.id == *id) {
-                siblings.remove(index);
-                return true;
+                return Some(siblings.remove(index));
             }
             stack.extend(siblings.iter_mut().map(|folder| &mut folder.children));
         }
-        false
+        None
     }
 
     /// The folder at a Camel path, to be edited. The read-only half is
@@ -477,6 +539,49 @@ impl FolderTree {
 impl Node<'_> {
     fn sort_order(&self) -> u32 {
         self.mailbox.sort_order.unwrap_or(0)
+    }
+}
+
+/// Whether `path` is `ancestor` or sits somewhere below it.
+///
+/// A prefix test, and it is one because that is what a path here *is*: every
+/// folder's is its parent's with one more component after it, so the strings
+/// answer the question about the tree. The separator has to be part of the
+/// match — "Work" is not below "Wo".
+fn within(path: &str, ancestor: &str) -> bool {
+    path == ancestor
+        || path
+            .strip_prefix(ancestor)
+            .is_some_and(|below| below.starts_with(SEPARATOR))
+}
+
+/// Writes `path` onto a folder and rebuilds every path below it.
+///
+/// Structurally rather than by rewriting a prefix: a child's path is its
+/// parent's plus its own encoded name, and that last component is the only part
+/// of the old path still worth anything once the folder has moved. It is the
+/// same reading of a path [`FolderTree::insert`] makes.
+///
+/// Iterative, for [`MAX_DEPTH`]'s reason turned around — the depth of a tree is
+/// a number a server chose, and this walk should not be one more thing that
+/// makes it a stack.
+fn repath(folder: &mut FolderInfo, path: String) {
+    let mut stack: Vec<(&mut FolderInfo, String)> = vec![(folder, path)];
+    while let Some((folder, path)) = stack.pop() {
+        let FolderInfo {
+            path: at, children, ..
+        } = folder;
+        *at = path;
+        for child in children.iter_mut() {
+            let component = child
+                .path
+                .rsplit(SEPARATOR)
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let below = join(Some(at), &component);
+            stack.push((child, below));
+        }
     }
 }
 
