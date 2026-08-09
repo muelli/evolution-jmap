@@ -31,10 +31,16 @@ pub const DEFAULT_OBJECTS_IN_GET: u64 = 256;
 /// is out of the way of every test that is not about it.
 pub const DEFAULT_SIZE_UPLOAD: u64 = 50_000_000;
 
+/// The `maxCallsInRequest` the mock advertises and enforces unless a test asks
+/// for a different one. Comfortably above the longest chain this client builds
+/// (two calls), so only a test about the limit meets it.
+pub const DEFAULT_CALLS_IN_REQUEST: u64 = 16;
+
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
     omitted_capabilities: BTreeSet<String>,
+    calls_in_request: Option<u64>,
     changes_page_size: Option<u64>,
     objects_in_get: Option<u64>,
     query_page_size: Option<u64>,
@@ -64,6 +70,32 @@ impl MockServerBuilder {
     /// right one, because every account here answers to all four.
     pub fn without_capability(mut self, capability: &str) -> Self {
         self.omitted_capabilities.insert(capability.to_owned());
+        self
+    }
+
+    /// Advertise — and enforce — `calls` as `maxCallsInRequest`, as a server
+    /// that takes only short requests does.
+    ///
+    /// A request with more calls than this is refused whole, with RFC 8620
+    /// §3.2's `urn:ietf:params:jmap:error:limit`: none of its calls run, not
+    /// even the ones that would have fit. That is what makes it worth
+    /// configuring — a client that chains two calls through a back-reference
+    /// without reading the session document loses both here, rather than
+    /// passing because the mock was permissive.
+    pub fn calls_in_request(mut self, calls: u64) -> Self {
+        self.calls_in_request = Some(calls);
+        self
+    }
+
+    /// Leave `maxCallsInRequest` out of the session document entirely, and take
+    /// a request of any length.
+    ///
+    /// RFC 8620 §2 requires the property, so this is a server out of spec — and
+    /// it exists for the reason [`Self::no_size_upload`] does: a client has to
+    /// be pinned on what it does when the number it would check against is not
+    /// there.
+    pub fn no_calls_in_request(mut self) -> Self {
+        self.calls_in_request = None;
         self
     }
 
@@ -140,6 +172,7 @@ impl MockServerBuilder {
         let mut state = ServerState::new();
         state.add_account(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME);
         state.omitted_capabilities = self.omitted_capabilities.clone();
+        state.calls_in_request = self.calls_in_request;
         state.changes_page_size = self.changes_page_size;
         state.objects_in_get = self.objects_in_get;
         state.query_page_size = self.query_page_size;
@@ -186,6 +219,7 @@ impl MockServer {
             auth: AuthConfig::default(),
             port: 0,
             omitted_capabilities: BTreeSet::new(),
+            calls_in_request: Some(DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
             objects_in_get: None,
             query_page_size: None,
@@ -220,6 +254,16 @@ impl MockServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.method_calls.clone()
+    }
+
+    /// How many requests this server has taken at the API endpoint — see
+    /// [`ServerState::api_requests`].
+    pub fn api_requests(&self) -> usize {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.api_requests
     }
 }
 
@@ -467,13 +511,15 @@ fn session_document(state: &ServerState, origin: &str) -> Session {
         "maxConcurrentUpload": 4,
         "maxSizeRequest": 10_000_000u64,
         "maxConcurrentRequests": 4,
-        "maxCallsInRequest": 16,
         "maxObjectsInGet": state.objects_in_get(),
         "maxObjectsInSet": 128,
         "collationAlgorithms": ["i;ascii-casemap"],
     });
     if let Some(size_upload) = state.size_upload {
         core["maxSizeUpload"] = json!(size_upload);
+    }
+    if let Some(calls_in_request) = state.calls_in_request {
+        core["maxCallsInRequest"] = json!(calls_in_request);
     }
 
     Session {
