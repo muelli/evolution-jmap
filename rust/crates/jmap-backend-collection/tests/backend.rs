@@ -287,6 +287,68 @@ fn the_installed_populate_is_the_one_the_parent_can_still_be_reached_through() {
     );
 }
 
+#[test]
+fn class_init_replaces_the_default_child_added_rather_than_leaving_it() {
+    // `ECollectionBackendClass::child_added` is a signal class closure with a
+    // working body — it inserts the child into the backend's table, binds its
+    // enabled flag and makes it non-removable — so an override that is written
+    // but not installed is not a backend that breaks. It is one whose children
+    // go on naming whatever server the account named when they were written,
+    // which is invisible until the user moves the account.
+    let class = Class::get();
+    // SAFETY: the parent type's class is alive for as long as ours is.
+    let parent: *mut ECollectionBackendClass =
+        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+    assert!(!parent.is_null(), "the parent class was not referenced");
+
+    let ours = class
+        .vfuncs()
+        .child_added
+        .expect("class_init installed no child_added");
+    // SAFETY: a live class struct.
+    let inherited = unsafe { (*parent).child_added }.expect("EDS installs its own");
+
+    assert!(
+        ours as usize != inherited as usize,
+        "the slot still holds EDS's default, and the chain-up would recurse"
+    );
+}
+
+#[test]
+fn installing_child_added_left_the_slots_beside_it_inherited() {
+    // `child_added` is the first slot this crate writes into the middle of
+    // `ECollectionBackendClass` — `dup_resource_id` and `populate` sit at the
+    // front of it — and its neighbours are the pair of signal closures and the
+    // resource vfuncs, all of which EDS fills in. A write one slot out does not
+    // fail to compile; it replaces a function of another signature, which is a
+    // call through a bad pointer the first time EDS uses it.
+    let class = Class::get();
+    // SAFETY: as above.
+    let parent: *mut ECollectionBackendClass =
+        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+    assert!(!parent.is_null(), "the parent class was not referenced");
+
+    let ours = class.vfuncs();
+    // SAFETY: a live class struct.
+    let inherited = unsafe { &*parent };
+
+    assert_eq!(
+        ours.child_removed.map(|f| f as usize),
+        inherited.child_removed.map(|f| f as usize),
+        "class_init overwrote child_removed"
+    );
+    assert_eq!(
+        ours.create_resource_sync.map(|f| f as usize),
+        inherited.create_resource_sync.map(|f| f as usize),
+        "class_init overwrote create_resource_sync"
+    );
+    assert_eq!(
+        ours.delete_resource_sync.map(|f| f as usize),
+        inherited.delete_resource_sync.map(|f| f as usize),
+        "class_init overwrote delete_resource_sync"
+    );
+}
+
 /// The `EBackendClass` EDS installed its own defaults into, which is what an
 /// override of `authenticate_sync` has to displace.
 fn e_backend_class() -> *mut EBackendClass {

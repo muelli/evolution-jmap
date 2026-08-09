@@ -1,0 +1,426 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// A child following its account, against real `ESource`s — the half of
+// `tests/child_source.rs` that happens *after* the child was written.
+//
+// `apply` copies the account's connection onto a child once, at the populate
+// that creates it. Every test in `tests/child_source.rs` is about that copy
+// being right; none of them is about what happens when the account changes
+// afterwards, which is the case this file is for. The failure it describes has
+// no symptom to look at: the child still names a host, still connects, still
+// authenticates — at the *old* server, with the old user, or without the TLS the
+// account has since been given.
+//
+// The account and the child here are the real objects, and the account is
+// changed through EDS's own setters, so what is asserted is a live `GBinding`
+// doing its work rather than a second copy taken by this test.
+
+use std::ffi::{CStr, CString};
+use std::ptr;
+
+use eds_sys::{
+    E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_AUTHENTICATION,
+    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceSecurity,
+    e_source_authentication_get_host, e_source_authentication_get_type,
+    e_source_authentication_set_host, e_source_authentication_set_method,
+    e_source_authentication_set_port, e_source_authentication_set_user, e_source_get_extension,
+    e_source_has_extension, e_source_new_with_uid, e_source_security_get_type,
+    e_source_security_set_secure,
+};
+use glib_sys::{GFALSE, GTRUE};
+use gobject_sys::g_object_unref;
+use jmap_backend_collection::child_added::{BOUND, follow_collection};
+use jmap_backend_collection::child_source::apply;
+use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::source::SourceConfig;
+use jmap_collection_sync::child_source::Connection;
+use jmap_collection_sync::{Child, ChildKind};
+use jmap_proto::Id;
+
+/// An `ESource` in the state EDS hands one back in — a uid and nothing else —
+/// with the extensions each test puts on it.
+struct Source(*mut ESource);
+
+impl Source {
+    fn new(uid: &str) -> Self {
+        let uid = CString::new(uid).expect("no NUL in a literal");
+        let mut error = ptr::null_mut();
+        // SAFETY: a NUL-terminated uid, the default main context and a GError
+        // out-parameter are the documented arguments.
+        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
+        assert!(!source.is_null(), "e_source_new_with_uid failed");
+        Self(source)
+    }
+
+    /// The account source, as a user's `.source` file describes it: the four
+    /// `[Authentication]` fields and the `[Security]` flag, which together are
+    /// the whole of what a child copies.
+    fn account() -> Self {
+        let source = Self::new("jmap-account");
+        source.set_host("jmap.example.com");
+        source.set_port(8443);
+        source.set_user("vera@example.com");
+        source.set_auth_method("plain/password");
+        source.set_secure(true);
+        source
+    }
+
+    /// A child of that account, written the way a populate writes one — through
+    /// `child_source::apply`, so the properties are the ones this backend really
+    /// puts on a child rather than ones this test chose.
+    fn child_of(connection: &Connection) -> Self {
+        let source = Self::new("jmap-account-child");
+        let child = Child {
+            resource_id: ChildKind::AddressBook.resource_id(&Id::new("AB1")),
+            kind: ChildKind::AddressBook,
+            display_name: "Personal".to_owned(),
+            account_id: Id::new("A1"),
+            collection_id: Id::new("AB1"),
+            is_default: false,
+            read_only: false,
+        };
+        // SAFETY: a live source.
+        unsafe { apply(source.0, &child.settings(connection)) }
+            .expect("a child this backend wrote");
+        source
+    }
+
+    fn extension<T>(&self, name: &CStr) -> *mut T {
+        assert!(
+            self.has(name),
+            "the test would have created the extension it meant to read"
+        );
+        // SAFETY: a live source, a header constant, and the extension is
+        // present, so this returns the source's own.
+        unsafe { e_source_get_extension(self.0, name.as_ptr()) }.cast()
+    }
+
+    fn has(&self, name: &CStr) -> bool {
+        // SAFETY: a live source and a NUL-terminated name.
+        unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
+    }
+
+    fn set_host(&self, host: &str) {
+        let host = CString::new(host).expect("no NUL in a literal");
+        let auth: *mut ESourceAuthentication = self.authentication();
+        // SAFETY: a live extension; the setter copies the string.
+        unsafe { e_source_authentication_set_host(auth, host.as_ptr()) };
+    }
+
+    fn set_port(&self, port: u16) {
+        let auth: *mut ESourceAuthentication = self.authentication();
+        // SAFETY: a live extension.
+        unsafe { e_source_authentication_set_port(auth, port) };
+    }
+
+    fn set_user(&self, user: &str) {
+        let user = CString::new(user).expect("no NUL in a literal");
+        let auth: *mut ESourceAuthentication = self.authentication();
+        // SAFETY: as above.
+        unsafe { e_source_authentication_set_user(auth, user.as_ptr()) };
+    }
+
+    fn set_auth_method(&self, method: &str) {
+        let method = CString::new(method).expect("no NUL in a literal");
+        let auth: *mut ESourceAuthentication = self.authentication();
+        // SAFETY: as above.
+        unsafe { e_source_authentication_set_method(auth, method.as_ptr()) };
+    }
+
+    fn set_secure(&self, secure: bool) {
+        // The `[Security]` extension of a source that has none yet: created
+        // here, deliberately, because this is a test building an account rather
+        // than the backend reading one.
+        // SAFETY: a live source and a header constant; the extension is created
+        // on demand and owned by the source.
+        let security: *mut ESourceSecurity =
+            unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast() };
+        // SAFETY: a live extension.
+        unsafe { e_source_security_set_secure(security, if secure { GTRUE } else { GFALSE }) };
+    }
+
+    /// `[Authentication]`, created on demand — as for [`Source::set_secure`],
+    /// this is the test writing an account, not the backend reading one.
+    fn authentication(&self) -> *mut ESourceAuthentication {
+        // SAFETY: a live source and a header constant.
+        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast() }
+    }
+
+    fn host(&self) -> Option<String> {
+        let auth: *mut ESourceAuthentication = self.extension(E_SOURCE_EXTENSION_AUTHENTICATION);
+        // SAFETY: a live extension; the string is owned by it.
+        unsafe { read_string(e_source_authentication_get_host(auth)) }
+    }
+
+    /// The child as the address book and calendar backends read it — origin,
+    /// user and resource id in one, which is what a stale child gets wrong.
+    fn config(&self) -> SourceConfig {
+        // SAFETY: a live source.
+        unsafe { SourceConfig::from_source(self.0) }.expect("a child names its account's server")
+    }
+}
+
+impl Drop for Source {
+    fn drop(&mut self) {
+        // SAFETY: this holds the only reference.
+        unsafe { g_object_unref(self.0.cast()) };
+    }
+}
+
+fn connection() -> Connection {
+    Connection {
+        host: "jmap.example.com".to_owned(),
+        port: Some(8443),
+        user: Some("vera@example.com".to_owned()),
+        auth_method: Some("plain/password".to_owned()),
+        secure: true,
+    }
+}
+
+/// The account and one of its children, bound — the state every test below
+/// starts from, and the one `child_added` leaves behind.
+fn bound() -> (Source, Source) {
+    let account = Source::account();
+    let child = Source::child_of(&connection());
+    // SAFETY: two live sources.
+    unsafe { follow_collection(account.0, child.0) };
+    (account, child)
+}
+
+#[test]
+fn the_bound_properties_exist_on_the_extensions_they_are_named_under() {
+    // A property name is a string on this call, so a misspelling is not a
+    // compile error — it is a `g_critical` at runtime and a binding that was
+    // never made, which is exactly the silent staleness this module exists to
+    // remove. Asked of GObject rather than assumed, and asked of the *class*, so
+    // it fails whether or not any other test happens to exercise that property.
+    // SAFETY: no arguments; the type system initialises itself.
+    unsafe {
+        e_source_authentication_get_type();
+        e_source_security_get_type();
+    }
+
+    for (extension, properties) in BOUND {
+        let source = Source::new("jmap-property-check");
+        // SAFETY: a live source and a header constant.
+        let object = unsafe { e_source_get_extension(source.0, extension.as_ptr()) };
+        assert!(!object.is_null(), "{extension:?} is not an extension");
+
+        for property in properties {
+            // SAFETY: a live GObject; `g_object_class_find_property` answers
+            // NULL for a name the class does not carry.
+            let found = unsafe {
+                let class = (*object.cast::<gobject_sys::GObject>())
+                    .g_type_instance
+                    .g_class;
+                gobject_sys::g_object_class_find_property(class.cast(), property.as_ptr())
+            };
+            assert!(
+                !found.is_null(),
+                "{extension:?} has no property called {property:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
+    // The case the binding exists for, and the one no copy at populate can
+    // reach: a child written by an earlier session, loaded from the backend's
+    // cache directory on this one, carrying the server the account named *then*.
+    // `child_added` fires for it before anything connects, so this is where the
+    // account's current answer has to reach it.
+    let account = Source::account();
+    let stale = Connection {
+        host: "old.example.com".to_owned(),
+        port: Some(1234),
+        user: Some("someone-else@example.com".to_owned()),
+        ..connection()
+    };
+    let child = Source::child_of(&stale);
+    assert_eq!(
+        child.config(),
+        SourceConfig {
+            origin: "https://old.example.com:1234".to_owned(),
+            user: Some("someone-else@example.com".to_owned()),
+            resource_id: Some("AB1".to_owned()),
+        },
+        "the test did not start from a stale child"
+    );
+
+    // SAFETY: two live sources.
+    unsafe { follow_collection(account.0, child.0) };
+
+    assert_eq!(
+        child.config(),
+        SourceConfig {
+            origin: "https://jmap.example.com:8443".to_owned(),
+            user: Some("vera@example.com".to_owned()),
+            resource_id: Some("AB1".to_owned()),
+        },
+        "the child is still asking last session's server"
+    );
+}
+
+#[test]
+fn moving_the_account_to_another_server_moves_its_children() {
+    // The user edits the account: a new host, a new port. Nothing re-runs
+    // `apply` — a populate only writes children it creates — so without the
+    // binding the child goes on reaching the old server.
+    let (account, child) = bound();
+
+    account.set_host("jmap.example.org");
+    account.set_port(443);
+
+    assert_eq!(
+        child.config().origin,
+        "https://jmap.example.org:443",
+        "the child stayed with the server the account used to name"
+    );
+}
+
+#[test]
+fn renaming_the_account_user_renames_its_children() {
+    let (account, child) = bound();
+
+    account.set_user("vera@example.org");
+
+    assert_eq!(
+        child.config().user,
+        Some("vera@example.org".to_owned()),
+        "the child would authenticate as somebody the account no longer is"
+    );
+}
+
+#[test]
+fn switching_tls_off_on_the_account_reaches_its_children() {
+    // The one change that a child getting it wrong is a *security* difference
+    // rather than a connection failure — in both directions. A child left at
+    // "tls" against an account switched to "none" fails visibly; the reverse,
+    // which is this assertion's other half below, does not.
+    let (account, child) = bound();
+
+    account.set_secure(false);
+    account.set_host("localhost");
+    assert_eq!(
+        child.config().origin,
+        "http://localhost:8443",
+        "the child still believes the account is on TLS"
+    );
+
+    account.set_secure(true);
+    assert_eq!(
+        child.config().origin,
+        "https://localhost:8443",
+        "the child stayed on plain text after the account went back to TLS"
+    );
+}
+
+#[test]
+fn the_authentication_method_follows_too() {
+    // Not a credential — how EDS is to *obtain* one. A child that disagrees with
+    // its account is a child prompted for a password the account does not use.
+    let (account, child) = bound();
+
+    account.set_auth_method("OAuth2");
+
+    let auth: *mut ESourceAuthentication = child.extension(E_SOURCE_EXTENSION_AUTHENTICATION);
+    // SAFETY: a live extension; the string is owned by it.
+    let method = unsafe { read_string(eds_sys::e_source_authentication_get_method(auth)) };
+    assert_eq!(method.as_deref(), Some("OAuth2"));
+}
+
+#[test]
+fn a_child_does_not_write_back_to_the_account() {
+    // One-way, deliberately: the child sources are this backend's to write, and
+    // a binding that carried a child's value back would let one of them edit the
+    // user's account file — and, through the account, every other child.
+    let (account, child) = bound();
+
+    child.set_host("somewhere-else.example.com");
+
+    assert_eq!(
+        account.host().as_deref(),
+        Some("jmap.example.com"),
+        "a child rewrote the account"
+    );
+}
+
+#[test]
+fn an_account_with_no_authentication_group_is_not_given_one() {
+    // The rule that keeps this out of the user's file: `e_source_get_extension`
+    // creates what it cannot find, and the account source is the one thing this
+    // backend must only ever read. An account with no `[Authentication]` names
+    // no host, so there is nothing to carry anyway.
+    let account = Source::new("jmap-account-without-authentication");
+    let child = Source::child_of(&connection());
+
+    // SAFETY: two live sources.
+    unsafe { follow_collection(account.0, child.0) };
+
+    assert!(
+        !account.has(E_SOURCE_EXTENSION_AUTHENTICATION),
+        "the account was given an [Authentication] group it did not have"
+    );
+    assert!(
+        !account.has(E_SOURCE_EXTENSION_SECURITY),
+        "the account was given a [Security] group it did not have"
+    );
+    assert_eq!(
+        child.config().origin,
+        "https://jmap.example.com:8443",
+        "the child was reset from an account that says nothing"
+    );
+}
+
+#[test]
+fn a_child_of_a_kind_this_backend_did_not_write_is_left_alone() {
+    // `child_added` fires for every source parented to the collection, mail
+    // identities included, and this backend writes only some of them. A source
+    // with no `[Authentication]` connects to nothing, so binding one onto it
+    // would be this backend editing a source belonging to another part of
+    // Evolution.
+    let account = Source::account();
+    let identity = Source::new("jmap-account-identity");
+
+    // SAFETY: two live sources.
+    unsafe { follow_collection(account.0, identity.0) };
+
+    assert!(
+        !identity.has(E_SOURCE_EXTENSION_AUTHENTICATION),
+        "a source that authenticates to nothing was given an [Authentication] group"
+    );
+    assert!(
+        !identity.has(E_SOURCE_EXTENSION_SECURITY),
+        "a source that connects to nothing was given a [Security] group"
+    );
+}
+
+#[test]
+fn a_child_that_authenticates_but_names_no_security_keeps_naming_none() {
+    // The two groups are decided separately, and this is the pair that says so:
+    // a child with `[Authentication]` and no `[Security]` — which is what a mail
+    // account source created by the setup UI can be — follows the account's host
+    // and user without being given a `[Security]` group it never had.
+    let account = Source::account();
+    let mail = Source::new("jmap-account-mail");
+    mail.set_host("stale.example.com");
+    // The address book children this backend writes always carry both groups, so
+    // reaching this state at all takes a source it did not write.
+    assert!(!mail.has(E_SOURCE_EXTENSION_SECURITY));
+    assert!(!mail.has(E_SOURCE_EXTENSION_ADDRESS_BOOK));
+
+    // SAFETY: two live sources.
+    unsafe { follow_collection(account.0, mail.0) };
+
+    assert_eq!(
+        mail.host().as_deref(),
+        Some("jmap.example.com"),
+        "the group both sources have was not bound"
+    );
+    assert!(
+        !mail.has(E_SOURCE_EXTENSION_SECURITY),
+        "the group only the account has was written onto the child anyway"
+    );
+}
