@@ -4090,3 +4090,113 @@ on disk is what the empty `recent` list and the whole-mailbox refresh are both
 still waiting for. Unexercised against a real `CamelSession`: `service.rs`, which
 waits on M6 and M7. The README's architecture block still lists only the round-1
 crates.
+
+## 2026-08-09 (forty-fourth session)
+
+M5's twenty-fourth increment, and the first thing in the mail provider that
+writes: `synchronize_sync`. The folder walks the rows Camel has not written back,
+diffs the keywords each row claims now against the ones it remembers the server
+holding, sends the difference as an `Email/set` update, and — on success —
+renews the remembered set and takes the row off the work list.
+
+Red first: nine tests in `jmap-mail`'s `tests/synchronize.rs`, all of them
+against `jmap-mockd` through a real `CamelStore`, and four more in
+`tests/message_info.rs` for the two column-level rules the walk rests on.
+
+Decisions taken:
+
+- **`get_changed` is where the walk starts, not what it trusts.** IMAPX drives
+  its own synchronisation from `camel_folder_summary_get_changed`, and the name
+  promises something narrower than the function delivers: it gathers the rows
+  Camel has not yet written to the *summary database*, not the rows carrying
+  `CAMEL_MESSAGE_FOLDER_FLAGGED`. A freshly listed row is on it. So every row on
+  the list is diffed, and the diff is what decides whether anything is sent —
+  which is what IMAPX effectively does too, by comparing against its own server
+  flags rather than believing the list.
+- **A listing must not queue what it lists.** This was the session's finding, and
+  it was a real bug rather than a tidiness point. Every one of Camel's column
+  setters marks the row as having to reach the server, and so does
+  `camel_folder_summary_add` — both right for the caller they were written for
+  (the user changing a message, a message the user composed) and backwards for a
+  provider filling a summary from a listing. Before this increment nothing read
+  the bit, so it was invisible; with `synchronize_sync` in place, a refresh would
+  have queued every message of every mailbox to be written straight back to the
+  server it had just been read from. `new_message_info` and `update_message_info`
+  now write inside a `without_queueing` that puts the bit back the way it found
+  it, and `apply_message` clears it on the row `summary_add` just marked.
+- **Restoring the bit, not clearing it.** The two are the same for a row that
+  came out of a listing and different for the row whose flags the user changed a
+  moment before the refresh arrived. That listing overwrites the user's flags —
+  a race this provider still does not resolve, and the next thing worth fixing
+  here — but clearing the bit as well would take the row off the work list too,
+  which turns a race into a change lost in silence rather than one retried.
+  `a_listing_does_not_take_an_unsaved_change_off_the_work_list` pins that.
+- **An empty change costs no connection, not merely no request.** The
+  short-circuit for an empty `KeywordChange` already existed in
+  `MailSync::set_keywords`, but underneath the store's connection check — so a
+  folder full of unchanged mail failed to synchronise when offline. The store is
+  now looked for only once there is something to say to it. Camel synchronises a
+  folder every time it closes one, so this is the common path, not the edge.
+- **The row's *after* is read back out of Camel's own two columns.** The before
+  is the column `CamelJmapMessageInfo` keeps; the after is `flags_word` and
+  `set_user_flags` run backwards, over the same bits and the same names, so a row
+  nobody touched produces the set it was built from and therefore no change at
+  all. `message_flags` is written as one loop over the same pairs `flags_word`
+  uses rather than as a second list of them: a bit named in one and not the other
+  would be a flag written to the server and never read back.
+- **One row's failure does not stop the rest.** Every queued row is attempted and
+  the first failure is what the vfunc reports. Stopping at the first would be
+  cheaper on a dead network and wrong on a live one — a keyword one server
+  refuses says nothing about the next message, and every row behind the refusal
+  would stay queued behind a write that can never succeed. The cost, named in the
+  module: a connection that has just gone away is discovered once per queued row.
+- **A message another client destroyed is settled, not failed.** `NoSuchMessage`
+  clears the bit and does not fail the synchronisation: a uid in a summary is a
+  claim about the last listing, so the flag change is moot rather than refused.
+  Reported, it would put an alert in front of the user about a message that is
+  not there; left queued, it would retry a write that can never succeed. The row
+  goes at the next refresh, which is where a message leaving a mailbox is noticed.
+- **A row dirty for something that is not a keyword still leaves the list.**
+  `CAMEL_MESSAGE_DELETED` is a local mark JMAP has no keyword for, so such a row
+  produces an empty change — and the bit is cleared anyway, because a bit nothing
+  can clear is a row retried on every synchronisation forever. Nothing is lost by
+  it: `expunge_sync` will read the `DELETED` flag, which is untouched, not this
+  bit.
+- **`expunge` is ignored, and said so.** Camel's argument asks the folder to get
+  rid of the messages marked deleted. In JMAP that is a mailbox change — taking
+  the message out of its mailboxes, or destroying it, depending on what the
+  account calls its trash — so it belongs with the increment that implements
+  `expunge_sync`, not with a flag write. Documented in the module rather than
+  quietly accepted.
+- **The summary lock is not held across the request.** A synchronisation is one
+  round trip per changed row, and a folder locked for the length of that is a
+  message list that cannot be drawn while the user's last click is being saved;
+  `camel_folder_summary_get` takes the lock itself for as long as it needs it. A
+  refresh running alongside can renew the row's remembered set from a fresh
+  listing, which the write then overwrites with what it established — the more
+  recent of the two answers.
+
+Not verified locally, as in the previous forty-three sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The two new files —
+`jmap-mail/src/synchronize.rs` and `jmap-mail/tests/synchronize.rs` — carry SPDX
+`GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates; `jmap-mail` is at 186 tests. One new
+allowlist entry in `eds-sys`: `camel_folder_synchronize_sync`, so a test can call
+the vfunc through Camel's own wrapper the way Evolution does.
+
+Next in M5. **The refresh/write race** is the sharpest thing this increment
+exposed and did not fix: `apply_listing` overwrites a row's flags with the
+server's even when the user's own change to that row has not been sent yet. The
+change is not lost — the row stays queued — but the flags it will be diffed from
+are the server's, so the user's click is undone on screen and then never sent.
+IMAPX solves it by not applying server flags to a row that is folder-flagged; the
+same rule fits here and is a small, self-contained increment with an obvious red
+test. **Bounding the cache** is still open from the forty-first session.
+`CamelSubscribable` remains the smaller unblocked piece; `get_trash_folder_sync`
+and `get_junk_folder_sync` are still a settings decision before they are a vfunc,
+and that decision is now also what `expunge_sync` waits on. `Email/changes`
+against a state kept on disk is what the empty `recent` list and the whole-mailbox
+refresh are both still waiting for. Unexercised against a real `CamelSession`:
+`service.rs`, which waits on M6 and M7. The README's architecture block still
+lists only the round-1 crates.
