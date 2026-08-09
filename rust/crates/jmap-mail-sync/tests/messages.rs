@@ -67,7 +67,7 @@ fn a_mailboxs_messages_come_back_oldest_first() {
     let fixture = Fixture::start();
     let inbox = fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 3);
 
-    let messages = fixture.sync().messages(&inbox).unwrap();
+    let (_, messages) = fixture.sync().messages(&inbox).unwrap();
 
     assert_eq!(
         Fixture::subjects(&messages),
@@ -90,8 +90,8 @@ fn only_the_mailbox_asked_about_is_listed() {
 
     let sync = fixture.sync();
 
-    assert_eq!(sync.messages(&inbox).unwrap().len(), 2);
-    assert_eq!(sync.messages(&sent).unwrap().len(), 1);
+    assert_eq!(sync.messages(&inbox).unwrap().1.len(), 2);
+    assert_eq!(sync.messages(&sent).unwrap().1.len(), 1);
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn an_empty_mailbox_lists_nothing() {
     let fixture = Fixture::start();
     let empty = fixture.seed_mailbox_with("Archive", Some(role::ARCHIVE), 0);
 
-    assert!(fixture.sync().messages(&empty).unwrap().is_empty());
+    assert!(fixture.sync().messages(&empty).unwrap().1.is_empty());
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn a_mailbox_the_account_does_not_have_lists_nothing() {
     let fixture = Fixture::start();
     fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 1);
 
-    let messages = fixture
+    let (_, messages) = fixture
         .sync()
         .messages(&Id::new("no-such-mailbox"))
         .unwrap();
@@ -140,7 +140,7 @@ fn the_flags_a_listing_carries_are_the_servers_keywords() {
         inbox
     };
 
-    let messages = fixture.sync().messages(&inbox).unwrap();
+    let (_, messages) = fixture.sync().messages(&inbox).unwrap();
 
     let [message] = messages.as_slice() else {
         panic!("one message, got {}", messages.len());
@@ -160,7 +160,7 @@ fn more_messages_than_one_get_may_ask_about_are_fetched_in_several() {
     let fixture = Fixture::started_with(MockServer::builder().objects_in_get(2));
     let inbox = fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 5);
 
-    let messages = fixture.sync().messages(&inbox).unwrap();
+    let (_, messages) = fixture.sync().messages(&inbox).unwrap();
 
     assert_eq!(messages.len(), 5);
     assert_eq!(
@@ -184,7 +184,7 @@ fn a_server_that_pages_its_query_answer_is_read_to_the_end() {
     let fixture = Fixture::started_with(MockServer::builder().query_page_size(2));
     let inbox = fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 5);
 
-    let messages = fixture.sync().messages(&inbox).unwrap();
+    let (_, messages) = fixture.sync().messages(&inbox).unwrap();
 
     assert_eq!(messages.len(), 5);
     assert_eq!(

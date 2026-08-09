@@ -197,7 +197,13 @@ impl JmapStore {
     /// The connection is read-locked across the request, which is what makes a
     /// disconnect that arrives mid-refresh wait rather than pull the client out
     /// from under it. Read-locked, so several folders may refresh at once.
-    pub fn messages(&self, mailbox: &Id) -> Result<Vec<MessageSummary>, StoreError> {
+    ///
+    /// The state the listing comes with is the one a later refresh could ask
+    /// `Email/changes` from instead of listing again. It is handed straight on
+    /// to the caller and, for now, dropped there: keeping it means keeping it
+    /// across a restart, which is the summary's own on-disk header and an
+    /// increment of its own.
+    pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
