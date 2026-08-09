@@ -110,6 +110,15 @@ pub enum StoreError {
     /// reads as "that message is gone" instead of as a reason to take the
     /// account offline.
     NoMessage(String),
+    /// A message was to be sent from an address the account has no identity
+    /// for.
+    ///
+    /// Reported as `CAMEL_SERVICE_ERROR_INVALID`, the code
+    /// [`crate::envelope`]'s refusals use and deliberately not
+    /// `UNAVAILABLE`: nothing is wrong with the account or the connection, and
+    /// this send would fail identically against a working server. It is fixed
+    /// by sending as an address the account has — never by retrying.
+    NoIdentity(String),
 }
 
 impl From<SourceError> for StoreError {
@@ -136,6 +145,10 @@ impl From<SyncError> for StoreError {
             // that a folder it still lists is not there, which is the only part
             // a caller in C reads.
             SyncError::NoSuchFolder(id) => Self::NoFolder(id.as_str().to_owned()),
+            // And again: an address the account cannot send as is a sentence
+            // for the user naming that address, not a server failure, so it
+            // keeps its shape all the way to the `GError`.
+            SyncError::NoIdentity(address) => Self::NoIdentity(address),
         }
     }
 }
@@ -161,6 +174,9 @@ impl fmt::Display for StoreError {
                 )
             }
             Self::NoMessage(uid) => write!(f, "no such message: {uid}"),
+            Self::NoIdentity(address) => {
+                write!(f, "this account cannot send mail as {address}")
+            }
         }
     }
 }

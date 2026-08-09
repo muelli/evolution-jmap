@@ -131,6 +131,7 @@ fn a_blob_the_server_will_not_serve_is_the_downloads_own_failure() {
     match error {
         SyncError::NoSuchMessage(_) => panic!("a missing blob is not a missing message"),
         SyncError::NoSuchFolder(_) => panic!("a missing blob is not a missing folder"),
+        SyncError::NoIdentity(_) => panic!("a missing blob has nothing to do with sending"),
         SyncError::Client(_) => {}
     }
 }
