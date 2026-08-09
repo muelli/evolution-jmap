@@ -4642,3 +4642,93 @@ and that decision is what `expunge_sync` waits on; cross-store transfers want
 `Email/import` for an `append_message_sync`. Unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's architecture
 block still lists only the round-1 crates.
+
+## 2026-08-09 (fiftieth session)
+
+M5's thirtieth increment, in `jmap-mail`: a folder now remembers the `Email`
+state its last listing was taken at, and remembers it across a restart. That is
+the one piece the previous session's `messages_since` was waiting on — a delta
+is only cheaper than a listing if there is a state to ask it from, and a state
+that lives in memory is gone exactly when it would have paid for itself, on the
+first refresh of a session.
+
+Red first: six tests — four in `tests/summary.rs`, two in `tests/refresh.rs` —
+and each was checked by breaking the implementation on purpose afterwards. Not
+installing the two vfuncs fails three, dropping the format-number check fails
+one, taking out the `camel_folder_summary_touch` fails the round trip, and
+dropping `set_summary_state` from the vfunc fails both refresh tests.
+
+Decisions taken:
+
+- **The state belongs to the summary, not to the folder.** It is a fact about
+  the *rows* — it says what they are current as of — so it has to be stored
+  where they are stored and read back when they are read back. Camel keeps one
+  header record per folder beside the message rows and reserves a `bdata` field
+  in it for what a provider has and Camel has not, which is the same
+  arrangement `CamelMIRecord.bdata` already carries the keywords in.
+- **A header's `bdata` is not a chain; a row's is.** `save`/`load` on a message
+  info are handed a cursor the whole class chain walks in order, so
+  `crate::message_info` appends to it. `summary_header_load` is handed the
+  record and nothing else — there is no cursor to share — so the field belongs
+  to the last class in the chain and this one writes it whole. Whatever was in
+  it is still freed first, so that a base class which started using it would
+  not leak once per save.
+- **A format number in front of the state.** The case it is for is not a
+  restart but a downgrade: a header written by a later version of this provider
+  must not be read as a state by this one. A number this version does not know
+  leaves the summary with no state, which costs one full listing — what a
+  folder does today anyway — where misreading the field would cost the mailbox.
+  A record with no `bdata` at all is the same answer, and is what every summary
+  written before this increment is.
+- **Setting the state touches the summary, and only when it changed.** Camel
+  skips saving a summary it was not told had changed, and a refresh that found
+  no new mail changes nothing else — so without the touch the state would never
+  reach the disk. With an unconditional touch, every poll of every folder would
+  rewrite the database for a value that did not move.
+- **The state is recorded after the rows are applied, not before.** The two are
+  not one transaction: a process that died in between having claimed the state
+  first would come back holding the older rows and asking for changes *since*
+  the newer state, and never hear about the ones in between. The other order
+  re-reports what the rows already have, which is a rewrite of what they
+  already said.
+- **`guard_summary`, the summary's counterpart to `message_info`'s
+  `guard_row`.** A vfunc body reaching the instance struct needs the type check
+  in front of it, and the panic guard is the rule every `extern "C"` here
+  follows.
+- **`CamelFIRecord` named in `eds-sys`'s allowlist** beside `CamelMIRecord`.
+  bindgen already emitted the struct as a field type; naming it brings the
+  typedef, which is what the tests and the vfunc signatures read as.
+
+`refresh_info_sync` now records what it used to drop, and its "what is not here
+yet" section says what remains: `apply_listing` reconciles a *whole* listing, so
+a delta handed to it would remove every row it did not mention. The folder side
+needs an application path of its own, and that is the next increment — with it,
+`refresh_info_sync` becomes messages_since-then-apply and the `recent` list
+`crate::changes` leaves empty can finally be filled.
+
+One test in this session is weaker than the others and is worth naming: the
+`bdata`-is-NULL case cannot be made red by removing the NULL check, because
+Camel's own `camel_util_bdata_get_number` tolerates a NULL cursor. It is red for
+the *installation* of the vfunc — `header_load` in the test asserts the vfunc is
+this provider's and not the inherited one, which is what tells "the record was
+read and had nothing in it" from "nobody read the record" — and the check itself
+stays as a guard rather than as tested behaviour.
+
+Not verified locally, as in the previous forty-nine sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and
+on the five EDS crates; `jmap-mail`'s summary suite is at 25 tests and its
+refresh suite at 6.
+
+Still open from earlier sessions: **bounding the cache**; the other half of the
+cache's atomicity problem (an entry is written by `write_all` and close rather
+than to a temporary name and renamed); the `changed` signal a transfer emits is
+still not asserted by a test, and lifting `tests/refresh.rs`'s emission harness
+into `tests/common` is what that wants; `CamelSubscribable` still wants
+`Mailbox/set`, which the client does not have; `get_trash_folder_sync` and
+`get_junk_folder_sync` are still a settings decision before they are a vfunc,
+and that decision is what `expunge_sync` waits on; cross-store transfers want
+`Email/import` for an `append_message_sync`. Unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's
+architecture block still lists only the round-1 crates.
