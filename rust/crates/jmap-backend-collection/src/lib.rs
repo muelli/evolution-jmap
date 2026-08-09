@@ -38,19 +38,25 @@
 //!   So it is also where the fan-out belongs — and where the one enum that
 //!   decides whether Evolution prompts again, gives up, or says nothing is
 //!   written.
+//! - [`fan_out`] is all of those put together, and the closure
+//!   [`authenticate::authenticate_with`] is handed: [`Fanout::discover`] against
+//!   the [`Login`] it is given, an `e_collection_backend_new_child` plus
+//!   [`child_source::apply`] per [`Child`] it warrants, and
+//!   [`removal::remove_obsolete`] over the children the collection already has.
+//!   The four calls on a live collection it needs are a trait, so the order and
+//!   the decisions are testable against a real `jmap-mockd` and real `ESource`s
+//!   on a machine with no `evolution-source-registry`.
 //! - [`backend`] is the subclass those functions exist for: an instance struct,
 //!   the vfunc slots, and a panic guard in front of each.
 //!
-//! Still missing, and the reason there is no module entry point yet: the body
-//! of the fan-out — the closure [`authenticate::authenticate_with`] is handed —
-//! which is the part that needs a live `ECollectionBackend`:
-//! [`Fanout::discover`] against the [`Login`] it is given, an
-//! `e_collection_backend_new_child` per [`Child`] it warrants with
-//! [`child_source::apply`] over its settings, and
-//! [`removal::remove_obsolete`] over the children the collection already has.
-//! Both halves of that are written and tested; what neither has yet is an
-//! instance to be called with, and this machine has no
-//! `evolution-source-registry` to produce one.
+//! Still missing, and the reason there is no module entry point yet: the two
+//! vfunc slots. `populate` — which claims the cached children of previous
+//! sessions with `e_collection_backend_claim_all_resources()` and then asks EDS
+//! for credentials — and the `authenticate_sync` that runs [`fan_out::fan_out`]
+//! with the [`Collection`](fan_out::Collection) the instance implements. Both
+//! are small, and neither can be driven here: they need a live
+//! `ECollectionBackend`, which needs a running `evolution-source-registry` on a
+//! session bus.
 //! `dup_resource_id` came first because `populate` cannot be written without it
 //! — EDS loads the cached children and asks their resource ids *before* it calls
 //! `populate`, and a populate that ran against a mis-loaded child list would
@@ -70,5 +76,6 @@ pub mod authenticate;
 pub mod backend;
 pub mod child_source;
 pub mod collection_source;
+pub mod fan_out;
 pub mod removal;
 pub mod resource_id;

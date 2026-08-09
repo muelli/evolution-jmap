@@ -30,4 +30,5 @@ glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 
 [dev-dependencies]
+evolution-jmap-mock = { workspace = true }
 evolution-jmap-proto = { workspace = true }
