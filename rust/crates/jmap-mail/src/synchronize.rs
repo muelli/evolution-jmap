@@ -210,6 +210,10 @@ unsafe fn queued_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
 ///   it would retry a write that can never succeed. The row itself goes at the
 ///   next refresh, which is where a message leaving the mailbox is noticed.
 ///
+/// It is also what [`crate::transfer`] calls before it takes a row away: a move
+/// removes the row, and the row is the only place a change the user has not
+/// saved yet is written down.
+///
 /// A row whose remembered set is absent — one loaded from a summary written
 /// before that column existed — is diffed from nothing, which is the same
 /// conservative degradation `CamelJmapMessageInfo` documents: a difference from
@@ -226,7 +230,7 @@ unsafe fn queued_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
 /// # Safety
 ///
 /// `summary` must point at a live `CamelFolderSummary`.
-unsafe fn push_row(
+pub(crate) unsafe fn push_row(
     folder: *mut CamelFolder,
     summary: *mut CamelFolderSummary,
     uid: &CStr,
