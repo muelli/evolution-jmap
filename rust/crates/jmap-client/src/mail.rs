@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use jmap_proto::error::SetError;
 use jmap_proto::mail::{
     Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailQueryFilter, EmailSubmission,
-    EmailSubmissionSetRequest, Identity, Mailbox,
+    EmailSubmissionSetRequest, Envelope, Identity, Mailbox,
 };
 use jmap_proto::methods::{
     Comparator, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -76,10 +76,16 @@ fn in_query_order(ids: &[Id], emails: Vec<Email>) -> Vec<Email> {
 /// the two forms of [`Client::send_email`] differ. The `on_success_update` key
 /// stays a creation reference either way: it names the *submission*, which is
 /// always created by this very call.
+///
+/// `envelope` is the SMTP envelope the message is to go out with. `None` is not
+/// "no recipients": RFC 8621 §7 has the server derive one from the message's
+/// own headers, which is right for a message this client composed and wrong for
+/// one it was handed — a `Bcc` recipient has no header to be derived from.
 fn submission_request(
     account_id: &Id,
     identity_id: &Id,
     email_id: Id,
+    envelope: Option<Envelope>,
     on_success_update: Option<Value>,
 ) -> EmailSubmissionSetRequest {
     const SUBMISSION: &str = "submission";
@@ -91,7 +97,7 @@ fn submission_request(
                 identity_id: identity_id.clone(),
                 email_id,
                 thread_id: None,
-                envelope: None,
+                envelope,
                 send_at: None,
                 undo_status: None,
                 extra: Default::default(),
@@ -589,6 +595,7 @@ impl Client {
             account_id,
             identity_id,
             Id::new(format!("#{DRAFT}")),
+            None,
             on_success_update,
         );
 
@@ -642,7 +649,7 @@ impl Client {
             .ok_or_else(|| Error::Protocol("Email/set created a draft without an id".to_owned()))?;
 
         let submission_set =
-            submission_request(account_id, identity_id, email_id, on_success_update);
+            submission_request(account_id, identity_id, email_id, None, on_success_update);
         let arguments = self.single_call(
             &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
             "EmailSubmission/set",
@@ -652,6 +659,51 @@ impl Client {
         let submission = expect_created(&submission_response, SUBMISSION)?;
 
         Ok((created_email, submission))
+    }
+
+    /// Hand a message the account already holds to the server's submission
+    /// machinery (`EmailSubmission/set`, RFC 8621 §7).
+    ///
+    /// The half of [`Client::send_email`] that does not compose. Sending a
+    /// message another program built — a `CamelMimeMessage` out of Evolution's
+    /// composer — cannot go through an `Email/set` create, because that names
+    /// the message by properties and what has to go out is the *bytes*: a
+    /// message taken apart and rebuilt is no longer the one the sender signed.
+    /// So the message arrives in the account through `Email/import` and this is
+    /// what submits it afterwards, naming it by the id the import minted.
+    ///
+    /// `envelope` is the SMTP envelope, and passing one is the ordinary case
+    /// here rather than the exception: the caller was given the recipients
+    /// separately from the message and they are not the same thing as its
+    /// headers. See [`submission_request`].
+    ///
+    /// `on_success_update` is a patch applied to the message once the server
+    /// accepts the submission (RFC 8621 §7.5) — moving it out of the mailbox it
+    /// was staged in, and out of being a draft.
+    pub fn submit_email(
+        &self,
+        account_id: &Id,
+        email_id: &Id,
+        identity_id: &Id,
+        envelope: Option<Envelope>,
+        on_success_update: Option<Value>,
+    ) -> Result<EmailSubmission, Error> {
+        const SUBMISSION: &str = "submission";
+
+        let submission_set = submission_request(
+            account_id,
+            identity_id,
+            email_id.clone(),
+            envelope,
+            on_success_update,
+        );
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/set",
+            &submission_set,
+        )?;
+        let response: SetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
+        expect_created(&response, SUBMISSION)
     }
 
     /// Upload a blob via the session's `uploadUrl` template (RFC 8620 §6.1).

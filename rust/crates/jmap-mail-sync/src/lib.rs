@@ -26,6 +26,7 @@ pub mod mailboxes;
 pub mod message;
 pub mod path;
 pub(crate) mod pointer;
+pub mod send;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -39,6 +40,7 @@ pub use folder::{FolderInfo, FolderRole, FolderTree};
 pub use keywords::{KeywordChange, Keywords};
 pub use mailboxes::Filing;
 pub use message::{MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES};
+pub use send::Outgoing;
 
 /// What a folder-list refresh found.
 ///
@@ -640,6 +642,52 @@ impl MailSync {
         imported
             .id
             .ok_or_else(|| SyncError::protocol("Email/import created a message without an id"))
+    }
+
+    /// Sends one message — what a `CamelTransport`'s `send_to_sync` amounts to.
+    ///
+    /// Two requests plus an upload, in this order and for the reasons
+    /// [`Outgoing`] gives: the message is imported into the staging mailbox as
+    /// a draft, and then submitted by the id the import minted, with the patch
+    /// that files it where sent mail is kept once the server has accepted it.
+    ///
+    /// It is *not* chained into one request, although RFC 8620 §5.3 would let
+    /// an `EmailSubmission/set` name the import's creation id. The upload has
+    /// to happen first either way — a blob id is what `Email/import` takes —
+    /// so the chain would save one round trip of three, and it would buy that
+    /// by making a message the server refused to *import* indistinguishable
+    /// from one it refused to submit. What the user needs told apart is exactly
+    /// those two: one is a message the account would not take, the other is a
+    /// message that is safe in Drafts and did not go out. A later increment can
+    /// chain them when there is a reason to; the round trip is not one.
+    ///
+    /// What comes back is the id the message has in the account, which is the
+    /// uid the staging or destination mailbox will list it under. Nothing about
+    /// the submission itself: its id names a record of a send that has already
+    /// been accepted, and there is no undo in this provider for it to be the
+    /// handle of.
+    ///
+    /// A refusal is the server's own [`SyncError::Client`], from whichever of
+    /// the two calls refused — an identity the account does not have, a message
+    /// whose `From` does not agree with it, a message over the upload limit.
+    /// See [`Outgoing`] for what a refused submission leaves behind.
+    pub fn send_message(&self, outgoing: Outgoing) -> Result<Id, SyncError> {
+        let keywords = Outgoing::staged_keywords();
+        let accepted = outgoing.accepted_patch();
+        let Outgoing {
+            source,
+            identity,
+            envelope,
+            staging,
+            ..
+        } = outgoing;
+
+        // No `receivedAt`: the message is arriving now, and the server's clock
+        // is the one every other client of the account will read it by.
+        let uid = self.import_message(&staging, source, &keywords, None)?;
+        self.client
+            .submit_email(&self.account_id, &uid, &identity, envelope, accepted)?;
+        Ok(uid)
     }
 
     /// Says whether the user wants to see a folder — the write behind
