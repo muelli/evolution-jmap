@@ -6065,3 +6065,109 @@ before they are a vfunc, and that decision is what `expunge_sync` waits on;
 cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (sixty-fifth session)
+
+**The selection, not the message.** The previous session named it: every test in
+`tests/transfer.rs` transferred a single uid, while the vfunc is handed the
+*list* the user had highlighted, and "a selection where one message moves and
+another is already gone should announce both rows in one emission" was written
+the right way and never watched. Four tests now cover the list, and the code was
+right — no production change in this increment.
+
+Red first, and twice over, because two different mistakes are in scope:
+
+- With `break` after the first failure — the naive walk this module's header
+  argues against — three of the four fail: the second message stays in the inbox
+  (`{M1: true}` against `{M2: true}`), the reported array comes back
+  `[None, None]` instead of `[None, Some("E2")]`, and the emission carries
+  `["E1"]` instead of `["E1", "E2"]`.
+- With the walk truncated to the first uid, all four fail, including the
+  all-succeed case the `break` leaves green.
+
+Both were restored before anything else; `git diff` on `src/transfer.rs` is
+empty.
+
+- **`every_message_of_a_selection_is_filed`** — the ordinary drag. Both messages
+  end up in the archive alone and the inbox lists nothing.
+- **`a_message_that_is_gone_does_not_hold_up_the_rest_of_the_selection`** — the
+  module's "one request per message, not one per transfer" decision seen from
+  outside. The first message is destroyed by another client; the second still
+  moves, and the transfer is still reported as `INVALID_UID`.
+- **`a_partial_transfer_reports_only_the_messages_that_landed`** — Camel reads
+  the out-parameter by position, so a half-worked transfer leaves NULL in the
+  slot of the message that did not land rather than a shorter array. A closed-up
+  gap would tell the caller the wrong message had moved.
+- **`the_rows_a_selection_left_behind_are_announced_together`** — one emission
+  for the whole selection. `CamelFolderChangeInfo` is four *lists* precisely so
+  that a drag of twenty messages redraws the message list once. Both rows are on
+  it although only one message moved, which is where the announcement and the
+  reported outcome deliberately disagree.
+
+Decisions taken:
+
+- **Two constructors over one parameterised fixture at every call site.**
+  `Fixture::start()` seeds one message and `Fixture::selection()` two, both over
+  a private `seeded(n)` and a `MESSAGES` table. Seeding two unconditionally
+  would have been the smaller diff and would have quietly changed what fifteen
+  existing tests assert — `listed(inbox).is_empty()` after a move is only true
+  because the inbox held one message.
+- **`Fixture::watching(context, folder)` became `Fixture::watched(self, …)`.**
+  The old constructor hard-coded `Self::start()`, so a watched two-message
+  fixture needed either a second near-identical constructor or a builder
+  argument. Consuming `self` keeps the ordering rule the doc comment exists for
+  — drain, then connect — inside one place, and reads as
+  `Fixture::selection().watched(&context, |f| f.inbox)`.
+- **`mailboxes_on_server` / `keywords_on_server` / `destroyed_elsewhere` take a
+  uid.** A selection has no single "the message", and a zero-argument version
+  beside a `_of(uid)` one would be two names for one question.
+
+**Not covered by a test, and the honest limits of the increment:**
+
+1. **Nothing here has been driven from Evolution.** That a drag of several
+   messages reaches the vfunc as one call with one array — rather than as one
+   call per message — is read from `camel_folder_transfer_messages_to_sync`
+   rather than observed, and it is the premise of all four tests. *Needs human
+   verification in real Evolution.*
+2. **Two messages, not twenty.** The claims are about the shape of the answer
+   (per-uid request, positional slots, single emission) and two uids is the
+   smallest list that can distinguish them, but nothing here exercises a
+   selection large enough for the per-message round trip to be a visible cost.
+   Batching several uids into one `Email/set` while keeping a per-message answer
+   is possible — RFC 8621 §5.3 reports `notUpdated` per id — and is a real
+   optimisation this file's decision leaves on the table deliberately, not
+   accidentally.
+3. **The failing message is always the first.** A failure in the middle or at
+   the end of a longer selection would exercise the same code, and the index
+   arithmetic in `Reported::set` is the part a longer list would pin harder.
+
+Not verified locally, as in the previous sixty-four sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set (337
+tests) and on the five EDS crates (531); the jmap-mail suite was run three times
+over for the main-context flakiness, 313 tests each time.
+
+Next in M5. The `get_folder_info_sync` NULL-versus-GError question is still the
+oldest undecided thing in the folder surface, and this session looked at it
+before choosing the transfer work instead. What it found, so the next session
+starts further along: the warning is
+`CamelJmapStore::get_folder_info() reported failure without setting its GError`,
+it comes from Camel's `CAMEL_CHECK_GERROR`, and exactly one test provokes it —
+`emissions.rs`'s `a_rename_of_a_subtree_nothing_is_subscribed_to_is_announced_by_no_one`,
+where Camel's own rename path asks with `SUBSCRIBED` and this store correctly
+answers "nothing matches" as NULL with no error, which is what
+`camel_store_get_folder_info_sync` documents as allowed. So the two readings are
+Camel's macro against Camel's own prose, and settling it wants the EDS *source*
+for `camel-store.c` — which this VM does not have, only the headers. That is the
+blocker to clear first, by reading the release tarball rather than by guessing
+at which branch of the wrapper the check sits in.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.
