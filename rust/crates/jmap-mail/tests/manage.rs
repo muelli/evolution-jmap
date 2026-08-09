@@ -17,12 +17,13 @@
 //! open again. And a rename is both at once, for the folder and for everything
 //! under it, since every one of those paths is a key Camel opens a folder by.
 //!
-//! One thing above is *not* covered, and it is the vfunc rather than what it
-//! decides: the `camel_store_folder_created`/`_deleted`/`_renamed` emission at
-//! the end of each needs a store with a `CamelSession` behind it —
-//! `camel_store_folder_created` starts by taking the service's session and
-//! queueing the emission on it — which is the same limit `subscriptions.rs`
-//! documents.
+//! One thing above is not covered *here*, and it is the vfunc rather than what
+//! it decides: what each of the three announces needs a store with a
+//! `CamelSession` behind it, since `camel_store_folder_created` starts by
+//! taking the service's session and queueing the emission on it, and the stores
+//! below are `detached`. That is `tests/emissions.rs`, whose first run found
+//! that the rename had been announcing itself on top of the announcement
+//! Camel's own wrapper already makes.
 //!
 //! What is covered, at the bottom, is the pair that decides whether the user
 //! ever reaches any of it: the three slots being filled, and the store's flags

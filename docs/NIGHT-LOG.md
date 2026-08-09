@@ -5877,3 +5877,98 @@ cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs` and the five emissions,
 which wait on M6 and M7. The README's architecture block still lists only the
 round-1 crates.
+
+## 2026-08-09 (sixty-third session)
+
+**The five emissions, watched at last — and one of them was a duplicate.** The
+previous session named lifting `tests/refresh.rs`'s emission harness into
+`tests/common` as the most valuable next increment, because five folder signals
+and a transfer's `changed` were all "two lines written the way IMAPX writes
+them" rather than anything a test had seen fire. The harness moved, and the
+first thing it saw was a bug.
+
+- **`tests/common/signals.rs`** holds `Context` (a main context per test, and
+  the pump without which every emission test passes by observing silence) and
+  two recorders: the folder's `changed`, lifted from `refresh.rs` unchanged, and
+  the store's five folder signals, new. `refresh.rs` lost 159 lines and kept all
+  thirteen tests.
+- **`tests/emissions.rs`**, nine tests, is the first thing in this crate to
+  drive a store signal end to end. It works because `tests/common`'s `Account`
+  builds a real `CamelSession`: `camel_store_folder_created` and its four
+  siblings queue the emission on `camel_session_ref_main_context`, so a detached
+  store — what `tests/manage.rs` and `tests/subscriptions.rs` use, and why both
+  of their headers said the emissions were out of reach — cannot emit at all.
+
+**The finding: `camel_store_rename_folder_sync` emits `folder-renamed` itself.**
+`manage.rs`'s header claimed the opposite — "Camel does not emit any of the
+three signals for us … the emitters are called nowhere in libcamel outside
+`CamelVeeStore`" — and that claim was wrong for exactly one of the three. Red,
+reproducibly: two identical `folder-renamed` events per rename; one when our
+line is commented out. So the line is gone, and with it the chain it built.
+
+Decisions taken:
+
+- **Rename is Camel's to announce, not ours.** A create and a delete that said
+  nothing would leave every view of the account but one showing a stale tree —
+  their wrappers call the vfunc and return. The rename wrapper does not: it
+  renames the folders in the store's object bag and then emits, building the
+  info by asking the store for the new path. Duplicating that is announcing one
+  rename twice; matching the platform is what every other provider does.
+- **The cost is stated, and pinned by two tests.** Camel asks for that info with
+  `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`, because this store is subscribable — so
+  the subscription filter the previous session built decides whether Camel says
+  anything. Measured, not assumed: a subtree with nothing subscribed anywhere in
+  it is renamed **silently**; an unsubscribed folder kept for a subscribed child
+  is announced normally. The silent case is a subtree the folder tree the rename
+  was invoked from is not drawing, and it is Camel's rule for every provider
+  alike — but it is a real hole and there is now a test whose failure message
+  says so, should Camel ever change its mind.
+- **The four one-argument signals share one handler**, told apart by the static
+  signal name passed as the user data. Five near-identical `extern "C"` bodies
+  differing in a string literal is not clearer than one that reads the string.
+- **`Context` must be pushed before the account is opened.** For the folder's
+  `changed` the context that matters is the one current when `camel_folder_changed`
+  runs; for the store's five it is the one the *session* captured at
+  construction, which is earlier. Every test here pushes first, and the type
+  says why.
+- **A handler connected between the queueing and the pump still catches the
+  emission**, because the emission happens when the idle source runs. Two tests
+  therefore pump their setup away before they start watching.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Nothing here has been driven from Evolution.** That the folder tree redraws
+   from these signals, and that a duplicate `folder-renamed` would have been
+   visible rather than merely wrong, is read from Camel's documentation and
+   source behaviour, not observed. *Needs human verification in real Evolution.*
+2. **A second finding, left for the next increment.** The fully-unsubscribed
+   rename test prints
+   `camel-WARNING: CamelJmapStore::get_folder_info() reported failure without
+   setting its GError`. Camel's `CAMEL_CHECK_GERROR` treats a NULL return from
+   `get_folder_info_sync` as a failure, while this provider documents NULL with
+   no error as "an account with no folders" — which is what `camel_store_*`'s
+   own callers read it as too. Both readings are defensible and the choice is
+   not obvious enough to make in passing, so it is written down rather than
+   patched: it is a console warning, not a behaviour break.
+3. **The transfer's `changed` signal is still unasserted.** It was the other
+   thing waiting on this harness; the harness is now there and the test is a
+   small, self-contained next increment.
+
+Not verified locally, as in the previous sixty-two sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). Two new files, both with
+SPDX `GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates; the jmap-mail suite was run three times
+over for the main-context flakiness this harness exists to avoid.
+
+Next in M5. The transfer's `changed` emission, then the `get_folder_info_sync`
+NULL-versus-GError question above.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.
