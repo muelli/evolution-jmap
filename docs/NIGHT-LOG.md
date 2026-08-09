@@ -5569,3 +5569,101 @@ cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs` and the four emissions
 (two subscription, two folder-management), which wait on M6 and M7. The README's
 architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (sixtieth session)
+
+**The rename, in `jmap-mail-sync`** — the write and the tree edit under
+`rename_folder_sync`, which the previous session named as the next increment.
+Two commits, both in one crate; the `CamelStore` vfunc and
+`CAMEL_STORE_CAN_EDIT_FOLDERS` are deliberately *not* here, for the reason at
+the end.
+
+- **`MailSync::rename_folder`**: one `Mailbox/set` update over `name` and
+  `parentId`, answering with the folder's new Camel path.
+- **`FolderTree::rename`**: the tree's third edit, after `set_subscribed` and
+  `insert`/`remove`.
+
+Red first: eight tests in `jmap-mail-sync/tests/manage.rs` against a `MailSync`
+with no such method, then eleven in `tests/tree.rs` against a tree with no such
+edit.
+
+Decisions taken:
+
+- **A rename and a move are one operation**, because they are one to the caller.
+  Camel names a folder by path, so the folder's name and its parent both live in
+  the string `rename_folder_sync` is handed, and it never says which of the two
+  the user changed. RFC 8621 §2.5 puts both in one update.
+- **Both properties are sent every time**, including a `parentId` of `null` for
+  a folder moving up to the top level. Sending only what looks changed would
+  need a before-picture, and the only one available is the caller's listing — a
+  cache, which another client's move has already made wrong in exactly the
+  direction that would swallow this write. Pinned by a test: a child moved to
+  the top level ends up there, which a patch omitting `parentId` would not do.
+- **The answer is the new path**, for the reason a create answers with a whole
+  `FolderInfo`: the caller keys the folder by that string and cannot build it,
+  because the mailbox-name-to-path-component encoding is private to this crate.
+  Nothing else about a folder changes, so there is nothing else to report.
+- **`display_name` is passed to the tree edit beside the path**, not read out of
+  it. The path's last component is the name with the encoding applied and this
+  crate has no decoder; the caller has the name it just sent. A test pins the
+  pair — the path `and%2For` with the name `and/or`.
+- **Descendant paths are rebuilt structurally**, from each child's own last
+  component onto its parent's new path, rather than by swapping a prefix. It is
+  the same reading of a path `insert` already makes, and it does not depend on
+  the moved subtree's paths having been consistent beforehand. Iterative, so the
+  walk is not one more thing a server-chosen depth turns into a stack.
+- **A move into the folder's own subtree is refused**, and both refusals are
+  checked *before* the subtree is lifted out: a folder taken out of the tree and
+  then refused at its destination is one that has simply disappeared. The
+  placement itself is delegated to `insert`, which is what makes the second
+  lookup unable to fail without a panic being needed to say so.
+- **A moved folder joins its new siblings at the end**, as a created one does.
+  Sibling order is the server's (sortOrder, then name); this side has been told
+  about one folder, not about where the account now sorts it. Stated in a test
+  rather than left to be discovered.
+- **`remove` became `take`** — the same walk with the folder handed back — since
+  a move is a removal that puts the subtree down again somewhere else.
+
+**Not covered by a test, and the honest limits of the increment:**
+
+1. **Nothing in Evolution reaches this yet**, and one more increment is needed
+   before it can: `rename_folder_sync` is still NULL on `CamelJmapStoreClass`,
+   and `CAMEL_STORE_CAN_EDIT_FOLDERS` is still unset. The test in
+   `jmap-mail/tests/manage.rs` that fails the moment the vfunc is filled in is
+   still the reminder that the flag is then the thing to add. *Needs human
+   verification in real Evolution once both land.*
+2. The path the *store* will hand `FolderTree::rename` comes from Camel and its
+   last component is whatever Evolution's rename dialog put there — not
+   necessarily this crate's encoding of it. That is the layer above's problem to
+   state and it is what the next increment has to decide: the name sent to the
+   server and the path written into the tree have to be the pair this session's
+   two methods take, or a renamed folder is one Camel cannot open.
+
+Not verified locally, as in the previous fifty-nine sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and
+on the five EDS crates.
+
+Next in M5. **`rename_folder_sync` on `JmapStore`, and the flag that turns all
+three management vfuncs on.** The vfunc resolves the old path to a folder, reads
+the new path's last component as the mailbox name (the decision limit 2 above
+names), calls `MailSync::rename_folder`, applies `FolderTree::rename` to the
+held listing and emits `camel_store_folder_renamed` — one more emission with
+`subscribe.rs`'s `CamelSession` limit. Then
+`CAMEL_STORE_CAN_EDIT_FOLDERS` on the store's flags, which is what puts New,
+Delete and Rename Folder in front of the user. Worth pairing:
+`get_folder_info_sync` still ignores `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED` and
+`SUBSCRIPTION_LIST`.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+the `changed` signal a transfer emits is still not asserted by a test, which
+wants `tests/refresh.rs`'s emission harness lifted into `tests/common`;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs` and the four emissions
+(two subscription, two folder-management), which wait on M6 and M7. The README's
+architecture block still lists only the round-1 crates.
