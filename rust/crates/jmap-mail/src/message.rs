@@ -30,14 +30,20 @@
 //! `camel_folder_get_message_sync` callers make anyway, since what they get back
 //! *is* the whole message.
 //!
-//! ## What is not here yet
+//! ## Once, not every time
 //!
-//! **The message is fetched every time it is opened.** RFC 8621 §4.1 makes an
-//! `Email` immutable, so a message fetched once could be kept — and Camel has
-//! the place to keep it, `CamelDataCache`, which is what IMAPX's
-//! `get_message_cached` reads. That is a file per message under the account's
-//! cache directory and a `purge_message_cache_sync` to bound it, which is its
-//! own increment; without it every click is two round trips.
+//! The two steps above are what the *first* open of a message costs. RFC 8621
+//! §4.1 makes an `Email` immutable, so every later open would pay the same two
+//! round trips for bytes that cannot have changed — and would fail outright with
+//! the account offline, in a provider whose store is a `CamelOfflineStore`. So
+//! the download is kept: [`crate::cache`], a file per message under the
+//! account's own cache directory, consulted here before the connection is even
+//! looked for. What is *not* kept is the blob id, for the reason
+//! [`MailSync::message_source`] documents — a server may reissue one — which is
+//! why the cache is keyed by the uid Camel asked for rather than by anything the
+//! fetch produced.
+//!
+//! ## What is not here yet
 //!
 //! `cancellable` is not observed, the same gap [`crate::refresh`] documents and
 //! for the same reason: [`Client`] takes its [`CancelFlag`] when it is built. A
@@ -63,7 +69,7 @@ use jmap_backend_core::trampoline::guard_ptr;
 use jmap_proto::Id;
 
 use crate::connect::StoreError;
-use crate::folder::parent_store;
+use crate::folder::{JmapFolder, parent_store};
 
 /// Installs the message vfuncs on a class whose first member is a
 /// `CamelFolderClass`.
@@ -101,14 +107,39 @@ unsafe extern "C" fn get_message_sync(
             let Some(uid) = read_string(message_uid) else {
                 return fail(error, &StoreError::NoMessage(String::new()));
             };
+            let uid = Id::new(uid);
+
+            // Before the connection is even looked for: a message already
+            // downloaded is one this provider can hand over with the account
+            // offline, which is the whole point of a `CamelOfflineStore`.
+            let cache = JmapFolder::borrow(folder).and_then(JmapFolder::cache);
+            if let Some(source) = cache.and_then(|cache| cache.load(uid.as_str())) {
+                // Parsed without an error out-parameter, so a failure is silent
+                // and falls through to the fetch below: an entry Camel's parser
+                // will not read is not a message to report, it is one to
+                // replace.
+                let message = parse(&source, ptr::null_mut());
+                if !message.is_null() {
+                    return message;
+                }
+            }
+
             let Some(store) = parent_store(folder) else {
                 return fail(error, &StoreError::Disconnected);
             };
 
-            let source = match store.message_source(&Id::new(uid)) {
+            let source = match store.message_source(&uid) {
                 Ok(source) => source,
                 Err(failure) => return fail(error, &failure),
             };
+            // Kept before it is parsed, not after: what is worth keeping is the
+            // bytes the server sent, and a message this parser rejects is one
+            // the next release of Camel may not — while a failed parse that
+            // discarded the download would make every open of that message
+            // another two round trips.
+            if let Some(cache) = cache {
+                cache.store(uid.as_str(), &source);
+            }
             parse(&source, error)
         })
     }

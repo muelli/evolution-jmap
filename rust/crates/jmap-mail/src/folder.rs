@@ -39,8 +39,8 @@ use std::ptr;
 use eds_sys::{
     CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY,
     CamelFolder, CamelFolderClass, CamelFolderFlags, CamelOfflineFolder, CamelOfflineFolderClass,
-    CamelStore, camel_folder_get_parent_store, camel_folder_set_flags,
-    camel_offline_folder_get_type,
+    CamelService, CamelStore, camel_folder_get_parent_store, camel_folder_set_flags,
+    camel_offline_folder_get_type, camel_service_get_user_cache_dir,
 };
 use glib_sys::{GFALSE, GType, gchar};
 use gobject_sys::{g_object_new, g_type_check_instance_is_a};
@@ -49,6 +49,7 @@ use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
 
+use crate::cache::MessageCache;
 use crate::folder_info::c_string;
 use crate::store::{JmapStore, store_type};
 use crate::summary::attach_summary;
@@ -68,6 +69,19 @@ pub struct JmapFolder {
     /// instance struct arrives zeroed and is freed without a destructor
     /// running over it — the same reason the store keeps its connection in one.
     mailbox: Slot<Id>,
+    /// The messages of this account already downloaded, on disk.
+    ///
+    /// Filled by [`new_folder`] like the mailbox, and for a reason of the same
+    /// kind: what a cache needs is the account's cache directory, and the
+    /// moment that is both known and settled is when the folder is built on a
+    /// store Camel has finished constructing. Empty on a folder whose cache
+    /// directory could not be made, which is a folder that fetches every
+    /// message it opens — see [`crate::cache`].
+    ///
+    /// It is not per-folder state despite living here: the entries are keyed by
+    /// JMAP email id under the *account's* directory, so a message filed in
+    /// several mailboxes is one file that every one of those folders reads.
+    cache: Slot<MessageCache>,
 }
 
 impl JmapFolder {
@@ -78,6 +92,12 @@ impl JmapFolder {
     /// that rather than assuming an id.
     pub fn mailbox(&self) -> Option<&Id> {
         self.mailbox.get()
+    }
+
+    /// The account's message cache, or `None` if this folder has none — which
+    /// every caller treats as "fetch it", never as an error.
+    pub fn cache(&self) -> Option<&MessageCache> {
+        self.cache.get()
     }
 
     /// The Rust view of a `CamelFolder *` Camel handed over.
@@ -177,8 +197,12 @@ unsafe impl ObjectSubclass for JmapFolder {
     unsafe fn finalize(instance: *mut Self::Instance) {
         // SAFETY: the instance is being finalized, so nothing can still reach
         // it and no borrow handed out by `get` is alive. Without this the id
-        // leaks — once per folder the user ever opened.
-        unsafe { (*instance).mailbox.clear() };
+        // leaks — once per folder the user ever opened — and the cache's
+        // reference on its `CamelDataCache` with it.
+        unsafe {
+            (*instance).mailbox.clear();
+            (*instance).cache.clear();
+        };
     }
 }
 
@@ -236,16 +260,47 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
     }
 
     // SAFETY: `folder` is a fresh instance of this type, and this reference is
-    // the only one — nothing else can be reading the slot.
+    // the only one — nothing else can be reading the slots.
     unsafe {
         (*folder.cast::<JmapFolder>())
             .mailbox
             .init(mailbox.id.clone());
+        if let Some(cache) = account_cache(store) {
+            (*folder.cast::<JmapFolder>()).cache.init(cache);
+        }
         camel_folder_set_flags(folder, flags(mailbox));
         attach_summary(folder);
     }
 
     folder
+}
+
+/// The message cache of the account `store` is, or `None` if it has none.
+///
+/// The directory is the one Camel gives the *service* — its session's cache
+/// directory with the account's uid under it — rather than one composed here:
+/// it is the directory Evolution's own "empty cache" clears and the one Camel
+/// removes when the account is deleted, and a provider that cached mail outside
+/// it would be a provider whose mail survives the account.
+///
+/// # Safety
+///
+/// `store` must point at a live `CamelStore`, which is a `CamelService`.
+unsafe fn account_cache(store: *mut CamelStore) -> Option<MessageCache> {
+    // SAFETY: the contract above; the string belongs to the service and is only
+    // read here.
+    let directory = unsafe {
+        let directory = camel_service_get_user_cache_dir(store.cast::<CamelService>());
+        if directory.is_null() {
+            return None;
+        }
+        CStr::from_ptr(directory)
+    };
+    // A path Camel built out of a session directory and an ESource uid. Not
+    // UTF-8 on principle — a filesystem path is bytes — so a lossy read would
+    // point the cache somewhere else; refusing is the version that cannot
+    // silently write to the wrong directory.
+    MessageCache::open(directory.to_str().ok()?)
 }
 
 /// How Camel should treat this folder.
