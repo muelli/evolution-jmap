@@ -52,6 +52,25 @@ pub(crate) fn encode_component(name: &str) -> String {
     encoded
 }
 
+/// Split a path into the path of its parent, if it has one, and its own last
+/// component.
+///
+/// The one part of this mapping a caller outside the crate needs, because Camel
+/// names a folder's new home by path: what the store has to read out of the
+/// string `rename_folder_sync` hands it is where the folder now hangs and what
+/// its component now is, and neither is anything it may split out for itself —
+/// the separator is this module's choice.
+///
+/// A component can never contain the separator, since [`encode_component`]
+/// escapes it, so the last one splits the path unambiguously. It is the same
+/// reading `FolderTree::insert` makes of a path.
+pub fn split(path: &str) -> (Option<&str>, &str) {
+    match path.rsplit_once(SEPARATOR) {
+        Some((parent, component)) => (Some(parent), component),
+        None => (None, path),
+    }
+}
+
 /// Join a parent path and an already-encoded component.
 pub(crate) fn join(parent: Option<&str>, component: &str) -> String {
     match parent {
