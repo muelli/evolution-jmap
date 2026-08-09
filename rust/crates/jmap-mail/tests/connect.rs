@@ -214,6 +214,14 @@ fn each_failure_carries_the_camel_service_error_code_evolution_routes_on() {
             }),
             CAMEL_SERVICE_ERROR_INVALID,
         ),
+        // An address the account has no identity for. `INVALID` rather than
+        // `UNAVAILABLE`: the account works, the server is there, and this send
+        // would fail the same way against every one of them — a retry, which is
+        // what `UNAVAILABLE` asks Evolution for, cannot help.
+        (
+            StoreError::NoIdentity("alice@example.com".to_owned()),
+            CAMEL_SERVICE_ERROR_INVALID,
+        ),
     ] {
         let gerror = error.to_gerror();
         assert!(!gerror.is_null(), "no GError for {error}");
@@ -271,6 +279,23 @@ fn a_sync_layers_missing_message_stays_a_missing_message() {
         StoreError::NoMessage(uid) => assert_eq!(uid, "E17"),
         other => panic!("expected a missing message, got {other}"),
     }
+}
+
+/// The same crate boundary again, for the address the account cannot send as.
+///
+/// Flattened into a client error it would reach Evolution as a server that said
+/// no, which is the one thing it is not: the server was never asked. The
+/// address survives the boundary because it is the whole of what the user has
+/// to act on.
+#[test]
+fn a_sync_layers_missing_identity_stays_a_missing_identity() {
+    let error = StoreError::from(SyncError::NoIdentity("alice@example.com".to_owned()));
+
+    match &error {
+        StoreError::NoIdentity(address) => assert_eq!(address, "alice@example.com"),
+        other => panic!("expected a missing identity, got {other}"),
+    }
+    assert!(error.to_string().contains("alice@example.com"), "{error}");
 }
 
 /// The one failure that is not Camel's to classify: the user pressed Stop, and

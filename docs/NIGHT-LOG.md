@@ -7859,3 +7859,115 @@ its own connection, `send_to_sync` joining `envelope` to
 `MailSync::send_message`, the identity lookup, the Drafts/Sent lookup out of the
 folder tree, and the provider's transport slot. The addresses are no longer part
 of that work.
+
+## 2026-08-09 (eighty-first session)
+
+**Which identity the message goes out as.** Item 3 of the seventy-ninth
+session's list — "which identity to submit through is not decided anywhere yet"
+— answered: `jmap-mail-sync/src/identity.rs` and `MailSync::identity_for`, the
+lookup from the address Camel hands a transport to the id `Outgoing::identity`
+takes. It is the second of the transport's pieces that can be finished and
+tested to the end here, after the envelope, and it leaves `send_to_sync` itself
+as the only part of sending with nothing under it.
+
+Red first: `jmap-mail-sync/tests/identity.rs`, nine tests against a live mock,
+failing to compile against a method that did not exist. A compile failure is a
+weak red, so each rule was then re-checked against a deliberately broken
+implementation — dropping the `.rev()` fails
+`the_first_of_two_identities_with_the_same_address_wins`; reading the wildcard
+as a prefix (`local.starts_with('*')`) fails
+`an_identity_whose_local_part_only_begins_with_a_star_is_not_a_wildcard`;
+matching the domain with `ends_with` fails
+`a_wildcard_identity_covers_only_its_own_domain` on `notexample.com`; swapping
+the two `MatchKind` variants so the wildcard outranks the exact address fails
+the preference test and the case test. The same treatment for the Camel-side
+mapping: flattening `NoIdentity` into a client error fails the crate-boundary
+test, and reporting it as `UNAVAILABLE` fails the code table.
+
+Decisions taken:
+
+- **The wildcard is RFC 8621 §6's and nothing wider.** An identity whose local
+  part is the single character `*` covers its domain; `*alice@example.com` is an
+  ordinary address with an unusual name. A server hosting a whole domain
+  publishes only the wildcard form, so a client comparing whole strings would
+  tell such an account it cannot send at all — and one reading `*` as a prefix
+  would send Bob's mail through Alice's identity.
+- **Exact beats wildcard, and the first of equals wins.** The identity that has
+  the address outright carries the user's name and signature and is what the
+  server writes `From` from; the wildcard is the account's fallback. Among
+  identities that match equally the first in the server's order wins, pinned so
+  that retries of one message do not pick up a different signature each time.
+- **Case is folded, in both halves, ASCII only.** The domain is
+  case-insensitive by DNS. The local part is case-*sensitive* per RFC 5321 §2.4
+  — but this is not a relay: both spellings are the user's own address on their
+  own account, and refusing to send because the server wrote the identity with a
+  capital would be a failure with nothing behind it. The safety argument is that
+  RFC 8621 §7 has the *server* check the message's `From` against the identity,
+  so a generous match here can only ever produce a refusal, never mail leaving
+  as somebody else. Unicode case is deliberately not folded: the fold is
+  language-dependent and two addresses that fold together are not reliably the
+  same mailbox.
+- **The envelope sender, not the `From` header.** The address matched is what
+  Evolution filled in from the account the user chose, whereas a `From` can be a
+  list address or a second author. The header check is the server's, and
+  pre-empting it here would be this crate guessing at a policy it cannot see.
+- **No identity is `SyncError::NoIdentity(String)`, a variant of its own.**
+  Nothing failed — the server was never asked to send anything — and the
+  alternative to refusing is submitting through whatever the account happens to
+  have first, which is sending the user's message as somebody else. It carries
+  the address because that is the part the user recognises and the only part
+  they can act on. At the Camel boundary it becomes `StoreError::NoIdentity` and
+  `CAMEL_SERVICE_ERROR_INVALID`, the code `envelope.rs`'s refusals use, and
+  deliberately not `UNAVAILABLE`: a retry cannot help, and `UNAVAILABLE` is what
+  Evolution reads to put an account offline.
+- **One `Identity/get` per lookup, nothing cached.** A send is not a hot path,
+  the user changes their identities elsewhere, and an identity list held across
+  a session goes wrong quietly — by submitting through an identity the account
+  no longer has, or by failing to find one it has just gained.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no `CamelJmapTransport`,** and `provider.rs` still leaves the
+   transport slot at `G_TYPE_INVALID`. Nothing in this session changes what the
+   user sees; Evolution still cannot send through a JMAP account.
+2. **Nothing joins the three tested halves.** `read_envelope` → `identity_for`
+   → `MailSync::send_message` is a chain with no caller, and the caller is
+   `send_to_sync`.
+3. **An identity the server returns without an id** is reported as a protocol
+   violation, and that path has no test: the mock always mints an id and there
+   is no hook to seed one without. It is one `ok_or_else` over the `Option<Id>`
+   `Identity` carries.
+4. **No test against a server that publishes a wildcard identity for real.**
+   The mock takes whatever `email` it is seeded with, so `*@example.com` is our
+   own fixture rather than an observed server's behaviour. Stalwart's
+   `Identity/get` has not been looked at.
+5. **Nothing decides what happens when the account has several identities and
+   the user's chosen address matches none** *at the Evolution level* — the
+   refusal is correct here, but whether Evolution's composer can even produce
+   such an address for a JMAP account is a question for the account-setup work.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, `jmap-mail-sync/src/identity.rs`
+and `jmap-mail-sync/tests/identity.rs`, both with the SPDX `GPL-3.0-or-later`
+header. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set (428
+tests, up from 417) and on the five EDS crates (603, up from 602).
+
+The new `SyncError` variant made two exhaustive matches fail to compile —
+`jmap-mail-sync/tests/source.rs` and `jmap-mail/src/connect.rs`. Both were
+written exhaustively on purpose, so that a new variant forces a decision instead
+of falling into a wildcard; the decision was taken in both places rather than
+the match loosened.
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Next in M5: `CamelJmapTransport` itself — the `CamelTransport` subclass and its
+connection, `send_to_sync` joining `read_envelope`, `identity_for` and
+`MailSync::send_message`, the Drafts/Sent lookup out of the folder tree, and the
+provider's transport slot. Both of its pure pieces are now done.
