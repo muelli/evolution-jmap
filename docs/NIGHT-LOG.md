@@ -8949,3 +8949,120 @@ applying `Child::settings`, removing the children `Fanout::is_obsolete` names,
 and `dup_resource_id` answering from (extension, `[Resource] Identity`). The
 mail-children question stays open and the increment that answers it must be
 marked *needs human verification*.
+
+## 2026-08-09 (ninety-first session)
+
+**The name EDS knows a child by — and the one vfunc whose wrong answer deletes
+a file.** M6's decision layer has been complete for a session
+(`jmap-collection-sync`: layout, resources, children, child_source, parts) and
+the next thing needed was the backend crate. This session started it, with the
+vfunc that has to work before `populate` can be written at all: EDS loads the
+cached `.source` files and asks each one's resource id *before* it calls
+`populate`, so a populate written first would be running against a child list
+that had already been mis-loaded — and, worse, mis-*pruned*.
+
+New crate `rust/crates/jmap-backend-collection` (out of `default-members`, added
+to CMake's `rust-test-eds`), with two modules:
+
+- `resource_id.rs` — `resource_id_of(*mut ESource)`: which of `[Address Book]`
+  and `[Calendar]` the source carries, `[Resource] Identity`, and
+  `jmap_collection_sync::resource_id_for` over the two. `KIND_EXTENSIONS` pairs
+  each EDS `#define` with the literal `jmap-collection-sync` spells it as.
+- `backend.rs` — `JmapCollectionBackend`, an `ECollectionBackend` subclass whose
+  `class_init` installs a `dup_resource_id` trampoline, panic-guarded, returning
+  a `g_strdup`ed string or NULL.
+
+Red first, and recorded as red: against stubs (`KIND_EXTENSIONS` empty,
+`resource_id_of` returning `None`, no `class_init`), 5 of 9 in
+`tests/resource_id.rs` and 3 of 5 in `tests/backend.rs` failed. The failures are
+worth quoting because they are the bug the increment exists to prevent: with the
+slot left at EDS's default, an address book source carrying `Identity=X1`
+answered `"X1"` and a `[Mail Account]` source carrying `Identity=A1` answered
+`"A1"` — EDS's `collection_backend_dup_resource_id()` returns the identity
+verbatim and asks no questions about the kind. The four resource-id tests that
+passed against the stub are the "not claimed" ones (a foreign source, an empty
+identity, a NULL source, a child with no `[Resource]`); a stub that claims
+nothing satisfies them, and they are there so the *other* tests cannot be
+satisfied by claiming everything.
+
+What was decided, and why:
+
+- **The resource id carries the kind; the stored `Identity` does not.** EDS's
+  default is enough for `EWebDAVCollectionBackend` only because it writes
+  `"contacts::" + url` into `[Resource] Identity` itself. This backend writes the
+  bare JMAP id there, because that is the field `jmap-backend-core`'s
+  `SourceConfig` — and the hand-written `docs/examples/jmap-mock.source` — already
+  read as the object to fetch. JMAP ids are unique per data type, not per account
+  (RFC 8620 §1.2), so an address book and a calendar may both be `X1`, and under
+  the inherited vfunc the second of them to load is "redundant":
+  `collection_backend_load_resources()` keeps the first and **deletes the second's
+  cache file**. Overriding is not a refinement here, it is the difference between
+  two children and one.
+- **The identity is tested for before it is read.** `e_source_get_extension()`
+  creates the extension it is asked for, and this vfunc is called on every
+  `.source` in the cache directory — including other backends' — so reaching
+  straight for `[Resource]` would hand an empty one to each. EDS's own default
+  guards it the same way. `a_child_with_no_identity_is_not_claimed_and_is_not_given_one`
+  asserts the absence afterwards, not just the `None`.
+- **A panic becomes NULL, and NULL deletes the file.** There is no better
+  answer available: `dup_resource_id` has no `GError` and no "ask me again"
+  sentinel. The guard logs a critical, which is the only trace such a bug can
+  leave; this is written down in the trampoline rather than left implied.
+- **A source carrying both kind extensions reads as an address book.** Chosen
+  rather than derived — this backend never writes one — and it is the same
+  precedence `collection_backend_child_added()` applies. Returning `None` there
+  was the alternative and is not obviously better: both outcomes end in a
+  deleted file, and one of them at least round-trips.
+
+Also pinned, in `eds-sys/tests/layout.rs`: `ECollectionBackend`/`…Class` against
+`g_type_query`, and the four vfunc slots the backend will override
+(`populate`, `dup_resource_id`, `child_added`, `child_removed`). Both passed on
+first run — they are pins on a surface the bindings already generated correctly,
+not a fix — but `ECollectionBackend` is the one class whose vfuncs
+`evolution-source-registry` dispatches *itself* rather than in a factory
+subprocess, so a layout drift there misfires in the process that owns every
+account.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no `populate`, and so still no fan-out.** Nothing calls
+   `e_collection_backend_new_child`, nothing applies `Child::settings`, nothing
+   removes what `Fanout::is_obsolete` names. This session made the *reading*
+   half sound; the writing half is the next increment and the larger one.
+2. **No module entry point, so nothing is loadable yet.** The crate builds an
+   rlib only — a `module-jmap-backend.so` exporting nothing is a file
+   `evolution-source-registry` would dlopen and learn nothing from. The cdylib
+   and the `cmake/Backends.cmake` install rule land with `e_module_load`.
+3. **Never driven by EDS.** Every call goes through the class struct from a
+   *detached* instance (zeroed parent bytes), which is sound for this vfunc
+   precisely because it never touches the backend — but it means "EDS calls this
+   with the sources from the cache directory" is read off
+   `e-collection-backend.c`, not demonstrated. A real instance needs an
+   `ESourceRegistryServer` and a running `evolution-source-registry`, which this
+   VM does not have.
+4. **The mail children question is still open**, and it now has a second edge:
+   `resource_id_of` answers `None` for a `[Mail Account]` source, which is
+   correct today (this backend creates none) and would become a deletion the day
+   it does. Whoever adds mail children has to add them to `KIND_EXTENSIONS` in
+   the same commit.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Four new files, each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491
+tests on the default members, unchanged — the new crate is not among them) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean, as is
+`cargo test`/`clippy` over the six EDS crates (`eds-sys`, `jmap-backend-core`,
+`jmap-backend-book`, `jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`
+— 14 new tests). `RUSTDOCFLAGS=-D warnings cargo doc -p jmap-backend-collection`
+is clean; the two pre-existing private-intra-doc-link failures in `jmap-ical`
+and `jmap-mock` noted last session are untouched.
+
+No milestone tag: M6 has a backend now, but not one that fans anything out.
+
+Next in M6: `populate` — reading `Parts::from_collection` off the collection
+source's `[Collection]` extension and its `Connection` off `[Authentication]`/
+`[Security]`, calling `Fanout::discover`, `e_collection_backend_new_child` per
+`Child`, applying `Child::settings` to each, and `e_source_remove_sync` on the
+children `Fanout::is_obsolete` names. It cannot be driven by EDS here either, so
+the increment that writes it must be marked *needs human verification in real
+Evolution*.

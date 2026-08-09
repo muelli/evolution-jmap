@@ -403,6 +403,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmap-backend-collection"
+version = "0.1.0"
+dependencies = [
+ "eds-sys",
+ "evolution-jmap-collection-sync",
+ "evolution-jmap-proto",
+ "glib-sys",
+ "gobject-sys",
+ "jmap-backend-core",
+]
+
+[[package]]
 name = "jmap-backend-core"
 version = "0.1.0"
 dependencies = [
