@@ -147,6 +147,25 @@ default test target.
 
 ## Rules for autonomous work sessions
 
+**Correctness over progress — the overriding principle.** The maintainer
+would rather this repository advance one milestone slowly and *correctly*
+than three milestones quickly and dirtily. A session that ends with no
+new commit because the honest state was "blocked" or "needs human
+verification" is a *good* session, not a failure. Concretely:
+- Never weaken, skip, `#[ignore]`, or delete a test to make something
+  pass; never stub a function and present it as implemented; never paper
+  over a failing check. If the real thing is hard, do the real thing or
+  stop and log why.
+- **Do not claim what you cannot verify.** If a milestone's behaviour
+  can't be checked here — most importantly GUI/config code (M7, M9's GUI
+  tier), which needs a real Evolution session and a display this VM
+  lacks — implement it conservatively, mark it in `docs/NIGHT-LOG.md` as
+  *needs human verification in real Evolution*, and do NOT tag it
+  `COMPLETE`. Compiling is not working.
+- Prefer a small, fully-tested increment over a large, partly-verified
+  one. When unsure whether something is right, stop and write down the
+  uncertainty rather than pushing on it.
+
 - Work only inside this repository; never force-push; never rewrite
   history; do not modify `infra/` or `.github/workflows/ci-image.yml`
   unless a milestone requires it.
