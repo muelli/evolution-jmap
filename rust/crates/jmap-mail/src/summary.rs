@@ -11,22 +11,27 @@
 //! anything of — `CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` is the flag it tests
 //! first, and [`crate::folder`] could not honestly set it until now.
 //!
-//! ## No subclass
+//! ## One line of subclass
 //!
-//! Camel's own providers subclass `CamelFolderSummary`, and this one does not.
-//! What the subclass exists for is building rows out of *messages*: the three
+//! `CamelJmapSummary` overrides no vfunc. What a `CamelFolderSummary` subclass
+//! usually exists for is building rows out of *messages*: the three
 //! `message_info_new_from_*` vfuncs, which turn a parser, a MIME message or a
 //! header list into a row, and `next_uid_string`, which invents a uid for a
 //! message that arrived without one. A JMAP folder is listed rather than
 //! parsed — the rows come from `Email/get`, already structured, and every one
 //! of them arrives with the server's own immutable id — so all four would be
-//! overrides of paths this provider does not take. The one thing a base
-//! summary decides on our behalf is which message-info class to instantiate,
-//! and its answer is `CamelMessageInfoBase`, which is the class
-//! [`crate::message_info`] already builds and pins.
+//! overrides of paths this provider does not take.
 //!
-//! A subclass becomes real when something local has to be numbered — appending
-//! a message to a folder, which is `EmailSubmission` and a later increment.
+//! It exists for the one thing a summary decides that is not a vfunc at all:
+//! `message_info_type`, the class it instantiates a row as. Camel reads that
+//! field when it loads the summary back out of the database, so a folder whose
+//! summary declared nothing would come back from a restart holding plain
+//! `CamelMessageInfoBase` rows — and with them no [`server keywords`], which is
+//! the column that makes a flag change a difference rather than a guess. The
+//! rows [`crate::message_info`] builds are of that type either way; this is what
+//! makes the ones Camel builds match them.
+//!
+//! [`server keywords`]: crate::message_info::server_keywords
 //!
 //! ## A listing is not a copy
 //!
@@ -46,20 +51,65 @@
 //!   summary invented.
 
 use std::collections::BTreeSet;
+use std::ffi::CStr;
+use std::ptr;
 
 use eds_sys::{
-    CamelFolder, CamelFolderSummary, camel_folder_summary_add, camel_folder_summary_check_uid,
-    camel_folder_summary_free_array, camel_folder_summary_get, camel_folder_summary_get_array,
-    camel_folder_summary_lock, camel_folder_summary_new, camel_folder_summary_remove_uid,
-    camel_folder_summary_unlock, camel_folder_take_folder_summary,
+    CamelFolder, CamelFolderSummary, CamelFolderSummaryClass, camel_folder_summary_add,
+    camel_folder_summary_check_uid, camel_folder_summary_free_array, camel_folder_summary_get,
+    camel_folder_summary_get_array, camel_folder_summary_get_type, camel_folder_summary_lock,
+    camel_folder_summary_remove_uid, camel_folder_summary_unlock, camel_folder_take_folder_summary,
 };
-use glib_sys::{GFALSE, GTRUE, gchar};
-use gobject_sys::g_object_unref;
+use glib_sys::{GFALSE, GTRUE, GType, gchar};
+use gobject_sys::{g_object_new, g_object_unref};
+use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::MessageSummary;
 
 use crate::changes::Changes;
 use crate::folder_info::c_string;
-use crate::message_info::{new_message_info, update_message_info};
+use crate::message_info::{message_info_type, new_message_info, update_message_info};
+
+/// The instance struct. Nothing of its own: what this type carries is a class
+/// field, not per-summary state.
+#[repr(C)]
+pub struct JmapSummary {
+    parent: CamelFolderSummary,
+}
+
+/// The class struct, and the field this type exists for.
+#[repr(C)]
+pub struct JmapSummaryClass {
+    parent_class: CamelFolderSummaryClass,
+}
+
+// SAFETY: both structs are #[repr(C)] and lead with the CamelFolderSummary
+// instance and class structs, whose layouts eds-sys's tests/layout.rs checks
+// against `g_type_query`; CamelFolderSummary derives from GObject.
+unsafe impl ObjectSubclass for JmapSummary {
+    const NAME: &'static CStr = c"CamelJmapSummary";
+    type Instance = JmapSummary;
+    type Class = JmapSummaryClass;
+
+    fn parent_type() -> GType {
+        // SAFETY: no arguments, and the type initialises itself.
+        unsafe { camel_folder_summary_get_type() }
+    }
+
+    unsafe fn class_init(class: *mut Self::Class) {
+        // The whole subclass. Camel instantiates a row of this type whenever it
+        // builds one itself — which is every row of every folder after a
+        // restart, read back out of the summary database.
+        //
+        // SAFETY: the class leads with CamelFolderSummaryClass — the contract
+        // above.
+        unsafe { (*class).parent_class.message_info_type = message_info_type() };
+    }
+}
+
+/// Registers the summary type, or returns it if it is already registered.
+pub fn summary_type() -> GType {
+    register_static::<JmapSummary>()
+}
 
 /// Gives `folder` the summary it keeps its rows in.
 ///
@@ -71,15 +121,27 @@ use crate::message_info::{new_message_info, update_message_info};
 /// is what makes the folder the summary's owner and its finalizer the only
 /// place the summary is released.
 ///
+/// Constructed the way `camel_folder_summary_new` constructs a base one — the
+/// folder is a construct-only property — rather than through it, because what
+/// this folder needs is the subclass above.
+///
 /// # Safety
 ///
 /// `folder` must point at a live `CamelFolder` that has not been given a
 /// summary yet.
 pub unsafe fn attach_summary(folder: *mut CamelFolder) {
-    // SAFETY: the folder is live by this function's contract, and the summary
-    // built from it is handed straight over along with its ownership.
+    // SAFETY: a variadic construct call on a registered type; `folder` is a
+    // live `CamelFolder` by this function's contract, which is the type the
+    // property carries, and the list is NULL-terminated. The summary is handed
+    // straight over along with its ownership.
     unsafe {
-        let summary = camel_folder_summary_new(folder);
+        let summary = g_object_new(
+            summary_type(),
+            c"folder".as_ptr(),
+            folder,
+            ptr::null::<gchar>(),
+        )
+        .cast::<CamelFolderSummary>();
         camel_folder_take_folder_summary(folder, summary);
     }
 }

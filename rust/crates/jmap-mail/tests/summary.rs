@@ -23,23 +23,26 @@ mod common;
 
 use std::collections::BTreeSet;
 use std::ffi::{CStr, CString};
+use std::ptr;
 
 use common::Account;
 use eds_sys::{
     CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_FLAGGED,
-    CAMEL_MESSAGE_SEEN, CamelFolder, CamelFolderSummary, camel_folder_get_flags,
-    camel_folder_get_folder_summary, camel_folder_has_summary_capability,
+    CAMEL_MESSAGE_SEEN, CamelFolder, CamelFolderSummary, CamelFolderSummaryClass,
+    camel_folder_get_flags, camel_folder_get_folder_summary, camel_folder_has_summary_capability,
     camel_folder_summary_check_uid, camel_folder_summary_count, camel_folder_summary_free_array,
     camel_folder_summary_get, camel_folder_summary_get_array, camel_folder_summary_get_folder,
     camel_folder_summary_get_next_uid, camel_folder_summary_get_unread_count,
+    camel_folder_summary_load, camel_folder_summary_save, camel_message_info_clone,
     camel_message_info_get_flags, camel_message_info_get_subject, camel_message_info_get_uid,
     camel_message_info_get_user_flag, camel_message_info_set_flags,
 };
-use glib_sys::{GFALSE, GTRUE};
-use gobject_sys::g_object_unref;
+use glib_sys::{GError, GFALSE, GTRUE};
+use gobject_sys::{GTypeInstance, g_object_unref};
 use jmap_mail::folder::new_folder;
+use jmap_mail::message_info::{message_info_type, server_keywords};
 use jmap_mail::summary::apply_listing;
-use jmap_mail_sync::{FolderInfo, MessageFlags, MessageSummary};
+use jmap_mail_sync::{FolderInfo, Keywords, MessageFlags, MessageSummary};
 use jmap_proto::Id;
 
 /// A folder for a mailbox nobody has listed yet, together with the account it
@@ -618,5 +621,107 @@ fn a_row_that_moved_in_both_columns_has_both_of_them_written() {
         assert_eq!(changes.changed(), ["M1001"]);
         g_object_unref(info.cast());
         g_object_unref(folder.cast());
+    }
+}
+
+/// The reason the summary is a subclass at all. Camel builds rows itself
+/// whenever it reads a folder back off disk, and this class field is the only
+/// thing that says which kind to build — so the answer here and the answer
+/// `new_message_info` gives have to be the same one, or a folder would hold two
+/// kinds of row depending on where each came from.
+#[test]
+fn the_summary_declares_the_provider_s_own_row_type() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live and owns its summary, whose class is owned by the
+    // type system and outlives both.
+    unsafe {
+        let summary = summary_of(folder);
+        let class = (*summary.cast::<GTypeInstance>())
+            .g_class
+            .cast::<CamelFolderSummaryClass>();
+        assert!(!class.is_null(), "the summary has no class");
+
+        assert_eq!((*class).message_info_type, message_info_type());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// Camel clones a row when one has to exist outside the summary it belongs to,
+/// and the summary the copy is being made for is what decides its type. Cloned
+/// into one of ours, the copy is one of ours — and a copy that had forgotten the
+/// keywords the server holds would be a row whose next flag change looked like
+/// the removal of every one of them.
+#[test]
+fn a_row_cloned_into_the_summary_keeps_the_keywords_it_remembered() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+    let mut listed = message("M2001");
+    listed.tags = vec!["Work".to_owned()];
+
+    // SAFETY: `folder` is live; the row and its clone are both references this
+    // test owns.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, std::slice::from_ref(&listed));
+        let info = row(summary, "M2001").expect("a row for the message");
+
+        let clone = camel_message_info_clone(info, summary);
+        assert!(!clone.is_null(), "Camel cloned nothing");
+
+        assert_eq!(
+            server_keywords(clone),
+            Some(Keywords::new(&listed.flags, &listed.tags))
+        );
+        g_object_unref(clone.cast());
+        g_object_unref(info.cast());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// And the whole point of storing the set at all: it has to be there after a
+/// restart. A folder closed and opened again is a new summary over the same
+/// rows, read back out of the store's database — the state in which a flag
+/// change made this morning is diffed against a listing made yesterday.
+#[test]
+fn the_keywords_a_row_remembers_outlive_the_folder_that_listed_it() {
+    let account = Account::open();
+    let mut listed = message("M2002");
+    listed.flags.seen = true;
+    listed.tags = vec!["Read later".to_owned()];
+
+    // SAFETY: every folder is live for as long as it is used and unreffed once;
+    // the error out-parameter is only read while it is in scope.
+    unsafe {
+        let folder = open_folder(&account);
+        apply_listing(summary_of(folder), std::slice::from_ref(&listed));
+        let mut error: *mut GError = ptr::null_mut();
+        assert_ne!(
+            camel_folder_summary_save(summary_of(folder), ptr::addr_of_mut!(error)),
+            GFALSE,
+            "the summary would not save"
+        );
+        assert!(error.is_null());
+        g_object_unref(folder.cast());
+
+        // The same mailbox opened a second time: a folder with a summary that
+        // holds nothing until it is loaded, which is what a restart amounts to.
+        let reopened = open_folder(&account);
+        assert_ne!(
+            camel_folder_summary_load(summary_of(reopened), ptr::addr_of_mut!(error)),
+            GFALSE,
+            "the summary would not load"
+        );
+        assert!(error.is_null());
+
+        let info = row(summary_of(reopened), "M2002").expect("a row read back off disk");
+        assert_eq!(
+            server_keywords(info),
+            Some(Keywords::new(&listed.flags, &listed.tags)),
+            "the row came back without the keywords it was stored with"
+        );
+        g_object_unref(info.cast());
+        g_object_unref(reopened.cast());
     }
 }

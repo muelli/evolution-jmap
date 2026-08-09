@@ -27,18 +27,21 @@ use std::ptr;
 use eds_sys::{
     CAMEL_MESSAGE_ANSWERED, CAMEL_MESSAGE_ATTACHMENTS, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DRAFT,
     CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK,
-    CAMEL_MESSAGE_SEEN, CamelMessageInfo, camel_message_info_get_cc,
+    CAMEL_MESSAGE_SEEN, CamelMIRecord, CamelMessageInfo, camel_message_info_get_cc,
     camel_message_info_get_date_received, camel_message_info_get_date_sent,
     camel_message_info_get_flags, camel_message_info_get_from, camel_message_info_get_message_id,
     camel_message_info_get_preview, camel_message_info_get_references, camel_message_info_get_size,
     camel_message_info_get_subject, camel_message_info_get_to, camel_message_info_get_uid,
-    camel_message_info_get_user_flag, camel_message_info_new_from_headers,
-    camel_name_value_array_append, camel_name_value_array_free, camel_name_value_array_new,
+    camel_message_info_get_user_flag, camel_message_info_load, camel_message_info_new_from_headers,
+    camel_message_info_save, camel_message_info_set_flags, camel_name_value_array_append,
+    camel_name_value_array_free, camel_name_value_array_new,
 };
-use glib_sys::{GFALSE, gchar};
-use gobject_sys::g_object_unref;
-use jmap_mail::message_info::new_message_info;
-use jmap_mail_sync::{MessageFlags, MessageSummary};
+use glib_sys::{GFALSE, GTRUE, g_string_free, g_string_new, gchar};
+use gobject_sys::{g_object_unref, g_type_check_instance_is_a};
+use jmap_mail::message_info::{
+    message_info_type, new_message_info, server_keywords, update_message_info,
+};
+use jmap_mail_sync::{Keywords, MessageFlags, MessageSummary};
 use jmap_proto::Id;
 use jmap_proto::mail::EmailAddress;
 
@@ -432,6 +435,177 @@ fn a_value_with_a_nul_in_it_does_not_truncate_the_row() {
             camel_message_info_get_user_flag(info, c"to\u{fffd}do".as_ptr()),
             GFALSE
         );
+        g_object_unref(info.cast());
+    }
+}
+
+/// The keywords the row remembers the *server* holding, which is a fourth
+/// column and the only one that is neither a copy nor a computation: it is what
+/// this provider knows and Camel has no field for.
+///
+/// # Safety
+///
+/// `info` must be a live message info.
+unsafe fn remembered(info: *mut CamelMessageInfo) -> Keywords {
+    // SAFETY: the accessor reads the row's own copy of the set and clones it.
+    unsafe { server_keywords(info) }.expect("a row of this provider's own kind")
+}
+
+/// A row is not a `CamelMessageInfoBase` any more, and the reason is one
+/// column: the keywords the last listing found. Without them a flag change has
+/// no *before* to be the difference from — the row's own flags word is the
+/// after, mutated in place by the user — so every write would have to be a
+/// whole-set replacement over keywords no client here has ever seen.
+#[test]
+fn a_row_is_the_provider_s_own_kind_of_row() {
+    let info = info_of(&row("Em0020"));
+
+    // SAFETY: `info` is a live message info this test owns, and a GObject.
+    unsafe {
+        assert_ne!(
+            g_type_check_instance_is_a(info.cast(), message_info_type()),
+            GFALSE,
+            "the row is not the type the summary declares"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+#[test]
+fn a_row_remembers_the_keywords_the_listing_carried() {
+    let mut message = row("Em0021");
+    message.flags.seen = true;
+    message.tags = vec!["Work".to_owned()];
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        assert_eq!(
+            remembered(info),
+            Keywords::new(&message.flags, &message.tags)
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// The whole point of the column. The user marking a row read writes Camel's
+/// flags word and nothing else, so the row now claims `$seen` and the column
+/// still says the server has not been told — which is what makes the one
+/// keyword to send a difference rather than a guess.
+#[test]
+fn a_flag_the_user_changed_does_not_change_what_the_row_remembers() {
+    let mut message = row("Em0022");
+    message.tags = vec!["Work".to_owned()];
+    let info = info_of(&message);
+    let listed = Keywords::new(&message.flags, &message.tags);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+
+        assert_ne!(camel_message_info_get_flags(info) & CAMEL_MESSAGE_SEEN, 0);
+        assert_eq!(
+            remembered(info),
+            listed,
+            "a local mark rewrote what the server was last seen holding"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// A refresh is where the set is renewed: the listing that reports a keyword
+/// another client added is the listing after which that keyword is no longer
+/// something this folder would remove.
+#[test]
+fn a_later_listing_replaces_the_keywords_the_row_remembers() {
+    let mut first = row("Em0023");
+    first.tags = vec!["Work".to_owned()];
+    let mut second = row("Em0023");
+    second.tags = vec!["Later".to_owned()];
+    let info = info_of(&first);
+
+    // SAFETY: `info` is a live message info this test owns, built from a row
+    // with the same uid as the one it is updated from.
+    unsafe {
+        update_message_info(info, &second);
+
+        assert_eq!(remembered(info), Keywords::new(&second.flags, &second.tags));
+        g_object_unref(info.cast());
+    }
+}
+
+/// The set is written into the one field of the summary database Camel reserves
+/// for what a provider knows and it does not, and read back out of it in the
+/// same order. Asserted through Camel's own `load`/`save` entry points rather
+/// than against the encoding, because the encoding is Camel's: a keyword with a
+/// space in it is what says so, since a format that joined the names would come
+/// back as two keywords.
+#[test]
+fn the_keywords_a_row_remembers_survive_a_trip_through_the_summary_database() {
+    let mut message = row("Em0025");
+    message.flags.seen = true;
+    message.tags = vec!["Read later".to_owned(), "9-lives".to_owned()];
+    let info = info_of(&message);
+    let restored = info_of(&row("Em0025"));
+
+    // SAFETY: both infos are live and owned here. The record is zeroed, which
+    // is the state Camel hands `save` one in, and every string `save` leaves in
+    // it is read back before it goes out of scope.
+    unsafe {
+        let mut record: CamelMIRecord = std::mem::zeroed();
+        let bdata = g_string_new(ptr::null());
+        assert_ne!(
+            camel_message_info_save(info, ptr::addr_of_mut!(record), bdata),
+            GFALSE,
+            "the row would not save"
+        );
+
+        record.bdata = (*bdata).str;
+        let mut cursor = record.bdata;
+        assert_ne!(
+            camel_message_info_load(restored, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+            GFALSE,
+            "the row would not load"
+        );
+
+        assert_eq!(
+            remembered(restored),
+            Keywords::new(&message.flags, &message.tags)
+        );
+        g_string_free(bdata, GTRUE);
+        g_object_unref(restored.cast());
+        g_object_unref(info.cast());
+    }
+}
+
+/// A row whose stored data says nothing about keywords — one written by a
+/// summary from before this column existed — is a row that remembers nothing,
+/// not one that fails to load. The empty set is also the safe answer: the
+/// difference from it only ever *adds* keywords, so a folder that lost the
+/// column removes none.
+#[test]
+fn a_row_stored_without_the_column_loads_as_a_row_that_remembers_nothing() {
+    let mut message = row("Em0026");
+    message.tags = vec!["Work".to_owned()];
+    let info = info_of(&message);
+
+    // SAFETY: as above, with a record whose bdata is the empty string a summary
+    // that wrote no provider data leaves behind.
+    unsafe {
+        let mut record: CamelMIRecord = std::mem::zeroed();
+        let bdata = g_string_new(c"".as_ptr());
+        record.uid = camel_message_info_get_uid(info);
+        record.bdata = (*bdata).str;
+        let mut cursor = record.bdata;
+
+        assert_ne!(
+            camel_message_info_load(info, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+            GFALSE,
+            "a row with no provider data would not load"
+        );
+
+        assert!(remembered(info).is_empty());
+        g_string_free(bdata, GTRUE);
         g_object_unref(info.cast());
     }
 }

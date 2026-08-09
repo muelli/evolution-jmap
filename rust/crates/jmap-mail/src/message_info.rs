@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CamelMessageInfo`: one summary row, as the object Camel keeps it in.
+//! `CamelJmapMessageInfo`: one summary row, as the object Camel keeps it in.
 //!
 //! `jmap-mail-sync`'s [`MessageSummary`] is the same row read off an
 //! `Email/get`, and most of what happens here is copying it across. Three
@@ -26,37 +26,400 @@
 //!   conversation as two. `tests/message_info.rs` pins that against Camel
 //!   itself rather than against a constant.
 //!
-//! The row is built detached, with no summary behind it. That is not a
-//! placeholder for the summary this folder will grow: `camel_message_info_new`
-//! consults the summary only to learn which message-info type to instantiate,
-//! and a summary that declares none — which is the case here — gets
-//! `CamelMessageInfoBase`, the same class NULL produces.
+//! There is a fourth column, and it is neither a copy nor a computation: it is
+//! something only this provider knows, so Camel has no field for it and the row
+//! has to be a subclass to carry it.
+//!
+//! ## The keywords the server was last seen holding
+//!
+//! A flag change is a *difference* on the wire — `jmap-mail-sync`'s
+//! `KeywordChange` — because a whole-set write would speak for every keyword on
+//! the message, including the ones no client here has heard of. A difference
+//! needs both ends, and the row only has one of them: the user marks a message
+//! read by mutating the flags word in place, which is the *after*. The before —
+//! the keywords the last listing found — is gone the moment that mark is made,
+//! unless the row keeps it.
+//!
+//! So [`JmapMessageInfo`] is a `CamelMessageInfoBase` with the listing's keyword
+//! set beside it, written by [`new_message_info`] and renewed by
+//! [`update_message_info`]. It is the shape IMAPX's own message info takes for
+//! the same reason — it keeps a `server_flags` word next to Camel's — and it
+//! survives a restart the only way Camel offers a provider: `CamelMIRecord`'s
+//! `bdata`, one string per row that the class chain appends to on the way out
+//! and reads back in the same order on the way in.
+//!
+//! Two things follow from what the column is *for*, and both are tested:
+//!
+//! - **A row that lost it remembers nothing rather than failing to load.** The
+//!   empty set is the conservative answer and not merely a tolerable one: a
+//!   difference from nothing only ever adds keywords, so a row whose stored data
+//!   predates this column takes none off.
+//! - **A clone into a summary of ours carries it.** A copy that dropped the
+//!   column would be a row whose next flag change looked like the removal of
+//!   every keyword the message has. Which summary the copy is being made for is
+//!   what decides whether it is a row of ours at all — see [`clone`].
+//!
+//! The row is still built detached, with no summary behind it — nothing about
+//! the column needs one — but which class a *summary* instantiates is no longer
+//! a question that answers itself. [`crate::summary`]'s subclass declares this
+//! type, which is what a row read back out of the database comes back as, and
+//! `tests/summary.rs` pins the two answers together.
 
 use std::ffi::CStr;
 use std::ptr;
+use std::sync::Mutex;
 
 use eds_sys::{
     CAMEL_MESSAGE_ANSWERED, CAMEL_MESSAGE_ATTACHMENTS, CAMEL_MESSAGE_DRAFT, CAMEL_MESSAGE_FLAGGED,
     CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK, CAMEL_MESSAGE_SEEN,
-    CamelAddress, CamelMessageFlags, CamelMessageInfo, camel_address_format,
-    camel_internet_address_add, camel_internet_address_new,
-    camel_message_info_freeze_notifications, camel_message_info_new, camel_message_info_set_cc,
+    CamelAddress, CamelFolderSummary, CamelMIRecord, CamelMessageFlags, CamelMessageInfo,
+    CamelMessageInfoBase, CamelMessageInfoBaseClass, CamelMessageInfoClass, camel_address_format,
+    camel_internet_address_add, camel_internet_address_new, camel_message_info_base_get_type,
+    camel_message_info_freeze_notifications, camel_message_info_set_cc,
     camel_message_info_set_date_received, camel_message_info_set_date_sent,
     camel_message_info_set_flags, camel_message_info_set_from, camel_message_info_set_message_id,
     camel_message_info_set_preview, camel_message_info_set_size, camel_message_info_set_subject,
     camel_message_info_set_to, camel_message_info_set_uid, camel_message_info_take_references,
     camel_message_info_take_user_flags, camel_message_info_thaw_notifications,
-    camel_named_flags_insert, camel_named_flags_new,
+    camel_named_flags_insert, camel_named_flags_new, camel_util_bdata_get_number,
+    camel_util_bdata_get_string, camel_util_bdata_put_number, camel_util_bdata_put_string,
 };
 use glib_sys::{
-    G_CHECKSUM_MD5, GArray, GFALSE, g_array_append_vals, g_array_sized_new, g_checksum_free,
-    g_checksum_get_digest, g_checksum_new, g_checksum_update, g_free,
+    G_CHECKSUM_MD5, GArray, GFALSE, GString, GTRUE, GType, g_array_append_vals, g_array_sized_new,
+    g_checksum_free, g_checksum_get_digest, g_checksum_new, g_checksum_update, g_free, gboolean,
+    gchar,
 };
-use gobject_sys::g_object_unref;
-use jmap_mail_sync::{MessageFlags, MessageSummary};
+use gobject_sys::{g_object_new, g_object_unref, g_type_check_instance_is_a, g_type_class_peek};
+use jmap_backend_core::instance::Slot;
+use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::trampoline::{guard, log_critical};
+use jmap_mail_sync::{Keywords, MessageFlags, MessageSummary};
 use jmap_proto::mail::EmailAddress;
 
 use crate::folder_info::c_string;
+
+/// The instance struct: Camel's row, and the one thing about it Camel has no
+/// field for.
+#[repr(C)]
+pub struct JmapMessageInfo {
+    parent: CamelMessageInfoBase,
+    /// The keywords the last listing found on the message.
+    ///
+    /// A [`Slot`] for the reason every other instance field in this crate is
+    /// one — the struct arrives zeroed and is freed without a destructor
+    /// running over it — and a [`Mutex`] because, unlike a folder's mailbox id,
+    /// this one is written more than once: every refresh renews it, and Camel
+    /// drives a folder from more than one thread.
+    server: Slot<Mutex<Keywords>>,
+}
+
+impl JmapMessageInfo {
+    /// The Rust view of a row Camel handed over, or `None` for a row that is
+    /// not one of ours.
+    ///
+    /// Checked rather than assumed, unlike a vfunc's own first argument: a row
+    /// reaches this crate from a summary, and a summary that was written before
+    /// this type existed hands back a plain `CamelMessageInfoBase`. Reading one
+    /// of those as this type would be undefined behaviour rather than a wrong
+    /// answer.
+    ///
+    /// # Safety
+    ///
+    /// `info` must be NULL or point at a live `CamelMessageInfo`.
+    unsafe fn borrow<'a>(info: *mut CamelMessageInfo) -> Option<&'a Self> {
+        // SAFETY: the type check is what makes the cast sound; the contract
+        // above is what makes the check itself legal.
+        unsafe {
+            if info.is_null()
+                || g_type_check_instance_is_a(info.cast(), message_info_type()) == GFALSE
+            {
+                return None;
+            }
+            info.cast::<Self>().as_ref()
+        }
+    }
+}
+
+/// The class struct, carrying the parent's vfunc slots with our functions in
+/// three of them.
+#[repr(C)]
+pub struct JmapMessageInfoClass {
+    parent_class: CamelMessageInfoBaseClass,
+}
+
+// SAFETY: both structs are #[repr(C)] and lead with the CamelMessageInfoBase
+// instance and class structs, whose layouts eds-sys's tests/layout.rs checks
+// against `g_type_query`; CamelMessageInfoBase derives from CamelMessageInfo,
+// from GObject.
+unsafe impl ObjectSubclass for JmapMessageInfo {
+    /// `CamelJmapMessageInfo`, matching the store and the folder: Camel's own
+    /// providers name theirs `Camel<Protocol>MessageInfo`.
+    const NAME: &'static CStr = c"CamelJmapMessageInfo";
+    type Instance = JmapMessageInfo;
+    type Class = JmapMessageInfoClass;
+
+    fn parent_type() -> GType {
+        // SAFETY: no arguments, and the type initialises itself.
+        unsafe { camel_message_info_base_get_type() }
+    }
+
+    unsafe fn class_init(class: *mut Self::Class) {
+        // SAFETY: the class leads with CamelMessageInfoBaseClass, which leads
+        // with CamelMessageInfoClass — the contract above.
+        let class = unsafe { &mut (*class).parent_class.parent_class };
+        class.load = Some(load);
+        class.save = Some(save);
+        class.clone = Some(clone);
+    }
+
+    unsafe fn instance_init(instance: *mut Self::Instance) {
+        // Filled here rather than left empty, because an empty slot and a slot
+        // holding an empty set are different answers: the first is a row this
+        // crate cannot speak for, and every reader treats it as one.
+        //
+        // SAFETY: the instance is being constructed, so this is the only
+        // reference to it.
+        unsafe { (*instance).server.init(Mutex::new(Keywords::default())) };
+    }
+
+    unsafe fn finalize(instance: *mut Self::Instance) {
+        // SAFETY: the instance is being finalized, so nothing can still reach
+        // it and no borrow handed out by `get` is alive. Without this the set
+        // leaks — once per row the folder ever listed.
+        unsafe { (*instance).server.clear() };
+    }
+}
+
+/// Registers the row type, or returns it if it is already registered.
+///
+/// Statically, like the store's and the folder's: a Camel provider is not a
+/// `GTypeModule`, so there is no unload for a dynamic type to be unregistered
+/// by.
+pub fn message_info_type() -> GType {
+    register_static::<JmapMessageInfo>()
+}
+
+/// The keywords `info` last saw the server holding, or `None` if it is not a row
+/// this provider built.
+///
+/// A copy rather than a borrow: the set lives behind a mutex the row hands out
+/// nothing from, so that a refresh renewing it cannot be interleaved with a
+/// synchronisation reading it.
+///
+/// # Safety
+///
+/// `info` must be NULL or point at a live `CamelMessageInfo`.
+pub unsafe fn server_keywords(info: *mut CamelMessageInfo) -> Option<Keywords> {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let row = unsafe { JmapMessageInfo::borrow(info) }?;
+    let keywords = row
+        .server
+        .get()?
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Some(keywords.clone())
+}
+
+/// Records what one listing found, replacing whatever the row remembered.
+///
+/// Wholesale, for the reason the user flags are replaced wholesale: a
+/// `keywords` object is the whole truth about the message's keywords, so a
+/// keyword the listing did not mention is one that is no longer there.
+///
+/// Silently does nothing for a row that is not ours — a row loaded from a
+/// summary written before this column existed — which is the same degradation
+/// an empty set is: the difference from nothing adds keywords and removes none.
+///
+/// # Safety
+///
+/// `info` must be NULL or point at a live `CamelMessageInfo`.
+unsafe fn set_server_keywords(info: *mut CamelMessageInfo, keywords: Keywords) {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let Some(row) = (unsafe { JmapMessageInfo::borrow(info) }) else {
+        return;
+    };
+    if let Some(slot) = row.server.get() {
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = keywords;
+    }
+}
+
+/// `CamelMessageInfoClass.save`: appends the column to the row's stored data.
+///
+/// The count first, then the names, because that is what [`load`] reads and the
+/// two are one format. Written through `camel_util_bdata_put_string` rather than
+/// joined here: `bdata` is one string for the whole class chain, and a keyword
+/// may contain a space, a digit or a dash — Camel's own length-prefixed encoding
+/// is what keeps one keyword from coming back as two.
+///
+/// # Safety
+///
+/// Called by Camel with a live row of this type, a record to fill and the
+/// string the chain is building.
+unsafe extern "C" fn save(
+    info: *const CamelMessageInfo,
+    record: *mut CamelMIRecord,
+    bdata: *mut GString,
+) -> gboolean {
+    guard_row("save", info.cast_mut(), GFALSE, || {
+        // SAFETY: chaining up to the parent's own save, on an instance of a type
+        // derived from it, with the arguments Camel passed through untouched.
+        let chained = unsafe { parent_class() }
+            .and_then(|class| class.save)
+            .map_or(GFALSE, |save| unsafe { save(info, record, bdata) });
+        if chained == GFALSE {
+            return GFALSE;
+        }
+
+        // SAFETY: `info` is a row of this type, so the set is there; `bdata` is
+        // the live GString Camel is building and each name is NUL-terminated
+        // and copied by the call.
+        unsafe {
+            let keywords = server_keywords(info.cast_mut()).unwrap_or_default();
+            camel_util_bdata_put_number(bdata, keywords.len() as i64);
+            for name in keywords.iter() {
+                camel_util_bdata_put_string(bdata, c_string(name).as_ptr());
+            }
+        }
+        GTRUE
+    })
+}
+
+/// `CamelMessageInfoClass.load`: reads the column back out of it.
+///
+/// A count that runs past the end of the string is a truncated or foreign
+/// record rather than an error to report: the reads stop at the first name that
+/// is not there, and what the row is left with is the keywords that *were*
+/// stored. Reporting failure instead would drop the whole row — every other
+/// column included — over the one column nothing else needs.
+///
+/// # Safety
+///
+/// Called by Camel with a live row of this type, the record it was stored as,
+/// and the cursor the chain is reading through.
+unsafe extern "C" fn load(
+    info: *mut CamelMessageInfo,
+    record: *const CamelMIRecord,
+    cursor: *mut *mut gchar,
+) -> gboolean {
+    guard_row("load", info, GFALSE, || {
+        // SAFETY: chaining up first, because the cursor is read in the order it
+        // was written and the parent's fields come first.
+        let chained = unsafe { parent_class() }
+            .and_then(|class| class.load)
+            .map_or(GFALSE, |load| unsafe { load(info, record, cursor) });
+        if chained == GFALSE {
+            return GFALSE;
+        }
+
+        // SAFETY: the cursor is Camel's own, pointing into the record's `bdata`;
+        // `get_string` advances it and hands back a `g_malloc`ed string, or NULL
+        // once there is nothing left to read.
+        let names: Vec<String> = unsafe {
+            let count = camel_util_bdata_get_number(cursor, 0).max(0) as u64;
+            (0..count)
+                .map_while(|_| {
+                    let name = camel_util_bdata_get_string(cursor, ptr::null());
+                    if name.is_null() {
+                        return None;
+                    }
+                    let text = CStr::from_ptr(name).to_string_lossy().into_owned();
+                    g_free(name.cast());
+                    Some(text)
+                })
+                .collect()
+        };
+
+        // SAFETY: `info` is a row of this type, by the guard above.
+        unsafe { set_server_keywords(info, names.into_iter().collect()) };
+        GTRUE
+    })
+}
+
+/// `CamelMessageInfoClass.clone`: hands the column to the copy.
+///
+/// Which copies those are is not this function's choice. The parent's clone
+/// builds its result out of the *summary* it is told to assign the copy to — it
+/// is `camel_message_info_new` on that summary — so a row cloned into a summary
+/// of ours comes back as one of ours and a row cloned into no summary at all
+/// comes back a plain `CamelMessageInfoBase`. The second is left exactly as the
+/// parent made it, which is why the write below goes through the checked
+/// accessor rather than through the instance struct: a copy that is not of this
+/// type is a copy in a folder that has no JMAP keywords to be asked about.
+///
+/// Overriding the whole thing to force the type would mean rebuilding every
+/// column of the row here, which is the parent's job and would silently stop
+/// copying whatever column Camel adds next.
+///
+/// # Safety
+///
+/// Called by Camel with a live row of this type.
+unsafe extern "C" fn clone(
+    info: *const CamelMessageInfo,
+    summary: *mut CamelFolderSummary,
+) -> *mut CamelMessageInfo {
+    guard_row("clone", info.cast_mut(), ptr::null_mut(), || {
+        // SAFETY: chaining up to the parent's clone with Camel's own arguments;
+        // the row it returns is owned by the caller.
+        let copy = unsafe { parent_class() }
+            .and_then(|class| class.clone)
+            .map_or(ptr::null_mut(), |clone| unsafe { clone(info, summary) });
+
+        // SAFETY: `copy` is NULL or a live row; both accessors check the type.
+        unsafe {
+            if let Some(keywords) = server_keywords(info.cast_mut()) {
+                set_server_keywords(copy, keywords);
+            }
+        }
+        copy
+    })
+}
+
+/// The class our overrides chain up to.
+///
+/// `g_type_class_peek` of the parent type rather than of the instance's own
+/// class: a further subclass of ours would make the second point back at these
+/// same functions and recurse until the stack ran out — the same rule the
+/// finalize trampoline in `jmap-backend-core` follows.
+///
+/// # Safety
+///
+/// An instance of this type must exist, which is what guarantees its parent's
+/// class is initialised and alive.
+unsafe fn parent_class<'a>() -> Option<&'a CamelMessageInfoClass> {
+    // SAFETY: the contract above; the class is owned by the type system and
+    // outlives every instance.
+    unsafe {
+        g_type_class_peek(JmapMessageInfo::parent_type())
+            .cast::<CamelMessageInfoClass>()
+            .as_ref()
+    }
+}
+
+/// Runs one vfunc body, refusing to run it at all on a row that is not ours.
+///
+/// The type check is not defensive about Camel — it only dispatches a class's
+/// vfuncs on instances of that class — it is what makes the *bodies* above able
+/// to reach the instance struct without a check of their own. The panic guard is
+/// the rule every `extern "C"` in this repository follows: a Rust panic must
+/// never cross into C.
+fn guard_row<T>(
+    what: &str,
+    info: *mut CamelMessageInfo,
+    fallback: T,
+    body: impl FnOnce() -> T,
+) -> T {
+    // SAFETY: `info` is the argument Camel dispatched on, so it is NULL or a
+    // live instance.
+    if unsafe { JmapMessageInfo::borrow(info) }.is_none() {
+        log_critical(&format!(
+            "CamelJmapMessageInfo::{what} called on a row of another type"
+        ));
+        return fallback;
+    }
+    guard(what, fallback, body)
+}
 
 /// The summary row for one message, owned by the caller.
 ///
@@ -65,9 +428,16 @@ use crate::folder_info::c_string;
 /// it rather than unwrapped into a reference, because its only caller hands it
 /// straight back to a summary.
 pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
-    // SAFETY: NULL is a summary that declares no message-info type, which is
-    // what this provider's will be; the row comes out a `CamelMessageInfoBase`.
-    let info = unsafe { camel_message_info_new(ptr::null_mut()) };
+    // Constructed directly rather than through `camel_message_info_new`, which
+    // reads the type to instantiate off a *summary* and has none to read here:
+    // the row is built before it is added, and the summary it is added to
+    // declares this same type ([`crate::summary`]), so the two answers agree by
+    // being the same function.
+    //
+    // SAFETY: a variadic construct call on a registered type, with NULL for the
+    // first property name — a row is constructed with none.
+    let info = unsafe { g_object_new(message_info_type(), ptr::null::<gchar>()) }
+        .cast::<CamelMessageInfo>();
     if info.is_null() {
         return info;
     }
@@ -163,6 +533,12 @@ pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &Message
         let flags = camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&message.flags));
         let labels = set_user_flags(info, &message.tags);
         camel_message_info_thaw_notifications(info);
+        // Renewed alongside them, and deliberately not part of the answer: what
+        // the server was last seen holding is not a column the message list
+        // draws, so a listing that only re-spelled a keyword is not a change to
+        // announce. A keyword the server really added arrives as a flag or a
+        // label too, and is reported as one of those.
+        set_server_keywords(info, Keywords::new(&message.flags, &message.tags));
         flags != GFALSE || labels != GFALSE
     }
 }

@@ -98,10 +98,36 @@ impl Keywords {
         self.0.is_empty()
     }
 
+    /// How many keywords the set holds — which is how many names
+    /// [`Keywords::iter`] yields, and not how many were put in: two spellings
+    /// of one keyword are one keyword.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     fn insert(&mut self, name: &str) {
         self.0
             .entry(name.to_lowercase())
             .or_insert_with(|| name.to_owned());
+    }
+}
+
+/// A set from the names it holds, folded on the way in like every other way of
+/// building one.
+///
+/// This is the inverse of [`Keywords::iter`], and it exists for the same reason
+/// the iterator does: the keywords the last listing found have to survive the
+/// process that found them, and the only thing there is to store is the names.
+/// A list read back from wherever they were kept is therefore turned into a set
+/// here rather than trusted to be one — nothing about a file on disk guarantees
+/// it does not name one keyword twice.
+impl FromIterator<String> for Keywords {
+    fn from_iter<I: IntoIterator<Item = String>>(names: I) -> Self {
+        let mut keywords = Self::default();
+        for name in names {
+            keywords.insert(&name);
+        }
+        keywords
     }
 }
 
