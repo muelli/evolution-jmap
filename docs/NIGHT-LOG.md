@@ -7515,3 +7515,126 @@ time. Worth writing down as answered-by-design rather than carrying as open.
 
 Next in M5: `get_folder_info_sync`'s NULL-versus-GError question, or the README's
 architecture block. The core limits are done.
+
+## 2026-08-09 (seventy-eighth session)
+
+**The folders Send / Receive never checked.** `CamelStoreClass` has one
+non-blocking slot, `can_refresh_folder` — "Returns if this folder (param info)
+should be checked for new mail or not" — and this provider had never filled it.
+The inherited answer is one line, `(info->flags & CAMEL_FOLDER_TYPE_MASK) ==
+CAMEL_FOLDER_TYPE_INBOX`: the inbox and nothing else. Every provider in the
+tree overrides it — IMAPX, EWS, local, POP3, NNTP, Evolution's own RSS store —
+and this one did not, so a JMAP account's Send / Receive checked the inbox and
+left every other folder's counts stale until the user clicked it. On JMAP that
+is worse than on IMAP, because server-side filing is ordinary: mail the user
+cares about often never touches the inbox at all.
+
+Red first, three tests through the wrapper Evolution calls:
+
+- `send_receive_checks_the_inbox_and_the_folders_the_user_ticked` — a listing
+  with all four cases in it (inbox; a ticked folder; an unticked one; an
+  unticked folder kept in the answer only because a ticked one sits below it),
+  walked the way `get_folders` in Evolution's `mail-send-recv.c` walks one,
+  asking `camel_store_can_refresh_folder` about each info. Failed with
+  `["Inbox"]` against `["Inbox", "Lists", "Work/Invoices"]`.
+- `the_inbox_is_checked_even_when_the_user_unticked_it` — the half of the
+  inherited rule that is kept rather than replaced.
+- `the_inherited_answer_checks_nothing_but_the_inbox` — the same listing put
+  through `CamelOfflineStoreClass`'s inherited slot, so a Camel that widened
+  its own default fails here with a sentence instead of leaving this provider
+  carrying an override nobody needs.
+
+What landed: `folders::refreshable(flags)` — the inbox, plus every folder
+carrying `CAMEL_FOLDER_SUBSCRIBED` — and the `can_refresh_folder` trampoline
+that installs it, in `folders::install_vfuncs` beside the other five.
+
+Decisions taken:
+
+- **Subscription is the line, and no setting is added.** RFC 8621 §2 defines
+  `isSubscribed` as "has the user indicated they wish to see this Mailbox" —
+  the same user and the same intent that "check this folder for new mail" is
+  about. IMAPX needs `check-all`/`check-subscribed` settings because `LIST` and
+  `LSUB` are separate round trips and an IMAP account's subscriptions are often
+  nobody's idea of the folders worth checking; `Mailbox/get` returns every
+  mailbox with its `isSubscribed` in the one call the listing already made, so
+  the answer is in hand and costs nothing. A "check all folders regardless"
+  setting is a property to add later, not a reason to guess at one now.
+- **An unticked folder kept only for a ticked child answers no.** It is a
+  folder the user chose not to see; the ticked folder below it is asked about
+  separately and answers yes. This is the same asymmetry `folders::ticked`
+  already documents, now visible in a second place.
+- **`CAMEL_FOLDER_NOSELECT` is deliberately not tested for**, unlike in EWS.
+  This store never sets it — `ticked` explains why an unticked ancestor is
+  still a selectable mailbox — and Evolution's `get_folders` filters `NOSELECT`
+  itself in the walk that asks the question, so a test here would be a second
+  answer to one the caller has already given.
+- **The vfunc reads neither the store nor the network.** The slot is documented
+  as non-blocking and Camel asks it once per folder while walking a forest it
+  already holds; a provider that reached for account state here would turn one
+  Send / Receive into a round trip per folder.
+
+**The long-standing `get_folder_info_sync` NULL-versus-GError question is now
+answered, and the answer is "NULL with no error is right".** This log has
+carried it since the sixty-third session as needing the EDS source this VM does
+not have; the source was fetched from GNOME GitLab at tag 3.52.3, which is the
+`camel-1.2` this VM has installed. Three pieces of evidence, all primary:
+
+1. `camel_store_get_folder_info_sync` **exempts `SUBSCRIBED` from the check**:
+   `if ((flags & CAMEL_STORE_FOLDER_INFO_SUBSCRIBED) == 0) CAMEL_CHECK_GERROR
+   (...)`. Camel itself treats a subscription-filtered listing that comes back
+   empty as legitimate.
+2. IMAPX, the reference provider, does exactly what this one does.
+   `get_folder_info_offline` ends in `camel_folder_info_build (folders, top,
+   '/', TRUE)`, and `camel_folder_info_build` returns NULL — with no error —
+   for an empty array. A `top` naming nothing is NULL-and-no-error there too.
+3. The warning this repo saw came from `store_rename_folder_thread`, which uses
+   `CAMEL_CHECK_LOCAL_GERROR` **without** the `SUBSCRIBED` exemption its
+   sibling has. That is an inconsistency in Camel, and the consequence —
+   `camel_store_folder_renamed` not being emitted for a subtree with nothing
+   subscribed in it — is already pinned by
+   `a_rename_of_a_subtree_nothing_is_subscribed_to_is_announced_by_no_one`.
+
+So the console warning is a diagnostic false positive that IMAPX trips too, and
+nothing changes in this provider. Also checked while the source was in hand:
+`camel_store_get_folder_info_sync`'s vTrash/vJunk relist branch is dead for this
+store, which clears `CAMEL_STORE_VTRASH | CAMEL_STORE_VJUNK` in `instance_init`.
+The item is struck from the open list.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Nothing here has been seen in Evolution.** That Send / Receive now visits
+   the subscribed folders, and that their counts update in the folder tree as a
+   result, is read from `mail-send-recv.c` at 3.52.3 — `get_folders` is its one
+   caller, and `mail-folder-cache.c` lists with `FAST | RECURSIVE | SUBSCRIBED`
+   before it — not observed. *Needs human verification in real Evolution.*
+2. **The cost is not measured.** An account with a hundred subscribed folders
+   now gets a hundred folder refreshes per Send / Receive where it got one.
+   That is the behaviour every other provider has with `check-all` set, and it
+   is the point of the change, but no one has run it against an account that
+   size — nor against a real server, where each refresh is an `Email/query`.
+3. **Only 3.52.3 was read.** The rule is a test on a flags word, so it is not
+   version-fragile in the way a struct layout is, but `store_can_refresh_folder`
+   changing in a later EDS is exactly what
+   `the_inherited_answer_checks_nothing_but_the_inbox` exists to catch.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). No new files, so no new SPDX headers.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (410 tests,
+unchanged — nothing there was touched) and on the five EDS crates (592, up from
+589).
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates. `get_folder_info_sync`'s NULL-versus-GError question is answered
+above and no longer open.
+
+Next in M5: the README's architecture block is the last item this log is
+carrying that can be done here. Beyond it, the remaining `CamelStoreClass` slots
+are worth a look now that the source is available — `initial_setup_sync`
+(EWS uses it to write folder ids into the ESource at first connect, which is
+M6/M7 territory), `synchronize_sync`, and `get_can_auto_save_changes`.
