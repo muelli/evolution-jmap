@@ -6,15 +6,19 @@
 // hangs off this, so the test drives a real `g_object_new` rather than only
 // checking that registration returned a non-zero GType.
 
-use jmap_backend_core::subclass::{ObjectSubclass, register_dynamic, register_static};
+use jmap_backend_core::subclass::{
+    InterfaceDecl, InterfaceImpl, ObjectSubclass, register_dynamic, register_static,
+};
 use std::ffi::CStr;
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use gobject_sys::{
-    GObject, GObjectClass, GTypeInstance, GTypeModule, GTypeModuleClass, g_object_new,
-    g_object_unref, g_type_module_get_type, g_type_module_unuse, g_type_module_use,
+    GObject, GObjectClass, GTypeInstance, GTypeModule, GTypeModuleClass, GTypePlugin,
+    GTypePluginClass, g_object_new, g_object_unref, g_type_class_ref, g_type_class_unref,
+    g_type_interface_peek, g_type_module_get_type, g_type_module_unuse, g_type_module_use,
+    g_type_plugin_get_type, g_type_plugin_use,
 };
 
 /// Counts how often each trampoline ran, so the test can tell "the vfunc was
@@ -221,9 +225,9 @@ unsafe impl ObjectSubclass for Implementor {
         gobject_sys::G_TYPE_OBJECT
     }
 
-    fn interfaces() -> Vec<glib_sys::GType> {
+    fn interfaces() -> Vec<InterfaceDecl> {
         // SAFETY: no arguments, and the type initialises itself.
-        vec![unsafe { gobject_sys::g_type_plugin_get_type() }]
+        vec![InterfaceDecl::defaults(unsafe { g_type_plugin_get_type() })]
     }
 }
 
@@ -270,6 +274,148 @@ fn registering_an_implementor_twice_does_not_add_the_interface_again() {
         register_static::<Implementor>(),
         register_static::<Implementor>()
     );
+}
+
+// ---------------------------------------------------------------------------
+// interfaces whose vfunc slots the implementing type fills
+//
+// `GTypePlugin` again, for the reason above and for one more: it is an
+// interface with vfuncs that GLib itself dispatches through
+// (`g_type_plugin_use` calls the slot with no default behind it), so a test can
+// tell "the slot was filled" from "something plausible happened".
+
+/// How often the slot [`FilledPlugin`] installs was dispatched to.
+static USES: AtomicU32 = AtomicU32::new(0);
+
+unsafe extern "C" fn count_use(_plugin: *mut GTypePlugin) {
+    USES.fetch_add(1, Ordering::SeqCst);
+}
+
+/// A type that fills the interface it declares.
+struct Filled;
+
+/// …and the filling, declared beside it rather than on it: one type can
+/// implement several interfaces, and a trait implemented on the type itself
+/// could only describe one of them.
+struct FilledPlugin;
+
+// SAFETY: `GTypePluginClass` is gobject-sys's binding of the interface struct
+// `g_type_plugin_get_type()` names, and it leads with `GTypeInterface`.
+unsafe impl InterfaceImpl for FilledPlugin {
+    type Vtable = GTypePluginClass;
+
+    fn gtype() -> glib_sys::GType {
+        // SAFETY: no arguments, and the type initialises itself.
+        unsafe { g_type_plugin_get_type() }
+    }
+
+    unsafe fn interface_init(vtable: *mut Self::Vtable) {
+        // SAFETY: GLib passes this type's own copy of the vtable.
+        unsafe { (*vtable).use_plugin = Some(count_use) };
+    }
+}
+
+// SAFETY: as `Test`; the structs are shared with it.
+unsafe impl ObjectSubclass for Filled {
+    const NAME: &'static CStr = c"JmapBackendCoreTestFilled";
+    type Instance = TestInstance;
+    type Class = TestClass;
+
+    fn parent_type() -> glib_sys::GType {
+        gobject_sys::G_TYPE_OBJECT
+    }
+
+    fn interfaces() -> Vec<InterfaceDecl> {
+        vec![InterfaceDecl::filled_by::<FilledPlugin>()]
+    }
+}
+
+/// The whole point: a slot written by an `interface_init` is the function GLib
+/// dispatches an interface call to. Driven through `g_type_plugin_use` — the
+/// interface's own public wrapper, which is how Camel's
+/// `camel_subscribable_folder_is_subscribed` will reach the store — rather than
+/// by reading the slot back, because reading it back would pass just as well if
+/// GLib never looked at that copy of the vtable.
+#[test]
+fn glib_dispatches_an_interface_call_to_the_slot_the_type_filled() {
+    let gtype = register_static::<Filled>();
+    // SAFETY: the type is registered and has no construct properties;
+    // `g_type_plugin_use` calls the slot `FilledPlugin` filled in, and the one
+    // reference taken is dropped again below.
+    unsafe {
+        let obj = g_object_new(gtype, ptr::null());
+        assert!(!obj.is_null(), "g_object_new returned NULL");
+
+        assert_eq!(USES.load(Ordering::SeqCst), 0);
+        g_type_plugin_use(obj.cast::<GTypePlugin>());
+        assert_eq!(
+            USES.load(Ordering::SeqCst),
+            1,
+            "the interface call did not reach the slot the type filled"
+        );
+
+        g_object_unref(obj);
+    }
+}
+
+/// A type whose `interface_init` panics.
+struct Faulty;
+struct FaultyPlugin;
+
+// SAFETY: as `FilledPlugin`.
+unsafe impl InterfaceImpl for FaultyPlugin {
+    type Vtable = GTypePluginClass;
+
+    fn gtype() -> glib_sys::GType {
+        // SAFETY: no arguments, and the type initialises itself.
+        unsafe { g_type_plugin_get_type() }
+    }
+
+    unsafe fn interface_init(_vtable: *mut Self::Vtable) {
+        panic!("an interface_init that gets it wrong");
+    }
+}
+
+// SAFETY: as `Test`; the structs are shared with it.
+unsafe impl ObjectSubclass for Faulty {
+    const NAME: &'static CStr = c"JmapBackendCoreTestFaulty";
+    type Instance = TestInstance;
+    type Class = TestClass;
+
+    fn parent_type() -> glib_sys::GType {
+        gobject_sys::G_TYPE_OBJECT
+    }
+
+    fn interfaces() -> Vec<InterfaceDecl> {
+        vec![InterfaceDecl::filled_by::<FaultyPlugin>()]
+    }
+}
+
+/// An `interface_init` runs from inside the type system, while it holds its
+/// global lock, and a panic unwinding out of it would abort the process — the
+/// whole mail session, not just the account whose provider was registering.
+/// Guarded like every other entry point C calls into this crate: the panic is
+/// logged and the vtable is left as it was, which for a slot never written is
+/// the NULL the interface's own default put there.
+#[test]
+fn a_panicking_interface_init_does_not_unwind_into_the_type_system() {
+    let gtype = register_static::<Faulty>();
+    // SAFETY: the type is registered; the class ref is dropped again below,
+    // and the vtable it hands out is read, not called.
+    unsafe {
+        let class = g_type_class_ref(gtype);
+        assert!(!class.is_null(), "g_type_class_ref returned NULL");
+
+        let vtable =
+            g_type_interface_peek(class, g_type_plugin_get_type()).cast::<GTypePluginClass>();
+        assert!(!vtable.is_null(), "the type never got the vtable");
+        assert!(
+            (*vtable).use_plugin.is_none(),
+            "the panic left a half-filled vtable behind"
+        );
+
+        g_type_class_unref(class);
+    }
 }
 
 /// A type with nothing to declare is the common case and must not pay for the

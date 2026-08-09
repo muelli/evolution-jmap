@@ -58,7 +58,7 @@ use gobject_sys::{
     GObject, GObjectClass, GParamSpec, GValue, g_object_class_override_property, g_value_get_enum,
     g_value_get_string, g_value_get_uint, g_value_set_enum, g_value_set_uint, g_value_take_string,
 };
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 
 /// The instance struct. Adds nothing of its own: every value this type carries
@@ -117,9 +117,15 @@ unsafe impl ObjectSubclass for JmapSettings {
         unsafe { camel_offline_settings_get_type() }
     }
 
-    fn interfaces() -> Vec<GType> {
+    fn interfaces() -> Vec<InterfaceDecl> {
+        // `CamelNetworkSettings` declares no vfuncs — the five properties
+        // `class_init` overrides below are the whole of it — so there is no
+        // vtable for this type to fill.
+        //
         // SAFETY: as above.
-        vec![unsafe { camel_network_settings_get_type() }]
+        vec![InterfaceDecl::defaults(unsafe {
+            camel_network_settings_get_type()
+        })]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
