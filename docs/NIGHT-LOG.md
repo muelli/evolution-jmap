@@ -10633,3 +10633,88 @@ the part this VM cannot verify begins — and where
 `e_source_camel_generate_subtype` will have to be called for real, since
 nothing has loaded `libcameljmap.so` in Evolution's process at the point an
 account is committed.
+
+## 2026-08-09 (hundred-and-fifth session)
+
+**What a setup refuses to commit: `jmap-config`'s `complete::check`.** Ten
+tests, red first, in `rust/crates/jmap-config/tests/complete.rs`; a new
+`src/complete.rs`; the crate stays an rlib out of `default-members` and gains no
+dependency.
+
+**Why this and not the module.** Last session named the module and the
+`EMailConfigServiceBackend` subclass as next, and that is still next — but the
+subclass has two separable halves, and only one of them is verifiable on this
+machine. `check_completeness` is a vfunc whose *decision* is ordinary Rust over
+an `Account`: whether the answers so far are ones an account may be written
+from. Taking that half first means that when the widget code lands, the part of
+it that could be wrong in a way no test would notice is the plumbing, not the
+rules. That is this crate's stated strategy applied one step further rather than
+a detour around the hard part.
+
+**Two rules, and both are grounded in code that already exists.** The server is
+checked by calling `jmap_backend_core::source::origin` — the same function
+`server_of` and every backend's connect path calls — and keeping its
+`SourceError`: a missing host, a host that is not a bare host name, and
+plaintext to anywhere that is not loopback. Nothing is restated, because a rule
+spelled out twice is a rule to fix twice. The identity is checked for being an
+address at all, since it is written into `[Mail Identity] Address` and is
+therefore the `From:` of everything the account sends.
+
+**The one line of translation, and the test that pins it.** `origin` takes the
+absent-or-non-empty host `read_string` produces from a keyfile; a setup has an
+entry the user has not filled in, which is `""`. Mapping the one to the other is
+the only place the two sides do not share code, so `""` is reported as
+`MissingHost` and not as `InvalidHost("")`. The last test is the join and the
+reason the file links the collection backend: eight servers, each committed with
+`account::apply` and read back with `server_of`, asserting the setup's verdict
+and the registry's are the *same* verdict — accepted by both, or refused by both
+for the identical `SourceError`. A check that accepted what the registry rejects
+would be an account that fails everywhere except in the dialog it was typed into.
+
+**Two things deliberately not checked, both documented as such in the code.**
+A missing user name is not a fault: `credentials()` turns it into an anonymous
+connection, which is how `jmap-mockd` and a local development server are
+reached, so insisting on one would refuse to commit the account this project is
+developed against. And an account with mail, contacts and calendars all switched
+off is not a mistake at commit time — `mail::apply` already writes the three
+sources either way precisely because the parts are switches, and a switch the
+user can flip later is not an incomplete answer. Refusing either would have been
+a rule invented by the checker rather than one the rest of the code has.
+
+**Whitespace is refused rather than trimmed**, for the same reason every writer
+here writes verbatim: `apply` would commit `" vera@example.com"` unchanged. An
+entry holding *only* whitespace is reported as `MissingIdentity` — the
+unanswered question it looks like — rather than as an address that fails to
+parse. `is_address` is deliberately not an RFC 5322 parser and says so: the cost
+of a wrong answer is asymmetric, so anything it is unsure about it accepts and
+leaves for the server to reject at login.
+
+**Mutation-checked**, four mutants, each caught: the whitespace rule dropped
+(one red); the empty host passed to `origin` as `Some("")` (two red, one of them
+the join test, which is the case for the translation existing); a second `@`
+allowed (one red); the identity's emptiness tested without `trim` (one red).
+
+**The honest limits are unchanged and are still all of M7's remainder.** Nothing
+calls any of this: there is no `EMailConfigServiceBackend` subclass and no
+`module-jmap-configuration.so`, and no account has been created through
+Evolution's UI, which is the milestone's actual acceptance and not something
+this VM can do. So M7 carries no completion tag.
+`docs/manual-test-collection-backend.md` still documents `MailEnabled=false`.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, both with SPDX headers.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as are `clippy`/`test` over the EDS crates — 794 tests, `jmap-config`'s 41
+(was 31) included. `RUSTDOCFLAGS=-D warnings cargo doc` clean for the crate.
+Pre-existing and untouched: `example-module` does not build on this VM (26
+`manual_c_str_literals` clippy errors and a link failure) — confirmed against a
+stashed tree, so it is the machine and not this change, and it is why the
+workspace-wide runs above exclude it.
+
+No milestone tag.
+
+Next: the module and the `EMailConfigServiceBackend` subclass — the widgets and
+the plumbing, now that the rules they enforce are decided and tested here. That
+is where the part this VM cannot verify begins, and where
+`e_source_camel_generate_subtype` will have to be called for real.
