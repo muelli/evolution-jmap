@@ -430,6 +430,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmap-config"
+version = "0.1.0"
+dependencies = [
+ "eds-sys",
+ "evolution-jmap-collection-sync",
+ "glib-sys",
+ "gobject-sys",
+ "jmap-backend-collection",
+ "jmap-backend-core",
+]
+
+[[package]]
 name = "jmap-mail"
 version = "0.1.0"
 dependencies = [
