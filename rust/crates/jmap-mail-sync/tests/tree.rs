@@ -404,3 +404,48 @@ fn the_role_is_found_on_the_folder_that_kept_it() {
     let inbox = tree.role(FolderRole::Inbox).expect("the account's inbox");
     assert_eq!(inbox.display_name, "Real inbox");
 }
+
+// ---------------------------------------------------------------------------
+// the one editable property
+
+/// Subscription is the one thing in a listing the *client* decides, so it is
+/// the one thing a tree can be told rather than re-listed for. By id, and at
+/// any depth: the walk that finds the folder is the same one `iter` does, and a
+/// subscription editor's ticks are mostly on folders well below the roots.
+#[test]
+fn a_subscription_can_be_recorded_on_a_folder_at_any_depth() {
+    let mut tree = tree(&[
+        mailbox("M1", "Projects"),
+        child("M2", "JMAP", "M1"),
+        child("M3", "Drafts", "M2"),
+    ]);
+
+    assert!(tree.set_subscribed(&Id::new("M3"), false));
+
+    assert_eq!(
+        paths_and_subscriptions(&tree),
+        [
+            ("Projects", true),
+            ("Projects/JMAP", true),
+            ("Projects/JMAP/Drafts", false),
+        ]
+    );
+}
+
+/// And a mailbox the tree does not have is reported rather than ignored: the
+/// caller is a write that already succeeded against the server, and "the tree
+/// predates that folder" is a different situation from "the tree was updated".
+#[test]
+fn a_subscription_for_a_mailbox_the_tree_does_not_have_changes_nothing() {
+    let mut tree = tree(&[mailbox("M1", "Inbox")]);
+
+    assert!(!tree.set_subscribed(&Id::new("M404"), false));
+
+    assert_eq!(paths_and_subscriptions(&tree), [("Inbox", true)]);
+}
+
+fn paths_and_subscriptions(tree: &FolderTree) -> Vec<(&str, bool)> {
+    tree.iter()
+        .map(|folder| (folder.path.as_str(), folder.subscribed))
+        .collect()
+}

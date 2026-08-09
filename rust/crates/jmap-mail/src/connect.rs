@@ -127,6 +127,13 @@ impl From<SyncError> for StoreError {
             // gave this a variant of its own so that the mapping below could
             // exist, and collapsing it here would undo that at the last step.
             SyncError::NoSuchMessage(uid) => Self::NoMessage(uid.as_str().to_owned()),
+            // The same, one level up. `NoFolder` carries a *path* everywhere
+            // else, because that is what Camel asked with; here it carries the
+            // mailbox id, because that is what the caller named and the path it
+            // came from may since have moved. Both are the store telling Camel
+            // that a folder it still lists is not there, which is the only part
+            // a caller in C reads.
+            SyncError::NoSuchFolder(id) => Self::NoFolder(id.as_str().to_owned()),
         }
     }
 }
