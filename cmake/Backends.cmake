@@ -76,3 +76,31 @@ add_cargo_cdylib(jmap_mail
 	DATA ${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls
 	VERIFY_DESTINATION_FROM camel-1.2 camel_providerdir
 )
+
+# Where evolution-source-registry scans. A fourth directory and a fourth
+# pkg-config module — and the one host of the four that is a single process for
+# the whole session rather than one per account, which is why the module entry
+# point in it is guarded twice over.
+pkg_check_modules(LIBEBACKEND REQUIRED libebackend-1.2>=${REQUIRE_EVOLUTION_VERSION})
+pkg_check_variable(EDS_REGISTRY_MODULE_DIR libebackend-1.2 moduledir)
+
+if(FORCE_INSTALL_PREFIX)
+	pkg_check_variable(eds_backend_prefix libebackend-1.2 prefix)
+	string(REGEX REPLACE "^${eds_backend_prefix}" "${CMAKE_INSTALL_PREFIX}" EDS_REGISTRY_MODULE_DIR "${EDS_REGISTRY_MODULE_DIR}")
+endif(FORCE_INSTALL_PREFIX)
+
+# The JMAP collection backend, which is what turns one account into the mail,
+# address book and calendar sources the three modules above serve. `module-*.so`
+# is the convention every registry module follows — module-google-backend.so,
+# module-cache-reaper.so — and unlike the book and calendar backends the name is
+# not derived from anything: the registry dlopens every file in the directory
+# regardless of what it is called. Following the convention is for the human
+# reading the directory, and the `-backend` suffix distinguishes this from M7's
+# module-jmap-configuration.so, which is Evolution's module directory over.
+add_cargo_cdylib(jmap_backend_collection
+	OUTPUT_NAME module-jmap-backend.so
+	DESTINATION ${EDS_REGISTRY_MODULE_DIR}
+	COMPONENT collection-backend
+	SYMBOLS e_module_load e_module_unload
+	VERIFY_DESTINATION_FROM libebackend-1.2 moduledir
+)
