@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The folders the user makes and removes, as the `Mailbox/set` that does it.
+//! The folders the user makes, removes and renames, as the `Mailbox/set` that
+//! does it.
 //!
-//! Camel asks with two vfuncs — `create_folder_sync`, which must answer with
-//! the folder it made, and `delete_folder_sync`, which must answer whether the
-//! folder went — and RFC 8621 §2.5 answers both with one method.
+//! Camel asks with three vfuncs — `create_folder_sync`, which must answer with
+//! the folder it made, `delete_folder_sync`, which must answer whether the
+//! folder went, and `rename_folder_sync`, which is a rename and a move in one
+//! because Camel spells both as a new path — and RFC 8621 §2.5 answers all
+//! three with one method.
 //!
 //! Three things are worth pinning here, and none of them is "the request was
 //! sent":
@@ -54,6 +57,16 @@ impl Fixture {
             .account_mut(&self.account_id)
             .unwrap()
             .seed_mailbox(name, None)
+    }
+
+    /// A mailbox under another, by name.
+    fn seed_child_mailbox(&self, name: &str, parent: &Id) -> Id {
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&self.account_id)
+            .unwrap()
+            .seed_child_mailbox(name, None, parent)
     }
 
     /// A message sitting in a mailbox, so that removing it is refused.
@@ -241,14 +254,7 @@ fn a_folder_that_still_holds_mail_is_refused() {
 fn a_folder_that_still_holds_a_subfolder_is_refused() {
     let fixture = Fixture::start();
     let parent = fixture.seed_mailbox("Work");
-    let child = {
-        let state = fixture.server.state();
-        let mut state = state.lock().unwrap();
-        state
-            .account_mut(&fixture.account_id)
-            .unwrap()
-            .seed_child_mailbox("Notes", None, &parent)
-    };
+    let child = fixture.seed_child_mailbox("Notes", &parent);
 
     let failure = fixture.sync().delete_folder(&parent).unwrap_err();
 
@@ -291,4 +297,149 @@ fn the_other_refusals_are_not_read_as_a_missing_folder() {
     let failure = fixture.sync().delete_folder(&full).unwrap_err();
 
     assert_ne!(refusal(failure), NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// renaming one, which is also moving one
+
+#[test]
+fn a_renamed_folder_answers_to_its_new_name() {
+    let fixture = Fixture::start();
+    let folder = fixture.seed_mailbox("Projects");
+
+    fixture.sync().rename_folder(&folder, None, "Work").unwrap();
+
+    assert_eq!(fixture.folder("Work").map(|folder| folder.id), Some(folder));
+    assert!(fixture.folder("Projects").is_none());
+}
+
+/// The answer is the path, for the reason a create answers with a whole folder:
+/// the caller keys the folder by it and cannot build it, because the encoding
+/// from a mailbox name to a path component lives in this crate.
+#[test]
+fn the_answer_is_the_path_the_folder_now_has() {
+    let fixture = Fixture::start();
+    let folder = fixture.seed_mailbox("Projects");
+
+    let path = fixture.sync().rename_folder(&folder, None, "Work").unwrap();
+
+    assert_eq!(path, "Work");
+}
+
+/// Camel spells a move as a rename to a path under some other parent, so the
+/// two are one write here — and the new parent's path is what the answer is
+/// built on.
+#[test]
+fn a_moved_folder_hangs_under_its_new_parent() {
+    let fixture = Fixture::start();
+    let folder = fixture.seed_mailbox("Notes");
+    fixture.seed_mailbox("Work");
+    let parent = fixture.folder("Work").unwrap();
+
+    let path = fixture
+        .sync()
+        .rename_folder(&folder, Some(&parent), "Notes")
+        .unwrap();
+
+    assert_eq!(path, "Work/Notes");
+    assert_eq!(
+        fixture.folder("Work/Notes").map(|folder| folder.id),
+        Some(folder)
+    );
+}
+
+/// And the way back up, which is the case that says `parentId` is *sent* rather
+/// than left out when there is no parent: a patch that omitted it would leave
+/// the folder where it was and answer with a path nothing is at.
+#[test]
+fn a_folder_moved_to_the_top_level_loses_its_parent() {
+    let fixture = Fixture::start();
+    let parent = fixture.seed_mailbox("Work");
+    let folder = fixture.seed_child_mailbox("Notes", &parent);
+
+    let path = fixture
+        .sync()
+        .rename_folder(&folder, None, "Notes")
+        .unwrap();
+
+    assert_eq!(path, "Notes");
+    assert_eq!(
+        fixture.folder("Notes").map(|folder| folder.id),
+        Some(folder)
+    );
+}
+
+/// The new name is a mailbox name and the answer is a Camel path, the same two
+/// different things a create maps between.
+#[test]
+fn a_new_name_that_is_not_a_path_component_is_encoded() {
+    let fixture = Fixture::start();
+    let folder = fixture.seed_mailbox("Projects");
+
+    let path = fixture
+        .sync()
+        .rename_folder(&folder, None, "and/or")
+        .unwrap();
+
+    assert_eq!(path, "and%2For");
+    assert_eq!(
+        fixture.folder("and%2For").map(|folder| folder.id),
+        Some(folder)
+    );
+}
+
+/// RFC 8621 §2 makes a name unique among siblings, and a rename is the other
+/// way to break that. The folder stays where it was.
+#[test]
+fn a_new_name_a_sibling_already_has_is_refused() {
+    let fixture = Fixture::start();
+    fixture.seed_mailbox("Work");
+    let folder = fixture.seed_mailbox("Projects");
+
+    let failure = fixture
+        .sync()
+        .rename_folder(&folder, None, "Work")
+        .unwrap_err();
+
+    assert_eq!(refusal(failure), INVALID_PROPERTIES);
+    assert_eq!(
+        fixture.folder("Projects").map(|folder| folder.id),
+        Some(folder)
+    );
+}
+
+/// A folder cannot be moved inside itself: the server refuses it, and what it
+/// would otherwise make is a subtree with no way back to the account.
+#[test]
+fn a_move_into_the_folders_own_subtree_is_refused() {
+    let fixture = Fixture::start();
+    let folder = fixture.seed_mailbox("Work");
+    fixture.seed_child_mailbox("Notes", &folder);
+    let child = fixture.folder("Work/Notes").unwrap();
+
+    let failure = fixture
+        .sync()
+        .rename_folder(&folder, Some(&child), "Work")
+        .unwrap_err();
+
+    assert_eq!(refusal(failure), INVALID_PROPERTIES);
+    assert_eq!(fixture.folder("Work").map(|folder| folder.id), Some(folder));
+}
+
+/// And a folder another client removed while this one still listed it, which
+/// gets the variant every other write to a mailbox gives it.
+#[test]
+fn renaming_a_mailbox_the_account_does_not_have_is_no_such_folder() {
+    let fixture = Fixture::start();
+    fixture.seed_mailbox("Inbox");
+
+    let failure = fixture
+        .sync()
+        .rename_folder(&Id::new("M404"), None, "Work")
+        .unwrap_err();
+
+    match failure {
+        SyncError::NoSuchFolder(id) => assert_eq!(id.as_str(), "M404"),
+        other => panic!("expected a missing folder, got {other}"),
+    }
 }

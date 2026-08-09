@@ -608,6 +608,65 @@ impl MailSync {
             .map_err(|error| folder_error(mailbox, error))
     }
 
+    /// Renames a folder, and moves it — `rename_folder_sync`.
+    ///
+    /// One method for both, because Camel asks for both with one vfunc: it
+    /// names a folder by path, and a path carries the folder's name *and* where
+    /// it hangs, so "Work/Notes" becoming "Archive/Notes" and becoming
+    /// "Work/Minutes" arrive here identically. On the wire they are the two
+    /// properties of one `Mailbox/set` update, `name` and `parentId`.
+    ///
+    /// **Both are always sent**, including a `parentId` of `null` for a folder
+    /// moving up to the top level. Sending only what looks changed would need a
+    /// before-picture, and the only one available is the caller's listing —
+    /// a cache, which another client's move has already made wrong in exactly
+    /// the direction that would swallow this write. What the user asked for is
+    /// where the folder should *be*, and that is a statement about both
+    /// properties; a patch that left `parentId` out would answer with a path
+    /// the folder is not at.
+    ///
+    /// The answer is the folder's new Camel path, for the reason
+    /// [`MailSync::create_folder`] answers with a whole folder: the caller keys
+    /// the folder by that string and cannot build it, because the mapping from
+    /// a mailbox name to a path component is this crate's. Everything else
+    /// about the folder — its counts, its role, its subscription, what hangs
+    /// under it — a rename does not touch, so there is nothing else to report.
+    ///
+    /// `name` is a mailbox name, not a path component, the reading
+    /// [`MailSync::create_folder`] documents: a `/` in it is a character of the
+    /// name, and this is where it becomes `%2F`.
+    ///
+    /// Not `ifInState`, for the reason [`MailSync::set_keywords`] gives.
+    ///
+    /// A mailbox the account no longer holds is [`SyncError::NoSuchFolder`],
+    /// the judgement every other write naming a mailbox makes. Every other
+    /// refusal — a name a sibling already has, a parent that is gone, a move
+    /// into the folder's own subtree — stays the server's own
+    /// [`SyncError::Client`]: each is a sentence for the user, and Camel has no
+    /// code to map them onto.
+    pub fn rename_folder(
+        &self,
+        folder: &Id,
+        parent: Option<&FolderInfo>,
+        name: &str,
+    ) -> Result<String, SyncError> {
+        self.client
+            .mailbox_update(
+                &self.account_id,
+                folder,
+                serde_json::json!({
+                    "name": name,
+                    "parentId": parent.map(|parent| parent.id.as_str()),
+                }),
+            )
+            .map_err(|error| folder_error(folder, error))?;
+
+        Ok(path::join(
+            parent.map(|parent| parent.path.as_str()),
+            &path::encode_component(name),
+        ))
+    }
+
     /// One `Email/set` update, with the one refusal that is not a failure
     /// named: a message the account no longer holds.
     fn update_email(&self, uid: &Id, patch: serde_json::Value) -> Result<(), SyncError> {
