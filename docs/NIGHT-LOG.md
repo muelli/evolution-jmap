@@ -4352,3 +4352,92 @@ state kept on disk is what the empty `recent` list and the whole-mailbox refresh
 are both still waiting for. Unexercised against a real `CamelSession`:
 `service.rs`, which waits on M6 and M7. The README's architecture block still
 lists only the round-1 crates.
+
+## 2026-08-09 (forty-seventh session)
+
+M5's twenty-seventh increment, at the sync layer: the `Email/set` a message
+moved or copied into another folder becomes. `jmap-mail-sync` grows a `Filing`
+and `MailSync::file_message`, which is what Camel's `transfer_messages_to_sync`
+will spend when the folder side of it lands.
+
+Red first: ten tests in a new `tests/mailboxes.rs`, four over the patch itself
+and six through `jmap-mockd`. All ten failed to compile against the old crate;
+the two that assert the server's own refusals were additionally verified failing
+against the *new* client with the mock's new rule taken back out, which is where
+they would have passed vacuously.
+
+Decisions taken:
+
+- **A copy and a move are the same request.** RFC 8621 has no `Email/copy` and
+  no `Email/move`, because a JMAP mailbox is closer to a label than to a
+  directory: §4.6 makes `mailboxIds` the set of mailboxes a message is in, so a
+  copy adds a member and a move adds one and removes another. The message is one
+  object either way, which is also why the cache keyed on the uid alone (the
+  forty-second session) needs nothing doing to it here.
+- **A move is one patch, not two requests.** RFC 8621 §4.6 spends a sentence on
+  it: an `Email` in the mail store belongs to one or more `Mailbox`es. Removing
+  the source first is therefore a request no server may accept, and adding the
+  destination first leaves the message filed in both if the second request never
+  happens — a copy the user did not ask for that nothing afterwards knows to
+  clean up. One `Email/set` update is applied as one change, and RFC 8620 §5.3
+  defines a `PatchObject` by its *result* rather than as a sequence, so there is
+  no intermediate state with no mailbox in it for a server to refuse.
+- **A move into the mailbox the message is already in is not a request.** It is
+  the one filing that cannot be written down: the same pointer would have to be
+  both `true` and `null`. Whichever won, the answer would be wrong, so `Filing`
+  reports it empty and `file_message` sends nothing — the same shape
+  `set_keywords` has for a change that changes nothing.
+- **The mailbox a message came *from* is the caller's claim, not a question.** A
+  Camel folder knows its own mailbox id, and confirming it would be a round trip
+  spent re-reading what the summary the user clicked in already said. A `null`
+  for a member that is not there removes nothing and is not an error, so a stale
+  claim costs the message nothing.
+- **A destination the account does not have is not `NoSuchMessage`.** The
+  message is fine; the folder is the thing that is gone, which is what a folder
+  Camel still shows after another client deleted it looks like. It stays the
+  server's own `SyncError::Client` so that the user is told, while a uid the
+  account no longer holds keeps the "ordinary, not a failure" judgement every
+  other write here makes.
+- **RFC 6901 escaping moved into `crate::pointer`.** `keywords/` and
+  `mailboxIds/` are both JSON Pointers into a map whose keys came off the
+  network, and a second copy of the escaping that fell behind would be a hole
+  rather than a duplication. A mailbox id *cannot* contain `/` or `~` — RFC 8620
+  §1.2 — but the id in hand is the server's word for that, and unescaped it
+  would let a server choose which property of an `Email` this client patches.
+  Its own test.
+- **The mock was letting a message end up in no mailbox, and in mailboxes that do
+  not exist — a finding, like the `size` one before it.** It checked
+  `mailboxIds` only on creation and only for emptiness. So the two-request move
+  this increment exists to avoid would have *worked* against it, and a client
+  that botched a move would have been taught it was fine. `filed_somewhere` now
+  holds the invariant over creation, over the result of an update, and over
+  `onSuccessUpdateEmail`, refusing both halves with `invalidProperties`. No
+  existing test depended on the old laxity.
+
+Not verified locally, as in the previous forty-six sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). Two new files, both with
+the SPDX GPL-3.0-or-later header. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates; `jmap-mail-sync` is at 31 tests in
+`tests/keywords.rs` and `tests/mailboxes.rs` together. (`example-module`'s lib
+test still fails to link on this VM, as before; it is not in either set.)
+
+Next in M5. **The folder half of this** — `transfer_messages_to_sync` on
+`CamelFolderClass`, and with it what a move does to the source folder's summary
+before the next refresh confirms it — is the increment that makes any of the
+above reach Evolution; nothing the user does moves a message yet. Note that
+`file_message` is one request per message where Camel hands its vfunc a list of
+uids: one `Email/set` may carry many updates but applies them as one state
+change, so a partly-failed transfer would have no way to say which messages
+moved, and a request per message is the shape the caller has to report in
+anyway. **Bounding the cache** is still open from the forty-first session, as is
+the other half of the atomicity problem — an entry is written by `write_all` and
+close rather than to a temporary name and renamed, and a rename would close the
+window the forty-sixth session's size check only *detects*. `CamelSubscribable`
+still wants `Mailbox/set`, which the client does not have yet.
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is also what `expunge_sync` waits on.
+`Email/changes` against a state kept on disk is what the empty `recent` list and
+the whole-mailbox refresh are both still waiting for. Unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's
+architecture block still lists only the round-1 crates.

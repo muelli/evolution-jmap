@@ -41,6 +41,7 @@ use jmap_proto::mail::keyword;
 use serde_json::{Map, Value};
 
 use crate::message::MessageFlags;
+use crate::pointer;
 
 /// The keywords of one message: [`MessageFlags`] and the labels beside it, as
 /// the single set a JMAP server keeps.
@@ -244,19 +245,14 @@ impl KeywordChange {
     pub fn patch(&self) -> Value {
         let mut patch = Map::new();
         for name in &self.set {
-            patch.insert(pointer(name), Value::Bool(true));
+            patch.insert(pointer::member(KEYWORDS, name), Value::Bool(true));
         }
         for name in &self.cleared {
-            patch.insert(pointer(name), Value::Null);
+            patch.insert(pointer::member(KEYWORDS, name), Value::Null);
         }
         Value::Object(patch)
     }
 }
 
-/// One keyword, as the JSON Pointer that addresses it inside an `Email`.
-///
-/// The escapes are RFC 6901 §3's and are applied in its order — `~` first, or
-/// the `~1` produced for a `/` would be read again and become a `/`.
-fn pointer(name: &str) -> String {
-    format!("keywords/{}", name.replace('~', "~0").replace('/', "~1"))
-}
+/// The property a keyword change patches.
+const KEYWORDS: &str = "keywords";

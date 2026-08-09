@@ -22,8 +22,10 @@ pub(crate) mod date;
 pub mod error;
 pub mod folder;
 pub mod keywords;
+pub mod mailboxes;
 pub mod message;
 pub(crate) mod path;
+pub(crate) mod pointer;
 
 use std::collections::BTreeMap;
 
@@ -35,6 +37,7 @@ use jmap_proto::{Id, State};
 pub use error::SyncError;
 pub use folder::{FolderInfo, FolderRole, FolderTree};
 pub use keywords::{KeywordChange, Keywords};
+pub use mailboxes::Filing;
 pub use message::{MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES};
 
 /// What a folder-list refresh found.
@@ -235,8 +238,46 @@ impl MailSync {
         if change.is_empty() {
             return Ok(());
         }
+        self.update_email(uid, change.patch())
+    }
+
+    /// Files one message into another mailbox — `transfer_messages_to_sync`.
+    ///
+    /// A copy and a move are one `Email/set` update over `mailboxIds`, for the
+    /// reasons [`crate::mailboxes`] gives; a [`Filing`] that would leave the
+    /// message where it is costs no request at all, like a keyword change that
+    /// changes nothing.
+    ///
+    /// One message per call, as with [`MailSync::set_keywords`], although Camel
+    /// hands its vfunc a whole list of uids: one `Email/set` may carry many
+    /// updates, but it applies them as one state change, and a transfer that
+    /// half-succeeded would then be a single failure with no way to say which
+    /// messages moved. A request per message is more round trips and an answer
+    /// per message, which is what the caller has to report anyway.
+    ///
+    /// A uid the account no longer holds is [`SyncError::NoSuchMessage`], the
+    /// judgement every other write here makes about the same situation. A
+    /// destination the account does not have is *not* that: the message is
+    /// fine, and a folder Camel still shows after the server deleted it is
+    /// something the user has to be told about, so it stays the server's own
+    /// [`SyncError::Client`].
+    ///
+    /// Not `ifInState`, for the reason [`MailSync::set_keywords`] gives: the
+    /// state a folder holds is its listing's, and a conditional write would
+    /// fail for any change to any other message in the account. A patch of
+    /// named members commutes with changes to the members it does not name.
+    pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), SyncError> {
+        if filing.is_empty() {
+            return Ok(());
+        }
+        self.update_email(uid, filing.patch())
+    }
+
+    /// One `Email/set` update, with the one refusal that is not a failure
+    /// named: a message the account no longer holds.
+    fn update_email(&self, uid: &Id, patch: serde_json::Value) -> Result<(), SyncError> {
         self.client
-            .email_update(&self.account_id, uid, change.patch())
+            .email_update(&self.account_id, uid, patch)
             .map_err(|error| match &error {
                 jmap_client::Error::Set(set_error)
                     if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
