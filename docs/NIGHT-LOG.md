@@ -8494,3 +8494,113 @@ Next in M6: the EDS side — a `jmap-backend-collection` crate subclassing
 and `dup_resource_id`/`create_resource` for the address books and calendars
 enumerated per account. The structural question in limit 3 is the first thing to
 settle, from the headers.
+
+## 2026-08-09 (eighty-seventh session)
+
+**How many address books is "the address book".** The previous session left M6
+with a decision layer that answers *which account* serves contacts and
+calendars, and a note that the next thing to settle was structural and had to
+come from the installed 3.52 headers rather than from a guess. This session
+settled one half of that and built on it.
+
+From the headers, and not guessed at: `e_collection_backend_new_child` takes a
+*resource id* and hands back the child `ESource` — so a backend does not invent
+child uids, it names resources and EDS assigns them. And
+`e_collection_backend_list_mail_sources` sits beside
+`list_contacts_sources`/`list_calendar_sources`, all three returning children —
+so mail is a child of the collection, not a set of properties on it. That
+answers the "children or properties" half of the previous session's limit 3.
+The other half — *which* extension sits on *which* of the mail children (the
+`[Mail Identity]`/`[Mail Submission]` pairing in particular) — is Evolution
+convention, not a header fact, and there is no reference `.source` file
+installed on this VM to check it against; it stays open and is **not** claimed.
+
+The increment itself is the other question a populate has to answer, and one
+that is entirely testable here: an account is not one address book, it is
+however many `AddressBook`s and `Calendar`s the server lists (RFC 9610 §2,
+draft-ietf-jmap-calendars §4), and Evolution shows one source per collection.
+New module `jmap-collection-sync/src/resources.rs`: `Resource` (id, name,
+is_default) and `Fanout` (the layout plus the two collection lists), with
+`Fanout::discover(&Client)` doing the session read and the two listings.
+
+Red first, and recorded as red: with `discover` stubbed to return empty vectors,
+5 of the 6 mock-driven tests in `tests/resources.rs` failed (the sixth,
+"a login without calendars is never asked for them", passes vacuously against a
+stub — noted rather than papered over). Then green, then the deliberately wrong
+implementations checked against the suite: dropping the subscription filter,
+sorting by name alone, and listing regardless of what the layout resolved are
+each caught by exactly the test named for them.
+
+Decisions taken:
+
+- **A listing is sent only for a capability the layout resolved.** Not to save
+  a round trip: RFC 8620 §3.3 has a server answer a `using` naming a capability
+  it does not advertise with `unknownCapability`, and that fails the *whole
+  request*, not the one call. So asking a contacts-less server for its address
+  books anyway would not return a short answer, it would return nothing at all —
+  and the calendars in the same request with it. Two mock tests assert on
+  `method_calls()` that the request is never sent, which is the only place this
+  is visible; the returned value looks the same either way.
+- **`isSubscribed == Some(false)` is dropped; an absent `isSubscribed` is not.**
+  The property means the user has said they do not want this collection, and
+  creating a child for it puts a calendar they removed back in the sidebar at
+  every populate. But the property is optional in both specifications, so
+  silence is the shape of a plain server, not a refusal — reading it as one
+  would empty the sidebar of every server that omits it.
+- **A collection with no `id` is dropped rather than pointed somewhere.**
+  `[Resource] Identity` is how a child names its collection, and the book
+  backend already treats a missing one as "the account's default" — so keeping
+  an id-less collection would show the wrong address book under the right name,
+  which is worse than showing nothing.
+- **A collection the server named nothing is shown under its id.** `name` is
+  required by both specifications, so this is a server out of spec; the
+  alternative to a fallback is a blank row in Evolution's sidebar that the user
+  cannot tell from another blank row.
+- **The order is `sortOrder`, then name, then id.** The first two are what a
+  JMAP client is told to do with `Mailbox` and both collection objects copy the
+  property; the id tie-break exists only so that two identically named
+  collections come back in the same order every populate. A child list that
+  reshuffles between runs is one EDS is handed as a changed account.
+- **The error type is `jmap_client::Error` rather than a new wrapper.**
+  Everything that can fail here is one of its calls, and the GObject layer
+  already maps that type onto Evolution's codes; a wrapper with one variant
+  would be ceremony. If a second failure kind appears, that is when it earns a
+  `FanoutError`.
+
+**Not covered by a test, and the honest limits:**
+
+1. **There is still no collection backend.** Nothing turns a `Fanout` into
+   `ESource`s, nothing has been loaded by `evolution-source-registry`, and the
+   mail-children structure above is settled only as far as the headers state it.
+2. **Nothing here decides what a *read-only* account's collections become.**
+   `ServiceAccount::read_only` is carried through as before and still acted on
+   nowhere; per-collection rights (a shared calendar one may read and not write)
+   are a `myRights`-shaped question neither collection object is being read for
+   yet.
+3. **`Calendar` and `AddressBook` are read only for the five properties a child
+   source is made from.** Colour, description and the calendar's participant
+   identity are ignored; `ESourceCalendar` has a `color` property and mapping it
+   is a later increment, not an oversight to rediscover.
+4. **Untested against any real server.** `jmap-mockd` answers `AddressBook/get`
+   and `Calendar/get` in full and never paginates them; whether Stalwart or
+   Fastmail sort, subscribe or default differently is unknown here.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files — `src/resources.rs` and
+`tests/resources.rs` — each with the SPDX `GPL-3.0-or-later` header;
+`evolution-jmap-client` moved from a dev-dependency to a dependency of the
+crate. `cargo fmt --check`, `cargo test --locked` (457 tests, up from 446) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set, and clippy is clean on the five EDS crates, which this change does
+not touch.
+
+No milestone tag: M5 still wants the provider exercised through a real
+Evolution, and M6 has two decision layers and no backend.
+
+Next in M6: the EDS side — a `jmap-backend-collection` crate subclassing
+`ECollectionBackend`, whose `populate` calls `e_collection_backend_new_child`
+once per `Resource` and once for the mail account, and whose `dup_resource_id`
+reads the id back out of `[Resource] Identity`. The open question above — which
+extension sits on which mail child — has to be answered there, and this VM
+cannot answer it; it needs a real Evolution account to compare against, and the
+increment that writes it must be marked *needs human verification*.
