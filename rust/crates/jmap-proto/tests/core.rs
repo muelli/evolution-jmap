@@ -94,3 +94,26 @@ fn session_object_roundtrip() {
     assert!(account.is_personal);
     assert!(!account.is_read_only);
 }
+
+/// The largest thing this server will take (RFC 8620 §6.1), read off the core
+/// capability — the number a client has to know *before* it sends a message,
+/// because the alternative to reading it is finding out by uploading.
+#[test]
+fn the_session_names_the_largest_upload_the_server_takes() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    assert_eq!(session.max_size_upload(), Some(50_000_000));
+}
+
+/// A server that does not name the limit is answered with `None` rather than a
+/// guess. RFC 8620 §2 requires the property, so this is a server out of spec —
+/// and inventing a limit for it would refuse uploads it would have taken.
+#[test]
+fn a_session_that_names_no_upload_limit_says_so() {
+    let mut value = fixture("core/session.json");
+    value["capabilities"][jmap_proto::session::CAPABILITY_CORE]
+        .as_object_mut()
+        .unwrap()
+        .remove("maxSizeUpload");
+    let session: Session = serde_json::from_value(value).unwrap();
+    assert_eq!(session.max_size_upload(), None);
+}

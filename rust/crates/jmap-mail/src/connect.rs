@@ -43,11 +43,12 @@ use std::fmt;
 
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
-    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
-    CAMEL_SERVICE_ERROR_INVALID, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
-    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_SERVICE_ERROR_URL_INVALID, CAMEL_STORE_ERROR_NO_FOLDER,
-    CamelAuthenticationResult, CamelServiceError, camel_folder_error_quark,
-    camel_service_error_quark, camel_store_error_quark,
+    CAMEL_FOLDER_ERROR_INVALID, CAMEL_FOLDER_ERROR_INVALID_UID,
+    CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE, CAMEL_SERVICE_ERROR_INVALID,
+    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_SERVICE_ERROR_UNAVAILABLE,
+    CAMEL_SERVICE_ERROR_URL_INVALID, CAMEL_STORE_ERROR_NO_FOLDER, CamelAuthenticationResult,
+    CamelServiceError, camel_folder_error_quark, camel_service_error_quark,
+    camel_store_error_quark,
 };
 use glib_sys::{GError, GQuark, g_error_new_literal};
 use jmap_backend_core::connect::is_wrong_password;
@@ -216,6 +217,20 @@ impl StoreError {
                 (
                     camel_folder_error_quark(),
                     CAMEL_FOLDER_ERROR_INVALID_UID as i32,
+                )
+            },
+            // A message over the account's `maxSizeUpload`. The account is
+            // fine, the connection is fine, and the message is what could not
+            // be used — so it is reported the way a message Camel could not
+            // write out is, and not as a service error, which is what Evolution
+            // reads to decide an account is unusable. The sentence carries the
+            // limit; the code only has to not lie about whose fault it is.
+            //
+            // SAFETY: as above.
+            Self::Client(Error::TooLarge { .. }) => unsafe {
+                (
+                    camel_folder_error_quark(),
+                    CAMEL_FOLDER_ERROR_INVALID as i32,
                 )
             },
             // SAFETY: as above.

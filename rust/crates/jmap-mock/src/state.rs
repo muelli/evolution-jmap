@@ -42,6 +42,16 @@ pub struct ServerState {
     /// [`crate::MockServerBuilder::query_page_size`] asked. `None` answers the
     /// whole result at once.
     pub query_page_size: Option<u64>,
+    /// The largest upload this server takes, as
+    /// [`crate::MockServerBuilder::size_upload`] asked — advertised as
+    /// `maxSizeUpload` in the session document and enforced on `/upload/`.
+    ///
+    /// `None` is the server that names no limit at all
+    /// ([`crate::MockServerBuilder::no_size_upload`]), which RFC 8620 §2 does
+    /// not allow and which a client still has to have an answer for; it takes
+    /// any size. The default is [`crate::DEFAULT_SIZE_UPLOAD`], far above what
+    /// any test uploads, so only a test about the limit meets it.
+    pub size_upload: Option<u64>,
 }
 
 impl ServerState {
@@ -54,6 +64,7 @@ impl ServerState {
             changes_page_size: None,
             objects_in_get: None,
             query_page_size: None,
+            size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
         }
     }
 

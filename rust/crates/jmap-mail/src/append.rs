@@ -55,10 +55,19 @@
 //! built. An append uploads the whole message, so it is the longest request this
 //! provider makes going the other way.
 //!
-//! **A size check before the upload.** RFC 8620 §6.1's `maxSizeUpload` is in the
-//! session object and nothing here reads it, so a message over the account's
-//! limit is refused by the server's HTTP layer rather than by a local message
-//! naming the limit.
+//! ## The one refusal that costs nothing
+//!
+//! A message larger than RFC 8620 §6.1's `maxSizeUpload` never reaches the
+//! wire: [`Client::upload_blob`] compares the length against the session
+//! document and answers [`Error::TooLarge`], which arrives here as a
+//! [`StoreError::Client`] and is reported in `CAMEL_FOLDER_ERROR` — the
+//! message is what could not be used, and the account is not broken for having
+//! a limit. Every other way an append fails needs the server to say so; this
+//! one is knowable before the upload starts, and an upload is the one request
+//! whose body is the whole message.
+//!
+//! [`Error::TooLarge`]: jmap_client::Error::TooLarge
+//! [`Client::upload_blob`]: jmap_client::Client::upload_blob
 //!
 //! [`MailSync::import_message`]: jmap_mail_sync::MailSync::import_message
 //! [`Client`]: jmap_client::Client

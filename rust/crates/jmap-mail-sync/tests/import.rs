@@ -34,7 +34,11 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
-        let server = MockServer::builder().start();
+        Self::started_with(MockServer::builder())
+    }
+
+    fn started_with(builder: jmap_mock::MockServerBuilder) -> Self {
+        let server = builder.start();
         let account_id = server.account_id();
         Self { server, account_id }
     }
@@ -264,4 +268,41 @@ fn a_mailbox_the_account_does_not_have_takes_no_message() {
     // And the message is nowhere else either: a refused import must not leave
     // the account holding a message no mailbox shows.
     assert!(fixture.listing(&inbox).is_empty());
+}
+
+/// A message larger than the account's `maxSizeUpload` is refused without the
+/// upload being attempted, and the refusal names both numbers.
+///
+/// The import is where this matters most: the bytes are a whole message, and
+/// the account may be one an administrator gave a small allowance. What the
+/// Camel layer above needs is a sentence for the user — "this account takes at
+/// most N bytes" — which it can only write if the numbers survive the crate
+/// boundary, so the client's [`jmap_client::Error::TooLarge`] is kept whole
+/// here exactly as the server's refusals are.
+#[test]
+fn a_message_over_the_accounts_upload_limit_is_not_imported() {
+    let fixture = Fixture::started_with(MockServer::builder().size_upload(1024));
+    let inbox = fixture.seed_mailbox("Inbox");
+
+    let error = fixture
+        .sync()
+        .import_message(&inbox, vec![b'x'; 4096], &Keywords::default(), None)
+        .expect_err("a message over the account's limit was imported");
+
+    match error {
+        SyncError::Client(jmap_client::Error::TooLarge { size, limit }) => {
+            assert_eq!(size, 4096);
+            assert_eq!(limit, 1024);
+        }
+        other => panic!("expected the upload limit, got {other:?}"),
+    }
+
+    // Nothing was uploaded and nothing was imported.
+    assert!(fixture.listing(&inbox).is_empty());
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state.account(&fixture.account_id).unwrap().blobs.is_empty(),
+        "a refused import still uploaded the message"
+    );
 }
