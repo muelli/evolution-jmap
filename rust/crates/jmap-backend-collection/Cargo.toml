@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "jmap-backend-collection"
+description = "The JMAP collection backend for evolution-source-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_backend_collection"
+# rlib only, for now. The other backends build a cdylib because there is an
+# `e_module_load` in them for EDS to find; this crate has no module entry point
+# yet, and a `module-jmap-backend.so` that exports nothing is a file
+# `evolution-source-registry` would dlopen and learn nothing from. The cdylib
+# and the install rule in cmake/Backends.cmake arrive together with that entry
+# point.
+crate-type = ["rlib"]
+
+[dependencies]
+eds-sys = { workspace = true }
+jmap-backend-core = { workspace = true }
+evolution-jmap-collection-sync = { workspace = true }
+glib-sys = { workspace = true }
+gobject-sys = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-proto = { workspace = true }

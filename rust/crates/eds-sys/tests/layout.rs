@@ -51,6 +51,32 @@ fn backend_layouts_match_the_gtype_system() {
     assert_layout!(e_source_get_type, ESource, ESourceClass);
 }
 
+/// The type M6's collection backend subclasses. It lives in `libebackend`
+/// beside `EBackend` rather than in either of the data libraries, and it is the
+/// one class whose vfuncs are dispatched by `evolution-source-registry` itself
+/// rather than by a factory subprocess — so a layout drift here misfires in the
+/// process that owns every account, not in one address book's.
+#[test]
+fn collection_backend_layout_matches_the_gtype_system() {
+    assert_layout!(
+        e_collection_backend_get_type,
+        ECollectionBackend,
+        ECollectionBackendClass
+    );
+}
+
+/// And the slots on it the collection backend overrides, for the same reason
+/// the meta backends' are checked below: a name that moved or a signature that
+/// changed is a compile error here rather than a wrong-arity call at runtime.
+#[test]
+fn the_collection_backend_class_exposes_the_vfuncs_the_backend_overrides() {
+    let collection = unsafe { std::mem::zeroed::<ECollectionBackendClass>() };
+    assert!(collection.populate.is_none());
+    assert!(collection.dup_resource_id.is_none());
+    assert!(collection.child_added.is_none());
+    assert!(collection.child_removed.is_none());
+}
+
 #[test]
 fn book_backend_layouts_match_the_gtype_system() {
     assert_layout!(e_book_backend_get_type, EBookBackend, EBookBackendClass);
