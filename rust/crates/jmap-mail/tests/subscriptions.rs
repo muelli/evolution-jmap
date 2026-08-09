@@ -17,11 +17,11 @@
 //! slots the store's copy of `CamelSubscribableInterface` fills. Two of the
 //! three are reachable here: `folder_is_subscribed` takes no `CamelSubscribable`
 //! machinery beyond the instance pointer, so it is called through the vtable the
-//! way Camel calls it. The two sync vfuncs are not — they end in a
-//! `g_signal_emit` on the store, which needs a store built through a
-//! `CamelSession` — so what is tested of them is everything up to that emission,
+//! way Camel calls it. The two sync vfuncs are not — they end in an emission
+//! queued on the store's `CamelSession`, which a detached store does not have —
+//! so what is tested of them here is everything up to that emission,
 //! [`jmap_mail::subscribe::set_subscribed`], which is the whole of what they
-//! decide.
+//! decide. The emission is `tests/emissions.rs`.
 
 use std::ffi::CString;
 use std::sync::Arc;

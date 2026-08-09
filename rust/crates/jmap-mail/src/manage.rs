@@ -62,21 +62,28 @@
 //! The alternative — refusing a rename this crate would have to encode — is
 //! refusing a legal folder name, which is worse.
 //!
-//! ## What is not covered by a test
+//! ## Who says the folder tree changed
 //!
-//! The emission at the end of each vfunc, for the reason [`crate::subscribe`]
-//! gives: `camel_store_folder_created` begins by taking the service's session
-//! and queueing the signal on it, so a store without a `CamelSession` behind it
-//! cannot emit at all, and the stores these tests use are
-//! [`JmapStore::detached`] instances. Everything the vfuncs decide is
-//! [`create_folder`], [`delete_folder`] and [`rename_folder`], which
-//! `tests/manage.rs` drives against the mock.
+//! Two of the three vfuncs end in an emission and the third deliberately does
+//! not, and the difference is Camel's rather than ours.
 //!
-//! Camel does not emit any of the three signals for us. Its own
 //! `camel_store_create_folder_sync` and `camel_store_delete_folder_sync` call
-//! the vfunc and nothing else — the emitters are called nowhere in libcamel
-//! outside `CamelVeeStore` — which is why the lines are here, as they are in
-//! every other provider.
+//! the vfunc and nothing else, so a create and a delete that said nothing would
+//! leave every view of the account except the one window that made the call
+//! showing a folder tree that never moves. The two `camel_store_folder_*` lines
+//! here are what tells it, as they are in every other provider.
+//!
+//! `camel_store_rename_folder_sync` is not like them: it renames the folders in
+//! the store's object bag and then emits `folder-renamed` *itself*, building the
+//! info by asking the store for the new path. So a rename that emitted as well
+//! would announce one rename twice — which is what `tests/emissions.rs` observed
+//! and what took the line out again. The cost is stated rather than hidden: the
+//! info Camel builds is asked for with `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`,
+//! because this store is subscribable, so a subtree with nothing subscribed
+//! anywhere in it is renamed with no announcement at all. That is Camel's rule
+//! applied to every provider alike, not a gap of ours, and the folder tree the
+//! rename is invoked from is not showing such a subtree in the first place;
+//! `tests/emissions.rs` pins both halves.
 //!
 //! ## What puts all three in front of the user
 //!
@@ -99,7 +106,7 @@ use std::slice;
 
 use eds_sys::{
     CamelFolderInfo, CamelStore, CamelStoreClass, camel_store_folder_created,
-    camel_store_folder_deleted, camel_store_folder_renamed,
+    camel_store_folder_deleted,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
@@ -315,16 +322,11 @@ unsafe extern "C" fn delete_folder_sync(
 
 /// Renames a folder, and moves it: `camel_store_rename_folder_sync`'s vfunc.
 ///
-/// The chain built here is not handed over — the vfunc answers with a
-/// boolean — so it is freed one line after the signal that borrows it, as in
-/// [`delete_folder_sync`]. Its depth is `None` rather than `Some(0)`, unlike
-/// both of those: a rename changes the path of every folder *under* the one
-/// renamed, and `camel_store_folder_renamed` is what tells Evolution about
-/// them — its handler walks the children of what it is handed.
-///
-/// `old_name` is passed on as it arrived, since it is what the signal names the
-/// folder by, and it cannot be NULL here: a NULL path resolves to no folder and
-/// the rename has already failed.
+/// Nothing is announced here, alone among the three, and the module says why:
+/// Camel's own wrapper emits `folder-renamed` once this returns, with an info it
+/// builds by asking the store for the folder's new path — including everything
+/// under it, whose paths the rename changed too. A second emission from here
+/// would be the same rename announced twice.
 ///
 /// `cancellable` is not observed, for the reason [`create_folder_sync`] gives.
 unsafe extern "C" fn rename_folder_sync(
@@ -349,15 +351,9 @@ unsafe extern "C" fn rename_folder_sync(
             let from = read_string(old_name).unwrap_or_default();
             let to = read_string(new_name).unwrap_or_default();
 
-            let renamed = match rename_folder(instance, &from, &to) {
-                Ok(folder) => folder,
-                Err(failure) => return fail_bool(error, &failure),
-            };
-
-            let announcement = FolderInfoChain::from_forest(slice::from_ref(&renamed), None);
-            // SAFETY: as in `create_folder_sync`, and `old_name` is the
-            // borrowed string this call was handed.
-            camel_store_folder_renamed(store, old_name, announcement.as_ptr());
+            if let Err(failure) = rename_folder(instance, &from, &to) {
+                return fail_bool(error, &failure);
+            }
             GTRUE
         })
     }
