@@ -119,6 +119,16 @@ pub enum StoreError {
     /// this send would fail identically against a working server. It is fixed
     /// by sending as an address the account has — never by retrying.
     NoIdentity(String),
+    /// A message was to be sent and the account has no mailbox an outgoing
+    /// message may be put in.
+    ///
+    /// Reported as `CAMEL_SERVICE_ERROR_INVALID`, like [`Self::NoIdentity`] and
+    /// for its reasons — nothing is wrong with the account or the connection,
+    /// and retrying cannot help. Deliberately *not* the store's `NO_FOLDER`
+    /// that [`Self::NoRole`] uses, although both are about a role no mailbox
+    /// claims: this one is answered by a `CamelTransport`, which is not a
+    /// store, and there is no folder Camel asked for to report as missing.
+    NoOutgoingFolder,
 }
 
 impl From<SourceError> for StoreError {
@@ -149,6 +159,11 @@ impl From<SyncError> for StoreError {
             // for the user naming that address, not a server failure, so it
             // keeps its shape all the way to the `GError`.
             SyncError::NoIdentity(address) => Self::NoIdentity(address),
+            // And once more, for the account that cannot send at all rather
+            // than cannot send as one address. It carries nothing in either
+            // crate, because the thing that is missing is a mailbox that does
+            // not exist and so has no id or path to name.
+            SyncError::NoOutgoingFolder => Self::NoOutgoingFolder,
         }
     }
 }
@@ -176,6 +191,9 @@ impl fmt::Display for StoreError {
             Self::NoMessage(uid) => write!(f, "no such message: {uid}"),
             Self::NoIdentity(address) => {
                 write!(f, "this account cannot send mail as {address}")
+            }
+            Self::NoOutgoingFolder => {
+                f.write_str("this account has no Drafts or Sent folder to send a message from")
             }
         }
     }
