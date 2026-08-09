@@ -77,6 +77,22 @@
 //!   keeps in the same flags word.
 //! - A message that is new gets a row under the server's id, not under one the
 //!   summary invented.
+//!
+//! ## A delta is not a listing either
+//!
+//! [`apply_delta`] is the other way rows arrive, and it exists because the
+//! first rule above is exactly wrong for one. `Email/changes` answers for the
+//! *account*: what comes back is what moved, never what is there, so a row the
+//! delta did not mention is a row nothing was said about. Handed to
+//! [`apply_listing`], the first delta that found one new message would empty
+//! the folder.
+//!
+//! So the two share how a row is written and differ in what silence means. A
+//! delta says which messages this mailbox holds now (`present`) and which it
+//! does not (`absent`), and everything else keeps the row it had. It can also
+//! answer the one question a listing cannot — see [`crate::changes`]: a message
+//! it names that the folder has no row for arrived since the state the folder
+//! recorded, which is what recent means.
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
@@ -99,7 +115,7 @@ use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_mail_sync::MessageSummary;
-use jmap_proto::State;
+use jmap_proto::{Id, State};
 
 use crate::changes::Changes;
 use crate::folder_info::c_string;
@@ -479,6 +495,73 @@ pub unsafe fn apply_listing(
     changes
 }
 
+/// Brings the summary in line with what one *delta* of the mailbox found, and
+/// reports what moved.
+///
+/// `present` is the rows this mailbox holds for the messages the delta named,
+/// `absent` the uids it does not hold any more — and, critically, the rows
+/// neither list mentions are left exactly as they were. That is the whole
+/// difference from [`apply_listing`], and the reason this is a second function
+/// rather than a call into that one.
+///
+/// Under the summary's lock for the same reason, and returning the same
+/// [`Changes`] — with one list filled that a listing leaves empty. A message
+/// here that the folder has no row for has arrived since the state the delta
+/// was asked from, so it goes on Camel's recent list as well as its added one;
+/// [`crate::changes`] documents why only this path may say so.
+///
+/// # Safety
+///
+/// `summary` must point at a live `CamelFolderSummary`.
+pub unsafe fn apply_delta(
+    summary: *mut CamelFolderSummary,
+    present: &[MessageSummary],
+    absent: &[Id],
+) -> Changes {
+    let mut changes = Changes::new();
+
+    // SAFETY: the summary is live by this function's contract, and Camel's
+    // summary lock is recursive — the calls below take it again themselves.
+    unsafe {
+        camel_folder_summary_lock(summary);
+        for uid in absent {
+            remove_row(summary, uid.as_str(), &mut changes);
+        }
+        for message in present {
+            if apply_message(summary, message, &mut changes) {
+                changes.arrive(message.uid.as_str());
+            }
+        }
+        camel_folder_summary_unlock(summary);
+    }
+
+    changes
+}
+
+/// Drops the row for one uid a delta reported gone, if this folder had one.
+///
+/// Most of what a delta calls absent was never here: `Email/changes` reports on
+/// every mailbox of the account, so a message the user filed in some other
+/// folder is on this folder's absent list too. Reporting those would ask Camel
+/// to take lines off the message list that were never drawn, and would make a
+/// delta about somewhere else look like a change here — which is what decides
+/// whether the folder emits `changed` at all.
+///
+/// # Safety
+///
+/// `summary` must be live and locked.
+unsafe fn remove_row(summary: *mut CamelFolderSummary, uid: &str, changes: &mut Changes) {
+    let key = c_string(uid);
+    // SAFETY: the uid outlives both calls, and neither takes ownership of it.
+    unsafe {
+        if camel_folder_summary_check_uid(summary, key.as_ptr()) == GFALSE {
+            return;
+        }
+        camel_folder_summary_remove_uid(summary, key.as_ptr());
+    }
+    changes.remove(uid);
+}
+
 /// Drops the rows for messages the listing did not name.
 ///
 /// # Safety
@@ -522,6 +605,12 @@ unsafe fn remove_absent(
 
 /// Adds the row for one message, or updates the one that is already there.
 ///
+/// `true` where the row is one the folder did not have — which is what
+/// [`apply_delta`] needs to tell an arrival from a message that was here all
+/// along, and what [`apply_listing`] deliberately ignores because a listing
+/// finds the whole mailbox. Only the *new row* half is reported here; whether
+/// the change is worth telling Camel about goes on `changes` either way.
+///
 /// # Safety
 ///
 /// `summary` must be live and locked.
@@ -529,7 +618,7 @@ unsafe fn apply_message(
     summary: *mut CamelFolderSummary,
     message: &MessageSummary,
     changes: &mut Changes,
-) {
+) -> bool {
     let uid = c_string(message.uid.as_str());
 
     // SAFETY: the uid outlives every call it is passed to; `summary_get`
@@ -547,7 +636,7 @@ unsafe fn apply_message(
                     changes.change(message.uid.as_str());
                 }
                 g_object_unref(info.cast());
-                return;
+                return false;
             }
             // A uid the summary lists and has no row for is a summary whose
             // database went missing under it. Rebuilding the row from the
@@ -556,7 +645,7 @@ unsafe fn apply_message(
 
         let info = new_message_info(message);
         if info.is_null() {
-            return;
+            return false;
         }
         // `force_keep_uid`, because the uid is the JMAP `Email` id: unique in
         // the mailbox, immutable, and what every later request names the
@@ -576,5 +665,6 @@ unsafe fn apply_message(
         clear_pending_write(info);
         g_object_unref(info.cast());
         changes.add(message.uid.as_str());
+        true
     }
 }
