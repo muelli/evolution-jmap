@@ -3790,3 +3790,112 @@ is what the empty `recent` list and the whole-mailbox refresh are both still
 waiting for. Unexercised against a real `CamelSession`: `service.rs`, which
 waits on M6 and M7. The README's architecture block still lists only the
 round-1 crates.
+
+## 2026-08-09 (forty-first session)
+
+M5's twenty-first increment, and the gap the twentieth left open: a message
+opened twice was downloaded twice. `get_message_sync` now consults a
+`CamelDataCache` under the account's own cache directory before it looks for a
+connection, so the second click on a row costs nothing and a message already
+read opens with the network gone — which is what a provider whose store is a
+`CamelOfflineStore` is claiming to be able to do.
+
+Red first, in two steps. `tests/cache.rs` against a `jmap_mail::cache` that did
+not exist yet (seven tests, the wrapper's whole contract); then, once those were
+green, two tests in `tests/message.rs` that failed for the right reasons — the
+offline reopen with "transport error: timeout" after the mock was dropped, and
+the account-directory test with "the opened message was not cached under the
+account".
+
+Decisions taken:
+
+- **Keyed by uid, under the account, not the folder.** A JMAP mailbox is closer
+  to a label than to a directory: the same `Email` is filed in several of them
+  and carries one id in all of them. So the cache directory is the *service's*
+  — `camel_service_get_user_cache_dir`, the one Evolution's "empty cache"
+  clears and Camel removes with the account — and the key is the uid alone,
+  which makes a message filed in five mailboxes one file. IMAPX keys per folder
+  because an IMAP uid only means something inside one; ours means something
+  inside the account, and copying IMAPX's shape would have stored the same mail
+  five times. The object holding the cache is still the folder, because
+  `new_folder` is the one place in this crate that has a fully constructed
+  store in hand at a well-defined moment — `instance_init` runs before the
+  construct properties the cache directory is derived from are set.
+- **A uid is about to become a file name.** `camel_data_cache_add` joins the key
+  onto a path, so an `Email/query` answering `../../../.config/autostart` would
+  otherwise be a server choosing where this provider writes. Keys are checked
+  against RFC 8620 §1.2's own grammar — one to 255 of `A-Za-z0-9_-`, no leading
+  dash — and a key that fails it is not cached rather than sanitised: a
+  rewritten key would still be a file, and the id it came from is not one this
+  provider should be talking to a server about. `.` and `..`, the two that
+  matter most, fall to the character set. The test walks eight of them and then
+  checks the parent directory is still empty.
+- **Best-effort, and that is the contract rather than a shortcut.** `open`
+  answers `None`, `load` answers `None`, `store` answers a `bool` the caller
+  ignores. Every failure a cache can have — a full disk, a read-only directory,
+  an entry another process removed mid-read — is a condition under which mail
+  must still open, just slower, and the only error out-parameter in reach
+  belongs to the vfunc, where it means "this message cannot be produced". A
+  cache that turned a working account into a broken one would be worse than no
+  cache. The failures are logged as criticals instead, because a cache
+  directory that cannot be made is a broken installation and the symptom
+  without a log line is mail that is merely slow.
+- **An empty entry is not a message, at both ends.** Camel's parser makes an
+  empty `CamelMimeMessage` out of zero bytes rather than refusing them, so an
+  entry a process died before writing would be served as an empty message in
+  preference to the download that would have replaced it — forever, since
+  nothing invalidates. `store` refuses an empty source and `load` refuses an
+  empty entry. The related hole that is *not* closed is a short write: MIME has
+  no length, so a truncated file parses as a complete message with a truncated
+  body. A failed write removes its entry, which covers the case this process
+  can see; the case it cannot is a crash mid-write, and the check that would
+  close it is the one number a summary row already carries — the `Email`'s
+  `size`, which RFC 8621 §4.1 defines as the octets of exactly these bytes.
+- **A cached entry that will not parse falls through to the fetch.** The cached
+  path parses with a NULL error out-parameter, which `set_raw_gerror` already
+  defines as "free it": an entry Camel's parser rejects is not a message to
+  report, it is one to replace. The fetched path keeps its bytes *before* it
+  parses them, so a parse failure does not turn every later open of that
+  message into two more round trips.
+- **Our lock, not Camel's.** Camel documents no thread-safety guarantee for
+  `CamelDataCache`, and Camel drives a folder from several threads at once, so
+  the pointer lives in a `Mutex` — held for one entry's IO and never across a
+  network fetch, which is the part of an open worth overlapping. That plus the
+  pointer never being handed out is what the `unsafe impl Send`/`Sync` rests on.
+- **The close gets a GError of its own.** `g_io_stream_close` is what flushes,
+  so a write that reported success and a close that failed is still an
+  incomplete entry — but passing the same out-parameter to both makes GLib log
+  a critical of its own for the second `g_set_error` over an already-set one.
+  The write's reason is the one worth reporting, so the close's is only adopted
+  if the write left none.
+- **`CamelDataCache` in `eds-sys`, layout-checked like the rest.** Nothing
+  subclasses it — the provider only ever holds one — but it crosses the ABI, so
+  it is in `tests/layout.rs` against `g_type_query` with the other twenty-odd
+  types. The streams come from gio-sys, not from a second binding: the entry is
+  a `GIOStream`, and `g_output_stream_write_all`'s buffer is typed `*mut` there
+  although the C declaration says `const void *`, which is one cast with a
+  comment on it.
+
+Not verified locally, as in the previous forty sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). The two new files —
+`jmap-mail/src/cache.rs` and `jmap-mail/tests/cache.rs` — carry SPDX
+`GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets, the five EDS crates included. One measurement worth keeping: the message
+suite ran in 30s while the offline test was red, waiting on a transport timeout
+against a server that had been dropped, and 0.04s once the cache answered it.
+
+Next in M5. **`synchronize_sync`** is still the first thing in the crate that
+writes: a row Camel marked read or deleted is a `keywords` patch through
+`Email/set`, and it is now the largest unbuilt piece of the folder. **Bounding
+the cache** is the other half of what landed today — nothing removes an entry,
+so it grows with every message ever opened; `CamelDataCache` has
+`set_expire_age`/`set_expire_enabled` and Evolution's "empty cache" is
+`camel_data_cache_clear`, and which of the two this provider should offer is a
+settings question before it is a mechanism one. `CamelSubscribable` remains the
+smaller unblocked piece; `get_trash_folder_sync` and `get_junk_folder_sync` are
+still a settings decision before they are a vfunc. `Email/changes` against a
+state kept on disk is what the empty `recent` list and the whole-mailbox
+refresh are both still waiting for. Unexercised against a real `CamelSession`:
+`service.rs`, which waits on M6 and M7. The README's architecture block still
+lists only the round-1 crates.
