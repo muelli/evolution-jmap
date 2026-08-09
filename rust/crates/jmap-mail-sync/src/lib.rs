@@ -24,7 +24,7 @@ pub mod folder;
 pub mod keywords;
 pub mod mailboxes;
 pub mod message;
-pub(crate) mod path;
+pub mod path;
 pub(crate) mod pointer;
 
 use std::collections::{BTreeMap, BTreeSet};
