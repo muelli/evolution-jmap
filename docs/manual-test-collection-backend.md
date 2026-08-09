@@ -123,10 +123,12 @@ What each load-bearing line does:
   out to. Switching one off is worth trying as a second run: the children of
   that kind are *removed*, not merely hidden, which is the populate's other
   half.
-- `MailEnabled=false` because this backend does not create mail children yet.
-  M5's Camel provider exists and works from a hand-written mail account; wiring
-  it into the collection is not done, so an account claiming mail would claim a
-  part nothing serves.
+- `MailEnabled=false` because nothing yet *creates* an account's mail sources.
+  M5's Camel provider exists and works from a hand-written mail account, and the
+  factory's `prepare_mail` now names that provider on the mail account and
+  transport it is handed — but the three sources (account, identity, transport)
+  are the setup UI's to create, as they are in every EDS backend, and that is
+  M7. Until then an account claiming mail would claim a part nothing serves.
 - `Method=none` is what allows plain HTTP, and it is refused for any host that
   is not loopback. **The key is `Method`, not `Secure`**: `ESourceSecurity:secure`
   is a boolean *over* the `Method` string, so a keyfile saying `Secure=true`
