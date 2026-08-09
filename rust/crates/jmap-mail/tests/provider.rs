@@ -29,8 +29,8 @@ use eds_sys::{
     CAMEL_NUM_PROVIDER_TYPES, CAMEL_PROVIDER_IS_REMOTE, CAMEL_PROVIDER_IS_SOURCE,
     CAMEL_PROVIDER_IS_STORAGE, CAMEL_PROVIDER_STORE, CAMEL_PROVIDER_SUPPORTS_SSL,
     CAMEL_PROVIDER_TRANSPORT, CAMEL_URL_NEED_HOST, CamelProvider, CamelProviderFlags,
-    CamelProviderURLFlags, GError, camel_offline_store_get_type, camel_provider_get,
-    camel_provider_init, camel_store_get_type,
+    CamelProviderURLFlags, CamelTransportClass, GError, camel_offline_store_get_type,
+    camel_provider_get, camel_provider_init, camel_store_get_type,
 };
 use glib_sys::GType;
 use gobject_sys::{
@@ -40,6 +40,7 @@ use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_mail::module::camel_provider_module_init;
 use jmap_mail::provider::PROTOCOL;
 use jmap_mail::store::JmapStore;
+use jmap_mail::transport::JmapTransport;
 
 /// The entry point, called the way Camel calls it, and the provider read back
 /// out of Camel's registry afterwards.
@@ -132,12 +133,15 @@ fn the_provider_needs_a_host() {
     );
 }
 
-/// The store slot is the whole point of the provider; the transport slot is
-/// deliberately empty until `EmailSubmission/set` has a `CamelJmapTransport`
-/// behind it. Empty means `G_TYPE_INVALID` — a zeroed slot Camel reads as "no
-/// transport", not as a type it should try to instantiate.
+/// Both slots, which is what makes a JMAP account a whole account: the store is
+/// the mail it holds and the transport is the mail it sends, and Camel
+/// instantiates each from the type named here. An empty slot is
+/// `G_TYPE_INVALID`, which Camel reads as "this provider cannot do that" — a
+/// transport slot left invalid is an account Evolution offers no way to send
+/// from, and one naming a type whose `send_to_sync` is NULL is a GLib critical
+/// the first time the user presses Send.
 #[test]
-fn the_provider_names_a_store_and_no_transport_yet() {
+fn the_provider_names_a_store_and_a_transport() {
     let provider = registered();
     assert_eq!(
         provider.object_types.len(),
@@ -152,12 +156,35 @@ fn the_provider_names_a_store_and_no_transport_yet() {
         "the provider names some other type than the store this module registers"
     );
 
-    assert_eq!(
-        provider.object_types[CAMEL_PROVIDER_TRANSPORT as usize], G_TYPE_INVALID,
-        "a store-only provider must leave the transport slot invalid; sending \
-         mail is a later increment and a half-registered transport type is a \
-         crash at send time, not a missing feature"
+    let transport = provider.object_types[CAMEL_PROVIDER_TRANSPORT as usize];
+    assert_ne!(
+        transport, G_TYPE_INVALID,
+        "the provider names no transport type"
     );
+    assert_eq!(
+        transport,
+        transport_type(),
+        "the provider names some other type than the transport this module registers"
+    );
+
+    // The precondition the slot is only safe to fill because of: Camel
+    // dispatches sending through the class, and a transport type without the
+    // vfunc is worse than no transport type at all.
+    //
+    // SAFETY: a live GType of a class that has one; the reference is given back.
+    unsafe {
+        let class = g_type_class_ref(transport).cast::<CamelTransportClass>();
+        assert!(
+            (*class).send_to_sync.is_some(),
+            "the transport the provider names cannot send"
+        );
+        g_type_class_unref(class.cast());
+    }
+}
+
+fn transport_type() -> GType {
+    // SAFETY: NAME is a 'static NUL-terminated string.
+    unsafe { g_type_from_name(<JmapTransport as ObjectSubclass>::NAME.as_ptr()) }
 }
 
 fn store_type() -> GType {

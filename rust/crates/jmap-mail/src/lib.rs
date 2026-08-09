@@ -109,10 +109,18 @@
 //!   second service Camel gives an account and the one that reads no folder. It
 //!   is a service of its own rather than a view of the store because Camel gives
 //!   it no way to reach one — so it has a connection of its own to the same
-//!   server, opened by the same [`service`] vfuncs, and `send_to_sync` is the
-//!   one slot on it still empty.
+//!   server, opened by the same [`service`] vfuncs, and the account-side half of
+//!   a send held under one lock of it.
+//! - [`send`] is the slot that object exists for: `send_to_sync`, the vfunc a
+//!   message leaves the account through. It joins [`envelope`] and [`mime`] to
+//!   the identity, the two mailboxes and the import-and-submit — refusing
+//!   everything it can before the upload, so that a send the user is told did
+//!   not happen has left nothing behind — and answers Camel's
+//!   `out_sent_message_saved`, which decides whether Evolution keeps a second
+//!   copy of every message this account sends.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
-//!   to offer a JMAP account as, and the store slot pointing at that type.
+//!   to offer a JMAP account as, and the two slots naming the store and the
+//!   transport.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
 //!   in this repository.
 //!
@@ -138,6 +146,7 @@ pub mod mime;
 pub mod module;
 pub mod provider;
 pub mod refresh;
+pub mod send;
 pub mod server;
 pub mod service;
 pub mod settings;

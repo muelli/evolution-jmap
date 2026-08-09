@@ -204,6 +204,11 @@ impl<'a> Transport<'a> {
         }
     }
 
+    /// Installs a live connection, the way `authenticate_sync` would.
+    pub fn connect(&self, sync: MailSync) {
+        self.jmap().install_connection(sync);
+    }
+
     /// The transport as its Rust self, for the state no Camel accessor reaches.
     pub fn jmap(&self) -> &JmapTransport {
         // SAFETY: `self.service` is an instance of `JmapTransport`, constructed
