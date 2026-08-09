@@ -127,3 +127,46 @@ fn receive_email_attachment_blob_download() {
         .unwrap();
     assert_eq!(downloaded, attachment_bytes);
 }
+
+/// The state probe: `Email/get` naming no ids at all, which is how a client
+/// learns what to ask `Email/changes` from without downloading a mailbox first.
+#[test]
+fn the_email_state_can_be_read_without_reading_any_email() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let held = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+        account.seed_email(EmailSeed::new(
+            inbox,
+            ("Bob", "bob@example.com"),
+            "Hello",
+            "text",
+            "2026-08-01T10:00:00Z",
+        ));
+        account.emails.state()
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    assert_eq!(client.email_state(&account_id).unwrap(), held);
+
+    // And it moves with the account, which is the whole reason to read it.
+    let delivered = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let inbox = account.seed_mailbox("Later", None);
+        account.deliver_email(EmailSeed::new(
+            inbox,
+            ("Carol", "carol@example.com"),
+            "Newer",
+            "text",
+            "2026-08-02T10:00:00Z",
+        ));
+        account.emails.state()
+    };
+    assert_ne!(delivered, held);
+    assert_eq!(client.email_state(&account_id).unwrap(), delivered);
+}

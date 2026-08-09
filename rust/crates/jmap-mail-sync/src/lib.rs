@@ -27,10 +27,10 @@ pub mod message;
 pub(crate) mod path;
 pub(crate) mod pointer;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_client::Client;
-use jmap_proto::mail::EmailQueryFilter;
+use jmap_proto::mail::{Email, EmailQueryFilter};
 use jmap_proto::methods::Comparator;
 use jmap_proto::{Id, State};
 
@@ -56,6 +56,54 @@ pub enum FolderUpdate {
     Unchanged(State),
     /// The tree as it is now, and the state that listing is current as of.
     Rebuilt { state: State, tree: FolderTree },
+}
+
+/// What a mailbox refresh found, when it was able to ask what *changed* rather
+/// than what is there.
+///
+/// The three answers are three different questions the server was able to
+/// settle, not three degrees of confidence:
+///
+/// - [`MessageUpdate::Unchanged`] is one round trip saying the folder is
+///   already right, which is what nearly every poll gets.
+/// - [`MessageUpdate::Changed`] is a delta, and it is deliberately not phrased
+///   as created/updated/destroyed. `Email/changes` reports on the *account's*
+///   messages and a folder is asking about one mailbox; JMAP files a message by
+///   changing its `mailboxIds`, which is an ordinary update to it. So a delta
+///   naming a message says only that something about it changed, never whether
+///   that something moved it in or out of the mailbox being refreshed — and the
+///   only honest answer is to look each named message up and report which
+///   mailbox it is in now. `present` is the rows this mailbox holds for the
+///   messages that moved, whole rather than as bare uids; `absent` is the uids
+///   that are not in it any more, whether they were destroyed, filed elsewhere,
+///   or never in it at all.
+/// - [`MessageUpdate::Relisted`] is the whole mailbox, for a state the server
+///   cannot calculate from.
+///
+/// The caller diffs `present` and `absent` against the rows it already has,
+/// because it is the only side that knows them: a message that moved into this
+/// mailbox and one whose flags changed while it sat here are the same delta on
+/// the wire, and which of the two it is depends on whether there is a row for
+/// it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MessageUpdate {
+    /// Nothing in the account's mail changed. The state carried is the one to
+    /// ask from next time, which may be later than the one asked with.
+    Unchanged(State),
+    /// What the mailbox holds for the messages that moved, and what it does not
+    /// hold any more — with the state that answer is current as of.
+    Changed {
+        state: State,
+        /// Rows of this mailbox, oldest first, like a listing's.
+        present: Vec<MessageSummary>,
+        /// Uids that are not in this mailbox, in the order a set puts them.
+        absent: Vec<Id>,
+    },
+    /// The mailbox listed again, and the state that listing is current as of.
+    Relisted {
+        state: State,
+        messages: Vec<MessageSummary>,
+    },
 }
 
 /// Synchronises one JMAP mail account.
@@ -121,8 +169,8 @@ impl MailSync {
         Ok(FolderUpdate::Rebuilt { state, tree })
     }
 
-    /// Every message in one mailbox, oldest first — what a folder's summary is
-    /// filled from.
+    /// Every message in one mailbox, oldest first, and the state that listing
+    /// can be brought forward from — what a folder's summary is filled from.
     ///
     /// Two steps, not the one round-trip `Email/query`+`Email/get`
     /// back-reference the client also offers: chaining them sends every
@@ -134,20 +182,31 @@ impl MailSync {
     /// order Camel numbers messages in, and `receivedAt` rather than the `Date`
     /// header because the header is the sender's clock — a message with a wrong
     /// one would sort into the wrong place forever.
-    pub fn messages(&self, mailbox: &Id) -> Result<Vec<MessageSummary>, SyncError> {
+    ///
+    /// ## The state is read first, and that is not an accident
+    ///
+    /// It costs an extra round trip — an `Email/get` naming no ids — and the
+    /// alternative would be free: the `/get`s below carry a state of their own.
+    /// But that state is the one *after* the listing was taken, and a message
+    /// that arrived between the query and the fetch is then a message the query
+    /// never named and no later delta will ever mention, because it changed
+    /// before the state a delta would be asked from. It would be missing from
+    /// the folder until something forced a full listing again.
+    ///
+    /// Reading the state first has the opposite failure, which is not one: the
+    /// next delta re-reports changes this listing already has. Every one of them
+    /// is a message looked up again and a row written again with what it already
+    /// said.
+    pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), SyncError> {
+        let state = self.client.email_state(&self.account_id)?;
         let ids = self.message_ids(mailbox)?;
 
         // `/get` may answer in any order (RFC 8620 §5.1), so the query's order
         // is restored below rather than assumed here.
         let mut by_uid: BTreeMap<Id, MessageSummary> = BTreeMap::new();
-        for chunk in ids.chunks(self.objects_in_get()) {
-            for email in self
-                .client
-                .email_get(&self.account_id, chunk, Some(SUMMARY_PROPERTIES))?
-            {
-                let summary = MessageSummary::from_email(&email)?;
-                by_uid.insert(summary.uid.clone(), summary);
-            }
+        for email in self.fetch(&ids, SUMMARY_PROPERTIES)? {
+            let summary = MessageSummary::from_email(&email)?;
+            by_uid.insert(summary.uid.clone(), summary);
         }
 
         // An id the query named and the `/get` did not answer for is a message
@@ -155,7 +214,119 @@ impl MailSync {
         // not something to keep a row for. `remove` also settles the other side
         // of the same race — a message that shifted position and came back on
         // two pages is listed once.
-        Ok(ids.iter().filter_map(|id| by_uid.remove(id)).collect())
+        Ok((
+            state,
+            ids.iter().filter_map(|id| by_uid.remove(id)).collect(),
+        ))
+    }
+
+    /// What one mailbox looks like now, given what it looked like at `since` —
+    /// the refresh half of what fills a folder's summary.
+    ///
+    /// One `Email/changes` for the common case, which is a folder asking
+    /// whether anything happened and being told no. Anything the account did
+    /// change costs one `Email/get` per chunk of messages it names, which is
+    /// still the whole answer for a mailbox that gained one message where a
+    /// listing would have fetched every row it already had.
+    ///
+    /// What comes back is [`MessageUpdate`], and the reason it is phrased as
+    /// present/absent rather than as the delta's own created/updated/destroyed
+    /// is documented there: `Email/changes` is an account-wide answer to a
+    /// question about one mailbox, and membership has to be re-read rather than
+    /// inferred. `destroyed` is the one part taken at its word — a message that
+    /// is gone is gone from every mailbox, and there is nothing left to look up.
+    ///
+    /// A state the server cannot calculate from — too old, or from some other
+    /// server entirely — is answered with the mailbox rather than reported, the
+    /// judgement [`MailSync::folder_tree_since`] makes about the same condition
+    /// and for the same reason: Camel has nowhere to report it to, so a folder
+    /// that failed here would be one that never recovers.
+    pub fn messages_since(&self, mailbox: &Id, since: &State) -> Result<MessageUpdate, SyncError> {
+        let changes = match self.client.all_changes(&self.account_id, "Email", since) {
+            Ok(changes) if changes.is_empty() => {
+                return Ok(MessageUpdate::Unchanged(changes.new_state));
+            }
+            Ok(changes) => changes,
+            Err(error) if error.is_cannot_calculate_changes() => return self.relist(mailbox),
+            Err(error) => return Err(error.into()),
+        };
+
+        // Created and updated are one list here, for the reason `MessageUpdate`
+        // gives: which of the two a message is says nothing about whether it is
+        // in this mailbox, and that is the only question being asked.
+        let touched: Vec<Id> = changes
+            .created
+            .iter()
+            .chain(changes.updated.iter())
+            .cloned()
+            .collect();
+
+        let mut absent = changes.destroyed;
+        let mut present = Vec::new();
+        for email in self.fetch(&touched, &filing_properties())? {
+            let filed = email
+                .mailbox_ids
+                .as_ref()
+                .is_some_and(|mailboxes| mailboxes.get(mailbox).copied().unwrap_or(false));
+            let summary = MessageSummary::from_email(&email)?;
+            match filed {
+                true => present.push(summary),
+                false => {
+                    absent.insert(summary.uid);
+                }
+            }
+        }
+
+        // A message the delta named and the `/get` did not answer for was
+        // destroyed between the two calls — the same race a listing settles by
+        // dropping the id, settled here by reporting it gone, because a folder
+        // may well be holding a row for it.
+        let answered: BTreeSet<&Id> = present.iter().map(|message| &message.uid).collect();
+        let unanswered: Vec<Id> = touched
+            .into_iter()
+            .filter(|id| !answered.contains(id) && !absent.contains(id))
+            .collect();
+        absent.extend(unanswered);
+
+        // The order a listing produces, for rows that are appended to the same
+        // summary: oldest first by the server's clock, and by uid where a server
+        // gave two messages the same time or none at all — so that a refresh is
+        // not a different answer each time it is asked.
+        present.sort_by(|one, other| {
+            one.received_at
+                .cmp(&other.received_at)
+                .then_with(|| one.uid.cmp(&other.uid))
+        });
+
+        Ok(MessageUpdate::Changed {
+            state: changes.new_state,
+            present,
+            absent: absent.into_iter().collect(),
+        })
+    }
+
+    /// The mailbox listed again, labelled with its own state rather than the
+    /// delta's — as [`MailSync::rebuild`] does for the folder tree, and for the
+    /// same reason: the listing is what was walked.
+    fn relist(&self, mailbox: &Id) -> Result<MessageUpdate, SyncError> {
+        let (state, messages) = self.messages(mailbox)?;
+        Ok(MessageUpdate::Relisted { state, messages })
+    }
+
+    /// The `Email` objects for `ids`, in however many `Email/get` calls the
+    /// account's limit takes, in whatever order the server answered.
+    ///
+    /// No calls at all for an empty list, which is what a delta of nothing but
+    /// destroyed messages amounts to.
+    fn fetch(&self, ids: &[Id], properties: &[&str]) -> Result<Vec<Email>, SyncError> {
+        let mut emails = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(self.objects_in_get()) {
+            emails.extend(
+                self.client
+                    .email_get(&self.account_id, chunk, Some(properties))?,
+            );
+        }
+        Ok(emails)
     }
 
     /// The RFC 5322 bytes of one message — what `get_message_sync` parses into
@@ -338,6 +509,20 @@ impl MailSync {
             .unwrap_or(FALLBACK_OBJECTS_IN_GET);
         advertised.min(MAX_OBJECTS_PER_GET)
     }
+}
+
+/// What a delta has to ask for: a summary row's properties and the one thing a
+/// listing never needs, `mailboxIds`.
+///
+/// Kept out of [`SUMMARY_PROPERTIES`] rather than added to it, because a
+/// listing already knows the answer — it asked `Email/query` for one mailbox's
+/// messages — and neither [`MessageSummary`] nor a `CamelFolderSummary` row has
+/// anywhere to keep it. It is a question only a delta has, and only for as long
+/// as it takes to decide which of its two lists a message belongs in.
+fn filing_properties() -> Vec<&'static str> {
+    let mut properties = SUMMARY_PROPERTIES.to_vec();
+    properties.push("mailboxIds");
+    properties
 }
 
 /// A server that answers every `Email/query` with a limited page, without ever

@@ -3,7 +3,6 @@
 
 //! Mail operations (RFC 8621).
 
-use jmap_proto::Id;
 use jmap_proto::mail::{
     Email, EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Identity, Mailbox,
 };
@@ -13,6 +12,7 @@ use jmap_proto::methods::{
 };
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION};
+use jmap_proto::{Id, State};
 use serde_json::Value;
 
 use crate::client::Client;
@@ -78,6 +78,29 @@ impl Client {
         let arguments =
             self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/query", &request)?;
         Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// The account's `Email` state, without fetching a single message.
+    ///
+    /// `Email/get` naming no ids at all: RFC 8620 §5.1 has the response carry
+    /// the type's current state whatever the list came back as, so an empty
+    /// request is the one way to learn a state without paying for the objects
+    /// it describes. `Email/changes` is asked from this.
+    ///
+    /// Why a caller wants it *before* it wants the messages: a state read after
+    /// a listing was taken already covers whatever arrived while it was being
+    /// taken, and a delta asked from it would never mention those messages
+    /// again.
+    pub fn email_state(&self, account_id: &Id) -> Result<State, Error> {
+        let mut request = GetRequest::ids(account_id.clone(), std::iter::empty::<Id>());
+        // Asked for explicitly, so that a server which answers a property list
+        // it does not understand with an error cannot be handed `null` — and so
+        // that nothing here depends on the empty id list being honoured.
+        request.properties = Some(vec!["id".to_owned()]);
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/get", &request)?;
+        let response: GetResponse<Email> = serde_json::from_value(arguments)?;
+        Ok(response.state)
     }
 
     /// `Email/get` for explicit ids.
