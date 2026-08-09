@@ -9,7 +9,7 @@ use jmap_proto::Id;
 use jmap_proto::mail::{Mailbox, role};
 
 use crate::error::SyncError;
-use crate::path::{encode_component, join};
+use crate::path::{SEPARATOR, encode_component, join};
 
 /// How deep a `parentId` chain may make the tree before the chain is cut.
 ///
@@ -231,6 +231,87 @@ impl FolderTree {
             stack.extend(folder.children.iter_mut());
         }
         false
+    }
+
+    /// Adds a folder the account has just gained, reporting whether the tree
+    /// had somewhere to put it.
+    ///
+    /// The second edit this type offers, and it is here for the reason the
+    /// first one is: the caller has just been told by the server that the
+    /// folder exists, so re-listing the account to learn it would be asking a
+    /// question already answered — and until something asks, a store holding a
+    /// listing without the new folder in it is a store that cannot open the
+    /// folder Evolution was just handed.
+    ///
+    /// Where it goes is read out of its own path rather than passed in beside
+    /// it. A folder's path *is* its position — it is its parent's path with one
+    /// encoded component after it, which is the invariant
+    /// [`paths`](Self::paths) maintains for every folder here — and a component
+    /// can never contain the separator, so the last one splits the path
+    /// unambiguously. A caller that passed the parent separately could pass one
+    /// that disagrees with the path; there is no such second version to
+    /// disagree with.
+    ///
+    /// A parent path no folder answers to inserts nothing. Hanging the folder
+    /// off the roots instead would draw it at the top level of an account that
+    /// has it somewhere else entirely, which is worse than not drawing it until
+    /// the next listing.
+    ///
+    /// A sibling that already has the new folder's path is dropped. The tree
+    /// can be out of date in exactly one direction the server will not correct
+    /// — it can still hold a mailbox another client destroyed, whose name is
+    /// then free for this create to reuse — and of the two folders with that
+    /// one path, the one the server has just confirmed is the one to keep.
+    pub fn insert(&mut self, folder: FolderInfo) -> bool {
+        let siblings = match folder.path.rsplit_once(SEPARATOR) {
+            Some((parent, _)) => match self.find_mut(parent) {
+                Some(parent) => &mut parent.children,
+                None => return false,
+            },
+            None => &mut self.roots,
+        };
+
+        siblings.retain(|sibling| sibling.path != folder.path);
+        siblings.push(folder);
+        true
+    }
+
+    /// Takes a folder out of the tree, reporting whether it was in it.
+    ///
+    /// By mailbox id, and for the reason [`set_subscribed`](Self::set_subscribed)
+    /// is: the caller is a write that named a mailbox.
+    ///
+    /// Whatever hung under it goes too. RFC 8621 §2.5 has the server refuse to
+    /// destroy a mailbox that still has children, so a destroy that succeeded
+    /// says the server had none — and the children this tree still lists are
+    /// ones another client removed first. Keeping them would leave folders
+    /// under a parent that is not there, at paths nothing answers to.
+    pub fn remove(&mut self, id: &Id) -> bool {
+        let mut stack: Vec<&mut Vec<FolderInfo>> = vec![&mut self.roots];
+        while let Some(siblings) = stack.pop() {
+            if let Some(index) = siblings.iter().position(|folder| folder.id == *id) {
+                siblings.remove(index);
+                return true;
+            }
+            stack.extend(siblings.iter_mut().map(|folder| &mut folder.children));
+        }
+        false
+    }
+
+    /// The folder at a Camel path, to be edited. The read-only half is
+    /// [`find`](Self::find), and this one is deliberately not public: handing
+    /// out a `&mut FolderInfo` would be handing out the ability to edit a path
+    /// or an id, which is the tree's own structure rather than a property of a
+    /// folder.
+    fn find_mut(&mut self, path: &str) -> Option<&mut FolderInfo> {
+        let mut stack: Vec<&mut FolderInfo> = self.roots.iter_mut().collect();
+        while let Some(folder) = stack.pop() {
+            if folder.path == path {
+                return Some(folder);
+            }
+            stack.extend(folder.children.iter_mut());
+        }
+        None
     }
 
     /// How many folders the account has, at any depth.

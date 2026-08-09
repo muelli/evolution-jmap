@@ -8,7 +8,7 @@
 //! is not in the list, a cycle. `folders.rs` covers the well-behaved case
 //! against `jmap-mockd`.
 
-use jmap_mail_sync::{FolderRole, FolderTree};
+use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
 use jmap_proto::Id;
 use jmap_proto::mail::{Mailbox, role};
 
@@ -448,4 +448,119 @@ fn paths_and_subscriptions(tree: &FolderTree) -> Vec<(&str, bool)> {
     tree.iter()
         .map(|folder| (folder.path.as_str(), folder.subscribed))
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// the two folders a user adds and takes away
+
+/// A folder made out of nothing, for the tests below: what
+/// [`MailSync::create_folder`] answers with, which is where the real ones come
+/// from.
+fn made(id: &str, path: &str) -> FolderInfo {
+    FolderInfo {
+        id: Id::new(id),
+        path: path.to_owned(),
+        display_name: path.rsplit('/').next().unwrap_or(path).to_owned(),
+        role: None,
+        total: 0,
+        unread: 0,
+        subscribed: true,
+        children: Vec::new(),
+    }
+}
+
+/// The other half of `create_folder_sync`: the folder the server just made has
+/// to join the listing the store is holding, or it is a folder Evolution was
+/// told about and cannot open until something refreshes the account.
+#[test]
+fn a_created_folder_joins_the_roots_when_its_path_has_no_parent_in_it() {
+    let mut tree = tree(&[mailbox("M1", "Inbox")]);
+
+    assert!(tree.insert(made("M2", "Projects")));
+
+    assert_eq!(paths(&tree), ["Inbox", "Projects"]);
+}
+
+/// And under the folder its path names when it has one — the path is what says
+/// where in the tree the folder belongs, because it is built out of the
+/// parent's.
+#[test]
+fn a_created_folder_joins_the_children_of_the_folder_its_path_names() {
+    let mut tree = tree(&[mailbox("M1", "Projects"), child("M2", "JMAP", "M1")]);
+
+    assert!(tree.insert(made("M3", "Projects/JMAP/Drafts")));
+
+    assert_eq!(
+        paths(&tree),
+        ["Projects", "Projects/JMAP", "Projects/JMAP/Drafts"]
+    );
+}
+
+/// A path whose parent is not in the tree is reported rather than guessed at.
+/// The alternative — hanging it off the roots — would be a folder drawn at the
+/// top level of the account that the server has somewhere else entirely.
+#[test]
+fn a_created_folder_whose_parent_is_missing_is_not_inserted() {
+    let mut tree = tree(&[mailbox("M1", "Inbox")]);
+
+    assert!(!tree.insert(made("M2", "Projects/JMAP")));
+
+    assert_eq!(paths(&tree), ["Inbox"]);
+}
+
+/// The tree may be out of date in the one direction the server cannot correct:
+/// it can still hold a folder another client removed, and a create then makes a
+/// second folder with that same path. The new one is the one the server just
+/// confirmed, so it is the one that stays.
+#[test]
+fn a_created_folder_replaces_a_stale_namesake() {
+    let mut tree = tree(&[mailbox("M1", "Projects")]);
+
+    assert!(tree.insert(made("M2", "Projects")));
+
+    assert_eq!(paths(&tree), ["Projects"]);
+    assert_eq!(
+        tree.find("Projects").map(|folder| folder.id.as_str()),
+        Some("M2")
+    );
+}
+
+/// The removal half, and by id for [`FolderTree::set_subscribed`]'s reason: the
+/// caller is a write that named a mailbox, and a path is this crate's invention.
+#[test]
+fn a_removed_folder_leaves_the_tree() {
+    let mut tree = tree(&[mailbox("M1", "Inbox"), mailbox("M2", "Projects")]);
+
+    assert!(tree.remove(&Id::new("M2")));
+
+    assert_eq!(paths(&tree), ["Inbox"]);
+}
+
+/// What hung under it goes with it. RFC 8621 §2.5 makes the server refuse to
+/// destroy a mailbox that still has children, so a tree that has some describes
+/// folders another client already removed — and leaving them would be folders
+/// under a parent that is not there.
+#[test]
+fn a_removed_folder_takes_its_subtree_with_it() {
+    let mut tree = tree(&[
+        mailbox("M1", "Projects"),
+        child("M2", "JMAP", "M1"),
+        child("M3", "Drafts", "M2"),
+        mailbox("M4", "Inbox"),
+    ]);
+
+    assert!(tree.remove(&Id::new("M2")));
+
+    assert_eq!(paths(&tree), ["Inbox", "Projects"]);
+}
+
+/// And a mailbox the tree does not have is reported rather than ignored, the
+/// same answer a subscription for one gets.
+#[test]
+fn removing_a_mailbox_the_tree_does_not_have_changes_nothing() {
+    let mut tree = tree(&[mailbox("M1", "Inbox")]);
+
+    assert!(!tree.remove(&Id::new("M404")));
+
+    assert_eq!(paths(&tree), ["Inbox"]);
 }
