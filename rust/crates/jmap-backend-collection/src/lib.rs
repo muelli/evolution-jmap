@@ -46,19 +46,19 @@
 //!   The four calls on a live collection it needs are a trait, so the order and
 //!   the decisions are testable against a real `jmap-mockd` and real `ESource`s
 //!   on a machine with no `evolution-source-registry`.
-//! - [`populate`] is the half of a populate that needs no server: the cached
-//!   children of previous sessions, claimed and exported so that an account works
-//!   *offline*, and then the one call that asks EDS to authenticate the account —
-//!   which is what eventually produces a fan-out, one vfunc later.
+//! - [`populate`] is the vfunc EDS reaches all of that through first, and the
+//!   half of it that needs no server: the cached children of previous sessions,
+//!   claimed and exported so that an account works *offline*, and then the one
+//!   call that asks EDS to authenticate the account — which is what eventually
+//!   produces a fan-out, one vfunc later.
 //! - [`backend`] is the subclass those functions exist for: an instance struct,
 //!   the vfunc slots, and a panic guard in front of each.
 //!
-//! Still missing, and the reason there is no module entry point yet: the two
-//! vfunc slots. `populate`, whose body [`populate`] now is, and the
-//! `authenticate_sync` that runs [`fan_out::fan_out`] with the
-//! [`Collection`](fan_out::Collection) the instance implements. Both are small,
-//! and neither can be driven here: they need a live `ECollectionBackend`, which
-//! needs a running `evolution-source-registry` on a session bus.
+//! Still missing, and the reason there is no module entry point yet: the
+//! `authenticate_sync` slot, which runs [`fan_out::fan_out`] with the
+//! [`Collection`](fan_out::Collection) the instance implements. It is small, and
+//! it cannot be driven here — it needs a live `ECollectionBackend`, which needs a
+//! running `evolution-source-registry` on a session bus.
 //! `dup_resource_id` came first because [`populate`] cannot be written without it
 //! — EDS loads the cached children and asks their resource ids *before* it calls
 //! `populate`, and a populate that ran against a mis-loaded child list would
