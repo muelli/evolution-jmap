@@ -29,7 +29,7 @@ use eds_sys::{
 };
 use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::g_object_unref;
-use jmap_backend_collection::collection_source::{Server, parts_of, server_of};
+use jmap_backend_collection::collection_source::{Server, parts_of, server_of, user_of};
 use jmap_backend_core::source::SourceError;
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind, Parts};
@@ -135,6 +135,11 @@ impl TestSource {
     fn server_of(&self) -> Result<Server, SourceError> {
         // SAFETY: a live source.
         unsafe { server_of(self.0) }
+    }
+
+    fn user_of(&self) -> Option<String> {
+        // SAFETY: a live source.
+        unsafe { user_of(self.0) }
     }
 }
 
@@ -392,4 +397,58 @@ fn a_plain_http_account_is_refused_unless_it_stays_on_the_machine() {
 
     assert_eq!(server.origin, "http://127.0.0.1:31415");
     assert!(!server.connection.secure);
+}
+
+#[test]
+fn the_user_an_account_names_is_read_without_the_host_being_looked_at() {
+    // `populate` needs one field of `[Authentication]` and only one: whether
+    // the account names a user, which is what decides whether it asks EDS for a
+    // password or for a straight anonymous authenticate. It must not need
+    // `server_of` for that — an account with a user and a broken host has to
+    // reach `authenticate_sync`, which is the vfunc that has a `GError` to
+    // report the broken host through, rather than be quietly treated as
+    // anonymous by a populate that could not read it.
+    let source = TestSource::new().enabled(true).authentication(
+        "jmap.example.com/nonsense",
+        0,
+        Some("vera@example.com"),
+        None,
+    );
+
+    assert_eq!(source.user_of().as_deref(), Some("vera@example.com"));
+    assert!(
+        source.server_of().is_err(),
+        "the host in this test is meant to be one server_of refuses"
+    );
+}
+
+#[test]
+fn an_account_that_names_no_user_reads_as_anonymous_and_is_not_given_a_group() {
+    // `None` is what `jmap_backend_core::connect::credentials` reads as
+    // "anonymous on purpose", so it is also what a populate must not ask for a
+    // password for. And the create-on-read trap once more, on the account's own
+    // file.
+    let source = TestSource::new().enabled(true);
+
+    assert_eq!(source.user_of(), None);
+    assert!(
+        !source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
+        "reading the user gave the account an [Authentication] extension it did not have"
+    );
+}
+
+#[test]
+fn a_user_key_that_is_present_but_empty_is_no_user_at_all() {
+    // `User=` in a keyfile reads back as "", and EDS's own collection backends
+    // test `user && *user` for exactly this. It matters here because the two
+    // spellings must not decide differently: `credentials()` answers
+    // `CredentialsRequired` for a named user with no password, so an empty user
+    // read as a user is a password prompt for an account that authenticates
+    // anonymously — and whatever was typed into it would then be dropped.
+    let source =
+        TestSource::new()
+            .enabled(true)
+            .authentication("jmap.example.com", 0, Some(""), None);
+
+    assert_eq!(source.user_of(), None);
 }
