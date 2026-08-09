@@ -96,7 +96,7 @@ use gobject_sys::{g_object_new, g_object_unref, g_type_check_instance_is_a, g_ty
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
-use jmap_mail_sync::{Keywords, MessageFlags, MessageSummary};
+use jmap_mail_sync::{KeywordChange, Keywords, MessageFlags, MessageSummary};
 use jmap_proto::mail::EmailAddress;
 
 use crate::folder_info::c_string;
@@ -562,27 +562,84 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
 /// Written inside [`without_queueing`], because a listing is the server
 /// speaking and the bit it would otherwise set means the opposite.
 ///
+/// ## What the listing is written *over*
+///
+/// Not the row, if the row still has something to say — see
+/// [`outstanding_change`]. A refresh timer that goes off between the user's
+/// click and the synchronisation brings back a listing the server made before
+/// the click, and writing that whole would undo the click on screen and, worse,
+/// leave the row claiming exactly what it remembers the server holding: the next
+/// synchronisation would diff those two into nothing and the change would never
+/// be sent. So what is written is the listing with the row's outstanding change
+/// replayed on top of it.
+///
+/// The remembered set is renewed to the *listing* either way, never to what the
+/// row ends up claiming. That is what keeps the two ends of the next difference
+/// honest — and it is why a change the server has meanwhile made itself settles
+/// rather than being sent again: replayed onto a listing that already has it,
+/// it changes nothing, and the diff against the listing is then empty.
+///
+/// `attachments` is taken from the listing on both paths. It is the one bit of
+/// the word that is not a keyword — RFC 8621 §4.1.1 has the server compute
+/// `hasAttachment` — so the keyword set the replay works with cannot carry it.
+///
 /// # Safety
 ///
 /// `info` must be a live message info.
 pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &MessageSummary) -> bool {
+    let listed = Keywords::new(&message.flags, &message.tags);
+
     // SAFETY: the caller guarantees the info; the mask keeps the setter off the
     // bits this provider is not the authority on, and the flag set below is
     // handed over along with its ownership.
     unsafe {
-        let (flags, labels) = without_queueing(info, || {
-            let flags =
-                camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&message.flags));
-            let labels = set_user_flags(info, &message.tags);
-            (flags, labels)
+        let (mut flags, tags) = listed.patched(&outstanding_change(info)).split();
+        flags.attachments = message.flags.attachments;
+
+        let (word, labels) = without_queueing(info, || {
+            let word = camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&flags));
+            let labels = set_user_flags(info, &tags);
+            (word, labels)
         });
         // Renewed alongside them, and deliberately not part of the answer: what
         // the server was last seen holding is not a column the message list
         // draws, so a listing that only re-spelled a keyword is not a change to
         // announce. A keyword the server really added arrives as a flag or a
         // label too, and is reported as one of those.
-        set_server_keywords(info, Keywords::new(&message.flags, &message.tags));
-        flags != GFALSE || labels != GFALSE
+        set_server_keywords(info, listed);
+        word != GFALSE || labels != GFALSE
+    }
+}
+
+/// The change of the user's this row is still carrying — what a listing has to
+/// be written *around* rather than over.
+///
+/// The two ends are the row's own two columns, and they are the same two
+/// [`crate::synchronize`] takes: the keywords the last listing found and the
+/// keywords the row claims now. So this is precisely the patch the next
+/// synchronisation would send, read as something still owed rather than
+/// something to make happen.
+///
+/// Empty for a row Camel does not hold as needing to reach the server, and the
+/// bit is what decides it rather than the two sets: a row with nothing
+/// outstanding takes the server's answer whole, which is the ordinary case and
+/// the only thing that ever brings a row that has drifted back into line. A row
+/// whose sets happen to differ with the bit clear is one whose difference nobody
+/// is waiting to send.
+///
+/// # Safety
+///
+/// `info` must be a live message info.
+unsafe fn outstanding_change(info: *mut CamelMessageInfo) -> KeywordChange {
+    // SAFETY: the contract above; both accessors read the row's own columns.
+    unsafe {
+        if camel_message_info_get_folder_flagged(info) == GFALSE {
+            return KeywordChange::default();
+        }
+        KeywordChange::between(
+            &server_keywords(info).unwrap_or_default(),
+            &row_keywords(info),
+        )
     }
 }
 
@@ -620,11 +677,13 @@ pub(crate) unsafe fn clear_pending_write(info: *mut CamelMessageInfo) {
 /// be written straight back to the server it came from.
 ///
 /// Put back the way it was found rather than cleared, and the difference is the
-/// row whose flags the user changed a moment before the refresh arrived: the
-/// listing overwrites the user's flags — a race this provider does not yet
-/// resolve — but clearing the bit as well would take the row off the work list
-/// too, and the user's change would be lost in silence instead of being
-/// retried.
+/// row whose flags the user changed a moment before the refresh arrived. That
+/// row is still waiting to be written, and clearing the bit would take it off
+/// the work list and lose the change in silence. What the listing does to such a
+/// row's columns is [`update_message_info`]'s side of the same question — it
+/// replays the outstanding change over the listing rather than writing the
+/// listing whole — and the two together are what let a refresh and a
+/// synchronisation interleave without either one undoing the other.
 ///
 /// The notifications are frozen around the write for a second reason, which is
 /// the one Camel's own builders freeze for: a row rewritten column by column

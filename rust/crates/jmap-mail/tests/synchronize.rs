@@ -141,6 +141,22 @@ impl Fixture {
         }
     }
 
+    /// Another listing of the mailbox, the way Evolution's refresh timer asks
+    /// for one — including at the worst possible moment, which is what the two
+    /// tests at the end of this file are about.
+    fn refresh(&self) {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: a live folder of ours, and an out-parameter that is writable
+        // and currently NULL.
+        unsafe {
+            assert_ne!(
+                camel_folder_refresh_info_sync(self.folder, ptr::null_mut(), &mut error),
+                GFALSE,
+                "the inbox would not refresh"
+            );
+        }
+    }
+
     /// The summary row for the seeded message, as a reference the caller owns.
     fn row(&self) -> *mut CamelMessageInfo {
         let uid = CString::new(self.uid.as_str()).expect("a uid with no NUL");
@@ -425,6 +441,72 @@ fn a_message_another_client_deleted_does_not_fail_the_synchronisation() {
 
     fixture.synchronize().expect_ok();
 
+    assert!(!fixture.is_dirty(), "the row will be retried forever");
+}
+
+/// The race between the two directions, end to end. Evolution refreshes a
+/// folder on a timer and synchronises it when it is closed, so a listing made
+/// *before* the user's click routinely arrives *after* it. Written over the row
+/// whole, that listing would undo the click on screen and leave the row claiming
+/// exactly what it remembers the server holding — so the diff below would be
+/// empty and the change would be lost in silence, with the row still on the work
+/// list and nothing left on it to send.
+#[test]
+fn a_refresh_between_the_click_and_the_write_does_not_lose_the_click() {
+    let fixture = Fixture::start(&[]);
+    fixture.set_flags(CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+
+    fixture.refresh();
+    fixture.synchronize().expect_ok();
+
+    assert_eq!(
+        fixture.keywords_on_server(),
+        BTreeMap::from([("$seen".to_owned(), true)]),
+        "the refresh undid the user's unsaved change"
+    );
+    assert!(
+        !fixture.is_dirty(),
+        "the row is still queued for the server"
+    );
+}
+
+/// And the listing is still applied: what another client did between the click
+/// and the refresh is news the user's outstanding change says nothing about. The
+/// row ends up carrying both, and the write that follows sends only the half
+/// that is this folder's to send.
+#[test]
+fn a_refresh_leaves_a_queued_row_carrying_both_changes() {
+    let fixture = Fixture::start(&[]);
+    fixture.set_flags(CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+    fixture.keyword_from_elsewhere("Urgent");
+
+    fixture.refresh();
+    fixture.synchronize().expect_ok();
+
+    assert_eq!(
+        fixture.keywords_on_server(),
+        BTreeMap::from([("$seen".to_owned(), true), ("Urgent".to_owned(), true)])
+    );
+}
+
+/// The other half of the same rule, and the reason the listing is renewed onto
+/// the row rather than the row's own claim: a server that has *already* been
+/// told — by this folder's own earlier write, or by the user's phone — leaves
+/// nothing to send, and the row settles instead of writing the same keyword on
+/// every synchronisation for as long as the folder is open.
+#[test]
+fn a_change_the_server_already_made_itself_settles_the_row() {
+    let fixture = Fixture::start(&[]);
+    fixture.set_flags(CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+    fixture.keyword_from_elsewhere("$seen");
+
+    fixture.refresh();
+    fixture.synchronize().expect_ok();
+
+    assert_eq!(
+        fixture.keywords_on_server(),
+        BTreeMap::from([("$seen".to_owned(), true)])
+    );
     assert!(!fixture.is_dirty(), "the row will be retried forever");
 }
 

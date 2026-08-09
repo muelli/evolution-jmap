@@ -572,9 +572,9 @@ fn a_row_a_listing_built_is_not_waiting_for_the_server() {
 }
 
 /// And a refresh that meets a row the user has changed and not yet saved leaves
-/// it waiting. The listing overwrites the user's flags — a race this provider
-/// does not yet resolve — but taking the row off the work list as well would
-/// lose the change in silence rather than retry it.
+/// it waiting: taking the row off the work list would lose the change in silence
+/// rather than retry it. What the listing does to the *flags* of such a row is
+/// the group of tests below.
 #[test]
 fn a_listing_does_not_take_an_unsaved_change_off_the_work_list() {
     let info = info_of(&row("Em0034"));
@@ -597,6 +597,166 @@ fn a_listing_does_not_take_an_unsaved_change_off_the_work_list() {
             camel_message_info_get_folder_flagged(info),
             GFALSE,
             "the listing dropped the user's unsaved change"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// The race the work list on its own does not settle. Evolution's refresh timer
+/// goes off between the user marking a message read and the folder being
+/// synchronised, and the listing it brings back is one the server made before
+/// the click: it says unread. Written whole, it would undo the click on screen
+/// *and* leave the row claiming what the server already holds — so the diff the
+/// next synchronisation makes would be empty and the change would never be sent.
+/// The row stays queued either way; what is lost is what it has to say.
+#[test]
+fn a_listing_does_not_undo_a_flag_the_user_has_not_saved_yet() {
+    let info = info_of(&row("Em0035"));
+    // The server has not heard about the click, so its listing is the row as it
+    // was before it.
+    let listed = row("Em0035");
+
+    // SAFETY: `info` is a live message info this test owns, updated from a row
+    // with the same uid.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+
+        update_message_info(info, &listed);
+
+        assert_ne!(
+            camel_message_info_get_flags(info) & CAMEL_MESSAGE_SEEN,
+            0,
+            "the listing undid the user's unsaved change"
+        );
+        // And the row remembers the *listing*, not what it claims: the two
+        // together are what makes the next synchronisation send `$seen`.
+        assert_eq!(remembered(info), Keywords::new(&listed.flags, &listed.tags));
+        g_object_unref(info.cast());
+    }
+}
+
+/// The other half of the same rule, and why the row cannot simply refuse a
+/// listing while it is queued: what another client did in the meantime is news,
+/// and the user's outstanding change says nothing about it. The listing is
+/// applied and the change replayed on top.
+#[test]
+fn a_listing_still_brings_a_queued_row_what_the_server_changed() {
+    let info = info_of(&row("Em0036"));
+    let mut listed = row("Em0036");
+    listed.flags.seen = true;
+    listed.tags = vec!["Urgent".to_owned()];
+
+    // SAFETY: `info` is a live message info this test owns, updated from a row
+    // with the same uid.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FLAGGED);
+
+        update_message_info(info, &listed);
+
+        let flags = camel_message_info_get_flags(info);
+        assert_ne!(
+            flags & CAMEL_MESSAGE_FLAGGED,
+            0,
+            "the user's unsaved change was overwritten"
+        );
+        assert_ne!(
+            flags & CAMEL_MESSAGE_SEEN,
+            0,
+            "the server's change was lost"
+        );
+        assert_ne!(
+            camel_message_info_get_user_flag(info, c"Urgent".as_ptr()),
+            GFALSE,
+            "the label another client added never arrived"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// A keyword the server *stopped* holding comes off a queued row too — the row
+/// keeps only what it is itself waiting to say. Both directions matter: a rule
+/// that only ever added would leave a label another client removed on screen
+/// until the user next touched the message.
+#[test]
+fn a_listing_takes_a_keyword_off_a_queued_row_when_the_server_did() {
+    let mut message = row("Em0037");
+    message.tags = vec!["Work".to_owned()];
+    let info = info_of(&message);
+    // The same message after another client took the label off.
+    let listed = row("Em0037");
+
+    // SAFETY: `info` is a live message info this test owns, updated from a row
+    // with the same uid.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+
+        update_message_info(info, &listed);
+
+        assert_eq!(
+            camel_message_info_get_user_flag(info, c"Work".as_ptr()),
+            GFALSE,
+            "the label the server dropped is still on the row"
+        );
+        assert_ne!(
+            camel_message_info_get_flags(info) & CAMEL_MESSAGE_SEEN,
+            0,
+            "the user's unsaved change went with it"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// And a row with nothing outstanding takes the listing whole, which is the
+/// ordinary case and the only thing that ever brings a row that has drifted back
+/// to what the server says. The replay above is for the row that is *waiting* to
+/// speak; a row that is not has nothing to add to the server's answer.
+#[test]
+fn a_listing_that_dropped_a_flag_takes_it_off_an_untouched_row() {
+    let mut message = row("Em0038");
+    message.flags.seen = true;
+    message.tags = vec!["Work".to_owned()];
+    let info = info_of(&message);
+    let listed = row("Em0038");
+
+    // SAFETY: `info` is a live message info this test owns, updated from a row
+    // with the same uid.
+    unsafe {
+        update_message_info(info, &listed);
+
+        assert_eq!(
+            camel_message_info_get_flags(info) & CAMEL_MESSAGE_SEEN,
+            0,
+            "a row nobody touched kept a flag the server had dropped"
+        );
+        assert_eq!(
+            camel_message_info_get_user_flag(info, c"Work".as_ptr()),
+            GFALSE
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// The bit of the flags word that is not a keyword. `hasAttachment` is the
+/// server's own conclusion about the message, so it comes off the listing on
+/// every path — a queued row would otherwise lose it, since the set the replay
+/// works on cannot carry it.
+#[test]
+fn a_queued_row_still_takes_the_servers_word_on_an_attachment() {
+    let info = info_of(&row("Em0039"));
+    let mut listed = row("Em0039");
+    listed.flags.attachments = true;
+
+    // SAFETY: `info` is a live message info this test owns, updated from a row
+    // with the same uid.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+
+        update_message_info(info, &listed);
+
+        assert_ne!(
+            camel_message_info_get_flags(info) & CAMEL_MESSAGE_ATTACHMENTS,
+            0,
+            "the row lost the server's word on its attachments"
         );
         g_object_unref(info.cast());
     }
