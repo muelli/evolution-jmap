@@ -8273,3 +8273,123 @@ vfunc joining `read_envelope`, `write_message`, `identity_for`,
 `outgoing_mailboxes` and `send_message`, the `out_sent_message_saved`
 out-parameter derived from whether a destination mailbox was needed, and the
 provider's transport slot that stays `G_TYPE_INVALID` until it exists.
+
+## 2026-08-09 (eighty-fifth session)
+
+**The message that leaves the account, and the second copy Evolution would have
+kept of it.** `jmap-mail/src/send.rs`: `send_to_sync`, the vfunc M5 has been
+building towards, joining `read_envelope`, `write_message`, `identity_for`,
+`outgoing_mailboxes` and `send_message`; `JmapTransport::send_message` beside it
+for the account-side half of that under one hold of the connection; and the
+provider's transport slot, filled at last, so a JMAP account is now an account
+Evolution can send from.
+
+Red first: `jmap-mail/tests/send.rs` (13 tests, real `CamelMimeMessage`s and
+`CamelInternetAddress`es through `camel_transport_send_to_sync`), three new
+assertions in `jmap-mail-sync/tests/staging.rs`, and the flipped transport-slot
+test in `jmap-mail/tests/provider.rs`. All red before any of it existed.
+
+**The plan the last session left was wrong, and the tests are why.** It said the
+`out_sent_message_saved` out-parameter would be "derived from whether a
+destination mailbox was needed" — that is, `destination.is_some()`. It is not
+derivable from that. `OutgoingMailboxes::destination` is `None` in two opposite
+cases: the account that stages *in* Sent because it has no Drafts, where the
+copy is saved exactly where the user looks for sent mail, and the account with
+only a Drafts, where it is not. Camel documents the parameter as "the transport
+saved the message into its Sent folder — do not copy it there yourself", and
+Evolution appends a copy of its own when told `FALSE`. So the planned derivation
+would have given the first kind of account **two of every message it sends**.
+`OutgoingMailboxes` gained a `saves_sent_copy` field instead, which is true
+exactly when the account has a Sent mailbox, and
+`an_account_with_no_drafts_waits_in_the_mailbox_it_will_be_filed_in` and
+`an_account_whose_only_outgoing_mailbox_is_sent_has_already_saved_the_copy` are
+the two tests that pin the distinction. The misleading paragraph in
+`OutgoingMailboxes::of` that the plan came from is corrected in the same commit.
+
+Decisions taken:
+
+- **Everything that can be refused is refused before the upload.** The envelope
+  and the written-out message both come before the connection is looked for,
+  which is `crate::envelope`'s own argument honoured: the alternative is a
+  refusal made *after* the import, which leaves a draft in the user's account
+  for a send they were told did not happen. Four tests assert the staging
+  mailbox is still empty after a refusal, not only that the right code came
+  back.
+- **The envelope, not the headers, names the identity.** `identity_for` is
+  asked about `envelope.mail_from`, which is what Evolution filled in from the
+  account the user chose, and `the_identity_is_the_one_the_envelope_sender_names`
+  is a message whose `From` header has no identity behind it and whose envelope
+  sender does. RFC 8621 §7 has the server check the header against the identity
+  named; that check is the server's, and pre-empting it here would refuse sends
+  that are ordinary.
+- **One read lock across all three account-side operations.** Taking it per
+  operation would let a `disconnect_sync` land between the import and the
+  submission — a message in the account, no submission, and a failure reported.
+  It stays a *read* lock, which is what the `RwLock` on the transport was for:
+  Evolution's outbox hands a transport several messages in a row.
+- **The out-parameter is written before anything can fail, as well as on
+  success.** `camel_transport_send_to_sync` clears it on the way in, so nothing
+  going through the wrapper can tell the two apart — which is exactly why
+  `a_failed_send_says_no_copy_was_saved` dispatches the class slot directly with
+  the parameter pre-set to `TRUE`. Without that test the defensive clear was
+  dead code; it was added after a deliberately-wrong implementation survived.
+- **A message Camel will not write out is reported in the service's domain**
+  here and in the folder's in `append.rs`. `Unwritable::into_gerror` takes the
+  domain from the caller for this reason, which is what the previous session
+  lifted it out for; there is no folder in a `send_to_sync` call to blame.
+- **No retry, ever.** A submission the server refused is a message safe in the
+  staging mailbox and a sentence for the user. Trying again would risk sending
+  twice what could not be proved unsent once.
+- **The provider slot is only filled because the class installs the vfunc.**
+  `tests/provider.rs` now asserts both together: a transport type whose
+  `send_to_sync` is NULL is worse than no transport type, because Camel's
+  wrapper is a `g_return_val_if_fail` and the user meets it by pressing Send.
+
+Six deliberately wrong implementations were checked against the suite and each
+is caught by the test that should catch it: `destination.is_some()` for the
+saved copy fails both the sync-level and the Camel-level Sent-only tests;
+always-`true` fails the Drafts-only test; not clearing the out-parameter fails
+the direct-dispatch failure test; `envelope: None`, which lets the server derive
+the envelope from the headers, fails the Bcc test.
+
+**Not covered by a test, and the honest limits:**
+
+1. **No real Evolution has pressed Send.** What is tested is the vfunc against
+   `jmap-mockd` through Camel's own wrapper, with a transport constructed by
+   `g_initable_new` rather than by `camel_session_add_service`. That
+   `e_mail_session_send_to` reads `out_sent_message_saved` the way its
+   documentation says, and that an account configured through the source
+   registry reaches this vfunc at all, is **needs human verification in real
+   Evolution**.
+2. **No real server has accepted a submission from this code.** The mock records
+   the `EmailSubmission/set` and applies `onSuccessUpdateEmail`; whether
+   Stalwart or Fastmail accept the same request is untested.
+3. **Cancellation during a send is not tested here.** The `observe` scope is
+   installed exactly as every other vfunc's and `tests/cancellation.rs` covers
+   that machinery, but no test presses Stop mid-upload on a transport.
+4. **The connection is held under a read lock across three round trips**, which
+   is deliberate, but nothing tests two concurrent sends over one transport.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, `jmap-mail/src/send.rs` and
+`jmap-mail/tests/send.rs`, both with the SPDX `GPL-3.0-or-later` header. `cargo
+fmt --check`, `cargo test --locked` and `cargo clippy --all-targets --locked --
+-D warnings` are clean on the default member set (434 tests, unchanged — the
+staging tests gained assertions, not cases) and on the five EDS crates (637, up
+from 624).
+
+No milestone tag is claimed: M5's acceptance also wants the provider exercised
+through a real Evolution, and the two limits above are exactly that gap.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Next in M5: the surface is now feature-complete against the mock — store,
+folders, summaries, bodies, flags, moves, appends, folder management,
+subscriptions and sending. What is left is not another vfunc but the two things
+no test here can reach: a manual test recipe for the mail provider, like
+`docs/manual-test-book-backend.md` has for the address book, and a run against a
+real server.

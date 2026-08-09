@@ -29,6 +29,7 @@ use eds_sys::{
 use gobject_sys::G_TYPE_INVALID;
 
 use crate::store::store_type;
+use crate::transport::transport_type;
 
 /// The protocol Camel keys its provider table by.
 ///
@@ -98,16 +99,20 @@ static PROVIDER: OnceLock<Registered> = OnceLock::new();
 /// transport slot tomorrow.
 pub fn register() -> &'static CamelProvider {
     let registered = PROVIDER.get_or_init(|| {
-        // Resolved before the struct is built rather than inside it: the store
-        // type has to exist before Camel can be told to instantiate it.
+        // Resolved before the struct is built rather than inside it: both types
+        // have to exist before Camel can be told to instantiate them.
         let store = store_type();
+        // The mail the account sends, as against the mail it holds. Two
+        // services with no pointer between them, which is Camel's shape rather
+        // than JMAP's — see `crate::transport`. Naming the type here is only
+        // safe because its class installs `send_to_sync`: Camel dispatches
+        // sending through the class, and a transport slot naming a type that
+        // cannot send is a GLib critical the first time the user presses Send.
+        let transport = transport_type();
 
         let mut object_types = [G_TYPE_INVALID; 2];
         object_types[CAMEL_PROVIDER_STORE as usize] = store;
-        // Left invalid on purpose. Sending is `EmailSubmission/set` and a
-        // `CamelJmapTransport` that does not exist yet; naming a type here
-        // before then is a crash the first time a user hits Send.
-        object_types[CAMEL_PROVIDER_TRANSPORT as usize] = G_TYPE_INVALID;
+        object_types[CAMEL_PROVIDER_TRANSPORT as usize] = transport;
 
         let provider = Box::new(CamelProvider {
             protocol: PROTOCOL.as_ptr(),

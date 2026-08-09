@@ -14,9 +14,9 @@
 //! class rather than through a stock one with no host in it, that authenticating
 //! it opens a connection, and that the connection is *its* and not the store's.
 //!
-//! What is deliberately not here is `send_to_sync`. The vfunc is a later
-//! increment, and until it exists the provider's transport slot stays
-//! `G_TYPE_INVALID` — see `tests/provider.rs`, which pins that.
+//! What is deliberately not here is `send_to_sync` itself, which has a file of
+//! its own — `tests/send.rs`. The split is the same one the source takes: this
+//! is the service and its connection, that is what a message does with one.
 
 mod common;
 
