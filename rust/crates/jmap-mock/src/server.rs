@@ -175,6 +175,20 @@ impl MockServer {
     pub fn state(&self) -> Arc<Mutex<ServerState>> {
         Arc::clone(&self.state)
     }
+
+    /// The names of the method calls this server has answered so far, in
+    /// order — see [`ServerState::method_calls`].
+    ///
+    /// A copy, because the alternative is a test holding the server's lock
+    /// while it asserts, and the server needs that lock to answer the next
+    /// request.
+    pub fn method_calls(&self) -> Vec<String> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.method_calls.clone()
+    }
 }
 
 impl Drop for MockServer {

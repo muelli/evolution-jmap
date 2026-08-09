@@ -56,10 +56,10 @@ use common::Account;
 use eds_sys::{
     CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderChangeInfo,
     CamelFolderClass, camel_folder_change_info_get_added_uids,
-    camel_folder_change_info_get_changed_uids, camel_folder_change_info_get_removed_uids,
-    camel_folder_free_uids, camel_folder_get_folder_summary, camel_folder_get_message_count,
-    camel_folder_get_uids, camel_folder_refresh_info_sync, camel_service_error_quark,
-    camel_store_get_folder_sync,
+    camel_folder_change_info_get_changed_uids, camel_folder_change_info_get_recent_uids,
+    camel_folder_change_info_get_removed_uids, camel_folder_free_uids,
+    camel_folder_get_folder_summary, camel_folder_get_message_count, camel_folder_get_uids,
+    camel_folder_refresh_info_sync, camel_service_error_quark, camel_store_get_folder_sync,
 };
 use glib_sys::{
     GError, GFALSE, GMainContext, GPtrArray, g_main_context_iteration, g_main_context_new,
@@ -69,11 +69,11 @@ use glib_sys::{
 use gobject_sys::{g_object_unref, g_signal_connect_data, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
-use jmap_mail::summary::summary_state;
+use jmap_mail::summary::{set_summary_state, summary_state};
 use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer};
-use jmap_proto::Id;
 use jmap_proto::mail::role;
+use jmap_proto::{Id, State};
 
 fn sync_against(server: &MockServer) -> MailSync {
     let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
@@ -91,10 +91,24 @@ fn edit<R>(server: &MockServer, edit: impl FnOnce(&mut jmap_mock::AccountState) 
 /// A connected account whose inbox holds two messages, and that inbox opened
 /// the way Camel opens it — through the store, so the folder is the one in the
 /// store's own bag and carries the mailbox id `new_folder` put there.
-fn with_mail() -> (MockServer, Account, *mut CamelFolder) {
+///
+/// The archive beside it holds nothing and is never opened. It is there for the
+/// delta tests: `Email/changes` answers for the whole account, so a mailbox
+/// this folder is *not* refreshing is the only way to ask what a folder does
+/// with a change that is none of its business.
+struct Mailbox {
+    server: MockServer,
+    account: Account,
+    folder: *mut CamelFolder,
+    inbox: Id,
+    archive: Id,
+}
+
+fn with_mail() -> Mailbox {
     let server = MockServer::builder().start();
-    edit(&server, |account| {
+    let (inbox, archive) = edit(&server, |account| {
         let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+        let archive = account.seed_mailbox("Archive", None);
         account.seed_email(EmailSeed::new(
             inbox.clone(),
             ("Bob", "bob@example.com"),
@@ -103,18 +117,39 @@ fn with_mail() -> (MockServer, Account, *mut CamelFolder) {
             "2026-01-01T09:00:00Z",
         ));
         account.seed_email(EmailSeed::new(
-            inbox,
+            inbox.clone(),
             ("Bob", "bob@example.com"),
             "Second",
             "two",
             "2026-01-02T09:00:00Z",
         ));
+        (inbox, archive)
     });
 
     let account = Account::open();
     account.connect(sync_against(&server));
     let folder = open(&account, "Inbox");
-    (server, account, folder)
+    Mailbox {
+        server,
+        account,
+        folder,
+        inbox,
+        archive,
+    }
+}
+
+/// One message arriving in a mailbox the way one arrives at a server: as a
+/// state transition, so that a delta asked from an earlier state names it.
+fn deliver(server: &MockServer, mailbox: &Id, subject: &str, received_at: &str) -> Id {
+    edit(server, |account| {
+        account.deliver_email(EmailSeed::new(
+            mailbox.clone(),
+            ("Bob", "bob@example.com"),
+            subject,
+            "and a body",
+            received_at,
+        ))
+    })
 }
 
 /// The folder Camel would hand the user, opened by path.
@@ -215,6 +250,10 @@ struct Emission {
     added: Vec<String>,
     removed: Vec<String>,
     changed: Vec<String>,
+    /// The list only a delta may fill, and the one with a side effect: Camel
+    /// hands a folder's recent uids to the session's filter driver, so a
+    /// message on it is one the user's incoming rules will act on.
+    recent: Vec<String>,
 }
 
 thread_local! {
@@ -305,6 +344,7 @@ unsafe extern "C" fn on_changed(
             added: uid_list(camel_folder_change_info_get_added_uids(changes)),
             removed: uid_list(camel_folder_change_info_get_removed_uids(changes)),
             changed: uid_list(camel_folder_change_info_get_changed_uids(changes)),
+            recent: uid_list(camel_folder_change_info_get_recent_uids(changes)),
         }
     };
     EMISSIONS.with(|seen| seen.borrow_mut().push(emission));
@@ -358,7 +398,8 @@ fn listed(folder: *mut CamelFolder) -> Vec<String> {
 /// filled, which is the half a test against the summary alone could not show.
 #[test]
 fn a_refresh_fills_the_folder_from_the_mailbox() {
-    let (_server, _account, folder) = with_mail();
+    let mail = with_mail();
+    let folder = mail.folder;
 
     Refreshed::of(folder).expect_ok();
 
@@ -378,7 +419,8 @@ fn a_refresh_fills_the_folder_from_the_mailbox() {
 #[test]
 fn a_refresh_tells_camel_what_arrived() {
     let context = Context::push();
-    let (_server, _account, folder) = with_mail();
+    let mail = with_mail();
+    let folder = mail.folder;
     watch(folder);
 
     Refreshed::of(folder).expect_ok();
@@ -388,6 +430,14 @@ fn a_refresh_tells_camel_what_arrived() {
     assert_eq!(emissions[0].added.len(), 2);
     assert!(emissions[0].removed.is_empty());
     assert!(emissions[0].changed.is_empty());
+    // A listing cannot tell an arrival from mail the user has had for years,
+    // so none of it is recent. Otherwise the first refresh of an account would
+    // run the user's incoming filters over their whole mailbox.
+    assert!(
+        emissions[0].recent.is_empty(),
+        "a listing called {:?} recent",
+        emissions[0].recent
+    );
 
     // SAFETY: the one reference this test took.
     unsafe { g_object_unref(folder.cast()) };
@@ -400,7 +450,8 @@ fn a_refresh_tells_camel_what_arrived() {
 #[test]
 fn a_refresh_that_found_nothing_new_says_nothing() {
     let context = Context::push();
-    let (_server, _account, folder) = with_mail();
+    let mail = with_mail();
+    let folder = mail.folder;
 
     Refreshed::of(folder).expect_ok();
     emissions(&context);
@@ -433,8 +484,9 @@ fn a_refresh_that_found_nothing_new_says_nothing() {
 /// what is under test is the window after Camel decided it had.
 #[test]
 fn a_folder_whose_store_has_no_connection_reports_it() {
-    let (_server, account, folder) = with_mail();
-    assert!(account.jmap().drop_connection());
+    let mail = with_mail();
+    let folder = mail.folder;
+    assert!(mail.account.jmap().drop_connection());
 
     let refreshed = Refreshed::straight(folder);
 
@@ -460,7 +512,8 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
 /// it is the increment after this one.
 #[test]
 fn a_refresh_keeps_the_state_the_listing_was_taken_at() {
-    let (_server, _account, folder) = with_mail();
+    let mail = with_mail();
+    let folder = mail.folder;
 
     Refreshed::of(folder).expect_ok();
 
@@ -480,7 +533,8 @@ fn a_refresh_keeps_the_state_the_listing_was_taken_at() {
 /// further into the past with every refresh.
 #[test]
 fn a_second_refresh_replaces_the_state_the_first_one_kept() {
-    let (server, _account, folder) = with_mail();
+    let mail = with_mail();
+    let folder = mail.folder;
 
     Refreshed::of(folder).expect_ok();
     // SAFETY: `folder` is live and was built with a summary.
@@ -491,7 +545,8 @@ fn a_second_refresh_replaces_the_state_the_first_one_kept() {
     // the account's mail — the mailbox it happened in does not matter here,
     // only that the server has moved on since the first listing.
     let gone = listed(folder).pop().expect("the folder listed nothing");
-    assert!(edit(&server, |account| account.destroy_email(&Id::new(gone))));
+    assert!(edit(&mail.server, |account| account
+        .destroy_email(&Id::new(gone))));
     Refreshed::of(folder).expect_ok();
 
     // SAFETY: `folder` is live.
@@ -501,6 +556,187 @@ fn a_second_refresh_replaces_the_state_the_first_one_kept() {
         assert_ne!(
             second, first,
             "mail arrived and the folder kept the state it had before"
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The increment: the second refresh of a mailbox asks what *changed* rather
+/// than fetching the whole thing again.
+///
+/// This is what the state kept above is for, and it is the one thing about a
+/// refresh that no assertion over the account's objects can reach: a listing
+/// and a delta leave the folder holding exactly the same rows. The difference
+/// is entirely in what went over the wire, so the wire is what is asserted —
+/// `Email/changes` was asked, and `Email/query`, which is how the whole mailbox
+/// is enumerated, was not.
+#[test]
+fn a_second_refresh_asks_what_changed_instead_of_listing_again() {
+    let mail = with_mail();
+    let folder = mail.folder;
+
+    Refreshed::of(folder).expect_ok();
+    let listed = mail.server.method_calls().len();
+    Refreshed::of(folder).expect_ok();
+
+    let second = mail.server.method_calls().split_off(listed);
+    assert!(
+        second.iter().any(|call| call == "Email/changes"),
+        "the second refresh never asked what changed: {second:?}"
+    );
+    assert!(
+        !second.iter().any(|call| call == "Email/query"),
+        "the second refresh listed the whole mailbox again: {second:?}"
+    );
+
+    // SAFETY: the one reference this test took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// And a message that arrived since that state is *recent*, which is the fourth
+/// list and the one with consequences: Camel hands it to the session's filter
+/// driver, so this is the folder saying "run the user's rules over this one".
+///
+/// Only a delta may say it. The listing path deliberately does not — see the
+/// first-refresh test below, where two messages are added and none is recent.
+#[test]
+fn a_message_that_arrived_since_the_last_refresh_is_recent() {
+    let context = Context::push();
+    let mail = with_mail();
+    let folder = mail.folder;
+
+    Refreshed::of(folder).expect_ok();
+    emissions(&context);
+    watch(folder);
+
+    let arrived = deliver(&mail.server, &mail.inbox, "Third", "2026-01-03T09:00:00Z");
+    Refreshed::of(folder).expect_ok();
+
+    let emissions = emissions(&context);
+    assert_eq!(emissions.len(), 1, "the folder emitted {emissions:?}");
+    assert_eq!(emissions[0].added, vec![arrived.as_str().to_owned()]);
+    assert_eq!(
+        emissions[0].recent,
+        vec![arrived.as_str().to_owned()],
+        "new mail arrived and the folder did not call it recent"
+    );
+    // SAFETY: `folder` is live.
+    unsafe {
+        assert_eq!(camel_folder_get_message_count(folder), 3);
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The rule that makes a delta a second path rather than an argument to the
+/// first: a row nothing was said about stays.
+///
+/// `Email/changes` answers for the *account*, so a message delivered to the
+/// archive is on this folder's delta too — and it holds none of this folder's
+/// messages. Reconciled as if it were a listing, that delta would empty the
+/// inbox; applied as a delta it changes nothing here, which is also why the
+/// folder must stay silent.
+#[test]
+fn a_refresh_leaves_the_rows_a_delta_did_not_mention() {
+    let context = Context::push();
+    let mail = with_mail();
+    let folder = mail.folder;
+
+    Refreshed::of(folder).expect_ok();
+    emissions(&context);
+    watch(folder);
+
+    deliver(&mail.server, &mail.archive, "Filed", "2026-01-03T09:00:00Z");
+    Refreshed::of(folder).expect_ok();
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        assert_eq!(
+            camel_folder_get_message_count(folder),
+            2,
+            "a change in another mailbox emptied this one"
+        );
+    }
+    let emissions = emissions(&context);
+    assert!(
+        emissions.is_empty(),
+        "mail arriving elsewhere made this folder announce {emissions:?}"
+    );
+
+    // SAFETY: the one reference this test took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// And a message the delta says this mailbox no longer holds loses its row, and
+/// is announced as removed so the message list stops drawing it.
+#[test]
+fn a_message_a_delta_says_is_gone_leaves_the_folder() {
+    let context = Context::push();
+    let mail = with_mail();
+    let folder = mail.folder;
+
+    Refreshed::of(folder).expect_ok();
+    emissions(&context);
+    watch(folder);
+
+    let gone = listed(folder).pop().expect("the folder listed nothing");
+    assert!(edit(&mail.server, |account| account
+        .destroy_email(&Id::new(gone.clone()))));
+    Refreshed::of(folder).expect_ok();
+
+    let emissions = emissions(&context);
+    assert_eq!(emissions.len(), 1, "the folder emitted {emissions:?}");
+    assert_eq!(emissions[0].removed, vec![gone]);
+    // SAFETY: `folder` is live.
+    unsafe {
+        assert_eq!(camel_folder_get_message_count(folder), 1);
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The recovery. A server may refuse to calculate a delta from a state — too
+/// old to still be in its log, or, as here, one it never issued at all — and
+/// Camel has nowhere to report that to, so the answer has to be the mailbox
+/// itself. A folder that gave up here would be one that never comes back.
+///
+/// The state is planted rather than aged, because ageing one out means a
+/// server with a bounded changes log; what the folder does with the refusal is
+/// the same either way.
+///
+/// A message is destroyed first so that the answer is a *reconciled* listing
+/// and not just rows written again: what comes back from a relist is the whole
+/// mailbox, so the message it does not name has to lose its row. Applied the
+/// way a delta is applied, it would keep it forever.
+#[test]
+fn a_refresh_from_a_state_the_server_will_not_calculate_from_lists_again() {
+    let mail = with_mail();
+    let folder = mail.folder;
+
+    Refreshed::of(folder).expect_ok();
+    let gone = listed(folder).pop().expect("the folder listed nothing");
+    assert!(edit(&mail.server, |account| account
+        .destroy_email(&Id::new(gone))));
+    // SAFETY: `folder` is live and was built with a summary of ours.
+    unsafe {
+        set_summary_state(
+            camel_folder_get_folder_summary(folder),
+            State::new("a state from some other server"),
+        );
+    }
+
+    let before = mail.server.method_calls().len();
+    Refreshed::of(folder).expect_ok();
+
+    let calls = mail.server.method_calls().split_off(before);
+    assert!(
+        calls.iter().any(|call| call == "Email/query"),
+        "a refused delta did not fall back to listing the mailbox: {calls:?}"
+    );
+    // SAFETY: `folder` is live.
+    unsafe {
+        assert_eq!(
+            camel_folder_get_message_count(folder),
+            1,
+            "the listing that recovered from a refused delta was not reconciled"
         );
         g_object_unref(folder.cast());
     }

@@ -17,7 +17,8 @@
 //! [`crate::folder`] put on it and `camel_folder_get_parent_store`, and the
 //! store is where [`crate::service`] left the client — so a refresh is the
 //! folder's mailbox id asked of the store's connection, which is
-//! [`JmapStore::messages`]. That is also why the disconnected case reports
+//! [`JmapStore::messages`] or [`JmapStore::messages_since`]. That is also why
+//! the disconnected case reports
 //! `CAMEL_SERVICE_ERROR_NOT_CONNECTED` rather than anything about the folder:
 //! nothing is wrong with the folder, and that code is what makes Camel connect
 //! and ask again instead of showing the account as broken.
@@ -32,22 +33,35 @@
 //! timer, and a folder that announced a change every time would move the list
 //! under the user while they read it.
 //!
+//! ## Ask what changed, not what is there
+//!
+//! A refresh is a poll: Camel runs one when the folder is opened and again on a
+//! timer for as long as it stays open, and nearly every one of them finds a
+//! mailbox nobody has touched. Listing answers that at the price of the whole
+//! mailbox — one query and one `Email/get` per page of rows the folder already
+//! has — so what this vfunc asks first is [`JmapStore::messages_since`], which
+//! is one `Email/changes` and, for the usual answer, nothing else at all.
+//!
+//! The state to ask from is the one the last refresh recorded, and it lives in
+//! the summary rather than here because it is a fact about the rows; a folder
+//! that has none has never listed this mailbox, and lists. `MessageUpdate`'s
+//! three answers are then dispatched below, and which of the two application
+//! paths a delta and a listing take is the distinction [`crate::summary`]
+//! exists to keep: silence in a listing means a message has left the mailbox,
+//! and silence in a delta means nothing was said about it.
+//!
+//! It is also what fills the `recent` list, which every refresh before this one
+//! left empty. Only a delta can honestly say a message *arrived* — it is asked
+//! from a state this folder recorded, so a message it names that the folder has
+//! no row for reached the mailbox since then — and [`crate::changes`] documents
+//! why that matters more than it looks: recent is what runs the user's incoming
+//! filters.
+//!
 //! ## What is not here yet
 //!
-//! The whole mailbox is still listed on every refresh, and every piece of not
-//! doing so now exists: `jmap-mail-sync`'s `messages_since` turns one
-//! `Email/changes` into the rows this mailbox holds and the uids it does not,
-//! [`crate::summary`] keeps the state such a question is asked from across a
-//! restart — which is what this vfunc records below — and
-//! [`crate::summary::apply_delta`] applies that answer to a summary without
-//! `apply_listing`'s rule that anything unnamed has left the mailbox. What is
-//! missing is only the join: this vfunc still asks [`JmapStore::messages`] for
-//! the whole mailbox rather than asking for a delta from the state it recorded
-//! last time, and choosing between the two paths by which of
-//! `jmap_mail_sync::MessageUpdate`'s three answers came back. That is also what
-//! the `recent` list [`crate::changes`] leaves empty here is waiting for, since
-//! only the delta path may fill it. Listing meanwhile is correct; it is only
-//! expensive.
+//! A delta that names a great many messages is still one `Email/get` per chunk
+//! of them, which is the right shape but says nothing about how far behind a
+//! folder may fall before relisting would be cheaper than catching up.
 //!
 //! `cancellable` is not observed, the same gap [`crate::folders`] documents and
 //! for the same reason: [`Client`] takes its [`CancelFlag`] when it is built.
@@ -67,11 +81,13 @@ use glib_sys::{GError, GFALSE, GTRUE, gboolean};
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
+use jmap_mail_sync::MessageUpdate;
 use jmap_proto::Id;
 
+use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, parent_store};
-use crate::summary::{apply_listing, set_summary_state};
+use crate::summary::{apply_delta, apply_listing, set_summary_state, summary_state};
 
 /// Installs the folder's own vfuncs on a class whose first member is a
 /// `CamelFolderClass`.
@@ -86,7 +102,9 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
     vfuncs.refresh_info_sync = Some(refresh_info_sync);
 }
 
-/// Lists the mailbox and brings the folder in line with what it found.
+/// Asks what the mailbox has done since the folder last looked, and brings the
+/// folder in line with the answer — listing it in full when there is no such
+/// "since" to ask from.
 ///
 /// `TRUE` for a refresh that happened, `FALSE` with the error set for one that
 /// could not — which is Camel's convention and, in particular, is what
@@ -108,12 +126,46 @@ unsafe extern "C" fn refresh_info_sync(
                 return fail(error, &StoreError::Disconnected);
             };
 
-            let (state, messages) = match store.messages(mailbox) {
-                Ok(listing) => listing,
+            // The question this folder is in a position to ask. A summary that
+            // remembers a state can ask what changed since it; one that does
+            // not — a mailbox never refreshed, or one whose header was written
+            // by a version of this provider that kept no state — has nothing
+            // to ask from and lists, which is the same answer phrased as the
+            // update the two paths share.
+            let update = match summary_state(summary) {
+                Some(since) => store.messages_since(mailbox, &since),
+                None => store
+                    .messages(mailbox)
+                    .map(|(state, messages)| MessageUpdate::Relisted { state, messages }),
+            };
+            let update = match update {
+                Ok(update) => update,
                 Err(failure) => return fail(error, &failure),
             };
 
-            let changes = apply_listing(summary, &messages);
+            let (state, changes) = match update {
+                // Nearly every poll, and the whole point of asking: the folder
+                // is already right, one round trip said so, and the only thing
+                // to record is that it is right as of a newer state.
+                MessageUpdate::Unchanged(state) => (state, Changes::new()),
+                // A delta says what this mailbox holds for the messages that
+                // moved and what it no longer holds; every row neither list
+                // names is left exactly where it is. Handing this to
+                // `apply_listing` would empty the folder — see
+                // [`crate::summary`].
+                MessageUpdate::Changed {
+                    state,
+                    present,
+                    absent,
+                } => (state, apply_delta(summary, &present, &absent)),
+                // And the whole mailbox, when the server would not calculate a
+                // delta from the state this folder had. Reconciled rather than
+                // applied: a listing is the mailbox, so a row it does not name
+                // is a message that has left.
+                MessageUpdate::Relisted { state, messages } => {
+                    (state, apply_listing(summary, &messages))
+                }
+            };
             // Recorded after the rows and not before them, because what the
             // state says is what the rows are current as of: a summary that
             // claimed one it had not applied yet would, if the process died in
