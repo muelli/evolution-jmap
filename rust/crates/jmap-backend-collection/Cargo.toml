@@ -12,13 +12,10 @@ publish = false
 
 [lib]
 name = "jmap_backend_collection"
-# rlib only, for now. The other backends build a cdylib because there is an
-# `e_module_load` in them for EDS to find; this crate has no module entry point
-# yet, and a `module-jmap-backend.so` that exports nothing is a file
-# `evolution-source-registry` would dlopen and learn nothing from. The cdylib
-# and the install rule in cmake/Backends.cmake arrive together with that entry
-# point.
-crate-type = ["rlib"]
+# cdylib is what evolution-source-registry dlopens (installed as
+# module-jmap-backend.so); rlib is what the integration tests link against, and
+# building both keeps the two from drifting apart.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 eds-sys = { workspace = true }

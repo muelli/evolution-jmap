@@ -1,0 +1,66 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The two symbols `evolution-source-registry` resolves out of the built shared
+//! object.
+//!
+//! The registry server is an `EDBusServer` whose `module_directory` is
+//! libebackend's `registry-modules` — overridable at runtime with
+//! `EDS_REGISTRY_MODULES`, which is what makes the manual test recipe possible
+//! without installing into `/usr`. It wraps each `.so` it finds there in an
+//! `EModule` and `g_type_module_use`s it; `EModule`'s `load` dlopens the file,
+//! looks up `e_module_load`, and calls it with itself as the `GTypeModule`.
+//! Whatever types are registered against that module by the time the call
+//! returns are the module's contribution — for us, the backend and the factory
+//! that builds it.
+//!
+//! Both entry points are guarded. Nothing here should be able to panic, but a
+//! panic that unwound out of `e_module_load` would abort the one process that
+//! owns every data source in the session — every account, of every kind, not
+//! just this one.
+
+use gobject_sys::GTypeModule;
+use jmap_backend_core::subclass::register_dynamic;
+use jmap_backend_core::trampoline::guard;
+
+use crate::backend::JmapCollectionBackend;
+use crate::factory::{JmapCollectionFactory, remember_backend_type};
+
+/// Registers the backend and its factory against `type_module`.
+///
+/// Called once per use of the module, not once per process: the registry unuses
+/// a module when the last backend it provided goes away, which marks every type
+/// it registered as unloaded, and calls this again when the next account wants
+/// one. So registering is what happens on *every* call, and `register_dynamic`
+/// is idempotent for exactly that reason.
+///
+/// The backend goes first, because the factory's `class_init` needs the type it
+/// produced.
+///
+/// # Safety
+///
+/// `type_module` must be the `GTypeModule *` the registry passed to this symbol;
+/// it has to stay alive for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
+    guard("e_module_load", (), || {
+        // SAFETY: the module is the registry's, by this function's contract.
+        unsafe {
+            remember_backend_type(register_dynamic::<JmapCollectionBackend>(type_module));
+            register_dynamic::<JmapCollectionFactory>(type_module);
+        }
+    });
+}
+
+/// Called just before the module is unloaded again.
+///
+/// There is nothing to undo: GLib unregisters the types the module registered on
+/// its own, and this crate keeps no other process-wide state — the backend type
+/// remembered for the factory is re-registered, and re-recorded, by the next
+/// [`e_module_load`].
+///
+/// # Safety
+///
+/// As [`e_module_load`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn e_module_unload(_type_module: *mut GTypeModule) {}
