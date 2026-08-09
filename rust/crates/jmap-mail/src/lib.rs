@@ -48,7 +48,8 @@
 //! - [`summary`] is where those rows live: the `CamelFolderSummary` every
 //!   folder is given at construction, what a listing of the mailbox does to the
 //!   rows already in it, and the flag that lets Camel ask a folder how much it
-//!   holds.
+//!   holds. A subclass for one field's sake — the row type Camel instantiates
+//!   when it reads the folder back off disk.
 //! - [`changes`] is the other half of that answer: the uids one listing moved,
 //!   in the `CamelFolderChangeInfo` Camel's `changed` signal carries — which is
 //!   how a message list that is already on screen learns about new mail.
@@ -66,7 +67,11 @@
 //! - [`message_info`] is one row of that folder's contents: the
 //!   `CamelMessageInfo` a `jmap-mail-sync` summary row becomes, and with it the
 //!   three columns that are a computation rather than a copy — the flags word,
-//!   the formatted address headers, and the 64-bit digests Camel threads on.
+//!   the formatted address headers, and the 64-bit digests Camel threads on —
+//!   and a fourth that is neither, and is why the row is a subclass: the
+//!   keywords the last listing found, which a flag change is the difference
+//!   from and which nothing else on the row still holds once the user has
+//!   marked it.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point

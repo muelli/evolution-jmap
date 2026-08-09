@@ -156,6 +156,31 @@ fn a_keyword_is_removed_under_the_name_the_server_gave_it() {
 }
 
 #[test]
+fn a_keyword_set_survives_being_written_out_as_the_names_it_holds() {
+    // What a row kept on disk amounts to. The keywords the last listing found
+    // have to outlive the process — a folder that forgot them would have no
+    // *before* to diff the next flag change against — and the only thing there
+    // is to write down is the names, so collecting them back has to produce
+    // the set they came from.
+    let keywords = Keywords::new(&read_and_flagged(), &["Work".to_owned()]);
+
+    let restored: Keywords = keywords.iter().map(str::to_owned).collect();
+
+    assert_eq!(restored, keywords);
+    assert_eq!(restored.len(), 3);
+}
+
+#[test]
+fn two_spellings_of_one_keyword_collected_together_are_one_keyword() {
+    // The same folding [`Keywords::new`] applies, on the way back in: a set
+    // read off disk is a set, not the list it was stored as.
+    let restored: Keywords = ["Work".to_owned(), "work".to_owned()].into_iter().collect();
+
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored.iter().collect::<Vec<&str>>(), vec!["Work"]);
+}
+
+#[test]
 fn a_label_with_a_slash_in_it_is_one_keyword_and_not_a_path() {
     // A patch key is a JSON pointer (RFC 8620 §5.3, RFC 6901) and an IMAP
     // keyword is an atom, which permits `/` and `~`. Unescaped, a label like

@@ -119,6 +119,11 @@ const ALLOWED_TYPES: &[&str] = &[
     // wide a stored message id is. `CamelNamedFlags` and `CamelNameValueArray`
     // are what the user flags and the headers come back as.
     "CamelMessageInfo.*",
+    // One row as the summary database stores it: the column-per-field struct
+    // Camel's `load` and `save` vfuncs are handed. Named for its `bdata` field,
+    // which is where a message info subclass keeps the column Camel has none of
+    // — for this provider, the keywords the last listing found.
+    "CamelMIRecord",
     "CamelMessageFlags",
     "CamelSummaryMessageID",
     "CamelNamedFlags",
@@ -236,6 +241,14 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // digests Camel threads on. A provider whose digests disagreed with it
     // would split a conversation in two the moment the two met.
     "camel_message_info_.*",
+    // Where a row keeps what only this provider knows about it. A message info
+    // subclass that adds a column has to write it into the one field of the
+    // summary database Camel reserves for that — `CamelMIRecord.bdata`, a
+    // single string the class chain appends to on the way out and reads back in
+    // the same order on the way in — and these four are the encoding of it, so
+    // that a keyword with a space or a digit in it comes back as the keyword it
+    // was rather than as two.
+    "camel_util_bdata_.*",
     // The set a row's user flags — Evolution's labels — are kept in. Replaced
     // wholesale rather than flag by flag, because JMAP's `keywords` is the
     // whole truth about a message's labels: a keyword the server stopped
