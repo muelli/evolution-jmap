@@ -23,7 +23,9 @@ crate-type = ["rlib"]
 [dependencies]
 eds-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
+evolution-jmap-client = { workspace = true }
 evolution-jmap-collection-sync = { workspace = true }
+gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 
