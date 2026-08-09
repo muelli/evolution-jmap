@@ -5200,3 +5200,97 @@ before they are a vfunc, and that decision is what `expunge_sync` waits on;
 cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (fifty-sixth session)
+
+The scaffold change the previous session named as the only thing left between
+the subscription state it landed and the vfuncs that carry it: **an interface
+whose vtable one of our types fills in**, in `jmap-backend-core`, and the
+binding of the interface it exists for, `CamelSubscribable`, in `eds-sys`.
+
+Deliberately not the vfuncs themselves. This is shared machinery plus an FFI
+surface, and both are testable here on their own terms; the store's three slots
+are a mail-provider increment and start from a scaffold that is already pinned.
+
+- **`InterfaceDecl`**, what `ObjectSubclass::interfaces` now returns.
+  `InterfaceDecl::defaults(gtype)` is exactly the old behaviour — a NULL
+  `interface_init`, right for `CamelNetworkSettings`, which is all properties —
+  and `InterfaceDecl::filled_by::<I>()` is new.
+- **`InterfaceImpl`**, the `G_IMPLEMENT_INTERFACE` init function as a trait:
+  an associated `Vtable` type, the interface's `GType`, and an
+  `interface_init` handed a typed `*mut Vtable`. Implemented by a type *beside*
+  the class rather than on it, because one class can fill several interfaces
+  and a trait on the class could only describe one.
+- **A guarded trampoline** between the two, like `class_init`'s: GObject calls
+  it from inside `g_type_class_ref` while holding the type system's global
+  lock, and a panic unwinding out of there aborts the process.
+- **`CamelSubscribable.*` and `camel_subscribable_.*`** on `eds-sys`'s
+  allowlist.
+
+Red first: three tests in `jmap-backend-core/tests/subclass.rs`, two in
+`eds-sys/tests/camel.rs`. Both new guards were then checked by breaking them on
+purpose — with `filled_by` handing GObject a NULL init the dispatch test
+segfaults, and with the `guard` taken out of the trampoline the panicking-init
+test aborts the process instead of failing.
+
+Decisions taken:
+
+- **The old comment was wrong, and checking it is what this increment is built
+  on.** `subclass.rs` claimed a type that needs to fill a vfunc slot "overrides
+  them in `class_init`, where the interface struct is reachable through
+  `g_type_interface_peek`". A throwaway probe says that does work today: the
+  vtable *is* reachable from `class_init` and a slot written through it *does*
+  survive. So this is not a bug fix. It is a choice of the documented mechanism
+  over an ordering `gtype.c` happens to have — it base-initialises interface
+  vtables before calling `class_init` and runs the `interface_init`s after —
+  and nothing in GLib's documentation promises that ordering.
+  The first version of the test asserted the peek returns NULL and failed,
+  which is how the claim got checked at all; the doc comment now records what
+  is actually true rather than what was assumed.
+- **A caught panic leaves the vtable half-filled.** Putting the defaults back
+  would mean copying a vtable whose size this code does not know. Logged and
+  left, which for a slot the init never reached is the interface's own default.
+- **`GTypePlugin` as the test interface.** Already used for the "an interface
+  is added before the type is handed back" test, and it is the one interface a
+  test can implement without also satisfying it — with the property that makes
+  this increment testable at all: `g_type_plugin_use` dispatches through a slot
+  with no default behind it, so the test drives GLib's own dispatch rather than
+  reading the slot back. Reading it back would pass just as well if GLib never
+  looked at that copy of the vtable.
+- **Two `eds-sys` tests rather than a line in `tests/layout.rs`.** `g_type_query`
+  reports nothing about an interface — asserted, so the gap is recorded rather
+  than implied. What is checked instead is the contract: the `CamelStore`
+  prerequisite, `CamelOfflineStore` *not* implementing it already, and no
+  default behind any of the three methods. The last is why `defaults()` would be
+  the wrong declaration here: a slot left NULL is a call through NULL from
+  inside `camel_subscribable_folder_is_subscribed`, not a store that answers
+  conservatively.
+
+Not verified locally, as in the previous fifty-five sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers to get wrong. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates.
+
+Next in M5. **The store's three slots**, which now have nowhere left to hide: an
+`InterfaceImpl` beside `JmapStore` with `CamelSubscribableInterface` as its
+`Vtable`, `folder_is_subscribed` reading the held listing (non-blocking, so the
+listing is the only thing that can answer it), and the two sync vfuncs calling
+`JmapStore::set_subscribed`, each emitting
+`camel_subscribable_folder_subscribed`/`_unsubscribed` with the
+`CamelFolderInfo` for the folder the way IMAPX does. `create_folder_sync` and
+`delete_folder_sync` come after that, and both want a `CamelFolderInfo` answer
+and the store's folder list kept in step; the refusals the mock learned three
+sessions ago (`mailboxHasChild`, `mailboxHasEmail`, a sibling's name) are what
+those vfuncs must map onto a `CamelError` the user can act on.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+the `changed` signal a transfer emits is still not asserted by a test, which
+wants `tests/refresh.rs`'s emission harness lifted into `tests/common`;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.
