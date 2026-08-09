@@ -7094,3 +7094,102 @@ No milestone tag is claimed; M5's open questions are the ones listed above.
 Next in M5: the cancellation line for the book and calendar backends' vfuncs is
 now a small, tractable item; after that the cache items above, or the
 delete-versus-trash question if a human has answered it.
+
+## 2026-08-09 (seventy-fourth session)
+
+**The same Stop button, on the address book and the calendar.** Last session
+wired cancellation through the sixteen Camel mail vfuncs and left the two EDS
+backends exactly where they were: every vfunc but `connect_sync` named its
+`GCancellable` `_cancellable` and ignored it. A first sync of a large address
+book — the longest operation either backend has, and the one a user is most
+likely to stop — was a Stop button attached to nothing.
+
+And the same latch: the only flag either client carried came from the
+*connect's* `CancelBridge` and was built into the `Client`, so it belonged to
+the account rather than to the operation. A connect the user managed to stop
+left behind a client that refused every request for the rest of the session,
+curable only by reconnecting.
+
+Red first: twelve tests, six per backend, calling the vfuncs through their
+class pointers with an already-stopped `GCancellable` and expecting
+`G_IO_ERROR_CANCELLED`. Ten failed (the vfuncs cheerfully did the work); the
+two NULL-cancellable tests passed from the start, which is what they are for.
+
+What landed:
+
+- **`with_connection` observes**, in both backends. `let _cancel =
+  observe(cancellable)` sits in the one shared helper every connected vfunc
+  goes through — the listing, the changes call, the load, the save and the
+  remove — rather than being repeated five times.
+- **`connect_with` in `jmap-backend-core` installs a scope** instead of handing
+  a `CancelFlag` to the client builder, and `open_book`/`open_calendar` build a
+  plain `Client`. The connection now carries no cancellation of its own.
+- The two backends' `backend.rs` module docs lost their "what is not wired up
+  yet" sections, which were the note this session was working from.
+
+Decisions taken:
+
+- **The `observe` goes in `with_connection`, not at the top of each vfunc.**
+  The mail provider repeats the line sixteen times because its vfuncs have no
+  shared entry point; these do. Putting it there makes reaching the connection
+  and being cancellable the same act, so a vfunc added later cannot get the
+  first without the second — which is exactly the gap the mail crate still has
+  (its note names it: "a vfunc added later that forgets the line is not caught
+  by anything").
+- **`disconnect_sync` deliberately does not observe.** It makes no request; it
+  drops the connection. Refusing it because the user pressed Stop would leave
+  the backend holding a socket EDS believes is closed, and dropping it is what
+  the caller asked for either way. It is the one vfunc that does not go through
+  `with_connection`, and the helper's doc comment says why.
+- **The offline check stays after the observe**, so an operation with no
+  connection *and* a stopped cancellable still reports
+  `E_CLIENT_ERROR_REPOSITORY_OFFLINE`. That is the code that makes
+  `EBookMetaBackend`/`ECalMetaBackend` serve their cache; reporting CANCELLED
+  for a backend that is merely disconnected would be a worse answer to the more
+  important question.
+- **The client carries no flag, as in the mail provider.** Same reasoning:
+  precedence alone would not un-latch it, because `Client::cancel_for_request`
+  falls back to the built-in flag whenever the vfunc installed nothing — which
+  is every NULL cancellable, and EDS passes those.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The latch removal is not pinned by a red test, and cannot easily be.** The
+   bridge is disconnected when `connect_with` returns, so cancelling the
+   cancellable afterwards does nothing either way; the only way to latch the
+   flag is to cancel *during* the connect, which is a race the mock server
+   offers no hook for. What pins it now is a signature: `open_book` and
+   `open_calendar` no longer take a `CancelFlag`, so there is nothing to latch.
+   Saying so plainly rather than writing a test that would pass before the fix.
+2. **No test cancels a request in flight**, as in the mail provider. Every test
+   here stops the cancellable before the call — which is what EDS produces for
+   an operation stopped while queued, and what `g_cancellable_connect` fires
+   immediately for. A Stop during a slow response still waits for that
+   response; closing that is a transport change, not this one.
+3. **Nothing here has been seen in Evolution.** That EDS's Stop reaches these
+   cancellables is EDS's business — *needs human verification in real
+   Evolution*.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files,
+`jmap-backend-book/tests/cancellation.rs` and
+`jmap-backend-cal/tests/cancellation.rs`, both with the SPDX `GPL-3.0-or-later`
+header. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set (393
+tests, unchanged) and on the five EDS crates (587, up from 575).
+
+No milestone tag is claimed. `example-module` still fails clippy on
+`manual_c_str_literals` — pre-existing, untouched by this session, and outside
+both sets the rules require green.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; bounding the mail cache; the cache entry
+written by `write_all` rather than to a temporary name and renamed;
+`get_folder_info_sync`'s NULL-versus-GError question; `maxSizeRequest`,
+`maxCallsInRequest` and `maxConcurrentUpload` still unread; `service.rs`
+unexercised against a real `CamelSession`; and the README's architecture block
+still listing only the round-1 crates.
+
+Next in M5: the mail cache items, or the delete-versus-trash question if a
+human has answered it.
