@@ -32,6 +32,15 @@
 //!   `ESourceCamel` extension hands a `CamelJmapStore`, which is where the
 //!   server a setup wrote turns into the server the provider connects to, and
 //!   which `jmap-mail`'s own `ServerConfig` is asked about in the same test.
+//! - [`defaults`] is what comes before either of them: the account the dialog
+//!   already says when the user first reaches it, from the one answer the
+//!   assistant has by then — the address off its identity page. For JMAP that
+//!   is unusually well-determined, because RFC 8620 §2.2 makes the address's
+//!   own domain the place a client asks; the module says so at length. Its
+//!   joins are with both of the above: the account it offers is one
+//!   [`complete::check`] accepts, so the assistant does not open on a page
+//!   whose *Next* is greyed out with nothing on it to fix, and one the
+//!   collection backend reads back as the origin the address named.
 //! - [`complete`] is the other direction: not what a commit writes but whether
 //!   there is to be one. It is the deciding half of
 //!   `EMailConfigServiceBackend`'s `check_completeness` vfunc, and it is here
@@ -76,4 +85,5 @@
 
 pub mod account;
 pub mod complete;
+pub mod defaults;
 pub mod mail;

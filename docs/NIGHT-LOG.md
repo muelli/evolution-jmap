@@ -10718,3 +10718,91 @@ Next: the module and the `EMailConfigServiceBackend` subclass — the widgets an
 the plumbing, now that the rules they enforce are decided and tested here. That
 is where the part this VM cannot verify begins, and where
 `e_source_camel_generate_subtype` will have to be called for real.
+
+## 2026-08-09 (hundred-and-sixth session)
+
+**The account a setup starts from: `jmap-config`'s `defaults::from_identity`.**
+Ten tests, red first, in `rust/crates/jmap-config/tests/defaults.rs`; a new
+`src/defaults.rs`; the crate stays an rlib out of `default-members` and gains no
+dependency.
+
+**Why this before the module, again.** Last session named the module and the
+`EMailConfigServiceBackend` subclass as next, and they still are. But that
+subclass has a third decision in it that is ordinary Rust over an `Account` —
+`setup_defaults`, what the *Receiving Email* page says before the user has typed
+anything into it — and taking it now leaves the subclass with widgets and
+plumbing and no rules, which is the split this crate has been working to. The
+same reasoning as `complete::check`, one step further, and the last of the three
+halves that could be checked on a machine with no display.
+
+**For JMAP a default server is not a guess.** For IMAP, deriving `example.com`
+from `vera@example.com` is usually wrong — mail servers live at `imap.` and
+`mail.` and at names no rule produces, which is what autoconfig databases exist
+for. RFC 8620 §2.2 removes the problem: a client that knows only the address
+fetches `https://<domain>/.well-known/jmap`, and the server answers with where
+its session, API and download URLs really are. So the domain is not a guess at
+where the server is, it is the address the protocol specifies for asking, and
+the account this writes names exactly that. That is the whole reason this crate
+can offer a working default where an IMAP setup would need a lookup table.
+
+**The login name, and the rule that is not broken by it.** `account` says the
+identity is deliberately *not* derived from `[Authentication] User` — the two
+are equal often enough to be assumed and different often enough for the
+assumption to be wrong. That rule is about what is committed and still holds:
+`apply` writes whatever the entry says and never looks at the identity. Here the
+two are related the only way they safely can be, as an offer sitting in an entry
+the user can edit. The alternative default was an empty entry, which is worse
+than wrong: an account with no user name is an *anonymous* connection — a
+legitimate state, and the one `jmap-mockd` is reached by — so leaving it blank
+would offer this project's development configuration to everybody else.
+
+**What is left unanswered, and why each.** The port: 443 is right and writing it
+down would still be wrong, because an account that names a port keeps naming it
+if the scheme changes underneath. The auth method: what the server offers is
+something a session document answers, not something a dialog guesses before it
+has connected. The display name: not this crate's to write at all. And nothing
+here reaches the network — `setup_defaults`'s neighbours run on every keystroke,
+and asking a server belongs in the assistant's lookup step, which is still a
+later increment.
+
+**Both joins are tested, and they are the point of the function.** A default
+`check` would refuse is a *Next* button greyed out on a page the user has not
+touched — so `check(&from_identity("vera@example.com"))` is `Ok`. A default
+whose server the registry reads back as some other server is a well-known probe
+aimed somewhere the address never named — so the account is committed with
+`account::apply` and read back with the collection backend's `server_of`, which
+must answer `https://example.com`. A string that is not an address yet leaves
+the server entry blank rather than half-filled, and `check` reports the address,
+which is the entry the user is in.
+
+**Mutation-checked**, six mutants, each caught: `split_once` for `rsplit_once`
+(one red); the default written as insecure (three red, including both joins);
+the empty local part accepted so `@example.com` becomes a server (one red); the
+port written down as 443 (two red); the empty address offered as a login name
+(one red); calendars off by default (one red). One redundancy the mutants found
+was removed rather than tested around: an empty domain and an absent one produce
+the same empty entry, so `domain_of` no longer distinguishes them.
+
+**The honest limits are unchanged and are all of M7's remainder.** Nothing calls
+any of this: there is no `EMailConfigServiceBackend` subclass and no
+`module-jmap-configuration.so`, and no account has been created through
+Evolution's UI, which is the milestone's actual acceptance and not something
+this VM can do. So M7 carries no completion tag.
+`docs/manual-test-collection-backend.md` still documents `MailEnabled=false`.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, both with SPDX headers.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as are `clippy`/`test` over the EDS crates — 804 tests, `jmap-config`'s 51
+(was 41) included. `RUSTDOCFLAGS=-D warnings cargo doc` clean for the crate.
+Pre-existing and untouched: `example-module` does not build on this VM, which is
+why the workspace-wide runs exclude it.
+
+No milestone tag.
+
+Next: the module and the `EMailConfigServiceBackend` subclass. All three of its
+decisions — what an account is written as, what it starts from, and whether it
+may be committed — are now decided and tested in plain Rust, so what is left is
+the widgets and the plumbing, and that is where the part this VM cannot verify
+begins.
