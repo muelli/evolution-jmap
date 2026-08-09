@@ -30,7 +30,8 @@ use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_mail_sync::{
-    Filing, FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary, MessageUpdate,
+    Filing, FolderInfo, FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary,
+    MessageUpdate,
 };
 use jmap_proto::{Id, State};
 
@@ -336,6 +337,66 @@ impl JmapStore {
         Ok(())
     }
 
+    /// Makes a folder — the write behind `create_folder_sync`.
+    ///
+    /// Locked like the writes above, and it edits the held listing for
+    /// [`JmapStore::set_subscribed`]'s reason turned one step further: Camel
+    /// hands the folder this answers with to Evolution's folder tree and then
+    /// opens it by path, and opening is answered out of the listing. A store
+    /// that made the folder and did not record it would offer the user a folder
+    /// it refuses to open until something refreshes the account.
+    ///
+    /// `parent` is the folder the new one hangs under, whole rather than by id,
+    /// because the answer's path is built from the parent's — see
+    /// [`MailSync::create_folder`], which is where that happens.
+    ///
+    /// A store with nothing listed yet gains nothing, and the state the listing
+    /// is current as of is left where it was: both are the judgements
+    /// [`JmapStore::set_subscribed`] documents, and for the same reasons.
+    pub fn create_folder(
+        &self,
+        parent: Option<&FolderInfo>,
+        name: &str,
+    ) -> Result<FolderInfo, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let created = sync.create_folder(parent, name)?;
+
+        // Only after the server made it, and while the connection it made it
+        // over is still ours — the ordering rule the `folders` field documents.
+        if let Some(folders) = self.folder_listing()
+            && let Some(listing) = write(folders).as_mut()
+        {
+            Arc::make_mut(&mut listing.tree).insert(created.clone());
+        }
+        Ok(created)
+    }
+
+    /// Removes a folder — the write behind `delete_folder_sync`.
+    ///
+    /// The mirror of [`JmapStore::create_folder`] in every respect, including
+    /// why the listing is edited at all: a folder that is gone from the account
+    /// and still in the listing is one Camel will happily open again.
+    ///
+    /// By mailbox id, like every other write here, because the caller named the
+    /// folder out of a listing and the path it had is the part another client's
+    /// rename can already have invalidated.
+    pub fn delete_folder(&self, mailbox: &Id) -> Result<(), StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        sync.delete_folder(mailbox)?;
+
+        // As above: only after the server agreed.
+        if let Some(folders) = self.folder_listing()
+            && let Some(listing) = write(folders).as_mut()
+        {
+            Arc::make_mut(&mut listing.tree).remove(mailbox);
+        }
+        Ok(())
+    }
+
     /// The folder listing the store is holding, if it is holding one — and
     /// nothing else: no request, and no connection needed to ask.
     ///
@@ -481,6 +542,13 @@ unsafe impl ObjectSubclass for JmapStore {
         // SAFETY: the class leads with CamelOfflineStoreClass, which leads with
         // CamelStoreClass — the contract above.
         unsafe { crate::folders::install_vfuncs(class.cast::<CamelStoreClass>()) };
+
+        // And the two that change which folders there are. Their own module
+        // rather than `crate::folders`, which answers questions about the
+        // account's folders where these two are what gains and loses one.
+        //
+        // SAFETY: as above.
+        unsafe { crate::manage::install_vfuncs(class.cast::<CamelStoreClass>()) };
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {

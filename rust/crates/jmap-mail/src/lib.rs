@@ -82,6 +82,11 @@
 //!   mailbox is a member of a set rather than a place, so a copy adds one and a
 //!   move adds one and takes another away — and the work around it is the rows
 //!   a move leaves the source folder holding.
+//! - [`manage`] is the pair that changes which folders there are:
+//!   `create_folder_sync` and `delete_folder_sync`, the vfuncs behind the
+//!   folder the user adds to an account and the one they take away — one
+//!   `Mailbox/set` each, and the edit to the store's held listing that keeps
+//!   the folder Camel was just handed openable.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -99,6 +104,7 @@ pub mod connect;
 pub mod folder;
 pub mod folder_info;
 pub mod folders;
+pub mod manage;
 pub mod message;
 pub mod message_info;
 pub mod module;
