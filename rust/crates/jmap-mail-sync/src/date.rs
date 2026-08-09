@@ -62,6 +62,74 @@ pub(crate) fn epoch_seconds(text: &str) -> Option<i64> {
     Some(days_from_civil(year, month, day) * 86_400 + seconds_of_day - offset)
 }
 
+/// The `UTCDate` naming the same instant as `seconds`, or `None` if no
+/// `UTCDate` names it.
+///
+/// [`epoch_seconds`] run backwards, and it exists for the one thing this crate
+/// sends a date *to* the server in: an import carries the moment Camel says the
+/// message was received, and Camel says it as a count of seconds.
+///
+/// `None` is the answer for an instant outside the grammar rather than a
+/// clamped date at the end of it. RFC 8620 §1.4 makes a `UTCDate` an RFC 3339
+/// `date-time` at `Z`, whose year is four digits — so a `gint64` of seconds can
+/// hold instants that simply cannot be written, and writing the nearest one that
+/// can would be this layer inventing a date the caller never gave it. What the
+/// caller does with `None` is its own decision; for an import it is to send no
+/// date and let the server choose, which is what RFC 8621 §4.8 has it do.
+///
+/// Whole seconds, no fraction: Camel has nowhere to keep one, so there is never
+/// one to write.
+pub(crate) fn utc_date(seconds: i64) -> Option<String> {
+    // Euclidean, not truncating: an instant before the epoch is a negative
+    // count, and `-1 / 86_400` is the day *after* the one -1 seconds falls in.
+    let (days, seconds_of_day) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
+    let (year, month, day) = civil_from_days(days)?;
+
+    let (hour, minute, second) = (
+        seconds_of_day / 3_600,
+        (seconds_of_day / 60) % 60,
+        seconds_of_day % 60,
+    );
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
+    ))
+}
+
+/// The civil date `days` after 1970-01-01, or `None` for a year no four-digit
+/// year can name.
+///
+/// Howard Hinnant's `civil_from_days`, the inverse of [`days_from_civil`] and
+/// shifted the same way — the year starts in March so that the leap day is the
+/// last day of it — and exact for every date it answers.
+fn civil_from_days(days: i64) -> Option<(i64, u32, u32)> {
+    let shifted = days.checked_add(719_468)?;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+
+    // The grammar's whole range, and no year zero: 0000 is four digits and not
+    // a year of the proleptic Gregorian calendar as RFC 3339 counts them.
+    (1..=9_999).contains(&year).then_some((
+        year,
+        u32::try_from(month).ok()?,
+        u32::try_from(day).ok()?,
+    ))
+}
+
 /// Splits `text` into exactly three fields on `separator`.
 fn split3(text: &str, separator: char) -> Option<(&str, &str, &str)> {
     let mut fields = text.split(separator);
@@ -133,7 +201,69 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::epoch_seconds;
+    use super::{epoch_seconds, utc_date};
+
+    #[test]
+    fn the_epoch_itself_is_the_epoch_written_out() {
+        assert_eq!(utc_date(0).as_deref(), Some("1970-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn an_instant_is_written_as_the_date_it_is() {
+        assert_eq!(
+            utc_date(1_768_469_400).as_deref(),
+            Some("2026-01-15T09:30:00Z")
+        );
+        // The leap day, and a moment before the epoch: the two places the
+        // arithmetic is easiest to get wrong.
+        assert_eq!(
+            utc_date(951_825_600).as_deref(),
+            Some("2000-02-29T12:00:00Z")
+        );
+        assert_eq!(
+            utc_date(-14_182_940).as_deref(),
+            Some("1969-07-20T20:17:40Z")
+        );
+    }
+
+    #[test]
+    fn every_instant_this_writes_it_reads_back_as_the_same_one() {
+        for seconds in [
+            0,
+            1,
+            -1,
+            86_399,
+            86_400,
+            -86_400,
+            1_768_469_400,
+            951_825_600,
+            -14_182_940,
+            // The ends of what a four-digit year can say.
+            -62_135_596_800,
+            253_402_300_799,
+        ] {
+            let written = utc_date(seconds).expect("a date inside the grammar");
+            assert_eq!(epoch_seconds(&written), Some(seconds), "{written}");
+        }
+    }
+
+    #[test]
+    fn an_instant_no_utc_date_can_name_is_not_written_as_one() {
+        // A `UTCDate` is `date-time` with a four-digit year (RFC 8620 §1.4,
+        // RFC 3339 §5.6), so an instant outside the first of year 1 and the last
+        // second of year 9999 has no spelling — including the two ends of the
+        // range Camel keeps a date in.
+        for seconds in [
+            i64::MIN,
+            i64::MAX,
+            -62_135_596_801,
+            253_402_300_800,
+            // Year zero: four digits, and not a year.
+            -62_167_219_200,
+        ] {
+            assert_eq!(utc_date(seconds), None, "{seconds}");
+        }
+    }
 
     #[test]
     fn the_epoch_itself_is_zero() {

@@ -6292,3 +6292,110 @@ written by `write_all` and close rather than to a temporary name and renamed);
 before they are a vfunc, and that decision is what `expunge_sync` waits on.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (sixty-seventh session)
+
+**`MailSync::import_message`: the sync half of appending a message.** The
+previous session put `Email/import` into the proto, the mock and the client, and
+said the Camel vfunc wanted a session of its own. This is the layer between
+them, and it is the crate's rhythm — the sync-layer increment, then the vfunc —
+that the folder work has followed all week.
+
+Red first: `jmap-mail-sync/tests/import.rs`'s nine tests were written against a
+`MailSync` with no such method and failed to compile, and the five new
+`date::tests` cases named a `utc_date` that did not exist. Green is the two
+functions below.
+
+What landed:
+
+- **`date::utc_date`** — [`epoch_seconds`] run backwards. The first thing this
+  crate writes a date *into*: Camel keeps `date_received` as a count of seconds
+  and an import has to send a `UTCDate`.
+- **`MailSync::import_message(mailbox, source, keywords, received_at) -> Id`** —
+  an `upload_blob` announced as `message/rfc822`, then an `Email/import` naming
+  the blob, the mailbox, the row's keywords and its date. Answers the id the
+  server minted, which is the Camel uid.
+
+Decisions taken:
+
+- **The bytes go up as bytes.** The other way to add a message is an `Email/set`
+  create out of `from`, `subject` and body values, which has the *server* build
+  the message — right for composing a draft, wrong for one that already exists,
+  because what comes back is not what went in and a signature over it stops
+  verifying. `the_bytes_that_went_up_are_the_bytes_that_come_back_down` asserts
+  the round trip through `message_source`, so a future change to either end that
+  rewrote the message would be a red test rather than a broken signature.
+- **`receivedAt` is sent rather than left to the server.** RFC 8621 §4.8's
+  default is the most recent `Received` header's date or the time of the import,
+  and either would date a message copied between accounts to the moment it was
+  copied — sorting it to the wrong end of the folder. Camel has the date parsed
+  already, so there is nothing to guess at.
+- **An instant no `UTCDate` can spell is sent as no date at all**, not as a
+  clamped one and not as a refusal: what the caller asked for is that the message
+  be appended, and losing the message to save its timestamp is the worse trade.
+  `utc_date` answers `None` outside years 1–9999 — a four-digit year is what RFC
+  8620 §1.4 allows — and `a_date_no_utc_date_can_name_is_left_to_the_server`
+  pins that an `i64::MAX` still imports.
+- **A refusal stays `SyncError::Client`, including a mailbox the account does not
+  have.** Not the `NoSuchFolder` the folder writes answer with, and the reason is
+  structural rather than taste: those name a mailbox as the record being changed
+  and get a `notFound` saying so, while an import names it inside `mailboxIds`,
+  where a server reports an `invalidProperties` refusal of the *message* that is
+  indistinguishable from the same refusal about the blob. Reading the server's
+  prose to tell them apart would be worse than passing the sentence through.
+- **The answer is the id and nothing else.** RFC 8620 §5.3 lets a server return
+  only the properties it set, so the rest of a summary row is not there to read;
+  the row is what the next refresh builds. `append_message_sync` asks for exactly
+  the uid.
+- **`Keywords`, not a string list.** The set the folder layer already holds, so
+  the flags word maps through one path in both directions —
+  `the_keywords_a_row_carries_go_up_with_the_message` reads the result back
+  through `messages`, which is the whole round trip rather than a look at the
+  request.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no `append_message_sync`.** Nothing in `jmap-mail` calls this yet, so
+   a drag from an IMAP account into a JMAP one still fails inside Camel. No
+   milestone tag is claimed.
+2. **No size check before the upload.** RFC 8620 §6.1's `maxSizeUpload` is in the
+   session and `jmap_proto::Session` has no accessor for it; a message over the
+   limit is therefore the server's HTTP refusal rather than a local one. Cheap to
+   add when something needs the better message.
+3. **The import is not conditional.** `EmailImportRequest` carries `ifInState`
+   and this does not send one, for the reason every other write here gives: the
+   state a folder holds is its listing's, and a conditional write would fail for
+   any change to any other message in the account.
+4. **A duplicate import is two messages**, which is the mock's documented MAY and
+   not asserted again here — the client suite already pins it.
+5. **Nothing driven from Evolution**, as with every session so far: no EDS code
+   changed at all this time.
+
+Not verified locally, as in the previous sixty-six sessions: `reuse lint` and
+`cargo deny` (neither binary is on this VM). One new file,
+`jmap-mail-sync/tests/import.rs`, with the SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (372 tests, up from
+359: nine integration tests and five date unit tests) and on the five EDS crates
+(531, unchanged — nothing there was touched). `example-module` fails
+`clippy --workspace` with 28 `manual_c_str_literals` errors; that is on master
+already, unrelated to this work, and left alone.
+
+Next in M5: `append_message_sync` itself, which now has both halves under it —
+serialize the `CamelMimeMessage` Camel hands over (`camel_data_wrapper_write_to_stream_sync`
+into a `CamelStreamMem`, the mirror of what `get_message_sync` parses), read the
+flags and `date_received` off the `CamelMessageInfo` when there is one, call
+`import_message`, and answer the uid through `appended_uid`. The open question
+it will have to settle is what the folder does with its summary afterwards: the
+same "the listing is the only thing that knows what a row should say" argument
+`transfer.rs` makes about the destination folder applies here too.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_folder_info_sync`'s NULL-versus-GError question, which still wants the EDS
+source for `camel-store.c` that this VM does not have; `get_trash_folder_sync`
+and `get_junk_folder_sync` are still a settings decision before they are a vfunc,
+and that decision is what `expunge_sync` waits on. Unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's architecture
+block still lists only the round-1 crates.
