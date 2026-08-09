@@ -16,15 +16,20 @@
 use std::sync::{Arc, Mutex};
 
 use jmap_client::{Client, Credentials};
-use jmap_collection_sync::Fanout;
+use jmap_collection_sync::{ChildKind, Fanout, Parts};
 use jmap_mock::{AccountState, DEFAULT_ACCOUNT_ID, MockServer, ServerState};
 use jmap_proto::Id;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS};
 
 fn fanout_of(server: &MockServer) -> Fanout {
+    fanout_with(server, Parts::ALL)
+}
+
+/// The fan-out of a login whose account has only some of its parts switched on.
+fn fanout_with(server: &MockServer, parts: Parts) -> Fanout {
     let client = Client::connect(server.origin(), Credentials::none())
         .expect("the mock serves a session document");
-    Fanout::discover(&client).expect("the mock answers every listing it is asked for")
+    Fanout::discover(&client, parts).expect("the mock answers every listing it is asked for")
 }
 
 /// Runs `f` against the default account's state.
@@ -214,4 +219,77 @@ fn an_account_offering_contacts_and_holding_none_warrants_no_address_book() {
         fanout.layout.mail.is_some(),
         "an account with no books and no calendars is still a mail account"
     );
+}
+
+#[test]
+fn a_part_the_user_switched_off_is_never_asked_about() {
+    // The account offers both, and the user said they keep their contacts
+    // elsewhere. Sending `AddressBook/get` anyway is a request for data they
+    // said they did not want — and, on an account that has to be authenticated
+    // for, a credential prompt to fetch it with.
+    let server = MockServer::builder().start();
+    let state = server.state();
+    with_account(&state, |account| {
+        account.seed_address_book("Not wanted here", true);
+        account.seed_calendar("Work", true);
+    });
+
+    let fanout = fanout_with(
+        &server,
+        Parts {
+            contacts: false,
+            ..Parts::ALL
+        },
+    );
+
+    assert!(
+        !server
+            .method_calls()
+            .iter()
+            .any(|call| call == "AddressBook/get"),
+        "{:?}",
+        server.method_calls()
+    );
+    assert!(fanout.address_books.is_empty());
+    assert!(
+        fanout
+            .children()
+            .iter()
+            .all(|child| child.kind == ChildKind::Calendar),
+        "a part that was never asked about warrants no child"
+    );
+    assert_eq!(
+        fanout
+            .calendars
+            .iter()
+            .map(|calendar| calendar.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Work"],
+        "the part that is on is populated as usual"
+    );
+}
+
+#[test]
+fn an_account_with_nothing_switched_on_is_asked_nothing_at_all() {
+    // `e_collection_backend_get_part_enabled()` with every bit set is false
+    // here — a disabled account, or one the user switched every part off on.
+    // Its populate has nothing to create, so it has nothing to ask.
+    let server = MockServer::builder().start();
+    let state = server.state();
+    with_account(&state, |account| {
+        account.seed_address_book("Personal", true);
+        account.seed_calendar("Work", true);
+    });
+
+    let fanout = fanout_with(&server, Parts::NONE);
+
+    assert!(
+        !server
+            .method_calls()
+            .iter()
+            .any(|call| call == "AddressBook/get" || call == "Calendar/get"),
+        "{:?}",
+        server.method_calls()
+    );
+    assert!(fanout.children().is_empty());
 }
