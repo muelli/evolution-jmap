@@ -5384,3 +5384,91 @@ cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs` and the two emissions
 above, which wait on M6 and M7. The README's architecture block still lists only
 the round-1 crates.
+
+## 2026-08-09 (fifty-eighth session)
+
+The two vfuncs the previous session named as next want a layer that does not
+exist yet: **`MailSync::create_folder` and `MailSync::delete_folder`**, in
+`jmap-mail-sync`. `jmap-client` learned `mailbox_create`/`mailbox_destroy` two
+sessions ago and the mock learned the refusals five ago; this is the sync layer
+between them, and it is where the one thing Camel needs and JMAP does not have —
+the folder *path* — is built.
+
+- **`create_folder(parent: Option<&FolderInfo>, name)` answers with a
+  `FolderInfo`**, not an id. `camel_store_create_folder_sync` hands the
+  `CamelFolderInfo` it gets straight to Evolution's folder tree, and the path is
+  this crate's invention: `path::join(parent.path, encode_component(name))`, the
+  same mapping a listing makes.
+- **`delete_folder(&Id)`** is `Mailbox/set` destroy with no
+  `onDestroyRemoveEmails`.
+- **`folder_error`** is new and shared: the `notFound` → `SyncError::NoSuchFolder`
+  mapping `set_subscribed` had inline, now the one place both mailbox writes ask
+  it.
+
+Red first: twelve tests in a new `tests/manage.rs`, all failing to compile
+against a `MailSync` with neither method. The path guard was then checked by
+breaking it on purpose — with the raw name in place of `encode_component(name)`,
+`a_name_that_is_not_a_path_component_is_encoded` fails and nothing else does.
+
+Decisions taken:
+
+- **The answer is built from what was *sent*, not from what came back.** RFC
+  8620 §5.3 lets a server return, for a created record, only the properties it
+  set itself — so `name` and `parentId` may legitimately be absent from the
+  response object, and a path read out of it would be empty against a perfectly
+  correct server. The id is the property a create exists to learn and the one the
+  RFC guarantees; everything else in the answer is the request plus arithmetic.
+- **`parent` is a `FolderInfo` and not an `Id`.** The request needs the id and
+  the answer needs the path, and only the caller's tree holds both.
+- **`role` is `None` on a new folder, deliberately.** None is requested, and a
+  role read back from the response would be this function assigning one outside
+  `FolderTree::claim_roles`' arbitration — which is what keeps an account from
+  showing two inboxes.
+- **`isSubscribed` *is* read from the response**, defaulting to `true`. It is
+  the one property here the client cannot work out, RFC 8621 §2 leaves the
+  default to the server, and the other guess hides the folder Evolution was just
+  told to make until the next listing.
+- **`mailboxHasChild` and `mailboxHasEmail` get no variant of their own.** The
+  test for a variant in `SyncError` is whether Camel has a *code* the layer above
+  could map it onto — `NoSuchFolder` exists because `CAMEL_STORE_ERROR_NO_FOLDER`
+  does. For these two the reason is prose either way, and it already survives the
+  crate boundary intact inside `SyncError::Client(Error::Set(_))`; re-encoding
+  the server's vocabulary into ours would only drop the description that came
+  with it. Two tests pin that the distinction arrives, and one pins that neither
+  is read as a missing folder.
+
+**Not covered by a test, and the honest limit of the increment:** the "server
+returns only what it set" case above. `jmap-mockd` echoes the whole mailbox in
+its `created` map, so both readings of the response pass against it — the
+decision is defensive, argued from the RFC, and unexercised. Making the mock
+answer sparsely would be a change to a fixture every other test reads, and is
+worth doing on its own if a second caller ever depends on the same rule.
+
+Not verified locally, as in the previous fifty-seven sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). One new file, carrying the
+SPDX header. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and on
+the five EDS crates. (`example-module`, the vendored EDS sample, still fails
+clippy on `manual_c_str_literals` as it has all along; it is not one of the six.)
+
+Next in M5. **`create_folder_sync` and `delete_folder_sync` on `JmapStore`**, now
+that both have a layer under them: each wants the store's held listing kept in
+step — a create has to *add* its `FolderInfo` to the tree the way `set_subscribed`
+edits one, or the folder disappears until the next refresh — and Camel wants
+`folder_created`/`folder_deleted` emitted with the `CamelFolderInfo`, which is the
+same signal problem the subscription vfuncs hit and the same
+`CamelSession`-shaped limit. `rename_folder_sync` sits beside them and has no
+`MailSync` method yet. Worth pairing: `get_folder_info_sync` still ignores
+`CAMEL_STORE_FOLDER_INFO_SUBSCRIBED` and `SUBSCRIPTION_LIST`.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+the `changed` signal a transfer emits is still not asserted by a test, which
+wants `tests/refresh.rs`'s emission harness lifted into `tests/common`;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs` and the subscription
+emissions, which wait on M6 and M7. The README's architecture block still lists
+only the round-1 crates.
