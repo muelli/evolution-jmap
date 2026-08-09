@@ -254,6 +254,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // The wrapper around the vfunc that hands one message over, for the same
     // reason: a test calls it the way Evolution's preview pane does.
     "camel_folder_get_message_sync",
+    // And the wrapper around the vfunc that takes one in — what Camel's own
+    // cross-store transfer calls on the destination folder, and what the
+    // composer's "save to Drafts" reaches. Named for the same reason again: a
+    // test drives it through the wrapper Evolution calls, which takes the
+    // folder's lock around the dispatch, rather than through the class.
+    "camel_folder_append_message_sync",
     "camel_folder_get_message_count",
     "camel_folder_(get|free)_uids",
     "camel_folder_changed",
