@@ -831,6 +831,40 @@ impl AccountState {
     /// Seed a full email (with a text body and optional attachments);
     /// returns its id. Does not bump state.
     pub fn seed_email(&mut self, seed: EmailSeed) -> Id {
+        let (id, email) = self.build_email(seed);
+        self.emails.seed_with_id(id.clone(), email);
+        id
+    }
+
+    /// Deliver an email as a state transition — what a message arriving
+    /// mid-session looks like from here.
+    ///
+    /// The difference from [`AccountState::seed_email`] is the same one
+    /// [`AccountState::create_mailbox`] draws: a seeded message predates every
+    /// state a client has ever seen, so `Email/changes` never names it, while
+    /// this one is named as created. There is no `Email/set` *create* in this
+    /// mock — RFC 8621 §4.6 makes that an import rather than a delivery — so a
+    /// test that wants new mail to show up says so directly.
+    pub fn deliver_email(&mut self, seed: EmailSeed) -> Id {
+        let (id, email) = self.build_email(seed);
+        self.emails
+            .transaction(|transaction| transaction.create(id.clone(), email));
+        id
+    }
+
+    /// Destroy a message as a state transition. False if there is no such
+    /// message. Its blobs are left behind — this is a test helper, not a
+    /// server.
+    pub fn destroy_email(&mut self, id: &Id) -> bool {
+        self.emails
+            .transaction(|transaction| transaction.destroy(id))
+    }
+
+    /// The message [`AccountState::seed_email`] and
+    /// [`AccountState::deliver_email`] both build, and the id it will be filed
+    /// under. Which of the two ways it then enters the store is the only thing
+    /// that separates them.
+    fn build_email(&mut self, seed: EmailSeed) -> (Id, Email) {
         let id = self.emails.alloc_id();
         let body_blob_id = self.add_blob("text/plain", seed.text_body.clone().into_bytes());
 
@@ -887,7 +921,6 @@ impl AccountState {
             attachments: (!attachments.is_empty()).then_some(attachments),
             ..Email::default()
         };
-        self.emails.seed_with_id(id.clone(), email);
-        id
+        (id, email)
     }
 }

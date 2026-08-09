@@ -4537,3 +4537,108 @@ state kept on disk is what the empty `recent` list and the whole-mailbox refresh
 are both still waiting for. Unexercised against a real `CamelSession`:
 `service.rs`, which waits on M6 and M7. The README's architecture block still
 lists only the round-1 crates.
+
+## 2026-08-09 (forty-ninth session)
+
+M5's twenty-ninth increment, in `jmap-mail-sync` and the two crates under it: a
+mailbox can now be asked what *changed* rather than what it holds.
+`MailSync::messages_since` turns one `Email/changes` into an answer a folder can
+apply, and `MailSync::messages` finally comes back with the state such a question
+is asked from.
+
+Red first: twelve tests in a new `jmap-mail-sync/tests/updates.rs`, none of which
+compiled against the old API. Once the API existed, two of the decisions below
+were re-checked by breaking them on purpose — membership inferred instead of
+re-read, and the ordering taken out — which failed three of the twelve.
+
+Decisions taken:
+
+- **The delta is present/absent, not created/updated/destroyed.**
+  `Email/changes` reports on the account's *messages*; a folder is asking about
+  one mailbox. JMAP files a message by changing its `mailboxIds`, which is an
+  ordinary update to the message, so a delta naming one says only that something
+  about it changed — never whether that something moved it into or out of the
+  mailbox being refreshed. Every named message is therefore looked up with
+  `mailboxIds` among its properties and sorted into the rows this mailbox holds
+  and the uids it does not. A message moved *in* is not `created` and a message
+  moved *out* is not `destroyed`, and a provider that believed either word would
+  show mail that is not there and hide mail that is.
+- **`destroyed` is the one word taken at face value.** A message that is gone is
+  gone from every mailbox, and there is nothing left to look up. So is an id the
+  delta named and `Email/get` did not answer for: it was destroyed between the
+  two calls, and unlike a listing — which simply drops such an id — a delta has
+  to report it, because the folder may well be holding a row for it.
+- **The caller diffs, because the caller is the only side that knows.** A
+  message moved into this mailbox and one whose flags changed while it sat here
+  are the same delta on the wire; which of the two it is depends on whether
+  there is already a row, and the rows are Camel's. So `present` carries whole
+  summary rows rather than uids — a row that arrives by a delta has to be
+  listable without a second fetch — and the folder decides add-or-update.
+- **The state is read *before* the listing, at the cost of a round trip.** The
+  `Email/get`s a listing makes carry a state of their own and using it would be
+  free, but it is the state *after* the listing was taken: a message that
+  arrived between the `Email/query` and the fetch is then one the query never
+  named and no later delta will ever mention, because it changed before the
+  state the delta is asked from. It would be missing until something forced a
+  full listing again. Reading first has the opposite failure, which is not one —
+  the next delta re-reports what the listing already has, and each such message
+  is a row rewritten with what it already said. `Client::email_state` is that
+  probe: `Email/get` naming no ids, which RFC 8620 §5.1 answers with the type's
+  state and an empty list.
+- **`mailboxIds` stays out of `SUMMARY_PROPERTIES`.** A listing already knows
+  the answer — it asked `Email/query` for one mailbox — and neither
+  `MessageSummary` nor a `CamelFolderSummary` row has anywhere to keep it. It is
+  a question only a delta has, and only for as long as it takes to sort a
+  message into one of two lists.
+- **A state the server cannot calculate from lists the mailbox again**
+  (`MessageUpdate::Relisted`), the judgement `folder_tree_since` already makes
+  about the same condition: Camel has nowhere to report it to, so a folder that
+  failed here would be one that never recovers.
+- **Delta rows are sorted like listing rows** — oldest first by `receivedAt`,
+  by uid where a server gave two messages the same time or none — because they
+  are appended to the same summary and Camel numbers messages in the order they
+  are added. Unsorted they would arrive in whatever order a `BTreeSet` of ids
+  puts them, which is not a mail order at all.
+- **The mock gained `deliver_email` and `destroy_email`**, the mail counterparts
+  of `create_mailbox`/`destroy_mailbox`: `seed_email` deliberately does not bump
+  state, so a seeded message predates every state a test asks from and can never
+  appear in a `/changes` answer. A test that wants mail to *arrive* has to say
+  so. `seed_email` and `deliver_email` now build the same message through one
+  private helper and differ only in how it enters the store.
+
+`JmapStore::messages` and `refresh_info_sync` were carried along to the new
+signature; the vfunc drops the state with a comment naming what it is for. It is
+*not* yet used for anything: keeping it means keeping it across a restart, which
+is the summary's own on-disk header and the next increment. Nothing in Camel
+calls `messages_since` yet, so this session moved no user-visible behaviour — it
+built the half of it that can be tested without Camel, which is the half the
+whole-mailbox refresh and the empty `recent` list were both waiting on.
+
+Not verified locally, as in the previous forty-eight sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). One new file, with the
+SPDX GPL-3.0-or-later header. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates; `jmap-mail-sync` is at 115 tests, twelve
+of them the new `tests/updates.rs`. (`example-module`'s lib test still fails to
+link on this VM, as before; it is not in either set.)
+
+Next in M5. **Keeping the state** is what turns this session's work into a
+refresh that costs one round trip: `CamelFolderSummary` has an on-disk header a
+provider may extend (`summary_header_load`/`summary_header_save` on
+`CamelFolderSummaryClass`), and that is where a mailbox's `Email` state belongs.
+With it, `refresh_info_sync` becomes messages_since-then-apply, and the `recent`
+list `crate::changes` leaves empty can finally be filled — a delta knows which
+rows are new, which a full listing cannot tell without keeping the previous one.
+Note the summary's `apply_listing` reconciles a *whole* listing and a delta is
+not one, so the folder side needs its own application path rather than a reuse of
+that one. Still open from earlier sessions: **bounding the cache**; the other
+half of the cache's atomicity problem (an entry is written by `write_all` and
+close rather than to a temporary name and renamed); the `changed` signal a
+transfer emits is still not asserted by a test, and lifting `tests/refresh.rs`'s
+emission harness into `tests/common` is what that wants; `CamelSubscribable`
+still wants `Mailbox/set`, which the client does not have; `get_trash_folder_sync`
+and `get_junk_folder_sync` are still a settings decision before they are a vfunc,
+and that decision is what `expunge_sync` waits on; cross-store transfers want
+`Email/import` for an `append_message_sync`. Unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's architecture
+block still lists only the round-1 crates.

@@ -34,12 +34,14 @@
 //!
 //! ## What is not here yet
 //!
-//! The whole mailbox is listed on every refresh. `Email/changes` against a
-//! saved state would ask a much smaller question, and it is what the `recent`
-//! list [`crate::changes`] deliberately leaves empty is waiting for — but it
-//! needs somewhere to keep the state across a restart, which is the summary's
-//! own on-disk header and a later increment. Listing is correct meanwhile; it
-//! is only expensive.
+//! The whole mailbox is listed on every refresh. The smaller question is now
+//! asked-able — `jmap-mail-sync`'s `messages_since` turns one `Email/changes`
+//! into the rows this mailbox holds and the uids it does not — and it is what
+//! the `recent` list [`crate::changes`] deliberately leaves empty is waiting
+//! for. What is still missing is somewhere to keep the state a listing comes
+//! with across a restart, which is the summary's own on-disk header and an
+//! increment of its own; until then this vfunc drops it and lists. Listing is
+//! correct meanwhile; it is only expensive.
 //!
 //! `cancellable` is not observed, the same gap [`crate::folders`] documents and
 //! for the same reason: [`Client`] takes its [`CancelFlag`] when it is built.
@@ -100,8 +102,12 @@ unsafe extern "C" fn refresh_info_sync(
                 return fail(error, &StoreError::Disconnected);
             };
 
-            let messages = match store.messages(mailbox) {
-                Ok(messages) => messages,
+            // The state the listing was taken at is what a delta would be asked
+            // from next time, and there is nowhere to keep it yet: a summary's
+            // on-disk header is where it belongs, and putting it there is the
+            // increment this vfunc is still waiting on.
+            let (_state, messages) = match store.messages(mailbox) {
+                Ok(listing) => listing,
                 Err(failure) => return fail(error, &failure),
             };
 
