@@ -4272,3 +4272,83 @@ a lock across a round trip; it is written down here so it is a known cost rather
 than an oversight. Unexercised against a real `CamelSession`: `service.rs`, which
 waits on M6 and M7. The README's architecture block still lists only the round-1
 crates.
+
+## 2026-08-09 (forty-sixth session)
+
+M5's twenty-sixth increment, and the one the cache module has been pointing at
+since it was written: a cached message is now checked against the size its
+summary row carries, so a truncated entry is fetched again instead of being
+served as the message.
+
+Red first: one test in `jmap-mail`'s `tests/message.rs` — the whole path, through
+a real `CamelStore` against `jmap-mockd` — which failed with the body decoding to
+`"Two lines, so the body is more than a header value"`, and six at the wrapper
+level in `tests/cache.rs`. The three that assert the new rule were each verified
+failing with the check disabled; the other three are the guards against the rule
+being too strict.
+
+Decisions taken:
+
+- **MIME has no length, so the file has to be measured against something.** An
+  entry is written by one `write_all` and closed, and a process killed between
+  the two leaves a short file. Camel's parser reads one as a *complete* message
+  with a truncated body and says nothing — so the symptom is a message that
+  silently opens wrong every time it is opened, in preference to the download
+  that would have been right. The number that closes it is the one the row
+  already carries: RFC 8621 §4.1's `size`, defined as the octets of exactly the
+  bytes the `blobId` references.
+- **Shorter, not different.** Truncation produces a short file and nothing else,
+  so `<` is the whole of the fault. An exact comparison would additionally catch
+  a server whose `size` is a byte out in the other direction — by making every
+  message it holds one that can never be cached, two round trips per open,
+  forever. A mail client that tolerates an over-long entry is more usable than
+  one that re-downloads everything a slightly wrong server serves.
+- **Zero is not a claim.** It is what Camel's counter holds for a row that was
+  never given a size — an `Email` that arrived without one, or a row read back
+  from a summary database written before the column existed. Read as a claim it
+  would be the claim every entry satisfies, which is harmless; `claimed()` names
+  it so that the reason it is harmless is not the reason it is being relied on.
+- **The check is at both ends.** `store` declines bytes it can see `load` would
+  refuse, on the reasoning that already refuses an empty entry: an entry the
+  cache will not serve is a syscall spent on producing a miss. What disagrees
+  there is the server with itself rather than a file with a crash, so it gets a
+  log line of its own — the visible symptom is a message downloaded again at
+  every open.
+- **A refused entry is dropped, not merely refused.** Nothing will ever serve
+  it, the cache still has no bound of its own, and leaving it means the same
+  critical at every open of that message. A fetch that succeeds writes it again;
+  one that does not leaves the cache where it should be — empty of that message.
+- **The size is read from the summary, not carried into the vfunc.** What
+  Evolution clicks is a line of the message list, and the row behind that line is
+  where everything already known about the message lives. A uid with no row —
+  one a caller invented, or a folder not yet refreshed — claims nothing and is
+  cached unchecked, exactly as before there was a check; the fetch is what
+  decides whether such a uid means anything.
+- **The mock was reporting the wrong `size`, and that is a finding rather than a
+  test-fixture detail.** `seed_email` set `size` to the length of the *body*.
+  RFC 8621 §4.1 defines it as "the number of octets in the file the user would
+  download" — the raw data behind `blobId`, headers included. A client is
+  entitled to check a download against it, so a mock that reported the body's
+  length is one that teaches a client the check is useless. Fixed to the rendered
+  message's length; no existing test depended on the old value.
+
+Not verified locally, as in the previous forty-five sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and on
+the five EDS crates; `jmap-mail` is at 201 tests. (`example-module`'s lib test
+still fails to link on this VM, as before; it is not in either set.)
+
+Next in M5. **Bounding the cache** — expiry by age versus Evolution's own "empty
+cache" — is still open from the forty-first session, and is now the only thing
+`crate::cache` lists as missing. The other half of the atomicity problem is also
+still open and is smaller than it looks: an entry is written by `write_all` and
+close rather than by a write to a temporary name and a rename, so the window this
+increment *detects* is one a rename would close outright. `CamelSubscribable`
+remains the smaller unblocked piece; `get_trash_folder_sync` and
+`get_junk_folder_sync` are still a settings decision before they are a vfunc, and
+that decision is also what `expunge_sync` waits on. `Email/changes` against a
+state kept on disk is what the empty `recent` list and the whole-mailbox refresh
+are both still waiting for. Unexercised against a real `CamelSession`:
+`service.rs`, which waits on M6 and M7. The README's architecture block still
+lists only the round-1 crates.
