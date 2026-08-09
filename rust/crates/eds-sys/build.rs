@@ -128,6 +128,19 @@ const ALLOWED_TYPES: &[&str] = &[
     // parent, which is where the formatting entry point is declared.
     "CamelAddress.*",
     "CamelInternetAddress.*",
+    // A message rather than a row about one: what `get_message_sync` returns
+    // and what Evolution's preview pane renders. The four are one chain —
+    // `CamelMimeMessage` is a `CamelMimePart` is a `CamelMedium` is a
+    // `CamelDataWrapper` — and all four are named because the parse entry point
+    // is declared on the *last* of them, so the provider crosses the ABI at
+    // every level of it. `CamelMimeParser` and the stream classes are
+    // deliberately not here: the bytes arrive as one buffer from a blob
+    // download, and `construct_from_data_sync` is the entry point that takes
+    // one.
+    "CamelDataWrapper.*",
+    "CamelMedium.*",
+    "CamelMimePart.*",
+    "CamelMimeMessage.*",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -200,6 +213,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // answers straight out of the summary, and `camel_folder_changed` is how
     // the answer to them reaches a window that is already open.
     "camel_folder_refresh_info_sync",
+    // The wrapper around the vfunc that hands one message over, for the same
+    // reason: a test calls it the way Evolution's preview pane does.
+    "camel_folder_get_message_sync",
     "camel_folder_get_message_count",
     "camel_folder_(get|free)_uids",
     "camel_folder_changed",
@@ -224,6 +240,19 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // `CamelInternetAddress`, then `camel_address_format` on it.
     "camel_address_.*",
     "camel_internet_address_.*",
+    // Turning a downloaded message into the object Camel renders.
+    // `camel_mime_message_new` allocates it and
+    // `camel_data_wrapper_construct_from_data_sync` parses the bytes into it —
+    // one call rather than the stream dance, because a blob download already
+    // produced the whole message as a buffer. The accessors ride in on the same
+    // prefixes and are what a test asks the parsed message about.
+    // `camel_medium_.*` brings `camel_medium_get_content`, which is how the
+    // body is reached without a `CamelMimePart` function of its own; the part's
+    // type accessor is here alone, for tests/layout.rs.
+    "camel_data_wrapper_.*",
+    "camel_medium_.*",
+    "camel_mime_part_get_type",
+    "camel_mime_message_.*",
     "camel_transport_.*",
     "camel_session_.*",
     "camel_settings_.*",

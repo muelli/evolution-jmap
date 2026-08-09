@@ -52,19 +52,17 @@
 
 use eds_sys::{
     CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
-    camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_get_parent_store,
+    camel_folder_get_folder_summary, camel_folder_get_full_name,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean};
-use gobject_sys::g_type_check_instance_is_a;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_proto::Id;
 
 use crate::connect::StoreError;
-use crate::folder::JmapFolder;
-use crate::store::{JmapStore, store_type};
+use crate::folder::{JmapFolder, parent_store};
 use crate::summary::apply_listing;
 
 /// Installs the folder's own vfuncs on a class whose first member is a
@@ -135,30 +133,6 @@ unsafe fn target<'a>(folder: *mut CamelFolder) -> Option<(&'a Id, *mut CamelFold
         let mailbox = JmapFolder::borrow(folder)?.mailbox()?;
         let summary = camel_folder_get_folder_summary(folder);
         (!summary.is_null()).then_some((mailbox, summary))
-    }
-}
-
-/// The store the folder hangs off, as our own.
-///
-/// Type-checked rather than assumed, unlike the store vfuncs' first argument:
-/// those are dispatched by GObject on an instance of the class, while
-/// `parent-store` is an ordinary construct property that anything holding a
-/// `CamelStore` could have been given. A folder of ours on someone else's store
-/// is not a case that arises, but reading a `JmapStore` out of one would be
-/// undefined behaviour rather than a wrong answer.
-///
-/// # Safety
-///
-/// `folder` must point at a live `CamelFolder`.
-unsafe fn parent_store<'a>(folder: *mut CamelFolder) -> Option<&'a JmapStore> {
-    // SAFETY: the accessor borrows the store the folder holds a reference to,
-    // and the type check is what makes the cast below sound.
-    unsafe {
-        let store = camel_folder_get_parent_store(folder);
-        if store.is_null() || g_type_check_instance_is_a(store.cast(), store_type()) == GFALSE {
-            return None;
-        }
-        JmapStore::borrow(store)
     }
 }
 
