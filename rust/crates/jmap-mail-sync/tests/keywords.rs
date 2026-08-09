@@ -180,6 +180,101 @@ fn two_spellings_of_one_keyword_collected_together_are_one_keyword() {
     assert_eq!(restored.iter().collect::<Vec<&str>>(), vec!["Work"]);
 }
 
+/// A change read as something that has already happened rather than something
+/// to make happen. It is the same value either way — what a keyword set becomes
+/// when a change is applied to it is what the folder needs to know when the
+/// *server* is the one that changed, and the row it is applying it to is one the
+/// user has already touched.
+#[test]
+fn a_set_takes_the_change_that_was_made_to_it() {
+    let before = Keywords::new(&MessageFlags::default(), &["Work".to_owned()]);
+    let after = Keywords::new(&read_and_flagged(), &[]);
+    let change = KeywordChange::between(&before, &after);
+
+    assert_eq!(before.patched(&change), after);
+}
+
+#[test]
+fn a_change_applied_to_a_set_it_was_not_taken_from_touches_only_what_it_names() {
+    // The case the folder is actually in: the user's outstanding change, whose
+    // two ends are the row's own, replayed on top of a fresh listing. Everything
+    // the change does not name is the listing's answer and stays exactly as it
+    // is — including a keyword this side has never seen.
+    let change = KeywordChange::between(
+        &Keywords::new(&MessageFlags::default(), &[]),
+        &Keywords::new(&read_and_flagged(), &[]),
+    );
+    let listed = Keywords::new(&MessageFlags::default(), &["Urgent".to_owned()]);
+
+    let patched = listed.patched(&change);
+
+    assert_eq!(
+        patched.iter().collect::<Vec<&str>>(),
+        vec!["$flagged", "$seen", "Urgent"]
+    );
+}
+
+#[test]
+fn a_change_removes_a_keyword_however_the_set_spells_it() {
+    // The removal names the keyword as the *previous* set spelled it, which is
+    // not necessarily how the set being patched spells it — folded comparison is
+    // what keeps the two the same keyword.
+    let change = KeywordChange::between(
+        &Keywords::new(&MessageFlags::default(), &["Work".to_owned()]),
+        &Keywords::default(),
+    );
+    let listed = Keywords::new(&MessageFlags::default(), &["WORK".to_owned()]);
+
+    assert!(listed.patched(&change).is_empty());
+}
+
+/// The set as Camel's two columns: the flags word's fields and the labels beside
+/// them. [`Keywords::new`] run backwards, and it has to be exactly that — a
+/// keyword that came in as a bit and went out as a label would show up in
+/// Evolution as a label called `$seen`.
+#[test]
+fn a_set_splits_back_into_the_flags_and_the_labels_it_was_built_from() {
+    let flags = read_and_flagged();
+    let tags = vec!["Work".to_owned(), "home/todo".to_owned()];
+
+    let (split_flags, split_tags) = Keywords::new(&flags, &tags).split();
+
+    assert_eq!(split_flags, flags);
+    // In folded order, which is the order the set holds them in; the row they
+    // are written to keeps them as a set too.
+    assert_eq!(split_tags, vec!["home/todo".to_owned(), "Work".to_owned()]);
+}
+
+#[test]
+fn splitting_a_set_reads_a_keyword_the_server_shouted_as_the_flag_it_is() {
+    // The folded name is what the match is against, or a server that spells it
+    // `$Seen` would leave the message unread and labelled.
+    let keywords: Keywords = ["$Seen".to_owned()].into_iter().collect();
+
+    let (flags, tags) = keywords.split();
+
+    assert!(flags.seen);
+    assert!(tags.is_empty());
+}
+
+/// `attachments` is the one field of the word that is not a keyword, so a set
+/// cannot carry it and splitting one never sets it: `hasAttachment` is a
+/// property RFC 8621 §4.1.1 has the server compute, and its bit has to come from
+/// the listing rather than from the keywords.
+#[test]
+fn splitting_a_set_never_claims_an_attachment() {
+    let keywords = Keywords::new(
+        &MessageFlags {
+            attachments: true,
+            seen: true,
+            ..MessageFlags::default()
+        },
+        &[],
+    );
+
+    assert!(!keywords.split().0.attachments);
+}
+
 #[test]
 fn a_label_with_a_slash_in_it_is_one_keyword_and_not_a_path() {
     // A patch key is a JSON pointer (RFC 8620 §5.3, RFC 6901) and an IMAP

@@ -35,6 +35,14 @@
 //! both mark a row as having to reach the server, which is right for the user
 //! changing a message and backwards for the server describing one.
 //!
+//! The bit is read as well as preserved there, and that is what keeps this walk
+//! from being raced by a refresh: a listing arriving between the user's click
+//! and this vfunc is replayed *around* the outstanding change rather than
+//! written over it, so what the walk finds when it gets here is still the
+//! difference the user made. Without that, the listing would leave the row
+//! claiming exactly what it remembers the server holding — a row still on the
+//! work list with nothing left on it to send.
+//!
 //! ## A difference, and where its two ends come from
 //!
 //! What goes on the wire is `jmap-mail-sync`'s `KeywordChange` — the difference

@@ -89,6 +89,68 @@ impl Keywords {
         keywords
     }
 
+    /// The set as a summary row's two columns: [`Keywords::new`] run backwards.
+    ///
+    /// Exactly backwards, which is what the match below is for — a keyword that
+    /// went in as a bit of the flags word and came back out as a label would be
+    /// a message Evolution showed as unread and tagged `$seen`. The names are
+    /// matched folded, because that is the form the set is keyed by and a server
+    /// that shouts `$Seen` is naming the same keyword.
+    ///
+    /// [`MessageFlags::attachments`] is never set: it is the one field of that
+    /// word which is not a keyword at all — `hasAttachment` is a property RFC
+    /// 8621 §4.1.1 has the server compute — so a set cannot carry it and the bit
+    /// has to come from the listing that mentioned it.
+    ///
+    /// The labels come back in folded order rather than the order they arrived
+    /// in, which is the only order a set has.
+    pub fn split(&self) -> (MessageFlags, Vec<String>) {
+        let mut flags = MessageFlags::default();
+        let mut tags = Vec::new();
+        for (folded, name) in &self.0 {
+            match folded.as_str() {
+                keyword::SEEN => flags.seen = true,
+                keyword::ANSWERED => flags.answered = true,
+                keyword::FLAGGED => flags.flagged = true,
+                keyword::DRAFT => flags.draft = true,
+                keyword::FORWARDED => flags.forwarded = true,
+                keyword::JUNK => flags.junk = true,
+                keyword::NOT_JUNK => flags.not_junk = true,
+                _ => tags.push(name.clone()),
+            }
+        }
+        (flags, tags)
+    }
+
+    /// This set with `change` applied to it.
+    ///
+    /// A [`KeywordChange`] read as something that has *happened* rather than
+    /// something to make happen — the same value, from the other side. It exists
+    /// for the case where the change and the set have different origins: a
+    /// refresh meets a row carrying a change of the user's that has not been
+    /// sent yet, and what the row should now hold is the listing with that
+    /// change replayed on top of it, not the listing alone. Overwriting would
+    /// undo the user's click on screen; ignoring the listing would hide what
+    /// another client did.
+    ///
+    /// Everything the change does not name is left exactly as this set has it,
+    /// which is the same conservatism [`KeywordChange::between`] is built on:
+    /// a keyword neither end mentions is one nothing here can speak for.
+    ///
+    /// A keyword the change adds keeps this set's spelling if it is already
+    /// here, which matters because a later removal has to quote the name the
+    /// server holds.
+    pub fn patched(&self, change: &KeywordChange) -> Self {
+        let mut keywords = self.clone();
+        for name in &change.cleared {
+            keywords.0.remove(&name.to_lowercase());
+        }
+        for name in &change.set {
+            keywords.insert(name);
+        }
+        keywords
+    }
+
     /// The keywords as they are spelled, in folded order.
     pub fn iter(&self) -> impl Iterator<Item = &str> {
         self.0.values().map(String::as_str)
