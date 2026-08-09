@@ -10448,3 +10448,93 @@ Next: the three mail sources — `[Mail Account]`, `[Mail Identity]`,
 that vfunc has had no caller. After that, the module and the
 `EMailConfigServiceBackend` subclass, which is where the part this VM cannot
 verify begins.
+
+## 2026-08-09 (hundred-and-third session)
+
+**The three mail sources an account's mail is: `jmap-config`'s `mail` module.**
+The continuation last session named, and the reason
+`jmap-backend-collection`'s `prepare_mail` vfunc has had no caller. Twelve
+tests, red first, in `rust/crates/jmap-config/tests/mail.rs`; the crate stays an
+rlib out of `default-members`, and CMake's `rust-test-eds` target already runs
+`-p jmap-config`, so nothing had to be wired.
+
+**This time the join runs the other way round.** `tests/account.rs` writes with
+this crate and reads back with somebody else's reader. Here there is no reader
+of ours at all — the mail sources are read by Evolution and by Camel — and
+instead there are two *writers* of the same three sources:
+`mail::apply`, which runs in Evolution's process where the user's answers are,
+and `prepare_mail`, which runs in `evolution-source-registry` where the
+collection factory is. Neither can stand in for the other: the vfunc is handed
+the three sources and nothing else (which is why it writes no address), and
+Evolution's process has no factory instance to call it on. So
+`the_setup_writes_the_services_the_registry_side_vfunc_would_write` runs both
+over blank sources and compares. Nothing else would notice the vfunc going
+stale — it has no caller in evolution-data-server 3.52.3 or evolution 3.52.3 —
+and it is the implementation a later Evolution reaching that hook would get.
+
+**What is written, and why each:**
+
+- **`Parent`, on all three.** This is what makes them *this account's* mail:
+  `e_collection_backend_list_mail_sources()` finds them by walking the account's
+  children, and `collection_backend_bind_child_enabled()` binds each one's
+  `enabled` to the account's `mail-enabled` on the same walk. An unparented mail
+  source is not a broken account — it is a second, top-level account in the
+  sidebar that no "receive mail for this account" switch reaches. Evolution's
+  assistant is *believed* to set it too; it is written here anyway, because a
+  writer that produces a complete account only when called from one particular
+  caller is one whose output depends on something none of its tests can see.
+- **The service name on the account and the transport** — `jmap` on both, the
+  same string `prepare_mail` writes and the one line of `libcameljmap.urls`,
+  because JMAP submits over the session it reads through.
+- **The two links** — the account's `identity-uid` and the identity's
+  `[Mail Submission] transport-uid`. A link written to the wrong uid is not a
+  failure at commit time: it is a `From:` from some other account, or a send
+  through some other account's server.
+- **`[Mail Identity] Address`, from the same string as `[Collection] Identity`.**
+  EDS keeps the address in two places; that the two agree is the setup's
+  business and nobody else's, and
+  `the_address_mail_is_sent_from_is_the_identity_the_account_claims` asserts the
+  equality rather than each half against a literal.
+- **Every field every time**, as in `account::apply` and for the same reason: a
+  commit lands on sources that already say something, and an address left behind
+  because the writer had nothing to add is the `From:` of every message sent
+  afterwards.
+
+**Deliberately not written:** `Enabled` (bound to the account's `mail-enabled`
+by the collection backend on every load, so a value written here is one the
+registry overwrites — which is also why the sources are written whether or not
+`Parts::mail` is on: a switch needs something to switch), and
+`[Mail Identity] Name`, which is the assistant's identity page's and which an
+`Account` does not carry.
+
+**Mutation-checked**, three mutants, each caught by tests that did not exist
+before: dropping the `e_source_set_parent` loop turns three red; pointing the
+account's `identity-uid` at the transport turns three red; dropping the
+transport's backend name turns two red, one of them the vfunc comparison.
+
+**The honest limit, and it is a large one: the mail account still names a
+provider but no server.** Host, port, security and user reach a Camel service
+through an `ESourceCamel` extension generated for the provider's *own* settings
+type — `e_source_camel_generate_subtype()` takes that GType — so writing them
+needs `jmap-mail`'s `CamelJmapSettings`, and therefore Camel, which this crate
+does not link. That is the next increment and the reason M7 carries no
+completion tag. Also unchanged from last session: nothing calls any of this
+(there is no `EMailConfigServiceBackend` subclass and no
+`module-jmap-configuration.so`), no account has been created through Evolution's
+UI, and `docs/manual-test-collection-backend.md` still documents
+`MailEnabled=false` — the recipe gains nothing from sources that cannot connect.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, both with SPDX headers.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as are `clippy`/`test` over the seven EDS crates — `jmap-config`'s 25 included.
+`RUSTDOCFLAGS=-D warnings cargo doc` clean for the crate.
+
+No milestone tag.
+
+Next: the Camel settings group on the mail account, which is where M7 stops
+being writable without Camel — either `jmap-config` gains a `jmap-mail`
+dependency, or the settings subtype is generated where the provider already
+lives. Then the module and the `EMailConfigServiceBackend` subclass, which is
+where the part this VM cannot verify begins.
