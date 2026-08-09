@@ -48,12 +48,13 @@
 //! row built from a uid alone would be a message list line with no subject,
 //! sender or date until the refresh replaced it.
 //!
-//! **`cancellable`**, the same gap [`crate::refresh`] and [`crate::synchronize`]
-//! document, for the same reason: [`Client`] takes its [`CancelFlag`] when it is
-//! built.
+//! ## Stopping one
 //!
-//! [`Client`]: jmap_client::Client
-//! [`CancelFlag`]: jmap_client::transport::CancelFlag
+//! The `cancellable` is [`observe`]d for the length of the call. A stop between
+//! two messages leaves the ones already filed filed — a move is one `Email/set`
+//! per message and there is no transaction over the set — and the rows of those
+//! messages are removed from this folder, so what the user sees matches what the
+//! server holds.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
@@ -69,6 +70,7 @@ use glib_sys::{
     gchar,
 };
 use gobject_sys::g_type_check_instance_is_a;
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
@@ -114,13 +116,18 @@ unsafe extern "C" fn transfer_messages_to_sync(
     destination: *mut CamelFolder,
     delete_originals: gboolean,
     transferred_uids: *mut *mut GPtrArray,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: Camel's contract for the vfunc: two valid folders, an array of
     // uids of the first, and out-parameters that are NULL or writable.
     unsafe {
         guard_bool("transfer_messages_to_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let uids = uid_list(message_uids);
             let reported = Reported::new(transferred_uids, uids.len());
 

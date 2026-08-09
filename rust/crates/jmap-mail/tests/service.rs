@@ -36,7 +36,6 @@ use eds_sys::{
 };
 use glib_sys::GError;
 use jmap_backend_core::source::SourceError;
-use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::StoreError;
 use jmap_mail::server::ServerConfig;
@@ -61,7 +60,7 @@ fn open(
     config: &ServerConfig,
     password: Option<&str>,
 ) -> Result<(), StoreError> {
-    authenticate(store, config, password, CancelFlag::new())
+    authenticate(store, config, password)
 }
 
 /// The verdict and the error one attempt produces, with the `GError` owned by

@@ -54,6 +54,7 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, GType, gboolean, gchar};
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::InterfaceImpl;
@@ -167,17 +168,12 @@ unsafe extern "C" fn folder_is_subscribed(
 
 /// Ticks a folder on, and tells Camel it happened.
 ///
-/// `cancellable` is not observed, the same gap `get_folder_info_sync`
-/// documents: [`Client`] takes its [`CancelFlag`] when it is built and offers
-/// no way to re-point it. This call is one `Mailbox/set`, and one listing at
-/// worst, rather than a paged walk.
-///
-/// [`Client`]: jmap_client::Client
-/// [`CancelFlag`]: jmap_client::transport::CancelFlag
+/// `cancellable` is [`observe`]d for the length of the call. This is one
+/// `Mailbox/set`, and one listing at worst, rather than a paged walk.
 unsafe extern "C" fn subscribe_folder_sync(
     subscribable: *mut CamelSubscribable,
     folder_name: *const gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a
@@ -185,6 +181,11 @@ unsafe extern "C" fn subscribe_folder_sync(
     // currently NULL.
     unsafe {
         guard_bool("subscribe_folder_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             change(subscribable, folder_name, true, error)
         })
     }
@@ -195,12 +196,17 @@ unsafe extern "C" fn subscribe_folder_sync(
 unsafe extern "C" fn unsubscribe_folder_sync(
     subscribable: *mut CamelSubscribable,
     folder_name: *const gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: as [`subscribe_folder_sync`].
     unsafe {
         guard_bool("unsubscribe_folder_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             change(subscribable, folder_name, false, error)
         })
     }
