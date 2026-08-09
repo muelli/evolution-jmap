@@ -21,18 +21,29 @@
 //! signal's handlers, which read it and are done by the time the emission
 //! returns, so the borrow this type keeps handing out is the whole contract.
 //!
-//! ## Three lists, not four
+//! ## The fourth list, and what may go on it
 //!
-//! `uid_recent` is deliberately never filled, and that is a decision rather
-//! than a gap. Camel's recent list is what runs the user's incoming filters —
-//! `CamelFolder`'s own `changed` handler asks the session for a filter driver
-//! the moment a folder with `CAMEL_FOLDER_FILTER_RECENT` reports one — and a
-//! JMAP listing cannot tell a message that has just arrived from one that was
-//! always there. The first refresh of an account finds the whole mailbox, so
-//! "added" and "recent" would be the same list, and the user's rules would file,
-//! forward or delete every message they already had. What could honestly answer
-//! the question is `Email/changes` against a state from the previous session,
-//! which is a later increment; until then the answer is that nothing is recent.
+//! `uid_recent` is what runs the user's incoming filters — `CamelFolder`'s own
+//! `changed` handler asks the session for a filter driver the moment a folder
+//! with `CAMEL_FOLDER_FILTER_RECENT` reports one — so putting a uid on it is
+//! asking for that message to be filed, forwarded or deleted by the user's
+//! rules. Only one of the two ways this provider learns what a mailbox holds
+//! may answer the question at all:
+//!
+//! - A **listing** may not. It finds the whole mailbox and cannot tell a
+//!   message that has just arrived from one that was always there, so its
+//!   "added" is every message the user already had — see
+//!   [`crate::summary::apply_listing`], which never calls [`Changes::arrive`].
+//! - A **delta** may. `Email/changes` is asked from a state the folder itself
+//!   recorded at its last refresh, so a message it names that this folder has
+//!   no row for is one that reached the mailbox since then. That is exactly
+//!   what recent means, and [`crate::summary::apply_delta`] is where it is
+//!   said.
+//!
+//! Camel keeps the two lists independently — `camel_folder_change_info_recent_uid`
+//! does not imply `_add_uid` — so an arrival is recorded on both, which is why
+//! [`Changes::arrive`] is a second call beside [`Changes::add`] rather than a
+//! replacement for it.
 
 use std::ffi::CStr;
 
@@ -41,7 +52,8 @@ use eds_sys::{
     camel_folder_change_info_changed, camel_folder_change_info_free,
     camel_folder_change_info_get_added_uids, camel_folder_change_info_get_changed_uids,
     camel_folder_change_info_get_recent_uids, camel_folder_change_info_get_removed_uids,
-    camel_folder_change_info_new, camel_folder_change_info_remove_uid,
+    camel_folder_change_info_new, camel_folder_change_info_recent_uid,
+    camel_folder_change_info_remove_uid,
 };
 use glib_sys::{GFALSE, GPtrArray};
 
@@ -67,6 +79,17 @@ impl Changes {
         // SAFETY: the info is live for this value's lifetime, and the uid is
         // NUL-terminated, alive across the call, and copied by it.
         unsafe { camel_folder_change_info_add_uid(self.info, c_string(uid).as_ptr()) };
+    }
+
+    /// Records a uid whose message reached the mailbox since the state the
+    /// folder was refreshed from — the one thing only a delta knows.
+    ///
+    /// Beside [`Changes::add`] and not instead of it: Camel's two lists are
+    /// separate, and a uid that is only recent is one the message list is never
+    /// told to draw a line for.
+    pub fn arrive(&mut self, uid: &str) {
+        // SAFETY: as above.
+        unsafe { camel_folder_change_info_recent_uid(self.info, c_string(uid).as_ptr()) };
     }
 
     /// Records a uid whose row has gone.

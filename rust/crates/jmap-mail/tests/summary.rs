@@ -28,8 +28,9 @@ use std::ptr;
 use common::Account;
 use eds_sys::{
     CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_FLAGGED,
-    CAMEL_MESSAGE_SEEN, CamelFIRecord, CamelFolder, CamelFolderSummary, CamelFolderSummaryClass,
-    camel_folder_get_flags, camel_folder_get_folder_summary, camel_folder_has_summary_capability,
+    CAMEL_MESSAGE_FOLDER_FLAGGED, CAMEL_MESSAGE_SEEN, CamelFIRecord, CamelFolder,
+    CamelFolderSummary, CamelFolderSummaryClass, camel_folder_get_flags,
+    camel_folder_get_folder_summary, camel_folder_has_summary_capability,
     camel_folder_summary_check_uid, camel_folder_summary_count, camel_folder_summary_free_array,
     camel_folder_summary_get, camel_folder_summary_get_array, camel_folder_summary_get_folder,
     camel_folder_summary_get_next_uid, camel_folder_summary_get_type,
@@ -44,7 +45,9 @@ use gobject_sys::{
 };
 use jmap_mail::folder::new_folder;
 use jmap_mail::message_info::{message_info_type, server_keywords};
-use jmap_mail::summary::{apply_listing, set_summary_state, summary_state, summary_type};
+use jmap_mail::summary::{
+    apply_delta, apply_listing, set_summary_state, summary_state, summary_type,
+};
 use jmap_mail_sync::{FolderInfo, Keywords, MessageFlags, MessageSummary};
 use jmap_proto::{Id, State};
 
@@ -933,6 +936,200 @@ fn a_header_from_an_unknown_format_loads_without_a_state() {
         );
 
         g_type_class_unref(class.cast());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A delta is not a listing, and the whole difference is here: `Email/changes`
+/// answers for the *account*, so what it names is what moved and never what is
+/// there. A row it did not mention is a row nothing was said about, and
+/// `apply_listing`'s rule — anything unnamed has left the mailbox — would empty
+/// the folder on the first refresh that found one new message.
+#[test]
+fn a_delta_leaves_alone_the_rows_it_did_not_mention() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001"), message("M1002")]);
+
+        let changes = apply_delta(summary, &[message("M1003")], &[]);
+
+        assert_eq!(
+            uids(summary),
+            BTreeSet::from(["M1001".to_owned(), "M1002".to_owned(), "M1003".to_owned()]),
+            "a delta removed the rows it was silent about"
+        );
+        assert_eq!(changes.added(), ["M1003"]);
+        assert!(changes.removed().is_empty());
+        assert!(changes.changed().is_empty());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The uids the delta says this mailbox no longer holds: destroyed, filed
+/// elsewhere, or moved out by another client — one answer, because from inside
+/// one folder those are the same thing. The row goes and Camel is told, which
+/// is the only notice the message list gets.
+#[test]
+fn a_message_the_delta_reports_absent_loses_its_row() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001"), message("M1002")]);
+
+        let changes = apply_delta(summary, &[], &[Id::new("M1001")]);
+
+        assert_eq!(uids(summary), BTreeSet::from(["M1002".to_owned()]));
+        assert_eq!(changes.removed(), ["M1001"]);
+        assert!(changes.added().is_empty());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// Most of what a delta calls absent was never here. `Email/changes` reports on
+/// every mailbox of the account, so a message the user filed in some other
+/// folder arrives on this folder's `absent` list too — and a removal announced
+/// for a uid the message list never drew is a change Camel is asked to make to
+/// nothing.
+#[test]
+fn an_absent_uid_this_folder_never_held_is_not_reported() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001")]);
+
+        let changes = apply_delta(summary, &[], &[Id::new("M2001")]);
+
+        assert_eq!(uids(summary), BTreeSet::from(["M1001".to_owned()]));
+        assert!(
+            changes.removed().is_empty(),
+            "a message that was never in this folder was reported as leaving it"
+        );
+        assert!(changes.is_empty(), "a delta about elsewhere moved a folder");
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A message the delta found in this mailbox and the folder has no row for has
+/// just arrived in it, and this is the one place that can be said honestly —
+/// which is what Camel's fourth list is for. A listing cannot: it finds the
+/// whole mailbox, so its "added" is every message the user already had, and the
+/// incoming filters would run over all of them. A delta's added rows are the
+/// ones that moved since a state the folder itself recorded.
+#[test]
+fn a_message_a_delta_saw_arrive_is_recent() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live, and so is the row borrowed below.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001")]);
+
+        let mut arrival = message("M1002");
+        arrival.subject = Some("Q4 plans".to_owned());
+        let changes = apply_delta(summary, &[arrival], &[]);
+
+        assert_eq!(changes.added(), ["M1002"]);
+        assert_eq!(changes.recent(), ["M1002"]);
+
+        let info = row(summary, "M1002").expect("a row for the arrival");
+        assert_eq!(
+            CStr::from_ptr(camel_message_info_get_subject(info)).to_string_lossy(),
+            "Q4 plans",
+            "the arrival's row was added without what the delta said about it"
+        );
+        g_object_unref(info.cast());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The other half of that: a message the delta named because its flags moved is
+/// one the folder already holds, so it is a change and emphatically not an
+/// arrival. Reported as recent it would be filed, forwarded or deleted by the
+/// user's rules every time somebody marked it read.
+#[test]
+fn a_row_the_delta_only_reflagged_is_changed_and_not_recent() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    let mut read = message("M1001");
+    read.flags.seen = true;
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001")]);
+
+        let changes = apply_delta(summary, &[read], &[]);
+
+        assert_eq!(changes.changed(), ["M1001"]);
+        assert!(changes.added().is_empty());
+        assert!(
+            changes.recent().is_empty(),
+            "a message that was already here was reported as newly arrived"
+        );
+        assert_eq!(camel_folder_summary_count(summary), 1);
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A row the delta mentioned and nothing about it moved. `Email/changes` is
+/// account-wide, so this is ordinary: another mailbox's message can be the
+/// reason this folder was handed a delta at all, and a row rewritten to what it
+/// already said is not a redraw.
+#[test]
+fn a_delta_that_moved_nothing_reports_nothing() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001")]);
+
+        let changes = apply_delta(summary, &[message("M1001")], &[]);
+
+        assert!(changes.is_empty(), "an unmoved row reported a change");
+        assert!(changes.added().is_empty());
+        assert!(changes.changed().is_empty());
+        assert!(changes.removed().is_empty());
+        assert!(changes.recent().is_empty());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A row a delta adds is not a row waiting to be written back to the server —
+/// the same rule `apply_listing` follows and for the same reason: Camel marks
+/// an added row as having to be sent, and `crate::synchronize` walks that list.
+/// Left set, every message that arrived would be written straight back to the
+/// server it arrived from.
+#[test]
+fn a_row_a_delta_added_is_not_queued_for_the_server() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live, and the row is unreffed before the folder goes.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_delta(summary, &[message("M1001")], &[]);
+
+        let info = row(summary, "M1001").expect("a row for the arrival");
+        assert_eq!(
+            camel_message_info_get_flags(info) & CAMEL_MESSAGE_FOLDER_FLAGGED,
+            0,
+            "an arrival was queued to be written back to the server"
+        );
+        g_object_unref(info.cast());
         g_object_unref(folder.cast());
     }
 }
