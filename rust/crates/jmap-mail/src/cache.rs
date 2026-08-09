@@ -46,23 +46,39 @@
 //! are therefore checked against the RFC's own grammar and a key that fails it
 //! is simply not cached — see [`valid_key`].
 //!
+//! ## An entry is checked against the row it belongs to
+//!
+//! An entry is written by one `write_all` and closed, and a write that fails
+//! takes the entry back out. What that does not survive is the process dying
+//! between the two: what is left is a short file that Camel's parser will read
+//! as a *complete* message with a truncated body, because MIME has no length.
+//!
+//! So both operations take the size the folder's row claims — RFC 8621 §4.1's
+//! `size`, which the spec defines as the octets of exactly the bytes the `blobId`
+//! references — and an entry shorter than that is not a message. [`load`] drops
+//! such an entry instead of serving it, and [`store`] declines to write one at
+//! all, on the same reasoning that already refuses an empty one: an entry the
+//! cache will not serve is a syscall spent on producing a miss.
+//!
+//! **Shorter, not different.** Truncation is the failure this closes, and a
+//! short file is the whole of it. A server whose `size` is a byte out in the
+//! other direction is a *reporting* fault, and an exact comparison would turn it
+//! into a message that can never be cached — every open another two round trips,
+//! forever. Between a mail client that tolerates an over-long entry and one that
+//! re-downloads every message a slightly wrong server holds, the first is the one
+//! that stays usable.
+//!
+//! [`load`]: MessageCache::load
+//! [`store`]: MessageCache::store
+//!
 //! ## What is not here yet
 //!
-//! **A bound.** Nothing removes an entry, so the cache grows with every message
-//! the user has ever opened. `CamelDataCache` has the machinery —
-//! `set_expire_age` and `set_expire_enabled`, evaluated when an entry is added —
-//! and Evolution's own "empty cache" is `camel_data_cache_clear`; which of the
-//! two this provider should use is a settings question rather than a mechanism
-//! one, and it is its own increment.
-//!
-//! **Atomicity.** An entry is written by one `write_all` and closed, and a write
-//! that fails takes the entry back out. What that does not survive is the
-//! process dying between the two: what is left is a short file that Camel's
-//! parser will read as a *complete* message with a truncated body, because MIME
-//! has no length. The check that would close it is the one number a summary row
-//! already carries — the `Email`'s `size`, which RFC 8621 §4.1 defines as the
-//! octets of exactly these bytes — and comparing it against a cached entry's
-//! length is the natural next thing here.
+//! **A bound.** Nothing removes an entry that is merely old, so the cache grows
+//! with every message the user has ever opened. `CamelDataCache` has the
+//! machinery — `set_expire_age` and `set_expire_enabled`, evaluated when an entry
+//! is added — and Evolution's own "empty cache" is `camel_data_cache_clear`;
+//! which of the two this provider should use is a settings question rather than a
+//! mechanism one, and it is its own increment.
 
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -148,12 +164,13 @@ impl MessageCache {
         })
     }
 
-    /// The bytes cached for `uid`, if any.
+    /// The bytes cached for `uid`, if any, given the size the folder's row
+    /// claims for it — see [`claimed`] for what a claim is.
     ///
     /// `None` covers every reason there are none — never stored, removed since,
-    /// unreadable, a key this cache will not look up — because the caller does
-    /// the same thing with all of them: fetch the message.
-    pub fn load(&self, uid: &str) -> Option<Vec<u8>> {
+    /// unreadable, damaged, a key this cache will not look up — because the
+    /// caller does the same thing with all of them: fetch the message.
+    pub fn load(&self, uid: &str, listed: Option<u32>) -> Option<Vec<u8>> {
         let key = self.key(uid)?;
         let cache = self.lock();
 
@@ -182,15 +199,48 @@ impl MessageCache {
             g_object_unref(stream.cast());
         }
 
-        // An entry with nothing in it is not a message: RFC 5322 has no
-        // zero-octet document, and Camel's parser would make an empty message
-        // out of one rather than refuse it — which the caller would then serve
-        // instead of fetching, for as long as the entry survived. It is what a
-        // process that died between `add` and the write leaves behind.
-        source.filter(|source| !source.is_empty())
+        let source = source?;
+        // Neither an entry with nothing in it nor one shorter than the message
+        // is a message, and both are what a process that died between `add` and
+        // the write leaves behind. RFC 5322 has no zero-octet document, and
+        // Camel's parser would make a message out of either rather than refuse
+        // it — which the caller would then serve instead of fetching, for as
+        // long as the entry survived.
+        let damage = if source.is_empty() {
+            Some("it has nothing in it".to_owned())
+        } else {
+            claimed(listed)
+                .filter(|listed| source.len() < *listed as usize)
+                .map(|listed| {
+                    format!(
+                        "it is {} octets where the message is {listed}",
+                        source.len()
+                    )
+                })
+        };
+        let Some(damage) = damage else {
+            return Some(source);
+        };
+
+        log_critical(&format!(
+            "the cached copy of message {uid} was dropped: {damage}"
+        ));
+        // Dropped rather than merely refused: nothing will ever serve it, and
+        // the cache has no bound of its own, so leaving it is leaving a file
+        // that costs disk and produces this log line at every open. A fetch that
+        // succeeds writes the entry again; one that does not leaves the cache
+        // where it should be — empty of this message.
+        // SAFETY: as above, and the removal's own failure is nothing this can
+        // act on.
+        unsafe {
+            camel_data_cache_remove(*cache, MESSAGES.as_ptr(), key.as_ptr(), ptr::null_mut());
+        }
+        None
     }
 
     /// Caches `source` as the bytes of `uid`, reporting whether it landed.
+    ///
+    /// `listed` is the size the folder's row claims, as in [`load`].
     ///
     /// Reported rather than silent so a test can tell a refusal from a success;
     /// the caller ignores it, because there is nothing it would do differently.
@@ -198,7 +248,9 @@ impl MessageCache {
     /// An entry that could not be written completely is removed rather than
     /// left: a short file is not a failed cache write, it is a message that
     /// opens with half its body missing every time it is opened from then on.
-    pub fn store(&self, uid: &str, source: &[u8]) -> bool {
+    ///
+    /// [`load`]: MessageCache::load
+    pub fn store(&self, uid: &str, source: &[u8], listed: Option<u32>) -> bool {
         let Some(key) = self.key(uid) else {
             return false;
         };
@@ -207,6 +259,18 @@ impl MessageCache {
             // would only be a way to spend a syscall on a miss. A message with
             // no bytes is not a message; whatever produced one, the cache is not
             // where that gets settled.
+            return false;
+        }
+        if let Some(listed) = claimed(listed).filter(|listed| source.len() < *listed as usize) {
+            // The other entry `load` will not serve, and here the bytes are the
+            // ones that just came off the network — so what disagrees is the
+            // server with itself, rather than a file with a crash. Worth a line
+            // either way, because the visible symptom is a message that is
+            // downloaded again every single time it is opened.
+            log_critical(&format!(
+                "message {uid} arrived as {} octets where its row says {listed}, and is not cached",
+                source.len()
+            ));
             return false;
         }
         let cache = self.lock();
@@ -303,6 +367,19 @@ impl Drop for MessageCache {
         // means nothing is using it.
         unsafe { g_object_unref(cache.cast()) };
     }
+}
+
+/// The size a summary row claims, out of the number it carries.
+///
+/// Zero is not a claim. It is what Camel's counter holds for a row that was
+/// never given a size — `MessageSummary` leaves it there for an `Email` that
+/// arrived without one, and a row loaded from a summary database written before
+/// the column existed has it too — and RFC 5322 has no zero-octet message for it
+/// to honestly mean. Read as a claim it would be the one claim every entry
+/// satisfies, which is harmless; named here so that the reason it is harmless is
+/// not the reason it is being relied on.
+fn claimed(listed: Option<u32>) -> Option<u32> {
+    listed.filter(|listed| *listed != 0)
 }
 
 /// Whether `key` is an id RFC 8620 §1.2 allows, and therefore a file name this

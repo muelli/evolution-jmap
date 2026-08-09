@@ -371,7 +371,7 @@ fn the_cached_message_is_the_account_s_rather_than_the_folder_s() {
 
     let cache = MessageCache::open(&account.cache_dir()).expect("the account's cache directory");
     let cached = cache
-        .load(uid.to_str().expect("a UTF-8 uid"))
+        .load(uid.to_str().expect("a UTF-8 uid"), None)
         .expect("the opened message was not cached under the account");
     let source = String::from_utf8_lossy(&cached);
     assert!(
@@ -379,6 +379,45 @@ fn the_cached_message_is_the_account_s_rather_than_the_folder_s() {
         "the cached entry is not the whole message: {source:?}"
     );
 
+    // SAFETY: the one reference this test took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// A cache entry is a file, and a file written by a process that died mid-write
+/// is a short one. MIME has no length in it, so Camel's parser reads a truncated
+/// message as a complete one with a truncated body — silently, and for as long
+/// as the entry survives. The row already carries the one number that closes
+/// that: RFC 8621 §4.1's `size`, the octets of exactly these bytes.
+#[test]
+fn a_cached_message_shorter_than_its_row_is_fetched_again() {
+    let (_server, account, folder) = with_one_message();
+    let uid = the_one_uid(folder);
+    let key = uid.to_str().expect("a UTF-8 uid");
+
+    // The entry the first open leaves, cut short the way a crash would cut it:
+    // a prefix of the real message, so what is lost is the end of the body and
+    // not a header the parser would have refused the message over.
+    Opened::of(folder, &uid).expect_message();
+    let cache = MessageCache::open(&account.cache_dir()).expect("the account's cache directory");
+    let whole = cache
+        .load(key, None)
+        .expect("the opened message was cached");
+    let truncated = &whole[..whole.len() - 24];
+    assert!(
+        cache.store(key, truncated, None),
+        "the truncated entry was not written"
+    );
+
+    let reopened = Opened::of(folder, &uid);
+    let message = reopened.expect_message();
+
+    let body = body_of(message);
+    assert!(
+        body.contains("And the second one."),
+        "a truncated cache entry was served as the message: {body:?}"
+    );
+
+    drop(reopened);
     // SAFETY: the one reference this test took.
     unsafe { g_object_unref(folder.cast()) };
 }
