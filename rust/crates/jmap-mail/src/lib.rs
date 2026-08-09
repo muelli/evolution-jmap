@@ -108,6 +108,7 @@ pub mod server;
 pub mod service;
 pub mod settings;
 pub mod store;
+pub mod subscribe;
 pub mod summary;
 pub mod synchronize;
 pub mod transfer;

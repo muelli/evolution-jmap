@@ -5294,3 +5294,93 @@ before they are a vfunc, and that decision is what `expunge_sync` waits on;
 cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (fifty-seventh session)
+
+The three slots the previous session left with nowhere to hide: **`JmapStore`
+fills `CamelSubscribableInterface`**, in a new `jmap-mail/src/subscribe.rs`.
+The scaffold (`InterfaceDecl::filled_by`, `InterfaceImpl`) and the FFI surface
+(`CamelSubscribable.*` on `eds-sys`'s allowlist) landed last session; the store's
+write (`JmapStore::set_subscribed`, mailbox id and a listing edit) the session
+before that. This is the joint between them.
+
+- **`Subscribable`**, a unit type beside the store, is the `InterfaceImpl`:
+  `CamelSubscribableInterface` as its `Vtable`, `camel_subscribable_get_type` as
+  its `GType`, and an `interface_init` that fills all three slots.
+- **`is_subscribed(store, path)`** — the non-blocking read, answered from
+  `JmapStore::held_folders` and nothing else.
+- **`set_subscribed(store, path, subscribed)`** — resolves the Camel path
+  against the folder tree, writes, and hands back the folder as it now is, which
+  is what the signal is built from.
+- **`JmapStore::held_folders`** is new: the listing if there is one, no request
+  and no connection needed. `JmapStore::folders(0)` was the near miss — it lists
+  the account when it holds nothing, which from a non-blocking vfunc is a folder
+  tree that stalls the UI thread once per row.
+- `folders::tree_holding` became `pub(crate)`; the subscription write is its
+  third caller.
+
+Red first: nine tests added to `tests/subscriptions.rs`, and the two new guards
+were then checked by breaking them on purpose — with `interfaces()` back to
+empty the vtable peek returns NULL, and with `is_subscribed` reading
+`folders(0)` the "makes no request" test fails.
+
+Decisions taken:
+
+- **`false` for a folder the store has never heard of**, and for a store with no
+  listing at all. The question `folder_is_subscribed` asks is whether the *user*
+  asked to see this folder; nothing in hand says they did. `true` would put a
+  tick on a folder this store knows nothing about. IMAPX answers the same way,
+  out of its mailbox table.
+- **The path is resolved through `folders::tree_holding`**, so a mailbox another
+  client created since the last listing is subscribable without a restart —
+  identical to opening a folder by path. The cost is one `Mailbox/changes` on
+  the path that was about to fail anyway; a hit costs nothing.
+- **The answer is an owned `FolderInfo`, not a borrow of the tree.** The listing
+  is edited by `JmapStore::set_subscribed` under its own lock, and handing out a
+  borrow would mean holding that lock across the signal emission.
+- **The announcement is a one-folder chain at depth `Some(0)`**, and the chain is
+  kept and dropped by this function rather than handed over: Camel's signal only
+  borrows it, which is why IMAPX frees it one line after emitting.
+- **`StoreError::NoFolder` carries the path here**, where the store's own
+  `set_subscribed` carries a mailbox id — this is the layer that still has the
+  path Camel named.
+
+**Not covered by a test, and this is the honest limit of the increment:** the
+`g_signal_emit` at the end of `subscribe_folder_sync` and
+`unsubscribe_folder_sync`. Emitting needs a store instantiated through a
+`CamelSession`, and a probe confirmed what was suspected — `g_object_new` on the
+store type without one leaves Camel logging four criticals and handing back
+something `G_IS_OBJECT` rejects. The stores these tests use are
+`JmapStore::detached` instances, which are deliberately not GObjects. So
+everything up to the emission is driven (`folder_is_subscribed` through the
+vtable, `set_subscribed` against the mock), and the two emission lines — the two
+IMAPX has — are **not verified here**; they want a real `CamelSession`, which is
+M6/M7 or the M9 functional tier.
+
+Not verified locally, as in the previous fifty-six sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). One new file, carrying the
+SPDX header. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and on
+the five EDS crates.
+
+Next in M5. **`create_folder_sync` and `delete_folder_sync`**, the last two
+`CamelStoreClass` folder vfuncs with a mock behind them: both want a
+`CamelFolderInfo` answer and the store's folder list kept in step, and the
+refusals the mock learned four sessions ago (`mailboxHasChild`,
+`mailboxHasEmail`, a sibling's name) are what they must map onto a `CamelError`
+the user can act on. `rename_folder_sync` sits beside them. Worth pairing with
+them: `get_folder_info_sync` still ignores `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`
+and `SUBSCRIPTION_LIST`, which now have something to filter on and are what the
+subscription editor passes.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+the `changed` signal a transfer emits is still not asserted by a test, which
+wants `tests/refresh.rs`'s emission harness lifted into `tests/common`;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs` and the two emissions
+above, which wait on M6 and M7. The README's architecture block still lists only
+the round-1 crates.
