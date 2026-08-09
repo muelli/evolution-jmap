@@ -39,16 +39,18 @@ use std::ptr;
 use eds_sys::{
     CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY,
     CamelFolder, CamelFolderClass, CamelFolderFlags, CamelOfflineFolder, CamelOfflineFolderClass,
-    CamelStore, camel_folder_set_flags, camel_offline_folder_get_type,
+    CamelStore, camel_folder_get_parent_store, camel_folder_set_flags,
+    camel_offline_folder_get_type,
 };
-use glib_sys::{GType, gchar};
-use gobject_sys::g_object_new;
+use glib_sys::{GFALSE, GType, gchar};
+use gobject_sys::{g_object_new, g_type_check_instance_is_a};
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
 
 use crate::folder_info::c_string;
+use crate::store::{JmapStore, store_type};
 use crate::summary::attach_summary;
 
 /// The instance struct. `#[repr(C)]` leading with the parent's instance struct
@@ -91,6 +93,35 @@ impl JmapFolder {
     }
 }
 
+/// The store the folder hangs off, as our own.
+///
+/// Every request a folder makes goes out over the store's connection — the
+/// folder holds a mailbox id and nothing else — so this is the first line of
+/// [`crate::refresh`] and of [`crate::message`] alike, and it lives here rather
+/// than in either of them because it is a fact about the folder object.
+///
+/// Type-checked rather than assumed, unlike the store vfuncs' first argument:
+/// those are dispatched by GObject on an instance of the class, while
+/// `parent-store` is an ordinary construct property that anything holding a
+/// `CamelStore` could have been given. A folder of ours on someone else's store
+/// is not a case that arises, but reading a `JmapStore` out of one would be
+/// undefined behaviour rather than a wrong answer.
+///
+/// # Safety
+///
+/// `folder` must point at a live `CamelFolder`.
+pub(crate) unsafe fn parent_store<'a>(folder: *mut CamelFolder) -> Option<&'a JmapStore> {
+    // SAFETY: the accessor borrows the store the folder holds a reference to,
+    // and the type check is what makes the cast below sound.
+    unsafe {
+        let store = camel_folder_get_parent_store(folder);
+        if store.is_null() || g_type_check_instance_is_a(store.cast(), store_type()) == GFALSE {
+            return None;
+        }
+        JmapStore::borrow(store)
+    }
+}
+
 /// The class struct, same rule one level up. It carries nothing of its own —
 /// what it carries is the parent's vfunc slots with our functions in them,
 /// which is still not the same as *being* `CamelOfflineFolderClass`: the type
@@ -127,6 +158,14 @@ unsafe impl ObjectSubclass for JmapFolder {
         // SAFETY: the class leads with CamelOfflineFolderClass, which leads
         // with CamelFolderClass — the contract above.
         unsafe { crate::refresh::install_vfuncs(class.cast::<CamelFolderClass>()) };
+
+        // And what one of those rows becomes when the user opens it.
+        // `camel_folder_get_message_sync` refuses to call a class that has not
+        // filled this in, so without it a folder is one whose message list draws
+        // and whose messages cannot be read.
+        //
+        // SAFETY: as above.
+        unsafe { crate::message::install_vfuncs(class.cast::<CamelFolderClass>()) };
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.

@@ -55,6 +55,10 @@
 //! - [`refresh`] is `refresh_info_sync`, the folder vfunc that joins the three
 //!   above to a server: the mailbox listed over the store's connection, the
 //!   rows reconciled against what the folder holds, and the diff emitted.
+//! - [`message`] is what a row is not: `get_message_sync`, the vfunc that
+//!   downloads one message's RFC 5322 bytes over the store's connection and lets
+//!   Camel's own parser turn them into the `CamelMimeMessage` the preview pane
+//!   renders.
 //! - [`message_info`] is one row of that folder's contents: the
 //!   `CamelMessageInfo` a `jmap-mail-sync` summary row becomes, and with it the
 //!   three columns that are a computation rather than a copy — the flags word,
@@ -75,6 +79,7 @@ pub mod connect;
 pub mod folder;
 pub mod folder_info;
 pub mod folders;
+pub mod message;
 pub mod message_info;
 pub mod module;
 pub mod provider;
