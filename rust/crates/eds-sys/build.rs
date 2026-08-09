@@ -200,6 +200,15 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // How a backend is handed its credentials: EDS fetches them from
     // libsecret and passes an ENamedParameters to connect_sync.
     "e_named_parameters_.*",
+    // The rule that decides whether a child source asks for its own password
+    // or shares the one stored on its collection —
+    // `e_source_credentials_provider_ref_credentials_source` is where EDS
+    // applies it, and it compares the two sources' `[Authentication] Host`.
+    // Named exactly rather than as `e_util_.*`, which is a hundred unrelated
+    // helpers: no backend calls this, but the account setup has to write a mail
+    // source that passes it, and the alternative to a test is trusting that two
+    // hosts written in different places stayed the same string.
+    "e_util_can_use_collection_as_credential_source",
     // Not an EDS symbol, but the entry point every loadable EDS module must
     // export; having the signature in scope keeps M2's trampoline honest.
     "e_module_.*",

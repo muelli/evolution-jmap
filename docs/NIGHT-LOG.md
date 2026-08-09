@@ -10538,3 +10538,98 @@ being writable without Camel — either `jmap-config` gains a `jmap-mail`
 dependency, or the settings subtype is generated where the provider already
 lives. Then the module and the `EMailConfigServiceBackend` subclass, which is
 where the part this VM cannot verify begins.
+
+## 2026-08-09 (hundred-and-fourth session)
+
+**The server an account's mail is reached at: `jmap-config`'s `apply_server`.**
+The increment last session named as the reason M7 carries no tag — and the first
+thing to say about it is that last session's account of *why* it was hard was
+wrong. Six tests, red first, in `rust/crates/jmap-config/tests/mail.rs`; the
+crate stays an rlib out of `default-members` and gains `jmap-mail` as a
+**dev**-dependency only.
+
+**The correction.** The claim was that writing host, port, user and security
+needs `jmap-mail`'s `CamelJmapSettings` GType, and therefore Camel, because those
+values live in the `ESourceCamel` extension generated from it. They do not live
+there. `e-source-camel.c` carries a table of six properties it binds to *other*
+extensions — `[Authentication]`'s `host`, `method`, `port`, `user`,
+`[Security]`'s `method`, `[Offline]`'s `stay-synchronized` — and
+`g_object_class_list_properties` is what fills the generated group, so exactly the
+five a setup has answers for are the ones excluded from it. Writing the server is
+therefore four ordinary `ESource` setters and no Camel at all; what is left in
+`[JMAP Backend]` is `CamelStoreSettings`' and `CamelOfflineSettings`' inherited
+defaults, which are the user's to change and not a setup's to invent. The library
+still links no Camel. The *tests* link it, because the settings object is the only
+place to ask an account the question the store will ask it.
+
+**What is written, and why on both services:** host, port and user out of the
+same `Connection` the collection was written from, on the mail account and on the
+transport. Camel splits an account into a store and a transport with no pointer
+between them and configures each from its own `ESource`; an unwritten transport is
+an account that receives and cannot send, found out the first time the user
+presses Send. The host being *the same string* as the collection's is
+load-bearing beyond tidiness:
+`e_util_can_use_collection_as_credential_source` compares exactly those two
+values to decide whether a child shares the account's password, so a host that
+disagreed — or one left blank while the collection has one — is a second password
+prompt for the same server. That rule is now asserted rather than trusted, which
+is the one line added to `eds-sys`'s allowlist (named exactly, not `e_util_.*`).
+
+**`[Authentication] Method` is written as nothing, deliberately.** On a
+collection it names the EDS credentials provider impl; on a mail source
+`ESourceCamel` also binds it to `CamelNetworkSettings:auth-mechanism`, where it
+names a SASL mechanism. `jmap-mail` passes a NULL mechanism to
+`camel_session_authenticate_sync` because JMAP authenticates over HTTP and
+advertises none, so the absent value is the true one — written rather than left
+alone, so a mechanism from a previous commit does not survive as this account's
+authentication type in the editor.
+
+**`[Security] Method` is not `"tls"` on a mail source, and the mutation test is
+what established what that costs.** EDS spells encryption `"tls"`; a mail source's
+copy of the same key is additionally read as a `CamelNetworkSecurityMethod`
+**enum nick**, so the string written there is `ssl-on-alternate-port` — TLS from
+the first byte, which is what HTTPS is, and the spelling Evolution's own server
+settings page writes back through the same binding. The first version of the test
+asserted the origin `jmap-mail` assembles and the `"tls"` mutant **passed it**: on
+a failed nick lookup `e_binding_transform_enum_nick_to_value` returns FALSE and
+the binding sets nothing, so the settings object keeps the property's default,
+which in EDS 3.52 is `STARTTLS_ON_STANDARD_PORT` — a TLS method. So an account
+written as `"tls"` connects fine today, by way of a default nobody chose, while
+telling the account editor a setting the user did not pick; and it becomes a
+refusal to connect (`origin` allows plaintext only to loopback) the day Camel's
+default moves. The doc comment claiming silent plaintext was corrected to that,
+and the test now asserts the enum value, not only the URL it produces.
+
+**Mutation-checked**, four mutants, each caught: `"tls"` for the nick (one red,
+the reason above); the host write dropped (five red); the loop narrowed to the
+account so the transport gets no server (three red, one of them the credential
+test); the unencrypted branch written as encrypted (one red — and Camel's own
+default being a TLS method is exactly why that direction needs its own
+assertion).
+
+**The honest limits.** Unchanged and still the whole of M7's remainder: nothing
+calls any of this — there is no `EMailConfigServiceBackend` subclass and no
+`module-jmap-configuration.so` — and no account has been created through
+Evolution's UI, which is the milestone's actual acceptance and not something this
+VM can do. So M7 carries no completion tag. What did change is that an account
+this crate commits is now one a store could open and a transport could send
+through, with nothing left for the caller to remember;
+`docs/manual-test-collection-backend.md` still documents `MailEnabled=false`,
+because the recipe would have to hand-write three more `.source` files to have
+any mail sources at all, which is its own increment.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM) — no new files this time, so no new SPDX headers
+either. `cargo fmt --check`, `cargo test --locked` (491 tests on the default
+members, unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are
+clean, as are `clippy`/`test` over the seven EDS crates — 784 tests,
+`jmap-config`'s 31 (was 25) included. `RUSTDOCFLAGS=-D warnings cargo doc` clean
+for the crate.
+
+No milestone tag.
+
+Next: the module and the `EMailConfigServiceBackend` subclass, which is where
+the part this VM cannot verify begins — and where
+`e_source_camel_generate_subtype` will have to be called for real, since
+nothing has loaded `libcameljmap.so` in Evolution's process at the point an
+account is committed.
