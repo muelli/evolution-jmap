@@ -9807,3 +9807,125 @@ the bindings, and it needs one more `parent_class()` — `EBackendClass`'s, not
 driven here either, so the increment that writes it is *needs human verification
 in real Evolution* too, and after it M6 is a module entry point and a CMake
 target away from being installable.
+
+## 2026-08-09 (ninety-eighth session)
+
+**The `authenticate_sync` slot, installed — the last vfunc M6 was missing.**
+`populate` (last session) asks EDS for the account's credentials; this is where
+EDS comes back with them, and so where the fan-out finally happens. Everything
+underneath it was already written and tested — `authenticate_with`
+(`src/authenticate.rs`, 12 tests) decides who gets contacted and which failure
+becomes a second password prompt, `fan_out` (`src/fan_out.rs`, 10 tests) turns one
+login into children — so what this session added is the two ends: the class-struct
+slot, and the one implementation of `fan_out::Collection` that is not a test's.
+
+Five tests, red first:
+
+- `jmap-backend-core`: `trampoline::guard_value` and three tests for it. The
+  existing guards pick the failure value themselves — FALSE, NULL — and
+  `authenticate_sync` cannot be guarded that way: four of
+  `ESourceAuthenticationResult`'s five values are failures and they mean
+  *different things to the user* (prompt again, distrust the stored password,
+  give up). So the caller names the fallback and the guard still sets the
+  `GError`, which is the only part of a failed authentication a person can read.
+  The vfunc passes `E_SOURCE_AUTHENTICATION_ERROR`, deliberately not `REJECTED`:
+  a panic in this code is not the user's password being wrong, and answering
+  `REJECTED` would make EDS throw a probably-correct password away and ask again
+  on every retry.
+- `jmap-backend-collection/tests/backend.rs`: two more slot tests, of the kind
+  the other two vfuncs already have — but with a sharper reason, verified against
+  the running EDS and its source rather than assumed.
+
+**Why the slot needs a test at all, and this one most of all.** Fetched
+`e-backend.c` from GNOME's GitLab to check what an *uninstalled* override would
+leave in place. `e_backend_class_init` installs three defaults, and
+`authenticate_sync`'s is one line with a comment saying why: "the default
+implementation just reports success, it's for backends which do not use (nor
+define) authentication routines". It returns `E_SOURCE_AUTHENTICATION_ACCEPTED`
+without contacting anything. So an override written but not installed is not a
+backend that fails to log in — it is one EDS believes logged in: the account goes
+CONNECTED, no fan-out ever runs, no credentials are ever asked for again, and
+there is no error, no prompt and no log line anywhere in it. That is the third
+and worst of this crate's three inherited defaults (`dup_resource_id` answers the
+bare identity, `populate` is a placeholder), and the reason `class_init` is held
+against the parent class three times now.
+
+The second test is about the offset rather than the value.
+`authenticate_sync` is the first slot this crate writes into a half of the class
+struct whose layout it does not own — bindgen's `EBackendClass`, two levels up,
+between `GObjectClass` and `ECollectionBackendClass`'s own vfuncs. A wrong offset
+there does not fail to compile; it silently overwrites a neighbouring slot with a
+function of a different signature, which is a call through a bad pointer the first
+time EDS uses it. EDS fills in exactly two neighbours — `get_destination_address`
+and `prepare_shutdown` — so the test asserts both are still pointer-identical to
+the grandparent's after `class_init` ran.
+
+Other decisions, and why:
+
+- **`Live` implements both traits now**, `Populating` and `Collection`, which is
+  what makes one struct the whole instance side of this crate. Two things they
+  share were factored out rather than written twice: `Live::export`, since
+  `publish` is the same `ref_server` / `add_source` / `unref` in both (the log
+  line's prefix is the parameter), and `drain`, since
+  `claim_all_resources` and `list_{contacts,calendar}_sources` are all
+  `(transfer full)` `GList`s freed with `g_list_free` and *not* `_full`. Checked
+  `e-collection-backend.c`'s own doc comment for the listing calls rather than
+  trusting the header: "the sources returned in the list are referenced for
+  thread-safety… free the returned #GList itself with g_list_free()".
+- **`new_child` refuses a resource id with an interior NUL** instead of using
+  `cstring_lossy` like the rest of this crate's C-string conversions. Truncating
+  there would not fail — it would silently ask EDS for a *different* resource and
+  pair this collection's child with it. NULL is already a documented answer
+  (`Adopted::Uncreated`, reported and logged), so the wrong child is the only
+  outcome worth avoiding. Reachable only from a server that puts a NUL in a JMAP
+  id, since every other resource id in this crate was read back out of a C string.
+- **`existing_children` is contacts + calendars and never mail**, which is
+  `Collection`'s documented contract reached from the implementing side: this
+  backend creates no mail children, so it has no opinion about them and must not
+  remove them.
+- **A fan-out's per-child failures never reach the `GError`.** `uncreated`,
+  `abandoned` and `not_removed` each become a critical naming the resource id;
+  the result stays `ACCEPTED`. Turning one unwritable address book into a failed
+  authentication would take the whole account offline over one collection — and
+  EDS would then ask for the password again, which fixes none of the three.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The vfunc body cannot be driven here**, like `populate`'s: its first act is
+   `e_backend_get_source` on the instance, so `JmapCollectionBackend::detached()`
+   is not sound for it (that doc comment already said so). What `tests/backend.rs`
+   holds is the slot. **Needs human verification in real Evolution** that adding a
+   JMAP account prompts for the password exactly once and that its address books
+   and calendars appear in the sidebar afterwards.
+2. **`Live`'s four new method bodies are unverified**, by construction — the part
+   that needs a session bus. Each is one EDS call with the ownership spelled out
+   in a SAFETY comment.
+3. **`report_fan_out` is untested**, like `populate`'s equivalent: it is four
+   `format!`s and a channel choice, and capturing GLib criticals to assert on them
+   would test the harness rather than the decision.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). No new files, so no new SPDX headers.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean, as
+is `cargo test`/`clippy` over the six EDS crates (`jmap-backend-collection` now 80
+tests, `jmap-backend-core` 68). `RUSTDOCFLAGS=-D warnings cargo doc` is clean for
+both changed crates.
+
+No milestone tag. M6's Rust is now complete — all three vfuncs installed — but the
+backend is not yet loadable: there is no `e_module_load` entry point registering
+the type with `evolution-source-registry`, and no CMake target installing the
+`.so` where the registry looks for it. Until then nothing of M6 has ever run
+inside EDS, which is exactly the state the roadmap's rules say must not be tagged.
+
+Next, and the last of M6: the module entry point plus the CMake target.
+`evolution-source-registry` loads an `ECollectionBackendFactory`, not a backend,
+so the entry point needs a factory subclass beside the one written here — its
+`backend_factory_get_type`, its `factory_name`, and whichever registration call
+3.52 actually uses, which has to be read off EDS's own source before it is
+written (`e_collection_backend_factory_get_type` is in the bindings; nothing that
+registers one is, so the current guess is that the registry finds them by walking
+`g_type_children`, and that is a guess). Then `add_cargo_cdylib` installing into
+the registry's module dir found with `pkg_check_variable`. That is the first
+increment of M6 whose acceptance is a manual recipe rather than a test, so it
+belongs with a documented `.source` keyfile like M3's and M4's.

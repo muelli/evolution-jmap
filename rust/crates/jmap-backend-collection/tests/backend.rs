@@ -1,21 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The `ECollectionBackend` subclass: the type EDS registers and the vfunc slot
-// it dispatches through.
+// The `ECollectionBackend` subclass: the type EDS registers and the three vfunc
+// slots it dispatches through.
 //
 // Every call here goes *through the class struct*, because that is the only
-// thing EDS ever does — and here that matters more than usual. The parent class
-// installs a `dup_resource_id` of its own, so a vfunc that is written but not
-// installed is not a backend that does nothing; it is a backend that quietly
-// uses EDS's default and answers the bare `[Resource] Identity`, which an
-// address book and a calendar of the same JMAP id both share.
+// thing EDS ever does — and here that matters more than usual, because all three
+// slots already hold something. `dup_resource_id` inherits a working
+// implementation that answers the bare `[Resource] Identity`, which an address
+// book and a calendar of the same JMAP id both share; `populate` inherits a
+// placeholder; and `authenticate_sync`, two levels up on `EBackendClass`,
+// inherits one that reports success without contacting anything. So a vfunc
+// written but not installed is never a backend that does nothing — it is one
+// that quietly answers something else, and no error says so.
 //
 // What is not here is a real instance: constructing one needs an
 // `ESourceRegistryServer`, and so a running `evolution-source-registry` on the
 // session bus, which neither this VM nor CI has. `JmapCollectionBackend::detached`
-// stands in, and is sound for exactly this vfunc — it never touches the backend
-// it is handed.
+// stands in, and is sound for exactly one of the three — `dup_resource_id`,
+// which never touches the backend it is handed. The other two can only be held
+// against the slot their override has to displace.
 
 use std::ffi::CString;
 use std::mem::size_of;
@@ -23,9 +27,10 @@ use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_RESOURCE,
-    ECollectionBackend, ECollectionBackendClass, ESource, ESourceResource,
-    e_collection_backend_get_type, e_source_address_book_get_type, e_source_calendar_get_type,
-    e_source_get_extension, e_source_new_with_uid, e_source_resource_set_identity,
+    EBackendClass, ECollectionBackend, ECollectionBackendClass, ESource, ESourceResource,
+    e_backend_get_type, e_collection_backend_get_type, e_source_address_book_get_type,
+    e_source_calendar_get_type, e_source_get_extension, e_source_new_with_uid,
+    e_source_resource_set_identity,
 };
 use glib_sys::{g_free, gchar};
 use gobject_sys::{
@@ -48,10 +53,18 @@ impl Class {
         Self(unsafe { g_type_class_ref(gtype) }.cast())
     }
 
-    /// The `ECollectionBackendClass` half, which is where the slot lives.
+    /// The `ECollectionBackendClass` half, which is where `populate` and
+    /// `dup_resource_id` live.
     fn vfuncs(&self) -> &ECollectionBackendClass {
         // SAFETY: the class is referenced and leads with the parent's.
         unsafe { &(*self.0).parent_class }
+    }
+
+    /// The `EBackendClass` half, two levels up, which is where
+    /// `authenticate_sync` lives — a grandparent's vfunc, not the collection
+    /// backend's own.
+    fn backend_vfuncs(&self) -> &EBackendClass {
+        &self.vfuncs().parent_class
     }
 
     /// Calls `dup_resource_id` the way EDS's `collection_backend_load_resources`
@@ -271,5 +284,82 @@ fn the_installed_populate_is_the_one_the_parent_can_still_be_reached_through() {
     assert!(
         inherited as usize != ours as usize,
         "chaining up through the parent type's class would call our own populate"
+    );
+}
+
+/// The `EBackendClass` EDS installed its own defaults into, which is what an
+/// override of `authenticate_sync` has to displace.
+fn e_backend_class() -> *mut EBackendClass {
+    // SAFETY: referencing our own class initialises the whole ancestry, so the
+    // grandparent's class is alive for as long as ours is.
+    unsafe { g_type_class_peek(e_backend_get_type()) }.cast()
+}
+
+#[test]
+fn class_init_replaces_the_default_authenticate_sync_rather_than_leaving_it() {
+    // The worst default of the three. `EBackendClass::authenticate_sync` is
+    // installed by `e_backend_class_init` and its body is one line — "the
+    // default implementation just reports success, it's for backends which do
+    // not use (nor define) authentication routines" — so it returns
+    // `E_SOURCE_AUTHENTICATION_ACCEPTED` without contacting anything.
+    //
+    // An override that is written but not installed is therefore not a backend
+    // that fails to log in. It is one that EDS believes logged in: the account
+    // goes CONNECTED, no fan-out ever runs, no credentials are ever asked for,
+    // and there is no error, no prompt and no log line anywhere in it. That is
+    // invisible in a way a NULL slot would not be, which is why the slot is a
+    // test of its own.
+    let class = Class::get();
+    let parent = e_backend_class();
+    assert!(
+        !parent.is_null(),
+        "the grandparent class was not referenced"
+    );
+
+    let ours = class
+        .backend_vfuncs()
+        .authenticate_sync
+        .expect("class_init installed no authenticate_sync");
+    // SAFETY: a live class struct.
+    let inherited = unsafe { (*parent).authenticate_sync }
+        .expect("EDS installs a default that accepts every account");
+
+    assert!(
+        ours as usize != inherited as usize,
+        "the slot still holds EDS's default, which accepts without contacting anything"
+    );
+}
+
+#[test]
+fn installing_authenticate_sync_leaves_the_other_ebackend_slots_inherited() {
+    // `authenticate_sync` is the first slot this crate writes into a half of
+    // the class struct it does not own the layout of — bindgen's
+    // `EBackendClass`, two levels up, sitting between GObject's class and
+    // `ECollectionBackendClass`'s own vfuncs. A wrong offset there does not
+    // fail to compile; it silently overwrites a neighbouring slot with a
+    // function of a different signature, which is a call through a bad pointer
+    // the first time EDS uses it. The two neighbours EDS fills in are
+    // `get_destination_address` and `prepare_shutdown`, so they are what pins
+    // it: both must still be exactly what the grandparent installed.
+    let class = Class::get();
+    let parent = e_backend_class();
+    assert!(
+        !parent.is_null(),
+        "the grandparent class was not referenced"
+    );
+
+    let ours = class.backend_vfuncs();
+    // SAFETY: a live class struct.
+    let inherited = unsafe { &*parent };
+
+    assert_eq!(
+        ours.get_destination_address.map(|f| f as usize),
+        inherited.get_destination_address.map(|f| f as usize),
+        "class_init overwrote get_destination_address"
+    );
+    assert_eq!(
+        ours.prepare_shutdown.map(|f| f as usize),
+        inherited.prepare_shutdown.map(|f| f as usize),
+        "class_init overwrote prepare_shutdown"
     );
 }
