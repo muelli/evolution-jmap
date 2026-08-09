@@ -29,11 +29,10 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::GError;
-use jmap_client::transport::CancelFlag;
 use jmap_client::{Credentials, Error};
 use jmap_proto::Id;
 
-use crate::cancel::CancelBridge;
+use crate::cancel::observe;
 use crate::error::{cstring_lossy, set_raw_gerror};
 use crate::marshal::password as stored_password;
 use crate::source::SourceConfig;
@@ -238,6 +237,14 @@ where
 /// it whenever the vfunc returns, and a stale value from a previous attempt is
 /// how an account ends up either never prompting or prompting forever.
 ///
+/// `cancellable` is [`observe`]d for the length of the connect and no longer,
+/// and the connection `open` returns carries no cancellation of its own. That
+/// is deliberate: a flag built into the client would belong to the *account*
+/// rather than to the operation, so a connect the user stopped would leave a
+/// client that had latched a cancellation nothing could clear — every later
+/// operation on that account refusing, until it was reconnected. What stops an
+/// operation after this one is the scope that operation's own vfunc installs.
+///
 /// # Safety
 ///
 /// `source` must be NULL or a valid `ESource`, `credentials` NULL or a valid
@@ -253,7 +260,7 @@ pub unsafe fn connect_with<T, F>(
     open: F,
 ) -> Option<T>
 where
-    F: FnOnce(&SourceConfig, Option<&str>, CancelFlag) -> Result<T, ConnectError>,
+    F: FnOnce(&SourceConfig, Option<&str>) -> Result<T, ConnectError>,
 {
     // A backend without a source cannot be configured, so no prompt helps. It
     // should not happen — EDS constructs the backend *from* a source — but a
@@ -287,10 +294,10 @@ where
     // outlives the call.
     let password = unsafe { stored_password(credentials) };
     // SAFETY: `cancellable` is NULL or a valid GCancellable that EDS keeps
-    // alive for the duration of the vfunc, which outlives the bridge.
-    let bridge = unsafe { CancelBridge::new(cancellable) };
+    // alive for the duration of the vfunc, which outlives this scope.
+    let _cancel = unsafe { observe(cancellable) };
 
-    match open(&config, password.as_deref(), bridge.flag().clone()) {
+    match open(&config, password.as_deref()) {
         Ok(opened) => {
             // SAFETY: as above.
             unsafe { write_auth_result(out_auth_result, ACCEPTED_AUTH_RESULT) };

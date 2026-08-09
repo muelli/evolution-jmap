@@ -22,7 +22,6 @@ use jmap_backend_core::connect::{Collection, ConnectError, connect_with, credent
 use jmap_backend_core::source::SourceConfig;
 use jmap_cal_sync::CalSync;
 use jmap_client::Client;
-use jmap_client::transport::CancelFlag;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
 pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
@@ -33,16 +32,19 @@ pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
 /// `password` is what EDS got out of libsecret, which is `None` on the first
 /// attempt; see [`jmap_backend_core::connect::credentials`] for what that
 /// means for the prompt.
+///
+/// The client is built with no cancellation of its own: what stops the connect
+/// is the scope `connect_sync` installed, and what stops every operation after
+/// it is the scope that operation's vfunc installs. See
+/// [`jmap_backend_core::connect::connect_with`] for why a flag on the client
+/// would be the wrong lifetime.
 pub fn open_calendar(
     config: &SourceConfig,
     password: Option<&str>,
-    cancel: CancelFlag,
 ) -> Result<CalSync, ConnectError> {
     let credentials = credentials(config.user.as_deref(), password)?;
 
-    let client = Client::builder()
-        .cancel_flag(cancel)
-        .connect(&config.origin, credentials)?;
+    let client = Client::connect(&config.origin, credentials)?;
     let account_id = client.primary_account(CAPABILITY_CALENDARS)?;
     let calendars = client.calendars(&account_id)?;
 

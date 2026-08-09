@@ -28,7 +28,6 @@ use jmap_backend_cal::connect;
 use jmap_backend_core::connect::{Collection, ConnectError};
 use jmap_backend_core::source::SourceConfig;
 use jmap_cal_sync::CalSync;
-use jmap_client::transport::CancelFlag;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 
@@ -76,7 +75,7 @@ impl Fixture {
 }
 
 fn open(config: &SourceConfig, password: Option<&str>) -> Result<CalSync, ConnectError> {
-    connect::open_calendar(config, password, CancelFlag::new())
+    connect::open_calendar(config, password)
 }
 
 /// `CalSync` is not `Debug`, and naming the calendar it opened is a more useful

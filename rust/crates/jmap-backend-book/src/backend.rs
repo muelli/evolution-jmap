@@ -17,18 +17,20 @@
 //! class pointer, which is why it could not live in `ops` with the decision
 //! that produces it.
 //!
-//! ## What is not wired up yet
+//! ## The Stop button
 //!
-//! Cancellation reaches the *connect*, which is the operation that blocks
-//! longest, but not the ones after it: a `GCancellable` handed to
-//! `list_existing_sync` is still observed by nobody. The mechanism it needs now
-//! exists — [`observe`] installs a cancellable for the length of one operation
-//! and the client honours it in preference to whatever it was built with, which
-//! is what the Camel mail provider's vfuncs do — so what is left here is one
-//! line at the top of each vfunc, and the tests to go with them. Until then the
-//! flag this backend's client was built with is what answers, which also means
-//! a connect the user cancelled leaves a client that refuses everything
-//! afterwards.
+//! Every operation here is cancellable, and the cancellable that stops it is
+//! the one EDS handed *that call* — not the account's. [`observe`], held for
+//! the length of the call by [`with_connection`], installs it as the
+//! cancellation of every request this thread makes, and the client honours it
+//! in preference to whatever it was built with. The connection itself is built
+//! carrying no flag at all, so a connect the user stopped cannot leave behind a
+//! client that refuses everything afterwards.
+//!
+//! What this does not do is abort a request already blocked in a socket read:
+//! cancellation is checked between requests and before one is sent, so a Stop
+//! during a slow response waits for that response. `tests/cancellation.rs` is
+//! the acceptance suite, and says the same.
 //!
 //! [`observe`]: jmap_backend_core::cancel::observe
 
@@ -45,6 +47,7 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar, guint32};
 use gobject_sys::g_type_class_peek;
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::ObjectSubclass;
@@ -267,14 +270,18 @@ unsafe extern "C" fn list_existing_sync(
     meta_backend: *mut EBookMetaBackend,
     out_new_sync_tag: *mut *mut gchar,
     out_existing_objects: *mut *mut GSList,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: as `connect_sync`.
     unsafe {
-        with_connection("list_existing_sync", meta_backend, error, |sync| {
-            ops::list_existing(sync, out_new_sync_tag, out_existing_objects, error)
-        })
+        with_connection(
+            "list_existing_sync",
+            meta_backend,
+            cancellable,
+            error,
+            |sync| ops::list_existing(sync, out_new_sync_tag, out_existing_objects, error),
+        )
     }
 }
 
@@ -293,43 +300,49 @@ unsafe extern "C" fn get_changes_sync(
 ) -> gboolean {
     // SAFETY: as `connect_sync`.
     unsafe {
-        with_connection("get_changes_sync", meta_backend, error, |sync| {
-            match ops::get_changes(
-                sync,
-                last_sync_tag,
-                out_new_sync_tag,
-                out_repeat,
-                out_created_objects,
-                out_modified_objects,
-                out_removed_objects,
-                error,
-            ) {
-                Outcome::Reported => GTRUE,
-                Outcome::Failed => GFALSE,
-                // Nothing has been written and no error set, which is exactly
-                // the state the parent expects to be called in.
-                Outcome::ListInstead => {
-                    match parent_class().and_then(|class| class.get_changes_sync) {
-                        Some(chain_up) => chain_up(
-                            meta_backend,
-                            last_sync_tag,
-                            is_repeat,
-                            out_new_sync_tag,
-                            out_repeat,
-                            out_created_objects,
-                            out_modified_objects,
-                            out_removed_objects,
-                            cancellable,
-                            error,
-                        ),
-                        // Unreachable against any EDS that has the meta backend at
-                        // all, but silently returning TRUE here would be an address
-                        // book that stays empty and says nothing.
-                        None => fail_offline(error),
+        with_connection(
+            "get_changes_sync",
+            meta_backend,
+            cancellable,
+            error,
+            |sync| {
+                match ops::get_changes(
+                    sync,
+                    last_sync_tag,
+                    out_new_sync_tag,
+                    out_repeat,
+                    out_created_objects,
+                    out_modified_objects,
+                    out_removed_objects,
+                    error,
+                ) {
+                    Outcome::Reported => GTRUE,
+                    Outcome::Failed => GFALSE,
+                    // Nothing has been written and no error set, which is exactly
+                    // the state the parent expects to be called in.
+                    Outcome::ListInstead => {
+                        match parent_class().and_then(|class| class.get_changes_sync) {
+                            Some(chain_up) => chain_up(
+                                meta_backend,
+                                last_sync_tag,
+                                is_repeat,
+                                out_new_sync_tag,
+                                out_repeat,
+                                out_created_objects,
+                                out_modified_objects,
+                                out_removed_objects,
+                                cancellable,
+                                error,
+                            ),
+                            // Unreachable against any EDS that has the meta backend at
+                            // all, but silently returning TRUE here would be an address
+                            // book that stays empty and says nothing.
+                            None => fail_offline(error),
+                        }
                     }
                 }
-            }
-        })
+            },
+        )
     }
 }
 
@@ -339,14 +352,18 @@ unsafe extern "C" fn load_contact_sync(
     _extra: *const gchar,
     out_contact: *mut *mut EContact,
     out_extra: *mut *mut gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: as `connect_sync`.
     unsafe {
-        with_connection("load_contact_sync", meta_backend, error, |sync| {
-            ops::load_contact(sync, uid, out_contact, out_extra, error)
-        })
+        with_connection(
+            "load_contact_sync",
+            meta_backend,
+            cancellable,
+            error,
+            |sync| ops::load_contact(sync, uid, out_contact, out_extra, error),
+        )
     }
 }
 
@@ -362,21 +379,27 @@ unsafe extern "C" fn save_contact_sync(
     _opflags: guint32,
     out_new_uid: *mut *mut gchar,
     out_new_extra: *mut *mut gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: as `connect_sync`.
     unsafe {
-        with_connection("save_contact_sync", meta_backend, error, |sync| {
-            ops::save_contact(
-                sync,
-                overwrite_existing,
-                contact,
-                out_new_uid,
-                out_new_extra,
-                error,
-            )
-        })
+        with_connection(
+            "save_contact_sync",
+            meta_backend,
+            cancellable,
+            error,
+            |sync| {
+                ops::save_contact(
+                    sync,
+                    overwrite_existing,
+                    contact,
+                    out_new_uid,
+                    out_new_extra,
+                    error,
+                )
+            },
+        )
     }
 }
 
@@ -388,34 +411,54 @@ unsafe extern "C" fn remove_contact_sync(
     _extra: *const gchar,
     _object: *const gchar,
     _opflags: guint32,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: as `connect_sync`.
     unsafe {
-        with_connection("remove_contact_sync", meta_backend, error, |sync| {
-            ops::remove_contact(sync, uid, error)
-        })
+        with_connection(
+            "remove_contact_sync",
+            meta_backend,
+            cancellable,
+            error,
+            |sync| ops::remove_contact(sync, uid, error),
+        )
     }
 }
 
 // ---------------------------------------------------------------------------
 // the shared shape
 
-/// Runs `f` against the live connection, under a panic guard.
+/// Runs `f` against the live connection, under a panic guard and the
+/// operation's own cancellation.
+///
+/// The [`observe`] is here rather than repeated at the top of each vfunc so
+/// that reaching the connection and being cancellable are the same act: a
+/// vfunc added later cannot get the first without the second. It covers the
+/// whole of `f`, which is the whole of the operation's network traffic.
+///
+/// `disconnect_sync` is the one vfunc that deliberately does not go through
+/// here. It makes no request — it drops the connection — and dropping it is
+/// what the caller asked for whether or not they then pressed Stop; refusing
+/// would leave the backend connected to a socket EDS believes is closed.
 ///
 /// # Safety
 ///
-/// `meta_backend` must be NULL or a valid instance of this type, and `error`
-/// NULL or a valid, currently-NULL `GError **`.
+/// `meta_backend` must be NULL or a valid instance of this type, `cancellable`
+/// NULL or a valid `GCancellable` that outlives the call, and `error` NULL or a
+/// valid, currently-NULL `GError **`.
+///
+/// [`observe`]: jmap_backend_core::cancel::observe
 unsafe fn with_connection(
     context: &str,
     meta_backend: *mut EBookMetaBackend,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
     f: impl FnOnce(&BookSync) -> gboolean,
 ) -> gboolean {
     unsafe {
         guard_bool(context, error, || {
+            let _cancel = observe(cancellable);
             let Some(session) = instance(meta_backend).and_then(JmapBookBackend::session) else {
                 return fail_offline(error);
             };

@@ -22,7 +22,6 @@ use gobject_sys::g_object_unref;
 use jmap_backend_book::connect;
 use jmap_backend_core::connect::{Collection, ConnectError};
 use jmap_backend_core::source::SourceConfig;
-use jmap_client::transport::CancelFlag;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 
@@ -73,7 +72,7 @@ fn open(
     config: &SourceConfig,
     password: Option<&str>,
 ) -> Result<jmap_book_sync::BookSync, ConnectError> {
-    connect::open_book(config, password, CancelFlag::new())
+    connect::open_book(config, password)
 }
 
 /// `BookSync` is not `Debug`, and naming the address book it opened is a more
