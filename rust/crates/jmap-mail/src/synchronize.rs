@@ -68,16 +68,16 @@
 //! A message another client destroyed is not a failure at all — see
 //! [`push_row`].
 //!
-//! ## What is not here yet
+//! ## The other half of the argument
 //!
-//! **`expunge`.** Camel's argument asks the folder to also get rid of the
-//! messages the user marked deleted. JMAP has no deleted keyword — deleting mail
-//! is `Email/set` taking the message out of its mailboxes, or `Email/set`
-//! destroying it, depending on what the account calls its trash — so it is a
-//! mailbox change rather than a flag change and belongs with the increment that
-//! implements `expunge_sync`. Until then the argument is ignored: a row marked
-//! deleted produces no keyword change, leaves the server as it was, and keeps
-//! its `DELETED` bit, which is what that later increment will read.
+//! **`expunge`.** Camel's second argument asks the folder to also get rid of
+//! the messages the user marked deleted, which is a mailbox change rather than
+//! a flag change: JMAP has no deleted keyword, so a row marked deleted still
+//! produces no keyword change here and the whole of what it means is carried
+//! out by [`crate::expunge`], which this hands over to when the argument is
+//! set. The walk below runs first — see the call site.
+//!
+//! ## What is not here
 //!
 //! **`cancellable`**, the same gap [`crate::refresh`] documents and for the same
 //! reason: [`Client`] takes its [`CancelFlag`] when it is built.
@@ -126,7 +126,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 /// `camel_folder_synchronize_sync` test before they consider the folder saved.
 unsafe extern "C" fn synchronize_sync(
     folder: *mut CamelFolder,
-    _expunge: gboolean,
+    expunge: gboolean,
     _cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
@@ -144,6 +144,18 @@ unsafe extern "C" fn synchronize_sync(
                 if let Err(problem) = push_row(folder, summary, &uid) {
                     failure.get_or_insert(problem);
                 }
+            }
+
+            // And only then the messages the user is finished with. After the
+            // keyword walk rather than before it, because a row about to be
+            // destroyed may still be carrying an unsaved change of the user's
+            // — marking a message read and deleting it before anything
+            // synchronised is an ordinary sequence — and because the walk
+            // above is what clears the marks that would otherwise be retried.
+            if expunge != GFALSE
+                && let Err(problem) = crate::expunge::expunge_folder(folder)
+            {
+                failure.get_or_insert(problem);
             }
 
             match failure {

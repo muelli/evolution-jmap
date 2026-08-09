@@ -244,6 +244,13 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // so that a test can put a flag change on the server the way Evolution
     // does rather than by reaching into the class.
     "camel_folder_synchronize_sync",
+    // And the wrapper around the vfunc that gets rid of the messages the user
+    // marked deleted — what Evolution's "Expunge" and "Empty Trash" reach.
+    // Named for the same reason as the two around it: a test drives it the way
+    // Evolution does, through the wrapper that takes the folder's lock and
+    // refuses a folder Camel considers read-only, rather than through the
+    // class.
+    "camel_folder_expunge_sync",
     // And the wrapper around the vfunc that files messages into another
     // folder, for the same reason again — with one extra: this wrapper decides
     // things of its own before it dispatches, answering a transfer into the

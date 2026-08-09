@@ -289,6 +289,43 @@ impl Client {
         )))
     }
 
+    /// Remove one message from the store entirely (`Email/set` destroy).
+    ///
+    /// The one write here with no `PatchObject` in it, because it is the one
+    /// that is not about a property: RFC 8621 §4.6 has a destroyed `Email`
+    /// leave every mailbox it was in and stop existing, which is what makes it
+    /// the wrong call for a message that is filed in more than one place. A
+    /// caller that means "take it out of *this* mailbox" wants
+    /// [`Client::email_update`] over `mailboxIds` instead.
+    ///
+    /// `notFound` — another client destroyed the message first — arrives as
+    /// [`Error::Set`] like every other refusal, so the caller can tell it from
+    /// a server that would not do it.
+    pub fn email_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
+        let request = SetRequest::<Email>::new(account_id.clone()).destroy(id.clone());
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/set", &request)?;
+        let response: SetResponse<Email> = serde_json::from_value(arguments)?;
+
+        if response
+            .destroyed
+            .as_ref()
+            .is_some_and(|destroyed| destroyed.contains(id))
+        {
+            return Ok(());
+        }
+        if let Some(set_error) = response
+            .not_destroyed
+            .as_ref()
+            .and_then(|not_destroyed| not_destroyed.get(id))
+        {
+            return Err(Error::Set(set_error.clone()));
+        }
+        Err(Error::Protocol(format!(
+            "Email/set answered neither destroyed nor notDestroyed for {id}"
+        )))
+    }
+
     /// Put a message into the store from bytes already uploaded
     /// (`Email/import`, RFC 8621 §4.8); answers the `Email` the server made of
     /// it.

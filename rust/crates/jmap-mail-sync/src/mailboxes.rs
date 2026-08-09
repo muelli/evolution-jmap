@@ -44,7 +44,27 @@ use serde_json::{Map, Value};
 use crate::pointer;
 
 /// The property a filing patches.
-const MAILBOX_IDS: &str = "mailboxIds";
+pub(crate) const MAILBOX_IDS: &str = "mailboxIds";
+
+/// The patch that takes a message out of one mailbox and speaks for no other.
+///
+/// The other half of what [`Filing`] can express, and deliberately not a
+/// [`Filing`]: every filing has a mailbox the message ends up *in*, because
+/// that is what a copy and a move both have. This one has only a mailbox the
+/// message leaves, which is a request RFC 8621 §4.6 permits exactly when the
+/// message is filed somewhere else as well — a message left in no mailbox at
+/// all is one the store may not hold, and a server keeping that invariant
+/// refuses the write rather than destroying the message on the client's
+/// behalf.
+///
+/// So this is only ever half an answer, and the half that is missing is which
+/// mailboxes the message is in. [`MailSync::expunge_message`](crate::MailSync::
+/// expunge_message) is where the two are put together.
+pub(crate) fn out_of(mailbox: &Id) -> Value {
+    let mut patch = Map::new();
+    patch.insert(pointer::member(MAILBOX_IDS, mailbox.as_str()), Value::Null);
+    Value::Object(patch)
+}
 
 /// What has to happen on the server for a message to be filed somewhere else.
 ///

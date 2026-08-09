@@ -296,6 +296,26 @@ impl JmapStore {
         Ok(sync.file_message(uid, filing)?)
     }
 
+    /// Makes one message leave a mailbox for good — the write behind
+    /// `expunge_sync`.
+    ///
+    /// On the store and locked exactly like [`JmapStore::file_message`]. It
+    /// takes the mailbox as well as the message because that is the whole of
+    /// what an expunge is about: the message is named by an id that identifies
+    /// it in the account, and the mailbox is the folder the user pressed
+    /// Expunge in — which decides whether the message is destroyed or only
+    /// unfiled, for the reasons [`MailSync::expunge_message`] gives.
+    ///
+    /// Read-locked although it destroys, for [`JmapStore::set_keywords`]'s
+    /// reason: what the lock guards is the connection, and Evolution empties a
+    /// trash while the rest of the account is still refreshing.
+    pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        Ok(sync.expunge_message(uid, mailbox)?)
+    }
+
     /// Puts a message the account does not have into one of its mailboxes —
     /// the write behind `append_message_sync`.
     ///
