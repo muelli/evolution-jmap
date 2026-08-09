@@ -63,6 +63,18 @@ pub struct ServerState {
     /// [`crate::MockServerBuilder::query_page_size`] asked. `None` answers the
     /// whole result at once.
     pub query_page_size: Option<u64>,
+    /// The largest request this server takes at the API endpoint, in octets, as
+    /// [`crate::MockServerBuilder::size_request`] asked — advertised as
+    /// `maxSizeRequest` in the session document and enforced on the body before
+    /// it is parsed.
+    ///
+    /// `None` is the server that names no limit at all
+    /// ([`crate::MockServerBuilder::no_size_request`]), which RFC 8620 §2 does
+    /// not allow and which a client still has to have an answer for; it takes a
+    /// request of any size. The default is [`crate::DEFAULT_SIZE_REQUEST`], far
+    /// above anything this client builds, so only a test about the limit meets
+    /// it.
+    pub size_request: Option<u64>,
     /// The largest upload this server takes, as
     /// [`crate::MockServerBuilder::size_upload`] asked — advertised as
     /// `maxSizeUpload` in the session document and enforced on `/upload/`.
@@ -87,6 +99,7 @@ impl ServerState {
             changes_page_size: None,
             objects_in_get: None,
             query_page_size: None,
+            size_request: Some(crate::DEFAULT_SIZE_REQUEST),
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
         }
     }

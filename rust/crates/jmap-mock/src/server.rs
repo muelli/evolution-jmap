@@ -36,6 +36,11 @@ pub const DEFAULT_SIZE_UPLOAD: u64 = 50_000_000;
 /// (two calls), so only a test about the limit meets it.
 pub const DEFAULT_CALLS_IN_REQUEST: u64 = 16;
 
+/// The `maxSizeRequest` the mock advertises and enforces unless a test asks for
+/// a different one — 10 MB, the number RFC 8620 §2's own example carries, and
+/// far above the longest id list any test builds.
+pub const DEFAULT_SIZE_REQUEST: u64 = 10_000_000;
+
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
@@ -44,6 +49,7 @@ pub struct MockServerBuilder {
     changes_page_size: Option<u64>,
     objects_in_get: Option<u64>,
     query_page_size: Option<u64>,
+    size_request: Option<u64>,
     size_upload: Option<u64>,
 }
 
@@ -136,6 +142,31 @@ impl MockServerBuilder {
         self
     }
 
+    /// Advertise — and enforce — `bytes` as `maxSizeRequest`, as a server that
+    /// takes only small requests does.
+    ///
+    /// A request whose body is longer than this is refused whole, with RFC 8620
+    /// §3.2's `urn:ietf:params:jmap:error:limit`, before anything in it is
+    /// parsed — so a client that names a long list of ids in one `Email/get`
+    /// without reading the session document gets none of them back, rather than
+    /// passing because the mock was permissive.
+    pub fn size_request(mut self, bytes: u64) -> Self {
+        self.size_request = Some(bytes);
+        self
+    }
+
+    /// Leave `maxSizeRequest` out of the session document entirely, and take a
+    /// request of any size.
+    ///
+    /// RFC 8620 §2 requires the property, so this is a server out of spec — and
+    /// it exists for the reason [`Self::no_size_upload`] does: a client has to
+    /// be pinned on what it does when the number it would check against is not
+    /// there.
+    pub fn no_size_request(mut self) -> Self {
+        self.size_request = None;
+        self
+    }
+
     /// Advertise — and enforce — `bytes` as `maxSizeUpload`, as a server with a
     /// modest appetite does.
     ///
@@ -176,6 +207,7 @@ impl MockServerBuilder {
         state.changes_page_size = self.changes_page_size;
         state.objects_in_get = self.objects_in_get;
         state.query_page_size = self.query_page_size;
+        state.size_request = self.size_request;
         state.size_upload = self.size_upload;
         let state = Arc::new(Mutex::new(state));
 
@@ -223,6 +255,7 @@ impl MockServer {
             changes_page_size: None,
             objects_in_get: None,
             query_page_size: None,
+            size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
         }
     }
@@ -509,12 +542,14 @@ fn session_document(state: &ServerState, origin: &str) -> Session {
     // would be one naming a limit of nothing.
     let mut core = json!({
         "maxConcurrentUpload": 4,
-        "maxSizeRequest": 10_000_000u64,
         "maxConcurrentRequests": 4,
         "maxObjectsInGet": state.objects_in_get(),
         "maxObjectsInSet": 128,
         "collationAlgorithms": ["i;ascii-casemap"],
     });
+    if let Some(size_request) = state.size_request {
+        core["maxSizeRequest"] = json!(size_request);
+    }
     if let Some(size_upload) = state.size_upload {
         core["maxSizeUpload"] = json!(size_upload);
     }
