@@ -34,16 +34,20 @@
 //!
 //! ## What is not here yet
 //!
-//! The whole mailbox is still listed on every refresh, and both halves of not
-//! doing so now exist: `jmap-mail-sync`'s `messages_since` turns one
+//! The whole mailbox is still listed on every refresh, and every piece of not
+//! doing so now exists: `jmap-mail-sync`'s `messages_since` turns one
 //! `Email/changes` into the rows this mailbox holds and the uids it does not,
-//! and [`crate::summary`] keeps the state such a question is asked from across
-//! a restart — which is what this vfunc records below. What is missing is the
-//! path that applies a *delta* to a summary, which `apply_listing` is not: it
-//! reconciles a whole listing, so a delta handed to it would remove every row
-//! the delta did not happen to mention. That path is the next increment, and it
-//! is what the `recent` list [`crate::changes`] deliberately leaves empty is
-//! waiting for too. Listing meanwhile is correct; it is only expensive.
+//! [`crate::summary`] keeps the state such a question is asked from across a
+//! restart — which is what this vfunc records below — and
+//! [`crate::summary::apply_delta`] applies that answer to a summary without
+//! `apply_listing`'s rule that anything unnamed has left the mailbox. What is
+//! missing is only the join: this vfunc still asks [`JmapStore::messages`] for
+//! the whole mailbox rather than asking for a delta from the state it recorded
+//! last time, and choosing between the two paths by which of
+//! `jmap_mail_sync::MessageUpdate`'s three answers came back. That is also what
+//! the `recent` list [`crate::changes`] leaves empty here is waiting for, since
+//! only the delta path may fill it. Listing meanwhile is correct; it is only
+//! expensive.
 //!
 //! `cancellable` is not observed, the same gap [`crate::folders`] documents and
 //! for the same reason: [`Client`] takes its [`CancelFlag`] when it is built.

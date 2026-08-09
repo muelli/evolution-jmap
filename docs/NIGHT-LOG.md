@@ -4732,3 +4732,84 @@ and that decision is what `expunge_sync` waits on; cross-store transfers want
 `Email/import` for an `append_message_sync`. Unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's
 architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (fifty-first session)
+
+M5's thirty-first increment, in `jmap-mail`: `apply_delta`, the path that puts
+an `Email/changes` answer into a folder's summary — and with it Camel's fourth
+list, `recent`, which every increment so far has deliberately left empty.
+
+The whole point is what *silence* means. `apply_listing` reconciles a listing,
+so a uid it does not name has left the mailbox; `Email/changes` answers for the
+account, so a uid a delta does not name is one nothing was said about. Handing a
+delta to `apply_listing` would empty a folder on the first refresh that found one
+new message, which is why this is a second function and not an argument to that
+one.
+
+Red first: seven tests in `tests/summary.rs`, and each was checked afterwards by
+breaking the implementation on purpose. Six mutations, every one caught by the
+test written for it: dropping the `arrive` call, having `apply_message` call
+every row new, dropping `remove_row`'s `check_uid` guard, ignoring `absent`,
+reconciling the delta as if it were a listing, and leaving the pending-write bit
+on an added row.
+
+Decisions taken:
+
+- **A delta may say a message is recent; a listing may not.** Camel's recent
+  list is what runs the user's incoming filters, so putting a uid on it asks for
+  that message to be filed, forwarded or deleted by the user's rules. A listing
+  finds the whole mailbox and cannot tell an arrival from a message that was
+  always there — its "added" is everything the user already had. A delta is
+  asked from a state the folder itself recorded at its last refresh, so a
+  message it names that the folder has no row for reached the mailbox since
+  then. That is exactly what recent means, and it is the one honest answer this
+  provider has ever had to the question.
+- **Recent is a second call, not a replacement for added.** Checked against
+  Camel rather than assumed: `camel_folder_change_info_recent_uid` appends to
+  `uid_recent` and does *not* imply `_add_uid`, so an arrival recorded only as
+  recent would be filtered and never drawn. `Changes::arrive` therefore sits
+  beside `Changes::add` and both are called.
+- **An absent uid this folder never held is not reported.** Most of what a delta
+  calls absent was never here — the delta is account-wide, so a message the user
+  filed in some other folder is on this folder's absent list too. A removal
+  announced for a uid the message list never drew asks Camel to change nothing,
+  and worse, makes a delta about somewhere else count as a change here, which is
+  the test the refresh vfunc emits `changed` on. So `remove_row` checks for the
+  row first and reports only what it really removed.
+- **`apply_message` reports whether the row is new; it does not decide what that
+  means.** The alternative was a boolean parameter telling it whether to mark
+  arrivals, which would have put the listing-versus-delta judgement in the one
+  function the two paths share. Returning the fact and letting `apply_delta` act
+  on it keeps `apply_listing` unchanged — it ignores the return, which is the
+  honest thing for a caller that cannot answer the question.
+- **Absent is applied before present.** `messages_since` cannot produce a uid on
+  both lists, so the order is not load-bearing for correctness; it matches
+  `apply_listing`'s removals-then-rows so that the two read the same way.
+
+Not verified locally, as in the previous fifty sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and
+on the five EDS crates; `jmap-mail`'s summary suite is at 32 tests.
+
+Next in M5. **The join**, and it is now the only piece left of a cheap refresh:
+every part exists — `messages_since` asks the question, the summary keeps the
+state to ask it from across a restart, and `apply_delta` applies the answer —
+and `refresh_info_sync` still asks `JmapStore::messages` for the whole mailbox
+every time. That vfunc becomes: read the summary's state, ask for a delta when
+there is one, and dispatch on `MessageUpdate`'s three answers — `Unchanged` to
+nothing but a new state, `Changed` to `apply_delta`, `Relisted` to
+`apply_listing`. The store needs a `messages_since` of its own beside
+`messages`, and `refresh.rs`'s "what is not here yet" section names exactly this.
+
+Still open from earlier sessions: **bounding the cache**; the other half of the
+cache's atomicity problem (an entry is written by `write_all` and close rather
+than to a temporary name and renamed); the `changed` signal a transfer emits is
+still not asserted by a test, and lifting `tests/refresh.rs`'s emission harness
+into `tests/common` is what that wants; `CamelSubscribable` still wants
+`Mailbox/set`, which the client does not have; `get_trash_folder_sync` and
+`get_junk_folder_sync` are still a settings decision before they are a vfunc,
+and that decision is what `expunge_sync` waits on; cross-store transfers want
+`Email/import` for an `append_message_sync`. Unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's
+architecture block still lists only the round-1 crates.
