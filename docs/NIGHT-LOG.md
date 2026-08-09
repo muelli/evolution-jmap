@@ -5972,3 +5972,96 @@ before they are a vfunc, and that decision is what `expunge_sync` waits on;
 cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (sixty-fourth session)
+
+**The transfer's `changed`, the last of the emissions nobody had watched.** The
+previous session lifted the emission harness into `tests/common` and named this
+as the small, self-contained next increment: `transfer_messages_to_sync` calls
+`camel_folder_changed` when a move has taken rows away, and no test had ever
+seen it fire. Five tests in `tests/transfer.rs` now do — and unlike last
+session's rename, the code was right.
+
+Red first, and reproducibly: with the emission disabled the two positive tests
+fail with `left: []` against the expected `removed: ["E1"]`, and the three
+silences pass — which is exactly the shape a guard against announcing too much
+should have. The emission was restored before anything else.
+
+- **`a_move_tells_camel_the_row_that_left`** — one emission, `removed` and
+  nothing else. Asserted as a whole `Emission` rather than field by field, so
+  the test also says that nothing was called added, changed, or *recent*: a uid
+  on the recent list is a message the user's incoming filters would be run over,
+  and a move is not an arrival.
+- **`a_copy_says_nothing_about_the_folder_it_came_from`** — a copy takes no row
+  away, so there is nothing to say. Announcing anyway would redraw a message
+  list the user is reading, and lose their place in it, for a folder in which
+  nothing happened.
+- **`a_move_says_nothing_about_the_folder_it_arrives_in`** — the visible half of
+  this file's standing decision not to build a row in the destination. Watched
+  on the archive rather than the inbox, because the recorder is one list for
+  whatever it is connected to: a test watching both folders could not tell which
+  of them spoke.
+- **`a_message_another_client_deleted_is_announced_as_its_row_goes`** — the one
+  failure that still changes the folder. The message is not in this mailbox
+  because it is not anywhere, so the row goes and the list is told, while the
+  transfer is still reported as failed.
+- **`a_transfer_that_failed_leaves_the_message_list_alone`** — every other
+  failure. A disconnected store is the case Camel retries after reconnecting,
+  and a folder that had announced the message as removed in the meantime would
+  have taken it off the user's screen for the duration.
+
+Decisions taken:
+
+- **`Fixture::watching` takes the folder as a function, not a pointer.** The
+  fixture has to exist before either of its folders does, and the ordering rule
+  `common::signals::Context` documents pushes the context before even that. A
+  `fn(&Fixture) -> *mut CamelFolder` is the smallest thing that lets one
+  constructor serve both the source-side and the destination-side tests.
+- **The setup is pumped away inside the constructor**, not in each test. The
+  fixture refreshes the inbox, which queues a `changed` of its own, and a
+  handler connected after the queueing still catches the delivery — so `watch`
+  after `emissions` is the only order that answers what the *transfer*
+  announced. Putting it in the constructor means no test can get it wrong.
+- **Two of the five assert the whole `Emission` value**, three assert emptiness.
+  Comparing the struct is shorter than four field assertions and says more,
+  since it pins the three lists a transfer must leave alone.
+
+**Not covered by a test, and the honest limits of the increment:**
+
+1. **Nothing here has been driven from Evolution.** That the message list redraws
+   from this signal — and in particular that the destination folder *not*
+   announcing is invisible to a user, because they are looking at the folder
+   they dragged into and Camel opens it fresh — is read from Camel's
+   documentation rather than observed. *Needs human verification in real
+   Evolution.*
+2. **The multi-message partial transfer is still unwatched.** A selection where
+   one message moves and another is already gone should announce both rows in
+   one emission; the walk is written that way and every test here transfers a
+   single uid. It is a fixture change (a second seeded message), not a code
+   change, and it is the obvious next test in this file.
+3. **Nothing asserts what the destination does at its next listing**, only that
+   the transfer itself left it alone. `a_move_says_nothing_about_the_folder_it_arrives_in`
+   checks the archive is still empty; that a refresh then finds the message is
+   `tests/refresh.rs`'s subject and is not re-asserted here.
+
+Not verified locally, as in the previous sixty-three sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set (337
+tests) and on the five EDS crates (527); the jmap-mail suite was run three times
+over for the main-context flakiness, 309 tests each time.
+
+Next in M5. The `get_folder_info_sync` NULL-versus-GError question the previous
+session wrote down and did not patch: Camel's `CAMEL_CHECK_GERROR` reads a NULL
+return as a failure, this provider documents it as "an account with no folders",
+and the fully-unsubscribed rename test prints a `camel-WARNING` because of it.
+That is now the oldest undecided thing in the folder surface.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.

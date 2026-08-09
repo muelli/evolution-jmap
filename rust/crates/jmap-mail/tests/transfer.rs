@@ -35,6 +35,28 @@
 //! and dragging it into another folder before anything synchronised is an
 //! ordinary sequence, and losing the flag in it would be this provider dropping
 //! a change of the user's in silence.
+//!
+//! ## The message list that is already on screen
+//!
+//! Removing the row is what the *next* listing of the source folder is drawn
+//! from; `changed` is what the one the user is looking at is redrawn from. The
+//! two are separate and the second was, until this increment, written the way
+//! IMAPX writes it and never watched. It is watched here, through
+//! `common::signals` — which means a [`Context`] pushed before the account is
+//! opened and a pump before every read, for the reason that module's header
+//! gives.
+//!
+//! Four things are asserted about it, and three of them are silences:
+//!
+//! - A move announces the rows it took away, and nothing else.
+//! - A copy announces nothing, because it took none.
+//! - The *destination* announces nothing either. The message appears there when
+//!   that folder is next listed, which is the decision this file's "what is not
+//!   decided here" section makes: a row built from a uid alone would be a line
+//!   with no subject, sender or date.
+//! - A transfer that failed without moving a row announces nothing. The one
+//!   failure that does announce is a message another client destroyed, which
+//!   leaves the folder precisely because it is not in it any more.
 
 mod common;
 
@@ -43,6 +65,7 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use common::Account;
+use common::signals::{Context, Emission, emissions, watch};
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
     CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
@@ -124,6 +147,20 @@ impl Fixture {
             archive_id,
             uid,
         }
+    }
+
+    /// The same fixture, with one of its folders listened to from here on.
+    ///
+    /// The setup is pumped away first and only then is the handler connected,
+    /// because the emission the inbox's refresh queued would otherwise be
+    /// delivered into a test that is asking what the *transfer* announced. The
+    /// context is the caller's, and has to have been pushed before
+    /// [`Fixture::start`] opened the account: see `common::signals::Context`.
+    fn watching(context: &Context, folder: fn(&Self) -> *mut CamelFolder) -> Self {
+        let fixture = Self::start();
+        emissions(context);
+        watch(folder(&fixture));
+        fixture
     }
 
     /// Through Camel's own wrapper, which is what Evolution calls when the user
@@ -615,5 +652,117 @@ fn a_message_another_client_deleted_is_reported_and_leaves_the_folder() {
     assert!(
         listed(fixture.inbox).is_empty(),
         "the folder still lists a message the server does not have"
+    );
+}
+
+/// Taking the row away settles what the next listing of the folder would show.
+/// This is the folder saying so to the list that is on screen now — and a move
+/// is the one transfer that has anything to say about the folder it left.
+#[test]
+fn a_move_tells_camel_the_row_that_left() {
+    let context = Context::push();
+    let fixture = Fixture::watching(&context, |fixture| fixture.inbox);
+
+    fixture.transfer(&[&fixture.uid], true).expect_ok();
+
+    assert_eq!(
+        emissions(&context),
+        vec![Emission {
+            added: Vec::new(),
+            removed: vec![fixture.uid.to_string()],
+            changed: Vec::new(),
+            recent: Vec::new(),
+        }]
+    );
+}
+
+/// A copy leaves every row where it was, so there is nothing to announce.
+/// Announcing anyway would redraw the message list the user is reading — and
+/// lose where they were in it — for a folder in which nothing has happened.
+#[test]
+fn a_copy_says_nothing_about_the_folder_it_came_from() {
+    let context = Context::push();
+    let fixture = Fixture::watching(&context, |fixture| fixture.inbox);
+
+    fixture.transfer(&[&fixture.uid], false).expect_ok();
+
+    let emissions = emissions(&context);
+    assert!(
+        emissions.is_empty(),
+        "a copy announced {emissions:?} about the folder it left"
+    );
+}
+
+/// And the folder the message arrived in says nothing either, which is the
+/// visible half of this file's decision not to build a row there: the message
+/// appears in the destination when that folder is next listed, because the
+/// listing is the only thing that knows what its row should say.
+///
+/// Watched on the archive rather than the inbox — the recorder is one list for
+/// whatever it is connected to, so a test that watched both would not be able
+/// to tell which folder spoke.
+#[test]
+fn a_move_says_nothing_about_the_folder_it_arrives_in() {
+    let context = Context::push();
+    let fixture = Fixture::watching(&context, |fixture| fixture.archive);
+
+    fixture.transfer(&[&fixture.uid], true).expect_ok();
+
+    let emissions = emissions(&context);
+    assert!(
+        emissions.is_empty(),
+        "the destination announced {emissions:?} for a message it has no row for"
+    );
+    assert!(
+        listed(fixture.archive).is_empty(),
+        "the destination gained a row from a transfer rather than from a listing"
+    );
+}
+
+/// A message another client destroyed is the one failure that still changes the
+/// folder: it is not in this mailbox because it is not anywhere, so the row goes
+/// and the list on screen is told. The transfer is reported as failed all the
+/// same — see [`a_message_another_client_deleted_is_reported_and_leaves_the_folder`],
+/// which asserts the other half.
+#[test]
+fn a_message_another_client_deleted_is_announced_as_its_row_goes() {
+    let context = Context::push();
+    let fixture = Fixture::watching(&context, |fixture| fixture.inbox);
+    fixture.destroyed_elsewhere();
+
+    assert!(
+        !fixture.transfer(&[&fixture.uid], true).ok,
+        "a message that is gone was transferred"
+    );
+
+    assert_eq!(
+        emissions(&context),
+        vec![Emission {
+            added: Vec::new(),
+            removed: vec![fixture.uid.to_string()],
+            changed: Vec::new(),
+            recent: Vec::new(),
+        }]
+    );
+}
+
+/// Every other failure leaves the message list alone, because it leaves the rows
+/// alone. A disconnected store is the case Camel retries after reconnecting, and
+/// a folder that had announced the message as removed in the meantime would have
+/// taken it off the user's screen for the duration.
+#[test]
+fn a_transfer_that_failed_leaves_the_message_list_alone() {
+    let context = Context::push();
+    let fixture = Fixture::watching(&context, |fixture| fixture.inbox);
+    assert!(fixture.account.jmap().drop_connection());
+
+    let transferred =
+        fixture.transfer_straight(fixture.inbox, fixture.archive, &[&fixture.uid], true);
+
+    assert!(!transferred.ok, "a disconnected folder transferred anyway");
+    let emissions = emissions(&context);
+    assert!(
+        emissions.is_empty(),
+        "a transfer that failed announced {emissions:?}"
     );
 }
