@@ -30,9 +30,9 @@ pub(crate) mod pointer;
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_client::Client;
-use jmap_proto::mail::{Email, EmailQueryFilter, Mailbox};
+use jmap_proto::mail::{Email, EmailImport, EmailQueryFilter, Mailbox};
 use jmap_proto::methods::Comparator;
-use jmap_proto::{Id, State};
+use jmap_proto::{Id, State, UtcDate};
 
 pub use error::SyncError;
 pub use folder::{FolderInfo, FolderRole, FolderTree};
@@ -470,6 +470,88 @@ impl MailSync {
         self.update_email(uid, filing.patch())
     }
 
+    /// Puts a message the caller already holds into a mailbox —
+    /// `append_message_sync`.
+    ///
+    /// The one write here that *adds* a message rather than changing one the
+    /// account has, and the one that sends a message as bytes. Everything a
+    /// mailbox gains otherwise arrived at the server on its own; this is a
+    /// message Evolution is holding — a draft it composed, a message being
+    /// filtered in, a message dragged out of another account — being handed
+    /// over intact.
+    ///
+    /// ## Two round trips, because the protocol has two
+    ///
+    /// A blob upload (RFC 8620 §6.1) and then an `Email/import` (RFC 8621 §4.8)
+    /// naming it. There is no way to put a message's bytes inside a method call,
+    /// and the alternative method — an `Email/set` create out of `from`,
+    /// `subject` and body values — is a different operation with a different
+    /// result: it has the *server* build a message out of parts, which is right
+    /// for composing a draft and wrong for a message that already exists. A
+    /// message reassembled that way is not the bytes that went in, so anything
+    /// signed over them stops verifying.
+    ///
+    /// The upload is announced as `message/rfc822`, which is what the bytes are.
+    /// RFC 8620 §6.1 lets the server answer with a type of its own and nothing
+    /// here reads it back: an import names a blob, and what the blob is *called*
+    /// is not part of the question.
+    ///
+    /// ## The date, and the one that cannot be sent
+    ///
+    /// `received_at` is Camel's `date_received`, seconds since the epoch, and it
+    /// is sent rather than left out because the server's own default — RFC 8621
+    /// §4.8 makes it the most recent `Received` header's date, or the time of the
+    /// import — would date a message being copied between accounts to the moment
+    /// it was copied, and sort it to the wrong end of the folder.
+    ///
+    /// An instant no `UTCDate` can spell is sent as no date at all, the judgement
+    /// [`date::utc_date`] documents: what the caller asked for is that the
+    /// message be appended, and refusing the whole append over an unwritable
+    /// date would lose the message to save its timestamp.
+    ///
+    /// ## What comes back
+    ///
+    /// The id the server minted, which is the Camel uid — the caller has nothing
+    /// else to name the message by, and `append_message_sync` is asked for
+    /// exactly that. Nothing else of the created `Email` is answered: RFC 8620
+    /// §5.3 has a server return only the properties it set itself, so the rest of
+    /// what a summary row needs is not there to read, and the row is what the
+    /// next refresh of the mailbox builds.
+    ///
+    /// A refusal stays the server's own [`SyncError::Client`], including a
+    /// mailbox the account does not have. That is *not* the
+    /// [`SyncError::NoSuchFolder`] the folder writes answer with, and the
+    /// difference is not a judgement about which is nicer: those writes name a
+    /// mailbox as the record being changed, and get a `notFound` back saying so,
+    /// while an import names it inside `mailboxIds` — where a server reports it
+    /// as an `invalidProperties` refusal of the *message*, indistinguishable
+    /// from the same refusal about the blob. Guessing which property a
+    /// description meant would be this crate reading the server's prose.
+    pub fn import_message(
+        &self,
+        mailbox: &Id,
+        source: Vec<u8>,
+        keywords: &Keywords,
+        received_at: Option<i64>,
+    ) -> Result<Id, SyncError> {
+        let upload = self
+            .client
+            .upload_blob(&self.account_id, MESSAGE_MEDIA_TYPE, source)?;
+
+        let mut import = EmailImport::new(upload.blob_id, mailbox.clone());
+        for keyword in keywords.iter() {
+            import = import.keyword(keyword);
+        }
+        if let Some(received_at) = received_at.and_then(date::utc_date) {
+            import = import.received_at(UtcDate::new(received_at));
+        }
+
+        let imported = self.client.email_import(&self.account_id, &import)?;
+        imported
+            .id
+            .ok_or_else(|| SyncError::protocol("Email/import created a message without an id"))
+    }
+
     /// Says whether the user wants to see a folder — the write behind
     /// `CamelSubscribable`'s two vfuncs.
     ///
@@ -788,6 +870,10 @@ fn folder_error(mailbox: &Id, error: jmap_client::Error) -> SyncError {
 fn catch_up_limit(held: usize, objects_in_get: usize) -> usize {
     held.max(objects_in_get)
 }
+
+/// What an uploaded message is announced as: RFC 2046 §5.2.1's type for an
+/// encapsulated RFC 5322 message, which is what the bytes of an import are.
+const MESSAGE_MEDIA_TYPE: &str = "message/rfc822";
 
 /// A server that answers every `Email/query` with a limited page, without ever
 /// running out of ids, would otherwise hang the calling thread. Far above any
