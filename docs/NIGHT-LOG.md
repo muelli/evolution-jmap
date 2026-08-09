@@ -5775,3 +5775,105 @@ cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs` and the five emissions
 (two subscription, three folder-management), which wait on M6 and M7. The
 README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (sixty-second session)
+
+**The ticks, in the listing** — `get_folder_info_sync` reads
+`CAMEL_STORE_FOLDER_INFO_SUBSCRIBED` and `SUBSCRIPTION_LIST`, which the previous
+session named as the next increment. One commit, entirely inside `jmap-mail`:
+`Request::roots` becomes a `Cow`, and a filter behind it.
+
+- **`SUBSCRIBED`** is what Evolution's folder tree adds for a store that is
+  `CamelSubscribable`, so it is the flag that makes the tick the user sets in
+  the subscription editor change what the folder tree draws. Until now the tick
+  was written to the server, kept in the store's listing and answered to
+  `folder_is_subscribed` — and then ignored by the only call that decides which
+  folders appear.
+- **`SUBSCRIPTION_LIST`** is the editor's own question — which folders are there
+  to tick — and is answered with all of them. For JMAP that is the listing the
+  store already holds: `Mailbox/get` returns every mailbox of the account with
+  its `isSubscribed`, so there is no second, wider request to make, the way an
+  IMAP store needs `LIST` beside `LSUB`.
+
+Red first: twelve tests in `jmap-mail/tests/folders.rs` against a hand-built
+tree with the ticks set explicitly, and two more through the vfunc against the
+mock, nine of which failed.
+
+Decisions taken:
+
+- **An unticked folder with a ticked one below it stays in the answer.**
+  `CamelFolderInfo` hangs a child off its parent, so there is no answer in which
+  `Work/Invoices` is present and `Work` is not: dropping the unticked parent
+  would drop mail the user explicitly asked to see. This is the same answer an
+  IMAP server gives, which returns the unsubscribed parents `LSUB`'s children
+  need.
+- **Such a folder is not dressed up as anything else.** It keeps
+  `subscribed: false`, so the listing does not put a tick in the editor the user
+  never set, and it is deliberately *not* marked `CAMEL_FOLDER_NOSELECT`.
+  Marking it was the obvious way to say "you are only seeing this because of
+  what is under it", and `camel-enums.h` documents the flag as "the folder
+  cannot contain messages" — which a JMAP mailbox the user unticked plainly can.
+  A flag Camel acts on is not a place to put a hint. The visible cost is that
+  unticking a folder that has a ticked child leaves it in the tree and openable;
+  the alternative is lying to Camel about the mailbox.
+- **The filter is applied to whatever `top` already chose**, rather than instead
+  of it — a caller asking about one subtree of a filtered account means the
+  filtered part of that subtree — and it leaves the depth alone: cutting to
+  `RECURSIVE` stays `FolderInfoChain::from_forest`'s job.
+- **`SUBSCRIPTION_LIST` outranks `SUBSCRIBED`** if a caller sets both. An editor
+  showing only what is already ticked is one nothing new can be ticked in.
+  Evolution passes them separately, so this is defensive rather than observed.
+- **The filter and the depth cut differ in one visible way, and a test pins it.**
+  `from_forest` deliberately leaves `CAMEL_FOLDER_CHILDREN` on a folder whose
+  children the *depth* left out — they exist, and the expander is how the caller
+  asks for them. Children the *ticks* left out are not part of this view at all,
+  so the folder reports `NOCHILDREN`.
+- **The filter is iterative**, for the reason `from_forest` gives: the depth of
+  the tree comes from a `parentId` chain a server chose. Pre-order with each
+  folder's parent recorded, then back the other way, so a folder's children are
+  settled before the folder is. `FolderInfo` is rebuilt field by field rather
+  than with `..folder.clone()`, which would clone the subtree its children were
+  just chosen from only to throw it away.
+- **`Request::roots` is now a `Cow`.** A subtree with folders taken out of it is
+  not a subtree of the tree the store holds, so a filtered answer has to be
+  built; an unfiltered one — every call Evolution makes for the message list —
+  still borrows and allocates nothing.
+
+**Not covered by a test, and the honest limits of the increment:**
+
+1. **Nothing here has been driven from Evolution's folder tree.** That the tree
+   passes `SUBSCRIBED` for a subscribable store, and the editor
+   `SUBSCRIPTION_LIST`, is read from Camel's own documentation of the flags
+   rather than observed. *Needs human verification in real Evolution.*
+2. **The `NOSELECT` decision above is a judgement, not a measurement.** What
+   Evolution draws for an unticked folder kept for its ticked child — and
+   whether a user reads it as "unsubscribing did nothing" — is exactly the
+   question a real session answers. *Needs human verification in real
+   Evolution.*
+3. `FAST` is still not read, and the module says why: it is documented as
+   deprecated and "most backends will behave the same whether it is supplied or
+   not", which is true of this one because JMAP puts the counts in the mailbox
+   anyway. The pairing the previous session expected turned out not to exist.
+
+Not verified locally, as in the previous sixty-one sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and
+on the five EDS crates (513 tests on the latter).
+
+Next in M5. The store's folder surface is now complete enough that the gaps are
+elsewhere: the most valuable next increment is **lifting `tests/refresh.rs`'s
+emission harness into `tests/common`**, which is what the five unexercised
+emissions (two subscription, three folder-management) and the transfer's
+`changed` signal all wait on — every one of them is currently "two lines written
+the way IMAPX writes them" rather than something a test has seen fire.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs` and the five emissions,
+which wait on M6 and M7. The README's architecture block still lists only the
+round-1 crates.
