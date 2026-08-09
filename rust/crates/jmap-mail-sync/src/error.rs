@@ -34,6 +34,15 @@ pub enum SyncError {
     /// above can only reach for it if the distinction survives the crate
     /// boundary.
     NoSuchFolder(jmap_proto::Id),
+    /// A message was to be sent from an address the account has no identity
+    /// for, so there is nothing to submit it through.
+    ///
+    /// Its own variant, and not a client error, because nothing failed: the
+    /// connection is fine and the server was never asked to send anything. It
+    /// carries the address rather than an id because that is the part the user
+    /// recognises — they chose it in the composer, and it is what they would
+    /// have to change.
+    NoIdentity(String),
 }
 
 impl SyncError {
@@ -53,6 +62,9 @@ impl std::fmt::Display for SyncError {
             Self::NoSuchFolder(id) => {
                 write!(f, "the account no longer holds the mailbox {id}")
             }
+            Self::NoIdentity(address) => {
+                write!(f, "the account cannot send mail as {address}")
+            }
         }
     }
 }
@@ -61,7 +73,7 @@ impl std::error::Error for SyncError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Client(error) => Some(error),
-            Self::NoSuchMessage(_) | Self::NoSuchFolder(_) => None,
+            Self::NoSuchMessage(_) | Self::NoSuchFolder(_) | Self::NoIdentity(_) => None,
         }
     }
 }

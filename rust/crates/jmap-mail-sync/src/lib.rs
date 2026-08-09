@@ -21,6 +21,7 @@
 pub(crate) mod date;
 pub mod error;
 pub mod folder;
+pub(crate) mod identity;
 pub mod keywords;
 pub mod mailboxes;
 pub mod message;
@@ -688,6 +689,49 @@ impl MailSync {
         self.client
             .submit_email(&self.account_id, &uid, &identity, envelope, accepted)?;
         Ok(uid)
+    }
+
+    /// The identity a message sent from `address` goes out through — the
+    /// lookup a `CamelTransport` makes before it can fill in
+    /// [`Outgoing::identity`].
+    ///
+    /// `address` is an addr-spec, as [`Envelope::mail_from`] carries it and as
+    /// a transport reads it out of Camel's `from` argument: no display name, no
+    /// angle brackets. Which of the account's identities covers it — including
+    /// the domain wildcard RFC 8621 §6 allows — is [`crate::identity`]'s
+    /// judgement, documented there.
+    ///
+    /// **The envelope sender, not the message's `From`.** The two may differ on
+    /// purpose, and the one the account is sending *as* is the envelope's — it
+    /// is what Evolution filled in from the account the user chose in the
+    /// composer, whereas a `From` header can be a list address or a second
+    /// author. RFC 8621 §7 has the server check the header against the identity
+    /// this names, which is a check this side cannot make and should not
+    /// pre-empt: what comes back from a disagreement is the server's own
+    /// refusal, with its reason, and not a guess made here.
+    ///
+    /// One `Identity/get` per call, and nothing caches it. The account's
+    /// identities change when the user changes them elsewhere, a send is not a
+    /// hot path, and an identity list held across a session is exactly the kind
+    /// of cache that goes wrong quietly — by submitting through an identity the
+    /// account no longer has, or by failing to find one it has just gained.
+    ///
+    /// An address no identity covers is [`SyncError::NoIdentity`] rather than a
+    /// send that goes out through whatever the account happens to have first: an
+    /// identity is who the mail is *from*, and picking one on the user's behalf
+    /// would send their message as somebody else.
+    pub fn identity_for(&self, address: &str) -> Result<Id, SyncError> {
+        let identities = self.client.identities(&self.account_id)?;
+        let found = identity::best_match(&identities, address)
+            .ok_or_else(|| SyncError::NoIdentity(address.to_owned()))?;
+        // RFC 8620 §5.1 answers a `/get` with records that have ids; an
+        // identity without one cannot be named in a submission, so there is
+        // nothing to fall back to and nothing to be gained by hiding it.
+        found.id.clone().ok_or_else(|| {
+            SyncError::protocol(format!(
+                "Identity/get returned an identity for {address} without an id"
+            ))
+        })
     }
 
     /// Says whether the user wants to see a folder — the write behind
