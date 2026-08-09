@@ -3996,3 +3996,97 @@ before they are a vfunc. `Email/changes` against a state kept on disk is what th
 empty `recent` list and the whole-mailbox refresh are both still waiting for.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (forty-third session)
+
+M5's twenty-third increment, and the missing half of the last one: the row now
+remembers what the server was last seen holding. `CamelJmapMessageInfo` is a
+`CamelMessageInfoBase` with the listing's keyword set beside it, and
+`CamelJmapSummary` is the one-field subclass that makes Camel build rows of that
+type when it reads a folder back off disk. `synchronize_sync` now has both ends
+of the difference it has to send; what is still missing is the vfunc that walks
+the summary for the rows Camel marked dirty.
+
+Red first: two tests in `jmap-mail-sync`'s `tests/keywords.rs` for the set built
+back out of the names it was stored as, six in `jmap-mail`'s
+`tests/message_info.rs` and three in `tests/summary.rs` — the last of those
+against a folder closed and opened again over the store's real summary database,
+which is the only test that would have caught a column that saves and does not
+load.
+
+Decisions taken:
+
+- **The before is a column, not a recomputation.** A summary row holds Camel's
+  flags word and its user flags, and both are the *after*: the user marking a
+  message read mutates the row in place, so by the time a write happens the
+  keywords the listing found are gone unless the row kept them. IMAPX solves the
+  same problem the same way — a `server_flags` word next to Camel's in its own
+  message-info subclass — and there is no other place to put it: Camel's row has
+  no spare field, and inventing one out of user flags would put this provider's
+  bookkeeping in the namespace Evolution draws labels from.
+- **`bdata`, because it is the field Camel reserves for exactly this.** A
+  `CamelMIRecord` has one string per row for what a provider knows and Camel does
+  not, appended to by the class chain on the way out and read back through the
+  same cursor on the way in. The names go through `camel_util_bdata_put_string`
+  rather than joined here: its encoding is length-prefixed, and a label like
+  `Read later` or `9-lives` is what says why that matters — a separator-joined
+  format would bring one keyword back as two. The count is written first because
+  the cursor is a stream shared with every other class in the chain, so a reader
+  has to know when to stop.
+- **A row that lost the column remembers nothing rather than failing to load.**
+  Reporting failure would drop the whole row over the one column nothing else
+  needs, and the empty set is the *conservative* answer rather than merely a
+  tolerable one: a difference from nothing only ever adds keywords, so a summary
+  written before this column existed removes none. Same rule for a count that
+  runs past the end of the string — the reads stop at the first name that is not
+  there and keep the ones that were.
+- **The summary subclass overrides no vfunc.** All four a `CamelFolderSummary`
+  subclass usually exists for build rows out of *messages* — a parser, a MIME
+  message, a header list, a locally invented uid — and a JMAP folder is listed
+  rather than parsed. What it declares is `message_info_type`, which is not a
+  vfunc at all: it is the field Camel reads when it instantiates a row itself,
+  which is every row of every folder after a restart. `tests/summary.rs` pins
+  that field against the same function `new_message_info` constructs through, so
+  the two paths cannot answer differently.
+- **A clone carries the column only when the copy is one of ours.** The parent's
+  clone builds its result out of the summary it is told to assign the copy to, so
+  a row cloned into no summary comes back a plain `CamelMessageInfoBase` — and
+  that is left exactly as the parent made it. Forcing the type would mean
+  rebuilding every column of the row here, which is the parent's job and would
+  silently stop copying whatever column Camel adds next. A copy that is not of
+  this type is a copy in a folder with no JMAP keywords to be asked about.
+- **The set is renewed by a refresh and is not part of what a refresh reports.**
+  `update_message_info` rewrites it beside the flags and the labels, and
+  deliberately does not fold it into the answer it gives the folder: what the
+  server holds is not a column the message list draws, so a listing that only
+  re-spelled a keyword is not a change to announce. A keyword the server really
+  added arrives as a flag or a label as well, and is reported as one of those.
+- **A mutex, unlike the folder's mailbox id.** The id is written once before
+  anything can reach the object; this is written by every refresh and read by
+  every synchronisation, from the several threads Camel drives a folder from. The
+  lock is never held across anything but a clone of the set, and the accessor
+  hands out a copy rather than a borrow.
+
+Not verified locally, as in the previous forty-two sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files this session,
+so every file touched already carries its SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates; `jmap-mail` is at 173 tests. Two
+allowlist entries in `eds-sys`: `camel_util_bdata_.*` and the `CamelMIRecord`
+typedef.
+
+Next in M5. **`synchronize_sync`** is now unblocked in full: the vfunc walks the
+summary for rows carrying `CAMEL_MESSAGE_FOLDER_FLAGGED`, builds a
+`KeywordChange` from the column that landed today against the row as it now is,
+sends it, and — on success — renews the column and clears the bit. The one design
+question left is what to do with a row whose write failed: leaving the bit set
+retries it on the next synchronisation, which is right for a network failure and
+a loop for a keyword the server will never accept. **Bounding the cache** is
+still open from the forty-first session. `CamelSubscribable` remains the smaller
+unblocked piece; `get_trash_folder_sync` and `get_junk_folder_sync` are still a
+settings decision before they are a vfunc. `Email/changes` against a state kept
+on disk is what the empty `recent` list and the whole-mailbox refresh are both
+still waiting for. Unexercised against a real `CamelSession`: `service.rs`, which
+waits on M6 and M7. The README's architecture block still lists only the round-1
+crates.
