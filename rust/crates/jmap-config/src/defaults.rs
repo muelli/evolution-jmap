@@ -71,7 +71,7 @@ use crate::account::Account;
 /// The account to offer a user who has typed `identity` and nothing else.
 ///
 /// Every field is an answer the user can change afterwards; none of them is one
-/// this reaches a network to find. `check_completeness` runs on every
+/// this reaches a network to find. `check_complete` runs on every
 /// keystroke, and so does the vfunc that calls this — anything that had to ask
 /// the server belongs in the assistant's own lookup step instead
 /// ([`complete`](crate::complete) says the same of itself).

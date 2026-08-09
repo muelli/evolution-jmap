@@ -43,7 +43,7 @@
 //!   collection backend reads back as the origin the address named.
 //! - [`complete`] is the other direction: not what a commit writes but whether
 //!   there is to be one. It is the deciding half of
-//!   `EMailConfigServiceBackend`'s `check_completeness` vfunc, and it is here
+//!   `EMailConfigServiceBackend`'s `check_complete` vfunc, and it is here
 //!   for the same reason the two writers are — the decision is ordinary Rust
 //!   over an [`account::Account`] and can be tested, while the widget that will
 //!   ask it cannot be. Its join is with the *readers*: an account it accepts is
