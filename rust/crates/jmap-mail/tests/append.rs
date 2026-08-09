@@ -62,10 +62,11 @@ use std::ptr;
 
 use common::Account;
 use eds_sys::{
-    CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
-    CAMEL_STORE_FOLDER_NONE, CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    CamelMimeMessage, camel_data_wrapper_construct_from_data_sync,
-    camel_folder_append_message_sync, camel_folder_free_uids, camel_folder_get_message_sync,
+    CAMEL_FOLDER_ERROR_INVALID, CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_SEEN,
+    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE, CamelDataWrapper, CamelFolder,
+    CamelFolderClass, CamelMessageInfo, CamelMimeMessage,
+    camel_data_wrapper_construct_from_data_sync, camel_folder_append_message_sync,
+    camel_folder_error_quark, camel_folder_free_uids, camel_folder_get_message_sync,
     camel_folder_get_uids, camel_folder_refresh_info_sync, camel_message_info_new,
     camel_message_info_set_date_received, camel_message_info_set_flags,
     camel_message_info_set_user_flag, camel_mime_message_get_subject, camel_service_error_quark,
@@ -101,7 +102,11 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
-        let server = MockServer::builder().start();
+        Self::started_with(MockServer::builder())
+    }
+
+    fn started_with(builder: jmap_mock::MockServerBuilder) -> Self {
+        let server = builder.start();
         let account_id = server.account_id();
         let archive_id = {
             let state = server.state();
@@ -607,5 +612,56 @@ fn appending_to_a_mailbox_the_account_no_longer_has_fails() {
         appended.reported(),
         None,
         "an append that failed reported a uid"
+    );
+}
+
+/// A message larger than the account's `maxSizeUpload` (RFC 8620 §6.1) is
+/// refused before a byte of it is sent, and the folder says why.
+///
+/// The size limit is the one refusal of an append that is knowable in advance:
+/// it is in the session document, and the message is in hand. Sending anyway
+/// costs the user the whole upload — a large attachment over a domestic
+/// connection, minutes of a progress bar — to be told at the end what could
+/// have been said at the start.
+///
+/// Reported in `CAMEL_FOLDER_ERROR`, not `CAMEL_SERVICE_ERROR`: nothing is
+/// wrong with the account, and a service error is what Evolution reads to
+/// decide an account is unusable. It is the same judgement the serialisation
+/// failure above makes — the message is what could not be used.
+#[test]
+fn appending_a_message_over_the_accounts_upload_limit_fails_before_it_is_sent() {
+    let fixture = Fixture::started_with(MockServer::builder().size_upload(64));
+    assert!(MESSAGE.len() > 64, "the test message is not over the limit");
+
+    let appended = fixture.append(&Message::parsed(MESSAGE), ptr::null_mut());
+
+    // SAFETY: no arguments, and the quark registers itself.
+    let quark = unsafe { camel_folder_error_quark() };
+    assert_eq!(
+        appended.failure(),
+        (quark, CAMEL_FOLDER_ERROR_INVALID as i32),
+        "{}",
+        appended.message()
+    );
+    // The limit is in the sentence, because "too large" without the number is
+    // not something a user can act on.
+    assert!(appended.message().contains("64"), "{}", appended.message());
+    assert_eq!(
+        appended.reported(),
+        None,
+        "an append that failed reported a uid"
+    );
+
+    // And the mailbox is as it was: no blob, no message.
+    assert!(fixture.listing().is_empty());
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state
+            .account(&fixture.server.account_id())
+            .unwrap()
+            .blobs
+            .is_empty(),
+        "a refused append still uploaded the message"
     );
 }

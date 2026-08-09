@@ -45,7 +45,11 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
-        let server = MockServer::builder().start();
+        Self::started_with(MockServer::builder())
+    }
+
+    fn started_with(builder: jmap_mock::MockServerBuilder) -> Self {
+        let server = builder.start();
         let account_id = server.account_id();
         let inbox = {
             let state = server.state();
@@ -78,6 +82,14 @@ impl Fixture {
     /// The current `Email` state, for a before-and-after or a stale `ifInState`.
     fn email_state(&self) -> jmap_proto::State {
         self.client.email_state(&self.account_id).unwrap()
+    }
+
+    /// How many blobs the account is holding — the question "did anything go
+    /// up", asked of the server rather than of the answer.
+    fn blobs(&self) -> usize {
+        let state = self.server.state();
+        let state = state.lock().unwrap();
+        state.account(&self.account_id).unwrap().blobs.len()
     }
 }
 
@@ -444,4 +456,73 @@ fn the_same_message_imported_twice_is_two_messages() {
     let state = fixture.server.state();
     let state = state.lock().unwrap();
     assert_eq!(state.account(&fixture.account_id).unwrap().emails.len(), 2);
+}
+
+/// A message larger than the account's `maxSizeUpload` never leaves this
+/// process.
+///
+/// RFC 8620 §6.1 makes the limit part of the session document precisely so a
+/// client can ask before it sends, and a client that does not ask sends the
+/// whole message — a mail-sized upload over a slow link — to be told at the end
+/// that it was too big. The refusal here is local and names the limit, so what
+/// the layer above can put in front of the user is "the account takes at most
+/// N bytes" rather than the server's HTTP status.
+#[test]
+fn a_message_over_the_accounts_upload_limit_is_refused_before_it_is_sent() {
+    let fixture = Fixture::started_with(MockServer::builder().size_upload(1024));
+    let source = vec![b'x'; 1025];
+
+    let refused = fixture
+        .client
+        .upload_blob(&fixture.account_id, "message/rfc822", source)
+        .expect_err("an upload over the limit was accepted");
+
+    match &refused {
+        Error::TooLarge { size, limit } => {
+            assert_eq!(*size, 1025);
+            assert_eq!(*limit, 1024);
+        }
+        other => panic!("expected TooLarge, got {other:?}"),
+    }
+    // The message names both numbers, because a limit without the size it was
+    // measured against is not an explanation.
+    let message = refused.to_string();
+    assert!(message.contains("1025"), "{message}");
+    assert!(message.contains("1024"), "{message}");
+
+    // And nothing went up: this is a refusal, not a failed request.
+    assert_eq!(fixture.blobs(), 0);
+}
+
+/// The limit is a maximum, not a boundary to stay under: RFC 8620 §6.1 refuses
+/// what is *larger* than `maxSizeUpload`, so a message of exactly that size is
+/// one the account takes.
+#[test]
+fn a_message_of_exactly_the_upload_limit_is_sent() {
+    let fixture = Fixture::started_with(MockServer::builder().size_upload(1024));
+
+    fixture
+        .client
+        .upload_blob(&fixture.account_id, "message/rfc822", vec![b'x'; 1024])
+        .expect("an upload of exactly the limit was refused");
+
+    assert_eq!(fixture.blobs(), 1);
+}
+
+/// A server that names no limit gets the upload.
+///
+/// RFC 8620 §2 requires `maxSizeUpload`, so this is a server out of spec — and
+/// the two ways to treat one are to invent a limit or to send. Inventing one
+/// would refuse messages the server would have taken, and be a number this
+/// crate made up appearing in front of the user as the account's.
+#[test]
+fn a_server_that_names_no_upload_limit_is_sent_the_message() {
+    let fixture = Fixture::started_with(MockServer::builder().no_size_upload());
+
+    fixture
+        .client
+        .upload_blob(&fixture.account_id, "message/rfc822", vec![b'x'; 4096])
+        .expect("an upload to a server with no stated limit was refused");
+
+    assert_eq!(fixture.blobs(), 1);
 }

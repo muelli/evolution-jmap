@@ -55,6 +55,21 @@ impl Session {
             .get("maxObjectsInGet")?
             .as_u64()
     }
+
+    /// The largest file the server will take on `uploadUrl`, in octets (RFC
+    /// 8620 §6.1, the core capability's `maxSizeUpload`).
+    ///
+    /// `None` when the server does not say — which RFC 8620 §2 does not allow,
+    /// and which is again the caller's decision rather than this type's: there
+    /// is no safe number to invent here, because a limit made up locally would
+    /// refuse uploads the server would have taken, and would be this crate's
+    /// number appearing in front of a user as the account's.
+    pub fn max_size_upload(&self) -> Option<u64> {
+        self.capabilities
+            .get(CAPABILITY_CORE)?
+            .get("maxSizeUpload")?
+            .as_u64()
+    }
 }
 
 /// One account the user has access to (RFC 8620 §1.6.2).
