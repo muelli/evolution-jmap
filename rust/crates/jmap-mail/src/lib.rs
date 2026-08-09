@@ -76,6 +76,12 @@
 //!   the vfunc that walks the rows Camel marked as having to reach the server
 //!   and turns each into the `Email/set` that closes the difference between the
 //!   keywords the last listing found and the ones the row claims now.
+//! - [`transfer`] is the other thing the user does that reaches the server:
+//!   `transfer_messages_to_sync`, the vfunc behind dragging a message into
+//!   another folder. Its patch is one `Email/set` over `mailboxIds` — a JMAP
+//!   mailbox is a member of a set rather than a place, so a copy adds one and a
+//!   move adds one and takes another away — and the work around it is the rows
+//!   a move leaves the source folder holding.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -104,3 +110,4 @@ pub mod settings;
 pub mod store;
 pub mod summary;
 pub mod synchronize;
+pub mod transfer;

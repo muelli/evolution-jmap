@@ -27,7 +27,7 @@ use eds_sys::{
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_mail_sync::{FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary};
+use jmap_mail_sync::{Filing, FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary};
 use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
@@ -235,6 +235,20 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         Ok(sync.set_keywords(uid, change)?)
+    }
+
+    /// Files one message into another mailbox — the write behind
+    /// `transfer_messages_to_sync`.
+    ///
+    /// On the store and locked exactly like [`JmapStore::set_keywords`], and
+    /// taking no mailbox for the same reason: both of the mailboxes a filing
+    /// names are in the [`Filing`], and the message is named by an id that
+    /// identifies it in the account rather than in a folder.
+    pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        Ok(sync.file_message(uid, filing)?)
     }
 
     /// Drops the folder listing. Called with the connection lock held, by the

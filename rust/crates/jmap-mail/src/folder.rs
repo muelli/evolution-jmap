@@ -195,6 +195,16 @@ unsafe impl ObjectSubclass for JmapFolder {
         //
         // SAFETY: as above.
         unsafe { crate::synchronize::install_vfuncs(class.cast::<CamelFolderClass>()) };
+
+        // And the other thing the user does to a message, which is not a
+        // property of it at all: where it is filed. `CamelFolder` fills this
+        // slot in with a generic implementation that downloads every message
+        // and appends it to the destination — correct between two accounts and
+        // absurd within one, where the server can file the message itself
+        // without the mail ever leaving it.
+        //
+        // SAFETY: as above.
+        unsafe { crate::transfer::install_vfuncs(class.cast::<CamelFolderClass>()) };
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.
