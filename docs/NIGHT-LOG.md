@@ -7292,3 +7292,108 @@ Next in M5: `maxCallsInRequest` is the smallest remaining protocol item — the
 client builds two-call requests in `search_emails` and `send_email`, and a
 server that advertised a limit of one would fail both. After that,
 `get_folder_info_sync`'s NULL-versus-GError question, or the README.
+
+## 2026-08-09 (seventy-sixth session)
+
+**The two-call requests nobody had asked the server about.** The client chains
+two method calls into one request in exactly two places — `Email/query` +
+`Email/get` through a `#ids` back-reference, and `Email/set` +
+`EmailSubmission/set` through a `#draft` creation reference — and neither had
+ever read `maxCallsInRequest`. RFC 8620 §3.2 refuses an over-long request
+*whole*, with `urn:ietf:params:jmap:error:limit`: a server that takes one call
+at a time would have answered neither the read nor the send, so the round trip
+the chain saves would have cost the user the mail.
+
+Red first, in three layers:
+
+- `evolution-jmap-proto`: two tests for a `Session::max_calls_in_request()` that
+  did not exist — `Some(32)` off the RFC fixture, `None` for a session with the
+  property stripped.
+- `evolution-jmap-mock`: `calls_in_request(n)` / `no_calls_in_request()` on the
+  builder, advertised **and enforced**, exactly as `objects_in_get` and
+  `size_upload` already are. A test pins the enforcement itself (a two-call
+  `Core/echo` request to a one-call server is a 400 `…:error:limit` and neither
+  call runs) so the client tests below cannot pass against a permissive mock.
+- `evolution-jmap-client`: four tests over the two chains, two of which failed
+  with precisely that 400.
+
+What landed:
+
+- **`Session::max_calls_in_request()`**, the third accessor of its shape next to
+  `max_objects_in_get` and `max_size_upload`, and `None` for a silent server for
+  the same reason as those two.
+- **`Client::takes_calls_in_one_request(calls)`** — asked *before* a chain is
+  built, not after a refusal.
+- **`email_query_then_get`** falls back to a query followed by an `Email/get`
+  naming the ids it answered; **`send_email`** falls back to creating the draft
+  and then submitting it by its real id. Both keep the chained form as the
+  default. The `/get` order-restoration is now `in_query_order`, shared by both
+  paths, and the submission request is now built by one `submission_request`
+  helper so the two forms differ in one argument rather than in a copied struct.
+- **`ServerState::api_requests`** / `MockServer::api_requests()` — a round-trip
+  counter. `method_calls` counts calls, which is the same for both paths; only
+  this can tell one request carrying two calls from two carrying one each, and
+  it is what stops "always split" from passing the tests.
+
+Decisions taken:
+
+- **Split, rather than fail with a good error.** A `TooLarge`-style refusal was
+  the other option and is what `upload_blob` does — but an upload that is too
+  big cannot be made smaller by the client, whereas a request that is too long
+  can always be sent as several. Refusing would have made a whole class of
+  server unable to read or send mail over a limit that costs one round trip to
+  respect.
+- **The chain stays the default, and not only for speed.** Split, there is a
+  window between the two requests: a message the query found may be destroyed
+  before the `/get`, and it comes back one short rather than as an error; a
+  draft exists alone in Drafts before its submission. Written into both doc
+  comments rather than left to be rediscovered.
+- **`#submission` stays a creation reference in the split path.**
+  `onSuccessUpdateEmail` is keyed by the *submission*, which the second request
+  creates itself — only the `emailId` had to become a real id. The test asserts
+  the draft still lands in Sent with `$seen`, which is the part that would have
+  gone quietly missing.
+- **An empty query costs one request, not two.** The chained form's `/get`
+  travels with the query whether or not anything matched; the split form would
+  otherwise spend a whole round trip fetching nothing.
+
+**Not covered by a test, and the honest limits:**
+
+1. **No real server was asked.** Everything here is against the mock, which now
+   enforces the limit it advertises — but a real server's refusal wording, and
+   whether it counts calls the way this does, is unverified. Stalwart is the
+   place to check that (the integration track), not this VM.
+2. **The split `Email/get` can still be too long.** It names every id the query
+   answered, so a query returning more than `maxObjectsInGet` fails there. That
+   is true of the chained form too — the server resolves the back-reference to
+   the same ids — so this change neither introduces nor fixes it; `jmap-mail-sync`
+   is where that limit is already respected, by chunking. Worth doing in the
+   client one day.
+3. **A server naming a limit of 0** is refused everything, split or not. Out of
+   spec, and nothing here pretends to rescue it.
+4. **Nothing here has been seen in Evolution** — *needs human verification in
+   real Evolution*, like the rest of this surface.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). One new file,
+`jmap-client/tests/call_limits.rs`, with the SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (402 tests, up from
+393) and on the five EDS crates (589, unchanged — the mail provider goes through
+the client, so it inherits this without a line of its own changing).
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `get_folder_info_sync`'s NULL-versus-GError
+question; `service.rs` unexercised against a real `CamelSession`; and the
+README's architecture block still listing only the round-1 crates.
+`maxCallsInRequest` is now read; `maxSizeRequest` and `maxConcurrentUpload`
+still are not.
+
+Next in M5: `maxSizeRequest` is the sibling of what was done here and the harder
+one — it bounds the *bytes* of a request, which for `Email/import` and a large
+`Email/set` is a number the client would have to measure before sending rather
+than count. Otherwise `get_folder_info_sync`'s NULL-versus-GError question, or
+the README.

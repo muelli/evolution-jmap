@@ -56,6 +56,26 @@ impl Session {
             .as_u64()
     }
 
+    /// How many method calls one request to `apiUrl` may carry (RFC 8620 §2,
+    /// the core capability's `maxCallsInRequest`).
+    ///
+    /// The number that decides whether two calls chained through a
+    /// back-reference may travel together. Over it, the whole request is
+    /// refused with `urn:ietf:params:jmap:error:limit` — not the last call
+    /// alone — so a client that chains without asking loses the calls that
+    /// would have been fine.
+    ///
+    /// `None` when the server does not say, like the other two limits here:
+    /// what to do without a number is the caller's decision. Both guesses are
+    /// wrong in their own direction — a low one splits requests the server
+    /// would have taken whole, a high one sends requests it refuses.
+    pub fn max_calls_in_request(&self) -> Option<u64> {
+        self.capabilities
+            .get(CAPABILITY_CORE)?
+            .get("maxCallsInRequest")?
+            .as_u64()
+    }
+
     /// The largest file the server will take on `uploadUrl`, in octets (RFC
     /// 8620 §6.1, the core capability's `maxSizeUpload`).
     ///

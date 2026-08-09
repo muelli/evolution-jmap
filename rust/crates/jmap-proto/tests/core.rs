@@ -104,6 +104,29 @@ fn the_session_names_the_largest_upload_the_server_takes() {
     assert_eq!(session.max_size_upload(), Some(50_000_000));
 }
 
+/// How many method calls one request may carry (RFC 8620 §2), which is what
+/// decides whether a chained `Email/query` + `Email/get` may go in one request
+/// or has to be two.
+#[test]
+fn the_session_names_how_many_calls_one_request_may_carry() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    assert_eq!(session.max_calls_in_request(), Some(32));
+}
+
+/// A server that names no call limit is answered with `None`, like the other
+/// two: what to do without a number is the caller's decision, and a guess here
+/// would either split requests that were fine or send ones that are refused.
+#[test]
+fn a_session_that_names_no_call_limit_says_so() {
+    let mut value = fixture("core/session.json");
+    value["capabilities"][jmap_proto::session::CAPABILITY_CORE]
+        .as_object_mut()
+        .unwrap()
+        .remove("maxCallsInRequest");
+    let session: Session = serde_json::from_value(value).unwrap();
+    assert_eq!(session.max_calls_in_request(), None);
+}
+
 /// A server that does not name the limit is answered with `None` rather than a
 /// guess. RFC 8620 §2 requires the property, so this is a server out of spec —
 /// and inventing a limit for it would refuse uploads it would have taken.
