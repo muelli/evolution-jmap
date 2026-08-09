@@ -27,7 +27,11 @@
 //!   writing the account rather than a longer version of it. Here the other
 //!   side of the join is not a reader but a second *writer*: the collection
 //!   backend's `prepare_mail` writes the same three sources from the registry,
-//!   and `tests/mail.rs` holds the two against each other.
+//!   and `tests/mail.rs` holds the two against each other. It also has a reader
+//!   the account source does not: the `CamelSettings` object an
+//!   `ESourceCamel` extension hands a `CamelJmapStore`, which is where the
+//!   server a setup wrote turns into the server the provider connects to, and
+//!   which `jmap-mail`'s own `ServerConfig` is asked about in the same test.
 //!
 //! ## Why an rlib with no module in it yet
 //!
@@ -47,16 +51,11 @@
 //!
 //! ## What is not here yet
 //!
-//! **The Camel settings the mail account connects with** — host, port,
-//! security and user, which reach a Camel service through an `ESourceCamel`
-//! extension generated for the provider's own settings type. Until they are
-//! written, an account committed by this crate names the `jmap` provider
-//! without naming a server for it; see [`mail`] for why they need `jmap-mail`'s
-//! `CamelJmapSettings` GType and therefore an increment of their own.
-//!
-//! And **the module**: no `EMailConfigServiceBackend` subclass calls any of
-//! this yet, so what is verified here is the functions, not a thing Evolution
-//! does.
+//! **The module**: no `EMailConfigServiceBackend` subclass calls any of this
+//! yet, so what is verified here is the functions, not a thing Evolution does.
+//! That is also the reason the two writers above are as complete as they are —
+//! an account this crate commits is one a store can open and a transport can
+//! send through, with no step left for the caller to remember.
 //!
 //! Like the backends, this crate needs the installed EDS headers and so stays
 //! out of the workspace's `default-members`; CMake runs its tests via the

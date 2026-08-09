@@ -30,6 +30,12 @@
 //! else would notice the uncalled one going stale, and it is the implementation
 //! a later Evolution reaching that hook would get.
 //!
+//! The overlap is not equality, and the difference is the server: the vfunc
+//! writes the two service *names* and can write no host, because it is handed
+//! the three sources without the account they belong to. So the two are held
+//! against each other on what both say, and everything below the service name is
+//! this writer's alone.
+//!
 //! ## What is written, and what writes it instead
 //!
 //! - **`Parent`**, on all three, is what makes them this account's mail:
@@ -53,6 +59,18 @@
 //!   agree is not EDS's business but the setup's, and an identity that
 //!   disagreed with its account would send mail from an address the account
 //!   does not claim.
+//! - **The server the two services reach** — `[Authentication]` and
+//!   `[Security]` on the account and on the transport, which is
+//!   `apply_server` below and where the answer to "why is this not a Camel
+//!   group?"
+//!   is written down. Host, port, user and encryption do not live in the
+//!   provider's own `[JMAP Backend]` group at all: `ESourceCamel` binds those
+//!   five `CamelNetworkSettings` properties to the two extensions above, so a
+//!   mail source that names a provider and no host is one whose store is handed
+//!   a settings object with an empty host in it. The one thing that is genuinely
+//!   Camel's is the *spelling* of the security method — see
+//!   [`MAIL_SECURITY_METHOD_TLS`], which is not the string the collection
+//!   carries.
 //!
 //! Not written here:
 //!
@@ -65,32 +83,43 @@
 //!   assistant's identity page's to write and which an [`Account`] does not
 //!   carry. Blank means Evolution sends `From: <address>`, which is
 //!   RFC-conformant and is not something to invent an answer for.
-//! - **The Camel settings the store connects with** — host, port, security and
-//!   user, which reach a Camel service through an `ESourceCamel` extension
-//!   generated for the provider's own settings type. Writing them needs
-//!   `jmap-mail`'s `CamelJmapSettings` GType, and therefore Camel, which this
-//!   crate does not link. **Until that is written the mail account names a
-//!   provider but no server**, which is the next increment and is why M7 is not
-//!   done.
+//! - **The `[JMAP Backend]` group itself.** The `ESourceCamel` subtype it
+//!   belongs to is generated from `jmap-mail`'s `CamelJmapSettings` GType, and
+//!   this crate links no Camel — but nothing here needs it to. The extension is
+//!   created on demand by `e_source_camel_configure_service` in whichever
+//!   process opens the account, the five properties this setup has answers for
+//!   are bound to `[Authentication]` and `[Security]` rather than stored in it,
+//!   and what remains in the group is `CamelStoreSettings`' and
+//!   `CamelOfflineSettings`' inherited defaults — filters, offline limits — which
+//!   are the user's to change later and not an account setup's to invent.
+//!   `tests/mail.rs` still generates the subtype and reads the settings object
+//!   back through it, because that object is the only place the account can be
+//!   asked the question the store will ask it.
 //!
 //! [prepare_mail]: ../../jmap_backend_collection/prepare_mail/index.html
 //! [`jmap-mail`'s provider]: ../../jmap_mail/provider/index.html
 
 use std::ffi::CStr;
+use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_MAIL_ACCOUNT, E_SOURCE_EXTENSION_MAIL_IDENTITY,
-    E_SOURCE_EXTENSION_MAIL_SUBMISSION, E_SOURCE_EXTENSION_MAIL_TRANSPORT, ESource, ESourceBackend,
-    ESourceMailAccount, ESourceMailIdentity, ESourceMailSubmission,
-    e_source_backend_set_backend_name, e_source_get_extension, e_source_get_uid,
-    e_source_mail_account_get_type, e_source_mail_account_set_identity_uid,
+    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_MAIL_ACCOUNT,
+    E_SOURCE_EXTENSION_MAIL_IDENTITY, E_SOURCE_EXTENSION_MAIL_SUBMISSION,
+    E_SOURCE_EXTENSION_MAIL_TRANSPORT, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication,
+    ESourceBackend, ESourceMailAccount, ESourceMailIdentity, ESourceMailSubmission,
+    ESourceSecurity, e_source_authentication_get_type, e_source_authentication_set_host,
+    e_source_authentication_set_method, e_source_authentication_set_port,
+    e_source_authentication_set_user, e_source_backend_set_backend_name, e_source_get_extension,
+    e_source_get_uid, e_source_mail_account_get_type, e_source_mail_account_set_identity_uid,
     e_source_mail_identity_get_type, e_source_mail_identity_set_address,
     e_source_mail_submission_get_type, e_source_mail_submission_set_transport_uid,
-    e_source_mail_transport_get_type, e_source_set_parent,
+    e_source_mail_transport_get_type, e_source_security_get_type, e_source_security_set_method,
+    e_source_set_parent,
 };
 use jmap_backend_core::error::cstring_lossy;
+use jmap_collection_sync::child_source::Connection;
 
-use crate::account::Account;
+use crate::account::{Account, as_ptr};
 
 /// The Camel protocol the mail account and the mail transport name — the same
 /// string [the collection backend's vfunc][prepare_mail] writes, and the one
@@ -102,6 +131,39 @@ use crate::account::Account;
 ///
 /// [prepare_mail]: ../../jmap_backend_collection/prepare_mail/constant.MAIL_BACKEND_NAME.html
 pub const MAIL_BACKEND_NAME: &CStr = c"jmap";
+
+/// The `[Security] Method` a mail source carries when the connection is
+/// encrypted — and deliberately not `"tls"`, which is what [`crate::account`]
+/// writes on the collection.
+///
+/// One key, read by two different pieces of code depending on which kind of
+/// source it is on. On the collection, `ESourceSecurity` compares it against
+/// `"none"` and hands the JMAP backends a boolean. On a mail source an
+/// `ESourceCamel` extension additionally binds it to `CamelNetworkSettings`'s
+/// `security-method` through `e_binding_transform_enum_nick_to_value`, which
+/// looks the string up as a **`CamelNetworkSecurityMethod` enum nick**.
+///
+/// The failure on a string that is not one is quiet and worth stating exactly,
+/// because it is not what it first looks like: the transform returns `FALSE` and
+/// the binding sets nothing, so the settings object keeps the property's own
+/// default — which in EDS 3.52 is `STARTTLS_ON_STANDARD_PORT`. An account
+/// written as `"tls"` therefore *does* connect over TLS today, by way of a
+/// default nobody chose: `jmap-mail` only distinguishes `NONE` from not, so it
+/// sees encryption, while Evolution's account editor shows the user an
+/// encryption setting they did not pick, and a Camel release that moved that
+/// default to `NONE` would turn the same keyfile into a refusal to connect.
+/// Writing the nick is what makes the account say what it means to both readers.
+///
+/// Of Camel's three nicks this is the one that describes HTTPS — TLS from the
+/// first byte, no in-band upgrade — and it is the spelling Evolution's own
+/// server settings page writes back through the same binding, so an account
+/// committed here and then merely opened in the editor does not change shape.
+pub const MAIL_SECURITY_METHOD_TLS: &CStr = c"ssl-on-alternate-port";
+
+/// And when it is not encrypted, which is the one spelling both sides share:
+/// `ESourceSecurity` documents `"none"` as its convention for "no security" and
+/// `CamelNetworkSecurityMethod`'s first value has the same nick.
+pub const MAIL_SECURITY_METHOD_NONE: &CStr = c"none";
 
 /// The three scratch sources a commit is handed, in the order they are talked
 /// about everywhere else — receiving account, identity, transport.
@@ -145,6 +207,11 @@ pub unsafe fn apply(collection: *mut ESource, sources: &MailSources, account: &A
         e_source_mail_identity_get_type();
         e_source_mail_submission_get_type();
         e_source_mail_transport_get_type();
+        // The two [`apply_server`] writes on, which are not mail extensions and
+        // so are not covered by the four above — though `e_source_class_init`
+        // ensures these as well.
+        e_source_authentication_get_type();
+        e_source_security_get_type();
     }
 
     // The strings outlive every call that borrows them, which is what keeps the
@@ -197,5 +264,83 @@ pub unsafe fn apply(collection: *mut ESource, sources: &MailSources, account: &A
         )
         .cast();
         e_source_backend_set_backend_name(transport, MAIL_BACKEND_NAME.as_ptr());
+    }
+
+    // And the server each of the two services reaches. Not the identity, which
+    // reaches none.
+    for source in [sources.account, sources.transport] {
+        // SAFETY: a valid source by this function's contract.
+        unsafe { apply_server(source, &account.connection) };
+    }
+}
+
+/// Writes where a mail service reaches its server, on the source that service
+/// is configured from.
+///
+/// Nothing here is a *Camel* group, which is the surprise and the reason this is
+/// four ordinary `ESource` extensions rather than a dependency on `jmap-mail`:
+/// host, port, user, authentication mechanism and security method are the five
+/// `CamelNetworkSettings` properties that `ESourceCamel` binds to *other*
+/// extensions — `[Authentication]` and `[Security]` on the same source — so they
+/// are excluded from the generated `[JMAP Backend]` group by construction. The
+/// provider's own group holds what is left, which for this provider is
+/// `CamelStoreSettings`' and `CamelOfflineSettings`' inherited properties and
+/// nothing this setup has an answer for.
+///
+/// The values are the collection's own, out of the same [`Connection`], and that
+/// is load-bearing beyond consistency: EDS decides whether a child source shares
+/// its collection's password by comparing the two `[Authentication] Host`
+/// strings (`e_util_can_use_collection_as_credential_source`, reached from
+/// `e_source_credentials_provider_ref_credentials_source`). The comparison exists
+/// so that an account may put its outgoing service on another server with a
+/// password of its own; here a host that disagreed — including one left
+/// unwritten while the collection has one — would be a second password prompt
+/// for the same server and a second libsecret entry to fall out of step.
+///
+/// `[Authentication] Method` is the one field written differently from the
+/// collection's, and it is written as nothing. On a collection it names the EDS
+/// credentials provider implementation; on a mail source `ESourceCamel` also
+/// binds it to `CamelNetworkSettings:auth-mechanism`, where it names a SASL
+/// mechanism. `jmap-mail` passes a NULL mechanism to
+/// `camel_session_authenticate_sync` because JMAP authenticates over HTTP and
+/// advertises none to choose between, so the honest value is the absent one —
+/// which EDS spells `"none"` and `ESourceCamel` converts back to NULL on the way
+/// to Camel. It is *written* rather than left alone for the same reason as every
+/// other field here: a mechanism left over from a previous commit is one
+/// Evolution's account editor would show as this account's authentication type.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` — one of the two service sources the setup
+/// is committing. Nothing here outlives the call.
+unsafe fn apply_server(source: *mut ESource, connection: &Connection) {
+    // Outliving every call that borrows them, as in `apply` above.
+    let host = cstring_lossy(&connection.host);
+    let user = connection.user.as_deref().map(cstring_lossy);
+    let security_method = if connection.secure {
+        MAIL_SECURITY_METHOD_TLS
+    } else {
+        MAIL_SECURITY_METHOD_NONE
+    };
+
+    // SAFETY: a valid source by this function's contract, and header constants
+    // naming extensions whose types `apply` registered; each extension is
+    // created on demand and owned by the source, and every setter copies the
+    // string it is given.
+    unsafe {
+        let auth: *mut ESourceAuthentication =
+            e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+        e_source_authentication_set_host(auth, host.as_ptr());
+        e_source_authentication_set_user(auth, as_ptr(&user));
+        e_source_authentication_set_method(auth, ptr::null());
+        // Zero is how `[Authentication] Port` spells "not set", and it is what
+        // an unconfigured `CamelNetworkSettings` reads back as as well, so the
+        // two ends of the binding agree about the absence and not only about a
+        // value.
+        e_source_authentication_set_port(auth, connection.port.unwrap_or(0));
+
+        let security: *mut ESourceSecurity =
+            e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
+        e_source_security_set_method(security, security_method.as_ptr());
     }
 }

@@ -52,6 +52,7 @@ evolution-jmap-mail-sync = { path = "crates/jmap-mail-sync" }
 evolution-jmap-collection-sync = { path = "crates/jmap-collection-sync" }
 jmap-backend-core = { path = "crates/jmap-backend-core" }
 jmap-backend-collection = { path = "crates/jmap-backend-collection" }
+jmap-mail = { path = "crates/jmap-mail" }
 
 # Reproducibility: deterministic codegen, no incremental state, no debug paths.
 [profile.release]
