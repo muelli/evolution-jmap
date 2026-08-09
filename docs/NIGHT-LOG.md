@@ -9280,3 +9280,103 @@ Next in M6: `populate` itself — `parts_of`, then `server_of`, then
 for each cached child `Fanout::is_obsolete` names. It cannot be driven by EDS
 here, so the increment that writes it must be marked *needs human verification
 in real Evolution*.
+
+## 2026-08-09 (ninety-fourth session)
+
+**The half of a populate that deletes.** `populate` is two loops — one that
+creates children and one that removes them — and only the second can be written
+without settling how a collection backend gets its credentials. It is also the
+one that destroys data, so it went first.
+
+New module `rust/crates/jmap-backend-collection/src/removal.rs`:
+
+- `obsolete(&Fanout, &[*mut ESource]) -> Vec<*mut ESource>` — of the children
+  this collection already has, the ones this populate must remove. The decision
+  is `Fanout::is_obsolete`'s; what is here is the join to the `ESource`, which is
+  `resource_id_of` per child and nothing else.
+- `remove_obsolete(&Fanout, &[*mut ESource]) -> Vec<NotRemoved>` — the same
+  choice, carried out with `e_source_remove_sync()`, reporting rather than
+  raising.
+- `NotRemoved { resource_id, message }` — a child that could not be removed and
+  what EDS said about it.
+
+Red first, and recorded as red: against a stub returning empty vectors, 5 of the
+7 tests in `tests/removal.rs` failed. The two that passed are
+`a_child_of_a_part_the_user_switched_off_is_kept` and
+`a_source_this_backend_did_not_write_is_never_removed` — a populate that removes
+nothing keeps everything, so they are satisfied by construction. They are there
+because they are the two ways this module can delete a user's offline cache, and
+they have to stay green as it grows a caller.
+
+What was decided, and why:
+
+- **Every source judged is one this backend wrote, by the code that writes it.**
+  The test sources are built by `child_source::apply` from a `Child`, not shaped
+  by hand. `Fanout::is_obsolete` is tested in `jmap-collection-sync` against
+  resource id *strings* and `apply` is tested here against the properties it
+  writes; neither covers the join, and the join is the whole risk — a resource id
+  this backend cannot read back off a source it wrote itself is not a mislabelled
+  sidebar row, it is `e_source_remove_sync()` on a child that should have been
+  kept, or a child kept forever that should have gone.
+- **A source with no resource id of ours is never removed.** `None` from
+  `resource_id_of` means a child of another collection backend, one written by a
+  future version of this one, or a hand-edited file. "I cannot read this" and
+  "this is obsolete" are indistinguishable from the removal's side and only one
+  of them is recoverable, so the unreadable child is left alone.
+- **A failed removal is reported, not raised, and does not stop the ones after
+  it.** `ECollectionBackendClass::populate` returns `void`: there is no `GError`
+  to fill and nobody to hand one to. So `remove_obsolete` removes what it can and
+  hands back one `NotRemoved` per refusal for the caller to log; the next
+  populate finds the same children and asks again, which is the whole of the
+  recovery available. Abandoning the loop at the first refusal would leave the
+  sidebar half-cleaned with no error anywhere to say so.
+- **The resource id is read once, not twice.** `named_obsolete` keeps the id it
+  judged, so the name a child is removed under is the name it was judged under.
+- **A `TRUE` that also set a `GError` frees it; a `FALSE` that set none still
+  produces a report.** Neither is EDS's behaviour, both are cheap, and the second
+  is the difference between a silent non-removal and a logged one.
+
+**Verified, not read off a header:** `e_source_remove_sync()` on a source with no
+D-Bus object fails rather than blocking or aborting — it answers `FALSE` with
+`Data source "…" is not removable`. That is the one branch of the call this
+machine can drive, and it happens to be exactly the branch a populate has to
+survive. The tests assert the message is non-empty rather than its wording,
+which is translated.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The success branch of `e_source_remove_sync` is never taken here.** Every
+   source in the suite is detached, so every removal is refused. That a removal
+   which EDS *accepts* takes the child, its `.source` file and its cache — and
+   that this module then reports nothing — is read off EDS, not observed.
+   **Needs human verification in real Evolution.**
+2. **Still no caller.** `children` will come from
+   `e_collection_backend_list_contacts_sources()` and `…_list_calendar_sources()`,
+   which need a live `ESourceRegistryServer`. Nothing in this crate can produce
+   that list yet, so the contract "these are the children of this collection" is
+   this module's precondition rather than something it checks.
+3. **The piece between the account and the fan-out is still unsettled**, and it
+   is what blocks `populate` as a whole: `Fanout::discover` wants a connected
+   `Client`, and when EDS makes credentials available to a *collection* backend
+   (as against the book and calendar backends, which are handed an
+   `ENamedParameters`) is not something this VM can be made to demonstrate. That
+   is the next session's first question, and it is a reading-and-deciding
+   question before it is a code one.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491 tests
+on the default members, unchanged) and `cargo clippy --all-targets --locked --
+-D warnings` are clean, as is `cargo test`/`clippy` over the six EDS crates
+(`jmap-backend-collection` now 41 tests, up from 34).
+`RUSTDOCFLAGS=-D warnings cargo doc` is clean for `jmap-backend-collection`.
+
+No milestone tag: M6 can now read an account, write a child and remove one, and
+still cannot fan one out.
+
+Next in M6: the credentials question above, and then `populate` itself —
+`parts_of`, `server_of`, a client, `Fanout::discover`, an
+`e_collection_backend_new_child` plus `child_source::apply` per `Child`, and
+`removal::remove_obsolete` over the children EDS lists. It cannot be driven by
+EDS here, so the increment that writes it must be marked *needs human
+verification in real Evolution*.
