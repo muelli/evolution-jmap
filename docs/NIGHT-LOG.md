@@ -3688,3 +3688,105 @@ before they are a vfunc. `Email/changes` against a state kept on disk is still
 what the empty `recent` list and the whole-mailbox refresh are both waiting for.
 Still unexercised against a real `CamelSession`: `service.rs`, which waits on M6
 and M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (fortieth session)
+
+M5's twentieth increment, and the one the previous nineteen were building
+towards: `get_message_sync`, the folder vfunc that turns a message list row
+into mail a person can read. The fetch half landed last session
+(`MailSync::message_source` — an `Email/get` for the blob id, then the blob);
+this is the half that makes an object out of the bytes, plus the `eds-sys`
+bindings the object needs and a home for the store accessor two vfuncs now
+share.
+
+The session opened on a working tree that already held the increment,
+uncommitted — the previous run wrote the code and the tests and stopped before
+the gates. So the first thing done was the check that TDD would otherwise have
+given for free: the vfunc installation was removed and `tests/message.rs` run
+against the rest, which failed all three, the success case with "the message
+would not open: no error". That last part is worth recording — Camel's
+`camel_folder_get_message_sync` does not guard a class with an empty
+`get_message_sync` slot, so an uninstalled vfunc is not a critical or a
+`G_IO_ERROR_NOT_SUPPORTED` but a silent NULL with no `GError`, which a caller
+that only tests the error pointer would read as success. Then restored, green
+again, and the gates run on both member sets.
+
+Decisions taken:
+
+- **Camel parses it, not us.** `camel_data_wrapper_construct_from_data_sync`
+  on the message's `CamelDataWrapper` face. The object has to agree with the
+  rest of Camel — the filters, the reply composer, the save-as dialogue —
+  about what the message says, and a provider that read the headers itself
+  would be a second MIME implementation inside the same process, disagreeing
+  with the first at exactly the edge cases MIME has. The corollary is that a
+  parse failure is passed through rather than reclassified: a message Camel's
+  parser rejects is one this crate has no better account of, and dressing it
+  as a service error would report a malformed message as a broken account.
+- **One buffer, not a stream.** `construct_from_data_sync` rather than a
+  `CamelStreamMem` and `construct_from_stream_sync`, which is what the
+  previous session's note assumed would be needed. A blob download already
+  produced the whole message in memory, so the stream would wrap a buffer this
+  code is holding anyway and would put `CamelStream`, `CamelStreamMem` and
+  their class structs across the ABI to do it. The cost is the message being
+  in memory twice for the length of the parse, which is the trade every caller
+  of `get_message_sync` makes regardless, since what they get back *is* the
+  whole message. The length is `gssize::try_from(...).unwrap_or(MAX)`: a
+  saturating cast leaves a truncated parse, which fails loudly, where a
+  wrapping one would leave a negative length that Camel reads as "to the end
+  of the buffer" and walks off it.
+- **Two error domains, and the distinction is the feature.** A uid the account
+  no longer holds is `CAMEL_FOLDER_ERROR_INVALID_UID`; a store with no
+  connection is `CAMEL_SERVICE_ERROR_NOT_CONNECTED`. The second is what makes
+  Camel reconnect and ask again, the first is what makes it drop one row.
+  Swapped, a message another client deleted between a listing and a click
+  would take a working account offline — which is why both are tests and not
+  just code. The third case, a parse that fails without setting an error, gets
+  a synthesised `CAMEL_FOLDER_ERROR_INVALID`: the uid was fine and the account
+  is fine, and answering NULL with no error set is the one thing Camel logs a
+  critical for.
+- **`parent_store` moved to `folder.rs`.** It was a private helper in
+  `refresh.rs` because `refresh_info_sync` was the only vfunc that needed the
+  store behind the folder. It is a fact about the folder object, not about
+  refreshing, and with `get_message_sync` it is the first line of two vfuncs;
+  the type check it does — `parent-store` is an ordinary construct property,
+  not a GObject dispatch, so a `JmapStore` read out of one unchecked would be
+  undefined behaviour rather than a wrong answer — is the sort of thing that
+  should exist once.
+- **The tests ask Camel, not the mock.** Comparing the downloaded bytes
+  against the mock's own rendering would assert that the mock agrees with
+  itself. What has to be true is that Camel can read the result, so the parsed
+  message is interrogated through Camel's accessors: the subject, the `From`
+  run through `camel_address_format`, and the body decoded via
+  `camel_medium_get_content` and the wrapper's own decoder — the last being
+  the assertion that needs the whole message to have arrived rather than its
+  first few hundred bytes. `body_of` guards the NULL buffer a resizable
+  `GMemoryOutputStream` has when nothing was written to it, because
+  `from_raw_parts` on it is undefined behaviour and would turn a test that
+  should fail with a readable message into an abort with no assertion in it.
+- **Four `eds-sys` types for one call.** `CamelDataWrapper`, `CamelMedium`,
+  `CamelMimePart` and `CamelMimeMessage` are one inheritance chain, and all
+  four are allowlisted because the parse entry point is declared on the *last*
+  ancestor: the provider crosses the ABI at every level of it. Layouts
+  spot-checked against `g_type_query` like the rest.
+
+Not verified locally, as in the previous thirty-nine sessions: `reuse lint`
+and `cargo deny` (neither binary is installed on this VM). The two new files —
+`jmap-mail/src/message.rs` and `jmap-mail/tests/message.rs` — carry SPDX
+`GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on both member
+sets, the five EDS crates included.
+
+Next in M5, in the order they look tractable. **The offline cache**, which is
+the gap this increment leaves: every open is two round trips, and RFC 8621
+§4.1 makes an `Email` immutable, so a message fetched once never needs
+fetching again — `CamelDataCache` is where IMAPX keeps one, a file per message
+under the account's cache directory, with a `purge_message_cache_sync` to
+bound it. **`synchronize_sync`**, still the first thing in the crate that
+writes: a row Camel marked read or deleted is a `keywords` patch through
+`Email/set`. `CamelSubscribable` remains the smaller unblocked piece;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings
+decision before they are a vfunc. `Email/changes` against a state kept on disk
+is what the empty `recent` list and the whole-mailbox refresh are both still
+waiting for. Unexercised against a real `CamelSession`: `service.rs`, which
+waits on M6 and M7. The README's architecture block still lists only the
+round-1 crates.
