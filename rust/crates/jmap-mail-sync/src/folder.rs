@@ -206,6 +206,33 @@ impl FolderTree {
         self.iter().find(|folder| folder.role == Some(role))
     }
 
+    /// Records that a mailbox is now subscribed, or is not, reporting whether
+    /// the tree had it at all.
+    ///
+    /// The one edit this type offers, and it exists because the property is the
+    /// one thing in a folder listing a *client* decides. Everything else here
+    /// is the server's — counts, roles, where a mailbox hangs — and the honest
+    /// way to bring any of it up to date is to list the account again. A
+    /// subscription is different: the client has just been told what the new
+    /// value is by the server accepting its write, so re-listing to learn it
+    /// would be asking a question already answered.
+    ///
+    /// By mailbox id rather than by path, because the caller is a write that
+    /// named a mailbox and paths are this crate's invention: a folder whose
+    /// parent was renamed between the listing and the write has a different
+    /// path and the same id.
+    pub fn set_subscribed(&mut self, id: &Id, subscribed: bool) -> bool {
+        let mut stack: Vec<&mut FolderInfo> = self.roots.iter_mut().collect();
+        while let Some(folder) = stack.pop() {
+            if folder.id == *id {
+                folder.subscribed = subscribed;
+                return true;
+            }
+            stack.extend(folder.children.iter_mut());
+        }
+        false
+    }
+
     /// How many folders the account has, at any depth.
     pub fn len(&self) -> usize {
         self.iter().count()

@@ -470,6 +470,49 @@ impl MailSync {
         self.update_email(uid, filing.patch())
     }
 
+    /// Says whether the user wants to see a folder — the write behind
+    /// `CamelSubscribable`'s two vfuncs.
+    ///
+    /// One method rather than two, because on the wire it is one `Mailbox/set`
+    /// update with two possible values: RFC 8621 §2 gives a mailbox an
+    /// `isSubscribed`, and `subscribe_folder_sync` and
+    /// `unsubscribe_folder_sync` differ only in what they set it to.
+    ///
+    /// It goes to the *server* rather than into a list Evolution keeps, which
+    /// is the whole reason the property is in the protocol: a subscription is a
+    /// decision about an account, and a user who hides a folder on their laptop
+    /// means it hidden on their phone too.
+    ///
+    /// Written unconditionally, with no "it is already that" shortcut of the
+    /// kind [`MailSync::set_keywords`] has. The two are not the same case: a
+    /// keyword change arrives already knowing what changed, whereas the only
+    /// thing that could answer "already subscribed?" here is a folder listing,
+    /// which is a *cache* — one that another client's change makes wrong, in
+    /// precisely the direction that would swallow the user's write. A round
+    /// trip per tick in the subscription editor is the cheaper mistake.
+    ///
+    /// A mailbox the account no longer holds is [`SyncError::NoSuchFolder`],
+    /// the same judgement [`MailSync::set_keywords`] makes about a message that
+    /// went away: another client deleting the folder is ordinary, and the
+    /// user's decision about it is simply moot. Every other refusal stays the
+    /// server's own [`SyncError::Client`].
+    pub fn set_subscribed(&self, mailbox: &Id, subscribed: bool) -> Result<(), SyncError> {
+        self.client
+            .mailbox_update(
+                &self.account_id,
+                mailbox,
+                serde_json::json!({ "isSubscribed": subscribed }),
+            )
+            .map_err(|error| match &error {
+                jmap_client::Error::Set(set_error)
+                    if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
+                {
+                    SyncError::NoSuchFolder(mailbox.clone())
+                }
+                _ => SyncError::Client(error),
+            })
+    }
+
     /// One `Email/set` update, with the one refusal that is not a failure
     /// named: a message the account no longer holds.
     fn update_email(&self, uid: &Id, patch: serde_json::Value) -> Result<(), SyncError> {

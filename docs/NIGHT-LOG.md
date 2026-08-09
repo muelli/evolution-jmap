@@ -5104,3 +5104,99 @@ before they are a vfunc, and that decision is what `expunge_sync` waits on;
 cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (fifty-fifth session)
+
+M5's thirty-fifth increment, across `jmap-mail-sync` and `jmap-mail`: **the
+subscription a user toggles** — the `Mailbox/set` that carries it, and the
+folder listing that has to agree with it afterwards.
+
+This is the first half of what the previous session named as next:
+`CamelSubscribable` on the store. The wire it was blocked on landed then
+(`Mailbox/set` in the client); what is added here is the state on both sides of
+it. The GInterface itself — `eds-sys`'s binding, the `interface_init` hook
+`jmap-backend-core`'s `ObjectSubclass` does not have yet, and the three vfunc
+slots — is deliberately left for the next session, because it is a change to the
+subclassing scaffold rather than to the store, and doing it in the same commit
+would mix a piece of shared machinery into a mail-provider increment.
+
+- **`MailSync::set_subscribed(&Id, bool)`** — one `Mailbox/set` update of
+  `isSubscribed`. One method rather than two, because `subscribe_folder_sync`
+  and `unsubscribe_folder_sync` differ on the wire only in what they set it to.
+- **`FolderTree::set_subscribed(&Id, bool) -> bool`**, the one edit the tree
+  type offers, and by mailbox id rather than by path: a folder whose parent was
+  renamed between the listing and the write has a different path and the same
+  id.
+- **`JmapStore::set_subscribed`** — the request, and then the edit to the
+  listing the store holds.
+
+Red first: six tests in the new `jmap-mail-sync/tests/subscriptions.rs`, nine in
+the new `jmap-mail/tests/subscriptions.rs`, two more in
+`jmap-mail-sync/tests/tree.rs`. Each guard was then checked by breaking it on
+purpose — dropping the listing edit fails `the_held_listing_agrees_with_the_write`
+and `a_tree_already_handed_out_is_not_edited_underneath_its_reader`; making the
+tree walk not descend fails the nested-folder test; collapsing `NoSuchFolder`
+into another variant fails `a_folder_the_account_no_longer_has_is_reported_as_missing`.
+
+Decisions taken:
+
+- **The store edits its own listing, and that is not cache-warming.**
+  `CamelSubscribable` declares `folder_is_subscribed` as a *non-blocking*
+  method — Evolution asks it once per folder while drawing the tree — so the
+  held listing is the only thing that can ever answer it. A store that wrote the
+  subscription to the server and left its listing saying the opposite would draw
+  the tick straight back on, and keep doing so until something refreshed the
+  tree.
+- **The edit goes through `Arc::make_mut`.** A `CamelFolderInfo` forest is
+  copied out of a borrowed tree; a tree that mutated underneath such a walk is
+  the bug this rules out. A caller already holding the previous `Arc` keeps
+  reading what it was handed, which a test pins.
+- **The listing's `state` is left where it was.** The write did move the account
+  on, so the next refresh finds a change and rebuilds — one listing more than
+  strictly needed. The alternative is a store inventing a state string the
+  server never handed it and then asking `Mailbox/changes` from it.
+- **A store with nothing listed yet gains nothing.** A tree assembled from the
+  single mailbox a write happened to name would be an account with one folder in
+  it.
+- **No "it is already subscribed" shortcut**, unlike `set_keywords`. The only
+  thing that could answer that question is the folder listing, which is a cache
+  another client's change makes wrong — in precisely the direction that would
+  swallow the user's write. A round trip per tick in the subscription editor is
+  the cheaper mistake.
+- **`SyncError::NoSuchFolder`**, mapped to `StoreError::NoFolder` and so to
+  `CAMEL_STORE_ERROR_NO_FOLDER`. A folder another client deleted while this one
+  still lists it is ordinary; reported as a service error it would be a working
+  account shown as broken. `NoFolder` carries a mailbox id here where it carries
+  a path elsewhere — noted in the mapping, since the path the write came from
+  may since have moved.
+
+Not verified locally, as in the previous fifty-four sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). Two new files, both
+carrying the SPDX header. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates.
+
+Next in M5. **The `CamelSubscribable` interface itself**, which is now the only
+thing between this state and the vfuncs: `CamelSubscribable.*` on `eds-sys`'s
+allowlist; an `interface_init` hook on `jmap-backend-core`'s `ObjectSubclass`,
+whose `interfaces()` today registers every interface with a NULL init and so
+cannot fill a vfunc slot (`CamelNetworkSettings`, the only interface implemented
+so far, is all properties); then `folder_is_subscribed` as a read of the held
+listing and the two sync vfuncs as calls to `JmapStore::set_subscribed`, each
+emitting `camel_subscribable_folder_subscribed`/`_unsubscribed` the way IMAPX
+does. `create_folder_sync` and `delete_folder_sync` come after that, and both
+want a `CamelFolderInfo` answer and the store's folder list kept in step; the
+refusals the mock learned two sessions ago (`mailboxHasChild`,
+`mailboxHasEmail`, a sibling's name) are what those vfuncs must map onto a
+`CamelError` the user can act on.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+the `changed` signal a transfer emits is still not asserted by a test, which
+wants `tests/refresh.rs`'s emission harness lifted into `tests/common`;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.
