@@ -4441,3 +4441,99 @@ before they are a vfunc, and that decision is also what `expunge_sync` waits on.
 the whole-mailbox refresh are both still waiting for. Unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's
 architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (forty-eighth session)
+
+M5's twenty-eighth increment, and the folder half of the one before it:
+`transfer_messages_to_sync` on `CamelFolderClass`. Dragging a message into
+another folder now reaches the server, and the folder it left stops showing it.
+
+Red first: ten tests in a new `jmap-mail/tests/transfer.rs`, eight of them
+through Camel's own `camel_folder_transfer_messages_to_sync` wrapper and two
+through the class pointer, for the two cases that wrapper settles before any
+provider is asked. Eight failed against the old class — the two that passed did
+so through `CamelFolder`'s generic implementation, which is what this overrides.
+The flag-settling test was additionally verified failing with only that one call
+taken back out, which is where it would otherwise have passed for free.
+
+Decisions taken:
+
+- **A move settles the row before it takes it away.** Camel keeps a change the
+  user has made and not yet saved on the summary row, marked
+  `CAMEL_MESSAGE_FOLDER_FLAGGED`, and `synchronize_sync` is the only thing that
+  writes it. Removing the row would therefore drop it in silence — marking a
+  message read and dragging it into another folder before anything synchronised
+  is an ordinary sequence, and the destination would never learn of it either,
+  because what a folder lists is what the server holds. So the move calls
+  `crate::synchronize`'s own `push_row` first, which costs nothing at all for a
+  row nobody changed: the diff is empty and no request is made.
+- **The rows go now, not at the next listing.** A refresh would reach the same
+  answer — a message that left the mailbox is one the next `Email/query` does not
+  name — but "the next refresh" is a timer, and until it fires the message list
+  would still be showing what the user just moved out of it.
+- **A request per message, not one per transfer.** One `Email/set` could carry
+  every selected message, and would be applied as one state change: a transfer
+  that half succeeded would then be a single failure with no way to say which
+  messages moved. Camel needs an answer per message — a row that landed must
+  leave the folder and a row that did not must stay — so the walk is per uid and
+  the first failure is reported once all of them have been tried, exactly as
+  `synchronize_sync` does it.
+- **A message another client deleted is reported here, unlike in a flag write.**
+  `synchronize_sync` settles that case in silence because the write is a
+  consequence the user never asked for. A transfer is something they did, so it
+  becomes `CAMEL_FOLDER_ERROR_INVALID_UID` — what Evolution reads as "that
+  message is gone" rather than as a reason to take the account offline. The row
+  still goes: the message is not in this folder either.
+- **The transferred uids are answered rather than left NULL.** IMAPX ignores that
+  out-parameter, because its server mints a new uid in the destination and the
+  copy command does not say what it is. JMAP has the opposite problem and no
+  problem: RFC 8621 §4.1 gives an `Email` one immutable id per account, and
+  filing it into another mailbox does not make a second object, so the answer is
+  the uid the caller passed in. Allocated and filled the way Camel's own generic
+  transfer does it — array sized up front, `NULL` for a message that did not
+  land, every string one `g_free` releases — which is verifiably the convention
+  its callers free by: the wrapper's own vee-folder path frees a nested call's
+  array exactly that way.
+- **`filing.is_empty()` guards the rows, not just the request.** Camel answers a
+  transfer into the same `CamelFolder` itself, but two folder *objects* of one
+  mailbox are a pair it cannot recognise, and a move that went nowhere must not
+  take the rows away. Checked before anything, so it needs no connection either.
+- **The destination is type-checked, the source is not.** GObject dispatched the
+  call on the source's class; the destination is whatever the caller passed, and
+  the wrapper deliberately picks the *destination's* class when it is a vtrash
+  folder — so a folder of someone else's arriving here is a case Camel allows
+  for. Reading a `JmapFolder` out of one would be undefined behaviour rather than
+  a wrong answer.
+
+Cross-store transfers are still Camel's generic `get_message` +
+`append_message` path, which this provider has no `append_message_sync` for; a
+drag from an IMAP account into a JMAP one therefore still fails, and fails in
+Camel rather than here. It wants `Email/import`, which the client does not have.
+
+Not verified locally, as in the previous forty-seven sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). Two new files, both with
+the SPDX GPL-3.0-or-later header. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set and on the five EDS crates; `jmap-mail` is at 211 tests.
+(`example-module`'s lib test still fails to link on this VM, as before; it is not
+in either set.)
+
+Next in M5. The `changed` signal a move emits is *not* asserted by this
+increment's tests — the source folder's summary is, which is what the next
+message list is drawn from, but the emission that updates one already on screen
+is only the same one-line call `refresh_info_sync` makes. The harness for
+watching it lives inside `tests/refresh.rs` (a main context per test, a
+thread-local of emissions); lifting it into `tests/common` and asserting the
+removal reaches a listener is a small increment of its own, and would pay for
+itself in every folder vfunc after this. **Bounding the cache** is still open
+from the forty-first session, as is the other half of the atomicity problem — an
+entry is written by `write_all` and close rather than to a temporary name and
+renamed. `CamelSubscribable` still wants `Mailbox/set`, which the client does not
+have. `get_trash_folder_sync` and `get_junk_folder_sync` are still a settings
+decision before they are a vfunc, and that decision is what `expunge_sync` waits
+on — note that deleting mail is now one `Filing` away, since a trash folder is a
+mailbox and moving into it is what this increment does. `Email/changes` against a
+state kept on disk is what the empty `recent` list and the whole-mailbox refresh
+are both still waiting for. Unexercised against a real `CamelSession`:
+`service.rs`, which waits on M6 and M7. The README's architecture block still
+lists only the round-1 crates.

@@ -229,6 +229,13 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // so that a test can put a flag change on the server the way Evolution
     // does rather than by reaching into the class.
     "camel_folder_synchronize_sync",
+    // And the wrapper around the vfunc that files messages into another
+    // folder, for the same reason again — with one extra: this wrapper decides
+    // things of its own before it dispatches, answering a transfer into the
+    // folder the messages are already in and one of no messages at all without
+    // asking any provider. A test that reached past it would be testing a call
+    // Evolution cannot make.
+    "camel_folder_transfer_messages_to_sync",
     // The wrapper around the vfunc that hands one message over, for the same
     // reason: a test calls it the way Evolution's preview pane does.
     "camel_folder_get_message_sync",
