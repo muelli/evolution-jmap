@@ -9066,3 +9066,104 @@ source's `[Collection]` extension and its `Connection` off `[Authentication]`/
 children `Fanout::is_obsolete` names. It cannot be driven by EDS here either, so
 the increment that writes it must be marked *needs human verification in real
 Evolution*.
+
+## 2026-08-09 (ninety-second session)
+
+**What the account says before anything is asked of the server.** Last session
+made the *child* half of the collection backend's `ESource` reads sound
+(`resource_id_of`, and the `dup_resource_id` slot it fills). This session did the
+other half and the other source: the collection source itself — the account EDS
+hands the backend, which is the whole description of what to populate.
+
+New module `rust/crates/jmap-backend-collection/src/collection_source.rs`, two
+functions and a struct:
+
+- `parts_of(*mut ESource) -> Parts` — `e_source_get_enabled` and, when the source
+  has a `[Collection]` extension, its three flags, through
+  `Parts::from_collection`.
+- `server_of(*mut ESource) -> Result<Server, SourceError>` — `[Authentication]`
+  host/port/user/method and `[Security]` secure, validated through
+  `jmap_backend_core::source::origin`.
+- `Server { origin, connection }` — the origin *this* backend fetches
+  `/.well-known/jmap` from and the `Connection` each child repeats, out of one
+  read of one source.
+
+Red first, and recorded as red: against a stub returning `Parts::ALL` and a
+canned well-formed `Server`, 8 of the 11 tests in `tests/collection_source.rs`
+failed. The three that passed against the stub are the ones a canned answer
+satisfies — "a source that says nothing has all parts", "a well-formed account
+reads back", "the origin and the children agree" — and they are there so the
+other eight cannot be satisfied by answering everything the same way.
+
+What was decided, and why:
+
+- **Two functions, not one.** They fail differently and are wanted at different
+  moments. An account with every part switched off has nothing to populate and
+  must not be reported broken merely because its host field is also empty:
+  `populate` asks `parts_of` first, returns when `Parts::any` is false, and only
+  then needs a server. Folding the two into one `Result` would turn a
+  switched-off account into an error dialog.
+- **But the origin and the children's connection come out of one read.** This
+  backend contacts the server itself, and every child assembles its own origin
+  at the far end from the fields `Child::settings` copied into it. Two reads of
+  one source are two chances to disagree, and a disagreement is an account that
+  discovers its collections from one server and fetches them from another. Hence
+  `Server` carrying both, and `the_server_this_backend_contacts_is_the_one_its_children_are_given`
+  holding the origin against what `Child::settings` actually writes.
+- **The host rules are `jmap_backend_core::source::origin`'s, reached rather than
+  repeated.** They matter twice here: this backend is the first thing to contact
+  the server, and it is what *writes* the host into the children. A child
+  re-validates what it was handed, but by then the string has been written into
+  one `.source` file per collection — so `evil.example.com/x` and plain HTTP to a
+  non-loopback host are refused here, before any child exists.
+- **Nothing in this module creates an extension.** `e_source_get_extension()`
+  creates the extension it is asked for, and the source in question is the user's
+  *account* — the file EDS writes back to disk. So `[Collection]`, `[Security]`
+  and `[Authentication]` are each tested for before they are read, and three
+  tests assert the *absence* afterwards rather than only the value. The absences
+  are the documented answers: no `[Collection]` is `Parts::ALL` (what
+  `e_collection_backend_get_part_enabled()` answers), no `[Security]` is TLS (the
+  same rule `SourceConfig` applies, and the one whose omission would silently
+  downgrade every hand-written account and every child of it at once), and no
+  `[Authentication]` is `MissingHost` — which an empty one would have produced
+  anyway, minus the edit to the user's file.
+- **A port nobody named stays unnamed.** The keyfile writes 0 for "not set", and
+  passing it on would give the children `Port=0` and this backend an origin
+  asking for port zero, rather than the scheme's default.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no `populate`, so still no fan-out.** This is its input, not its
+   body: nothing yet calls `Fanout::discover`, `e_collection_backend_new_child`
+   or `e_source_remove_sync`. That remains the next and larger increment.
+2. **Still no module entry point**, so nothing is loadable — the crate is an
+   rlib. The cdylib and the `cmake/Backends.cmake` install rule land with
+   `e_module_load`, as noted last session.
+3. **Never driven by EDS.** Every source here is built with
+   `e_source_new_with_uid` and the EDS setters, which is what EDS itself does
+   for a source read from a keyfile — so the extension machinery is real — but
+   "EDS hands the backend this source" is still read off `e-collection-backend.c`
+   rather than demonstrated. A real one needs `evolution-source-registry` on the
+   session bus, which this VM does not have.
+4. **`e_collection_backend_get_part_enabled()`'s rules are taken from last
+   session's reading of the EDS source**, not from EDS at runtime. If it has a
+   third rule, this reads an account slightly wrong in a direction no test here
+   can see.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491 tests
+on the default members, unchanged — this crate is not among them) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean, as is
+`cargo test`/`clippy` over the six EDS crates (`jmap-backend-collection` now 25
+tests, up from 14). `RUSTDOCFLAGS=-D warnings cargo doc -p jmap-backend-collection`
+is clean.
+
+No milestone tag: M6 can now read an account, and still cannot fan one out.
+
+Next in M6: `populate` itself — `parts_of`, then `server_of`, then
+`Fanout::discover` against that origin, `e_collection_backend_new_child` per
+`Child` with `Child::settings` applied, and `e_source_remove_sync` for each
+cached child `Fanout::is_obsolete` names. It cannot be driven by EDS here, so
+the increment that writes it must be marked *needs human verification in real
+Evolution*.
