@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evo-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Raw FFI bindings to the Evolution application libraries the setup module extends"
+publish = false
+# As in eds-sys: build.rs does the linking, so cargo must not invent `-levo-sys`.
+links = "evolution-shell"
+
+[dependencies]
+# Every EDS and GLib type in these headers comes from there rather than being
+# generated a second time; see build.rs for what that costs and buys.
+eds-sys = { workspace = true }
+
+[build-dependencies]
+bindgen = { workspace = true }
+pkg-config = { workspace = true }

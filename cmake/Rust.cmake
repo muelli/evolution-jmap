@@ -65,10 +65,12 @@ set_tests_properties(rust-test PROPERTIES
 # Crates kept out of the workspace's default-members because they need the
 # EDS/Evolution development headers, so plain `cargo test` skips them. CMake
 # has already established the headers are present, so run them here — this is
-# the only place eds-sys's g_type_query layout checks get exercised.
+# the only place the g_type_query layout checks in eds-sys and evo-sys get
+# exercised.
 add_test(
 	NAME rust-test-eds
-	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys -p jmap-backend-core
+	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys -p evo-sys
+		-p jmap-backend-core
 		-p jmap-backend-book -p jmap-backend-cal -p jmap-mail
 		-p jmap-backend-collection -p jmap-config
 	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
