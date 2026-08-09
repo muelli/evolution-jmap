@@ -321,9 +321,10 @@ unsafe extern "C" fn get_inbox_folder_sync(
 /// no request at all.
 ///
 /// `wanted` is a question about the whole tree rather than a path, because the
-/// two callers ask different ones: opening a folder wants the path Camel named,
-/// while opening the inbox wants whichever mailbox claims the role.
-fn tree_holding(
+/// callers ask different ones: opening a folder wants the path Camel named,
+/// opening the inbox wants whichever mailbox claims the role, and
+/// [`crate::subscribe`] wants the path a subscription change was aimed at.
+pub(crate) fn tree_holding(
     store: &JmapStore,
     wanted: impl Fn(&FolderTree) -> bool,
 ) -> Result<Arc<FolderTree>, StoreError> {
