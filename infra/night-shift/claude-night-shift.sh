@@ -6,47 +6,45 @@
 # prompt, pushing each green increment. Deployed to ~/ on the runner VM
 # and started inside tmux BY THE OPERATOR (deliberately not automated).
 #
-# Usage-limit handling: when an iteration fails with a usage-limit error,
-# the reset time is parsed out of the message — preferably the epoch
-# timestamp Claude Code embeds ("...|1754630400"), falling back to the
-# human "resets at 4pm" form — and the driver sleeps until then (plus a
-# 2-minute buffer) instead of polling. Unparseable limit messages fall
-# back to a 60-minute nap; sleeps are capped at 6h so a bad parse
-# self-corrects. The script name contains "claude" on purpose: the idle
-# watchdog counts it as activity, so backoff sleeps do not power the VM
-# off mid-shift. The 24h uptime cap ends the shift.
+# Lifecycle & cost: the driver does NOT loop forever. It exits when it
+# can no longer make progress — a drained backlog (several no-op
+# iterations) or a usage limit — so that (a) it stops spending tokens on
+# sessions that conclude "nothing to do", and (b) the idle watchdog can
+# nap the VM. The hourly GCE instance schedule then reboots the VM to
+# poll for new work, and the @reboot cron relaunches this driver. So
+# "wait for more work" and "wait for a quota reset" are both handled by
+# nap + hourly reboot rather than by an expensive in-VM sleep. NOTE: the
+# watchdog's activity signal is the running `claude` session's argv, not
+# this script's name, so this driver sleeping or exiting never keeps the
+# VM alive by itself.
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 cd "$HOME/evolution-jmap" || exit 1
 LOG="$HOME/night-shift.log"
 PROMPT_FILE="$HOME/night-prompt.md"
+DRAIN_LIMIT=3          # consecutive no-op iterations that mean "backlog drained"
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
 
-# Print the seconds to sleep if $1 contains a usage-limit error; print
-# nothing otherwise.
-limit_backoff() {
-    local out="$1" reset now tstr
-    grep -qiE "usage limit|rate limit" "$out" || return 0
-    now=$(date +%s)
-    # Machine-readable epoch, e.g. "Claude AI usage limit reached|1754630400"
+# If $1 (a captured session log) shows a usage limit, echo a short human
+# ETA for the reset and return 0; otherwise return 1. Used only for an
+# informative log line now — the driver exits on a limit rather than
+# sleeping until reset, because sleeping in-VM would pay for idle time the
+# nap is meant to save.
+usage_limit_eta() {
+    local out="$1" reset tstr
+    grep -qiE "usage limit|rate limit" "$out" || return 1
     reset=$(grep -oE '\|[0-9]{10}' "$out" | tr -d '|' | head -1)
     if [ -z "$reset" ]; then
-        # Human form, e.g. "Your limit will reset at 4pm". NB: printed in
-        # the account's timezone, the VM runs UTC — the 6h cap plus
-        # re-probing absorbs a mismatch.
         tstr=$(grep -oiE "resets? at [0-9apm: ]{1,8}" "$out" | head -1 | sed -E 's/resets? at //I')
         [ -n "$tstr" ] && reset=$(date -d "$tstr" +%s 2>/dev/null)
-        [ -n "$reset" ] && [ "$reset" -le "$now" ] && reset=$((reset + 86400))
     fi
-    if [ -n "$reset" ] && [ "$reset" -gt "$now" ]; then
-        echo $(( reset - now + 120 ))
-    else
-        echo 3600
-    fi
+    if [ -n "$reset" ]; then echo "resets ~$(date -Is -d "@$reset" 2>/dev/null)"; else echo "reset time unknown"; fi
+    return 0
 }
 
 log "=== night shift starting ==="
+consecutive_noop=0
 while true; do
     git pull --rebase --quiet >> "$LOG" 2>&1 || true
     start=$(date +%s)
@@ -57,16 +55,26 @@ while true; do
     duration=$(( $(date +%s) - start ))
     log "iteration finished: exit=$status duration=${duration}s"
 
-    backoff=$(limit_backoff "$out")
+    if eta=$(usage_limit_eta "$out"); then
+        rm -f "$out"
+        log "usage limit ($eta) - exiting so the VM naps; hourly reboot resumes once quota is back"
+        exit 0
+    fi
     rm -f "$out"
-    if [ -n "$backoff" ]; then
-        [ "$backoff" -gt 21600 ] && backoff=21600   # re-probe at most every 6h
-        log "usage limit - sleeping ${backoff}s, resuming ~$(date -Is -d "+${backoff} seconds")"
-        sleep "$backoff"
-    elif [ "$duration" -lt 120 ]; then
-        log "fast exit without limit message - backing off 30 min"
-        sleep 1800
+
+    if [ "$duration" -lt 120 ]; then
+        # A fast exit is a no-op or a transient error. Ride out a couple
+        # (short sleep, retry while the VM is up anyway) before concluding
+        # the backlog is drained and exiting.
+        consecutive_noop=$(( consecutive_noop + 1 ))
+        log "short iteration ${consecutive_noop}/${DRAIN_LIMIT}"
+        if [ "$consecutive_noop" -ge "$DRAIN_LIMIT" ]; then
+            log "backlog appears drained - exiting; hourly reboot re-checks for new work"
+            exit 0
+        fi
+        sleep 300
     else
+        consecutive_noop=0
         sleep 600
     fi
 done

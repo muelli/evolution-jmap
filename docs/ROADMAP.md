@@ -71,6 +71,31 @@ the CMake install tree (CPack) so testing a nightly build is
 `apt install ./evolution-jmap.deb`. Wire into release.yml with
 attestation like the other artifacts.
 
+### M9 — End-to-end tests through real EDS + a GUI smoke test
+Keep this deliberately small; a full Evolution UI suite is out of scope
+for this repo (see below). Two layers only:
+- **Layer 1 — functional, headless (the priority).** Drive Evolution
+  Data Server through its client API / D-Bus against `jmap-mockd`:
+  create a contact via `e-book-client` and assert it reached the mock's
+  store; the same for a calendar event via `e-cal-client`; list the
+  inbox. Fast, deterministic, no display server. A gated CI job
+  (`workflow_dispatch`/label) since it needs the EDS *runtime*, and a
+  local recipe. Depends on M3/M4/M5.
+- **Tier 2 — one GUI smoke test.** Under `Xvfb`, launch Evolution
+  against the mock and assert it starts, the account appears, and the
+  inbox is non-empty (driven via AT-SPI/dogtail). Capture artifacts
+  ONLY on failure: record the X session to tmpfs with `ffmpeg
+  -f x11grab` and keep the video only if the test failed; on failure
+  also dump a screenshot, the AT-SPI tree, and the EDS + mock logs.
+  Upload with `if: failure()` / `artifacts: when: on_failure`, so a
+  green run stores nothing. One test — accept it will be a little flaky
+  (retry once); it is a canary, not coverage.
+
+Full scripted GUI flows (click through account setup, read message
+lists, open contacts) with screenshots/video are explicitly deferred to
+a **separate project** that UI-tests the latest *released* plugin build
+— keeping this repo's test surface fast and this milestone cheap.
+
 ## Standing directives
 
 ### Outsource iCalendar/vCard parsing to `calcard` (2026-08-08)

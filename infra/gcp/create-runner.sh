@@ -11,10 +11,13 @@
 # (short-lived, ~1 hour).
 #
 # Shutdown policy: an idle watchdog powers the VM off once there has been
-# no CI job, login session, or claude process for IDLE_MINUTES (default
-# 60; boot counts as activity, so a freshly started VM always gets a full
-# grace period). A 24h maximum-uptime guard caps runaway cost if the
-# activity signals misbehave. Start the VM again with
+# no CI job, login session, or actively-running agent session for
+# IDLE_MINUTES (default 15; boot counts as activity, so a freshly started
+# VM gets a grace period to begin work). Crucially the session signal is
+# the running claude process, not the driver loop — a driver spinning over
+# an empty backlog must NOT keep the VM alive. A 24h maximum-uptime guard
+# caps runaway cost if the activity signals misbehave. Start the VM again
+# with
 # `gcloud compute instances start <name>`.
 #
 # Trial-quota note: this uses 8 vCPUs — the whole per-region allowance on a
@@ -26,7 +29,7 @@ NAME=${NAME:-gha-runner-1}
 ZONE=${ZONE:-europe-west1-b}
 MACHINE=${MACHINE:-c2d-standard-8}
 REPO=${REPO:-muelli/evolution-jmap}
-IDLE_MINUTES=${IDLE_MINUTES:-60}
+IDLE_MINUTES=${IDLE_MINUTES:-15}
 # 24.04 matches the hosted runners, the CI container, and the Evolution
 # 3.52 target. Override (e.g. IMAGE_FAMILY=ubuntu-2604-lts-amd64) to get a
 # newer-EDS build target once the backends exist.
@@ -39,16 +42,22 @@ cat > "$STARTUP" <<EOF
 #!/bin/bash
 set -eux
 
-# Idle watchdog: while a job runs, the Actions runner has a Runner.Worker
-# child process. Refresh a timestamp whenever one is seen (and at boot);
-# power off once it is ${IDLE_MINUTES} minutes stale.
+# Idle watchdog: refresh a timestamp whenever the VM is genuinely in use
+# (and at boot); power off once it is ${IDLE_MINUTES} minutes stale.
 cat > /usr/local/bin/idle-watchdog <<'WATCHDOG'
 #!/bin/bash
 STAMP=/run/runner-last-active
 [ -f "\$STAMP" ] || touch "\$STAMP"          # /run is tmpfs: boot = activity
-# Activity = a CI job (Runner.Worker), any login session, or an agent at
-# work (claude in a detached tmux has no login session).
-if pgrep -f Runner.Worker > /dev/null || [ -n "\$(who)" ] || pgrep -f claude > /dev/null; then
+# Activity = a CI job (Runner.Worker), a login session, or an ACTIVELY
+# RUNNING agent session. The session signal matches the claude process's
+# own argv ("dangerously-skip-permissions"), NOT a driver script named
+# claude-*.sh — otherwise a driver merely looping over no-op iterations
+# with an empty backlog would pin the VM up forever. Only real work, a
+# login, or a CI job keeps it awake; the hourly instance schedule re-boots
+# an idle VM to poll for new work.
+if pgrep -f Runner.Worker > /dev/null \
+   || [ -n "\$(who)" ] \
+   || pgrep -f dangerously-skip-permissions > /dev/null; then
     touch "\$STAMP"
 fi
 # Hard 24h uptime cap: cost hygiene and a periodic clean slate. This does
@@ -58,8 +67,12 @@ if [ "\$(awk '{printf "%d", \$1}' /proc/uptime)" -gt 86400 ]; then
     logger "idle-watchdog: 24h uptime cap reached, shutting down (self-heal will restart)"
     /sbin/shutdown -h now
 fi
+# Keep IDLE_MINUTES comfortably above the driver's between-iteration sleep
+# (10 min) so a working shift is never cut off, but short enough that a
+# drained backlog naps promptly — each idle hour then costs ~IDLE_MINUTES
+# of uptime, not a full 60.
 if [ \$(( \$(date +%s) - \$(stat -c %Y "\$STAMP") )) -gt \$(( ${IDLE_MINUTES} * 60 )) ]; then
-    logger "idle-watchdog: no CI job for ${IDLE_MINUTES} minutes, shutting down"
+    logger "idle-watchdog: idle ${IDLE_MINUTES} minutes (no session, login, or CI job), shutting down"
     /sbin/shutdown -h now
 fi
 WATCHDOG
