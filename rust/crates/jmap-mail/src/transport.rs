@@ -40,15 +40,18 @@
 //!
 //! ## What is not here yet
 //!
-//! `send_to_sync`, which is the reason the type exists. The pieces it joins are
-//! written and tested — [`crate::envelope`] for the addresses Camel hands it,
-//! [`MailSync::identity_for`] for the identity to submit through, and
-//! [`MailSync::send_message`] for the import-and-submit itself — but nothing
-//! calls them yet, and until something does the provider's transport slot stays
-//! `G_TYPE_INVALID`. A registered transport whose `send_to_sync` is NULL would
-//! be an account that offers to send and fails with a GLib critical.
+//! `send_to_sync`, which is the reason the type exists. Every piece it joins is
+//! now written and tested — [`crate::envelope`] for the addresses Camel hands
+//! it, [`crate::mime`] for the message it is handed as the bytes that go up,
+//! [`MailSync::identity_for`] for the identity to submit through,
+//! [`MailSync::outgoing_mailboxes`] for where the message waits and is filed,
+//! and [`MailSync::send_message`] for the import-and-submit itself — but
+//! nothing calls them yet, and until something does the provider's transport
+//! slot stays `G_TYPE_INVALID`. A registered transport whose `send_to_sync` is
+//! NULL would be an account that offers to send and fails with a GLib critical.
 //!
 //! [`MailSync::identity_for`]: jmap_mail_sync::MailSync::identity_for
+//! [`MailSync::outgoing_mailboxes`]: jmap_mail_sync::MailSync::outgoing_mailboxes
 //! [`MailSync::send_message`]: jmap_mail_sync::MailSync::send_message
 
 use std::ffi::CStr;

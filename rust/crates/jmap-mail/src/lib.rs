@@ -82,11 +82,17 @@
 //!   mailbox is a member of a set rather than a place, so a copy adds one and a
 //!   move adds one and takes another away — and the work around it is the rows
 //!   a move leaves the source folder holding.
+//! - [`mime`] is the step every message this account uploads goes through: the
+//!   `CamelMimeMessage` as the RFC 5322 octets a blob is made of, written by
+//!   Camel's own emitter and line-ended the way a message on the wire has to
+//!   be. Its own module because two unrelated objects need it — a folder taking
+//!   a message in and a transport sending one out — and a second emitter is
+//!   where the two would start to disagree.
 //! - [`append`] is the arrival [`transfer`] cannot serve: `append_message_sync`,
 //!   the vfunc that takes a `CamelMimeMessage` the account has never seen — one
 //!   dragged out of another account, one the composer just built — writes it out
-//!   through Camel's own emitter and puts it on the server as an `Email/import`
-//!   over an uploaded blob.
+//!   through [`mime`] and puts it on the server as an `Email/import` over an
+//!   uploaded blob.
 //! - [`manage`] is the pair that changes which folders there are:
 //!   `create_folder_sync` and `delete_folder_sync`, the vfuncs behind the
 //!   folder the user adds to an account and the one they take away — one
@@ -128,6 +134,7 @@ pub mod folders;
 pub mod manage;
 pub mod message;
 pub mod message_info;
+pub mod mime;
 pub mod module;
 pub mod provider;
 pub mod refresh;

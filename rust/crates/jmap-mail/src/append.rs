@@ -14,22 +14,20 @@
 //! this module does is turn the object into the bytes they need and decide what
 //! the folder makes of the answer.
 //!
-//! ## Camel's writer, for [`crate::message`]'s reason turned around
+//! ## Camel's writer, which is [`crate::mime`]'s
 //!
-//! The message is serialised through
-//! `camel_data_wrapper_write_to_output_stream_sync`, which is Camel's own RFC
-//! 5322 emitter reached through the message's `CamelDataWrapper` face. That is
-//! the mirror of the decision [`crate::message`] makes about the parse: the
-//! object has to agree with every other part of Camel about what the message
-//! says, and a provider that wrote headers itself would be a second, disagreeing
-//! MIME implementation inside the same process — one whose disagreement is
-//! *stored*, because what goes up is what the account holds from then on.
+//! The message is serialised by [`write_message`], through Camel's own RFC 5322
+//! emitter: the object has to agree with every other part of Camel about what
+//! the message says, and a provider that wrote headers itself would be a
+//! second, disagreeing MIME implementation inside the same process — one whose
+//! disagreement is *stored*, because what goes up is what the account holds
+//! from then on.
 //!
-//! A `GMemoryOutputStream` rather than a `CamelStreamMem`: the destination is a
-//! buffer either way, and the GIO one is the object Camel's own stream class is
-//! a wrapper around. The whole message is in memory twice for the length of the
-//! upload — the stream's copy and the request's — which is the same cost
-//! [`crate::message`] pays in the other direction.
+//! Its own module and not this one's private function, because sending needs
+//! exactly the same bytes: a `CamelTransport` is handed an object and uploads a
+//! blob, like a folder is. What this module decides is only what a failure to
+//! write is *called* — [`Unwritable::into_gerror`] takes the domain, and a
+//! folder's is `CAMEL_FOLDER_ERROR`.
 //!
 //! ## The row is the listing's to write
 //!
@@ -71,21 +69,14 @@
 //!
 //! [`MailSync::import_message`]: jmap_mail_sync::MailSync::import_message
 
-use std::ffi::CString;
-use std::ptr;
+use std::ffi::{CString, c_int};
 
 use eds_sys::{
-    CAMEL_FOLDER_ERROR_INVALID, CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    CamelMimeMessage, camel_data_wrapper_write_to_output_stream_sync, camel_folder_error_quark,
-    camel_folder_get_full_name, camel_message_info_get_date_received,
+    CAMEL_FOLDER_ERROR_INVALID, CamelFolder, CamelFolderClass, CamelMessageInfo, CamelMimeMessage,
+    camel_folder_error_quark, camel_folder_get_full_name, camel_message_info_get_date_received,
 };
-use gio_sys::{
-    GCancellable, GMemoryOutputStream, GOutputStream, g_memory_output_stream_get_data,
-    g_memory_output_stream_get_data_size, g_memory_output_stream_new_resizable,
-    g_output_stream_flush,
-};
-use glib_sys::{GError, GFALSE, GTRUE, g_error_new_literal, g_strdup, gboolean, gchar};
-use gobject_sys::g_object_unref;
+use gio_sys::GCancellable;
+use glib_sys::{GError, GFALSE, GTRUE, g_strdup, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
@@ -96,6 +87,7 @@ use jmap_proto::Id;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, parent_store};
 use crate::message_info::row_keywords;
+use crate::mime::{Unwritable, write_message};
 
 /// Installs the folder's append vfunc on a class whose first member is a
 /// `CamelFolderClass`.
@@ -143,8 +135,12 @@ unsafe extern "C" fn append_message_sync(
             // that can fail without the account being involved at all: a
             // message Camel cannot write out is not one to blame the server
             // for.
-            let Some(source) = serialize(message, error) else {
-                return GFALSE;
+            //
+            // SAFETY: the message is live by this vfunc's contract, which is
+            // this block's.
+            let source = match write_message(message) {
+                Ok(source) => source,
+                Err(failure) => return unwritable(error, failure),
             };
 
             // What the folder the message came from knew about it, and the
@@ -171,70 +167,32 @@ unsafe extern "C" fn append_message_sync(
     }
 }
 
-/// The message as the octets `Email/import` uploads, or `None` with the error
-/// set.
+/// Reports a message Camel's own emitter would not write out, and answers with
+/// it.
 ///
-/// The failure is Camel's own and is passed through rather than reclassified,
-/// exactly as [`crate::message`] passes a parse failure through: a message its
-/// own writer will not write out is one this provider has no better account of
-/// than the writer does, and reporting it as a service error would blame the
-/// account for it.
-///
-/// The stream is flushed before its buffer is read. `GMemoryOutputStream` does
-/// not buffer, but the writer above is free to wrap it — and a message that
-/// arrived truncated by however much a filter was still holding would be a
-/// silently corrupted message on the server.
+/// Camel's own account of the failure is passed through untouched, exactly as
+/// [`crate::message`] passes a parse failure through: a message its own writer
+/// will not write out is one this provider has no better account of than the
+/// writer does. The domain below is only what an *unexplained* refusal is
+/// called — `CAMEL_FOLDER_ERROR_INVALID`, because the message is what could not
+/// be used and nothing is wrong with the account, which would be a service
+/// error and is what Evolution reads to decide an account is unusable.
 ///
 /// # Safety
 ///
-/// `message` must be NULL or point at a live `CamelMimeMessage`, and `error`
-/// must meet [`set_raw_gerror`]'s contract.
-unsafe fn serialize(message: *mut CamelMimeMessage, error: *mut *mut GError) -> Option<Vec<u8>> {
-    // SAFETY: a fresh resizable memory stream, the message by this function's
-    // contract, and two error out-parameters that are locals starting NULL.
+/// `error` must meet [`set_raw_gerror`]'s contract.
+unsafe fn unwritable(error: *mut *mut GError, failure: Unwritable) -> gboolean {
+    // SAFETY: no arguments, and the quark registers itself.
+    let quark = unsafe { camel_folder_error_quark() };
+    // SAFETY: `into_gerror` hands over an owned GError, and `error` meets
+    // `set_raw_gerror`'s contract by this function's.
     unsafe {
-        let stream: *mut GOutputStream = g_memory_output_stream_new_resizable();
-        let mut inner: *mut GError = ptr::null_mut();
-        let written = camel_data_wrapper_write_to_output_stream_sync(
-            message.cast::<CamelDataWrapper>(),
-            stream,
-            ptr::null_mut(),
-            &mut inner,
-        );
-        let flushed =
-            written >= 0 && g_output_stream_flush(stream, ptr::null_mut(), &mut inner) != GFALSE;
-
-        if !flushed {
-            g_object_unref(stream.cast());
-            if inner.is_null() {
-                // A writer that failed without saying why still has to be
-                // reported as a failure: Camel logs a critical of its own for a
-                // vfunc that answers FALSE with no error set. `INVALID` because
-                // the message is what could not be used, and not a service
-                // error, because nothing is wrong with the account.
-                inner = g_error_new_literal(
-                    camel_folder_error_quark(),
-                    CAMEL_FOLDER_ERROR_INVALID as i32,
-                    c"the message could not be written out".as_ptr(),
-                );
-            }
-            set_raw_gerror(error, inner);
-            return None;
-        }
-
-        let stream = stream.cast::<GMemoryOutputStream>();
-        let data = g_memory_output_stream_get_data(stream).cast::<u8>();
-        let len = g_memory_output_stream_get_data_size(stream);
-        // Copied out rather than stolen, so that the stream's own free function
-        // stays the one that releases the buffer; the upload needs an owned
-        // `Vec` either way.
-        let source = match data.is_null() {
-            true => Vec::new(),
-            false => std::slice::from_raw_parts(data, len as usize).to_vec(),
-        };
-        g_object_unref(stream.cast());
-        Some(source)
-    }
+        set_raw_gerror(
+            error,
+            failure.into_gerror(quark, CAMEL_FOLDER_ERROR_INVALID as c_int),
+        )
+    };
+    GFALSE
 }
 
 /// When the row says the message arrived, as `Email/import`'s `receivedAt`.

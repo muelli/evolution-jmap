@@ -16,12 +16,13 @@
 //! ## The message goes up as the bytes Camel would write out
 //!
 //! The vfunc's argument is an object, and what `Email/import` takes is a blob,
-//! so something has to serialise it. That is Camel's own writer —
-//! `camel_data_wrapper_write_to_output_stream_sync` on the message's data
-//! wrapper face — for [`crate::message`]'s reason turned around: the parse on
-//! the way in has to be Camel's, so the emit on the way out has to be too, or
-//! this provider would be a second MIME implementation disagreeing with the
-//! first about what the message says.
+//! so something has to serialise it. That is [`jmap_mail::mime`], around
+//! Camel's own writer, for [`crate::message`]'s reason turned around: the parse
+//! on the way in has to be Camel's, so the emit on the way out has to be too,
+//! or this provider would be a second MIME implementation disagreeing with the
+//! first about what the message says. Its own module because sending needs the
+//! same bytes, and [`jmap_mail::mime`]'s own tests are where the writing is
+//! checked; what is checked here is what an append does with them.
 //!
 //! [`the_message_that_went_up_is_the_message_that_comes_back_down`] is that
 //! round trip end to end — appended as an object, listed as a row, opened again
@@ -626,8 +627,9 @@ fn appending_to_a_mailbox_the_account_no_longer_has_fails() {
 ///
 /// Reported in `CAMEL_FOLDER_ERROR`, not `CAMEL_SERVICE_ERROR`: nothing is
 /// wrong with the account, and a service error is what Evolution reads to
-/// decide an account is unusable. It is the same judgement the serialisation
-/// failure above makes — the message is what could not be used.
+/// decide an account is unusable. It is the same judgement this vfunc makes
+/// about a message Camel's writer refuses — the message is what could not be
+/// used.
 #[test]
 fn appending_a_message_over_the_accounts_upload_limit_fails_before_it_is_sent() {
     let fixture = Fixture::started_with(MockServer::builder().size_upload(64));
