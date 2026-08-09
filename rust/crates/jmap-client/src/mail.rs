@@ -442,12 +442,34 @@ impl Client {
     }
 
     /// Upload a blob via the session's `uploadUrl` template (RFC 8620 §6.1).
+    ///
+    /// Refused here, without a request, when the data is larger than the
+    /// session's `maxSizeUpload`. The limit is in the session document exactly
+    /// so a client can ask before it sends: an upload is the one request whose
+    /// body is the whole message, and finding out it was too big by sending it
+    /// costs the user the upload — over a slow link, minutes of it — for an
+    /// answer that was already on hand. What comes back is
+    /// [`Error::TooLarge`], carrying both numbers, rather than the server's
+    /// `urn:ietf:params:jmap:error:limit`, which cannot be told apart from the
+    /// other request-level limits by anything but its `limit` property.
+    ///
+    /// A server that names no limit is sent the data: see
+    /// [`Session::max_size_upload`] for why no number is invented for it.
+    ///
+    /// [`Session::max_size_upload`]: jmap_proto::session::Session::max_size_upload
     pub fn upload_blob(
         &self,
         account_id: &Id,
         content_type: &str,
         data: Vec<u8>,
     ) -> Result<UploadResponse, Error> {
+        let size = data.len() as u64;
+        if let Some(limit) = self.session().max_size_upload()
+            && size > limit
+        {
+            return Err(Error::TooLarge { size, limit });
+        }
+
         let url = self
             .session()
             .upload_url

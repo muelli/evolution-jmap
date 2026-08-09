@@ -26,6 +26,11 @@ pub const DEFAULT_ACCOUNT_NAME: &str = "alice@example.com";
 /// this size is out of the way of every test that is not about it.
 pub const DEFAULT_OBJECTS_IN_GET: u64 = 256;
 
+/// The `maxSizeUpload` the mock advertises and enforces unless a test asks for
+/// a different one — 50 MB, which is what a real server of this kind offers and
+/// is out of the way of every test that is not about it.
+pub const DEFAULT_SIZE_UPLOAD: u64 = 50_000_000;
+
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
@@ -33,6 +38,7 @@ pub struct MockServerBuilder {
     changes_page_size: Option<u64>,
     objects_in_get: Option<u64>,
     query_page_size: Option<u64>,
+    size_upload: Option<u64>,
 }
 
 impl MockServerBuilder {
@@ -98,6 +104,30 @@ impl MockServerBuilder {
         self
     }
 
+    /// Advertise — and enforce — `bytes` as `maxSizeUpload`, as a server with a
+    /// modest appetite does.
+    ///
+    /// The two being one number is the point, as it is for
+    /// [`Self::objects_in_get`]: an upload larger than this is answered with
+    /// RFC 8620 §6.1's `urn:ietf:params:jmap:error:limit`, so a client that
+    /// never reads the session document fails here rather than passing because
+    /// the mock was permissive.
+    pub fn size_upload(mut self, bytes: u64) -> Self {
+        self.size_upload = Some(bytes);
+        self
+    }
+
+    /// Leave `maxSizeUpload` out of the session document entirely, and take an
+    /// upload of any size.
+    ///
+    /// RFC 8620 §2 requires the property, so this is a server out of spec — and
+    /// it exists because a client has to be pinned on what it does when the
+    /// number it would check against is not there.
+    pub fn no_size_upload(mut self) -> Self {
+        self.size_upload = None;
+        self
+    }
+
     /// Bind to a fixed localhost port instead of an ephemeral one.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
@@ -113,6 +143,7 @@ impl MockServerBuilder {
         state.changes_page_size = self.changes_page_size;
         state.objects_in_get = self.objects_in_get;
         state.query_page_size = self.query_page_size;
+        state.size_upload = self.size_upload;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -158,6 +189,7 @@ impl MockServer {
             changes_page_size: None,
             objects_in_get: None,
             query_page_size: None,
+            size_upload: Some(DEFAULT_SIZE_UPLOAD),
         }
     }
 
@@ -289,6 +321,23 @@ fn handle_request(
                 return;
             }
             let mut state = state.lock().expect("mock state lock");
+            let size = data.len() as u64;
+            // RFC 8620 §6.1: too big is a request-level error naming the limit
+            // it broke, not a stored blob and not a generic 400.
+            if state.size_upload.is_some_and(|limit| size > limit) {
+                drop(state);
+                respond_json(
+                    request,
+                    400,
+                    &json!({
+                        "type": "urn:ietf:params:jmap:error:limit",
+                        "limit": "maxSizeUpload",
+                        "status": 400,
+                        "detail": "the upload is larger than maxSizeUpload",
+                    }),
+                );
+                return;
+            }
             let Some(account) = state.account_mut(&account_id) else {
                 drop(state);
                 respond_json(
@@ -298,7 +347,6 @@ fn handle_request(
                 );
                 return;
             };
-            let size = data.len() as u64;
             let blob_id = account.add_blob(content_type.clone(), data);
             drop(state);
             respond_json(
@@ -411,28 +459,33 @@ fn session_document(state: &ServerState, origin: &str) -> Session {
         })
         .unwrap_or_default();
 
+    // Built as an object rather than written out whole because one of its
+    // properties may be absent: a server that names no `maxSizeUpload` is what
+    // `no_size_upload` asks for, and a `null` would not be that server — it
+    // would be one naming a limit of nothing.
+    let mut core = json!({
+        "maxConcurrentUpload": 4,
+        "maxSizeRequest": 10_000_000u64,
+        "maxConcurrentRequests": 4,
+        "maxCallsInRequest": 16,
+        "maxObjectsInGet": state.objects_in_get(),
+        "maxObjectsInSet": 128,
+        "collationAlgorithms": ["i;ascii-casemap"],
+    });
+    if let Some(size_upload) = state.size_upload {
+        core["maxSizeUpload"] = json!(size_upload);
+    }
+
     Session {
-        capabilities: [(
-            CAPABILITY_CORE.to_owned(),
-            json!({
-                "maxSizeUpload": 50_000_000u64,
-                "maxConcurrentUpload": 4,
-                "maxSizeRequest": 10_000_000u64,
-                "maxConcurrentRequests": 4,
-                "maxCallsInRequest": 16,
-                "maxObjectsInGet": state.objects_in_get(),
-                "maxObjectsInSet": 128,
-                "collationAlgorithms": ["i;ascii-casemap"],
-            }),
-        )]
-        .into_iter()
-        .chain(
-            ACCOUNT_CAPABILITIES
-                .iter()
-                .filter(|capability| !state.omitted_capabilities.contains(**capability))
-                .map(|capability| ((*capability).to_owned(), json!({}))),
-        )
-        .collect(),
+        capabilities: [(CAPABILITY_CORE.to_owned(), core)]
+            .into_iter()
+            .chain(
+                ACCOUNT_CAPABILITIES
+                    .iter()
+                    .filter(|capability| !state.omitted_capabilities.contains(**capability))
+                    .map(|capability| ((*capability).to_owned(), json!({}))),
+            )
+            .collect(),
         accounts,
         primary_accounts,
         username: first_account

@@ -26,6 +26,15 @@ pub enum Error {
     Protocol(String),
     /// The operation was cancelled via [`crate::transport::CancelFlag`].
     Cancelled,
+    /// More octets than the session's `maxSizeUpload` (RFC 8620 §6.1) — the
+    /// one failure here the server was never asked about.
+    ///
+    /// Its own variant rather than a `Protocol` string because it is the one
+    /// thing a caller can act on: the size and the limit are both numbers a
+    /// layer above can put in front of the user, or use to decide to send the
+    /// attachment as a link instead. Flattened into prose they would have to be
+    /// parsed back out.
+    TooLarge { size: u64, limit: u64 },
 }
 
 impl Error {
@@ -72,6 +81,10 @@ impl std::fmt::Display for Error {
             Error::Json(error) => write!(f, "JSON error: {error}"),
             Error::Protocol(message) => write!(f, "protocol error: {message}"),
             Error::Cancelled => f.write_str("operation cancelled"),
+            Error::TooLarge { size, limit } => write!(
+                f,
+                "{size} bytes is larger than the {limit} bytes this account accepts in one upload"
+            ),
         }
     }
 }

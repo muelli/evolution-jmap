@@ -6777,3 +6777,115 @@ the store still implements no `CamelServiceClass::get_name()`, which every
 `Account::open()` in the tests logs. Unexercised against a real `CamelSession`:
 `service.rs`, which waits on M6 and M7. The README's architecture block still
 lists only the round-1 crates.
+
+## 2026-08-09 (seventy-first session)
+
+**The message that is too big to send, refused before it is sent.** The next
+item the previous session named — whether Evolution's Delete key files a message
+into the trash or only marks the row — cannot be answered on this VM and is
+still waiting on a human running real Evolution, so this session took the
+tractable item beside it: the size check `append.rs` had carried as a written-out
+gap since the append landed ("RFC 8620 §6.1's `maxSizeUpload` is in the session
+object and nothing here reads it").
+
+Red first, and red by not compiling: eight new tests naming
+`Session::max_size_upload`, `Error::TooLarge` and the mock's `size_upload`
+builder, none of which existed.
+
+What landed:
+
+- **`Session::max_size_upload()`** in `jmap-proto`, shaped like
+  `max_objects_in_get` beside it, `None` for a server that names no limit.
+- **`Error::TooLarge { size, limit }`** in `jmap-client`, and the check in
+  `Client::upload_blob` that produces it before any request is made.
+- **The mock advertises and enforces its own limit**: `size_upload(bytes)`,
+  `no_size_upload()`, `DEFAULT_SIZE_UPLOAD` (50 MB), and a `/upload/` that
+  answers an over-limit body with RFC 8620 §6.1's
+  `urn:ietf:params:jmap:error:limit` naming `maxSizeUpload`.
+- **`StoreError::Client(Error::TooLarge)` maps to `CAMEL_FOLDER_ERROR_INVALID`**
+  rather than falling through to `CAMEL_SERVICE_ERROR_INVALID`.
+- Tests: two in `jmap-proto` (the accessor and the absent property), three in
+  `jmap-client` (over, exactly at, and a server naming no limit), two in a new
+  `jmap-mock/tests/upload.rs`, one in `jmap-mail-sync`, one in `jmap-mail`.
+
+Decisions taken:
+
+- **The check is in `upload_blob`, not in the append.** An upload is the one
+  request whose body is the whole message, so it is the one place where finding
+  out by asking costs the user real time — minutes of progress bar over a
+  domestic uplink for an answer that was already in the session document. Putting
+  it in the client also covers the other caller of `upload_blob` that exists
+  today (`send_email`'s attachments) and every one that comes later, rather than
+  being a check `crate::append` remembered to make.
+- **A server that names no `maxSizeUpload` is sent the data.** RFC 8620 §2
+  requires the property, so this is a server out of spec, and the two available
+  answers are to invent a limit or to send. An invented limit would refuse
+  uploads the server would have taken, and would put *this crate's* number in
+  front of the user as the account's. Pinned by
+  `a_server_that_names_no_upload_limit_is_sent_the_message` and by the mock's
+  `no_size_upload()`, which omits the property rather than sending `null` — a
+  `null` would be a server naming a limit of nothing, which is a different
+  server.
+- **Larger than, not at least.** RFC 8620 §6.1 refuses what is *larger* than the
+  limit, so a message of exactly `maxSizeUpload` goes up; asserted on both sides,
+  in the client and against the mock, because an off-by-one here is a refusal the
+  user cannot work around by deleting a byte.
+- **`TooLarge` carries both numbers rather than a sentence.** The layer above has
+  to be able to say "this account takes at most N" — and a future one may decide
+  to send a large attachment as a link instead — so flattening the numbers into
+  prose that has to be parsed back out would be losing them at the boundary. The
+  same reason `SyncError` keeps `jmap_client::Error` whole.
+- **The Camel code is the folder's, not the service's.** `CAMEL_SERVICE_ERROR` is
+  what Evolution reads to decide an account is unusable, and an account with a
+  size limit is not broken — the *message* is what could not be used, which is
+  the judgement `append.rs`'s serialisation failure already makes with
+  `CAMEL_FOLDER_ERROR_INVALID`. The sentence carries the limit; the code only has
+  to not lie about whose fault it is.
+- **The mock enforces the number it advertises**, the rule `objects_in_get`
+  already follows: a mock that advertised a limit and took anything would let a
+  client that never reads the session document pass. Tested over a raw socket in
+  `jmap-mock/tests/upload.rs`, deliberately — `jmap-client` now refuses such an
+  upload locally, so a test going through it could never reach that code.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The limit is checked against the session document as it was when the client
+   connected.** `Client` holds the session it fetched; a server that lowers
+   `maxSizeUpload` mid-session will still refuse an upload this side thought was
+   fine, and the answer then is the server's `limit` error rather than the local
+   one. Re-fetching the session before every upload would cost a round trip on
+   the request that least needs another one, and the failure mode it would close
+   is a server changing its limits under a running client.
+2. **Only `maxSizeUpload` is read.** `maxSizeRequest`, `maxCallsInRequest` and
+   `maxConcurrentUpload` are all in the same capability and all still unread; a
+   method call over `maxSizeRequest` is refused by the server exactly as an
+   oversized upload used to be. `maxObjectsInGet` is the one other limit this
+   code honours.
+3. **Nothing tests the Camel error against real Evolution.** The domain and code
+   are asserted here, but which of them Evolution actually branches on for a
+   failed append is the same open question every error mapping in this provider
+   has, and it is a *needs human verification* one.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** (the previous session's
+limit 2, and `CAMEL_FOLDER_IS_TRASH` behind it) — **needs human verification in
+real Evolution**; bounding the cache; the cache entry written by `write_all`
+rather than to a temporary name and renamed; `get_folder_info_sync`'s
+NULL-versus-GError question; `cancellable` observed nowhere; no
+`CamelServiceClass::get_name()`; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). One new file, `jmap-mock/tests/upload.rs`, with
+the SPDX `GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked`
+and `cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set (386 tests, up from 378) and on the five EDS crates (559, up from
+558).
+
+No milestone tag is claimed; M5's open questions are the ones listed above.
+
+Next in M5: still **answering the delete-versus-trash question** — from a reading
+of Evolution's own source or from a human running it — and then
+`CAMEL_FOLDER_IS_TRASH` and, if the answer needs it, filing a delete into the
+trash rather than destroying it.
