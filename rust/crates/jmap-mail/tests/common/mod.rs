@@ -44,6 +44,7 @@ use glib_sys::{GError, gchar};
 use gobject_sys::{GObject, g_object_new, g_object_unref};
 use jmap_mail::provider::register;
 use jmap_mail::store::{JmapStore, store_type};
+use jmap_mail::transport::{JmapTransport, transport_type};
 use jmap_mail_sync::MailSync;
 
 /// A session and the store that hangs off it.
@@ -147,6 +148,74 @@ impl Account {
             assert!(!dir.is_null(), "the store has no cache directory");
             std::ffi::CStr::from_ptr(dir).to_string_lossy().into_owned()
         }
+    }
+}
+
+/// The other service of an account: a `CamelJmapTransport` on the same session.
+///
+/// Its own object rather than a field of [`Account`], because that is what it
+/// is in Evolution — two `ESource`s, two `camel_session_add_service` calls, two
+/// services that share a session and nothing else. Most tests want only the
+/// store, and constructing a transport for them would be Camel machinery
+/// running for no reason.
+///
+/// It borrows the account for the session's sake: a `CamelService` holds only a
+/// weak reference to its session, so a transport outliving the account it was
+/// built on would be a service pointing at nothing.
+pub struct Transport<'a> {
+    _account: &'a Account,
+    pub service: *mut CamelService,
+}
+
+impl<'a> Transport<'a> {
+    /// Constructs the transport on `account`'s session, with a uid of its own —
+    /// a service is keyed by uid, and two sharing one would be one service.
+    pub fn open(account: &'a Account) -> Self {
+        let provider: *const CamelProvider = register();
+
+        // SAFETY: a variadic construct call. Every property named is one
+        // `CamelService` declares, each value has the type that property
+        // carries, and the list is NULL-terminated. `g_initable_new` rather
+        // than `g_object_new` for the reason the module docs give.
+        let service = unsafe {
+            let mut error: *mut GError = ptr::null_mut();
+            let service = g_initable_new(
+                transport_type(),
+                ptr::null_mut(),
+                ptr::addr_of_mut!(error),
+                c"session".as_ptr(),
+                account.session,
+                c"provider".as_ptr(),
+                provider,
+                c"uid".as_ptr(),
+                c"jmap-test-transport".as_ptr(),
+                ptr::null::<gchar>(),
+            );
+            assert!(
+                !service.is_null() && error.is_null(),
+                "the transport would not initialise"
+            );
+            service.cast::<CamelService>()
+        };
+
+        Self {
+            _account: account,
+            service,
+        }
+    }
+
+    /// The transport as its Rust self, for the state no Camel accessor reaches.
+    pub fn jmap(&self) -> &JmapTransport {
+        // SAFETY: `self.service` is an instance of `JmapTransport`, constructed
+        // above, and it lives as long as this `Transport`.
+        unsafe { JmapTransport::borrow(self.service.cast()) }.expect("a transport of ours")
+    }
+}
+
+impl Drop for Transport<'_> {
+    fn drop(&mut self) {
+        // SAFETY: the one reference, taken at construction and never handed out.
+        unsafe { g_object_unref(self.service.cast()) };
     }
 }
 

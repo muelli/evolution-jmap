@@ -35,6 +35,16 @@
 //! password at the same time. [`report_authentication`] is where that rule
 //! lives, and it is the only place either answer is produced.
 //!
+//! ## Two services, one set of vfuncs
+//!
+//! Camel gives an account two services: the [`crate::store`] it reads from and
+//! the [`crate::transport`] it sends through. Both are `CamelService`s, both are
+//! configured through the same settings class, and both connect by exactly the
+//! steps above — so the vfuncs are written once here and installed on both, over
+//! the [`Connected`] trait that says which of the two the instance pointer is.
+//! What the trait carries is the only thing that differs: where the connection
+//! that opening the account produced is put.
+//!
 //! ## And the fourth vfunc, which is not about connecting
 //!
 //! `get_name` is what Camel calls the account in its own sentences — "Cannot
@@ -62,18 +72,48 @@ use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::guard_bool;
+use jmap_mail_sync::MailSync;
 
 use crate::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail};
 use crate::server::{ServerConfig, network, take_string};
-use crate::store::JmapStore;
 
-/// Opens the account `config` names and installs it on `store`.
+/// A service of this provider that holds a JMAP connection: the store, and the
+/// transport.
+///
+/// The three methods are the whole of what the vfuncs below need to know about
+/// the instance they were dispatched on. Everything else — reading the settings,
+/// asking the session to authenticate, opening the account, classifying the
+/// failure — is the same operation on either service, and is written once.
+///
+/// The connection is *held* rather than returned because the two services keep
+/// it differently: the store drops its folder listing with it, and a later
+/// increment's transport may keep more beside it. What neither may do is share
+/// one, and the trait is why that is not even expressible here — each
+/// implementer names its own slot.
+///
+/// # Safety
+///
+/// The instance struct of the `GType` an implementer registers must be `Self`,
+/// and that type must derive from `CamelService`: the vfuncs are dispatched on
+/// a `CamelService *` and read `Self` straight through it, which is the same
+/// cast every `G_DEFINE_TYPE` service makes.
+pub unsafe trait Connected: ObjectSubclass<Instance = Self> {
+    /// Installs `sync` as the live connection, replacing whatever was there.
+    fn hold_connection(&self, sync: MailSync);
+    /// Drops the connection, if there is one. Not having one is not a failure:
+    /// Camel disconnects every service on shutdown, connected or not.
+    fn release_connection(&self);
+    /// Whether an operation would find a connection.
+    fn holds_connection(&self) -> bool;
+}
+
+/// Opens the account `config` names and installs it on `service`.
 ///
 /// The body of `authenticate_sync`, with the GObject taken out: everything
 /// above it is reading the two arguments off a `CamelService`, everything below
 /// it is [`open_mail`].
 ///
-/// A failure leaves the store exactly as it was, including a connection that
+/// A failure leaves the service exactly as it was, including a connection that
 /// was working — Camel re-authenticates a service it already has one for (a
 /// password change, a session that lost track of the account), and a store that
 /// dropped its connection on the way to being told the new password would stop
@@ -86,13 +126,13 @@ use crate::store::JmapStore;
 /// operation could set and no later operation could unset. What stops the
 /// connect is the scope the vfunc installed — see [`observe`] — which is also
 /// what stops every operation afterwards.
-pub fn authenticate(
-    store: &JmapStore,
+pub fn authenticate<T: Connected>(
+    service: &T,
     config: &ServerConfig,
     password: Option<&str>,
 ) -> Result<(), StoreError> {
     let sync = open_mail(config, password)?;
-    store.store_connection(sync);
+    service.hold_connection(sync);
     Ok(())
 }
 
@@ -164,20 +204,27 @@ pub fn describe(host: Option<&str>, port: u16, user: Option<&str>, brief: bool) 
 // ---------------------------------------------------------------------------
 // the vfunc slots
 
-/// Installs the three service vfuncs on a class whose first member is a
+/// Installs the four service vfuncs on a class whose first member is a
 /// `CamelServiceClass`.
+///
+/// `T` is the type being registered, and it is what the three connecting vfuncs
+/// read the instance pointer as. Naming it here rather than inferring it from
+/// the class pointer is the point: a caller that installed the store's vfuncs on
+/// the transport's class would have every connect on that service read a
+/// `CamelTransport` as a `CamelJmapStore`.
 ///
 /// # Safety
 ///
-/// `class` must point at an initialised class struct that leads with a
-/// `CamelServiceClass` — which is every descendant of `CamelService`.
-pub unsafe fn install_vfuncs(class: *mut CamelServiceClass) {
+/// `class` must point at an initialised class struct of the type `T` registers —
+/// which leads with a `CamelServiceClass`, because `T`'s contract has it derive
+/// from `CamelService`.
+pub unsafe fn install_vfuncs<T: Connected>(class: *mut CamelServiceClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
     vfuncs.get_name = Some(get_name);
-    vfuncs.connect_sync = Some(connect_sync);
-    vfuncs.authenticate_sync = Some(authenticate_sync);
-    vfuncs.disconnect_sync = Some(disconnect_sync);
+    vfuncs.connect_sync = Some(connect_sync::<T>);
+    vfuncs.authenticate_sync = Some(authenticate_sync::<T>);
+    vfuncs.disconnect_sync = Some(disconnect_sync::<T>);
 }
 
 /// Answers what this account is called, as a string Camel frees.
@@ -242,7 +289,7 @@ unsafe fn name_of(service: *mut CamelService, brief: bool) -> String {
 /// reason: Camel reconnects a service whenever it suspects the connection is
 /// gone, including when it is not, and re-opening a live one would drop a
 /// socket other threads are mid-request on.
-unsafe extern "C" fn connect_sync(
+unsafe extern "C" fn connect_sync<T: Connected>(
     service: *mut CamelService,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
@@ -252,10 +299,10 @@ unsafe extern "C" fn connect_sync(
     // writable and currently NULL.
     unsafe {
         guard_bool("connect_sync", error, || {
-            let Some(store) = instance(service) else {
+            let Some(connected) = instance::<T>(service) else {
                 return fail_disconnected(error);
             };
-            if store.is_connected() {
+            if connected.holds_connection() {
                 return GTRUE;
             }
 
@@ -280,7 +327,7 @@ unsafe extern "C" fn connect_sync(
 
 /// Opens the account, with the password the session has just put on the
 /// service.
-unsafe extern "C" fn authenticate_sync(
+unsafe extern "C" fn authenticate_sync<T: Connected>(
     service: *mut CamelService,
     // Ignored, and NULL on every call this code provokes: `connect_sync` passes
     // none and nothing advertises any.
@@ -294,7 +341,7 @@ unsafe extern "C" fn authenticate_sync(
     // on.
     let outcome = jmap_backend_core::trampoline::guard("authenticate_sync", None, || {
         // SAFETY: Camel's contract for the vfunc, as `connect_sync`'s.
-        Some(unsafe { attempt(service, cancellable) })
+        Some(unsafe { attempt::<T>(service, cancellable) })
     });
 
     match outcome {
@@ -310,11 +357,11 @@ unsafe extern "C" fn authenticate_sync(
 ///
 /// As the vfunc: `service` must be an instance of this type, `cancellable`
 /// NULL or valid.
-unsafe fn attempt(
+unsafe fn attempt<T: Connected>(
     service: *mut CamelService,
     cancellable: *mut GCancellable,
 ) -> Result<(), StoreError> {
-    let store = unsafe { instance(service) }.ok_or(StoreError::Disconnected)?;
+    let connected = unsafe { instance::<T>(service) }.ok_or(StoreError::Disconnected)?;
 
     // Camel hands out a reference; the config is read before it is given back,
     // and nothing borrowed from the settings outlives the call.
@@ -339,7 +386,7 @@ unsafe fn attempt(
     // SAFETY: the cancellable is Camel's, and it outlives the call — which is
     // exactly the scope this observation wants.
     let _cancel = unsafe { observe(cancellable) };
-    authenticate(store, &config, password.as_deref())
+    authenticate(connected, &config, password.as_deref())
 }
 
 /// Drops the connection, then lets `CamelService` do its half.
@@ -349,7 +396,7 @@ unsafe fn attempt(
 /// operation could pick up and use against a service Camel believes is closed.
 /// Dropping one that is not there is not a failure — it is what Camel asks of
 /// every service on shutdown, whether or not it ever connected.
-unsafe extern "C" fn disconnect_sync(
+unsafe extern "C" fn disconnect_sync<T: Connected>(
     service: *mut CamelService,
     clean: gboolean,
     cancellable: *mut GCancellable,
@@ -358,10 +405,10 @@ unsafe extern "C" fn disconnect_sync(
     // SAFETY: as `connect_sync`.
     unsafe {
         guard_bool("disconnect_sync", error, || {
-            if let Some(store) = instance(service) {
-                store.drop_connection();
+            if let Some(connected) = instance::<T>(service) {
+                connected.release_connection();
             }
-            match parent_service_class().and_then(|class| class.disconnect_sync) {
+            match parent_service_class::<T>().and_then(|class| class.disconnect_sync) {
                 Some(chain_up) => chain_up(service, clean, cancellable, error),
                 // Unreachable against any Camel that has a CamelService at all,
                 // and there is nothing left for this side to do either way.
@@ -375,26 +422,28 @@ unsafe extern "C" fn disconnect_sync(
 ///
 /// # Safety
 ///
-/// `service` must be NULL or point at an instance of [`JmapStore`]. Camel only
-/// dispatches a class's vfuncs on instances of that class, so the cast is the
-/// same one every `G_DEFINE_TYPE` store makes.
-unsafe fn instance<'a>(service: *mut CamelService) -> Option<&'a JmapStore> {
-    unsafe { service.cast::<JmapStore>().as_ref() }
+/// `service` must be NULL or point at an instance of `T`. Camel only dispatches
+/// a class's vfuncs on instances of that class, so a vfunc installed by
+/// [`install_vfuncs`] for the same `T` satisfies this — and that is the whole
+/// of what the type parameter is for.
+unsafe fn instance<'a, T: Connected>(service: *mut CamelService) -> Option<&'a T> {
+    unsafe { service.cast::<T>().as_ref() }
 }
 
-/// `CamelOfflineStore`'s class, as the `CamelServiceClass` it leads with, for
-/// the one vfunc that chains up.
+/// `T`'s parent class, as the `CamelServiceClass` it leads with, for the one
+/// vfunc that chains up — `CamelOfflineStoreClass` for the store,
+/// `CamelTransportClass` for the transport.
 ///
 /// `g_type_class_peek` rather than `_ref`: an initialised parent class is what
 /// having registered a subclass of it guarantees, and taking a reference here
 /// would mean giving one back on a path that has no natural place to do so.
-fn parent_service_class() -> Option<&'static CamelServiceClass> {
+fn parent_service_class<T: Connected>() -> Option<&'static CamelServiceClass> {
     // SAFETY: peeking a type nothing has referenced returns NULL, which is
     // handled; otherwise the class outlives the type, which for a Camel type is
-    // the life of the process. `CamelOfflineStoreClass` leads with
-    // `CamelStoreClass`, which leads with `CamelServiceClass`.
+    // the life of the process. `T`'s parent derives from `CamelService`, so its
+    // class leads with a `CamelServiceClass` — the trait's contract.
     unsafe {
-        g_type_class_peek(<JmapStore as ObjectSubclass>::parent_type())
+        g_type_class_peek(T::parent_type())
             .cast::<CamelServiceClass>()
             .as_ref()
     }
