@@ -43,15 +43,17 @@ use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST, CAMEL_STORE_FOLDER_NONE, CamelFolder,
     CamelFolderInfo, CamelStore, CamelStoreClass, camel_folder_get_flags,
     camel_folder_get_full_name, camel_folder_info_free, camel_offline_store_get_type,
-    camel_service_error_quark, camel_store_error_quark, camel_store_get_folder_info_sync,
-    camel_store_get_folder_sync, camel_store_get_inbox_folder_sync,
-    camel_store_get_junk_folder_sync, camel_store_get_trash_folder_sync,
+    camel_service_error_quark, camel_store_can_refresh_folder, camel_store_error_quark,
+    camel_store_get_folder_info_sync, camel_store_get_folder_sync,
+    camel_store_get_inbox_folder_sync, camel_store_get_junk_folder_sync,
+    camel_store_get_trash_folder_sync,
 };
-use glib_sys::GError;
+use glib_sys::{GError, GFALSE};
 use gobject_sys::{g_object_unref, g_type_class_peek, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
 use jmap_mail::folder::JmapFolder;
+use jmap_mail::folder_info::FolderInfoChain;
 use jmap_mail::folders::Request;
 use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail::subscribe;
@@ -1654,5 +1656,159 @@ fn the_listing_offers_no_virtual_trash_or_junk_beside_the_accounts_own() {
             "Trash"
         ],
         "the listing gained a folder the account does not have"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// which folders Send / Receive checks for new mail
+
+/// A listing with all four cases in it: the inbox, a folder the user ticked,
+/// one they unticked, and one kept in the answer only because something below
+/// it is ticked.
+///
+/// Every mailbox says whether it is subscribed rather than leaving the property
+/// out, for the reason [`ticked`] gives.
+fn checkable() -> FolderTree {
+    let mailbox =
+        |id: &str, name: &str, parent: Option<&str>, role: Option<&str>, ticked| Mailbox {
+            id: Some(Id::new(id)),
+            name: name.to_owned(),
+            parent_id: parent.map(Id::new),
+            role: role.map(str::to_owned),
+            is_subscribed: Some(ticked),
+            ..Mailbox::default()
+        };
+    FolderTree::from_mailboxes(&[
+        mailbox("M1", "Inbox", None, Some(role::INBOX), true),
+        mailbox("M2", "Lists", None, None, true),
+        mailbox("M3", "Old", None, None, false),
+        mailbox("M4", "Work", None, None, false),
+        mailbox("M5", "Invoices", Some("M4"), None, true),
+    ])
+    .expect("a well-formed mailbox list")
+}
+
+/// The folders of a listing that Evolution would check for new mail, by path.
+///
+/// This is `get_folders` out of Evolution's `mail-send-recv.c`, which walks the
+/// forest `get_folder_info_sync` answered with and asks
+/// `camel_store_can_refresh_folder` about each info in it. Going through the
+/// wrapper rather than the class pointer because that is the call Evolution
+/// makes, and it is the wrapper that refuses a store whose slot is empty.
+fn checked(tree: &FolderTree, store: *mut CamelStore) -> Vec<String> {
+    let chain = FolderInfoChain::from_tree(tree);
+    let mut checked = Vec::new();
+    // SAFETY: the chain is the forest just built and still owned here, so every
+    // info in it is live and its `full_name` is NUL-terminated; `store` is a
+    // real `CamelStore` of ours, which is what the wrapper type-checks; the
+    // error out-parameter is NULL, which the wrapper tolerates.
+    unsafe {
+        walk(chain.as_ptr(), &mut |info| {
+            if camel_store_can_refresh_folder(store, info, ptr::null_mut()) != GFALSE {
+                checked.push(
+                    std::ffi::CStr::from_ptr((*info).full_name)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        })
+    };
+    checked
+}
+
+/// Depth-first over a sibling chain and its children, parents first — the order
+/// Evolution's `get_folders` walks one in.
+///
+/// # Safety
+///
+/// `head` is NULL or the head of a live `CamelFolderInfo` sibling chain.
+unsafe fn walk(head: *mut CamelFolderInfo, visit: &mut impl FnMut(*mut CamelFolderInfo)) {
+    let mut info = head;
+    while !info.is_null() {
+        visit(info);
+        unsafe {
+            walk((*info).child, visit);
+            info = (*info).next;
+        }
+    }
+}
+
+/// What the vfunc is *for*: Evolution asks it once per folder to build the list
+/// Send / Receive refreshes, and a folder that answers no is one whose new mail
+/// the user never hears about until they click it.
+///
+/// The rule is the inbox plus the folders the user ticked. Two of the four
+/// cases are the interesting ones. `Old` is unticked and stays out, which is
+/// the whole point of a tick. `Work` is unticked too and is only in the listing
+/// at all because `Work/Invoices` under it is ticked — see `ticked` in
+/// `crate::folders` — so it is a folder the user does not see and must not be
+/// checked, while the ticked folder below it must.
+#[test]
+fn send_receive_checks_the_inbox_and_the_folders_the_user_ticked() {
+    let account = Account::open();
+
+    assert_eq!(
+        checked(&checkable(), account.store),
+        ["Inbox", "Lists", "Work/Invoices"]
+    );
+}
+
+/// The one folder that is checked whether or not it is ticked. Mail arrives in
+/// the inbox by definition, an account whose inbox is never checked is one that
+/// never reports new mail at all, and this is the rule `CamelStore`'s own
+/// default implements — the override widens it rather than replacing it.
+#[test]
+fn the_inbox_is_checked_even_when_the_user_unticked_it() {
+    let account = Account::open();
+    let tree = FolderTree::from_mailboxes(&[Mailbox {
+        id: Some(Id::new("M1")),
+        name: "Inbox".to_owned(),
+        role: Some(role::INBOX.to_owned()),
+        is_subscribed: Some(false),
+        ..Mailbox::default()
+    }])
+    .expect("a well-formed mailbox list");
+
+    assert_eq!(checked(&tree, account.store), ["Inbox"]);
+}
+
+/// And why the override has to exist at all: left to `CamelStore`'s inherited
+/// answer, a ticked folder that is not the inbox is not checked for new mail.
+///
+/// Called on the parent class directly, so a Camel that widened its own default
+/// fails here with a sentence rather than leaving this provider carrying an
+/// override nobody needs any more.
+#[test]
+fn the_inherited_answer_checks_nothing_but_the_inbox() {
+    let account = Account::open();
+    let chain = FolderInfoChain::from_tree(&checkable());
+    let mut checked = Vec::new();
+
+    // SAFETY: the store type is registered and its class initialised, so the
+    // parent's class is live; every info in the chain is owned here; the error
+    // out-parameter is NULL, which the default tolerates.
+    unsafe {
+        let class = g_type_class_ref(store_type());
+        let parent = g_type_class_peek(camel_offline_store_get_type()).cast::<CamelStoreClass>();
+        assert!(!parent.is_null(), "the parent class is not initialised");
+        let inherited = (*parent)
+            .can_refresh_folder
+            .expect("CamelStore stopped answering the refresh question");
+        walk(chain.as_ptr(), &mut |info| {
+            if inherited(account.store, info, ptr::null_mut()) != GFALSE {
+                checked.push(
+                    std::ffi::CStr::from_ptr((*info).full_name)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        });
+        g_type_class_unref(class);
+    }
+
+    assert_eq!(
+        checked,
+        ["Inbox"],
+        "CamelStore's default has changed; the override may no longer be needed"
     );
 }

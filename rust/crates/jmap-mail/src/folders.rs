@@ -4,15 +4,17 @@
 //! The `CamelStore` folder vfuncs: `get_folder_info_sync`, which describes the
 //! account's folders, `get_folder_sync`, which opens one of them by path, and
 //! the three — `get_inbox_folder_sync`, `get_trash_folder_sync`,
-//! `get_junk_folder_sync` — that open one by purpose.
+//! `get_junk_folder_sync` — that open one by purpose. And `can_refresh_folder`,
+//! which is a question about a folder of that listing rather than one asked of
+//! the listing at all.
 //!
-//! They are one module because they are one question asked five ways: all five
-//! read the folder listing [`JmapStore::folders`] keeps, and the last four exist
-//! to turn something out of the first — a path, a role — back into the mailbox
-//! it came from. What they do with the answer is where they part: the listing
-//! marshals a whole subtree into C structs Camel frees, opening builds the
-//! [`crate::folder`] object Camel keeps, and the three purposes delegate to the
-//! opening so that every way of asking reaches the same object.
+//! The first five are one module because they are one question asked five ways:
+//! all five read the folder listing [`JmapStore::folders`] keeps, and the last
+//! four exist to turn something out of the first — a path, a role — back into
+//! the mailbox it came from. What they do with the answer is where they part:
+//! the listing marshals a whole subtree into C structs Camel frees, opening
+//! builds the [`crate::folder`] object Camel keeps, and the three purposes
+//! delegate to the opening so that every way of asking reaches the same object.
 //!
 //! ## The listing
 //!
@@ -59,23 +61,34 @@
 //! of this one because JMAP puts the counts in the mailbox anyway.
 //! `NO_VIRTUAL` is not this vfunc's business at all: the wrapper adds and
 //! removes vTrash and vJunk around the call.
+//!
+//! ## The sixth vfunc, which is a question about the listing rather than of it
+//!
+//! [`refreshable`] answers `can_refresh_folder`, the one non-blocking slot in
+//! `CamelStoreClass`: "Returns if this folder (param info) should be checked
+//! for new mail or not", asked once per folder of a listing. It reads the flags
+//! word and nothing else — no store state, no request — because Camel calls it
+//! from a walk over a forest it already has, and a slot documented as
+//! non-blocking that went to the server would turn one Send / Receive into a
+//! round trip per folder.
 
 use std::borrow::Cow;
 use std::ptr;
 use std::sync::Arc;
 
 use eds_sys::{
+    CAMEL_FOLDER_SUBSCRIBED, CAMEL_FOLDER_TYPE_INBOX, CAMEL_FOLDER_TYPE_MASK,
     CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH,
     CAMEL_STORE_FOLDER_INFO_SUBSCRIBED, CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST, CamelFolder,
-    CamelFolderInfo, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
+    CamelFolderInfo, CamelFolderInfoFlags, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
     CamelStoreGetFolderInfoFlags, camel_store_get_folder_sync,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, gchar};
+use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::trampoline::guard_ptr;
+use jmap_backend_core::trampoline::{guard, guard_ptr};
 use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
 
 use crate::connect::StoreError;
@@ -260,11 +273,87 @@ fn ticked(siblings: &[FolderInfo]) -> Vec<FolderInfo> {
 pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
+    vfuncs.can_refresh_folder = Some(can_refresh_folder);
     vfuncs.get_folder_info_sync = Some(get_folder_info_sync);
     vfuncs.get_folder_sync = Some(get_folder_sync);
     vfuncs.get_inbox_folder_sync = Some(get_inbox_folder_sync);
     vfuncs.get_trash_folder_sync = Some(get_trash_folder_sync);
     vfuncs.get_junk_folder_sync = Some(get_junk_folder_sync);
+}
+
+/// Whether Evolution should check this folder for new mail of its own accord:
+/// the inbox, and every folder the user subscribed to.
+///
+/// The flags word is the whole input, because it is the whole of what the
+/// question is about. `CAMEL_FOLDER_TYPE_INBOX` is `CamelStore`'s own default
+/// answer, kept rather than replaced — mail arrives in the inbox by definition,
+/// and an account whose inbox goes unchecked never reports new mail at all.
+/// `CAMEL_FOLDER_SUBSCRIBED` is what this store adds, and RFC 8621 §2 is why it
+/// is the right line: `isSubscribed` is defined as "has the user indicated they
+/// wish to see this Mailbox", which is the same user and the same intent that
+/// "check this folder for new mail" is about. Server-side filing is ordinary on
+/// JMAP — mail the user cares about often never touches the inbox — so a store
+/// that checked the inbox alone would leave the folder tree's counts stale
+/// until each folder was clicked.
+///
+/// Every other provider gets here through a *setting*: IMAPX has `check-all`
+/// and `check-subscribed`, evolution-ews has `check-all` and a per-folder tick
+/// of its own. This store needs neither, and that is a property of the protocol
+/// rather than a corner cut. An IMAP store has to ask, because `LIST` and
+/// `LSUB` are separate round trips and an account's subscriptions are often
+/// nobody's idea of the folders worth checking; `Mailbox/get` returns every
+/// mailbox with its `isSubscribed` in the one call the listing already made, so
+/// the answer is in hand and costs nothing. If a user ever wants "check all
+/// folders" regardless of their ticks, that is a settings property to add
+/// alongside this rule, not a reason to guess at one now.
+///
+/// The one case worth stating because it is invisible from here: an unticked
+/// folder that is in the listing *only* because something ticked sits below it
+/// — see [`ticked`] — answers no. It is a folder the user chose not to see,
+/// and the ticked folder underneath it is asked about separately.
+///
+/// `CAMEL_FOLDER_NOSELECT` is deliberately not tested. This store never sets
+/// it (again see [`ticked`]: an unticked ancestor holds mail like any other
+/// mailbox and is not dressed up as unselectable), and Evolution's
+/// `mail-send-recv.c` filters `NOSELECT` itself in the walk that asks this
+/// question — so a test here would be a second answer to a question the caller
+/// has already answered, about a flag this side does not produce.
+pub fn refreshable(flags: CamelFolderInfoFlags) -> bool {
+    let is_inbox =
+        flags & CAMEL_FOLDER_TYPE_MASK as CamelFolderInfoFlags == CAMEL_FOLDER_TYPE_INBOX;
+    is_inbox || flags & CAMEL_FOLDER_SUBSCRIBED != 0
+}
+
+/// `can_refresh_folder`: [`refreshable`], as the vfunc Camel calls.
+///
+/// The `error` out-parameter is never set, because there is no failure to
+/// report — the answer is a test on a word Camel handed in. Camel's own default
+/// takes the same view, and `camel_store_can_refresh_folder`'s only caller
+/// passes NULL for it.
+///
+/// The `store` is not read either, which is what makes this slot safe to answer
+/// without a connection: Evolution asks it while walking a listing, and a
+/// provider that reached for the account's state here would be answering a
+/// question about a folder with a question about the network.
+unsafe extern "C" fn can_refresh_folder(
+    _store: *mut CamelStore,
+    info: *mut CamelFolderInfo,
+    _error: *mut *mut GError,
+) -> gboolean {
+    guard("can_refresh_folder", GFALSE, || {
+        // SAFETY: Camel's contract for the vfunc — an info out of a listing,
+        // which its own wrapper has already checked is non-NULL. A NULL here
+        // is nothing Camel does, and answering no is the harmless half of the
+        // question either way.
+        let Some(info) = (unsafe { info.as_ref() }) else {
+            return GFALSE;
+        };
+        if refreshable(info.flags) {
+            GTRUE
+        } else {
+            GFALSE
+        }
+    })
 }
 
 /// Answers with the account's folders, or the part of them Camel asked for.
