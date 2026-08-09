@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-collection-sync"
+description = "What one JMAP account fans out into, for the Evolution collection backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_collection_sync"
+
+[dependencies]
+evolution-jmap-proto = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-client = { workspace = true }
+evolution-jmap-mock = { workspace = true }
+serde_json = { workspace = true }
