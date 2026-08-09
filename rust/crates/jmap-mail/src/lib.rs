@@ -82,6 +82,11 @@
 //!   mailbox is a member of a set rather than a place, so a copy adds one and a
 //!   move adds one and takes another away — and the work around it is the rows
 //!   a move leaves the source folder holding.
+//! - [`append`] is the arrival [`transfer`] cannot serve: `append_message_sync`,
+//!   the vfunc that takes a `CamelMimeMessage` the account has never seen — one
+//!   dragged out of another account, one the composer just built — writes it out
+//!   through Camel's own emitter and puts it on the server as an `Email/import`
+//!   over an uploaded blob.
 //! - [`manage`] is the pair that changes which folders there are:
 //!   `create_folder_sync` and `delete_folder_sync`, the vfuncs behind the
 //!   folder the user adds to an account and the one they take away — one
@@ -98,6 +103,7 @@
 //! `cdylib`, together with `libcameljmap.urls`, into Camel's provider
 //! directory.
 
+pub mod append;
 pub mod cache;
 pub mod changes;
 pub mod connect;

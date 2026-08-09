@@ -6399,3 +6399,119 @@ and `get_junk_folder_sync` are still a settings decision before they are a vfunc
 and that decision is what `expunge_sync` waits on. Unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's architecture
 block still lists only the round-1 crates.
+
+## 2026-08-09 (sixty-eighth session)
+
+**`append_message_sync`: the message that arrives from outside the account.**
+The previous session put `import_message` on `MailSync` and named this as what
+comes next; both halves were already under it, so this is the Camel vfunc that
+joins them — and the last of the four things a user does to a message that this
+provider could not do.
+
+Red first: `jmap-mail/tests/append.rs`'s nine tests were written against a
+folder class with a NULL `append_message_sync` and all nine failed with "the
+append failed: no error", which is what Camel's wrapper answers for a class that
+has not filled the slot in. Confirmed as red by disabling the install line again
+after the vfunc existed, rather than assumed.
+
+What landed:
+
+- **`eds-sys`: `camel_folder_append_message_sync`** on the allowlist, so a test
+  drives the vfunc through the wrapper Evolution calls rather than through the
+  class.
+- **`jmap-mail/src/append.rs`** — serialise, upload, import, answer the uid.
+- **`JmapStore::import_message`** — the connection-locked wrapper, read-locked
+  like every other write on the store.
+- **`crate::append::install_vfuncs`** from the folder's `class_init`, and
+  `transfer.rs`'s "that path is not this provider's yet" paragraph is now false
+  and was rewritten.
+
+Decisions taken:
+
+- **The message is written out by Camel's own emitter**, through
+  `camel_data_wrapper_write_to_output_stream_sync` on its `CamelDataWrapper`
+  face. This is `crate::message`'s parse decision turned around, and the
+  consequence is worse in this direction: a provider that emitted headers itself
+  would be a second MIME implementation whose disagreement with the first is
+  *stored*, because what goes up is what the account holds from then on.
+- **A `GMemoryOutputStream`, not a `CamelStreamMem`.** The destination is a
+  buffer either way and the GIO object is the one Camel's stream class wraps; it
+  also keeps three more Camel classes off the FFI boundary. The stream is
+  *flushed* before its buffer is read — `GMemoryOutputStream` does not buffer,
+  but the writer above it is free to wrap it, and a message truncated by whatever
+  a filter was still holding would be silent corruption on the server.
+- **Nothing is added to the folder's summary.** The same judgement `transfer.rs`
+  makes about the destination of a drag, and for the same reason: what this side
+  holds is a uid, and a row built from a uid alone is a message list line with no
+  subject, sender or date.
+  `an_appended_message_does_not_appear_in_the_folder_until_it_is_listed` pins
+  both halves — empty right after the append, one row after a refresh.
+- **The message is deliberately NOT put in the cache**, although the bytes and
+  the uid are both in hand. RFC 8621 §4.8 lets a server repair a message rather
+  than store it verbatim, so an entry written from this side could disagree with
+  the account forever *and be served in preference to it*. One download the first
+  time the message is opened is the cheaper mistake.
+- **`date_received == 0` is "nothing known", not 1970.** It is what a
+  `CamelMessageInfo` carries when nothing dated it, and sending it as `receivedAt`
+  would file every such message at the epoch for good — an `Email` is immutable.
+  `None` leaves the date to the server, which RFC 8621 §4.8 defines a default
+  for. Anything else passes through, negatives included.
+- **A NULL `CamelMessageInfo` is a case, not a defence.** Camel declares the
+  argument nullable; the message then carries no keywords, which is the answer
+  that cannot put a label on it that other clients would show.
+- **A uid that cannot be spelled as a C string leaves `appended_uid` unset
+  rather than failing the append.** Camel's callers read NULL as "the provider
+  could not say", and the message is on the server either way — reporting a
+  failure would have Evolution offer to send it again.
+
+**Found while testing, and worth recording:** `camel_folder_append_message_sync`
+**connects the service before it dispatches**. The disconnected-store test
+therefore came back with the *reconnection's* `URL_INVALID` (these settings name
+no server) instead of the vfunc's `NOT_CONNECTED`, and now goes through the class
+pointer, the way `transfer.rs`'s two equivalents already do. This was observed,
+not read out of the Camel source, which this VM does not have.
+
+**Not covered by a test, and the honest limits:**
+
+1. **No size check before the upload.** RFC 8620 §6.1's `maxSizeUpload` is in the
+   session and `jmap_proto::Session` still has no accessor for it, so an
+   oversized message is the server's HTTP refusal rather than a local message
+   naming the limit. Unchanged from the previous session's note.
+2. **`cancellable` is still not observed**, the gap every folder vfunc here
+   documents: `Client` takes its `CancelFlag` when it is built. An append uploads
+   the whole message, so it is now the longest request going the *other* way.
+3. **A cross-store drag has not been driven end to end.** Camel's generic
+   transfer path is `get_message` on the source folder and `append_message` on
+   the destination, and both ends now exist — but a test of that needs a *second*
+   store of another provider, which this crate's harness does not stand up. What
+   is tested is the destination half, called the way Camel calls it.
+4. **Nothing driven from Evolution**, as in every session so far.
+
+Not verified locally, as in the previous sixty-seven sessions: `reuse lint` and
+`cargo deny` (neither binary is on this VM). Two new files, `jmap-mail/src/append.rs`
+and `jmap-mail/tests/append.rs`, both with the SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (372 tests,
+unchanged — nothing there was touched) and on the five EDS crates (540, up from
+531: the nine new integration tests). `example-module` fails `clippy --workspace`
+with 28 `manual_c_str_literals` errors; that is on master already, unrelated, and
+left alone.
+
+No milestone tag is claimed. M5's folder surface still has `expunge_sync` waiting
+on the trash/junk settings decision, and `get_folder_info_sync`'s
+NULL-versus-GError question still wants the EDS source for `camel-store.c` that
+this VM does not have.
+
+Next in M5: the trash/junk pair is now the thing most other work is queued
+behind — `get_trash_folder_sync` and `get_junk_folder_sync` are a settings
+decision (which mailbox role, and what a JMAP account with no trash does) before
+they are vfuncs, and `expunge_sync` cannot be written until that is settled,
+because deleting mail in JMAP is either an `Email/set` that files the message
+into trash or one that destroys it, depending on the answer.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_folder_info_sync`'s NULL-versus-GError question. Unexercised against a real
+`CamelSession`: `service.rs`, which waits on M6 and M7. The README's architecture
+block still lists only the round-1 crates.
