@@ -9507,3 +9507,140 @@ and `…_list_calendar_sources()`. Then the two vfunc slots: a `populate` that
 schedules credentials, and the `authenticate_sync` that does the work. None of
 that can be driven by EDS here, so the increment that writes it must be marked
 *needs human verification in real Evolution*.
+
+## 2026-08-09 (ninety-sixth session)
+
+**The fan-out body.** The one thing M6 could not do: read an account, write a
+child and remove one, and never actually turn *one login* into a set of
+children. `jmap-backend-collection/src/fan_out.rs` is that, and it is the last
+piece of M6 that is not a vfunc slot.
+
+New module, ~10 tests in `tests/fan_out.rs`:
+
+- `Collection` — an `unsafe trait` holding the four `ECollectionBackend`
+  instance methods a fan-out needs and nothing else of a GObject:
+  `new_child`, `is_new_child`, `publish`, `existing_children`.
+- `fan_out(collection, login)` — `Client::connect` against `Login::server`,
+  `Fanout::discover` under `Login::parts`, then the rest.
+- `apply_fanout(collection, fanout, connection)` — the fan-out minus the
+  network, so a hand-built `Fanout` can drive every shape.
+- `adopt(collection, resource_id, settings)` — one child: created, written in
+  full, exported only if new.
+- `Populated` — what the fan-out did, as the log line a `void`-returning
+  `populate` can write: `children`, `uncreated`, `abandoned`, `not_removed`.
+
+Red first, and recorded as red: against stubbed `apply_fanout`/`adopt` bodies
+(returning `Populated::default()` and `Adopted::Uncreated`, calling nothing) 8
+of the 10 tests failed. The two that passed are the two that assert *nothing*
+happens — a switched-off part and an unreachable server — which is what a stub
+does by construction. Green now, all 10.
+
+**The protocol was read off EDS's own source, not guessed.** `/tmp` on this VM
+still had `e-collection-backend.c` and `e-webdav-collection-backend.c` from an
+earlier session, and they answer three things the header does not:
+
+1. `e_collection_backend_new_child()` is `(transfer full)` — "drawn from a cache
+   of previously used sources indexed by @resource_id" — and "the returned data
+   source **should be passed to `e_source_registry_server_add_source()`** to
+   export it over D-Bus". So creating a child and exporting it are two calls,
+   and a child that is only created is a child Evolution cannot see. That was
+   the single biggest thing this module could have got silently wrong.
+2. EDS's own `EWebDAVCollectionBackend` makes that second call under exactly one
+   condition, `if (is_new)` — `e_collection_backend_is_new_source()`. A child
+   drawn from the cache was already exported by the `populate` that claimed it.
+   Copied rather than invented, and it is `is_new_child` in the trait.
+3. `e_collection_backend_claim_all_resources()` belongs to `populate`, not here.
+   It is what makes an account's address books appear in the sidebar *offline*,
+   before a password exists, and it has to happen whether or not a fan-out ever
+   runs. So this module does not touch it; the `populate` slot will.
+
+What was decided, and why:
+
+- **The existing children are listed before a single new one is created**, and
+  that order is a test (`the_children_a_collection_has_are_listed_before_any_new_one_is_created`,
+  asserting `existing_children` is the first trait call). A list taken *after*
+  the additions would contain children this same fan-out had just created. They
+  would not be judged obsolete — they are in the fan-out by construction — but
+  then what keeps them safe is an accident of what `Fanout::is_obsolete` happens
+  to answer rather than of what was asked. EDS's WebDAV backend snapshots its
+  `known_sources` before discovery for the same reason.
+- **Nothing half-written is exported.** `adopt` writes every setting before it
+  publishes any of it; a setting it cannot write means the child is dropped
+  unexported. That is `child_source`'s rule followed to its consequence: the two
+  properties whose absence matters are `[Resource] Identity`, whose absence makes
+  EDS delete the child's cache, and `[Authentication] Host`, whose absence points
+  the child at no server — and a child Evolution never sees has neither problem.
+  For a child drawn from the cache the damage is already done and all this can do
+  is report it; that is the honest limit of a write with no transaction.
+- **One child EDS refuses costs that child and no other.** `new_child` answers
+  NULL when it cannot claim a resource (it warns and returns NULL). One row
+  missing from the sidebar is not the same failure as an account missing, so the
+  loop continues and the resource id goes in `Populated::uncreated`.
+- **The error type is `jmap_client::Error`, and it is the connection's only.**
+  Everything that fails per child is in `Populated`, because a login that worked
+  is not a failure because one address book of it could not be written — and the
+  layer above (`ConnectError::from`) is what turns a connection failure into the
+  enum Evolution re-prompts on. A test drives a dead port and asserts the
+  collection was not touched at all: a populate whose server is down must not be
+  the populate that empties the sidebar.
+- **The instance is a trait for the same reason it was a closure.** Four methods,
+  so the decisions above are testable against a real `jmap-mockd`, real
+  `ESource`s built by `e_source_new_with_uid`, the same `child_source::apply` the
+  backend calls and the same `resource_id_of` the `dup_resource_id` vfunc answers
+  with. What is stubbed is the part that needs a session bus, and only that part.
+- **Reference counting is spelled out in the trait's contract.** Both EDS getters
+  behind it are `(transfer full)`, so the fan-out consumes every reference it is
+  handed — `new_child`'s after the write and the publish, `existing_children`'s
+  after the removals. The test collection takes a `g_object_ref` before returning
+  each pointer, which is both what EDS does and what keeps the sources alive for
+  the assertions.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The two vfunc slots are still not installed.** `class_init` overrides only
+   `dup_resource_id`. `populate` (claim the cached children, then
+   `e_backend_schedule_credentials_required`) and `authenticate_sync` (run
+   `fan_out` with a `Collection` the instance implements) are what is left of M6,
+   and both need a live `ECollectionBackend`.
+2. **`e_source_registry_server_add_source` is not bound yet.** `eds-sys` allows
+   `e_collection_backend_.*` but not `e_source_registry_server_.*`, so the
+   `publish` method's real body — and the `ESourceRegistryServer` the
+   `e_collection_backend_ref_server()` hands back — arrive with the slot that
+   needs them. The trait is where that call is *documented*; it is not yet a call
+   this crate makes. **Needs human verification in real Evolution** that a child
+   published this way appears in the sidebar.
+3. **`Adopted::Abandoned` cannot be reached through `apply_fanout` today.**
+   `Child::settings` is a closed set that `child_source::apply` can write all of;
+   the abandoned path is reachable the moment `jmap-collection-sync` grows a
+   setting this crate was not taught to write, which is precisely when the child
+   must not be exported. That is why `adopt` takes `settings` as a parameter: the
+   test hands it an unparseable `[Authentication] Port` directly and asserts
+   nothing was published.
+4. **Every removal in the tests fails**, as in `tests/removal.rs`: these sources
+   have no D-Bus object, so `e_source_remove_sync` refuses. What the tests pin is
+   which children the fan-out *asked* to remove, via `Populated::not_removed` —
+   the successful-removal branch stays unreachable on this machine.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491 tests
+on the default members, unchanged) and `cargo clippy --all-targets --locked --
+-D warnings` are clean, as is `cargo test`/`clippy` over the six EDS crates
+(`jmap-backend-collection` now 63 tests, up from 53).
+`RUSTDOCFLAGS=-D warnings cargo doc` is clean for `jmap-backend-collection`.
+`jmap-backend-collection` gained one dev-dependency, `evolution-jmap-mock`.
+
+No milestone tag: M6 can now read an account, authenticate it, and fan one login
+out into children — and still has no vfunc slot for EDS to reach any of it
+through.
+
+Next in M6: the two slots, and they are the whole of what is left. `populate`
+first, since it is the one that runs offline —
+`e_collection_backend_freeze_populate`/`thaw_populate` around a chain-up, then
+`claim_all_resources` + `new_child` + `add_source` per cached child, then
+`e_backend_schedule_credentials_required` when any part is on. Then
+`authenticate_sync`, which is `authenticate_with` with a closure that calls
+`fan_out` against a `Collection` implemented over the instance. Both need
+`e_source_registry_server_.*` in `eds-sys`'s allowlist, and neither can be
+driven by EDS here, so the increment that writes them must be marked *needs
+human verification in real Evolution*.
