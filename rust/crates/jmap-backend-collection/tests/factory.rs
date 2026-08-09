@@ -350,14 +350,15 @@ fn the_factory_builds_the_jmap_collection_backend() {
 /// offset there does not fail to compile; it overwrites a neighbouring slot,
 /// which is a call through a bad pointer the first time EDS uses it.
 ///
-/// So: the three neighbours EDS fills in — `get_hash_key` and `new_backend` on
-/// the near side, `prepare_mail` on the far one — must still be exactly what the
-/// parent class installed. `prepare_mail` in particular is deliberately *not*
-/// overridden: this backend writes no mail children yet, and a factory that
-/// appeared to have an opinion about mail sources it never creates would be a
-/// lie in the class struct.
+/// So: the two neighbours EDS fills in and this crate does not touch —
+/// `get_hash_key` and `new_backend`, on the near side — must still be exactly
+/// what the parent class installed. On the far side sits `prepare_mail`, which
+/// *is* overridden (see `tests/prepare_mail.rs`), so what is asserted there is
+/// that it changed and that `reserved` past it did not: a write that landed one
+/// slot too far would leave the parent's `prepare_mail` in place and scribble
+/// into the padding EDS keeps for future vfuncs.
 #[test]
-fn writing_the_two_fields_left_the_parent_vfuncs_alone() {
+fn writing_the_fields_left_the_parent_vfuncs_alone() {
     let class = FactoryClass::get();
     let ours = class.get_ref();
     let parent = parent_class();
@@ -372,15 +373,26 @@ fn writing_the_two_fields_left_the_parent_vfuncs_alone() {
         parent.parent_class.new_backend.map(|f| f as usize),
         "new_backend was overwritten"
     );
-    assert_eq!(
-        ours.prepare_mail.map(|f| f as usize),
-        parent.prepare_mail.map(|f| f as usize),
-        "prepare_mail was overwritten"
-    );
     assert!(
         parent.prepare_mail.is_some(),
-        "EDS installs a default prepare_mail; if it stopped doing so, this \
-         test's comparison stopped saying anything"
+        "EDS installs a default prepare_mail; if it stopped doing so, the \
+         comparison below stopped saying anything"
+    );
+    assert_ne!(
+        ours.prepare_mail.map(|f| f as usize),
+        parent.prepare_mail.map(|f| f as usize),
+        "prepare_mail is still the parent's, so the mail sources of a JMAP \
+         account would name no provider"
+    );
+    assert!(
+        ours.reserved.iter().all(|slot| slot.is_null()),
+        "something was written past prepare_mail, into the slots EDS keeps for \
+         vfuncs it has not added yet"
+    );
+    assert!(
+        parent.reserved.iter().all(|slot| slot.is_null()),
+        "EDS itself put something in `reserved`, so the check above no longer \
+         distinguishes our write from its own"
     );
 }
 

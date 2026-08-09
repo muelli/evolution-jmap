@@ -34,6 +34,7 @@ use glib_sys::GType;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
 use crate::backend::JmapCollectionBackend;
+use crate::prepare_mail::prepare_mail_trampoline;
 
 /// What an account's `BackendName` has to say for this factory to be the one the
 /// registry picks — and so the name `[Collection]` carries in every JMAP
@@ -116,15 +117,13 @@ unsafe impl ObjectSubclass for JmapCollectionFactory {
         factory.factory_name = FACTORY_NAME.as_ptr();
         factory.backend_type = backend_type();
 
-        // `prepare_mail` is deliberately left alone, which is not the same
-        // decision as leaving `share_subprocess` alone in the address book
-        // factory. It is the hook a vendor backend uses to fill in the host,
-        // port and security details of an account's mail sources — and this
-        // collection creates no mail children at all yet (see
-        // `Collection::existing_children`), so it has nothing true to write
-        // there. The inherited default wires the identity and transport uids
-        // together, which is exactly right for the sources this backend does not
-        // yet create; overriding it before M5's provider is wired in would put
-        // an opinion about mail in the class struct that no code backs up.
+        // The third field, and the one that is not about this backend at all:
+        // the mail account, identity and transport sources are not children of
+        // this collection (see `crate::prepare_mail` for why they cannot be),
+        // and `prepare_mail` is the whole of what a collection factory gets to
+        // say about them. The inherited default joins the three together and
+        // stops there, leaving both services nameless; ours names the Camel
+        // provider that serves them, after chaining up.
+        factory.prepare_mail = Some(prepare_mail_trampoline);
     }
 }
