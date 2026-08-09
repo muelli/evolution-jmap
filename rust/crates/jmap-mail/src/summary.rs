@@ -101,11 +101,12 @@ use std::sync::Mutex;
 
 use eds_sys::{
     CamelFIRecord, CamelFolder, CamelFolderSummary, CamelFolderSummaryClass,
-    camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_free_array,
-    camel_folder_summary_get, camel_folder_summary_get_array, camel_folder_summary_get_type,
-    camel_folder_summary_lock, camel_folder_summary_remove_uid, camel_folder_summary_touch,
-    camel_folder_summary_unlock, camel_folder_take_folder_summary, camel_util_bdata_get_number,
-    camel_util_bdata_get_string, camel_util_bdata_put_number, camel_util_bdata_put_string,
+    camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_count,
+    camel_folder_summary_free_array, camel_folder_summary_get, camel_folder_summary_get_array,
+    camel_folder_summary_get_type, camel_folder_summary_lock, camel_folder_summary_remove_uid,
+    camel_folder_summary_touch, camel_folder_summary_unlock, camel_folder_take_folder_summary,
+    camel_util_bdata_get_number, camel_util_bdata_get_string, camel_util_bdata_put_number,
+    camel_util_bdata_put_string,
 };
 use glib_sys::{
     GError, GFALSE, GTRUE, GType, g_free, g_string_free, g_string_new, gboolean, gchar,
@@ -236,6 +237,30 @@ pub unsafe fn summary_state(summary: *mut CamelFolderSummary) -> Option<State> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     state.clone()
+}
+
+/// How many rows `summary` holds — the folder's own answer to "how big is this
+/// mailbox", which a refresh needs before it decides how much of one to fetch.
+///
+/// Camel counts in `guint`, and the answer is only ever compared against a
+/// number of messages, so a count that somehow did not fit is saturated rather
+/// than reported: what it would be used for is a cost estimate, and the estimate
+/// for a mailbox that large is "very large" either way.
+///
+/// Zero for a folder Camel handed no summary at all, which is not a special
+/// case: a folder with no rows has nothing a delta would spare it fetching.
+///
+/// # Safety
+///
+/// `summary` must be NULL or point at a live `CamelFolderSummary`.
+pub unsafe fn summary_rows(summary: *mut CamelFolderSummary) -> usize {
+    if summary.is_null() {
+        return 0;
+    }
+    // SAFETY: a live summary by the contract above; the accessor takes the
+    // summary's own lock.
+    let count = unsafe { camel_folder_summary_count(summary) };
+    usize::try_from(count).unwrap_or(usize::MAX)
 }
 
 /// Records the state one listing was taken at, replacing whatever the summary
