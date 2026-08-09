@@ -38,10 +38,12 @@ use std::time::Duration;
 use common::Account;
 use eds_sys::{
     CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_ERROR_NO_FOLDER,
-    CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_FOLDER_NONE,
-    CamelFolder, CamelFolderInfo, CamelStore, CamelStoreClass, camel_folder_get_full_name,
-    camel_folder_info_free, camel_offline_store_get_type, camel_service_error_quark,
-    camel_store_error_quark, camel_store_get_folder_sync, camel_store_get_inbox_folder_sync,
+    CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH,
+    CAMEL_STORE_FOLDER_INFO_SUBSCRIBED, CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST,
+    CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderInfo, CamelStore, CamelStoreClass,
+    camel_folder_get_full_name, camel_folder_info_free, camel_offline_store_get_type,
+    camel_service_error_quark, camel_store_error_quark, camel_store_get_folder_sync,
+    camel_store_get_inbox_folder_sync,
 };
 use glib_sys::GError;
 use gobject_sys::{g_object_unref, g_type_class_peek, g_type_class_ref, g_type_class_unref};
@@ -50,7 +52,8 @@ use jmap_mail::connect::StoreError;
 use jmap_mail::folder::JmapFolder;
 use jmap_mail::folders::Request;
 use jmap_mail::store::{JmapStore, store_type};
-use jmap_mail_sync::{FolderTree, MailSync};
+use jmap_mail::subscribe;
+use jmap_mail_sync::{FolderInfo, FolderTree, MailSync};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::{Mailbox, role};
@@ -62,6 +65,12 @@ const REFRESH: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_R
 /// Every real caller in Camel and Evolution sets this one; the two that do not
 /// are `camel_store_get_folder_info_sync`'s own virtual-folder paths.
 const RECURSIVE: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_RECURSIVE;
+/// What Evolution's folder tree adds for a store that is `CamelSubscribable`:
+/// only the folders the user ticked.
+const SUBSCRIBED: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_SUBSCRIBED;
+/// And what its subscription editor asks with: every folder there is to tick.
+const SUBSCRIPTION_LIST: eds_sys::CamelStoreGetFolderInfoFlags =
+    CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST;
 
 fn sync_against(server: &MockServer) -> MailSync {
     let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
@@ -450,6 +459,207 @@ fn the_refresh_flag_does_not_change_which_folders_are_asked_for() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// the ticks the user set, as a filter on that part
+
+/// The shape [`hand_built`] has, with only the named mailboxes ticked.
+///
+/// Every mailbox says which it is rather than leaving the property out: RFC
+/// 8621 §2 gives `isSubscribed` no default, and `jmap-mail-sync` reads a
+/// missing one as a tick, so an omission here would be the opposite of what a
+/// test about unsubscribed folders wants.
+fn ticked(subscribed: &[&str]) -> FolderTree {
+    let mailbox = |id: &str, name: &str, parent: Option<&str>| Mailbox {
+        id: Some(Id::new(id)),
+        name: name.to_owned(),
+        parent_id: parent.map(Id::new),
+        is_subscribed: Some(subscribed.contains(&name)),
+        ..Mailbox::default()
+    };
+    FolderTree::from_mailboxes(&[
+        mailbox("M1", "Work", None),
+        mailbox("M2", "Personal", None),
+        mailbox("M3", "Invoices", Some("M1")),
+        mailbox("M4", "Paid", Some("M3")),
+    ])
+    .expect("a well-formed mailbox list")
+}
+
+/// Every path one request asks for, parents before children.
+///
+/// [`requested`] reads the roots alone, which is all the `top` and the depth
+/// can change; a filter changes what hangs below them too, so these tests need
+/// the whole of what was asked for.
+fn requested_paths(
+    tree: &FolderTree,
+    top: Option<&str>,
+    flags: eds_sys::CamelStoreGetFolderInfoFlags,
+) -> Vec<String> {
+    let request = Request::new(tree, top, flags);
+    let mut paths = Vec::new();
+    let mut pending: Vec<&FolderInfo> = request.roots.iter().rev().collect();
+    while let Some(folder) = pending.pop() {
+        paths.push(folder.path.clone());
+        pending.extend(folder.children.iter().rev());
+    }
+    paths
+}
+
+/// The baseline the rest of this section is measured against: the ticks are a
+/// property of the folders either way, and without the flag they change
+/// nothing about which of them the call asks for.
+#[test]
+fn the_ticks_change_nothing_when_the_flag_is_not_set() {
+    let tree = ticked(&["Personal"]);
+
+    assert_eq!(
+        requested_paths(&tree, None, RECURSIVE),
+        ["Personal", "Work", "Work/Invoices", "Work/Invoices/Paid"]
+    );
+}
+
+/// And with it, the folders the user unticked are gone. This is the flag
+/// Evolution's folder tree passes for a store that is `CamelSubscribable`, so
+/// it is the whole reason the tick in the subscription editor changes what the
+/// user sees.
+#[test]
+fn the_subscribed_flag_leaves_out_the_folders_the_user_unticked() {
+    let tree = ticked(&["Personal", "Work"]);
+
+    assert_eq!(
+        requested_paths(&tree, None, RECURSIVE | SUBSCRIBED),
+        ["Personal", "Work"]
+    );
+}
+
+/// An unticked folder with a ticked one below it stays, because dropping it
+/// would drop the ticked folder with it: `CamelFolderInfo` hangs a child off
+/// its parent, so there is no answer in which `Work/Invoices` is present and
+/// `Work` is not.
+#[test]
+fn an_unticked_folder_stays_when_something_below_it_is_ticked() {
+    let tree = ticked(&["Invoices"]);
+
+    assert_eq!(
+        requested_paths(&tree, None, RECURSIVE | SUBSCRIBED),
+        ["Work", "Work/Invoices"]
+    );
+}
+
+/// Every level of it, not just the one immediately above.
+#[test]
+fn every_level_above_a_ticked_folder_is_kept() {
+    let tree = ticked(&["Paid"]);
+
+    assert_eq!(
+        requested_paths(&tree, None, RECURSIVE | SUBSCRIBED),
+        ["Work", "Work/Invoices", "Work/Invoices/Paid"]
+    );
+}
+
+/// And a folder kept only for what is below it is still described as unticked
+/// — it is in the answer because of its children, and saying otherwise would
+/// put a tick in the subscription editor the user never set.
+#[test]
+fn a_folder_kept_only_for_its_children_is_not_called_subscribed() {
+    let tree = ticked(&["Invoices"]);
+
+    let request = Request::new(&tree, None, RECURSIVE | SUBSCRIBED);
+
+    let work = request.roots.first().expect("Work is in the answer");
+    assert_eq!(work.path, "Work");
+    assert!(!work.subscribed, "a folder the user never ticked");
+}
+
+/// The other direction of the same question, and the one place the filter and
+/// the depth cut visibly differ. `from_forest` deliberately leaves
+/// `CAMEL_FOLDER_CHILDREN` on a folder whose children the *depth* left out —
+/// they exist, and the expander is how the caller asks for them. Children the
+/// *ticks* left out are not part of this view at all, so the folder has none.
+#[test]
+fn a_folder_whose_children_are_all_unticked_has_none_in_the_answer() {
+    let tree = ticked(&["Work"]);
+
+    let request = Request::new(&tree, None, RECURSIVE | SUBSCRIBED);
+
+    let work = request.roots.first().expect("Work is in the answer");
+    assert_eq!(work.path, "Work");
+    assert!(work.children.is_empty(), "an unticked child came along");
+}
+
+/// An account the user has unticked entirely asks for nothing — which Camel
+/// reads as a NULL chain with no error, the same as a `top` that names no
+/// folder.
+#[test]
+fn an_account_with_nothing_ticked_asks_for_nothing() {
+    let tree = ticked(&[]);
+
+    assert!(requested_paths(&tree, None, RECURSIVE | SUBSCRIBED).is_empty());
+}
+
+/// The filter is applied to the subtree `top` names rather than instead of it:
+/// a `top` whose subtree holds nothing ticked asks for nothing, even though
+/// the account has ticked folders elsewhere.
+#[test]
+fn a_top_with_nothing_ticked_below_it_asks_for_nothing() {
+    let tree = ticked(&["Personal"]);
+
+    assert!(requested_paths(&tree, Some("Work"), RECURSIVE | SUBSCRIBED).is_empty());
+}
+
+/// And a `top` that does is filtered like any other root, ancestors and all.
+#[test]
+fn a_top_is_filtered_like_any_other_root() {
+    let tree = ticked(&["Work", "Paid"]);
+
+    assert_eq!(
+        requested_paths(&tree, Some("Work"), RECURSIVE | SUBSCRIBED),
+        ["Work", "Work/Invoices", "Work/Invoices/Paid"]
+    );
+}
+
+/// The depth is still the depth. `Work` is in the answer only for the ticked
+/// folder below it, and the caller asked for one level: the depth the request
+/// carries is the one an ordinary parent would have got, and cutting to it
+/// stays `from_forest`'s job rather than becoming the filter's.
+#[test]
+fn the_filter_does_not_change_the_depth_the_call_asks_for() {
+    let tree = ticked(&["Invoices"]);
+
+    assert_eq!(
+        requested(&tree, None, SUBSCRIBED),
+        (vec!["Work".to_owned()], Some(0))
+    );
+}
+
+/// `SUBSCRIPTION_LIST` is the subscription editor's own question — "which
+/// folders are there to tick" — so it is answered with all of them. For JMAP
+/// that is the listing this store already has: `Mailbox/get` returns every
+/// mailbox of the account with its `isSubscribed`, so there is no second,
+/// wider request to make the way an IMAP store makes `LIST` beside `LSUB`.
+#[test]
+fn the_subscription_list_flag_asks_for_every_folder() {
+    let tree = ticked(&["Personal"]);
+
+    assert_eq!(
+        requested_paths(&tree, None, RECURSIVE | SUBSCRIPTION_LIST),
+        ["Personal", "Work", "Work/Invoices", "Work/Invoices/Paid"]
+    );
+}
+
+/// And it outranks `SUBSCRIBED` if a caller sets both, because a subscription
+/// editor showing only the folders that are already ticked is one the user
+/// cannot tick anything new in.
+#[test]
+fn the_subscription_list_flag_outranks_the_subscribed_one() {
+    let tree = ticked(&["Personal"]);
+
+    assert_eq!(
+        requested_paths(&tree, None, RECURSIVE | SUBSCRIPTION_LIST | SUBSCRIBED),
+        requested_paths(&tree, None, RECURSIVE | SUBSCRIPTION_LIST)
+    );
+}
+
 /// And the slot itself. `CamelStore` leaves `get_folder_info_sync` NULL and
 /// `camel_store_get_folder_info_sync` refuses to call a store that has not
 /// filled it in, so an override that never reached the class is an account with
@@ -647,6 +857,40 @@ fn the_vfunc_cuts_the_answer_when_recursive_is_not_asked_for() {
     let answered = Answered::of(&store, Some("Work"), CACHED);
 
     assert_eq!(answered.paths(), ["Work", "Work/Invoices"]);
+}
+
+/// The subscription flag reaching the answer, against a real account rather
+/// than a hand-built tree: the ticks come off through the same
+/// `Mailbox/set` the subscription editor writes, and the folder that keeps
+/// `Work` in the answer is the ticked one below it.
+#[test]
+fn the_vfunc_leaves_out_the_folders_the_user_unticked() {
+    let (_server, store) = nested();
+    subscribe::set_subscribed(&store, "Work", false).expect("unticked");
+    subscribe::set_subscribed(&store, "Work/Invoices/Paid", false).expect("unticked");
+
+    let answered = Answered::of(&store, None, RECURSIVE | SUBSCRIBED);
+
+    assert!(
+        answered.error.is_null(),
+        "a successful listing set an error"
+    );
+    assert_eq!(answered.paths(), ["Inbox", "Work", "Work/Invoices"]);
+}
+
+/// And the editor's own question, which has to reach the vfunc as the *whole*
+/// account or the user has no way to tick a folder back on.
+#[test]
+fn the_vfunc_answers_the_subscription_list_with_every_folder() {
+    let (_server, store) = nested();
+    subscribe::set_subscribed(&store, "Work/Invoices", false).expect("unticked");
+
+    let answered = Answered::of(&store, None, RECURSIVE | SUBSCRIPTION_LIST);
+
+    assert_eq!(
+        answered.paths(),
+        ["Inbox", "Work", "Work/Invoices", "Work/Invoices/Paid"]
+    );
 }
 
 /// The case that must not be an error. Camel documents the wrapper as able to
