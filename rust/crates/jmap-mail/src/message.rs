@@ -58,7 +58,9 @@ use std::ptr;
 
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID, CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMimeMessage,
-    camel_data_wrapper_construct_from_data_sync, camel_folder_error_quark, camel_mime_message_new,
+    camel_data_wrapper_construct_from_data_sync, camel_folder_error_quark,
+    camel_folder_get_folder_summary, camel_folder_summary_get, camel_message_info_get_size,
+    camel_mime_message_new,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, g_error_new_literal, gchar, gssize};
@@ -113,7 +115,11 @@ unsafe extern "C" fn get_message_sync(
             // downloaded is one this provider can hand over with the account
             // offline, which is the whole point of a `CamelOfflineStore`.
             let cache = JmapFolder::borrow(folder).and_then(JmapFolder::cache);
-            if let Some(source) = cache.and_then(|cache| cache.load(uid.as_str())) {
+            // And read once, for both ends of the cache: what the row says the
+            // message weighs is what tells a complete entry from what a crash
+            // left behind — see [`crate::cache`].
+            let listed = listed_size(folder, message_uid);
+            if let Some(source) = cache.and_then(|cache| cache.load(uid.as_str(), listed)) {
                 // Parsed without an error out-parameter, so a failure is silent
                 // and falls through to the fetch below: an entry Camel's parser
                 // will not read is not a message to report, it is one to
@@ -138,10 +144,48 @@ unsafe extern "C" fn get_message_sync(
             // discarded the download would make every open of that message
             // another two round trips.
             if let Some(cache) = cache {
-                cache.store(uid.as_str(), &source);
+                cache.store(uid.as_str(), &source, listed);
             }
             parse(&source, error)
         })
+    }
+}
+
+/// How many octets this folder's row for `message_uid` says the message has, or
+/// `None` if there is no row to ask.
+///
+/// The number is the `Email`'s `size` as [`crate::message_info`] wrote it into
+/// the row, which RFC 8621 §4.1 defines as the octets of the data the `blobId`
+/// references — the same bytes the cache holds. Asked of the summary rather than
+/// carried into the vfunc because the vfunc's argument is a uid: what Evolution
+/// clicked is a line of the message list, and the row behind that line is where
+/// everything already known about the message lives.
+///
+/// `None` for a uid the summary has no row for, which is every uid a caller
+/// invented and the ordinary state of a folder that has not been refreshed. That
+/// is not an error here — it is a message the cache will hold unchecked, exactly
+/// as it did before there was a check — because the fetch below is what decides
+/// whether the uid means anything.
+///
+/// # Safety
+///
+/// `folder` must point at a live `CamelFolder`, and `message_uid` must be a live
+/// NUL-terminated string.
+unsafe fn listed_size(folder: *mut CamelFolder, message_uid: *const gchar) -> Option<u32> {
+    // SAFETY: the contract above; the summary is borrowed from the folder, and
+    // `summary_get` hands back a reference this function owns and releases.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(folder);
+        if summary.is_null() {
+            return None;
+        }
+        let info = camel_folder_summary_get(summary, message_uid);
+        if info.is_null() {
+            return None;
+        }
+        let size = camel_message_info_get_size(info);
+        g_object_unref(info.cast());
+        Some(size)
     }
 }
 

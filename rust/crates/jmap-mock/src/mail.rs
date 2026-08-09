@@ -822,6 +822,12 @@ impl AccountState {
             .collect();
 
         let source = rfc5322(&id, &seed);
+        // RFC 8621 §4.1 defines `size` as the octets of the raw data the
+        // `blobId` references — "the number of octets in the file the user
+        // would download" — not the octets of the body. A client is entitled to
+        // check a download against it, so a mock that reported the body's
+        // length would be a mock that teaches a client the check is useless.
+        let size = source.len() as u64;
         let email = Email {
             id: Some(id.clone()),
             blob_id: Some(self.add_blob("message/rfc822", source.into_bytes())),
@@ -833,7 +839,7 @@ impl AccountState {
                     .map(|keyword| (keyword, true))
                     .collect(),
             ),
-            size: Some(seed.text_body.len() as u64),
+            size: Some(size),
             received_at: Some(seed.received_at),
             from: Some(vec![seed.from]),
             to: Some(seed.to),
