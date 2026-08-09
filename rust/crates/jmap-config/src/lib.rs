@@ -32,6 +32,16 @@
 //!   `ESourceCamel` extension hands a `CamelJmapStore`, which is where the
 //!   server a setup wrote turns into the server the provider connects to, and
 //!   which `jmap-mail`'s own `ServerConfig` is asked about in the same test.
+//! - [`complete`] is the other direction: not what a commit writes but whether
+//!   there is to be one. It is the deciding half of
+//!   `EMailConfigServiceBackend`'s `check_completeness` vfunc, and it is here
+//!   for the same reason the two writers are — the decision is ordinary Rust
+//!   over an [`account::Account`] and can be tested, while the widget that will
+//!   ask it cannot be. Its join is with the *readers*: an account it accepts is
+//!   one the collection backend's `server_of` accepts, asserted by committing
+//!   each case and reading it back, because a setup that accepts what the
+//!   registry rejects has written an account that fails everywhere except in
+//!   the dialog it was typed into.
 //!
 //! ## Why an rlib with no module in it yet
 //!
@@ -55,11 +65,15 @@
 //! yet, so what is verified here is the functions, not a thing Evolution does.
 //! That is also the reason the two writers above are as complete as they are —
 //! an account this crate commits is one a store can open and a transport can
-//! send through, with no step left for the caller to remember.
+//! send through, with no step left for the caller to remember — and the reason
+//! [`complete`] is a function rather than a vfunc: everything the subclass will
+//! have to *decide* is decided here, so what is left for it is the widgets and
+//! the plumbing, which is the part no test on this machine could cover anyway.
 //!
 //! Like the backends, this crate needs the installed EDS headers and so stays
 //! out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
 
 pub mod account;
+pub mod complete;
 pub mod mail;
