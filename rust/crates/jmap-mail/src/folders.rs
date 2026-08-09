@@ -46,19 +46,26 @@
 //! contract costs nothing a caller depends on, and saves a deep account from
 //! marshalling its whole tree into C for a question about one level of it.
 //!
-//! Three flags are still not read. `SUBSCRIBED` and `SUBSCRIPTION_LIST` want
-//! the tree filtered to what the user subscribed to, which is a filter on the
-//! folders rather than a different request; `FAST` is documented as deprecated
-//! and "most backends will behave the same whether it is supplied or not",
-//! which is true of this one because JMAP puts the counts in the mailbox
-//! anyway. `NO_VIRTUAL` is not this vfunc's business at all: the wrapper adds
-//! and removes vTrash and vJunk around the call.
+//! `SUBSCRIBED` and `SUBSCRIPTION_LIST` are read too, and both are a filter on
+//! the folders rather than a different request: `Mailbox/get` returns every
+//! mailbox of the account with its `isSubscribed`, so this store has the
+//! subscription list in hand and never needs the second, wider call an IMAP
+//! store makes `LIST` beside `LSUB` for. See [`Request::new`] for what each
+//! asks for and why an unsubscribed folder is sometimes still in the answer.
+//!
+//! Two flags are still not read. `FAST` is documented as deprecated and "most
+//! backends will behave the same whether it is supplied or not", which is true
+//! of this one because JMAP puts the counts in the mailbox anyway.
+//! `NO_VIRTUAL` is not this vfunc's business at all: the wrapper adds and
+//! removes vTrash and vJunk around the call.
 
+use std::borrow::Cow;
 use std::ptr;
 use std::sync::Arc;
 
 use eds_sys::{
-    CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH, CamelFolder,
+    CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH,
+    CAMEL_STORE_FOLDER_INFO_SUBSCRIBED, CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST, CamelFolder,
     CamelFolderInfo, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
     CamelStoreGetFolderInfoFlags, camel_store_get_folder_sync,
 };
@@ -81,7 +88,12 @@ pub struct Request<'a> {
     ///
     /// Empty for a `top` no folder answers to, which is a legitimate question
     /// with a legitimate empty answer — see [`Request::new`].
-    pub roots: &'a [FolderInfo],
+    ///
+    /// Borrowed from the store's tree for a call that wants the folders as
+    /// they are, owned for one that asked for a filtered view of them: a
+    /// subtree with folders taken out of it is not a subtree of the tree the
+    /// store holds, so it has to be built.
+    pub roots: Cow<'a, [FolderInfo]>,
     /// How many levels of descendants below those roots belong in the answer;
     /// `None` for all of them.
     pub depth: Option<usize>,
@@ -102,6 +114,23 @@ impl<'a> Request<'a> {
     /// folder another client deleted between one call and the next is asked
     /// for once more before Camel notices, and reporting that as a failure
     /// would turn someone else's tidying into a broken account.
+    ///
+    /// ## The two subscription flags
+    ///
+    /// `SUBSCRIBED` asks for the folders the user ticked, and is what
+    /// Evolution's folder tree adds for a store that is `CamelSubscribable` —
+    /// so it is what makes the tick in the subscription editor change what the
+    /// user sees. It is applied to whatever `top` already chose, rather than
+    /// instead of it: the two are separate halves of the same question, and a
+    /// caller that asks about one subtree of a filtered account means the
+    /// filtered part of that subtree.
+    ///
+    /// `SUBSCRIPTION_LIST` is the subscription editor's own question — which
+    /// folders are there to tick — and is answered with all of them, which for
+    /// this store is the listing it already has: `Mailbox/get` returns every
+    /// mailbox of the account with its `isSubscribed`. It outranks `SUBSCRIBED`
+    /// if a caller sets both, because an editor showing only what is already
+    /// ticked is one nothing new can be ticked in.
     pub fn new(
         tree: &'a FolderTree,
         top: Option<&str>,
@@ -115,16 +144,105 @@ impl<'a> Request<'a> {
             None => (tree.roots(), 0),
         };
 
+        let subscribed_only = flags & CAMEL_STORE_FOLDER_INFO_SUBSCRIBED != 0
+            && flags & CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST == 0;
+
         Self {
-            roots,
+            roots: if subscribed_only {
+                Cow::Owned(ticked(roots))
+            } else {
+                Cow::Borrowed(roots)
+            },
             depth: (flags & CAMEL_STORE_FOLDER_INFO_RECURSIVE == 0).then_some(below),
         }
     }
 
     /// The forest this request is answered with, owned until it is handed over.
     pub fn answer(&self) -> FolderInfoChain {
-        FolderInfoChain::from_forest(self.roots, self.depth)
+        FolderInfoChain::from_forest(&self.roots, self.depth)
     }
+}
+
+/// The part of a sibling chain the user's ticks leave: every subscribed folder,
+/// and every ancestor of one.
+///
+/// The ancestors are the whole of what makes this more than a filter.
+/// `CamelFolderInfo` hangs a child off its parent, so there is no answer in
+/// which `Work/Invoices` is present and `Work` is not — dropping an unticked
+/// parent would drop the ticked folder underneath it, which is mail the user
+/// asked to see and cannot reach. An IMAP server has the same problem and
+/// answers it the same way, by returning the unsubscribed parents `LSUB`'s
+/// children need.
+///
+/// Such a folder is *not* dressed up as anything else on the way out. It keeps
+/// `subscribed: false`, so the listing does not put a tick in the subscription
+/// editor the user never set, and it is deliberately not marked
+/// `CAMEL_FOLDER_NOSELECT`, which Camel documents as "the folder cannot contain
+/// messages" — a JMAP mailbox the user unticked holds mail like any other, and
+/// claiming otherwise would be a lie Camel acts on. The visible consequence is
+/// that unticking a folder with a ticked one below it leaves the folder in the
+/// tree and openable; the alternative is worse.
+///
+/// What it does change is the children. A folder whose children were all
+/// unticked has none *in this view*, and says so — unlike the depth cut in
+/// [`FolderInfoChain::from_forest`], which leaves `CAMEL_FOLDER_CHILDREN` on a
+/// folder whose children it left out, because those children exist and the
+/// expander is how the caller asks for them.
+///
+/// Iteratively, for the reason `from_forest` gives: the depth of the tree comes
+/// from a `parentId` chain a server chose.
+fn ticked(siblings: &[FolderInfo]) -> Vec<FolderInfo> {
+    // Pre-order first, each folder paired with its parent's place in that
+    // order, because the answer has to be assembled the other way round: what
+    // becomes of a folder depends on what became of everything below it.
+    let mut order: Vec<(&FolderInfo, Option<usize>)> = Vec::new();
+    let mut pending: Vec<(&FolderInfo, Option<usize>)> =
+        siblings.iter().rev().map(|folder| (folder, None)).collect();
+    while let Some((folder, parent)) = pending.pop() {
+        let index = order.len();
+        order.push((folder, parent));
+        pending.extend(
+            folder
+                .children
+                .iter()
+                .rev()
+                .map(|child| (child, Some(index))),
+        );
+    }
+
+    // And back again: reverse pre-order reaches every descendant before its
+    // ancestor, so the children a folder keeps are settled by the time the
+    // folder itself is decided.
+    let mut kept: Vec<Vec<FolderInfo>> = vec![Vec::new(); order.len()];
+    let mut roots: Vec<FolderInfo> = Vec::new();
+    for (index, (folder, parent)) in order.into_iter().enumerate().rev() {
+        let mut children = std::mem::take(&mut kept[index]);
+        if !folder.subscribed && children.is_empty() {
+            continue;
+        }
+        // They were collected by the same reversed walk, so they are in
+        // reverse sibling order.
+        children.reverse();
+        // Field by field rather than `..folder.clone()`, which would clone the
+        // subtree these children were just chosen from only to throw it away.
+        let folder = FolderInfo {
+            id: folder.id.clone(),
+            path: folder.path.clone(),
+            display_name: folder.display_name.clone(),
+            role: folder.role,
+            total: folder.total,
+            unread: folder.unread,
+            subscribed: folder.subscribed,
+            children,
+        };
+        match parent {
+            Some(parent) => kept[parent].push(folder),
+            None => roots.push(folder),
+        }
+    }
+
+    roots.reverse();
+    roots
 }
 
 // ---------------------------------------------------------------------------
