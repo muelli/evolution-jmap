@@ -173,6 +173,13 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_(book|cal)_cache_.*",
     "e_cache_.*",
     "e_source_.*",
+    // EDS's own `g_object_bind_property`, which is what every collection
+    // backend keeps a child's connection following its account's with. Named
+    // rather than reached for through gobject-sys because the two are not the
+    // same call: EDS's variant takes a lock of its own around creating and
+    // removing the binding, and the sources a registry binds are touched from
+    // more than one thread.
+    "e_binding_.*",
     // The registry's own side of a `.source` file. No backend calls these —
     // it is handed a finished `ESource` — but they are how a keyfile becomes
     // one without a running `evolution-source-registry`, which is what lets
