@@ -141,6 +141,12 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelMedium.*",
     "CamelMimePart.*",
     "CamelMimeMessage.*",
+    // Where a message fetched once is kept, so opening it a second time is not
+    // a second download: a directory of files keyed by a path and a name, which
+    // is what IMAPX's message cache is too. A `GObject` like the rest and
+    // therefore layout-checked, though nothing subclasses it — the provider
+    // only ever holds one.
+    "CamelDataCache.*",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -250,6 +256,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // body is reached without a `CamelMimePart` function of its own; the part's
     // type accessor is here alone, for tests/layout.rs.
     "camel_data_wrapper_.*",
+    // And keeping it, so the next open is not another download. `_new` is the
+    // constructor that also makes the directory, `_add` and `_get` hand over a
+    // `GIOStream` onto one entry, and `_remove` is what a half-written entry is
+    // taken out with. `_get_filename` rides in on the prefix and is what a test
+    // asks where an entry landed.
+    "camel_data_cache_.*",
     "camel_medium_.*",
     "camel_mime_part_get_type",
     "camel_mime_message_.*",
