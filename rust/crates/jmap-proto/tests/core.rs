@@ -113,6 +113,29 @@ fn the_session_names_how_many_calls_one_request_may_carry() {
     assert_eq!(session.max_calls_in_request(), Some(32));
 }
 
+/// How many octets one request to `apiUrl` may carry (RFC 8620 §2), which is
+/// what decides whether an `Email/get` naming a long list of ids may be sent as
+/// it stands or has to be sent as several.
+#[test]
+fn the_session_names_the_largest_request_the_server_takes() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    assert_eq!(session.max_size_request(), Some(10_000_000));
+}
+
+/// A server that names no request-size limit is answered with `None`, like the
+/// other three: inventing a number here would split requests the server would
+/// have taken whole, and the split ones are the ones with a window in them.
+#[test]
+fn a_session_that_names_no_request_size_limit_says_so() {
+    let mut value = fixture("core/session.json");
+    value["capabilities"][jmap_proto::session::CAPABILITY_CORE]
+        .as_object_mut()
+        .unwrap()
+        .remove("maxSizeRequest");
+    let session: Session = serde_json::from_value(value).unwrap();
+    assert_eq!(session.max_size_request(), None);
+}
+
 /// A server that names no call limit is answered with `None`, like the other
 /// two: what to do without a number is the caller's decision, and a guess here
 /// would either split requests that were fine or send ones that are refused.

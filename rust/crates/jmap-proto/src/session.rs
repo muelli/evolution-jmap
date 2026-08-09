@@ -76,6 +76,27 @@ impl Session {
             .as_u64()
     }
 
+    /// The largest request the server will take at `apiUrl`, in octets (RFC
+    /// 8620 §2, the core capability's `maxSizeRequest`).
+    ///
+    /// The sibling of [`Self::max_calls_in_request`], counting octets where
+    /// that one counts calls, and refused the same way: over it the server
+    /// answers `urn:ietf:params:jmap:error:limit` and *nothing* in the request
+    /// runs. A client that never asks finds out by sending the request, which
+    /// for a long list of ids is the whole cost of the operation spent on an
+    /// answer that was in the session document all along.
+    ///
+    /// `None` when the server does not say, as for the other three limits. A
+    /// number invented here would split requests the server would have taken
+    /// whole — and a split request is not merely slower, it has a window in it
+    /// where another client can change what the first half found.
+    pub fn max_size_request(&self) -> Option<u64> {
+        self.capabilities
+            .get(CAPABILITY_CORE)?
+            .get("maxSizeRequest")?
+            .as_u64()
+    }
+
     /// The largest file the server will take on `uploadUrl`, in octets (RFC
     /// 8620 §6.1, the core capability's `maxSizeUpload`).
     ///

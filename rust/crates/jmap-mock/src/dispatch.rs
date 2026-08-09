@@ -13,6 +13,30 @@ use crate::state::ServerState;
 
 /// Handle a POST to the API endpoint. Returns (HTTP status, JSON body).
 pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
+    // Counted before anything is read out of the body: what it is for is
+    // telling one request carrying two chained calls apart from two requests
+    // carrying one each, and a request refused below is still a round trip the
+    // client spent.
+    state.api_requests += 1;
+
+    // RFC 8620 §2: over `maxSizeRequest` the request is refused on its octets,
+    // before it is a request at all — a server counting bytes has not parsed
+    // anything yet, and cannot have run any of the calls inside.
+    if let Some(limit) = state.size_request
+        && body.len() as u64 > limit
+    {
+        let problem = serde_json::json!({
+            "type": "urn:ietf:params:jmap:error:limit",
+            "limit": "maxSizeRequest",
+            "status": 400,
+            "detail": format!(
+                "{} octets is more than the {limit} this server takes in one request",
+                body.len(),
+            ),
+        });
+        return (400, problem);
+    }
+
     let request: Request = match serde_json::from_slice(body) {
         Ok(request) => request,
         Err(parse_error) => {
@@ -24,11 +48,6 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
             return (400, problem);
         }
     };
-
-    // Counted here rather than per call: what it is for is telling one request
-    // carrying two chained calls apart from two requests carrying one each,
-    // and a request refused below is still a round trip the client spent.
-    state.api_requests += 1;
 
     // RFC 8620 §3.2: over `maxCallsInRequest` the whole request is refused with
     // a request-level error, and nothing in it runs — not even the calls that

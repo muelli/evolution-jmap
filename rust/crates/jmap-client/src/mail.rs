@@ -233,19 +233,110 @@ impl Client {
     }
 
     /// `Email/get` for explicit ids.
+    ///
+    /// Sent as several requests when naming every id at once would be longer
+    /// than the session's `maxSizeRequest` (RFC 8620 §2). This is the one call
+    /// this client builds whose length is the user's mailbox rather than the
+    /// client's choice — a folder of ten thousand messages is a list of ten
+    /// thousand ids — and over the limit the server refuses the *request*, so
+    /// the alternative to splitting is fetching nothing.
+    ///
+    /// The number of ids is bounded elsewhere, by `maxObjectsInGet`, and by the
+    /// caller: this is about octets, and the two limits do not imply each other
+    /// — ids may be up to 255 characters (RFC 8620 §1.2), so a list well inside
+    /// one limit can be well outside the other.
+    ///
+    /// Splitting is not free, and is not done when it is not needed: between
+    /// two requests another client may destroy a message the first named, and
+    /// it comes back one short rather than as an error. A server that names no
+    /// limit is sent the list whole.
     pub fn email_get(
         &self,
         account_id: &Id,
         ids: &[Id],
         properties: Option<&[&str]>,
     ) -> Result<Vec<Email>, Error> {
+        let limit = self.session().max_size_request();
+        let mut fetched: Vec<Email> = Vec::with_capacity(ids.len());
+        let mut rest = ids;
+        loop {
+            let call_id = self.next_call_id();
+            let take = match limit {
+                Some(limit) => self.ids_that_fit(account_id, rest, properties, &call_id, limit)?,
+                None => rest.len(),
+            };
+            let (chunk, remaining) = rest.split_at(take);
+            let request = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL]).call(
+                "Email/get",
+                &Self::email_get_arguments(account_id, chunk, properties),
+                &call_id,
+            )?;
+            let response = self.api_call(&request)?;
+            let invocation = response
+                .responses_for(&call_id)
+                .next()
+                .ok_or_else(|| Error::Protocol("no Email/get response".to_owned()))?;
+            let arguments = Self::unwrap_invocation(invocation, "Email/get")?;
+            let get_response: GetResponse<Email> = serde_json::from_value(arguments)?;
+            fetched.extend(get_response.list);
+
+            rest = remaining;
+            if rest.is_empty() {
+                return Ok(fetched);
+            }
+        }
+    }
+
+    /// The arguments of an `Email/get` naming `ids`.
+    fn email_get_arguments(account_id: &Id, ids: &[Id], properties: Option<&[&str]>) -> GetRequest {
         let mut request = GetRequest::ids(account_id.clone(), ids.iter().cloned());
         request.properties =
             properties.map(|properties| properties.iter().map(|s| s.to_string()).collect());
-        let arguments =
-            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/get", &request)?;
-        let response: GetResponse<Email> = serde_json::from_value(arguments)?;
-        Ok(response.list)
+        request
+    }
+
+    /// How many of `ids`, from the front, an `Email/get` under `call_id` may
+    /// name before the request goes over `limit` octets.
+    ///
+    /// Measured rather than estimated, and measured once: the request naming no
+    /// ids at all is everything whose length is not the id list, and a JSON
+    /// array grows by exactly each element's serialized length plus one comma
+    /// between them. So one serialization places every boundary, and it places
+    /// them on the same count the server will — the bytes counted here are the
+    /// bytes [`Client::api_call`] sends.
+    ///
+    /// [`Error::RequestTooLarge`] when even the first id does not fit, which is
+    /// where splitting runs out: a call naming one id cannot be made into two.
+    fn ids_that_fit(
+        &self,
+        account_id: &Id,
+        ids: &[Id],
+        properties: Option<&[&str]>,
+        call_id: &str,
+        limit: u64,
+    ) -> Result<usize, Error> {
+        let empty = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL]).call(
+            "Email/get",
+            &Self::email_get_arguments(account_id, &[], properties),
+            call_id,
+        )?;
+        let mut used = serde_json::to_vec(&empty)?.len() as u64;
+
+        for (taken, id) in ids.iter().enumerate() {
+            // The comma that separates this id from the one before it.
+            let cost = serde_json::to_string(id)?.len() as u64 + u64::from(taken > 0);
+            if used + cost > limit {
+                if taken == 0 {
+                    return Err(Error::RequestTooLarge {
+                        size: used + cost,
+                        limit,
+                    });
+                }
+                return Ok(taken);
+            }
+            used += cost;
+        }
+        Ok(ids.len())
     }
 
     /// `Email/query` chained to `Email/get` through a `#ids` back-reference —

@@ -180,9 +180,24 @@ impl Client {
     }
 
     /// Send a full request envelope to the API endpoint.
+    ///
+    /// A request longer than the session's `maxSizeRequest` is refused here,
+    /// without being sent: RFC 8620 §2 has the server refuse it on its octets
+    /// with a request-level error, so sending it costs a round trip and returns
+    /// nothing. What comes back instead is [`Error::RequestTooLarge`] with both
+    /// numbers, which is what a caller that could split its request needs in
+    /// order to decide to.
     pub fn api_call(&self, request: &Request) -> Result<Response, Error> {
         let api_url = self.session().api_url.clone();
         let body = serde_json::to_vec(request)?;
+        if let Some(limit) = self.session().max_size_request()
+            && body.len() as u64 > limit
+        {
+            return Err(Error::RequestTooLarge {
+                size: body.len() as u64,
+                limit,
+            });
+        }
         let response = self.execute(HttpMethod::Post, &api_url, Some(&body))?;
         Ok(serde_json::from_slice(&response.body)?)
     }
