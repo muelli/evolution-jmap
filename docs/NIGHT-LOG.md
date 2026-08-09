@@ -6641,3 +6641,139 @@ upload (`maxSizeUpload` has no accessor on `jmap_proto::Session`); `cancellable`
 observed nowhere, because `Client` takes its `CancelFlag` when it is built.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (seventieth session)
+
+**Expunging a folder: the first time `CAMEL_MESSAGE_DELETED` reaches the
+server.** The previous session named this as the next increment and left the
+interim state precisely: a trash folder showing what the server put there and
+not what this client deleted, because Evolution's Delete key marks a summary row
+with a bit JMAP has no keyword for and `synchronize_sync` deliberately produced
+no keyword change for it. This is the vfunc that reads the mark.
+
+Red first: ten tests in a new `jmap-mail/tests/expunge.rs` against a folder class
+that had never filled in `expunge_sync`. Nine failed — Camel's wrapper answers
+`TRUE` for a class with that slot NULL, so every one of them was a folder
+reporting the user's deletions as carried out and destroying nothing. The tenth,
+`synchronising_without_expunge_leaves_the_deleted_rows_alone`, passed before the
+implementation and is meant to: it is the negative control for the `expunge`
+argument, and a version of this work that ignored the argument entirely would
+still pass it. Five more tests in a new `jmap-mail-sync/tests/expunge.rs` covered
+the protocol half first.
+
+What landed:
+
+- **`Client::email_destroy`** — `Email/set` with a `destroy`, shaped like
+  `mailbox_destroy` beside it, with `notFound` staying an `Error::Set` so the
+  caller can tell "another client got there first" from "the server refused".
+- **`MailSync::expunge_message(uid, mailbox)`**, which reads before it writes,
+  and a private `mailboxes::out_of` for the patch it may send.
+- **`JmapStore::expunge_message`**, read-locked like every other write.
+- **`crate::expunge`**, the vfunc and the walk, with `expunge_folder` exposed to
+  the crate so `synchronize_sync` reaches the same code.
+- **`synchronize_sync` honours its `expunge` argument**, after the keyword walk
+  rather than before it.
+- **`camel_folder_expunge_sync` added to eds-sys's allowlist**, so the tests
+  drive the wrapper Evolution calls rather than the class pointer.
+
+Decisions taken:
+
+- **An expunge is one of two different writes, chosen per message from a read.**
+  This is the whole of the increment's difficulty and it is a mismatch between
+  the two models rather than caution. Camel's vfunc asks a *folder* to get rid of
+  the messages marked deleted in it; in IMAP that is unambiguous, because a
+  message is in one mailbox and removing it from the mailbox is removing it. RFC
+  8621 §4.6 makes `mailboxIds` a set, so the same message may be in the inbox and
+  in a folder the user filed it into, and the two candidate writes say different
+  things: `Email/set` **destroy** takes the message out of the account, which is
+  right for a message this mailbox is the last home of and data loss for one the
+  user also filed elsewhere — emptying the trash would take their copy in "Work"
+  with it; `Email/set` **update** with `mailboxIds/<this>: null` takes it out of
+  this mailbox only, which is right for the second case and a request any server
+  keeping §4.6's invariant refuses for the first, because it would leave the
+  message filed nowhere. Nothing on the Camel side can tell the cases apart: a
+  summary row records the mailbox it was listed from and was never told about any
+  other. So `mailboxIds` is read first — one `Email/get` of one property — and
+  the write chosen from the answer. It is a round trip per message on top of the
+  write, and the alternative is a provider that either loses mail or cannot empty
+  a trash.
+- **A message that is not in this mailbox at all is no work.** A uid is a claim
+  about the last listing, so another client can have moved the message out while
+  Evolution held the folder open; destroying it on the strength of where it *was*
+  would be deleting mail from a stale row. Removing a member that is already
+  absent would be harmless (RFC 8620 §5.3) and would also be a request that says
+  nothing.
+- **Membership is the member being present, whatever its value.** RFC 8621 §4.6
+  gives every value in the set as `true`, so a `false` from a server that spelled
+  absence out is still a mailbox naming the message — and counting it is the
+  reading that cannot turn into a destroy.
+- **The work list is the flag and not `get_changed`.** `synchronize_sync` walks
+  `camel_folder_summary_get_changed`, which is the rows Camel has not written back
+  to its *database*; a row marked deleted before the last synchronisation is not
+  on it while being exactly what an expunge is for. So this walks the whole
+  summary and tests the bit, which is what Camel's own providers do.
+- **A message another client destroyed is not a failure**, and its row goes
+  anyway — the judgement `transfer` and `synchronize` already make, and here it is
+  additionally the outcome the expunge wanted.
+- **The rows go now rather than at the next listing**, announced in one
+  `camel_folder_changed` — `transfer`'s decision, for its reason.
+- **`synchronize_sync`'s `expunge` argument is honoured, and after the keyword
+  walk.** A row about to be destroyed may still carry an unsaved change of the
+  user's (marking a message read and deleting it before anything synchronised is
+  ordinary), and the keyword walk is what clears the marks that would otherwise be
+  retried. Doing the expunge first would drop the change.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The read and the write are not one atomic step.** A client that files this
+   message into a second mailbox between the `Email/get` and the destroy loses it.
+   That is the window every unconditional `Email/set` has; closing it would need a
+   server-side "destroy if in no other mailbox", which JMAP does not have.
+   `ifInState` does not help — the state that would matter is the message's own
+   membership, and a conditional on the account's `Email` state would fail for any
+   change to any other message.
+2. **Nothing yet *files* a delete into the trash.** Evolution's Delete key still
+   marks the row locally, and this increment destroys such a message rather than
+   moving it to the account's trash mailbox. Whether that is what a real Evolution
+   asks for depends on how it treats a store whose `get_trash_folder_sync` answers
+   with a real folder and whose `CAMEL_STORE_VTRASH` is clear — the state the
+   previous session established — and that cannot be observed on this VM. Two
+   possibilities and both stay open: Evolution may move the message itself through
+   `transfer_messages_to_sync` (in which case this vfunc is only ever reached in
+   the trash, which is exactly right), or it may only set the bit (in which case a
+   delete in the inbox followed by an expunge destroys mail the user may have
+   expected to find in the trash). **Needs human verification in real Evolution.**
+   Until it is answered, `CAMEL_FOLDER_IS_TRASH` is still not set from the role —
+   the question `folder.rs` has carried for two sessions — because what reads it
+   is the same code path that cannot be exercised here.
+3. **`Email/set` destroy is per message**, so emptying a large trash is one
+   `Email/get` and one `Email/set` per message. Consistent with the per-message
+   decision `transfer` documents and for its reason (an answer per message is what
+   the caller must report), but it is a real cost that a batched destroy could cut
+   for the subset that needs no read.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Three new files, each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set (378 tests, up from 373: the five new `jmap-mail-sync` ones) and on
+the five EDS crates (558, up from 548: the ten new integration tests).
+
+No milestone tag is claimed. M5's delete surface is now half done — the server
+side of an expunge exists and the Evolution side of a delete is the open
+question above.
+
+Next in M5: **answering limit 2** — either from a reading of Evolution's own
+source or from a human running it — and then `CAMEL_FOLDER_IS_TRASH` and, if the
+answer needs it, filing a delete into the trash rather than destroying it.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_folder_info_sync`'s NULL-versus-GError question; no size check before an
+upload (`maxSizeUpload` has no accessor on `jmap_proto::Session`); `cancellable`
+observed nowhere, because `Client` takes its `CancelFlag` when it is built; and
+the store still implements no `CamelServiceClass::get_name()`, which every
+`Account::open()` in the tests logs. Unexercised against a real `CamelSession`:
+`service.rs`, which waits on M6 and M7. The README's architecture block still
+lists only the round-1 crates.

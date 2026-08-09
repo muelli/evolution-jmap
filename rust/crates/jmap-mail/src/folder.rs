@@ -214,6 +214,15 @@ unsafe impl ObjectSubclass for JmapFolder {
         //
         // SAFETY: as above.
         unsafe { crate::append::install_vfuncs(class.cast::<CamelFolderClass>()) };
+
+        // And the departure none of those is: a message the user is finished
+        // with. `CamelFolder` leaves `expunge_sync` NULL and its wrapper
+        // answers TRUE for a class that has not filled it in — so without this
+        // line "Expunge" and "Empty Trash" are menu items that report success
+        // and leave every message where it was.
+        //
+        // SAFETY: as above.
+        unsafe { crate::expunge::install_vfuncs(class.cast::<CamelFolderClass>()) };
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.
