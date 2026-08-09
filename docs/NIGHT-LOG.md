@@ -6889,3 +6889,99 @@ Next in M5: still **answering the delete-versus-trash question** — from a read
 of Evolution's own source or from a human running it — and then
 `CAMEL_FOLDER_IS_TRASH` and, if the answer needs it, filing a delete into the
 trash rather than destroying it.
+
+## 2026-08-09 (seventy-second session)
+
+**The name Camel had for this account, which was NULL.** The delete-versus-trash
+question the last two sessions named is still one only a human running real
+Evolution can answer, so this session took another item off the standing list:
+the store implemented no `CamelServiceClass::get_name()`.
+
+That slot is not optional decoration. `camel_service_get_name` is
+`g_return_val_if_fail (class->get_name != NULL, NULL)`, so every sentence Camel
+writes about the account — "Cannot get folder … from store …", the progress the
+user watches, the line an error dialog puts the failure on — was being written
+about NULL, with a critical logged beside it.
+
+Red first: eight tests naming `jmap_mail::service::describe`, which did not
+exist, and two of them going through `camel_service_get_name` on a real
+`Account`, which answered `None` until the slot was filled.
+
+What landed:
+
+- **`describe(host, port, user, brief)`** in `jmap-mail`'s `service.rs`: the
+  whole decision as a pure function, so the naming can be tested without a
+  GObject.
+- **`get_name` installed** in `install_vfuncs`, over a `name_of` that reads the
+  three fields off `camel_service_ref_settings` and hands back a `g_strdup` the
+  caller frees.
+- **`server::network()`**, the `CAMEL_IS_NETWORK_SETTINGS` check lifted out of
+  `ServerConfig::from_settings` so both readers share it rather than each
+  spelling it, and `take_string` made `pub(crate)` for the same reason.
+
+The names: `JMAP server <host>` brief, `JMAP service for <user> on <host>[:port]`
+full, `JMAP service on <host>[:port]` when the account names no user, and
+`JMAP account` when it names no server.
+
+Decisions taken:
+
+- **The port is in the long form and not the short one.** Camel documents
+  `brief` as a short description for the folder tree and the other as "complete
+  and mostly unambiguous". IMAPX drops the port from both, but IMAP accounts
+  differing only in port are exotic and JMAP ones are not — JMAP is HTTP, and a
+  local server beside a test one on the same host is this repo's own daily
+  setup. Two accounts Camel cannot tell apart in an error message is exactly
+  what the unambiguous form exists to prevent.
+- **An unconfigured account is named `JMAP account`, not `JMAP server `.** Camel
+  asks for the name long before anything has configured the service — the
+  settings object's properties are `G_PARAM_CONSTRUCT`, so a fresh account has a
+  host of `""` — and a sentence about a server with the host left off is worse
+  than a sentence that does not mention one.
+- **The host as the account spells it, not as the wire does.** `name_of` reads
+  `dup_host` where `ServerConfig` reads `dup_host_ensure_ascii`: nothing
+  connects with this string, and an account in an internationalised domain
+  should be described in the name its owner typed rather than in punycode.
+  Pinned by `an_internationalised_host_is_named_as_the_account_spells_it`.
+- **A panic answers with a name rather than with NULL.** This is the one vfunc
+  here with no `GError` out-parameter and no failure value; the caller drops
+  whatever comes back into the middle of a message. So the guard's fallback is
+  the unconfigured name, and the critical it logs is where the bug is reported.
+- **English and untranslated**, like the provider's own name and description.
+  There is no catalogue under this module's translation domain yet, and calling
+  into one that does not exist would not make the strings translated.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Nothing here has been seen in Evolution.** That these strings read well in
+   a folder tree, an error dialog and a progress bar is a judgement about a UI
+   this VM cannot run — *needs human verification in real Evolution*. What is
+   verified is that Camel asks and is answered, and what the answer is.
+2. **`get_name` is not the account's display name.** Evolution shows the
+   `ESource` display name in the folder tree; this string is what *Camel*
+   substitutes into its own messages. The two can disagree, and until M6/M7
+   exist there is no source to compare against.
+3. **The name is read fresh on every call**, which is what makes it follow a
+   reconfigured account (asserted), and also means it is read under whatever
+   lock the caller holds. `camel_service_ref_settings` is a property read; no
+   caller of `get_name` in Camel holds anything this re-enters.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; bounding the cache; the cache entry written by
+`write_all` rather than to a temporary name and renamed; `get_folder_info_sync`'s
+NULL-versus-GError question; `cancellable` observed nowhere; `maxSizeRequest`,
+`maxCallsInRequest` and `maxConcurrentUpload` still unread; `service.rs`
+unexercised against a real `CamelSession`; and the README's architecture block
+still listing only the round-1 crates.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). No new files, so no new SPDX headers.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (386 tests) and on
+the five EDS crates (567, up from 559).
+
+No milestone tag is claimed; M5's open questions are the ones listed above.
+
+Next in M5: still **answering the delete-versus-trash question**, and after it
+either `CAMEL_FOLDER_IS_TRASH` or the cache items above, which are the tractable
+ones left that need no display server.

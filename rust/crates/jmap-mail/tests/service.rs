@@ -13,13 +13,26 @@
 //! [`report_authentication`], which turns the outcome into the two answers the
 //! vfunc returns — a verdict, and an error that is deliberately absent for one
 //! of the three verdicts.
+//!
+//! The fourth vfunc has nothing to do with connecting at all: `get_name` is how
+//! every message Camel writes about this account refers to it, and it is
+//! testable both ways round — as [`describe`], which is the whole of the
+//! decision, and through `camel_service_get_name` on a real store, which is the
+//! only thing that proves the slot was filled in.
 
+mod common;
+
+use std::ffi::CStr;
 use std::ptr;
 use std::sync::Arc;
 
+use common::Account;
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
-    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_STORE_FOLDER_INFO_REFRESH, camel_service_error_quark,
+    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_STORE_FOLDER_INFO_REFRESH, CamelNetworkSettings,
+    CamelService, camel_network_settings_set_host, camel_network_settings_set_port,
+    camel_network_settings_set_user, camel_service_error_quark, camel_service_get_name,
+    camel_service_ref_settings,
 };
 use glib_sys::GError;
 use jmap_backend_core::source::SourceError;
@@ -27,7 +40,7 @@ use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::StoreError;
 use jmap_mail::server::ServerConfig;
-use jmap_mail::service::{authenticate, report_authentication};
+use jmap_mail::service::{authenticate, describe, report_authentication};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
 use jmap_mock::MockServer;
@@ -275,5 +288,158 @@ fn the_installed_connection_is_the_one_the_attempt_opened() {
     assert_eq!(
         store.folders(CACHED).expect("listed").iter().count(),
         direct.folder_tree().expect("listed").1.iter().count()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// what Camel calls this account
+
+/// Writes a server onto the account's settings the way EDS configures one: by
+/// property, on the settings object the service made for itself.
+fn configure(account: &Account, host: &str, port: u16, user: Option<&str>) {
+    let host = std::ffi::CString::new(host).expect("a host with no NUL in it");
+    let user = user.map(|user| std::ffi::CString::new(user).expect("a user with no NUL in it"));
+    // SAFETY: a live `CamelService`, whose settings are a `CamelJmapSettings`
+    // and therefore a `CamelNetworkSettings`; the strings are copied by the
+    // setters and the reference is given back.
+    unsafe {
+        let settings = camel_service_ref_settings(account.store.cast::<CamelService>());
+        assert!(!settings.is_null(), "the store has no settings");
+        let network = settings.cast::<CamelNetworkSettings>();
+        camel_network_settings_set_host(network, host.as_ptr());
+        camel_network_settings_set_port(network, port);
+        camel_network_settings_set_user(
+            network,
+            user.as_ref().map_or(ptr::null(), |user| user.as_ptr()),
+        );
+        gobject_sys::g_object_unref(settings.cast());
+    }
+}
+
+/// What `camel_service_get_name` answers, as a Rust string. NULL — which is
+/// what Camel returns for a class that filled none of the slot in — comes back
+/// as `None` rather than as a panic, so the test that cares says so itself.
+fn name_of(account: &Account, brief: bool) -> Option<String> {
+    // SAFETY: a live `CamelService`; the string returned is a GLib allocation
+    // this call owns and frees.
+    unsafe {
+        let name = camel_service_get_name(
+            account.store.cast::<CamelService>(),
+            if brief {
+                glib_sys::GTRUE
+            } else {
+                glib_sys::GFALSE
+            },
+        );
+        if name.is_null() {
+            return None;
+        }
+        let owned = CStr::from_ptr(name).to_string_lossy().into_owned();
+        glib_sys::g_free(name.cast());
+        Some(owned)
+    }
+}
+
+/// The brief form is the one Camel puts in a folder tree and in the middle of
+/// its own sentences, so it is the server and nothing else.
+#[test]
+fn the_brief_name_of_an_account_is_the_server_it_reaches() {
+    assert_eq!(
+        describe(Some("jmap.example.com"), 0, Some("ada"), true),
+        "JMAP server jmap.example.com"
+    );
+}
+
+/// The long form is documented as "complete and mostly unambiguous", and the
+/// thing that most often tells two accounts on one server apart is which user
+/// they are.
+#[test]
+fn the_full_name_of_an_account_names_the_user_as_well_as_the_server() {
+    assert_eq!(
+        describe(Some("jmap.example.com"), 0, Some("ada"), false),
+        "JMAP service for ada on jmap.example.com"
+    );
+}
+
+/// An account with no user name is not an error — the credential may be a
+/// bearer token — so it is named by its server alone rather than by an empty
+/// slot in a sentence.
+#[test]
+fn an_account_with_no_user_is_named_by_its_server_alone() {
+    assert_eq!(
+        describe(Some("jmap.example.com"), 0, None, false),
+        "JMAP service on jmap.example.com"
+    );
+}
+
+/// JMAP is HTTP, so two accounts differing only in port are ordinary — a local
+/// server and a test one. The port goes in the form whose job is to be
+/// unambiguous, and stays out of the one whose job is to be short.
+#[test]
+fn a_port_the_account_names_belongs_to_the_unambiguous_form() {
+    assert_eq!(
+        describe(Some("127.0.0.1"), 8080, None, false),
+        "JMAP service on 127.0.0.1:8080"
+    );
+    assert_eq!(
+        describe(Some("127.0.0.1"), 8080, None, true),
+        "JMAP server 127.0.0.1"
+    );
+}
+
+/// A newly created account has no server yet and Camel still asks what to call
+/// it. "JMAP server " with the host left off would be a sentence about a server
+/// that is not there.
+#[test]
+fn an_account_with_no_server_is_named_without_one() {
+    assert_eq!(describe(None, 0, Some("ada"), true), "JMAP account");
+    assert_eq!(describe(None, 0, Some("ada"), false), "JMAP account");
+}
+
+/// The slot itself. `camel_service_get_name` is `g_return_val_if_fail
+/// (class->get_name != NULL, NULL)`, so a class that overrides nothing answers
+/// NULL and logs a critical every time Camel mentions the account — which is
+/// what this asserts is no longer true.
+#[test]
+fn camel_asks_the_store_what_the_account_is_called_and_is_answered() {
+    let account = Account::open();
+    configure(&account, "jmap.example.com", 0, Some("ada"));
+
+    assert_eq!(
+        name_of(&account, true).as_deref(),
+        Some("JMAP server jmap.example.com")
+    );
+    assert_eq!(
+        name_of(&account, false).as_deref(),
+        Some("JMAP service for ada on jmap.example.com")
+    );
+}
+
+/// The name is read off the settings each time it is asked for, not frozen at
+/// construction: an account whose server the user edits is one Camel goes on
+/// naming after the edit.
+#[test]
+fn the_name_follows_the_server_the_account_is_reconfigured_to() {
+    let account = Account::open();
+    assert_eq!(name_of(&account, true).as_deref(), Some("JMAP account"));
+
+    configure(&account, "jmap.example.com", 8080, None);
+    assert_eq!(
+        name_of(&account, false).as_deref(),
+        Some("JMAP service on jmap.example.com:8080")
+    );
+}
+
+/// The name is a human's spelling of the host rather than the wire's: nothing
+/// connects with it, and an account configured in an internationalised domain
+/// name should be described in the one its owner typed.
+#[test]
+fn an_internationalised_host_is_named_as_the_account_spells_it() {
+    let account = Account::open();
+    configure(&account, "jmap.bücher.example", 0, None);
+
+    assert_eq!(
+        name_of(&account, true).as_deref(),
+        Some("JMAP server jmap.bücher.example")
     );
 }

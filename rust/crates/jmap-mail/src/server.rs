@@ -75,26 +75,8 @@ impl ServerConfig {
     /// `camel_service_ref_settings` returned. It is only read from, and
     /// nothing outlives the call.
     pub unsafe fn from_settings(settings: *mut CamelSettings) -> Result<Self, SourceError> {
-        // Camel will only hand a service settings of the class its
-        // `settings_type` names, and that class is `CamelJmapSettings`, which
-        // implements the interface. The check is here anyway because the
-        // alternative to it is not a wrong answer, it is a `g_return_if_fail`
-        // in each of the four accessors below — four criticals and four NULLs,
-        // in a process full of other people's mail. This way the answer is the
-        // same one those NULLs would produce, arrived at without asserting.
-        if settings.is_null()
-            // SAFETY: a non-NULL CamelSettings is a GTypeInstance by the
-            // contract above, and the interface type initialises itself.
-            || unsafe {
-                g_type_check_instance_is_a(
-                    settings.cast::<GTypeInstance>(),
-                    camel_network_settings_get_type(),
-                )
-            } == glib_sys::GFALSE
-        {
-            return Err(SourceError::MissingHost);
-        }
-        let network = settings.cast::<CamelNetworkSettings>();
+        // SAFETY: the contract above.
+        let network = unsafe { network(settings) }.ok_or(SourceError::MissingHost)?;
 
         // The host in the form it goes on the wire in. Camel hands back the
         // configured spelling unchanged when it cannot convert one — it does
@@ -121,6 +103,36 @@ impl ServerConfig {
     }
 }
 
+/// A settings object as the interface Camel's network accessors demand, or
+/// nothing if it does not implement one.
+///
+/// Camel will only hand a service settings of the class its `settings_type`
+/// names, and that class is `CamelJmapSettings`, which implements the
+/// interface. The check is here anyway because the alternative to it is not a
+/// wrong answer, it is a `g_return_if_fail` in each of the accessors that
+/// follow — a critical and a NULL apiece, in a process full of other people's
+/// mail. This way the answer is the same one those NULLs would produce, arrived
+/// at without asserting.
+///
+/// # Safety
+///
+/// `settings` must be NULL or a valid `CamelSettings`. The result borrows it
+/// and must not outlive the caller's reference.
+pub(crate) unsafe fn network(settings: *mut CamelSettings) -> Option<*mut CamelNetworkSettings> {
+    if settings.is_null() {
+        return None;
+    }
+    // SAFETY: a non-NULL CamelSettings is a GTypeInstance by the contract
+    // above, and the interface type initialises itself.
+    let implements = unsafe {
+        g_type_check_instance_is_a(
+            settings.cast::<GTypeInstance>(),
+            camel_network_settings_get_type(),
+        )
+    };
+    (implements != glib_sys::GFALSE).then(|| settings.cast::<CamelNetworkSettings>())
+}
+
 /// A string a `dup_` accessor just handed over, as an owned `Option<String>`.
 ///
 /// The ownership half of [`read_string`]: same normalisation of "" to absent,
@@ -129,7 +141,7 @@ impl ServerConfig {
 /// # Safety
 ///
 /// `s` must be NULL or a NUL-terminated string this call may `g_free`.
-unsafe fn take_string(s: *mut gchar) -> Option<String> {
+pub(crate) unsafe fn take_string(s: *mut gchar) -> Option<String> {
     // SAFETY: the contract above is exactly `read_string`'s, plus ownership.
     let value = unsafe { read_string(s) };
     if !s.is_null() {
