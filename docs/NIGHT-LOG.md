@@ -8075,3 +8075,109 @@ out of a folder tree read over the transport's connection, the
 `out_sent_message_saved` out-parameter, and — once all of that is there and
 tested — the provider's transport slot. It is the last piece of sending with
 nothing under it.
+
+## 2026-08-09 (eighty-third session)
+
+**Where an outgoing message waits, and where it is filed.** The two mailbox ids
+`Outgoing` carries — `staging` and `destination` — found in the account rather
+than named by the caller, because Camel's `send_to_sync` is handed a message and
+two address lists and nothing about folders at all. `jmap-mail-sync`:
+`send::OutgoingMailboxes` with the decision in it, and `MailSync::outgoing_mailboxes`
+with the round trip. It is the third of the four things the transport still
+needs before `send_to_sync` can be written, and the last one that is decidable
+without a `CamelMimeMessage` in hand.
+
+Red first: `jmap-mail-sync/tests/staging.rs`, six tests against a method and an
+error variant that did not exist. A compile failure is a weak red, so every rule
+was re-checked against a deliberately wrong implementation. Dropping the
+`destination == staging` collapse fails
+`an_account_with_no_drafts_waits_in_the_mailbox_it_will_be_filed_in`; adding an
+Inbox fallback fails `an_account_with_nowhere_to_put_an_outgoing_message_cannot_send`;
+preferring Sent over Drafts for staging fails three of the six. The
+name-versus-role rule is pinned by construction — the fixture seeds decoys
+called "Drafts" and "Sent" with no role at all, *before* the German mailboxes
+that carry the roles, so both a name match and a first-mailbox-wins match pick
+the wrong pair.
+
+Decisions taken:
+
+- **Drafts, then Sent, then a refusal.** Drafts is where unsent mail belongs, so
+  a submission the server refuses leaves the message where the user would look
+  for it. An account with no Drafts stages in Sent — the message is going there
+  anyway, and the only thing lost is that a refused send leaves something in
+  Sent that never went out, still marked `$draft` because `accepted_patch` only
+  clears the keyword on success. An account with neither is one this crate will
+  not send from.
+- **Not the Inbox.** The tempting fallback and the wrong one: the Inbox is where
+  the *server* delivers, and importing the user's own outgoing mail into it
+  manufactures arrivals they then have to sort out — for a message that may then
+  be refused. The refusal names something the user can act on, and it costs
+  nothing, because it happens before the upload.
+- **By role, never by name.** RFC 8621 §2 puts a `role` on a mailbox for exactly
+  this, and it is the only thing that identifies one across servers and
+  languages. Same judgement as the trash lookup two sessions back.
+- **No destination when it is the staging mailbox.** Not an optimisation but
+  `Filing::is_empty`'s rule: a message cannot be filed out of a mailbox into
+  that same mailbox, and asking for it would put a pointer that is both `true`
+  and `null` in one patch. It is also the answer Camel's
+  `out_sent_message_saved` out-parameter wants — whether this provider has
+  already saved the sent copy somewhere the user will find it.
+- **One `Mailbox/get` per send, caching nothing.** `identity_for`'s decision
+  made again and for its reasons: a folder tree held across a session goes wrong
+  quietly, by staging into a mailbox another client has deleted or by not
+  finding the Sent folder the user has just made. A send already costs an
+  upload. Deliberately *not* the tree the store keeps from its own listing —
+  the transport is a separate `CamelService` with no pointer to the store, and
+  reaching for one would invent a relationship Camel does not have.
+- **`SyncError::NoOutgoingFolder` carries nothing,** because the missing thing
+  is a mailbox that does not exist and so has no id or path to name. In
+  `jmap-mail` it maps to a new `StoreError::NoOutgoingFolder` reported as
+  `CAMEL_SERVICE_ERROR_INVALID` — like `NoIdentity`, and deliberately not the
+  store's `NO_FOLDER` that `NoRole` uses, since the service answering is a
+  transport rather than a store and there is no folder Camel asked for.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no `send_to_sync`,** so nothing here changes what the user sees.
+   Three of the four pieces the transport needs now exist and none of them has a
+   caller.
+2. **Nothing checks the pair against a real server's roles.** The mock takes
+   whatever `role` string it is seeded with, so "an account with no Drafts" is
+   our own fixture. Whether Stalwart or Fastmail ever publish an account without
+   a Drafts mailbox has not been looked at; the refusal is a judgement about a
+   case that may not occur in practice.
+3. **The Sent-as-staging fallback leaves a refused message in Sent,** marked
+   `$draft`. That is distinguishable from sent mail by anything reading
+   keywords, and it is *not* distinguishable in Evolution's message list, which
+   shows Sent without a draft column. Nobody has looked at what that looks like
+   to a user, because there is no send yet to produce it.
+4. **`out_sent_message_saved` has no code behind it.** The `destination` this
+   produces is what it should be derived from, and the derivation is next
+   session's, in the vfunc.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). One new file, `jmap-mail-sync/tests/staging.rs`,
+with the SPDX `GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test
+--locked` and `cargo clippy --all-targets --locked -- -D warnings` are clean on
+the default member set (434 tests, up from 428) and on the five EDS crates (612,
+unchanged — nothing there gained a test).
+
+The new `SyncError` variant made two exhaustive matches fail to compile again —
+`jmap-mail-sync/tests/source.rs` and `jmap-mail/src/connect.rs`, the same two as
+last session, both written exhaustively so that a new variant forces a decision.
+Both were decided rather than loosened.
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Next in M5: `send_to_sync` itself. What is left under it is the
+`CamelMimeMessage` written out to bytes — `append.rs` already does exactly that
+in a private `serialize`, which wants lifting out of the folder's error domain
+before a transport can share it — and then the vfunc joining it to
+`read_envelope`, `identity_for`, `outgoing_mailboxes` and `send_message`, the
+`out_sent_message_saved` out-parameter, and the provider's transport slot.

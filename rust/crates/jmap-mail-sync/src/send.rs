@@ -50,11 +50,21 @@
 //! message exists, unsent, in the place unsent messages live, which is where
 //! they would look for it — and destroying it to keep the account tidy would
 //! throw away work on behalf of a server that said no.
+//!
+//! ## Which two mailboxes those are
+//!
+//! [`OutgoingMailboxes`] answers that, and it is a question the caller cannot:
+//! Camel's `send_to_sync` is handed a message and two address lists and nothing
+//! about folders at all. So the pair is found in the account, by *role* — RFC
+//! 8621 §2 puts a `role` on a mailbox for exactly this, and it is the only
+//! thing that identifies one across the servers and the languages a user's
+//! account may be in.
 
 use jmap_proto::Id;
 use jmap_proto::mail::Envelope;
 use serde_json::{Map, Value};
 
+use crate::folder::{FolderRole, FolderTree};
 use crate::keywords::{KeywordChange, Keywords};
 use crate::mailboxes::Filing;
 use crate::message::MessageFlags;
@@ -134,6 +144,70 @@ impl Outgoing {
             );
         }
         (!patch.is_empty()).then_some(Value::Object(patch))
+    }
+}
+
+/// The two mailboxes a send needs, found in the account rather than named by
+/// the caller.
+///
+/// They fill [`Outgoing::staging`] and [`Outgoing::destination`], and they are
+/// looked up by role for the reason the module docs give. What follows is what
+/// each role's absence means, which is where the judgements are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutgoingMailboxes {
+    /// Where the message is imported to while it is being sent.
+    pub staging: Id,
+    /// Where the server files it once the submission is accepted, if that is
+    /// somewhere else.
+    pub destination: Option<Id>,
+}
+
+impl OutgoingMailboxes {
+    /// The pair this account sends through, or `None` if it has no mailbox an
+    /// outgoing message may be put in.
+    ///
+    /// ## Drafts, then Sent, then nothing
+    ///
+    /// Drafts is the staging mailbox of an account that has one: it is where
+    /// unsent mail belongs, and a submission the server refuses leaves the
+    /// message exactly where the user would look for it.
+    ///
+    /// An account with no Drafts stages in Sent instead — the message is going
+    /// there anyway, so the only thing lost is that a *refused* send leaves a
+    /// message in Sent that never went out. It is still marked `$draft` when
+    /// that happens (see [`Outgoing::accepted_patch`], which is what clears the
+    /// keyword, and only on success), so it is distinguishable from mail that
+    /// did go; and the alternative is refusing to send at all, which loses the
+    /// message the user just wrote.
+    ///
+    /// An account with neither is one this crate will not send from, and
+    /// falling back to the Inbox is the tempting wrong answer: the Inbox is
+    /// where the *server* delivers, and importing the user's own outgoing mail
+    /// into it would manufacture arrivals they have to sort out — for a message
+    /// that may then be refused. A refusal here names something the user can
+    /// act on. It also costs nothing, because it happens before the message is
+    /// uploaded.
+    ///
+    /// ## No destination when it is the staging mailbox
+    ///
+    /// Not an optimisation but the same rule [`Filing::is_empty`] is built on:
+    /// a message cannot be filed out of a mailbox into that same mailbox, and
+    /// asking for it would put a pointer that is both `true` and `null` in one
+    /// patch. `None` is also what the caller wants to hear — it is the answer
+    /// to "did this provider already save the sent copy somewhere else", which
+    /// is what Camel's `out_sent_message_saved` out-parameter asks.
+    pub fn of(tree: &FolderTree) -> Option<Self> {
+        let sent = tree.role(FolderRole::Sent).map(|folder| folder.id.clone());
+        let drafts = tree
+            .role(FolderRole::Drafts)
+            .map(|folder| folder.id.clone());
+
+        let staging = drafts.or_else(|| sent.clone())?;
+        let destination = sent.filter(|sent| *sent != staging);
+        Some(Self {
+            staging,
+            destination,
+        })
     }
 }
 
