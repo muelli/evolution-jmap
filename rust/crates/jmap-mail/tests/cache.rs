@@ -16,14 +16,18 @@
 //! mailboxes one file — and a uid that is a *path* not being allowed to become
 //! one.
 //!
-//! And, since this increment, the entry that is not a message: one shorter than
-//! the summary row says the message is, which is what a process killed mid-write
-//! leaves behind and what Camel's parser would otherwise read as a complete
-//! message with a short body.
+//! The entry that is not a message: one shorter than the summary row says the
+//! message is, which is what a process killed mid-write leaves behind and what
+//! Camel's parser would otherwise read as a complete message with a short body.
+//!
+//! And, since this increment, the bound: an entry nobody has opened for long
+//! enough is swept, so that a cache which only ever grew now has a size a user
+//! could describe.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use jmap_mail::cache::MessageCache;
 
@@ -64,6 +68,50 @@ impl Drop for Scratch {
         // panic in its teardown.
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+/// Every file the cache has written, wherever under its directory it put them.
+///
+/// `CamelDataCache` files a key into one of sixty-four subdirectories by a hash
+/// of the key, which is its business rather than this crate's — so the bound
+/// tests below read the tree rather than construct a path, and check the one
+/// thing about the hashing they do depend on (see [`share_a_bucket`]).
+fn files_under(directory: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(directory).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files_under(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Asserts that the cache filed exactly `keys` and put them all in one bucket.
+///
+/// Camel sweeps a bucket when something in it is looked up, and skips the entry
+/// being looked up — so an expiry is only observable through *another* key that
+/// hashes to the same bucket. `M1` and `M2` do, which is a fact about
+/// `g_str_hash` rather than a promise; asserting it here means a Camel that
+/// changed its hashing fails these tests with a sentence rather than by quietly
+/// making them prove nothing.
+fn share_a_bucket(scratch: &Scratch, keys: usize) -> Vec<PathBuf> {
+    let files = files_under(&scratch.path);
+    assert_eq!(
+        files.len(),
+        keys,
+        "not every entry reached the disk: {files:?}"
+    );
+    let bucket = files[0].parent();
+    assert!(
+        files.iter().all(|file| file.parent() == bucket),
+        "the entries landed in different hash buckets, so opening one cannot \
+         sweep another and this test would prove nothing: {files:?}"
+    );
+    files
 }
 
 #[test]
@@ -231,9 +279,10 @@ fn an_entry_shorter_than_the_row_claims_is_not_a_message() {
     );
 }
 
-/// And it is gone rather than merely refused. Nothing will ever serve it, the
-/// cache has no bound of its own, and an entry left in place would produce the
-/// same critical at every open of the message.
+/// And it is gone rather than merely refused. Nothing will ever serve it, and an
+/// entry left in place would produce the same critical at every open of the
+/// message — for as long as the bound below took to notice a file the opens
+/// themselves keep looking at.
 #[test]
 fn an_entry_that_was_refused_is_dropped() {
     let scratch = Scratch::new();
@@ -303,6 +352,62 @@ fn bytes_shorter_than_the_row_claims_are_not_cached() {
     assert!(
         cache.load("M1", None).is_none(),
         "they reached the disk anyway"
+    );
+}
+
+/// The bound. Nothing used to remove an entry that was merely old, so a cache
+/// grew by every message the account ever opened and stopped growing only when
+/// the disk was full. `CamelDataCache` sweeps lazily — when a lookup touches the
+/// bucket an entry lives in — so what this drives is a lookup of the *other*
+/// key, which is what a second message being opened is.
+#[test]
+fn an_entry_nobody_has_opened_within_the_bound_is_swept() {
+    let scratch = Scratch::new();
+    let writer = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    assert!(writer.store("M1", SOURCE, None));
+    assert!(writer.store("M2", SOURCE, None));
+    share_a_bucket(&scratch, 2);
+
+    // Long enough that an entry written just now is past a bound of nothing:
+    // the comparison is on whole seconds, so crossing one is the whole of it.
+    std::thread::sleep(Duration::from_millis(1_500));
+
+    // A bound of nothing rather than a backdated file, because the age Camel
+    // reads is the filesystem's and this crate has no business writing it.
+    let bounded = MessageCache::open_bounded(scratch.as_str(), Duration::ZERO)
+        .expect("a cache over the same directory");
+    assert_eq!(
+        bounded.load("M2", None).as_deref(),
+        Some(SOURCE),
+        "the entry being opened was swept along with the rest"
+    );
+    assert!(
+        bounded.load("M1", None).is_none(),
+        "an entry past the bound is still on disk"
+    );
+}
+
+/// And the bound is a bound rather than a clear: the default is long enough that
+/// an entry written a moment ago is one the next open still gets from disk. This
+/// is the test that would fail if the sweep above were `camel_data_cache_clear`
+/// — which is Evolution's *manual* "empty cache", not a policy to apply behind a
+/// user who has opened two messages.
+#[test]
+fn an_entry_inside_the_bound_is_left_alone() {
+    let scratch = Scratch::new();
+    let writer = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    assert!(writer.store("M1", SOURCE, None));
+    assert!(writer.store("M2", SOURCE, None));
+    share_a_bucket(&scratch, 2);
+
+    let reader = MessageCache::open(scratch.as_str()).expect("a cache over the same directory");
+    assert!(reader.load("M2", None).is_some());
+    assert_eq!(
+        reader.load("M1", None).as_deref(),
+        Some(SOURCE),
+        "an entry well inside the bound was swept"
     );
 }
 
