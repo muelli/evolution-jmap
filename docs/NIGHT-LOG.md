@@ -4200,3 +4200,75 @@ against a state kept on disk is what the empty `recent` list and the whole-mailb
 refresh are both still waiting for. Unexercised against a real `CamelSession`:
 `service.rs`, which waits on M6 and M7. The README's architecture block still
 lists only the round-1 crates.
+
+## 2026-08-09 (forty-fifth session)
+
+M5's twenty-fifth increment, and the fix for the race the previous one exposed:
+a refresh arriving between the user's click and the synchronisation no longer
+undoes the click. `update_message_info` now writes the listing with the row's
+*outstanding* change replayed on top of it, instead of writing the listing whole.
+
+Red first: two tests in `jmap-mail`'s `tests/synchronize.rs` against `jmap-mockd`
+through a real `CamelStore` (both verified failing before the change and passing
+after), three in `tests/message_info.rs` at the column level, and five in
+`jmap-mail-sync`'s `tests/keywords.rs` for the two set operations the replay
+rests on.
+
+Decisions taken:
+
+- **Replay, not refuse.** IMAPX's rule is often described as "do not apply server
+  flags to a folder-flagged row", but refusing the listing outright would hide
+  what another client did for as long as the row stayed queued — and a row whose
+  write keeps failing stays queued forever. What IMAPX actually applies is the
+  *difference* the server made, and the same idea written in this provider's
+  terms is: the row becomes the listing patched by the change it is still waiting
+  to send. `a_refresh_leaves_a_queued_row_carrying_both_changes` is the half that
+  a refusal would fail.
+- **The change replayed is exactly the change that will be sent.** Both are
+  `KeywordChange::between(remembered, claimed)` over the row's own two columns, so
+  there is one definition of "what this row still owes the server" and not two
+  that could drift apart. `Keywords::patched` is the only new operation it needed.
+- **The remembered set is renewed to the listing, never to what the row ends up
+  claiming.** That is what keeps the next difference honest, and it is also what
+  makes a change the server has meanwhile made *itself* settle: replayed onto a
+  listing that already carries it, it changes nothing, the diff against the
+  listing is empty, and the row leaves the work list instead of writing the same
+  keyword on every synchronisation.
+  `a_change_the_server_already_made_itself_settles_the_row` pins that; it passes
+  under the old code too, and is here because it is what a naive fix breaks.
+- **The dirty bit decides, not the two sets.** A row Camel does not hold as
+  needing to reach the server takes the listing whole — the ordinary path, and
+  the only thing that ever brings a row that has drifted back into line. A row
+  whose sets differ with the bit clear is one nobody is waiting to send, and
+  self-healing is worth more there than preserving a difference no one claims.
+- **`hasAttachment` is taken from the listing on both paths.** It is the one bit
+  of Camel's flags word that is not a keyword — RFC 8621 §4.1.1 has the server
+  compute it — so `Keywords` cannot carry it and the replay cannot speak for it.
+  Its own test, because losing it would have been silent.
+- **`Keywords::split` is `Keywords::new` run backwards, in the sync crate.** The
+  merged set has to become Camel's two columns again, and doing that in
+  `jmap-mail` would have been a second copy of the keyword-to-flag table living a
+  crate away from the first. Matched folded, so a server that shouts `$Seen`
+  still marks the message read rather than labelling it.
+
+Not verified locally, as in the previous forty-four sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). No new files, so no new
+SPDX headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and on
+the five EDS crates; `jmap-mail` is at 194 tests, `jmap-mail-sync` at 21 in
+`tests/keywords.rs`. (`example-module`'s lib test still fails to link on this VM,
+as before; it is not in either set.)
+
+Next in M5. **Bounding the cache** is still open from the forty-first session.
+`CamelSubscribable` remains the smaller unblocked piece; `get_trash_folder_sync`
+and `get_junk_folder_sync` are still a settings decision before they are a vfunc,
+and that decision is also what `expunge_sync` waits on. `Email/changes` against a
+state kept on disk is what the empty `recent` list and the whole-mailbox refresh
+are both still waiting for. One thing this increment does *not* settle: two
+refreshes racing each other, or a refresh racing the write it replays around —
+the summary lock is taken per row rather than across the walk, so the last writer
+wins on a given row. That is the same shape IMAPX lives with and it is not worth
+a lock across a round trip; it is written down here so it is a known cost rather
+than an oversight. Unexercised against a real `CamelSession`: `service.rs`, which
+waits on M6 and M7. The README's architecture block still lists only the round-1
+crates.
