@@ -409,6 +409,7 @@ dependencies = [
  "eds-sys",
  "evolution-jmap-client",
  "evolution-jmap-collection-sync",
+ "evolution-jmap-mock",
  "evolution-jmap-proto",
  "gio-sys",
  "glib-sys",
