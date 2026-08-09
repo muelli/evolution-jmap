@@ -224,6 +224,11 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // answers straight out of the summary, and `camel_folder_changed` is how
     // the answer to them reaches a window that is already open.
     "camel_folder_refresh_info_sync",
+    // And the wrapper around the vfunc that writes the other way — what
+    // Evolution calls when a folder is closed or the user saves their changes,
+    // so that a test can put a flag change on the server the way Evolution
+    // does rather than by reaching into the class.
+    "camel_folder_synchronize_sync",
     // The wrapper around the vfunc that hands one message over, for the same
     // reason: a test calls it the way Evolution's preview pane does.
     "camel_folder_get_message_sync",

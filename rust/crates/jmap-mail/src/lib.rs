@@ -72,6 +72,10 @@
 //!   keywords the last listing found, which a flag change is the difference
 //!   from and which nothing else on the row still holds once the user has
 //!   marked it.
+//! - [`synchronize`] is the only one of them that writes: `synchronize_sync`,
+//!   the vfunc that walks the rows Camel marked as having to reach the server
+//!   and turns each into the `Email/set` that closes the difference between the
+//!   keywords the last listing found and the ones the row claims now.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -99,3 +103,4 @@ pub mod service;
 pub mod settings;
 pub mod store;
 pub mod summary;
+pub mod synchronize;

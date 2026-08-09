@@ -75,12 +75,15 @@ use eds_sys::{
     CamelAddress, CamelFolderSummary, CamelMIRecord, CamelMessageFlags, CamelMessageInfo,
     CamelMessageInfoBase, CamelMessageInfoBaseClass, CamelMessageInfoClass, camel_address_format,
     camel_internet_address_add, camel_internet_address_new, camel_message_info_base_get_type,
-    camel_message_info_freeze_notifications, camel_message_info_set_cc,
+    camel_message_info_dup_user_flags, camel_message_info_freeze_notifications,
+    camel_message_info_get_flags, camel_message_info_get_folder_flagged, camel_message_info_set_cc,
     camel_message_info_set_date_received, camel_message_info_set_date_sent,
-    camel_message_info_set_flags, camel_message_info_set_from, camel_message_info_set_message_id,
-    camel_message_info_set_preview, camel_message_info_set_size, camel_message_info_set_subject,
-    camel_message_info_set_to, camel_message_info_set_uid, camel_message_info_take_references,
+    camel_message_info_set_flags, camel_message_info_set_folder_flagged,
+    camel_message_info_set_from, camel_message_info_set_message_id, camel_message_info_set_preview,
+    camel_message_info_set_size, camel_message_info_set_subject, camel_message_info_set_to,
+    camel_message_info_set_uid, camel_message_info_take_references,
     camel_message_info_take_user_flags, camel_message_info_thaw_notifications,
+    camel_named_flags_free, camel_named_flags_get, camel_named_flags_get_length,
     camel_named_flags_insert, camel_named_flags_new, camel_util_bdata_get_number,
     camel_util_bdata_get_string, camel_util_bdata_put_number, camel_util_bdata_put_string,
 };
@@ -220,6 +223,41 @@ pub unsafe fn server_keywords(info: *mut CamelMessageInfo) -> Option<Keywords> {
     Some(keywords.clone())
 }
 
+/// The keyword set the row claims *now* — the other end of a flag change.
+///
+/// [`server_keywords`] is the before and this is the after, and the asymmetry
+/// between them is the point: the before is a column only this provider keeps,
+/// while the after is read straight back out of Camel's own two — the flags word
+/// and the user flags — because those are what the user's click changed. It is
+/// [`flags_word`] and [`set_user_flags`] run backwards, over the same bits and
+/// the same names, so that a row nobody touched produces the set it was built
+/// from and therefore no change at all.
+///
+/// `attachments` is read out of the word for symmetry and contributes nothing:
+/// [`Keywords::new`] leaves it out, because `hasAttachment` is a property RFC
+/// 8621 §4.1.1 has the server compute rather than a label a client may set.
+///
+/// # Safety
+///
+/// `info` must point at a live `CamelMessageInfo`.
+pub unsafe fn row_keywords(info: *mut CamelMessageInfo) -> Keywords {
+    // SAFETY: the contract above; `dup_user_flags` hands over a copy this
+    // function owns and frees, which is what makes reading it here safe without
+    // holding the row's property lock across the walk.
+    unsafe {
+        let flags = message_flags(camel_message_info_get_flags(info));
+        let user_flags = camel_message_info_dup_user_flags(info);
+        let tags = (0..camel_named_flags_get_length(user_flags))
+            .filter_map(|index| {
+                let name = camel_named_flags_get(user_flags, index);
+                (!name.is_null()).then(|| CStr::from_ptr(name).to_string_lossy().into_owned())
+            })
+            .collect::<Vec<String>>();
+        camel_named_flags_free(user_flags);
+        Keywords::new(&flags, &tags)
+    }
+}
+
 /// Records what one listing found, replacing whatever the row remembered.
 ///
 /// Wholesale, for the reason the user flags are replaced wholesale: a
@@ -233,7 +271,7 @@ pub unsafe fn server_keywords(info: *mut CamelMessageInfo) -> Option<Keywords> {
 /// # Safety
 ///
 /// `info` must be NULL or point at a live `CamelMessageInfo`.
-unsafe fn set_server_keywords(info: *mut CamelMessageInfo, keywords: Keywords) {
+pub(crate) unsafe fn set_server_keywords(info: *mut CamelMessageInfo, keywords: Keywords) {
     // SAFETY: the contract above, and `borrow` checks the type.
     let Some(row) = (unsafe { JmapMessageInfo::borrow(info) }) else {
         return;
@@ -442,62 +480,62 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
         return info;
     }
 
-    // Every setter below emits a property notification and marks the row
-    // dirty. Camel's own builders freeze first for that reason: a row filled
-    // column by column while a summary watched would be a dozen changes to a
-    // message that has not been listed yet.
+    // Every setter below emits a property notification and marks the row as
+    // having to reach the server, which is what [`without_queueing`] is for and
+    // is why the whole build is inside it rather than only the two columns
+    // `update_message_info` writes: a row that came out of a listing carries no
+    // change of the user's, so it must not arrive on the folder's work list.
+    // A fresh row's bit is unset, so restoring it leaves it unset.
     //
     // SAFETY: `info` is a fresh info this function owns; every string passed
     // is NUL-terminated and copied by the setter, and the references array is
     // handed over to `take_references` along with its ownership.
     unsafe {
-        camel_message_info_freeze_notifications(info);
+        without_queueing(info, || {
+            camel_message_info_set_uid(info, c_string(message.uid.as_str()).as_ptr());
+            // Whether the two mutable columns "changed" is meaningless on a row
+            // that did not exist a line ago; the whole row is the change, and
+            // its caller reports it as an addition.
+            let _ = update_message_info(info, message);
 
-        camel_message_info_set_uid(info, c_string(message.uid.as_str()).as_ptr());
-        // Whether the two mutable columns "changed" is meaningless on a row
-        // that did not exist a line ago; the whole row is the change, and its
-        // caller reports it as an addition.
-        let _ = update_message_info(info, message);
+            set_string(
+                info,
+                camel_message_info_set_subject,
+                message.subject.as_deref(),
+            );
+            set_string(
+                info,
+                camel_message_info_set_from,
+                address_list(&message.from).as_deref(),
+            );
+            set_string(
+                info,
+                camel_message_info_set_to,
+                address_list(&message.to).as_deref(),
+            );
+            set_string(
+                info,
+                camel_message_info_set_cc,
+                address_list(&message.cc).as_deref(),
+            );
+            set_string(
+                info,
+                camel_message_info_set_preview,
+                message.preview.as_deref(),
+            );
 
-        set_string(
-            info,
-            camel_message_info_set_subject,
-            message.subject.as_deref(),
-        );
-        set_string(
-            info,
-            camel_message_info_set_from,
-            address_list(&message.from).as_deref(),
-        );
-        set_string(
-            info,
-            camel_message_info_set_to,
-            address_list(&message.to).as_deref(),
-        );
-        set_string(
-            info,
-            camel_message_info_set_cc,
-            address_list(&message.cc).as_deref(),
-        );
-        set_string(
-            info,
-            camel_message_info_set_preview,
-            message.preview.as_deref(),
-        );
+            camel_message_info_set_size(info, message.size);
+            camel_message_info_set_date_received(info, message.received_at.unwrap_or(0));
+            camel_message_info_set_date_sent(info, message.sent_at.unwrap_or(0));
 
-        camel_message_info_set_size(info, message.size);
-        camel_message_info_set_date_received(info, message.received_at.unwrap_or(0));
-        camel_message_info_set_date_sent(info, message.sent_at.unwrap_or(0));
-
-        if let Some(id) = &message.message_id {
-            camel_message_info_set_message_id(info, message_id_digest(id));
-        }
-        let ancestors = references_array(&message.references);
-        if !ancestors.is_null() {
-            camel_message_info_take_references(info, ancestors);
-        }
-
-        camel_message_info_thaw_notifications(info);
+            if let Some(id) = &message.message_id {
+                camel_message_info_set_message_id(info, message_id_digest(id));
+            }
+            let ancestors = references_array(&message.references);
+            if !ancestors.is_null() {
+                camel_message_info_take_references(info, ancestors);
+            }
+        });
     }
 
     info
@@ -521,6 +559,9 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
 /// the other way round, because `||` short-circuits — and a row whose flags
 /// moved must still have its labels written.
 ///
+/// Written inside [`without_queueing`], because a listing is the server
+/// speaking and the bit it would otherwise set means the opposite.
+///
 /// # Safety
 ///
 /// `info` must be a live message info.
@@ -529,10 +570,12 @@ pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &Message
     // bits this provider is not the authority on, and the flag set below is
     // handed over along with its ownership.
     unsafe {
-        camel_message_info_freeze_notifications(info);
-        let flags = camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&message.flags));
-        let labels = set_user_flags(info, &message.tags);
-        camel_message_info_thaw_notifications(info);
+        let (flags, labels) = without_queueing(info, || {
+            let flags =
+                camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&message.flags));
+            let labels = set_user_flags(info, &message.tags);
+            (flags, labels)
+        });
         // Renewed alongside them, and deliberately not part of the answer: what
         // the server was last seen holding is not a column the message list
         // draws, so a listing that only re-spelled a keyword is not a change to
@@ -540,6 +583,71 @@ pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &Message
         // label too, and is reported as one of those.
         set_server_keywords(info, Keywords::new(&message.flags, &message.tags));
         flags != GFALSE || labels != GFALSE
+    }
+}
+
+/// Takes a row off the folder's work list.
+///
+/// For the caller that has just put it on without meaning to.
+/// `camel_folder_summary_add` marks every row it is handed as having to reach
+/// the server, which is right for the caller it was written for — appending a
+/// message the user composed — and wrong for [`crate::summary`], which adds
+/// rows the server has just described. A row added by a listing has no change of
+/// the user's on it by definition: it did not exist a moment ago.
+///
+/// Separate from [`without_queueing`] because the two answer different
+/// questions. That one preserves whatever was there, for a row that already
+/// existed and may already have been waiting; this one asserts there is nothing
+/// to wait for.
+///
+/// # Safety
+///
+/// `info` must be a live message info.
+pub(crate) unsafe fn clear_pending_write(info: *mut CamelMessageInfo) {
+    // SAFETY: the contract above.
+    unsafe { camel_message_info_set_folder_flagged(info, GFALSE) };
+}
+
+/// Writes a row's columns from a listing, leaving its place on the folder's
+/// work list exactly as it was found.
+///
+/// Every one of Camel's column setters marks the row `FOLDER_FLAGGED` when it
+/// changes anything. The bit means "this row has to reach the server", which is
+/// right for the setter's usual caller — the user clicking on a message — and
+/// exactly backwards here: this is the server *telling* us. A listing that left
+/// the bit behind would put every row it wrote on the work list
+/// [`crate::synchronize`] walks, so a refresh would queue the whole mailbox to
+/// be written straight back to the server it came from.
+///
+/// Put back the way it was found rather than cleared, and the difference is the
+/// row whose flags the user changed a moment before the refresh arrived: the
+/// listing overwrites the user's flags — a race this provider does not yet
+/// resolve — but clearing the bit as well would take the row off the work list
+/// too, and the user's change would be lost in silence instead of being
+/// retried.
+///
+/// The notifications are frozen around the write for a second reason, which is
+/// the one Camel's own builders freeze for: a row rewritten column by column
+/// while a summary watched would be a handful of separate changes to one
+/// message. It is not what makes the restore work — the bit is set by each
+/// setter as it runs, not on thaw — but the restore has to happen before the
+/// thaw all the same, so that what the folder is told about is the row as it
+/// ends up.
+///
+/// # Safety
+///
+/// `info` must be a live message info.
+unsafe fn without_queueing<T>(info: *mut CamelMessageInfo, write: impl FnOnce() -> T) -> T {
+    // SAFETY: the caller guarantees the info; the freeze and the thaw are a
+    // matched pair, and the two flag calls are the same accessor read and
+    // written.
+    unsafe {
+        camel_message_info_freeze_notifications(info);
+        let queued = camel_message_info_get_folder_flagged(info);
+        let written = write();
+        camel_message_info_set_folder_flagged(info, queued);
+        camel_message_info_thaw_notifications(info);
+        written
     }
 }
 
@@ -635,6 +743,30 @@ fn flags_word(flags: &MessageFlags) -> CamelMessageFlags {
         }
     }
     word
+}
+
+/// The same table read the other way: which of the keywords Camel has a bit for
+/// this word says are set.
+///
+/// Written as one loop over the same pairs [`flags_word`] uses rather than as a
+/// second list of them, because the two have to stay each other's inverse: a bit
+/// named in one and not the other would be a flag the folder writes to the
+/// server and never reads back, or reads back and never writes.
+fn message_flags(word: CamelMessageFlags) -> MessageFlags {
+    let mut flags = MessageFlags::default();
+    for (field, bit) in [
+        (&mut flags.seen, CAMEL_MESSAGE_SEEN),
+        (&mut flags.answered, CAMEL_MESSAGE_ANSWERED),
+        (&mut flags.flagged, CAMEL_MESSAGE_FLAGGED),
+        (&mut flags.draft, CAMEL_MESSAGE_DRAFT),
+        (&mut flags.forwarded, CAMEL_MESSAGE_FORWARDED),
+        (&mut flags.junk, CAMEL_MESSAGE_JUNK),
+        (&mut flags.not_junk, CAMEL_MESSAGE_NOTJUNK),
+        (&mut flags.attachments, CAMEL_MESSAGE_ATTACHMENTS),
+    ] {
+        *field = word & bit != 0;
+    }
+    flags
 }
 
 /// One address header, in the single string Camel's summary keeps it as.

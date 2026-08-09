@@ -27,7 +27,7 @@ use eds_sys::{
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync, MessageSummary};
+use jmap_mail_sync::{FolderTree, FolderUpdate, KeywordChange, MailSync, MessageSummary};
 use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
@@ -216,6 +216,25 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         Ok(sync.message_source(uid)?)
+    }
+
+    /// Puts one message's keyword change on the server — the write half of what
+    /// a folder synchronises.
+    ///
+    /// On the store for the same reason as the two reads above, and locked the
+    /// same way; it takes no mailbox for the same reason [`JmapStore::
+    /// message_source`] does not, because a JMAP email id identifies the message
+    /// in the account.
+    ///
+    /// Read-locked rather than write-locked although it writes: what the lock
+    /// guards is the *connection*, and a request is a use of one. Several
+    /// folders may synchronise at once, which is what Camel does when Evolution
+    /// closes.
+    pub fn set_keywords(&self, uid: &Id, change: &KeywordChange) -> Result<(), StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        Ok(sync.set_keywords(uid, change)?)
     }
 
     /// Drops the folder listing. Called with the connection lock held, by the
