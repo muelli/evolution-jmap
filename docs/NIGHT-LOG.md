@@ -8723,3 +8723,115 @@ extensions, `dup_resource_id` reading the id back off the child source through
 `parse_resource_id`. Limit 3 above is the first thing to check there, from the
 EDS source rather than the headers. The mail-children question stays open and
 the increment that answers it must be marked *needs human verification*.
+
+## 2026-08-09 (eighty-ninth session)
+
+**What has to be set on a child source, read off EDS's own source rather than
+its headers.** The previous session ended with `Child` — the resource id a
+populate names each collection under — and three open limits, the first of them
+being that nothing writes an `ESource` from a `Child` and the third being that
+the resource id's constraints were assumed rather than known ("worth re-checking
+against the EDS source before the backend crate lands"). This session fetched
+that source — EDS 3.52.4 `src/libebackend/e-collection-backend.c` and
+`e-webdav-collection-backend.c`, the version this VM has headers for — and did
+the half of the next layer the source makes decidable.
+
+New module `jmap-collection-sync/src/child_source.rs`: `Connection` (where the
+collection source says its server is), `Setting` (one `(group, key, value)` to
+set on a child, named as both the keyfile and `e_source_get_extension` name it),
+`ChildKind::extension()`, `Child::settings()` and `resource_id_for()` — the
+`dup_resource_id` half.
+
+Red first, and recorded as red: with `settings()`, `resource_id_for()` and
+`extension()` stubbed, 6 of the 8 new unit tests failed. The other two assert
+*absence* — that no child writes its own `Enabled`/`Parent`, and that a source
+this backend did not create has no resource id — so they pass against a stub
+that returns an empty vector and `None`; noted rather than papered over. The
+mock-based test added afterwards was also run against the stub first and fails
+there ("every child is written with an identity").
+
+What the EDS source settled, each of which is now a test or a decision:
+
+- **Limit 3 is closed: the resource id is opaque.** `collection_backend_new_user_file()`
+  names the child's `.source` file after a freshly generated uid, not after the
+  resource id, and the resource id is only ever a `GHashTable` key compared with
+  `g_strcmp0`. The colon in `addressbook:<id>` was the open question; it is safe.
+- **But it is not persisted, and a `NULL` answer destroys data.** On each start
+  `collection_backend_load_resources()` re-reads the cached `.source` files and
+  asks `dup_resource_id` what each one is. A file whose answer is `NULL` — or a
+  duplicate of one already seen — is put on `remove_redundant` and **unlinked**.
+  So the resource id must be a *total* function of a child's own properties, and
+  every child this crate describes must round-trip. That is what the round-trip
+  test over both kinds, including two kinds sharing one id, is for.
+- **`[Resource] Identity` stays the bare JMAP id.** EDS's own WebDAV collection
+  backend writes `"contacts::" + url` into the identity and leaves
+  `dup_resource_id` at its default, which returns it verbatim — it has to,
+  because a WebDAV URL alone does not say which kind it is. A JMAP child does
+  say, in the extension it carries, and that is the same pair EDS keys
+  `collection_backend_child_is_contacts()`/`…_is_calendar()` off. Since
+  `jmap-backend-core`'s `SourceConfig` already reads `[Resource] Identity` as
+  *the JMAP object id*, and `docs/examples/jmap-mock.source` says `Identity=Ab1`,
+  prefixing it here would leave one field with two spellings — one written by
+  this backend, one by hand. The prefix lives in the resource id, which is
+  derived from (extension, identity) instead of stored.
+- **A child inherits nothing of the connection.** `collection_backend_child_added()`
+  binds `oauth2-support`, and the display name for mail children, and that is the
+  whole list; the WebDAV backend copies user and auth method onto each child by
+  hand for exactly this reason. Since the JMAP backends are handed the *child*
+  source and read the server off it, a child without `[Authentication] Host` is
+  one whose every operation fails with "the account does not name a JMAP server".
+  Host, Port, User and auth Method are copied, each omitted rather than written
+  empty when the account does not state it.
+- **`[Security] Method` is written even when it says `tls`.** `SourceConfig`
+  reads an absent `[Security]` as TLS, so omitting it is the one omission that
+  would silently *upgrade* a child past its own account — and against
+  `jmap-mockd`, past working at all.
+- **`Enabled` and `Parent` are not written.** `collection_backend_new_source()`
+  sets the parent before the child is handed out, and
+  `collection_backend_bind_child_enabled()` *binds* `enabled` to
+  `ESourceCollection:contacts-enabled`/`:calendar-enabled` (and the collection's
+  own `enabled`). Writing either would be overwritten, and would put the user's
+  "don't show this account's contacts" choice in two places. There is a test
+  asserting the absence.
+- **`read_only` is not a setting.** No `ESource` property says a collection is
+  read-only; writability is a runtime answer the book and calendar backends
+  give. The field stays a fact for the backend to act on.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no collection backend.** Nothing calls `e_collection_backend_new_child`,
+   nothing calls `e_source_get_extension`, nothing has been loaded by
+   `evolution-source-registry`. That the settings list is *complete* is argued
+   from EDS's source and from what `SourceConfig` reads, not demonstrated.
+2. **`[Authentication] Method` is copied on the WebDAV backend's authority.**
+   Whether EDS consults the child's method or the collection's when it decides
+   how to obtain credentials was not traced through
+   `ESourceCredentialsProvider`; copying it matches what the one in-tree
+   collection backend does, and a child that answered differently from its
+   account would at worst be prompted differently.
+3. **`[Offline] StaySynchronized` is not written**, so children get EDS's
+   default. Whether a collection's children should default to staying
+   synchronised is a product decision, not a protocol one.
+4. **The part-enabled question is untouched.** `ECollectionBackendParts` and
+   `e_collection_backend_get_part_enabled()` exist, and a populate should
+   probably not create address books for an account whose `contacts-enabled` is
+   off. EDS binds the child's `enabled` either way, so this is about not
+   creating sources rather than about hiding them — the next increment's
+   question, deliberately not bundled into this one.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). One new file — `src/child_source.rs` — with the
+SPDX `GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked`
+(479 tests, up from 470), `cargo clippy --all-targets --locked -- -D warnings`
+and `RUSTDOCFLAGS=-D warnings cargo doc` are clean on the default member set;
+the five EDS crates are untouched and depend on nothing that changed.
+
+No milestone tag: M6 still has no backend.
+
+Next in M6: the backend crate itself — `ECollectionBackend` subclassed in
+`jmap-backend-collection`, `populate` calling `e_collection_backend_new_child`
+once per `Child` and applying `Child::settings`, `dup_resource_id` answering
+from (extension, `[Resource] Identity`). Limit 4 above — whether a disabled part
+should suppress the children rather than only their `enabled` flag — is the
+first thing to settle there. The mail-children question stays open and the
+increment that answers it must be marked *needs human verification*.

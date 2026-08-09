@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 
 use jmap_client::{Client, Credentials};
-use jmap_collection_sync::{ChildKind, Fanout, parse_resource_id};
+use jmap_collection_sync::{ChildKind, Connection, Fanout, parse_resource_id, resource_id_for};
 use jmap_mock::{AccountState, DEFAULT_ACCOUNT_ID, MockServer, ServerState};
 use jmap_proto::Id;
 
@@ -105,6 +105,63 @@ fn every_resource_id_reads_back_as_the_collection_it_was_made_from() {
         unique,
         "two children under one resource id are one source, not two"
     );
+}
+
+#[test]
+fn the_identity_written_on_a_child_is_an_id_the_server_answers_to() {
+    // Two claims at once, and neither survives hand-written ids alone: the
+    // `[Resource] Identity` a child is written with is the id the book or
+    // calendar backend will put in an `AddressBook/get`, so it has to be one the
+    // server issued and not the prefixed resource id; and the pair
+    // (extension, identity) — the only two settings that outlive a restart — is
+    // what `dup_resource_id` reconstructs the resource id from.
+    let server = MockServer::builder().start();
+    let state = server.state();
+    with_account(&state, |account| {
+        account.seed_address_book("Personal", true);
+        account.seed_calendar("Work", true);
+    });
+
+    let fanout = fanout_of(&server);
+    let served: Vec<&str> = fanout
+        .address_books
+        .iter()
+        .chain(&fanout.calendars)
+        .map(|resource| resource.id.as_str())
+        .collect();
+    assert_eq!(served.len(), 2, "the mock listed both collections");
+
+    // The connection settings are the account's, not the collection's, and
+    // nothing here turns on them.
+    let connection = Connection {
+        host: "127.0.0.1".to_owned(),
+        port: None,
+        user: None,
+        auth_method: None,
+        secure: false,
+    };
+
+    let children = fanout.children();
+    assert_eq!(children.len(), 2);
+    for child in &children {
+        let settings = child.settings(&connection);
+        let identity = settings
+            .iter()
+            .find(|setting| (setting.group, setting.key) == ("Resource", "Identity"))
+            .expect("every child is written with an identity");
+
+        assert!(
+            served.contains(&identity.value.as_str()),
+            "{} was written with an identity the server never issued",
+            child.resource_id
+        );
+        assert_eq!(
+            resource_id_for(child.kind.extension(), &identity.value),
+            Some(child.resource_id.clone()),
+            "{} did not come back out of the settings it was written with",
+            child.resource_id
+        );
+    }
 }
 
 #[test]
