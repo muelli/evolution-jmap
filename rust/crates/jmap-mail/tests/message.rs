@@ -46,6 +46,7 @@ use gio_sys::{
 use glib_sys::{GError, GPtrArray, g_free};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
+use jmap_mail::cache::MessageCache;
 use jmap_mail::folder::folder_type;
 use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer};
@@ -318,6 +319,66 @@ fn a_uid_the_account_does_not_hold_is_an_invalid_uid() {
     }
 
     drop(opened);
+    // SAFETY: the one reference this test took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// The second open of a message is not a second download. Asserted by taking
+/// the server away between the two: what answers the second call cannot have
+/// come from the network, and it still has to be the whole message rather than
+/// its headers.
+#[test]
+fn a_message_opened_once_opens_again_with_the_server_gone() {
+    let (server, _account, folder) = with_one_message();
+    let uid = the_one_uid(folder);
+
+    Opened::of(folder, &uid).expect_message();
+    drop(server);
+
+    let reopened = Opened::of(folder, &uid);
+    let message = reopened.expect_message();
+    // SAFETY: a live message; the accessor borrows from it.
+    unsafe {
+        assert_eq!(
+            borrowed(camel_mime_message_get_subject(message)).as_deref(),
+            Some(SUBJECT),
+            "the cached message is not the one that was opened"
+        );
+    }
+    let body = body_of(message);
+    assert!(
+        body.contains("And the second one."),
+        "the cached body decoded to {body:?}"
+    );
+
+    drop(reopened);
+    // SAFETY: the one reference this test took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// And it lands in the *account's* cache directory rather than the folder's. A
+/// JMAP message is filed in mailboxes the way a mail is labelled, so the same id
+/// is a row in several folders and has to be one file — which is only true while
+/// every folder of the account keys its cache off the same directory. Read back
+/// through a cache of the test's own, which is the second holder that property
+/// is about.
+#[test]
+fn the_cached_message_is_the_account_s_rather_than_the_folder_s() {
+    let (_server, account, folder) = with_one_message();
+    let uid = the_one_uid(folder);
+
+    Opened::of(folder, &uid).expect_message();
+
+    let cache = MessageCache::open(&account.cache_dir()).expect("the account's cache directory");
+    let cached = cache
+        .load(uid.to_str().expect("a UTF-8 uid"))
+        .expect("the opened message was not cached under the account");
+    let source = String::from_utf8_lossy(&cached);
+    assert!(
+        source.contains(SUBJECT) && source.contains("And the second one."),
+        "the cached entry is not the whole message: {source:?}"
+    );
+
     // SAFETY: the one reference this test took.
     unsafe { g_object_unref(folder.cast()) };
 }

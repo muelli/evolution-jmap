@@ -59,6 +59,10 @@
 //!   downloads one message's RFC 5322 bytes over the store's connection and lets
 //!   Camel's own parser turn them into the `CamelMimeMessage` the preview pane
 //!   renders.
+//! - [`cache`] is why it only downloads them once: a `CamelDataCache` under the
+//!   account's cache directory, a file per message keyed by its JMAP id, which
+//!   is what makes a second click free and a message already read openable with
+//!   the account offline.
 //! - [`message_info`] is one row of that folder's contents: the
 //!   `CamelMessageInfo` a `jmap-mail-sync` summary row becomes, and with it the
 //!   three columns that are a computation rather than a copy — the flags word,
@@ -74,6 +78,7 @@
 //! `cdylib`, together with `libcameljmap.urls`, into Camel's provider
 //! directory.
 
+pub mod cache;
 pub mod changes;
 pub mod connect;
 pub mod folder;

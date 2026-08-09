@@ -153,6 +153,11 @@ fn camel_layouts_match_the_gtype_system() {
         CamelMimeMessage,
         CamelMimeMessageClass
     );
+    assert_layout!(
+        camel_data_cache_get_type,
+        CamelDataCache,
+        CamelDataCacheClass
+    );
 }
 
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the

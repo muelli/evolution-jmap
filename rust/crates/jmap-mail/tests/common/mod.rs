@@ -33,7 +33,10 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use eds_sys::{CamelProvider, CamelStore, camel_session_get_type};
+use eds_sys::{
+    CamelProvider, CamelService, CamelStore, camel_service_get_user_cache_dir,
+    camel_session_get_type,
+};
 use gio_sys::g_initable_new;
 use glib_sys::{GError, gchar};
 use gobject_sys::{GObject, g_object_new, g_object_unref};
@@ -126,6 +129,22 @@ impl Account {
     /// Installs a live connection, the way `connect_sync` would.
     pub fn connect(&self, sync: MailSync) {
         self.jmap().store_connection(sync);
+    }
+
+    /// Where Camel says this account may keep files — the session's cache
+    /// directory with the service's uid under it.
+    ///
+    /// Asked of Camel rather than composed from the two, because it is the
+    /// answer the provider itself builds its message cache from: a test that
+    /// guessed the layout would agree with itself rather than with Camel.
+    pub fn cache_dir(&self) -> String {
+        // SAFETY: a live `CamelService` — a `CamelStore` is one — and the
+        // string it returns is owned by the service and outlives this call.
+        unsafe {
+            let dir = camel_service_get_user_cache_dir(self.store.cast::<CamelService>());
+            assert!(!dir.is_null(), "the store has no cache directory");
+            std::ffi::CStr::from_ptr(dir).to_string_lossy().into_owned()
+        }
     }
 }
 
