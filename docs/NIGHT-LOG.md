@@ -6515,3 +6515,129 @@ written by `write_all` and close rather than to a temporary name and renamed);
 `get_folder_info_sync`'s NULL-versus-GError question. Unexercised against a real
 `CamelSession`: `service.rs`, which waits on M6 and M7. The README's architecture
 block still lists only the round-1 crates.
+
+## 2026-08-09 (sixty-ninth session)
+
+**Trash and junk: the two folders Camel asks for by purpose, and the two virtual
+ones it stops offering.** The previous session named this as the thing most other
+work was queued behind, and it called it a settings decision. It is not one:
+RFC 8621 §2 puts a `role` on the mailbox, so the account itself answers which
+mailbox is the trash — where IMAP has to ask the user, because `\Trash` is a
+convention and `CamelIMAPXSettings` carries a `use-real-trash-path` for exactly
+that reason.
+
+Red first: eight tests in `jmap-mail/tests/folders.rs` against a store that had
+never overridden the two vfuncs. Seven failed with the inherited answers, and the
+eighth — the NULL-instance guard — took the test binary down with SIGSEGV inside
+Camel's own vTrash construction, which is what the inherited implementation does
+with a store that is not there.
+
+What landed:
+
+- **`FolderRole::as_jmap`** in `jmap-mail-sync`, the inverse of `from_jmap`, with
+  a round-trip test. What wants it is an error message that can name the role
+  Camel asked for.
+- **`StoreError::NoInbox` became `StoreError::NoRole(FolderRole)`.** The variant
+  was already this case with one role hard-coded into it; three roles is when
+  that stops being tidy.
+- **`crate::folders::open_by_role`**, and `get_inbox_folder_sync`,
+  `get_trash_folder_sync`, `get_junk_folder_sync` as three names for it. The
+  inbox implementation was the body of this function already.
+- **`crate::store`'s `instance_init` clears `CAMEL_STORE_VTRASH` and
+  `CAMEL_STORE_VJUNK`.**
+
+Decisions taken:
+
+- **The trash is the mailbox holding the `trash` role, and nothing else.** The
+  inherited implementation answers with Camel's vTrash — a search across the
+  account for messages flagged `CAMEL_MESSAGE_DELETED` — and that flag is local
+  to this client: `message_info.rs`'s `FLAGS_FROM_JMAP` has said since it was
+  written that JMAP has no deleted keyword. So the virtual folder holds exactly
+  the messages *this* Evolution deleted and not the ones the user's phone did,
+  while the account's own trash sits next to it under its own name. Junk is the
+  same decision with a weaker version of the same argument, and it is worth
+  writing down that it is weaker: `$junk` *is* a JMAP keyword, so a vJunk folder
+  would not be empty — it would be a second spam folder disagreeing with the
+  first about what spam is.
+- **The virtual folders are turned off, not just outvoted.** Measured rather than
+  assumed: `camel_store_get_flags` on a constructed store is `0x23` —
+  `VTRASH | VJUNK | CAN_EDIT_FOLDERS`, Camel's defaults — and with the first two
+  set, `camel_store_get_folder_info_sync` appends `.#evolution/Trash` and
+  `.#evolution/Junk` to *every* listing the store answers with. Overriding the
+  getters and leaving the flags would be an account showing the user two trash
+  folders and two junk folders.
+  `the_listing_offers_no_virtual_trash_or_junk_beside_the_accounts_own` pins the
+  wrapper's whole answer, and `tests/manage.rs`'s flags test — which a previous
+  session wrote to fail if this bit ever moved, saying it was what the trash
+  pair still waited on — is updated to the new word rather than loosened.
+- **Unconditionally, and not per account.** A JMAP account whose server assigns
+  no `trash` role gets no trash folder rather than a virtual one. The alternative
+  is a folder tree whose shape changes when a listing arrives, and a store whose
+  flags say one thing before the first `Mailbox/get` and another after.
+- **Neither vfunc creates the mailbox.** `Mailbox/set` from inside a getter would
+  be the provider inventing a folder in the user's account on the way to
+  answering a question about one.
+- **A role no mailbox claims is NULL *with* an error**, although Camel documents
+  the return as "NULL on error or if no such folder exists". The store knows
+  which of the two it is, and all three by-purpose vfuncs now answer alike.
+- **The folder is opened by path through `camel_store_get_folder_sync`**, the
+  judgement `get_inbox_folder_sync` already made: the answer has to come out of
+  the store's folder bag, or Evolution ends up with two `CamelFolder`s over one
+  mailbox.
+
+**Found while testing, and worth recording:** Camel's wrapper does **not** mark
+the folder a store hands back — `camel_folder_get_flags` on the trash this
+provider answers with is `HAS_SUMMARY_CAPABILITY` and nothing else, so
+`CAMEL_FOLDER_IS_TRASH` is off. `folder.rs` guessed the opposite when it decided
+not to set that bit from the role, and that comment is now corrected and the
+flags word is pinned by the two role tests. Setting the bit belongs with the
+increment that makes a delete *file* the message into the trash, because that is
+where its consequence is observable; it is not set here.
+
+Also noticed, unrelated and not fixed: every `Account::open()` in the tests logs
+`CamelJmapStore does not implement CamelServiceClass::get_name()`. The service
+has no display name of its own, which is what Evolution puts in a progress
+message.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Deleting a message still does not reach the server.** This increment says
+   *which* mailbox is the trash; nothing yet moves a message into it. Evolution's
+   delete sets `CAMEL_MESSAGE_DELETED` locally, `crate::synchronize` does not read
+   that bit, and `expunge_sync` is still NULL. So the interim state is a trash
+   folder that shows what the server put there and not what this client deleted
+   — which is the same information the user had before, minus the virtual folder
+   that showed the local marks. That is the next increment, and it is the one the
+   IS_TRASH question above waits on too.
+2. **`CAMEL_STORE_REAL_JUNK_FOLDER` is deliberately not set.** IMAPX sets it when
+   the user configures a real junk path; what reads it is Evolution's own junk
+   handling, which this VM cannot exercise, and setting a flag whose effect
+   cannot be observed here would be a claim rather than a change.
+3. **Nothing driven from Evolution**, as in every session so far. What a real
+   Evolution does with an account whose trash is a server mailbox — the icon, the
+   "Empty Trash" menu item, the delete key — is unverified here.
+
+Not verified locally, as in the previous sixty-eight sessions: `reuse lint` and
+`cargo deny` (neither binary is on this VM). No new files, so no new SPDX
+headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set (373
+tests, up from 372: the role-name round trip) and on the five EDS crates (548, up
+from 540: the eight new integration tests).
+
+No milestone tag is claimed. M5's folder surface is now complete except
+`expunge_sync`, which is the next increment rather than a blocked one — the
+question it waited on is answered above.
+
+Next in M5: **deleting mail.** `synchronize_sync` reading `CAMEL_MESSAGE_DELETED`
+and filing those messages into the trash mailbox, `expunge_sync` destroying what
+is already in the trash, and the `CAMEL_FOLDER_IS_TRASH` bit that tells Camel the
+folder it is looking at is the one where delete means destroy.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_folder_info_sync`'s NULL-versus-GError question; no size check before an
+upload (`maxSizeUpload` has no accessor on `jmap_proto::Session`); `cancellable`
+observed nowhere, because `Client` takes its `CancelFlag` when it is built.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.
