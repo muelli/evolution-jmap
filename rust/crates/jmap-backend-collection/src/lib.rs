@@ -30,18 +30,27 @@
 //!   [`Fanout::is_obsolete`]'s; what is here is the join to the `ESource` and
 //!   the `e_source_remove_sync` — including what a populate does with a removal
 //!   EDS refuses, which is all it can do, since the vfunc returns `void`.
+//! - [`authenticate`] is the piece between the account and the fan-out, and the
+//!   answer to where a collection backend's credentials come from: not from
+//!   `populate`, which returns `void` and is handed nothing, but from
+//!   `EBackendClass::authenticate_sync`, which EDS calls back into with an
+//!   `ENamedParameters` once the registry has resolved the account's password.
+//!   So it is also where the fan-out belongs — and where the one enum that
+//!   decides whether Evolution prompts again, gives up, or says nothing is
+//!   written.
 //! - [`backend`] is the subclass those functions exist for: an instance struct,
 //!   the vfunc slots, and a panic guard in front of each.
 //!
-//! Still missing, and the reason there is no module entry point yet: `populate`
-//! itself, which is where the fan-out actually happens — a client for the
-//! server [`collection_source::server_of`] names, [`Fanout::discover`] against
-//! it, and an `e_collection_backend_new_child` per [`Child`] it warrants with
-//! [`child_source::apply`] over its settings. Its removal half is
-//! [`removal::remove_obsolete`], which is written and tested; what neither it
-//! nor anything else here has yet is a caller, because the piece between the
-//! account and the fan-out — the credentials, and when EDS makes them available
-//! to a collection backend — is not settled.
+//! Still missing, and the reason there is no module entry point yet: the body
+//! of the fan-out — the closure [`authenticate::authenticate_with`] is handed —
+//! which is the part that needs a live `ECollectionBackend`:
+//! [`Fanout::discover`] against the [`Login`] it is given, an
+//! `e_collection_backend_new_child` per [`Child`] it warrants with
+//! [`child_source::apply`] over its settings, and
+//! [`removal::remove_obsolete`] over the children the collection already has.
+//! Both halves of that are written and tested; what neither has yet is an
+//! instance to be called with, and this machine has no
+//! `evolution-source-registry` to produce one.
 //! `dup_resource_id` came first because `populate` cannot be written without it
 //! — EDS loads the cached children and asks their resource ids *before* it calls
 //! `populate`, and a populate that ran against a mis-loaded child list would
@@ -49,6 +58,7 @@
 //!
 //! [`Child`]: jmap_collection_sync::Child
 //! [`Child::settings`]: jmap_collection_sync::Child::settings
+//! [`Login`]: authenticate::Login
 //! [`Fanout::discover`]: jmap_collection_sync::Fanout::discover
 //! [`Fanout::is_obsolete`]: jmap_collection_sync::Fanout::is_obsolete
 //!
@@ -56,6 +66,7 @@
 //! stays out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
 
+pub mod authenticate;
 pub mod backend;
 pub mod child_source;
 pub mod collection_source;
