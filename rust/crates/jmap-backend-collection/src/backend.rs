@@ -6,34 +6,45 @@
 //! Deliberately dull, like `jmap-backend-book`'s: the instance and class
 //! structs, the vfunc slots, and a panic guard in front of each body — the
 //! bodies themselves live a layer down, where they can be tested without a
-//! GObject. What is different here is that the slots are not empty to begin
-//! with. `ECollectionBackendClass` installs a working `dup_resource_id` and a
-//! do-nothing `populate`, so an override that is written but not *installed*
-//! does not produce a backend that fails; it produces one that quietly answers
-//! something else. `tests/backend.rs` holds each slot against the parent's to
-//! keep that from being invisible.
+//! GObject. What is different here is that none of the three slots is empty to
+//! begin with. `ECollectionBackendClass` installs a working `dup_resource_id`
+//! and a do-nothing `populate`, and `EBackendClass` — two levels up, which is
+//! where `authenticate_sync` lives — installs one that reports success without
+//! contacting anything. So an override that is written but not *installed* does
+//! not produce a backend that fails; it produces one that quietly answers
+//! something else, and in `authenticate_sync`'s case one that EDS believes
+//! logged in. `tests/backend.rs` holds each slot against the parent's to keep
+//! that from being invisible.
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::ptr;
 
+use std::ffi::CString;
+
 use eds_sys::{
-    E_SOURCE_CREDENTIALS_REASON_REQUIRED, ECollectionBackend, ECollectionBackendClass, ESource,
-    e_backend_get_source, e_backend_schedule_authenticate, e_backend_schedule_credentials_required,
-    e_collection_backend_claim_all_resources, e_collection_backend_freeze_populate,
-    e_collection_backend_get_type, e_collection_backend_ref_server,
-    e_collection_backend_thaw_populate, e_source_registry_debug_print,
-    e_source_registry_server_add_source,
+    E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_CREDENTIALS_REASON_REQUIRED, EBackend,
+    ECollectionBackend, ECollectionBackendClass, ENamedParameters, ESource,
+    ESourceAuthenticationResult, e_backend_get_source, e_backend_schedule_authenticate,
+    e_backend_schedule_credentials_required, e_collection_backend_claim_all_resources,
+    e_collection_backend_freeze_populate, e_collection_backend_get_type,
+    e_collection_backend_is_new_source, e_collection_backend_list_calendar_sources,
+    e_collection_backend_list_contacts_sources, e_collection_backend_new_child,
+    e_collection_backend_ref_server, e_collection_backend_thaw_populate,
+    e_source_registry_debug_print, e_source_registry_server_add_source,
 };
-use glib_sys::{GFALSE, GType, g_list_free, gchar};
+use gio_sys::{GCancellable, GTlsCertificateFlags};
+use glib_sys::{GError, GFALSE, GList, GType, g_list_free, gchar};
 use gobject_sys::{g_object_unref, g_type_class_peek};
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::dup_string;
 use jmap_backend_core::subclass::ObjectSubclass;
-use jmap_backend_core::trampoline::{guard, log_critical};
+use jmap_backend_core::trampoline::{guard, guard_value, log_critical};
 use jmap_collection_sync::Parts;
 
+use crate::authenticate::authenticate_with;
 use crate::collection_source::{parts_of, user_of};
+use crate::fan_out::{Collection, Populated, fan_out};
 use crate::populate::Populating;
 use crate::resource_id::resource_id_of;
 
@@ -97,6 +108,11 @@ unsafe impl ObjectSubclass for JmapCollectionBackend {
         let vfuncs = unsafe { &mut (*class).parent_class };
         vfuncs.dup_resource_id = Some(dup_resource_id);
         vfuncs.populate = Some(populate);
+        // A grandparent's slot, not the collection backend's own: EDS's own
+        // default for it accepts every account without contacting anything, so
+        // the one thing worse than not writing here is writing to the wrong
+        // offset. `tests/backend.rs` holds both.
+        vfuncs.parent_class.authenticate_sync = Some(authenticate_sync);
     }
 }
 
@@ -200,13 +216,173 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
     });
 }
 
-/// A live collection, as a populate uses it: the seven EDS calls behind
-/// [`Populating`], one line each.
+/// What EDS calls once it has resolved the account's credentials — after a
+/// `populate` asked it to, and again whenever Evolution retries a login.
 ///
-/// This is the part of `populate` that cannot be tested on a machine with no
-/// `evolution-source-registry` — see [`crate::populate`] on why everything else
-/// is a layer down.
+/// The decisions are [`crate::authenticate::authenticate_with`]'s, and the
+/// children are [`crate::fan_out::fan_out`]'s; what is here is the instance
+/// those two are not given and the report the fan-out has nowhere else to go
+/// with. Everything before the network — which accounts are contacted at all,
+/// which failures become a second password prompt — is decided in
+/// `authenticate_with`, where it is testable.
+///
+/// The two certificate out-parameters are deliberately left alone; see
+/// [`crate::authenticate`] on why this backend never offers a certificate for
+/// the user to trust.
+///
+/// A panic becomes `E_SOURCE_AUTHENTICATION_ERROR` with the error set. Not
+/// `REJECTED`, which would make EDS throw away a password that is probably
+/// correct and ask for it again on every retry; a bug in this code is not the
+/// user's password being wrong.
+unsafe extern "C" fn authenticate_sync(
+    backend: *mut EBackend,
+    credentials: *const ENamedParameters,
+    out_certificate_pem: *mut *mut gchar,
+    out_certificate_errors: *mut GTlsCertificateFlags,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> ESourceAuthenticationResult {
+    let _ = (out_certificate_pem, out_certificate_errors);
+
+    let authenticate = || {
+        // `(transfer none)`, and NULL only for a backend EDS did not construct
+        // from a source; `authenticate_with` answers that with an error of its
+        // own rather than with a prompt.
+        // SAFETY: EDS hands us one of its own backends, alive for the call.
+        let source = unsafe { e_backend_get_source(backend) };
+        // SAFETY: our instance is an `ECollectionBackend`, which is what EDS
+        // dispatched this vfunc on.
+        let collection = Live(backend.cast());
+
+        // SAFETY: the arguments are the vfunc's own, which is exactly
+        // `authenticate_with`'s contract, and `Live`'s methods are the EDS
+        // calls `Collection` documents.
+        unsafe {
+            authenticate_with(source, credentials, cancellable, error, |login| {
+                let report = fan_out(&collection, &login)?;
+                report_fan_out(&report);
+                Ok(())
+            })
+        }
+    };
+
+    // SAFETY: `error` is what an EDS vfunc receives — NULL or a pointer to a
+    // NULL `GError`. `authenticate_with` sets it only on paths it then returns
+    // from, so a panic can never unwind past an already-set error into the
+    // guard's own, which would be one `GError` overwriting another.
+    unsafe {
+        guard_value(
+            "authenticate_sync",
+            error,
+            E_SOURCE_AUTHENTICATION_ERROR,
+            authenticate,
+        )
+    }
+}
+
+/// What one fan-out did, on the two channels a vfunc that has already answered
+/// still has.
+///
+/// The three failure lists are criticals because each of them is a child the
+/// user asked for and will not see, and none of them is anything the user can
+/// fix: `uncreated` is EDS refusing to claim a resource, `abandoned` is a
+/// setting this crate was never taught to write, and `not_removed` is a
+/// deletion EDS refused. The successes go to EDS's own debug channel, silent
+/// unless `SOURCE_REGISTRY_DEBUG` is set.
+///
+/// None of it reaches the `GError`: a login that worked is `ACCEPTED` even if
+/// one address book of it could not be written, and turning a per-child
+/// failure into a failed authentication would take the whole account offline
+/// over one collection.
+fn report_fan_out(report: &Populated) {
+    for resource_id in &report.uncreated {
+        log_critical(&format!(
+            "authenticate_sync: EDS would not create a child source for {resource_id}"
+        ));
+    }
+    for abandoned in &report.abandoned {
+        log_critical(&format!(
+            "authenticate_sync: {} stays unexported: {}",
+            abandoned.resource_id, abandoned.setting
+        ));
+    }
+    for not_removed in &report.not_removed {
+        log_critical(&format!(
+            "authenticate_sync: {} should have been removed and was not: {}",
+            not_removed.resource_id, not_removed.message
+        ));
+    }
+
+    debug_print(&format!(
+        "authenticate_sync: {} children written",
+        report.children.len()
+    ));
+}
+
+/// A live collection, as a populate and a fan-out use it: the EDS calls behind
+/// [`Populating`] and [`Collection`], one line each.
+///
+/// This is the part of both that cannot be tested on a machine with no
+/// `evolution-source-registry` — see [`crate::populate`] and [`crate::fan_out`]
+/// on why everything else is a layer down.
 struct Live(*mut ECollectionBackend);
+
+impl Live {
+    /// `e_source_registry_server_add_source (server, child)`, which both traits
+    /// call `publish` and which is one call on the server rather than on the
+    /// backend.
+    ///
+    /// The server is referenced per child rather than once around a loop:
+    /// neither trait has a setup call to hold one across, and a fan-out exports
+    /// a handful of children at most. `e_collection_backend_ref_server` reads a
+    /// weak reference, so NULL means the registry server is gone — during
+    /// shutdown, say — and then there is nothing to export to.
+    fn export(&self, child: *mut ESource, context: &str) {
+        // SAFETY: a valid backend; the server comes back `(transfer full)`.
+        let server = unsafe { e_collection_backend_ref_server(self.0) };
+        if server.is_null() {
+            log_critical(&format!(
+                "{context}: the registry server is gone; a child stays unexported"
+            ));
+            return;
+        }
+
+        // SAFETY: a live registry server and a live child source; the call takes
+        // a reference of its own if it keeps the source.
+        unsafe { e_source_registry_server_add_source(server, child) };
+        // SAFETY: the reference `ref_server` handed over, not used again.
+        unsafe { g_object_unref(server.cast()) };
+    }
+}
+
+/// The `ESource`s of a `(transfer full)` `GList`, with the list freed and every
+/// reference in it passed on to the caller.
+///
+/// `g_list_free` and not `_full`: that is what both
+/// `e_collection_backend_claim_all_resources()` and
+/// `e_collection_backend_list_*_sources()` document, and what both
+/// [`Populating`] and [`Collection`] promise their callers.
+///
+/// # Safety
+///
+/// `list` must be NULL or a `GList` this call may free, whose `data` are
+/// `ESource *` carrying one reference each.
+unsafe fn drain(list: *mut GList) -> Vec<*mut ESource> {
+    let mut sources = Vec::new();
+    let mut node = list;
+    while !node.is_null() {
+        // SAFETY: a live node of the list, whose `data` is one of the sources
+        // referenced for us.
+        sources.push(unsafe { (*node).data }.cast::<ESource>());
+        // SAFETY: as above.
+        node = unsafe { (*node).next };
+    }
+
+    // SAFETY: a list this call owns, whose nodes nothing else holds.
+    unsafe { g_list_free(list) };
+
+    sources
+}
 
 // SAFETY: `claim_all_resources` hands back what
 // `e_collection_backend_claim_all_resources` referenced for us, one reference per
@@ -234,46 +410,13 @@ unsafe impl Populating for Live {
     }
 
     fn claim_all_resources(&self) -> Vec<*mut ESource> {
-        // SAFETY: as above.
-        let list = unsafe { e_collection_backend_claim_all_resources(self.0) };
-
-        let mut sources = Vec::new();
-        let mut node = list;
-        while !node.is_null() {
-            // SAFETY: a live node of the list just returned; its `data` is one of
-            // the sources the claim referenced for us.
-            sources.push(unsafe { (*node).data }.cast::<ESource>());
-            // SAFETY: as above.
-            node = unsafe { (*node).next };
-        }
-
-        // `g_list_free` and not `_full`: the nodes are ours to free and the
-        // references in them pass on to the caller, which is what
-        // `Populating`'s contract says they do.
-        // SAFETY: a list this call owns, whose nodes nothing else holds.
-        unsafe { g_list_free(list) };
-
-        sources
+        // SAFETY: as above; the claim answers `(transfer full)`, one reference
+        // per source, which is what `drain` passes on.
+        unsafe { drain(e_collection_backend_claim_all_resources(self.0)) }
     }
 
     fn publish(&self, child: *mut ESource) {
-        // Referenced per child rather than once around the loop: `Populating` has
-        // no setup call to hold one across, and a populate exports a handful of
-        // children at most. `e_collection_backend_ref_server` reads a weak
-        // reference, so NULL means the registry server is gone — during shutdown,
-        // say — and then there is nothing to export to.
-        // SAFETY: a valid backend; the server comes back `(transfer full)`.
-        let server = unsafe { e_collection_backend_ref_server(self.0) };
-        if server.is_null() {
-            log_critical("populate: the registry server is gone; a child stays unexported");
-            return;
-        }
-
-        // SAFETY: a live registry server and a live child source; the call takes
-        // a reference of its own if it keeps the source.
-        unsafe { e_source_registry_server_add_source(server, child) };
-        // SAFETY: the reference `ref_server` handed over, not used again.
-        unsafe { g_object_unref(server.cast()) };
+        self.export(child, "populate");
     }
 
     fn request_credentials(&self) {
@@ -301,6 +444,50 @@ unsafe impl Populating for Live {
         // SAFETY: as above; NULL credentials are what an anonymous authenticate
         // is, and what `jmap_backend_core::marshal::password` reads as absent.
         unsafe { e_backend_schedule_authenticate(self.0.cast(), ptr::null()) };
+    }
+}
+
+// SAFETY: `new_child` and `existing_children` both hand back what EDS
+// referenced for us, one reference per source — `(transfer full)` in both
+// cases, which is what `Collection` asks for.
+unsafe impl Collection for Live {
+    fn new_child(&self, resource_id: &str) -> *mut ESource {
+        // `CString::new` and not `cstring_lossy`: truncating at an interior NUL
+        // would not fail, it would silently ask EDS for a *different* resource
+        // and pair this collection's child with it. A resource id EDS cannot be
+        // asked about is one no child exists for, which is what NULL means here
+        // and what `adopt` reports as `Uncreated`. Reachable only from a server
+        // that put a NUL in an id, since every other resource id in this crate
+        // was read back out of a C string.
+        let Ok(resource_id) = CString::new(resource_id) else {
+            return ptr::null_mut();
+        };
+        // SAFETY: a valid backend for the length of the vfunc this runs inside,
+        // and a NUL-terminated string the call only reads from.
+        unsafe { e_collection_backend_new_child(self.0, resource_id.as_ptr()) }
+    }
+
+    fn is_new_child(&self, child: *mut ESource) -> bool {
+        // SAFETY: a valid backend and one of the child sources it just handed
+        // back, both alive for this call.
+        unsafe { e_collection_backend_is_new_source(self.0, child) != GFALSE }
+    }
+
+    fn publish(&self, child: *mut ESource) {
+        self.export(child, "authenticate_sync");
+    }
+
+    fn existing_children(&self) -> Vec<*mut ESource> {
+        // Address books and calendars, in that order and never mail: this
+        // backend creates no mail children, so it has no opinion about them and
+        // must not remove them. Two calls rather than one because EDS has no
+        // "every child" accessor that is not also every mail source.
+        // SAFETY: a valid backend; each list is `(transfer full)`, one
+        // reference per source, which is what `drain` passes on.
+        let mut children = unsafe { drain(e_collection_backend_list_contacts_sources(self.0)) };
+        // SAFETY: as above.
+        children.extend(unsafe { drain(e_collection_backend_list_calendar_sources(self.0)) });
+        children
     }
 }
 

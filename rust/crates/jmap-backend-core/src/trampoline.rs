@@ -77,6 +77,33 @@ pub unsafe fn guard_ptr<T>(
     }
 }
 
+/// Guard for the vfuncs that answer with a value of their own *and* have a
+/// `GError` out-parameter — `EBackendClass::authenticate_sync`, whose answer is
+/// an `ESourceAuthenticationResult`. The failure value cannot be picked here:
+/// four of that enum's five values are failures and they mean different things
+/// to the user (prompt again, give up, distrust the password), so the caller
+/// names the one it wants. What is not left to the caller is the error: EDS
+/// turns every non-accepting result into an `ESourceCredentialsReason` it shows
+/// someone, and the `GError` is the only part of that a person can read.
+///
+/// # Safety
+///
+/// As [`guard_bool`].
+pub unsafe fn guard_value<T>(
+    context: &str,
+    error: *mut *mut GError,
+    fallback: T,
+    f: impl FnOnce() -> T,
+) -> T {
+    match catch(context, f) {
+        Ok(value) => value,
+        Err(message) => {
+            unsafe { crate::error::set_raw_gerror(error, internal_error(&message)) };
+            fallback
+        }
+    }
+}
+
 /// Runs `f`, converting a panic into an already-logged description of it.
 ///
 /// The closure is wrapped in [`AssertUnwindSafe`]: a vfunc body inevitably
