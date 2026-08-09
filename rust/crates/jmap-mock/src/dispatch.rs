@@ -183,6 +183,7 @@ fn handle_method(
         "Email/get" => crate::mail::email_get(state, arguments),
         "Email/query" => crate::mail::email_query(state, arguments),
         "Email/set" => crate::mail::email_set(state, arguments),
+        "Email/import" => crate::mail::email_import(state, arguments),
         "AddressBook/get" => crate::contacts::address_book_get(state, arguments),
         "ContactCard/get" => crate::contacts::contact_card_get(state, arguments),
         "ContactCard/set" => crate::contacts::contact_card_set(state, arguments),

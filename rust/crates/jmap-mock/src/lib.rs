@@ -5,7 +5,7 @@
 //!
 //! Serves a subset of JMAP sufficient for exercising the Evolution JMAP
 //! client end-to-end in tests: session discovery, Basic/Bearer auth, mail
-//! read/send, contacts CRUD, and calendar CRUD. State lives behind an
+//! read/send/import, contacts CRUD, and calendar CRUD. State lives behind an
 //! `Arc<Mutex<..>>` handle that tests can inspect directly (for example the
 //! recorded `EmailSubmission` outbox).
 //!
@@ -17,6 +17,7 @@ mod calendars;
 mod contacts;
 mod dispatch;
 mod mail;
+mod message;
 mod patch;
 mod server;
 mod setops;

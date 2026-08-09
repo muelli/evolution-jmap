@@ -6171,3 +6171,124 @@ before they are a vfunc, and that decision is what `expunge_sync` waits on;
 cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
 M7. The README's architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (sixty-sixth session)
+
+**`Email/import`: the method a message that is already a message arrives by.**
+The oldest item on the "still open" list that is a feature rather than a
+decision: *cross-store transfers want `Email/import` for an
+`append_message_sync`*. This session did the protocol half of it — RFC 8621 §4.8
+in `jmap-proto`, in the mock, and in the client — and left the Camel vfunc for a
+session of its own. Everything here is in `default-members`, so it is exercised
+by the fast suite rather than only by the EDS one.
+
+RFC 8621 §4.8 was read from the published text (`rfc-editor.org`) rather than
+from memory, because the branch points in it are the whole design: what the
+server *may* do with a duplicate, with a blob it cannot read, and with a
+`receivedAt` it was not given.
+
+Red first: the twelve tests in `jmap-client/tests/mail_import.rs` were written
+against a proto and a client that compiled, and all twelve failed with
+`unknownMethod` — the mock had no such method — before `dispatch.rs` learned the
+arm. The ten unit tests in the new `jmap-mock/src/message.rs` came with the
+parser they describe.
+
+What landed:
+
+- **`jmap-proto`**: `EmailImport`, `EmailImportRequest`, `EmailImportResponse`,
+  and `email_import_error::INVALID_EMAIL`.
+- **`jmap-mock`**: `Email/import`, and `message.rs` — the crate's only *parser*,
+  since every other message in this server is written *out* of an `Email` rather
+  than read into one.
+- **`jmap-client`**: `email_import`, answering the `Email` the server made.
+  `expect_created` was split so its inner half (`creation_outcome`) serves a
+  method that carries `created`/`notCreated` without being a `/set`.
+
+Decisions taken, each one a branch RFC 8621 §4.8 leaves to the server:
+
+- **The blob is kept exactly as it arrived**, so the `blobId` answered is the one
+  handed in and a download returns the uploaded octets byte for byte
+  (`an_imported_message_downloads_as_the_bytes_it_went_up_as`). The RFC allows
+  repairing a message and answering with a different blob; a mock that rewrote
+  its input could not be used to test that what a client appended is what it
+  later opens. The client's doc comment says to read the answered `blobId`
+  anyway, because a real server may not be this one.
+- **Duplicates are allowed** (`the_same_message_imported_twice_is_two_messages`).
+  `alreadyExists` is a MAY, and the same fixture gets imported twice on purpose
+  in a test account. Asserted, so that making the mock strict is a decision
+  someone takes rather than a behaviour that drifts.
+- **`receivedAt` is the one given, or the mock's fixed clock.** The RFC's default
+  is the most recent `Received` header's date, which is a zone offset away from a
+  `UtcDate` — calendar arithmetic that `jmap_proto::UtcDate` explicitly does not
+  do. The provider that will drive this has the date already parsed (Camel hands
+  it over as a `time_t`), so it will send `receivedAt` rather than have it
+  guessed at. Written down in `message.rs` as a deliberate absence, not a TODO.
+- **A missing property is a per-message refusal, a wrong-typed one fails the
+  call.** Hence every field of `EmailImport` is `Option` although the RFC makes
+  `blobId` and `mailboxIds` required: §4.8 wants "missing, wrong type, id not
+  found" answered with an `invalidProperties` `SetError` for *that* message while
+  the others still import, and a required field would turn one client mistake
+  into a whole request that fails to parse. A wrong *type* still fails the call
+  with `invalidArguments`, which is a deviation and is listed below.
+- **`filed_somewhere` is reused rather than reimplemented**, so an import is held
+  to exactly the `mailboxIds` rule a create and an update are: at least one
+  mailbox, and every named mailbox must exist.
+- **`invalidEmail` is the mock's answer to bytes that are not a message**, with
+  the bar set where "not a message" is not a judgement call: not UTF-8, no header
+  field at all, or a header block with a line that is neither a field nor a
+  continuation. A body it cannot make sense of is never a reason — a body is
+  opaque either way.
+
+**Not covered by a test, and the honest limits of the increment:**
+
+1. **No `append_message_sync` yet.** Nothing in `jmap-mail` calls
+  `email_import`; a drag from an IMAP account into a JMAP one still fails inside
+  Camel, and `transfer.rs`'s comment now says exactly that (the method exists,
+  the vfunc does not). Until that vfunc is written this is protocol work with no
+  user-visible effect, which is why no milestone tag is claimed for it.
+2. **An imported message has no MIME tree.** No `bodyStructure`, `textBody`,
+  `bodyValues` or `hasAttachment` is derived from the bytes, so an imported
+  message and a seeded one answer differently to an `Email/get` that asks for
+  body properties. Deriving them means a MIME parser, and a half-written one
+  would make the mock a worse test subject than one that visibly has none. Our
+  own provider reads a message from the raw blob, so nothing in this repository
+  needs the tree — a real server would have it, and a test that needs it seeds.
+3. **No RFC 2047 decoding**, matching the mock's writer, which emits display
+  names without encoding them. A `Subject` with an encoded word imports as the
+  encoded word.
+4. **A wrong-typed `EmailImport` property fails the whole call** with
+  `invalidArguments` instead of refusing the one message with
+  `invalidProperties`, because the request is deserialized into a typed struct
+  like every other method here. Faithful behaviour would need the `emails` map
+  parsed entry by entry out of `Value`.
+5. **An import's creation id is not back-referenceable.** `record_created_ids`
+  only harvests ids from a `/set`, so `#creationId` in a later call of the same
+  request cannot name an imported message. Nothing needs it (a submission
+  references a draft an `Email/set` made), and adding it untested would be
+  speculation.
+6. **Nothing here has been driven from Evolution**, which is true of the whole
+  session by construction: no EDS code changed except one comment.
+
+Not verified locally, as in the previous sixty-five sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). Two new files —
+`jmap-mock/src/message.rs`, `jmap-client/tests/mail_import.rs` — both with SPDX
+`GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` and
+`cargo clippy --all-targets --locked -- -D warnings` are clean on the default
+member set (359 tests, up from 337: twelve integration tests and ten parser unit
+tests) and on the five EDS crates (531).
+
+Next in M5. `append_message_sync` is now unblocked and is the obvious next
+increment: serialize the `CamelMimeMessage` Camel hands over, `upload_blob`,
+`email_import` with the folder's mailbox id, the message's flags as keywords and
+its date as `receivedAt`, and answer Camel the new uid. It is also what
+`get_folder_info_sync`'s NULL-versus-GError question is *not* — that one is still
+the oldest undecided thing in the folder surface and still wants the EDS source
+for `camel-store.c`, which this VM does not have.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.

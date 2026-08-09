@@ -3,8 +3,12 @@
 
 //! Mail operations (RFC 8621).
 
+use std::collections::BTreeMap;
+
+use jmap_proto::error::SetError;
 use jmap_proto::mail::{
-    Email, EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Identity, Mailbox,
+    Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailQueryFilter, EmailSubmission,
+    EmailSubmissionSetRequest, Identity, Mailbox,
 };
 use jmap_proto::methods::{
     Comparator, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -22,18 +26,25 @@ use crate::transport::HttpMethod;
 /// Pull the object for `creation_id` out of a `/set` response, mapping a
 /// rejection to [`Error::Set`].
 fn expect_created<T: Clone>(response: &SetResponse<T>, creation_id: &str) -> Result<T, Error> {
-    if let Some(object) = response
-        .created
-        .as_ref()
-        .and_then(|created| created.get(creation_id))
-    {
+    creation_outcome(
+        response.created.as_ref(),
+        response.not_created.as_ref(),
+        creation_id,
+    )
+}
+
+/// The same question of the two maps alone, for a method that creates without
+/// being a `/set` — `Email/import` (RFC 8621 §4.8), whose response carries
+/// `created` and `notCreated` and none of the rest of the `/set` shape.
+fn creation_outcome<T: Clone>(
+    created: Option<&BTreeMap<String, T>>,
+    not_created: Option<&BTreeMap<String, SetError>>,
+    creation_id: &str,
+) -> Result<T, Error> {
+    if let Some(object) = created.and_then(|created| created.get(creation_id)) {
         return Ok(object.clone());
     }
-    if let Some(set_error) = response
-        .not_created
-        .as_ref()
-        .and_then(|not_created| not_created.get(creation_id))
-    {
+    if let Some(set_error) = not_created.and_then(|not_created| not_created.get(creation_id)) {
         return Err(Error::Set(set_error.clone()));
     }
     Err(Error::Protocol(format!(
@@ -276,6 +287,46 @@ impl Client {
         Err(Error::Protocol(format!(
             "Email/set answered neither updated nor notUpdated for {id}"
         )))
+    }
+
+    /// Put a message into the store from bytes already uploaded
+    /// (`Email/import`, RFC 8621 §4.8); answers the `Email` the server made of
+    /// it.
+    ///
+    /// The two-step — [`Client::upload_blob`] and then this — is the protocol's,
+    /// not this client's: an import names a blob, and there is no way to send a
+    /// message's bytes inside a method call. It is also the only way to add a
+    /// message that *is* a message rather than a set of properties. An
+    /// `Email/set` create builds one out of `from`, `subject` and body values,
+    /// which is what composing a draft does; a message Evolution already holds
+    /// — a draft it wrote itself, a message being copied out of another account
+    /// — exists as RFC 5322 bytes, and importing them is how they survive
+    /// intact rather than being taken apart and reassembled by a server.
+    ///
+    /// Answered with the `Email` because its `id` is the server's to hand out
+    /// and the caller has nothing to look the message up by until it has one.
+    /// The RFC has the server fill in `id`, `blobId`, `threadId` and `size`, and
+    /// `blobId` is worth reading rather than assuming: a server that repaired
+    /// the message answers with the blob it stored, not the one it was given.
+    ///
+    /// A refusal is [`Error::Set`] — `invalidProperties` for a blob or mailbox
+    /// that is not there, `invalidEmail` for bytes the server will not read as a
+    /// message, `overQuota` for an account that is full.
+    pub fn email_import(&self, account_id: &Id, email: &EmailImport) -> Result<Email, Error> {
+        const IMPORTED: &str = "imported";
+
+        let request = EmailImportRequest::new(account_id.clone()).import(IMPORTED, email.clone());
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "Email/import",
+            &request,
+        )?;
+        let response: EmailImportResponse = serde_json::from_value(arguments)?;
+        creation_outcome(
+            response.created.as_ref(),
+            response.not_created.as_ref(),
+            IMPORTED,
+        )
     }
 
     /// Fetch the account's sending identities (`Identity/get`).
