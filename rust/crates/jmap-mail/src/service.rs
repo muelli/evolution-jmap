@@ -34,26 +34,38 @@
 //! case leaked, in the worst case shown to a user who is being asked for a
 //! password at the same time. [`report_authentication`] is where that rule
 //! lives, and it is the only place either answer is produced.
+//!
+//! ## And the fourth vfunc, which is not about connecting
+//!
+//! `get_name` is what Camel calls the account in its own sentences — "Cannot
+//! get folder … from store …", the progress the user watches, the line an error
+//! dialog puts the failure on. `CamelService` provides no default for it: the
+//! accessor is a `g_return_val_if_fail (class->get_name != NULL, NULL)`, so a
+//! store that leaves the slot empty answers NULL and logs a critical every time
+//! Camel mentions it. [`describe`] is the answer, and it is a pure function of
+//! the three fields the settings carry so that it can be tested as one.
 
 use std::ptr;
 
 use eds_sys::{
     CAMEL_AUTHENTICATION_ERROR, CAMEL_SERVICE_ERROR_INVALID, CamelAuthenticationResult,
-    CamelService, CamelServiceClass, camel_service_error_quark, camel_service_get_password,
-    camel_service_ref_session, camel_service_ref_settings, camel_session_authenticate_sync,
+    CamelService, CamelServiceClass, camel_network_settings_dup_host,
+    camel_network_settings_dup_user, camel_network_settings_get_port, camel_service_error_quark,
+    camel_service_get_password, camel_service_ref_session, camel_service_ref_settings,
+    camel_session_authenticate_sync,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, g_error_new_literal, gboolean, gchar};
 use gobject_sys::{GObject, g_object_unref, g_type_class_peek};
 use jmap_backend_core::cancel::CancelBridge;
 use jmap_backend_core::error::set_raw_gerror;
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_client::CancelFlag;
 
 use crate::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail};
-use crate::server::ServerConfig;
+use crate::server::{ServerConfig, network, take_string};
 use crate::store::JmapStore;
 
 /// Opens the account `config` names and installs it on `store`.
@@ -110,6 +122,41 @@ pub unsafe fn report_authentication(
     result
 }
 
+/// What Camel calls this account, in its two documented forms.
+///
+/// `brief` is the one Camel asks for when the name goes in a folder tree or in
+/// the middle of one of its own sentences, so it is the server and nothing
+/// else; the other is documented as "complete and mostly unambiguous", which is
+/// what the user and the port are here for. JMAP is HTTP and a JMAP account is
+/// therefore quite normally one of several on a host — a local server, a test
+/// one — so a port the account names belongs in the form whose job is to tell
+/// two accounts apart, and stays out of the form whose job is to be short.
+///
+/// An account with no server yet is named without one. `"JMAP server "` with
+/// the host left off is a sentence about a server that is not there, and Camel
+/// asks for the name of a service long before anything has configured it.
+///
+/// The strings are English and untranslated, like the provider's own name and
+/// description: there is no message catalogue under this module's domain yet,
+/// and inventing calls into one that does not exist would not make them
+/// translated.
+pub fn describe(host: Option<&str>, port: u16, user: Option<&str>, brief: bool) -> String {
+    let Some(host) = host else {
+        return "JMAP account".to_owned();
+    };
+    if brief {
+        return format!("JMAP server {host}");
+    }
+    let server = match port {
+        0 => host.to_owned(),
+        port => format!("{host}:{port}"),
+    };
+    match user {
+        Some(user) => format!("JMAP service for {user} on {server}"),
+        None => format!("JMAP service on {server}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // the vfunc slots
 
@@ -123,9 +170,65 @@ pub unsafe fn report_authentication(
 pub unsafe fn install_vfuncs(class: *mut CamelServiceClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
+    vfuncs.get_name = Some(get_name);
     vfuncs.connect_sync = Some(connect_sync);
     vfuncs.authenticate_sync = Some(authenticate_sync);
     vfuncs.disconnect_sync = Some(disconnect_sync);
+}
+
+/// Answers what this account is called, as a string Camel frees.
+///
+/// The one vfunc here with no `GError` out-parameter and no failure value:
+/// every caller drops the answer straight into a message, and `CamelService`'s
+/// accessor turns a missing implementation into NULL and a critical. So a panic
+/// becomes the name of an account nothing is known about rather than a NULL —
+/// the guard's critical is where the bug is reported.
+unsafe extern "C" fn get_name(service: *mut CamelService, brief: gboolean) -> *mut gchar {
+    let brief = brief != GFALSE;
+    let name = jmap_backend_core::trampoline::guard(
+        "get_name",
+        describe(None, 0, None, brief),
+        // SAFETY: Camel's contract for the vfunc — a valid instance of ours.
+        || unsafe { name_of(service, brief) },
+    );
+    // SAFETY: the caller of `camel_service_get_name` frees the result, which is
+    // what `dup_string` produces: a `g_malloc`'d copy.
+    unsafe { dup_string(&name) }
+}
+
+/// Reads the three fields [`describe`] needs off the service's settings.
+///
+/// The host in the spelling the *account* uses rather than the punycoded one
+/// [`ServerConfig`] takes: nothing connects with this string, and an account
+/// configured in an internationalised domain name should be described in the
+/// name its owner typed.
+///
+/// # Safety
+///
+/// `service` must be a valid `CamelService`.
+unsafe fn name_of(service: *mut CamelService, brief: bool) -> String {
+    // SAFETY: the contract above; the reference is given back below.
+    let settings = unsafe { camel_service_ref_settings(service) };
+    // SAFETY: `settings` is NULL or the `CamelSettings` Camel just handed over.
+    let read = unsafe { network(settings) }.map(|network| {
+        // SAFETY: `network` implements the interface, checked above; the `dup_`
+        // accessors return g_malloc'd copies `take_string` frees, rather than
+        // pointers into storage another thread may replace.
+        unsafe {
+            (
+                take_string(camel_network_settings_dup_host(network)),
+                camel_network_settings_get_port(network),
+                take_string(camel_network_settings_dup_user(network)),
+            )
+        }
+    });
+    if !settings.is_null() {
+        // SAFETY: the reference `ref_settings` handed over.
+        unsafe { g_object_unref(settings.cast::<GObject>()) };
+    }
+
+    let (host, port, user) = read.unwrap_or((None, 0, None));
+    describe(host.as_deref(), port, user.as_deref(), brief)
 }
 
 /// Asks the session to authenticate this service, unless it already did.
