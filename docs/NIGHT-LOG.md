@@ -9167,3 +9167,116 @@ Next in M6: `populate` itself — `parts_of`, then `server_of`, then
 cached child `Fanout::is_obsolete` names. It cannot be driven by EDS here, so
 the increment that writes it must be marked *needs human verification in real
 Evolution*.
+
+## 2026-08-09 (ninety-third session)
+
+**Onto the source, not just off it.** Every `ESource` read this crate does now
+has a counterpart tested against a real source — but nothing had yet *written*
+one. `Child::settings` says what a child is as `(group, key, value)` triples,
+which is a description of a keyfile and proves nothing about an `ESource`;
+`resource_id_of` and `SourceConfig::from_source` are tested against sources
+built by hand with the EDS setters, which proves nothing about what this backend
+writes. This session is the join between them.
+
+New module `rust/crates/jmap-backend-collection/src/child_source.rs`:
+
+- `apply(*mut ESource, &[Setting]) -> Result<(), UnwritableSetting>` — every
+  setting a child is described by, onto the property it names: the source's own
+  `display-name`, `ESourceBackend:backend-name` under the extension that *is*
+  the child's kind, `ESourceResource:identity`, the four `[Authentication]`
+  fields and `[Security] Method`.
+- `EXTENSIONS` — the three non-kind keyfile groups paired with EDS's
+  `E_SOURCE_EXTENSION_*` constants, the same two-spellings-of-one-string table
+  as `KIND_EXTENSIONS` and held against the `#define`s by the same kind of test.
+- `UnwritableSetting` — `UnknownProperty` and `WrongType`, with `Display`.
+
+Red first, and recorded as red: against a stub that returned `Ok(())` and wrote
+nothing, 7 of the 8 tests in `tests/child_source.rs` failed. The one that passed
+is `every_setting_a_child_can_be_described_by_is_one_this_writes`, which a
+do-nothing `apply` satisfies by construction — it is there to catch a setting
+`jmap-collection-sync` grows later, not to be red today. (The ninth test, the
+`EXTENSIONS`/`#define` pairing, was added after green as a pin, like
+`tests/resource_id.rs`'s.)
+
+Four of the four `EXTENSION_*` group constants in
+`jmap-collection-sync::child_source` became `pub` for this; they were already
+the strings that crate writes into its `Setting`s, so nothing changed but who
+can name them.
+
+What was decided, and why:
+
+- **An unknown setting is refused, not skipped.** Skipping is the worse failure
+  by a wide margin: the child is still created, still looks like an address book
+  of this account, and is missing whichever one property makes it work —
+  `[Resource] Identity`, whose absence makes EDS *delete* the child's cache file
+  on the next start, or `[Authentication] Host`, whose absence sends every
+  request the address book backend makes to no server. The settings are a closed
+  set produced by this project's own crate, so an `UnwritableSetting` means that
+  crate grew a setting this module was not taught to write — a red test here
+  rather than a broken account there.
+- **`Child::settings` is gone through, not around.** The obvious shortcut is to
+  take a `&Child` and a `&Connection` and call the typed setters directly. That
+  would leave two descriptions of what a child is, one tested as data in
+  `jmap-collection-sync` and one tested as behaviour here, free to drift.
+- **`e_source_get_extension` is called *for* the thing the read side avoids.**
+  Both readers in this crate go out of their way not to call it, because it
+  creates the extension it cannot find. Here creating them is the point: giving
+  the source `[Address Book]` is exactly what makes it an address book to
+  `collection_backend_child_is_contacts()` and to the factory that loads it.
+  What it must not do is create the *other* kind's, so nothing reaches for an
+  extension a setting did not name, and
+  `a_child_carries_the_extension_of_its_own_kind_and_not_the_other` asserts the
+  absence rather than only the presence.
+- **`[Security] Method` is written as the string, and read back as the
+  boolean.** `Child::settings` writes "tls"/"none"; the JMAP backends read the
+  derived `ESourceSecurity:secure`. Those are the same question only if EDS
+  spells its secure method the way that crate does — so `apply` calls
+  `e_source_security_set_method()` rather than `…_set_secure()`, and the test
+  reads `e_source_security_get_secure()` back. It agrees, which is now a fact on
+  the record rather than a reading of EDS's source.
+- **A NUL in a display name truncates rather than fails.** It is the one setting
+  whose value is server data, a JSON string may carry an escaped NUL and a C
+  string may not, and refusing the write would mean refusing the child. Handled
+  by `jmap_backend_core::error::cstring_lossy`, which is what every other string
+  crossing this boundary already uses.
+- **A `Port` that is not a number is `WrongType`, not a silently unset port.**
+  `Child::settings` can only produce a `u16`'s decimal form, so this is
+  unreachable through the intended caller; the conversion is nevertheless this
+  module's, so its failure is too.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no `populate`, so nothing calls this yet.** It is the second of the
+   two halves that one needs (the account read landed last session); what is
+   left is the body — `Fanout::discover`, `e_collection_backend_new_child`,
+   `apply` per child, `e_source_remove_sync` for the obsolete ones.
+2. **The source written here is never handed back to EDS.** These are
+   `e_source_new_with_uid` sources with a NULL D-Bus object, which is what EDS
+   itself builds from a keyfile — so the extension machinery and the property
+   setters are real — but "EDS writes this child out and reads it back on the
+   next start" is still read off `e-collection-backend.c`. A real round trip
+   needs `evolution-source-registry` on the session bus, which this VM has not
+   got. **Needs human verification in real Evolution.**
+3. **`apply` leaves a half-written child behind on error.** Deliberate — there
+   is nothing to roll back to, since the source is fresh — but it means the
+   caller's only correct answer to an `UnwritableSetting` is to abandon the
+   child, and there is no caller yet to hold to that.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491 tests
+on the default members, unchanged) and `cargo clippy --all-targets --locked --
+-D warnings` are clean, as is `cargo test`/`clippy` over the six EDS crates
+(`jmap-backend-collection` now 34 tests, up from 25).
+`RUSTDOCFLAGS=-D warnings cargo doc` is clean for `jmap-backend-collection` and
+`jmap-collection-sync`.
+
+No milestone tag: M6 can now read an account and write a child, and still cannot
+fan one out.
+
+Next in M6: `populate` itself — `parts_of`, then `server_of`, then
+`Fanout::discover` against that origin, `e_collection_backend_new_child` per
+`Child` with `child_source::apply` over its settings, and `e_source_remove_sync`
+for each cached child `Fanout::is_obsolete` names. It cannot be driven by EDS
+here, so the increment that writes it must be marked *needs human verification
+in real Evolution*.

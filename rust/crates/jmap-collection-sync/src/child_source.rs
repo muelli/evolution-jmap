@@ -95,10 +95,16 @@ pub const EXTENSION_ADDRESS_BOOK: &str = "Address Book";
 /// See [`EXTENSION_ADDRESS_BOOK`].
 pub const EXTENSION_CALENDAR: &str = "Calendar";
 
-const EXTENSION_DATA_SOURCE: &str = "Data Source";
-const EXTENSION_RESOURCE: &str = "Resource";
-const EXTENSION_AUTHENTICATION: &str = "Authentication";
-const EXTENSION_SECURITY: &str = "Security";
+/// The `ESource`'s own keyfile group — the one that is not an extension, and
+/// the only one of these five with no `E_SOURCE_EXTENSION_*` constant behind
+/// it, because EDS spells it in `e-source.c` rather than in a header.
+pub const EXTENSION_DATA_SOURCE: &str = "Data Source";
+/// See [`EXTENSION_ADDRESS_BOOK`]: the group is the extension name.
+pub const EXTENSION_RESOURCE: &str = "Resource";
+/// See [`EXTENSION_ADDRESS_BOOK`].
+pub const EXTENSION_AUTHENTICATION: &str = "Authentication";
+/// See [`EXTENSION_ADDRESS_BOOK`].
+pub const EXTENSION_SECURITY: &str = "Security";
 
 /// Where the collection source says its server is.
 ///
