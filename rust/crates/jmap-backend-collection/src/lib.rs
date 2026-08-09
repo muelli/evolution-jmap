@@ -19,25 +19,33 @@
 //! - [`collection_source`] is the other direction and the other source: what the
 //!   *account* says — which parts the user switched on, and where its server is
 //!   — which is everything `populate` knows before it contacts anything.
+//! - [`child_source`] is the write half, and the mirror of [`resource_id`]:
+//!   [`Child::settings`] onto the `ESource` `e_collection_backend_new_child`
+//!   hands back. Everything a child is, it is because this wrote it there —
+//!   including the two properties whose absence loses the cache file or points
+//!   the child at no server.
 //! - [`backend`] is the subclass those functions exist for: an instance struct,
 //!   the vfunc slots, and a panic guard in front of each.
 //!
 //! Still missing, and the reason there is no module entry point yet: `populate`
 //! itself, which is where the fan-out actually happens — `Fanout::discover`
 //! against the server [`collection_source::server_of`] names, an
-//! `e_collection_backend_new_child` per [`Child`] it warrants, and an
-//! `e_source_remove_sync` for each child `Fanout::is_obsolete` names.
+//! `e_collection_backend_new_child` per [`Child`] it warrants and
+//! [`child_source::apply`] over its settings, and an `e_source_remove_sync` for
+//! each child `Fanout::is_obsolete` names.
 //! `dup_resource_id` came first because `populate` cannot be written without it
 //! — EDS loads the cached children and asks their resource ids *before* it calls
 //! `populate`, and a populate that ran against a mis-loaded child list would
 //! create duplicates of children that are already there.
 //!
 //! [`Child`]: jmap_collection_sync::Child
+//! [`Child::settings`]: jmap_collection_sync::Child::settings
 //!
 //! Like `jmap-backend-core`, this crate needs the installed EDS headers and so
 //! stays out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
 
 pub mod backend;
+pub mod child_source;
 pub mod collection_source;
 pub mod resource_id;
