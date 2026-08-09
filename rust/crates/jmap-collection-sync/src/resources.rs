@@ -12,7 +12,7 @@
 //! not three children, it is one mail account plus however many collections the
 //! server lists.
 //!
-//! ## Only what the layout resolved is asked for
+//! ## Only what the layout resolved, and only what the user asked for
 //!
 //! A listing is sent for a capability only when the layout found an account for
 //! it. The saving is not the round trip: RFC 8620 §3.3 has a server answer a
@@ -20,6 +20,10 @@
 //! and that error fails the *whole request* rather than the one call. Asking a
 //! contacts-less server for its address books anyway would therefore be a
 //! request that comes back with nothing in it at all.
+//!
+//! The second gate is the user's: a part switched off on the account is not
+//! listed either — see [`Parts`], which also has what a fan-out may and may not
+//! conclude from a listing it never sent.
 //!
 //! ## What is left out, and why that is a decision
 //!
@@ -42,6 +46,7 @@ use jmap_proto::calendars::Calendar;
 use jmap_proto::contacts::AddressBook;
 
 use crate::layout::CollectionLayout;
+use crate::parts::Parts;
 
 /// One address book or calendar, as a child source is made from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +70,10 @@ pub struct Resource {
 /// child list a populate has to produce.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fanout {
+    /// The parts the discovery was run under, kept so that what may be
+    /// concluded from the vectors cannot drift from what was asked — see
+    /// [`Fanout::listed`].
+    pub parts: Parts,
     pub layout: CollectionLayout,
     /// In the order the server sorted them, which is the order the children are
     /// created in. Empty when the login offers no contacts *or* when the
@@ -75,24 +84,30 @@ pub struct Fanout {
 
 impl Fanout {
     /// Reads the session document, then lists the collections of whichever
-    /// accounts it resolved.
+    /// accounts it resolved — for the parts the account has switched on.
+    ///
+    /// A part that is off costs no request, so the vector for it comes back
+    /// empty whether or not the server holds anything; [`Fanout::listed`] is
+    /// how a caller tells that emptiness from an account that really holds no
+    /// address book.
     ///
     /// The error is `jmap_client`'s own rather than a wrapper: everything that
     /// can fail here is one of its calls, and the GObject layer already maps
     /// that type onto Evolution's error codes.
-    pub fn discover(client: &Client) -> Result<Self, jmap_client::Error> {
+    pub fn discover(client: &Client, parts: Parts) -> Result<Self, jmap_client::Error> {
         let layout = CollectionLayout::from_session(client.session());
 
-        let address_books = match &layout.contacts {
+        let address_books = match layout.contacts.as_ref().filter(|_| parts.contacts) {
             Some(account) => resources(client.address_books(&account.id)?),
             None => Vec::new(),
         };
-        let calendars = match &layout.calendars {
+        let calendars = match layout.calendars.as_ref().filter(|_| parts.calendars) {
             Some(account) => resources(client.calendars(&account.id)?),
             None => Vec::new(),
         };
 
         Ok(Self {
+            parts,
             layout,
             address_books,
             calendars,

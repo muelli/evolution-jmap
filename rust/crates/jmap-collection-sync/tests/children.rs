@@ -13,14 +13,16 @@
 use std::sync::{Arc, Mutex};
 
 use jmap_client::{Client, Credentials};
-use jmap_collection_sync::{ChildKind, Connection, Fanout, parse_resource_id, resource_id_for};
+use jmap_collection_sync::{
+    ChildKind, Connection, Fanout, Parts, parse_resource_id, resource_id_for,
+};
 use jmap_mock::{AccountState, DEFAULT_ACCOUNT_ID, MockServer, ServerState};
 use jmap_proto::Id;
 
 fn fanout_of(server: &MockServer) -> Fanout {
     let client = Client::connect(server.origin(), Credentials::none())
         .expect("the mock serves a session document");
-    Fanout::discover(&client).expect("the mock answers every listing it is asked for")
+    Fanout::discover(&client, Parts::ALL).expect("the mock answers every listing it is asked for")
 }
 
 /// Runs `f` against the default account's state.

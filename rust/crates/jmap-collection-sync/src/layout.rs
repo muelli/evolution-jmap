@@ -49,6 +49,8 @@ use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_MAIL, CAPABILITY_SUBMISSION, Session,
 };
 
+use crate::children::ChildKind;
+
 /// The JMAP account behind one of Evolution's services.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceAccount {
@@ -110,6 +112,22 @@ impl CollectionLayout {
     /// not an empty account tree to leave them puzzling over.
     pub fn is_empty(&self) -> bool {
         self.mail.is_none() && self.contacts.is_none() && self.calendars.is_none()
+    }
+
+    /// The account whose collections of `kind` this login's children come from,
+    /// if it has one.
+    pub fn account_for(&self, kind: ChildKind) -> Option<&ServiceAccount> {
+        match kind {
+            ChildKind::AddressBook => self.contacts.as_ref(),
+            ChildKind::Calendar => self.calendars.as_ref(),
+        }
+    }
+
+    /// Whether the login offers collections of `kind` at all — which is a
+    /// different question from whether the user wants them (see
+    /// [`Parts`](crate::Parts)) and from whether the account holds any.
+    pub fn serves(&self, kind: ChildKind) -> bool {
+        self.account_for(kind).is_some()
     }
 }
 

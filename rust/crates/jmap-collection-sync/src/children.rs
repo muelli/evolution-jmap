@@ -105,16 +105,23 @@ impl Fanout {
     /// A collection the server listed twice becomes one child: two children
     /// with one resource id is not two sources, it is one source created and
     /// then overwritten.
+    ///
+    /// A kind whose [`Parts`](crate::Parts) flag is off has no children here,
+    /// which for a discovered fan-out follows already from its listing never
+    /// having been sent — this holds the same line for a fan-out assembled by
+    /// hand, so that "the user switched contacts off" cannot mean two things.
     pub fn children(&self) -> Vec<Child> {
         let books = self
             .layout
-            .contacts
-            .iter()
+            .account_for(ChildKind::AddressBook)
+            .filter(|_| self.parts.wants(ChildKind::AddressBook))
+            .into_iter()
             .flat_map(|account| children(ChildKind::AddressBook, account, &self.address_books));
         let calendars = self
             .layout
-            .calendars
-            .iter()
+            .account_for(ChildKind::Calendar)
+            .filter(|_| self.parts.wants(ChildKind::Calendar))
+            .into_iter()
             .flat_map(|account| children(ChildKind::Calendar, account, &self.calendars));
 
         let mut seen: Vec<String> = Vec::new();
@@ -172,6 +179,7 @@ mod tests {
     use super::*;
 
     use crate::layout::{CollectionLayout, MailService};
+    use crate::parts::Parts;
 
     fn account(id: &str) -> ServiceAccount {
         ServiceAccount {
@@ -192,6 +200,7 @@ mod tests {
     /// A fan-out of one account serving both collection kinds.
     fn fanout(address_books: Vec<Resource>, calendars: Vec<Resource>) -> Fanout {
         Fanout {
+            parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
                 contacts: Some(account("A1")),
@@ -292,6 +301,7 @@ mod tests {
         // Contacts and calendars resolve independently in `CollectionLayout`,
         // and a child that carries the wrong `accountId` fails every call.
         let fanout = Fanout {
+            parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
                 contacts: Some(account("A1")),
@@ -311,6 +321,7 @@ mod tests {
         let mut contacts = account("A1");
         contacts.read_only = true;
         let fanout = Fanout {
+            parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
                 contacts: Some(contacts),
@@ -347,6 +358,7 @@ mod tests {
         // no contacts and when the account holds no address book; neither is an
         // error and neither is a child.
         let fanout = Fanout {
+            parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: None,
                 contacts: None,
@@ -367,6 +379,7 @@ mod tests {
         // cannot check. The module comment says so; this says so where it would
         // be noticed if someone added mail children without settling it.
         let fanout = Fanout {
+            parts: Parts::ALL,
             layout: CollectionLayout {
                 mail: Some(MailService {
                     account: account("A1"),
