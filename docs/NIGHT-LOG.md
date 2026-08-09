@@ -5667,3 +5667,111 @@ cross-store transfers want `Email/import` for an `append_message_sync`.
 Unexercised against a real `CamelSession`: `service.rs` and the four emissions
 (two subscription, two folder-management), which wait on M6 and M7. The README's
 architecture block still lists only the round-1 crates.
+
+## 2026-08-09 (sixty-first session)
+
+**The rename, in the store** — `rename_folder_sync`, the third and last of the
+folder-management vfuncs, which the previous session named as the next
+increment. Two commits: the path mapping's other direction in `jmap-mail-sync`,
+and everything else in `jmap-mail`.
+
+- **`path::split`**, and `jmap_mail_sync::path` goes public for it alone.
+- **`JmapStore::rename_folder`**: the write, the tree edit, and the renamed
+  subtree the emission is built from.
+- **`manage::rename_folder`**: the path Camel hands over, resolved.
+- **`rename_folder_sync`** on the class.
+
+Red first: sixteen tests in `jmap-mail/tests/manage.rs` against a store with no
+such method.
+
+Decisions taken:
+
+- **The last component of the new path is read two different ways, and which one
+  depends on whether it changed.** Unchanged, the folder keeps the name it has:
+  Evolution builds the path for a drag and drop out of the folder's *existing*
+  path, so the component that arrives is this crate's encoding of the name
+  rather than the name, and there is no decoder to read it back with. Taking it
+  as a name would rename `Bills/2026` to `Bills%2F2026` for the crime of being
+  dragged. Changed, it is the name the user typed into the rename dialog,
+  verbatim — the same reading `create_folder_sync` makes of `folder_name`,
+  which is what makes the two vfuncs agree about what a name is.
+- **The limit that leaves is stated in the module and pinned by a test rather
+  than hidden**: a typed name this crate has to encode (one containing a `%`, a
+  lone `.`) puts the folder at a path that is not the one Camel asked for,
+  because the path is the encoding and the caller wrote the name unencoded. The
+  name is the one the user asked for and the answer carries the real path, so
+  what Evolution draws is right; anything above that remembered the requested
+  path is out of step until the account is listed again. Refusing such a rename
+  instead would be refusing a legal folder name.
+- **Both paths are resolved against one look at the tree**, through
+  `tree_holding`, whose predicate now asks for the folder *and* the new parent —
+  so a parent another client created since the last listing is found rather than
+  reported missing, which is the second look every other folder vfunc takes.
+- **A missing new parent is `NoFolder` and nothing is written.** A folder moved
+  under a parent that is not there is a folder nothing can reach.
+- **The answer is the whole renamed subtree, not one folder.**
+  `camel_store_folder_renamed`'s handler walks the children of what it is
+  handed, and a rename moves every descendant's path — each of which is a key
+  Camel opens a folder by — so the chain is built with no depth limit, unlike
+  the create's and the delete's `Some(0)`.
+- **`CAMEL_STORE_CAN_EDIT_FOLDERS` needs no line of ours**, contrary to what the
+  previous two sessions expected. Camel's own `camel_store_init` sets it — the
+  store's flags word is `VTRASH | VJUNK | CAN_EDIT_FOLDERS` on a store this
+  provider has written nothing into, verified here on a real constructed store.
+  A provider *opts out* of folder management by clearing the bit. So New and
+  Delete Folder have been on offer since they landed, and Rename was a menu item
+  over a NULL slot, which Camel refuses to call and the user sees as nothing
+  happening; filling the slot is what fixes it. An explicit OR of a bit already
+  set would have been a line nothing could ever observe, so there is none — a
+  test pins the whole flags word instead, so that a Camel default changing under
+  us is red rather than a menu item quietly going away.
+- The verification method is worth recording: the flag test was written first
+  and then run with the setting line commented out. It passed, which is what
+  exposed the default. A test that passes without the code it is meant to test
+  is not a test; the code went, the test stayed and grew an exact assertion.
+
+**Not covered by a test, and the honest limits of the increment:**
+
+1. **The emission is still unexercised**, now for all three vfuncs:
+   `camel_store_folder_renamed` queues on the service's session, which the
+   detached stores these tests use do not have. The three sync-side lines are
+   written as every other provider writes them. *Needs human verification in
+   real Evolution.*
+2. **Nothing here has been driven from Evolution's menu.** Now that the flag
+   turns out to have been set all along, the whole of folder management —
+   create, delete, rename, move — is reachable by a user for the first time, and
+   none of it has been tried in a real session. Renaming an *open* folder in
+   particular touches Camel's own bookkeeping in
+   `camel_store_rename_folder_sync`, which this VM has no source for and which
+   was therefore not read. *Needs human verification in real Evolution.*
+3. The `VTRASH | VJUNK` half of that flags word is Camel's default rather than a
+   decision this provider has taken, and it is the one `get_trash_folder_sync`
+   and `get_junk_folder_sync` still wait on: a JMAP account has mailboxes with
+   `trash` and `junk` roles, and whether Evolution should show those or Camel's
+   virtual folders is a settings question. It is now pinned by a test, so it is
+   at least a visible default rather than an invisible one.
+
+Not verified locally, as in the previous sixty sessions: `reuse lint` and `cargo
+deny` (neither binary is installed on this VM). No new files, so no new SPDX
+headers. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set and
+on the five EDS crates (499 tests on the latter).
+
+Next in M5. With the three management vfuncs done, the store's remaining gap in
+the folder listing is **`get_folder_info_sync` ignoring
+`CAMEL_STORE_FOLDER_INFO_SUBSCRIBED` and `SUBSCRIPTION_LIST`** — a filter on the
+tree rather than a different request, and the thing that makes the subscription
+ticks the user sets actually change what the folder tree shows. It pairs with
+the `FAST` flag, which asks for the tree without counts.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+the `changed` signal a transfer emits is still not asserted by a test, which
+wants `tests/refresh.rs`'s emission harness lifted into `tests/common`;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs` and the five emissions
+(two subscription, three folder-management), which wait on M6 and M7. The
+README's architecture block still lists only the round-1 crates.
