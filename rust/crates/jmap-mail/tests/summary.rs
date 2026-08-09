@@ -28,22 +28,25 @@ use std::ptr;
 use common::Account;
 use eds_sys::{
     CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_FLAGGED,
-    CAMEL_MESSAGE_SEEN, CamelFolder, CamelFolderSummary, CamelFolderSummaryClass,
+    CAMEL_MESSAGE_SEEN, CamelFIRecord, CamelFolder, CamelFolderSummary, CamelFolderSummaryClass,
     camel_folder_get_flags, camel_folder_get_folder_summary, camel_folder_has_summary_capability,
     camel_folder_summary_check_uid, camel_folder_summary_count, camel_folder_summary_free_array,
     camel_folder_summary_get, camel_folder_summary_get_array, camel_folder_summary_get_folder,
-    camel_folder_summary_get_next_uid, camel_folder_summary_get_unread_count,
+    camel_folder_summary_get_next_uid, camel_folder_summary_get_type,
+    camel_folder_summary_get_unread_count, camel_folder_summary_header_load,
     camel_folder_summary_load, camel_folder_summary_save, camel_message_info_clone,
     camel_message_info_get_flags, camel_message_info_get_subject, camel_message_info_get_uid,
     camel_message_info_get_user_flag, camel_message_info_set_flags,
 };
-use glib_sys::{GError, GFALSE, GTRUE};
-use gobject_sys::{GTypeInstance, g_object_unref};
+use glib_sys::{GError, GFALSE, GTRUE, gboolean};
+use gobject_sys::{
+    GTypeInstance, g_object_unref, g_type_class_peek, g_type_class_ref, g_type_class_unref,
+};
 use jmap_mail::folder::new_folder;
 use jmap_mail::message_info::{message_info_type, server_keywords};
-use jmap_mail::summary::apply_listing;
+use jmap_mail::summary::{apply_listing, set_summary_state, summary_state, summary_type};
 use jmap_mail_sync::{FolderInfo, Keywords, MessageFlags, MessageSummary};
-use jmap_proto::Id;
+use jmap_proto::{Id, State};
 
 /// A folder for a mailbox nobody has listed yet, together with the account it
 /// hangs off — the store has to outlive the folder, so both are returned.
@@ -723,5 +726,213 @@ fn the_keywords_a_row_remembers_outlive_the_folder_that_listed_it() {
         );
         g_object_unref(info.cast());
         g_object_unref(reopened.cast());
+    }
+}
+
+/// A summary that has never listed anything has no state to ask a delta from,
+/// and the question has to be answerable before the first listing rather than
+/// only after it: a folder opened for the first time is exactly the case where
+/// there is nothing, and `None` is what makes the next refresh list the whole
+/// mailbox instead of asking `Email/changes` from a state it invented.
+#[test]
+fn a_summary_that_never_listed_holds_no_state() {
+    let account = Account::open();
+
+    // SAFETY: the folder is live until it is unreffed once.
+    unsafe {
+        let folder = open_folder(&account);
+        assert_eq!(
+            summary_state(summary_of(folder)),
+            None,
+            "a summary that listed nothing claimed a state anyway"
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The state a listing came with, asked back. It belongs to the summary rather
+/// than to the folder because it is a fact about the *rows*: it says what they
+/// are current as of, so it has to be stored where they are and loaded when
+/// they are.
+#[test]
+fn the_state_a_summary_was_told_is_the_state_it_reports() {
+    let account = Account::open();
+
+    // SAFETY: the folder is live until it is unreffed once.
+    unsafe {
+        let folder = open_folder(&account);
+        set_summary_state(summary_of(folder), State::new("EmailState7"));
+        assert_eq!(
+            summary_state(summary_of(folder)),
+            Some(State::new("EmailState7"))
+        );
+
+        // And a later listing replaces it. The state is the *last* answer's,
+        // never the first one's: a delta asked from a stale state re-reports
+        // everything that happened in between, which is a refresh that grows
+        // more expensive every time it runs.
+        set_summary_state(summary_of(folder), State::new("EmailState9"));
+        assert_eq!(
+            summary_state(summary_of(folder)),
+            Some(State::new("EmailState9"))
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// And the point of keeping it at all: it has to survive the folder that
+/// learnt it. A state that lived only in memory would be no state at all after
+/// a restart — Evolution would list every mailbox in full on the first refresh
+/// of every session, which is the cost this whole mechanism exists to avoid.
+///
+/// Stored in the summary's own on-disk header, which is the record Camel keeps
+/// beside the rows and hands back through `summary_header_load`.
+#[test]
+fn the_state_outlives_the_folder_that_listed_it() {
+    let account = Account::open();
+
+    // SAFETY: every folder is live until it is unreffed once; the error
+    // out-parameter is only read while it is in scope.
+    unsafe {
+        let folder = open_folder(&account);
+        set_summary_state(summary_of(folder), State::new("EmailState11"));
+        let mut error: *mut GError = ptr::null_mut();
+        assert_ne!(
+            camel_folder_summary_save(summary_of(folder), ptr::addr_of_mut!(error)),
+            GFALSE,
+            "the summary would not save"
+        );
+        assert!(error.is_null());
+        g_object_unref(folder.cast());
+
+        // The same mailbox opened again, and its header read back — which is
+        // what Camel does when it builds a folder over rows that are already
+        // on disk.
+        let reopened = open_folder(&account);
+        let name = CString::new("Inbox").expect("a path with no NUL in it");
+        assert_ne!(
+            camel_folder_summary_header_load(
+                summary_of(reopened),
+                account.store,
+                name.as_ptr(),
+                ptr::addr_of_mut!(error),
+            ),
+            GFALSE,
+            "the summary header would not load"
+        );
+        assert!(error.is_null());
+
+        assert_eq!(
+            summary_state(summary_of(reopened)),
+            Some(State::new("EmailState11")),
+            "the summary came back without the state it was stored with"
+        );
+        g_object_unref(reopened.cast());
+    }
+}
+
+/// The `summary_header_load` vfunc Camel would dispatch on one of this
+/// provider's summaries, checked to be the provider's own.
+///
+/// The check is what makes the two tests below say anything: both of them
+/// assert that a header produces *no* state, which is also what the base
+/// class's vfunc does — by never looking at the field. Asserting the vfunc is
+/// ours first is what tells "the record was read and had nothing in it" from
+/// "nobody read the record".
+///
+/// # Safety
+///
+/// The classes are alive for as long as this crate is loaded; the ref taken
+/// here is dropped by the caller.
+unsafe fn header_load(
+    class: *mut CamelFolderSummaryClass,
+) -> unsafe extern "C" fn(*mut CamelFolderSummary, *mut CamelFIRecord) -> gboolean {
+    // SAFETY: both classes are live — ours because the ref is held by the
+    // caller, the parent's because ours keeps it alive.
+    unsafe {
+        let parent =
+            g_type_class_peek(camel_folder_summary_get_type()).cast::<CamelFolderSummaryClass>();
+        let load = (*class).summary_header_load.expect("no header load vfunc");
+        assert!(
+            !parent.is_null()
+                && (*parent)
+                    .summary_header_load
+                    .map(|inherited| inherited as usize)
+                    != Some(load as usize),
+            "the summary inherited its header load rather than overriding it"
+        );
+        load
+    }
+}
+
+/// A header written before this column existed — or by some other provider —
+/// loads as a summary without a state rather than as a failure or as a state
+/// made of whatever was in the field. The fallback costs one full listing; the
+/// alternatives cost the rows.
+#[test]
+fn a_header_with_no_state_in_it_loads_without_one() {
+    let account = Account::open();
+
+    // SAFETY: the folder is live until it is unreffed once; the record is a
+    // zeroed `CamelFIRecord` that outlives the call, which is the struct the
+    // vfunc is defined over, and the class is alive for as long as the ref is
+    // held.
+    unsafe {
+        let folder = open_folder(&account);
+        let class = g_type_class_ref(summary_type()).cast::<CamelFolderSummaryClass>();
+        let load = header_load(class);
+
+        let mut record: CamelFIRecord = std::mem::zeroed();
+        assert_ne!(
+            load(summary_of(folder), ptr::addr_of_mut!(record)),
+            GFALSE,
+            "a header with no data of ours in it would not load"
+        );
+        assert_eq!(
+            summary_state(summary_of(folder)),
+            None,
+            "a header that stored no state produced one"
+        );
+
+        g_type_class_unref(class.cast());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// And a header written in a format this version does not know — by a later
+/// version of this provider, on a profile that was downgraded — is the same
+/// answer rather than a state made of a field that means something else. The
+/// number in front of the state is what makes the two cases tellable apart.
+#[test]
+fn a_header_from_an_unknown_format_loads_without_a_state() {
+    let account = Account::open();
+    // A version this provider does not write, and behind it something shaped
+    // like a state. Nothing after the number is ever read.
+    let bdata = CString::new(" 99 11-EmailState7").expect("a header with no NUL in it");
+
+    // SAFETY: the folder is live until it is unreffed once; the record is a
+    // zeroed `CamelFIRecord` whose `bdata` borrows a string that outlives the
+    // call — nothing takes ownership of it — and the class is alive for as
+    // long as the ref is held.
+    unsafe {
+        let folder = open_folder(&account);
+        let class = g_type_class_ref(summary_type()).cast::<CamelFolderSummaryClass>();
+        let load = header_load(class);
+
+        let mut record: CamelFIRecord = std::mem::zeroed();
+        record.bdata = bdata.as_ptr().cast_mut();
+        assert_ne!(
+            load(summary_of(folder), ptr::addr_of_mut!(record)),
+            GFALSE,
+            "a header in an unknown format would not load"
+        );
+        assert_eq!(
+            summary_state(summary_of(folder)),
+            None,
+            "a header this version cannot read produced a state anyway"
+        );
+
+        g_type_class_unref(class.cast());
+        g_object_unref(folder.cast());
     }
 }

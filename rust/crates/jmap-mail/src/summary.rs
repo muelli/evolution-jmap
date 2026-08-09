@@ -11,9 +11,9 @@
 //! anything of — `CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY` is the flag it tests
 //! first, and [`crate::folder`] could not honestly set it until now.
 //!
-//! ## One line of subclass
+//! ## Two lines of subclass
 //!
-//! `CamelJmapSummary` overrides no vfunc. What a `CamelFolderSummary` subclass
+//! `CamelJmapSummary` overrides two vfuncs. What a `CamelFolderSummary` subclass
 //! usually exists for is building rows out of *messages*: the three
 //! `message_info_new_from_*` vfuncs, which turn a parser, a MIME message or a
 //! header list into a row, and `next_uid_string`, which invents a uid for a
@@ -22,16 +22,44 @@
 //! of them arrives with the server's own immutable id — so all four would be
 //! overrides of paths this provider does not take.
 //!
-//! It exists for the one thing a summary decides that is not a vfunc at all:
-//! `message_info_type`, the class it instantiates a row as. Camel reads that
-//! field when it loads the summary back out of the database, so a folder whose
-//! summary declared nothing would come back from a restart holding plain
+//! It exists first for the one thing a summary decides that is not a vfunc at
+//! all: `message_info_type`, the class it instantiates a row as. Camel reads
+//! that field when it loads the summary back out of the database, so a folder
+//! whose summary declared nothing would come back from a restart holding plain
 //! `CamelMessageInfoBase` rows — and with them no [`server keywords`], which is
 //! the column that makes a flag change a difference rather than a guess. The
 //! rows [`crate::message_info`] builds are of that type either way; this is what
 //! makes the ones Camel builds match them.
 //!
 //! [`server keywords`]: crate::message_info::server_keywords
+//!
+//! ## The state the rows are current as of
+//!
+//! The two vfuncs it does override are `summary_header_save` and
+//! `summary_header_load`, and what they carry is one string: the `Email` state
+//! the last listing of this mailbox was taken at. It lives on the *summary*
+//! rather than on the folder because it is a fact about the rows — it says what
+//! they are current as of — so it has to be stored where they are stored and
+//! read back when they are read back. A state kept only in memory would be no
+//! state at all after a restart, which is the case that matters most: the first
+//! refresh of every session is exactly the one that would otherwise list every
+//! mailbox in full.
+//!
+//! Camel keeps one header record per folder beside the rows, and reserves a
+//! `bdata` field in it for whatever the provider has that Camel has none of —
+//! the same arrangement as `CamelMIRecord.bdata`, which [`crate::message_info`]
+//! keeps the keywords in, with one difference that decides the format below: a
+//! row's `bdata` is written and read through a cursor the whole class chain
+//! shares, and a header's is not — `summary_header_load` is handed the record
+//! and nothing else. So the field belongs to the last class in the chain, and
+//! this one writes it whole rather than appending to it.
+//!
+//! It carries a format number before the state for the case that is not a
+//! restart but an upgrade: a header written by some later version of this
+//! provider is one this version must not read as a state, and a number it does
+//! not recognise leaves the summary with no state at all. That costs one full
+//! listing, which is what a folder does today anyway; misreading the field
+//! would cost the mailbox.
 //!
 //! ## A listing is not a copy
 //!
@@ -53,17 +81,25 @@
 use std::collections::BTreeSet;
 use std::ffi::CStr;
 use std::ptr;
+use std::sync::Mutex;
 
 use eds_sys::{
-    CamelFolder, CamelFolderSummary, CamelFolderSummaryClass, camel_folder_summary_add,
-    camel_folder_summary_check_uid, camel_folder_summary_free_array, camel_folder_summary_get,
-    camel_folder_summary_get_array, camel_folder_summary_get_type, camel_folder_summary_lock,
-    camel_folder_summary_remove_uid, camel_folder_summary_unlock, camel_folder_take_folder_summary,
+    CamelFIRecord, CamelFolder, CamelFolderSummary, CamelFolderSummaryClass,
+    camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_free_array,
+    camel_folder_summary_get, camel_folder_summary_get_array, camel_folder_summary_get_type,
+    camel_folder_summary_lock, camel_folder_summary_remove_uid, camel_folder_summary_touch,
+    camel_folder_summary_unlock, camel_folder_take_folder_summary, camel_util_bdata_get_number,
+    camel_util_bdata_get_string, camel_util_bdata_put_number, camel_util_bdata_put_string,
 };
-use glib_sys::{GFALSE, GTRUE, GType, gchar};
-use gobject_sys::{g_object_new, g_object_unref};
+use glib_sys::{
+    GError, GFALSE, GTRUE, GType, g_free, g_string_free, g_string_new, gboolean, gchar,
+};
+use gobject_sys::{g_object_new, g_object_unref, g_type_check_instance_is_a, g_type_class_peek};
+use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_mail_sync::MessageSummary;
+use jmap_proto::State;
 
 use crate::changes::Changes;
 use crate::folder_info::c_string;
@@ -71,11 +107,49 @@ use crate::message_info::{
     clear_pending_write, message_info_type, new_message_info, update_message_info,
 };
 
-/// The instance struct. Nothing of its own: what this type carries is a class
-/// field, not per-summary state.
+/// What the stored header says it is. Bumped when the fields after it change
+/// meaning; a header carrying anything else is read as a summary with no state,
+/// which is the same position a folder that has never listed is in.
+const HEADER_VERSION: i64 = 1;
+
+/// The instance struct: Camel's summary, and the one thing about the rows in it
+/// that Camel has no field for.
 #[repr(C)]
 pub struct JmapSummary {
     parent: CamelFolderSummary,
+    /// The `Email` state the listing these rows came from was taken at, or
+    /// `None` for a summary that has never listed — which is what makes the
+    /// next refresh list rather than ask for a delta from a state it invented.
+    ///
+    /// A [`Slot`] because the struct arrives zeroed and is freed without a
+    /// destructor running over it, and a [`Mutex`] because it is written every
+    /// refresh and Camel drives a folder from more than one thread.
+    state: Slot<Mutex<Option<State>>>,
+}
+
+impl JmapSummary {
+    /// The Rust view of a summary Camel handed over, or `None` for one that is
+    /// not ours.
+    ///
+    /// Checked rather than assumed for the reason [`crate::message_info`]
+    /// checks a row: a summary reaches this crate from a folder, and a folder
+    /// built before this type existed carries a plain `CamelFolderSummary`.
+    ///
+    /// # Safety
+    ///
+    /// `summary` must be NULL or point at a live `CamelFolderSummary`.
+    unsafe fn borrow<'a>(summary: *mut CamelFolderSummary) -> Option<&'a Self> {
+        // SAFETY: the type check is what makes the cast sound; the contract
+        // above is what makes the check itself legal.
+        unsafe {
+            if summary.is_null()
+                || g_type_check_instance_is_a(summary.cast(), summary_type()) == GFALSE
+            {
+                return None;
+            }
+            summary.cast::<Self>().as_ref()
+        }
+    }
 }
 
 /// The class struct, and the field this type exists for.
@@ -98,14 +172,229 @@ unsafe impl ObjectSubclass for JmapSummary {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // The whole subclass. Camel instantiates a row of this type whenever it
-        // builds one itself — which is every row of every folder after a
-        // restart, read back out of the summary database.
-        //
         // SAFETY: the class leads with CamelFolderSummaryClass — the contract
         // above.
-        unsafe { (*class).parent_class.message_info_type = message_info_type() };
+        let class = unsafe { &mut (*class).parent_class };
+        // Camel instantiates a row of this type whenever it builds one itself —
+        // which is every row of every folder after a restart, read back out of
+        // the summary database.
+        class.message_info_type = message_info_type();
+        class.summary_header_save = Some(summary_header_save);
+        class.summary_header_load = Some(summary_header_load);
     }
+
+    unsafe fn instance_init(instance: *mut Self::Instance) {
+        // Filled here rather than left empty, so that an unlisted summary
+        // answers `None` because it holds an empty state and not because its
+        // slot was never filled — the second is a bug that would read as the
+        // first.
+        //
+        // SAFETY: the instance is being constructed, so this is the only
+        // reference to it.
+        unsafe { (*instance).state.init(Mutex::new(None)) };
+    }
+
+    unsafe fn finalize(instance: *mut Self::Instance) {
+        // SAFETY: the instance is being finalized, so nothing can still reach
+        // it and no borrow handed out by `get` is alive.
+        unsafe { (*instance).state.clear() };
+    }
+}
+
+/// The `Email` state `summary`'s rows are current as of, or `None` for a
+/// summary that has never listed — or one that is not this provider's.
+///
+/// A copy rather than a borrow, like the row's keywords and for the same
+/// reason: the value lives behind a mutex the summary hands nothing out of, so
+/// a refresh renewing it cannot be interleaved with a reader.
+///
+/// # Safety
+///
+/// `summary` must be NULL or point at a live `CamelFolderSummary`.
+pub unsafe fn summary_state(summary: *mut CamelFolderSummary) -> Option<State> {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let summary = unsafe { JmapSummary::borrow(summary) }?;
+    let state = summary
+        .state
+        .get()?
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.clone()
+}
+
+/// Records the state one listing was taken at, replacing whatever the summary
+/// remembered.
+///
+/// Touches the summary, because a state that is not written back is a state
+/// that does not survive the folder: Camel skips saving a summary it was not
+/// told had changed, and a refresh that found no new mail changes nothing else.
+///
+/// Silently does nothing for a summary that is not ours, which is the same
+/// degradation `None` is — a folder that cannot remember a state is one that
+/// lists.
+///
+/// # Safety
+///
+/// `summary` must be NULL or point at a live `CamelFolderSummary`.
+pub unsafe fn set_summary_state(summary: *mut CamelFolderSummary, state: State) {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let Some(borrowed) = (unsafe { JmapSummary::borrow(summary) }) else {
+        return;
+    };
+    let Some(slot) = borrowed.state.get() else {
+        return;
+    };
+    {
+        let mut slot = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.as_ref() == Some(&state) {
+            // The usual answer for a mailbox nobody wrote to. Marking the
+            // summary dirty for it would have Camel rewrite the database on
+            // every poll of every folder.
+            return;
+        }
+        *slot = Some(state);
+    }
+    // SAFETY: the summary is live and of this type, by the borrow above.
+    unsafe { camel_folder_summary_touch(summary) };
+}
+
+/// `CamelFolderSummaryClass.summary_header_save`: puts the state into the
+/// record Camel is about to store.
+///
+/// The record is the parent's — chained up for rather than allocated here, so
+/// that every count and flag Camel keeps in it is filled by the class that owns
+/// them. Only `bdata` is ours, and it is written whole for the reason this
+/// module's header gives: a header's `bdata` is not a chain the way a row's is.
+/// Whatever was in the field is freed first anyway, because a base class that
+/// started using it would otherwise leak it once per save.
+///
+/// A summary with no state stores nothing, so a mailbox that has never been
+/// listed reads back as one rather than as a state that is the empty string.
+unsafe extern "C" fn summary_header_save(
+    summary: *mut CamelFolderSummary,
+    error: *mut *mut GError,
+) -> *mut CamelFIRecord {
+    guard_summary("summary_header_save", summary, ptr::null_mut(), || {
+        // SAFETY: chaining up to the parent's own save, on an instance of a
+        // type derived from it, with the arguments Camel passed through
+        // untouched.
+        let record = unsafe { parent_class() }
+            .and_then(|class| class.summary_header_save)
+            .map_or(ptr::null_mut(), |save| unsafe { save(summary, error) });
+        if record.is_null() {
+            return record;
+        }
+
+        // SAFETY: `summary` is one of ours, by the guard; the record is the one
+        // the parent just allocated, so nothing else holds its `bdata`, and
+        // `g_string_free` hands over a `g_malloc`ed string Camel frees with the
+        // record.
+        unsafe {
+            let Some(state) = summary_state(summary) else {
+                return record;
+            };
+            let bdata = g_string_new(ptr::null());
+            camel_util_bdata_put_number(bdata, HEADER_VERSION);
+            camel_util_bdata_put_string(bdata, c_string(state.as_str()).as_ptr());
+            g_free((*record).bdata.cast());
+            (*record).bdata = g_string_free(bdata, GFALSE);
+        }
+        record
+    })
+}
+
+/// `CamelFolderSummaryClass.summary_header_load`: reads it back out of the
+/// record Camel stored.
+///
+/// A record with nothing of ours in it — a summary written before this column
+/// existed, or by another provider under the same folder name — leaves the
+/// state as it was and still reports success. Failing instead would refuse the
+/// whole header, and with it the counts and the next uid, over the one field
+/// nothing else needs.
+unsafe extern "C" fn summary_header_load(
+    summary: *mut CamelFolderSummary,
+    record: *mut CamelFIRecord,
+) -> gboolean {
+    guard_summary("summary_header_load", summary, GFALSE, || {
+        // SAFETY: chaining up first, on an instance of a type derived from the
+        // parent, with the record Camel passed through untouched.
+        let chained = unsafe { parent_class() }
+            .and_then(|class| class.summary_header_load)
+            .map_or(GFALSE, |load| unsafe { load(summary, record) });
+        if chained == GFALSE || record.is_null() {
+            return chained;
+        }
+
+        // SAFETY: the record is live for the call, and the cursor is a copy of
+        // its `bdata` pointer that the reads below advance through the string
+        // without taking ownership of it; `get_string` hands back a `g_malloc`ed
+        // copy this function frees.
+        let stored = unsafe {
+            let mut cursor = (*record).bdata;
+            if cursor.is_null() {
+                return GTRUE;
+            }
+            if camel_util_bdata_get_number(ptr::addr_of_mut!(cursor), 0) != HEADER_VERSION {
+                return GTRUE;
+            }
+            let text = camel_util_bdata_get_string(ptr::addr_of_mut!(cursor), ptr::null());
+            if text.is_null() {
+                return GTRUE;
+            }
+            let state = CStr::from_ptr(text).to_string_lossy().into_owned();
+            g_free(text.cast());
+            state
+        };
+
+        // SAFETY: `summary` is one of ours, by the guard above.
+        unsafe { set_summary_state(summary, State::new(stored)) };
+        GTRUE
+    })
+}
+
+/// The parent's class, for chaining up.
+///
+/// The *parent's* rather than this one's, for the reason
+/// [`crate::message_info`] gives: peeking our own would make a further subclass
+/// chain into these same functions and recurse until the stack ran out.
+///
+/// # Safety
+///
+/// An instance of this type must exist, which is what guarantees its parent's
+/// class is initialised and alive.
+unsafe fn parent_class<'a>() -> Option<&'a CamelFolderSummaryClass> {
+    // SAFETY: the contract above; the class is owned by the type system and
+    // outlives every instance.
+    unsafe {
+        g_type_class_peek(JmapSummary::parent_type())
+            .cast::<CamelFolderSummaryClass>()
+            .as_ref()
+    }
+}
+
+/// Runs one vfunc body, refusing to run it at all on a summary that is not
+/// ours.
+///
+/// The type check is what lets the bodies above reach the instance struct
+/// without one of their own; the panic guard is the rule every `extern "C"` in
+/// this repository follows.
+fn guard_summary<T>(
+    what: &str,
+    summary: *mut CamelFolderSummary,
+    fallback: T,
+    body: impl FnOnce() -> T,
+) -> T {
+    // SAFETY: `summary` is the argument Camel dispatched on, so it is NULL or a
+    // live instance.
+    if unsafe { JmapSummary::borrow(summary) }.is_none() {
+        log_critical(&format!(
+            "CamelJmapSummary::{what} called on a summary of another type"
+        ));
+        return fallback;
+    }
+    guard(what, fallback, body)
 }
 
 /// Registers the summary type, or returns it if it is already registered.

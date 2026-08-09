@@ -124,6 +124,12 @@ const ALLOWED_TYPES: &[&str] = &[
     // which is where a message info subclass keeps the column Camel has none of
     // — for this provider, the keywords the last listing found.
     "CamelMIRecord",
+    // And the whole folder as the same database stores it: the header row
+    // beside the message rows, with a `bdata` field of its own. That is where
+    // this provider keeps the `Email` state its last listing was taken at, so
+    // that a folder reopened after a restart can ask for a delta rather than
+    // list the mailbox again.
+    "CamelFIRecord",
     "CamelMessageFlags",
     "CamelSummaryMessageID",
     "CamelNamedFlags",
