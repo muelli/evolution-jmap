@@ -346,3 +346,71 @@ fn a_change_info_is_empty_until_something_is_put_in_it() {
         camel_folder_change_info_free(changes);
     }
 }
+
+/// The interface the store implements so a user can tick a folder off the
+/// account: `CamelSubscribable`.
+///
+/// It is here rather than in `tests/layout.rs` for the same reason
+/// `CamelProvider` is — `g_type_query` reports nothing about an interface, so
+/// there is no size to compare `size_of` against. What is checkable is the
+/// shape of the contract the provider signs, and each of the three assertions
+/// below is a decision the store's implementation rests on.
+#[test]
+fn subscribing_is_an_interface_a_store_has_to_implement_itself() {
+    // SAFETY: plain type-system reads; the default vtable ref is dropped
+    // again, and the prerequisite array is g_malloc'd for the caller to free.
+    unsafe {
+        let subscribable = camel_subscribable_get_type();
+
+        // An interface, so `tests/layout.rs` cannot cover it.
+        assert_eq!(
+            g_type_fundamental(subscribable),
+            gobject_sys::G_TYPE_INTERFACE
+        );
+        let mut query = std::mem::zeroed::<GTypeQuery>();
+        g_type_query(subscribable, &mut query);
+        assert_eq!(query.type_, 0, "g_type_query knows an interface after all");
+
+        // Only a store can implement it, which is why the provider's own
+        // `CamelJmapStore` is the implementer and not some object beside it.
+        let mut n = 0;
+        let prerequisites = gobject_sys::g_type_interface_prerequisites(subscribable, &mut n);
+        let required = std::slice::from_raw_parts(prerequisites, n as usize).to_vec();
+        glib_sys::g_free(prerequisites.cast());
+        assert!(
+            required.contains(&camel_store_get_type()),
+            "a CamelStore is not what CamelSubscribable requires"
+        );
+
+        // And Camel's own offline store — the class the provider derives from
+        // — does not implement it, so everything the interface promises has to
+        // come from the provider.
+        assert_eq!(
+            gobject_sys::g_type_is_a(camel_offline_store_get_type(), subscribable),
+            glib_sys::GFALSE,
+            "CamelOfflineStore implements CamelSubscribable already"
+        );
+    }
+}
+
+/// Camel installs no default behind the three methods, so an implementer that
+/// leaves one NULL is not a store that answers conservatively — it is a call
+/// through a NULL pointer from inside `camel_subscribable_folder_is_subscribed`.
+/// That is what makes filling the vtable, rather than merely declaring the
+/// interface, the whole of implementing it.
+#[test]
+fn the_interface_has_no_default_behind_any_of_its_three_methods() {
+    // SAFETY: the default vtable is ref'd for the length of the reads and
+    // unref'd again.
+    unsafe {
+        let vtable = gobject_sys::g_type_default_interface_ref(camel_subscribable_get_type())
+            .cast::<CamelSubscribableInterface>();
+        assert!(!vtable.is_null(), "the interface has no default vtable");
+
+        assert!((*vtable).folder_is_subscribed.is_none());
+        assert!((*vtable).subscribe_folder_sync.is_none());
+        assert!((*vtable).unsubscribe_folder_sync.is_none());
+
+        gobject_sys::g_type_default_interface_unref(vtable.cast());
+    }
+}
