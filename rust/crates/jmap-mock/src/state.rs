@@ -24,11 +24,32 @@ pub struct ServerState {
     /// difference between them is entirely in what went over the wire, and
     /// cheapness that is not asserted is cheapness that quietly goes away.
     pub method_calls: Vec<String>,
+    /// How many requests this server has taken at the API endpoint, whatever
+    /// it answered them with.
+    ///
+    /// [`Self::method_calls`] counts calls; this counts round trips, and the
+    /// two only differ where it matters — a client that chains `Email/query`
+    /// and `Email/get` through a back-reference makes the same two calls as
+    /// one that sends them separately, and pays one round trip instead of two.
+    /// Nothing about the account afterwards says which it did.
+    pub api_requests: usize,
     /// Capability URNs to leave out of the session document, as
     /// [`crate::MockServerBuilder::without_capability`] asked. A real account
     /// need not offer all four, and a client that resolves an account under
     /// the wrong capability has to be able to notice.
     pub omitted_capabilities: BTreeSet<String>,
+    /// How many method calls one request may carry, as
+    /// [`crate::MockServerBuilder::calls_in_request`] asked — advertised as
+    /// `maxCallsInRequest` in the session document and enforced at the API
+    /// endpoint.
+    ///
+    /// `None` is the server that names no limit at all
+    /// ([`crate::MockServerBuilder::no_calls_in_request`]), which RFC 8620 §2
+    /// does not allow and which a client still has to have an answer for; it
+    /// takes a request of any length. The default is
+    /// [`crate::DEFAULT_CALLS_IN_REQUEST`], above anything this client chains,
+    /// so only a test about the limit meets it.
+    pub calls_in_request: Option<u64>,
     /// How many ids one `/changes` response may carry, as
     /// [`crate::MockServerBuilder::changes_page_size`] asked. `None` answers
     /// every change at once.
@@ -60,7 +81,9 @@ impl ServerState {
             session_state: 1,
             accounts: BTreeMap::new(),
             method_calls: Vec::new(),
+            api_requests: 0,
             omitted_capabilities: BTreeSet::new(),
+            calls_in_request: Some(crate::DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
             objects_in_get: None,
             query_page_size: None,

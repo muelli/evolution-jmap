@@ -25,6 +25,29 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
         }
     };
 
+    // Counted here rather than per call: what it is for is telling one request
+    // carrying two chained calls apart from two requests carrying one each,
+    // and a request refused below is still a round trip the client spent.
+    state.api_requests += 1;
+
+    // RFC 8620 §3.2: over `maxCallsInRequest` the whole request is refused with
+    // a request-level error, and nothing in it runs — not even the calls that
+    // would have fitted.
+    if let Some(limit) = state.calls_in_request
+        && request.method_calls.len() as u64 > limit
+    {
+        let problem = serde_json::json!({
+            "type": "urn:ietf:params:jmap:error:limit",
+            "limit": "maxCallsInRequest",
+            "status": 400,
+            "detail": format!(
+                "{} method calls is more than the {limit} this server takes in one request",
+                request.method_calls.len(),
+            ),
+        });
+        return (400, problem);
+    }
+
     let mut responses: Vec<Invocation> = Vec::new();
     // Creation-id → real id across the whole request, so later /set calls
     // can reference earlier creations as `#creationId` (RFC 8620 §5.3).

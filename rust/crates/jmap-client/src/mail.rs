@@ -52,6 +52,57 @@ fn creation_outcome<T: Clone>(
     )))
 }
 
+/// Put `emails` back into the order `ids` names them in, dropping any the
+/// server did not answer with.
+///
+/// `/get` does not preserve the order of the ids it was asked for (RFC 8620
+/// §5.1), so the sort a query was made with survives only if it is reapplied
+/// here — and a message destroyed between the query and the fetch is simply
+/// absent, which is the same shape as a `notFound` and is why this filters
+/// rather than fails.
+fn in_query_order(ids: &[Id], emails: Vec<Email>) -> Vec<Email> {
+    let mut by_id: BTreeMap<Id, Email> = emails
+        .into_iter()
+        .filter_map(|email| email.id.clone().map(|id| (id, email)))
+        .collect();
+    ids.iter().filter_map(|id| by_id.remove(id)).collect()
+}
+
+/// The `EmailSubmission/set` half of sending: submit `email_id` through
+/// `identity_id`, and patch the message once the server accepts it.
+///
+/// `email_id` is a `#draft` creation reference when the draft is being created
+/// in the same request and the message's real id when it is not — the one place
+/// the two forms of [`Client::send_email`] differ. The `on_success_update` key
+/// stays a creation reference either way: it names the *submission*, which is
+/// always created by this very call.
+fn submission_request(
+    account_id: &Id,
+    identity_id: &Id,
+    email_id: Id,
+    on_success_update: Option<Value>,
+) -> EmailSubmissionSetRequest {
+    const SUBMISSION: &str = "submission";
+    EmailSubmissionSetRequest {
+        set: SetRequest::<EmailSubmission>::new(account_id.clone()).create(
+            SUBMISSION,
+            EmailSubmission {
+                id: None,
+                identity_id: identity_id.clone(),
+                email_id,
+                thread_id: None,
+                envelope: None,
+                send_at: None,
+                undo_status: None,
+                extra: Default::default(),
+            },
+        ),
+        on_success_update_email: on_success_update
+            .map(|patch| [(format!("#{SUBMISSION}"), patch)].into()),
+        on_success_destroy_email: None,
+    }
+}
+
 impl Client {
     /// Fetch all mailboxes of an account (`Mailbox/get` with `ids: null`).
     ///
@@ -199,6 +250,15 @@ impl Client {
 
     /// `Email/query` chained to `Email/get` through a `#ids` back-reference —
     /// one round-trip (RFC 8620 §3.7).
+    ///
+    /// Two round-trips against a server whose `maxCallsInRequest` is smaller
+    /// than the chain: the query first, then a `/get` naming the ids it
+    /// answered. The result is the same list in the same order; what it costs
+    /// is the round trip the back-reference exists to save, which is the right
+    /// price for reading mail at all. Splitting is not merely slower, though —
+    /// between the two requests another client may destroy a message the query
+    /// found, and it comes back one short rather than as an error. The chain
+    /// has no such window, which is the second reason it stays the default.
     pub fn email_query_then_get(
         &self,
         account_id: &Id,
@@ -206,11 +266,15 @@ impl Client {
         sort: Option<Vec<Comparator>>,
         properties: Option<&[&str]>,
     ) -> Result<Vec<Email>, Error> {
-        let query_call_id = self.next_call_id();
-        let get_call_id = self.next_call_id();
-
         let mut query = QueryRequest::new(account_id.clone()).filter(filter);
         query.sort = sort;
+
+        if !self.takes_calls_in_one_request(2) {
+            return self.email_query_then_get_separately(account_id, &query, properties);
+        }
+
+        let query_call_id = self.next_call_id();
+        let get_call_id = self.next_call_id();
 
         let mut get = GetRequest::all(account_id.clone());
         get.ids_ref = Some(ResultReference {
@@ -241,16 +305,29 @@ impl Client {
         let query_response: QueryResponse =
             serde_json::from_value(Self::unwrap_invocation(query_invocation, "Email/query")?)?;
 
-        let mut by_id: std::collections::BTreeMap<Id, Email> = get_response
-            .list
-            .into_iter()
-            .filter_map(|email| email.id.clone().map(|id| (id, email)))
-            .collect();
-        Ok(query_response
-            .ids
-            .iter()
-            .filter_map(|id| by_id.remove(id))
-            .collect())
+        Ok(in_query_order(&query_response.ids, get_response.list))
+    }
+
+    /// [`Client::email_query_then_get`] as two requests, for a server that will
+    /// not take the chain.
+    fn email_query_then_get_separately(
+        &self,
+        account_id: &Id,
+        query: &QueryRequest<EmailQueryFilter>,
+        properties: Option<&[&str]>,
+    ) -> Result<Vec<Email>, Error> {
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/query", query)?;
+        let query_response: QueryResponse = serde_json::from_value(arguments)?;
+        // Nothing matched, so there is nothing to fetch — and an `Email/get`
+        // naming no ids is a whole round trip spent on an empty list. The
+        // chained form has no equivalent case: its `/get` travels with the
+        // query whether or not the query finds anything.
+        if query_response.ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let emails = self.email_get(account_id, &query_response.ids, properties)?;
+        Ok(in_query_order(&query_response.ids, emails))
     }
 
     /// Apply a patch to one message (`Email/set` with a single `update`).
@@ -383,6 +460,16 @@ impl Client {
     /// `on_success_update` is an optional patch applied to the email once the
     /// submission is accepted (RFC 8621 §7.5) — typically moving it to Sent.
     /// Returns the server-set email properties and the accepted submission.
+    ///
+    /// Two requests against a server whose `maxCallsInRequest` is smaller than
+    /// the chain, with the submission naming the draft's real id instead of
+    /// `#draft`. What that costs is not only a round trip: the draft exists
+    /// alone between the two, so a submission the server refuses leaves it
+    /// behind in Drafts. The chained form leaves it behind too — RFC 8620 §3.2
+    /// runs the calls of a request in order and does not undo the earlier one
+    /// when a later one fails — so the difference is the window, not the
+    /// outcome: split, the draft is visible to the user's other clients while
+    /// it lasts.
     pub fn send_email(
         &self,
         account_id: &Id,
@@ -393,28 +480,26 @@ impl Client {
         const DRAFT: &str = "draft";
         const SUBMISSION: &str = "submission";
 
+        let email_set = SetRequest::<Email>::new(account_id.clone()).create(DRAFT, email.clone());
+
+        if !self.takes_calls_in_one_request(2) {
+            return self.send_email_separately(
+                account_id,
+                &email_set,
+                identity_id,
+                on_success_update,
+            );
+        }
+
         let email_call_id = self.next_call_id();
         let submission_call_id = self.next_call_id();
 
-        let email_set = SetRequest::<Email>::new(account_id.clone()).create(DRAFT, email.clone());
-        let submission_set = EmailSubmissionSetRequest {
-            set: SetRequest::<EmailSubmission>::new(account_id.clone()).create(
-                SUBMISSION,
-                EmailSubmission {
-                    id: None,
-                    identity_id: identity_id.clone(),
-                    email_id: Id::new(format!("#{DRAFT}")),
-                    thread_id: None,
-                    envelope: None,
-                    send_at: None,
-                    undo_status: None,
-                    extra: Default::default(),
-                },
-            ),
-            on_success_update_email: on_success_update
-                .map(|patch| [(format!("#{SUBMISSION}"), patch)].into()),
-            on_success_destroy_email: None,
-        };
+        let submission_set = submission_request(
+            account_id,
+            identity_id,
+            Id::new(format!("#{DRAFT}")),
+            on_success_update,
+        );
 
         let request = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION])
             .call("Email/set", &email_set, &email_call_id)?
@@ -436,6 +521,43 @@ impl Client {
         let submission_response: SetResponse<EmailSubmission> = serde_json::from_value(
             Self::unwrap_invocation(submission_invocation, "EmailSubmission/set")?,
         )?;
+        let submission = expect_created(&submission_response, SUBMISSION)?;
+
+        Ok((created_email, submission))
+    }
+
+    /// [`Client::send_email`] as two requests, for a server that will not take
+    /// the chain.
+    fn send_email_separately(
+        &self,
+        account_id: &Id,
+        email_set: &SetRequest<Email>,
+        identity_id: &Id,
+        on_success_update: Option<Value>,
+    ) -> Result<(Email, EmailSubmission), Error> {
+        const DRAFT: &str = "draft";
+        const SUBMISSION: &str = "submission";
+
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/set", email_set)?;
+        let email_response: SetResponse<Email> = serde_json::from_value(arguments)?;
+        let created_email = expect_created(&email_response, DRAFT)?;
+        // The id the chained form never needs: `#draft` resolves only inside
+        // the request that created the draft, so the second request has to name
+        // the message the server actually made.
+        let email_id = created_email
+            .id
+            .clone()
+            .ok_or_else(|| Error::Protocol("Email/set created a draft without an id".to_owned()))?;
+
+        let submission_set =
+            submission_request(account_id, identity_id, email_id, on_success_update);
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/set",
+            &submission_set,
+        )?;
+        let submission_response: SetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
         let submission = expect_created(&submission_response, SUBMISSION)?;
 
         Ok((created_email, submission))

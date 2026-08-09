@@ -205,6 +205,25 @@ impl Client {
         Self::unwrap_invocation(invocation, method)
     }
 
+    /// Whether this server has said it will take a request carrying `calls`
+    /// method calls (RFC 8620 §2's `maxCallsInRequest`).
+    ///
+    /// Asked before a chain is built, because over the limit the server refuses
+    /// the *request* — `urn:ietf:params:jmap:error:limit`, RFC 8620 §3.2 — and
+    /// not merely the call that went over it. A client that chains two calls to
+    /// save a round trip and gets neither answered has spent the round trip it
+    /// was saving and has no data.
+    ///
+    /// A server naming no limit is taken at its word and sent the chain: see
+    /// [`Session::max_calls_in_request`] for why nothing is invented here.
+    ///
+    /// [`Session::max_calls_in_request`]: jmap_proto::session::Session::max_calls_in_request
+    pub(crate) fn takes_calls_in_one_request(&self, calls: u64) -> bool {
+        self.session()
+            .max_calls_in_request()
+            .is_none_or(|limit| calls <= limit)
+    }
+
     /// Extract arguments from an invocation, mapping `error` responses to
     /// [`Error::Method`].
     pub fn unwrap_invocation(invocation: &Invocation, method: &str) -> Result<Value, Error> {
