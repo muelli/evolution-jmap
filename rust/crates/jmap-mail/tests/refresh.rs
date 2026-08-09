@@ -57,8 +57,9 @@ use eds_sys::{
     CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderChangeInfo,
     CamelFolderClass, camel_folder_change_info_get_added_uids,
     camel_folder_change_info_get_changed_uids, camel_folder_change_info_get_removed_uids,
-    camel_folder_free_uids, camel_folder_get_message_count, camel_folder_get_uids,
-    camel_folder_refresh_info_sync, camel_service_error_quark, camel_store_get_folder_sync,
+    camel_folder_free_uids, camel_folder_get_folder_summary, camel_folder_get_message_count,
+    camel_folder_get_uids, camel_folder_refresh_info_sync, camel_service_error_quark,
+    camel_store_get_folder_sync,
 };
 use glib_sys::{
     GError, GFALSE, GMainContext, GPtrArray, g_main_context_iteration, g_main_context_new,
@@ -68,8 +69,10 @@ use glib_sys::{
 use gobject_sys::{g_object_unref, g_signal_connect_data, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
+use jmap_mail::summary::summary_state;
 use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer};
+use jmap_proto::Id;
 use jmap_proto::mail::role;
 
 fn sync_against(server: &MockServer) -> MailSync {
@@ -443,6 +446,61 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
         assert_eq!(
             (*refreshed.error).code,
             CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A listing comes with the state it was taken at, and the point of that state
+/// is the *next* refresh: `Email/changes` asked from it is one round trip where
+/// a listing is one per page of the mailbox. So a refresh that dropped it would
+/// leave every later refresh as expensive as the first.
+///
+/// What is asserted here is only that the folder kept it — asking a delta from
+/// it is the increment after this one.
+#[test]
+fn a_refresh_keeps_the_state_the_listing_was_taken_at() {
+    let (_server, _account, folder) = with_mail();
+
+    Refreshed::of(folder).expect_ok();
+
+    // SAFETY: `folder` is live and was built with a summary.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(folder);
+        assert!(
+            summary_state(summary).is_some(),
+            "the refresh dropped the state its listing came with"
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// And the second refresh's state replaces the first one's. A folder that kept
+/// the older of the two would ask every later delta from a point that recedes
+/// further into the past with every refresh.
+#[test]
+fn a_second_refresh_replaces_the_state_the_first_one_kept() {
+    let (server, _account, folder) = with_mail();
+
+    Refreshed::of(folder).expect_ok();
+    // SAFETY: `folder` is live and was built with a summary.
+    let first = unsafe { summary_state(camel_folder_get_folder_summary(folder)) };
+    assert!(first.is_some());
+
+    // Another client deletes one of the two, which is a state transition on
+    // the account's mail — the mailbox it happened in does not matter here,
+    // only that the server has moved on since the first listing.
+    let gone = listed(folder).pop().expect("the folder listed nothing");
+    assert!(edit(&server, |account| account.destroy_email(&Id::new(gone))));
+    Refreshed::of(folder).expect_ok();
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let second = summary_state(camel_folder_get_folder_summary(folder));
+        assert!(second.is_some());
+        assert_ne!(
+            second, first,
+            "mail arrived and the folder kept the state it had before"
         );
         g_object_unref(folder.cast());
     }

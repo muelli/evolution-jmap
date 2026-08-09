@@ -34,14 +34,16 @@
 //!
 //! ## What is not here yet
 //!
-//! The whole mailbox is listed on every refresh. The smaller question is now
-//! asked-able — `jmap-mail-sync`'s `messages_since` turns one `Email/changes`
-//! into the rows this mailbox holds and the uids it does not — and it is what
-//! the `recent` list [`crate::changes`] deliberately leaves empty is waiting
-//! for. What is still missing is somewhere to keep the state a listing comes
-//! with across a restart, which is the summary's own on-disk header and an
-//! increment of its own; until then this vfunc drops it and lists. Listing is
-//! correct meanwhile; it is only expensive.
+//! The whole mailbox is still listed on every refresh, and both halves of not
+//! doing so now exist: `jmap-mail-sync`'s `messages_since` turns one
+//! `Email/changes` into the rows this mailbox holds and the uids it does not,
+//! and [`crate::summary`] keeps the state such a question is asked from across
+//! a restart — which is what this vfunc records below. What is missing is the
+//! path that applies a *delta* to a summary, which `apply_listing` is not: it
+//! reconciles a whole listing, so a delta handed to it would remove every row
+//! the delta did not happen to mention. That path is the next increment, and it
+//! is what the `recent` list [`crate::changes`] deliberately leaves empty is
+//! waiting for too. Listing meanwhile is correct; it is only expensive.
 //!
 //! `cancellable` is not observed, the same gap [`crate::folders`] documents and
 //! for the same reason: [`Client`] takes its [`CancelFlag`] when it is built.
@@ -65,7 +67,7 @@ use jmap_proto::Id;
 
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, parent_store};
-use crate::summary::apply_listing;
+use crate::summary::{apply_listing, set_summary_state};
 
 /// Installs the folder's own vfuncs on a class whose first member is a
 /// `CamelFolderClass`.
@@ -102,16 +104,18 @@ unsafe extern "C" fn refresh_info_sync(
                 return fail(error, &StoreError::Disconnected);
             };
 
-            // The state the listing was taken at is what a delta would be asked
-            // from next time, and there is nowhere to keep it yet: a summary's
-            // on-disk header is where it belongs, and putting it there is the
-            // increment this vfunc is still waiting on.
-            let (_state, messages) = match store.messages(mailbox) {
+            let (state, messages) = match store.messages(mailbox) {
                 Ok(listing) => listing,
                 Err(failure) => return fail(error, &failure),
             };
 
             let changes = apply_listing(summary, &messages);
+            // Recorded after the rows and not before them, because what the
+            // state says is what the rows are current as of: a summary that
+            // claimed one it had not applied yet would, if the process died in
+            // between, come back holding the older rows and asking for changes
+            // since the newer state — and never hear about the ones in between.
+            set_summary_state(summary, state);
             if !changes.is_empty() {
                 camel_folder_changed(folder, changes.as_ptr());
             }
