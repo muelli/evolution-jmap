@@ -324,16 +324,8 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     // transaction because blob allocation borrows the account.
     let mut to_create: Vec<(Id, Email)> = Vec::new();
     for (creation_id, mut email) in request.create.unwrap_or_default() {
-        if email
-            .mailbox_ids
-            .as_ref()
-            .is_none_or(|mailbox_ids| mailbox_ids.is_empty())
-        {
-            not_created.insert(
-                creation_id,
-                SetError::new(error::set::INVALID_PROPERTIES)
-                    .with_description("mailboxIds must name at least one mailbox"),
-            );
+        if let Err(refusal) = filed_somewhere(account, &email) {
+            not_created.insert(creation_id, refusal);
             continue;
         }
         let id = account.emails.alloc_id();
@@ -392,7 +384,12 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
                     SetError::new(error::set::INVALID_PATCH).with_description(e.to_string())
                 })
             }) {
-            Ok(patched) => to_update.push((id, patched)),
+            Ok(patched) => match filed_somewhere(account, &patched) {
+                Ok(()) => to_update.push((id, patched)),
+                Err(refusal) => {
+                    not_updated.insert(id, refusal);
+                }
+            },
             Err(set_error) => {
                 not_updated.insert(id, set_error);
             }
@@ -427,6 +424,44 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         not_updated: (!not_updated.is_empty()).then_some(not_updated),
         not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
     })
+}
+
+/// Whether `email` is in at least one mailbox this account has.
+///
+/// RFC 8621 §4.6: an `Email` in the mail store belongs to one or more
+/// `Mailbox`es, and `mailboxIds` names them. Both halves of that are checked
+/// here — a set with nothing in it, and a set naming a mailbox that is not
+/// there — because both describe a message the store cannot hold, and a mock
+/// that accepted either would be teaching a client that a move it botched
+/// worked. It is what makes a client's move one patch rather than a removal
+/// followed by an addition.
+///
+/// Applied to a creation and to the result of an update alike: the rule is an
+/// invariant of the store rather than a property of one request, so an update
+/// that would break it is refused with the same `invalidProperties` a creation
+/// gets.
+fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError> {
+    let Some(mailbox_ids) = email
+        .mailbox_ids
+        .as_ref()
+        .filter(|mailbox_ids| mailbox_ids.values().any(|filed| *filed))
+    else {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description("mailboxIds must name at least one mailbox"));
+    };
+    match mailbox_ids
+        .iter()
+        .filter(|(_, filed)| **filed)
+        .map(|(id, _)| id)
+        .find(|id| !account.mailboxes.contains(id))
+    {
+        Some(unknown) => Err(
+            SetError::new(error::set::INVALID_PROPERTIES).with_description(format!(
+                "mailboxIds names {unknown}, which is not a mailbox"
+            )),
+        ),
+        None => Ok(()),
+    }
 }
 
 pub fn email_submission_set(
@@ -559,6 +594,7 @@ pub fn email_submission_set(
         })?;
         if apply_patch(&mut value, patch_map).is_ok()
             && let Ok(updated) = serde_json::from_value::<Email>(value)
+            && filed_somewhere(account, &updated).is_ok()
         {
             patched.push((email_id.clone(), updated));
         }
