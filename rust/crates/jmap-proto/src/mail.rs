@@ -42,6 +42,19 @@ pub struct Mailbox {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// The two `SetError` types RFC 8621 §2.5 adds for `Mailbox/set`.
+///
+/// Both are refusals to *destroy*, and both exist because the generic types of
+/// RFC 8620 §5.3 cannot say what a client would have to do about them: a
+/// mailbox that still holds another mailbox, and one that still holds mail, are
+/// removable once the user has decided what becomes of what is inside. A
+/// `forbidden` would read as "not yours to delete", which is a different
+/// conversation with the user.
+pub mod mailbox_set_error {
+    pub const HAS_CHILD: &str = "mailboxHasChild";
+    pub const HAS_EMAIL: &str = "mailboxHasEmail";
+}
+
 /// Well-known mailbox roles (RFC 8457 registry, referenced by RFC 8621).
 pub mod role {
     pub const INBOX: &str = "inbox";

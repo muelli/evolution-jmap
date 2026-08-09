@@ -5006,3 +5006,101 @@ still a settings decision before they are a vfunc, and that decision is what
 `append_message_sync`. Unexercised against a real `CamelSession`: `service.rs`,
 which waits on M6 and M7. The README's architecture block still lists only the
 round-1 crates.
+
+## 2026-08-09 (fifty-fourth session)
+
+M5's thirty-fourth increment, across `jmap-proto`, `jmap-mock` and
+`jmap-client`: **`Mailbox/set` — the folder the user asks the server to make.**
+
+The gap this closes is one three earlier sessions have written down and none
+has taken: `CamelSubscribable` wants `Mailbox/set` "which the client does not
+have", and the same sentence is what `create_folder_sync`, `delete_folder_sync`
+and `rename_folder_sync` have been waiting on. Nothing above the wire can be
+written until the wire itself answers, so this increment is the protocol half
+alone — the mock method and the three client calls — and deliberately stops
+short of the Camel vfuncs that will sit on top of them.
+
+What the mock now answers (RFC 8621 §2.5), written out rather than handed to
+`setops::simple_set` for the reason `Email/set` is: every judgement here is
+about the *rest* of the store rather than about the object in hand, and the
+generic helper only validates a creation.
+
+- **A name is unique among siblings and nowhere else.** Two folders called
+  `2026` under one parent are two folders the user cannot tell apart; the same
+  two under different parents are an ordinary way to file mail. Both halves are
+  tested, and the second is what stops the check from being written as "unique
+  in the account".
+- **A `parentId` names a mailbox, and not one below the mailbox being moved.**
+  The cycle walk goes up one step at a time from the proposed parent and is
+  bounded by the size of the tree — a loop the mock did not put there is still a
+  loop it must not hang on.
+- **A role belongs to one mailbox.** An account with two inboxes is one where
+  `folders.rs`'s role lookup picks whichever came first.
+- **`id` is the server's.** A create that carries one is refused, on
+  `ContactCard/set`'s reasoning: a backend offering a Camel folder path as a
+  JMAP id is a mistake that would otherwise surface much later.
+- **A destroy is refused by what is inside it** — `mailboxHasChild` and
+  `mailboxHasEmail`, RFC 8621 §2.5's own two error types, added to `jmap-proto`
+  as `mail::mailbox_set_error`. They are refusals rather than failures: what is
+  inside the folder is the user's to decide about, and a backend has to be able
+  to pass the distinction on unchanged. `onDestroyRemoveEmails` is not
+  implemented, and the refusal is what says so.
+
+Red first: nineteen tests in the new `jmap-client/tests/mail_folders.rs`, which
+would not compile before the three client methods existed and then failed
+against a mock that answered `unknownMethod`. Each guard was then checked by
+breaking it on purpose — dropping the cycle walk fails the
+moved-inside-itself test; making the sibling comparison forget the parent fails
+`one_name_under_two_parents_is_two_folders`; letting a mailbox be its own
+sibling (the `of` argument ignored) fails the unsubscribe test, because a patch
+that leaves the name alone would otherwise collide with itself; removing either
+destroy guard fails exactly its own test.
+
+Decisions taken:
+
+- **One working copy of the tree per request.** The checks run against a clone
+  that the request updates as it goes, so a create is refused by a sibling made
+  two entries earlier in the same call, and a destroy sees the mailbox a move
+  earlier in the call reparented. Validating against the store as it was would
+  let one request contradict itself.
+- **A create answers with the mailbox, an update with nothing.** The id is the
+  server's to hand out and a caller that cannot name the folder afterwards would
+  have to go looking for it by a name that is unique only among siblings. The
+  echoed object carries `totalEmails`/`unreadEmails` of 0 — the counts are
+  derived rather than stored (see `mailbox_get`), and a folder made a moment ago
+  holds nothing, so answering them beats sending the client back for a
+  `Mailbox/get` to learn a number it could not fail to know.
+- **`isSubscribed` defaults to true on a create.** RFC 8621 §2 leaves the
+  default to the server; any other answer hides a folder the user has just asked
+  for from a client that lists subscribed ones.
+- **The client sends a `PatchObject`, not a whole `Mailbox`.** Same reason
+  `email_update` does: most of what a `Mailbox` carries is the server's — the
+  counts above all — and sending it back is a client telling a server what it
+  has just been told.
+
+Not verified locally, as in the previous fifty-three sessions: `reuse lint` and
+`cargo deny` (neither binary is installed on this VM). One new file,
+`jmap-client/tests/mail_folders.rs`, with the SPDX header. `cargo fmt --check`,
+`cargo test --locked` and `cargo clippy --all-targets --locked -- -D warnings`
+are clean on the default member set and on the five EDS crates.
+
+Next in M5. The wire is now there for the three folder vfuncs that were blocked
+on it, and the tractable next step is the smallest of them: **`CamelSubscribable`
+on the store** — `subscribe_folder_sync`/`unsubscribe_folder_sync` are one
+`Mailbox/set` update of `isSubscribed` each, and `folder_is_subscribed` is a
+read of what `Mailbox/get` already returns. `create_folder_sync` and
+`delete_folder_sync` are the next two after it, and both want a
+`CamelFolderInfo` answer and the store's folder list kept in step; the refusals
+this increment added (`mailboxHasChild`, `mailboxHasEmail`, a sibling's name)
+are what those vfuncs must map onto a `CamelError` the user can act on.
+
+Still open from earlier sessions: **bounding the cache** (unbounded on disk, and
+nothing evicts); the other half of the cache's atomicity problem (an entry is
+written by `write_all` and close rather than to a temporary name and renamed);
+the `changed` signal a transfer emits is still not asserted by a test, which
+wants `tests/refresh.rs`'s emission harness lifted into `tests/common`;
+`get_trash_folder_sync` and `get_junk_folder_sync` are still a settings decision
+before they are a vfunc, and that decision is what `expunge_sync` waits on;
+cross-store transfers want `Email/import` for an `append_message_sync`.
+Unexercised against a real `CamelSession`: `service.rs`, which waits on M6 and
+M7. The README's architecture block still lists only the round-1 crates.

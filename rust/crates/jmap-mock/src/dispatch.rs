@@ -179,6 +179,7 @@ fn handle_method(
     match name {
         "Core/echo" => Ok(arguments),
         "Mailbox/get" => crate::mail::mailbox_get(state, arguments),
+        "Mailbox/set" => crate::mail::mailbox_set(state, arguments),
         "Email/get" => crate::mail::email_get(state, arguments),
         "Email/query" => crate::mail::email_query(state, arguments),
         "Email/set" => crate::mail::email_set(state, arguments),
