@@ -15,9 +15,13 @@
 //! - [`server_of`] — where the server is, as a [`Server`]: the origin *this*
 //!   backend fetches `/.well-known/jmap` from, and the [`Connection`] each child
 //!   has to repeat in order to reach the same one.
+//! - [`user_of`] — whom the account authenticates as, which is the one field of
+//!   `[Authentication]` a `populate` needs and the one that cannot come from
+//!   [`server_of`]: see [`user_of`] on why a populate must not fail where
+//!   `authenticate_sync` is the vfunc that can report why.
 //!
-//! Two functions rather than one because they fail differently and are needed
-//! at different moments. An account with no part enabled has nothing to
+//! Separate functions rather than one because they fail differently and are
+//! needed at different moments. An account with no part enabled has nothing to
 //! populate and must not be reported as broken merely because its host field is
 //! also empty; `populate` asks [`parts_of`] first, returns if
 //! [`Parts::any`] is false, and only then needs a server. Folding them together
@@ -132,6 +136,47 @@ pub unsafe fn parts_of(source: *mut ESource) -> Parts {
             });
 
     Parts::from_collection(source_enabled, collection)
+}
+
+/// Whom the account authenticates as, or `None` for anonymously.
+///
+/// The one field of `[Authentication]` a `populate` needs, and deliberately not
+/// a call to [`server_of`]: which of EDS's two "authenticate me" calls a populate
+/// makes depends only on whether there is a password to resolve, while what a
+/// broken host means is `authenticate_sync`'s to answer — that is the vfunc with
+/// a `GError` to say it through. An account with a user and a host that is not a
+/// host must reach that error, not be quietly treated as anonymous by a populate
+/// whose read of the account failed.
+///
+/// `None` covers both spellings of "no user": no `[Authentication]` group at all,
+/// and a `User=` key that is present and empty. The second matters because
+/// [`jmap_backend_core::connect::credentials`] is what decides what the account
+/// authenticates *as*, it reads an empty user as anonymous through the same
+/// [`read_string`], and a populate that disagreed with it would ask EDS for a
+/// password that `credentials` then drops.
+///
+/// # Safety
+///
+/// As [`parts_of`].
+pub unsafe fn user_of(source: *mut ESource) -> Option<String> {
+    // SAFETY: no arguments; registers the type the lookup below needs.
+    unsafe { e_source_authentication_get_type() };
+
+    // Tested for rather than fetched, as everywhere in this module: this is the
+    // account's own file, and `e_source_get_extension` would add the group.
+    // SAFETY: a valid source by the contract above, and a header constant.
+    if unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }
+        == GFALSE
+    {
+        return None;
+    }
+
+    // SAFETY: the extension is present and is owned by the source.
+    let auth: *mut ESourceAuthentication = unsafe {
+        e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast()
+    };
+    // SAFETY: a live extension; the getter returns NULL or a string it owns.
+    unsafe { read_string(e_source_authentication_get_user(auth)) }
 }
 
 /// The server this account names, or why it names none.
