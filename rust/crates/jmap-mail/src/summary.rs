@@ -67,7 +67,9 @@ use jmap_mail_sync::MessageSummary;
 
 use crate::changes::Changes;
 use crate::folder_info::c_string;
-use crate::message_info::{message_info_type, new_message_info, update_message_info};
+use crate::message_info::{
+    clear_pending_write, message_info_type, new_message_info, update_message_info,
+};
 
 /// The instance struct. Nothing of its own: what this type carries is a class
 /// field, not per-summary state.
@@ -275,6 +277,14 @@ unsafe fn apply_message(
         // second cannot get this far past the check above. The value is the
         // one that stays right if it ever does.
         camel_folder_summary_add(summary, info, GTRUE);
+        // And straight back off the work list `add` just put it on. Camel marks
+        // an added row as having to reach the server, which is right for the
+        // caller that function was written for — a message the user composed and
+        // appended — and backwards here: this row exists *because* the server
+        // described it. Left set, the bit would have
+        // [`crate::synchronize`] write every message of every mailbox back to
+        // the server it was just listed from.
+        clear_pending_write(info);
         g_object_unref(info.cast());
         changes.add(message.uid.as_str());
     }

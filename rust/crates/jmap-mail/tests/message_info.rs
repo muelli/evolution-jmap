@@ -29,17 +29,18 @@ use eds_sys::{
     CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK,
     CAMEL_MESSAGE_SEEN, CamelMIRecord, CamelMessageInfo, camel_message_info_get_cc,
     camel_message_info_get_date_received, camel_message_info_get_date_sent,
-    camel_message_info_get_flags, camel_message_info_get_from, camel_message_info_get_message_id,
-    camel_message_info_get_preview, camel_message_info_get_references, camel_message_info_get_size,
-    camel_message_info_get_subject, camel_message_info_get_to, camel_message_info_get_uid,
-    camel_message_info_get_user_flag, camel_message_info_load, camel_message_info_new_from_headers,
-    camel_message_info_save, camel_message_info_set_flags, camel_name_value_array_append,
-    camel_name_value_array_free, camel_name_value_array_new,
+    camel_message_info_get_flags, camel_message_info_get_folder_flagged,
+    camel_message_info_get_from, camel_message_info_get_message_id, camel_message_info_get_preview,
+    camel_message_info_get_references, camel_message_info_get_size, camel_message_info_get_subject,
+    camel_message_info_get_to, camel_message_info_get_uid, camel_message_info_get_user_flag,
+    camel_message_info_load, camel_message_info_new_from_headers, camel_message_info_save,
+    camel_message_info_set_flags, camel_name_value_array_append, camel_name_value_array_free,
+    camel_name_value_array_new,
 };
 use glib_sys::{GFALSE, GTRUE, g_string_free, g_string_new, gchar};
 use gobject_sys::{g_object_unref, g_type_check_instance_is_a};
 use jmap_mail::message_info::{
-    message_info_type, new_message_info, server_keywords, update_message_info,
+    message_info_type, new_message_info, row_keywords, server_keywords, update_message_info,
 };
 use jmap_mail_sync::{Keywords, MessageFlags, MessageSummary};
 use jmap_proto::Id;
@@ -508,6 +509,94 @@ fn a_flag_the_user_changed_does_not_change_what_the_row_remembers() {
             remembered(info),
             listed,
             "a local mark rewrote what the server was last seen holding"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// The row's other end of the same difference, read back out of the two columns
+/// the user's click lands in. A row nobody has touched has to claim exactly what
+/// it remembers, or every synchronisation would write every message back.
+#[test]
+fn an_untouched_row_claims_the_keywords_it_remembers() {
+    let mut message = row("Em0031");
+    message.flags.seen = true;
+    message.flags.flagged = true;
+    message.tags = vec!["Work".to_owned(), "home/todo".to_owned()];
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        assert_eq!(row_keywords(info), remembered(info));
+        g_object_unref(info.cast());
+    }
+}
+
+/// And once the user has clicked, it claims the click. `attachments` is the one
+/// bit of the flags word that must not travel: `hasAttachment` is a property RFC
+/// 8621 §4.1.1 has the server compute, so sending it back would put a label on
+/// the message every other client would then show.
+#[test]
+fn a_row_claims_the_flag_the_user_just_set() {
+    let mut message = row("Em0032");
+    message.flags.attachments = true;
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+
+        let claimed = row_keywords(info);
+        assert_eq!(claimed.iter().collect::<Vec<&str>>(), vec!["$seen"]);
+        g_object_unref(info.cast());
+    }
+}
+
+/// A row built out of a listing carries no change of the user's — it did not
+/// exist a moment ago — so it must not arrive on the folder's work list. Camel's
+/// column setters put it there, which is what `new_message_info` undoes: left
+/// alone, every message of every mailbox would be written back to the server it
+/// was just listed from.
+#[test]
+fn a_row_a_listing_built_is_not_waiting_for_the_server() {
+    let mut message = row("Em0033");
+    message.flags.seen = true;
+    message.subject = Some("Lunch?".to_owned());
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        assert_eq!(camel_message_info_get_folder_flagged(info), GFALSE);
+        g_object_unref(info.cast());
+    }
+}
+
+/// And a refresh that meets a row the user has changed and not yet saved leaves
+/// it waiting. The listing overwrites the user's flags — a race this provider
+/// does not yet resolve — but taking the row off the work list as well would
+/// lose the change in silence rather than retry it.
+#[test]
+fn a_listing_does_not_take_an_unsaved_change_off_the_work_list() {
+    let info = info_of(&row("Em0034"));
+    let mut listed = row("Em0034");
+    listed.flags.seen = true;
+
+    // SAFETY: `info` is a live message info this test owns, updated from a row
+    // with the same uid.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FLAGGED);
+        assert_ne!(
+            camel_message_info_get_folder_flagged(info),
+            GFALSE,
+            "Camel did not queue the row the user changed"
+        );
+
+        update_message_info(info, &listed);
+
+        assert_ne!(
+            camel_message_info_get_folder_flagged(info),
+            GFALSE,
+            "the listing dropped the user's unsaved change"
         );
         g_object_unref(info.cast());
     }

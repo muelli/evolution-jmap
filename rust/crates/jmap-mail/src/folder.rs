@@ -186,6 +186,15 @@ unsafe impl ObjectSubclass for JmapFolder {
         //
         // SAFETY: as above.
         unsafe { crate::message::install_vfuncs(class.cast::<CamelFolderClass>()) };
+
+        // And the one vfunc that goes the other way: what the user changed
+        // about a row, put on the server. `CamelFolder` leaves
+        // `synchronize_sync` NULL and its wrapper answers TRUE for a class that
+        // has not filled it in — so without this line a JMAP folder is one that
+        // reports every flag change as saved and sends none of them.
+        //
+        // SAFETY: as above.
+        unsafe { crate::synchronize::install_vfuncs(class.cast::<CamelFolderClass>()) };
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.
