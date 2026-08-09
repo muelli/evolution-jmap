@@ -290,6 +290,49 @@ impl JmapStore {
         Ok(sync.file_message(uid, filing)?)
     }
 
+    /// Says whether the user wants to see a folder — the write behind
+    /// `CamelSubscribable`'s `subscribe_folder_sync` and
+    /// `unsubscribe_folder_sync`.
+    ///
+    /// On the store and locked like the writes above, and then it does one
+    /// thing none of them does: it edits the folder listing the store is
+    /// holding. That is not a cache being kept warm, it is the answer to a
+    /// different question. `folder_is_subscribed` is declared by Camel as a
+    /// *non-blocking* method — Evolution asks it once per folder while drawing
+    /// the tree — so the listing is the only thing that can ever answer it, and
+    /// a store that wrote the subscription to the server and left its own
+    /// listing saying the opposite would draw the tick straight back on.
+    ///
+    /// The edit is made through [`Arc::make_mut`], so a caller already walking
+    /// the tree it was handed keeps walking the tree it was handed: a
+    /// `CamelFolderInfo` forest is copied out of a borrowed tree, and one that
+    /// mutated underneath that walk is what this rules out.
+    ///
+    /// A store with nothing listed yet gains nothing. The alternative would be
+    /// a tree assembled from the single mailbox a write happened to name, which
+    /// is an account with one folder in it.
+    ///
+    /// The state the listing is current as of is deliberately left where it
+    /// was. The write did move the account on, so the next refresh finds a
+    /// change and rebuilds — one listing more than strictly needed. The
+    /// alternative is a store inventing a state string the server never handed
+    /// it and then asking `Mailbox/changes` from it.
+    pub fn set_subscribed(&self, mailbox: &Id, subscribed: bool) -> Result<(), StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        sync.set_subscribed(mailbox, subscribed)?;
+
+        // Only after the server agreed, and while the connection it agreed over
+        // is still ours — the ordering rule the `folders` field documents.
+        if let Some(folders) = self.folder_listing()
+            && let Some(listing) = write(folders).as_mut()
+        {
+            Arc::make_mut(&mut listing.tree).set_subscribed(mailbox, subscribed);
+        }
+        Ok(())
+    }
+
     /// Drops the folder listing. Called with the connection lock held, by the
     /// two operations that make a listing stop describing the account the store
     /// is pointed at.

@@ -24,6 +24,16 @@ pub enum SyncError {
     /// Camel's vocabulary has a code for exactly this, and the layer above can
     /// only reach for it if the distinction survives the crate boundary.
     NoSuchMessage(jmap_proto::Id),
+    /// A mailbox was asked to change and the account does not have it.
+    ///
+    /// The folder-shaped counterpart of [`SyncError::NoSuchMessage`], and its
+    /// own variant for the same reason: a folder in Camel's tree is a claim
+    /// about the last listing, and another client deleting it in the meantime
+    /// is ordinary. Camel has a code for exactly this — the store's
+    /// `NO_FOLDER`, not the service's "the account is broken" — and the layer
+    /// above can only reach for it if the distinction survives the crate
+    /// boundary.
+    NoSuchFolder(jmap_proto::Id),
 }
 
 impl SyncError {
@@ -40,6 +50,9 @@ impl std::fmt::Display for SyncError {
             Self::NoSuchMessage(uid) => {
                 write!(f, "the account no longer holds the message {uid}")
             }
+            Self::NoSuchFolder(id) => {
+                write!(f, "the account no longer holds the mailbox {id}")
+            }
         }
     }
 }
@@ -48,7 +61,7 @@ impl std::error::Error for SyncError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Client(error) => Some(error),
-            Self::NoSuchMessage(_) => None,
+            Self::NoSuchMessage(_) | Self::NoSuchFolder(_) => None,
         }
     }
 }
