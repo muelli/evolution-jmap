@@ -8835,3 +8835,117 @@ from (extension, `[Resource] Identity`). Limit 4 above — whether a disabled pa
 should suppress the children rather than only their `enabled` flag — is the
 first thing to settle there. The mail-children question stays open and the
 increment that answers it must be marked *needs human verification*.
+
+## 2026-08-09 (ninetieth session)
+
+**What a part the user switched off means — and, the half that can lose data,
+what it does *not* mean.** The previous session's limit 4: `ECollectionBackendParts`
+and `e_collection_backend_get_part_enabled()` exist, and a populate "should
+probably not create address books for an account whose `contacts-enabled` is
+off" — left deliberately unsettled. This session settled it, both halves, off
+EDS 3.52.4's `e-collection-backend.c` and `e-webdav-collection-backend.c`.
+
+New module `jmap-collection-sync/src/parts.rs`: `Parts` (the three flags
+`ESourceCollection` carries), `Parts::from_collection`, `wants`, `any`,
+`Fanout::listed` and `Fanout::is_obsolete`. `Fanout` gained a `parts` field and
+`Fanout::discover` a `parts` argument; `CollectionLayout` gained `account_for`
+and `serves`.
+
+Red first, and recorded as red: with `from_collection`, `wants`, `any`, `listed`
+stubbed and `is_obsolete` written the naive way ("not in the child list"), 8 of
+the 10 new unit tests failed. The two that passed are noted rather than papered
+over — `a_source_that_says_nothing_about_its_parts_has_all_of_them` passes
+against a stub returning `ALL`, and `a_collection_the_server_no_longer_lists_is_obsolete`
+is precisely what the naive `is_obsolete` does; it is there because the *other*
+tests must not be satisfied by never removing anything. The two mock-based tests
+were run against the ungated `discover` first and fail there
+(`["AddressBook/get", "Calendar/get"]`).
+
+What was decided, and why:
+
+- **A switched-off part is not asked about.** `discover` sends
+  `AddressBook/get` only when the contacts part is on, `Calendar/get` only when
+  the calendar part is on — the same gate `EWebDAVCollectionBackend` puts in
+  front of its discovery, which returns before contacting anything when neither
+  part is enabled. Cheaper by a request, and on an account that has to
+  authenticate, by a credential prompt for data the user said they did not want.
+- **So its children are not created either**, rather than created and
+  immediately switched off by EDS's `enabled` binding. The user sees the same
+  thing; this way it costs no `.source` file. `Fanout::children` holds the same
+  line a second time so a hand-built fan-out cannot route around it.
+- **But a switched-off part is not deleted — and here this backend parts company
+  with EDS's WebDAV one.** `EWebDAVCollectionBackend` fills its "previously
+  known" table with children of *both* kinds and then discovers only the enabled
+  ones, so with contacts off every address book child is a leftover and is
+  `e_source_remove_sync`'d: uid, `.source` file and offline cache gone to a
+  checkbox, and re-ticking it rediscovers them as brand new sources. That looks
+  like an oversight in EDS rather than a design (the error path has an explicit
+  "prevent lost of already known calendars when the discover failed" guard; the
+  part-disabled path has no equivalent), and EDS's own answer to a disabled part
+  — `collection_backend_bind_child_enabled()` binding the child's `enabled` to
+  it, with `SYNC_CREATE` when the part is off — is "the children exist and are
+  off", not "the children are gone".
+- **So `is_obsolete` is true in exactly one case**: the resource id parses as
+  ours, its kind was actually *listed* (`Fanout::listed` — the part is on *and*
+  the login resolved an account for it), and the listing did not contain it.
+  A resource id we did not write, a child of a switched-off part, and a child of
+  a kind the login stopped advertising are all kept. `Fanout` carries the
+  `parts` it was discovered under so that what was asked and what may be
+  concluded cannot drift apart in the caller.
+- **A failed discovery removes nothing** — by construction rather than by a
+  check: `discover` returns `Err` and there is no `Fanout` to ask.
+- **`Parts::from_collection` mirrors `e_collection_backend_get_part_enabled()`'s
+  two rules**: a disabled collection source has no enabled parts whatever its
+  extension says, and a source with no `[Collection]` extension has all of them
+  (EDS returns `TRUE` there). Encoding it here keeps the GObject layer a
+  three-getter read.
+- **`Parts::mail` is carried but drives nothing yet.** No mail children exist to
+  gate, and the mail service costs no request of its own. It is in the struct
+  because a `Parts` with two of EDS's three parts is a trap for whoever writes
+  the mail children.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no collection backend.** Nothing calls
+   `e_collection_backend_get_part_enabled`, `e_source_collection_get_contacts_enabled`
+   or `e_source_remove_sync`; `Parts` and `is_obsolete` are the decision, not the
+   act. That the three getters map onto these three fields is argued from EDS's
+   source, not demonstrated.
+2. **Diverging from the WebDAV backend is a judgement.** If Evolution or a user
+   somewhere *relies* on disabling contacts pruning the sources, this keeps
+   sources they expect to be gone (switched off, but present in the cache
+   directory). The trade is data preservation against tidiness, and it is
+   reversible in one function.
+3. **A collection that disappears while its part is off is kept indefinitely**,
+   and is only removed the first populate after the part comes back on. That is
+   the intended consequence of 3 above, but it means the cache can hold children
+   for collections that no longer exist.
+4. **The part-enabled gate is per-populate, not reactive.** EDS re-runs populate
+   when the collection source changes, so ticking a part on should discover it;
+   nothing here proves that, since nothing here is driven by EDS yet.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). One new file — `src/parts.rs` — with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491
+tests, up from 479) and `cargo clippy --all-targets --locked -- -D warnings` are
+clean on the default member set; the five EDS crates are untouched and depend on
+nothing that changed.
+
+Correction to the last three sessions' sign-off: `RUSTDOCFLAGS=-D warnings cargo
+doc` is **not** clean on master, and was not before this session either — it
+fails on two pre-existing private-intra-doc-links, `jmap-ical`'s
+`syntax.rs:28` (`Component::write_into`) and `jmap-mock`'s `state.rs:301`
+(`Transaction`). Verified by stashing this session's work and re-running. Left
+alone here rather than folded into an unrelated commit; no CI job runs `cargo
+doc`, so this is a local-check claim to fix, not a red pipeline.
+`cargo doc -p evolution-jmap-collection-sync` is clean.
+
+No milestone tag: M6 still has no backend.
+
+Next in M6: the backend crate itself — `ECollectionBackend` subclassed in
+`jmap-backend-collection`, `populate` reading `Parts::from_collection` off the
+collection source, calling `e_collection_backend_new_child` per `Child`,
+applying `Child::settings`, removing the children `Fanout::is_obsolete` names,
+and `dup_resource_id` answering from (extension, `[Resource] Identity`). The
+mail-children question stays open and the increment that answers it must be
+marked *needs human verification*.
