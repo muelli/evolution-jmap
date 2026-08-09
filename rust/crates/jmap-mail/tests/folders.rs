@@ -37,13 +37,15 @@ use std::time::Duration;
 
 use common::Account;
 use eds_sys::{
-    CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_ERROR_NO_FOLDER,
-    CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH,
-    CAMEL_STORE_FOLDER_INFO_SUBSCRIBED, CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST,
-    CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderInfo, CamelStore, CamelStoreClass,
+    CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
+    CAMEL_STORE_ERROR_NO_FOLDER, CAMEL_STORE_FOLDER_INFO_RECURSIVE,
+    CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_FOLDER_INFO_SUBSCRIBED,
+    CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST, CAMEL_STORE_FOLDER_NONE, CamelFolder,
+    CamelFolderInfo, CamelStore, CamelStoreClass, camel_folder_get_flags,
     camel_folder_get_full_name, camel_folder_info_free, camel_offline_store_get_type,
-    camel_service_error_quark, camel_store_error_quark, camel_store_get_folder_sync,
-    camel_store_get_inbox_folder_sync,
+    camel_service_error_quark, camel_store_error_quark, camel_store_get_folder_info_sync,
+    camel_store_get_folder_sync, camel_store_get_inbox_folder_sync,
+    camel_store_get_junk_folder_sync, camel_store_get_trash_folder_sync,
 };
 use glib_sys::GError;
 use gobject_sys::{g_object_unref, g_type_class_peek, g_type_class_ref, g_type_class_unref};
@@ -1174,7 +1176,7 @@ fn camel_hands_back_the_folder_it_already_opened() {
 }
 
 // ---------------------------------------------------------------------------
-// and the one folder Camel asks for by purpose rather than by name
+// and the three folders Camel asks for by purpose rather than by name
 
 /// A store whose inbox is not where a name-matching provider would look for
 /// it: nested under another mailbox, called something else entirely, and with a
@@ -1199,24 +1201,46 @@ fn with_inbox() -> (MockServer, Account, Id) {
     (server, account, inbox)
 }
 
-/// One `camel_store_get_inbox_folder_sync` call and both of its answers, owned
+/// One "open the folder for this purpose" call and both of its answers, owned
 /// the way Camel owns them.
-struct Inbox {
+///
+/// The three wrappers have one signature, so one type covers all of them; which
+/// of the three was asked is the constructor.
+struct Purpose {
     folder: *mut CamelFolder,
     error: *mut GError,
 }
 
-impl Inbox {
+impl Purpose {
     /// Through the public wrapper, which is how Evolution asks — and which
     /// returns NULL without even reaching the store if the class left the vfunc
     /// unset, so calling it is also what pins the override.
-    fn of(store: *mut CamelStore) -> Self {
+    fn asked(
+        store: *mut CamelStore,
+        wrapper: unsafe extern "C" fn(
+            *mut CamelStore,
+            *mut gio_sys::GCancellable,
+            *mut *mut GError,
+        ) -> *mut CamelFolder,
+    ) -> Self {
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: `store` is a live store of ours, and `error` is writable and
-        // currently NULL.
-        let folder =
-            unsafe { camel_store_get_inbox_folder_sync(store, ptr::null_mut(), &mut error) };
+        // SAFETY: `store` is a live store of ours or NULL — which every one of
+        // these wrappers type-checks — and `error` is writable and currently
+        // NULL.
+        let folder = unsafe { wrapper(store, ptr::null_mut(), &mut error) };
         Self { folder, error }
+    }
+
+    fn inbox(store: *mut CamelStore) -> Self {
+        Self::asked(store, camel_store_get_inbox_folder_sync)
+    }
+
+    fn trash(store: *mut CamelStore) -> Self {
+        Self::asked(store, camel_store_get_trash_folder_sync)
+    }
+
+    fn junk(store: *mut CamelStore) -> Self {
+        Self::asked(store, camel_store_get_junk_folder_sync)
     }
 
     fn path(&self) -> String {
@@ -1238,9 +1262,16 @@ impl Inbox {
             .expect("a folder with no mailbox behind it")
             .clone()
     }
+
+    /// What Camel believes about the folder it handed back.
+    fn flags(&self) -> eds_sys::CamelFolderFlags {
+        assert!(!self.folder.is_null(), "no folder to ask");
+        // SAFETY: a live folder of ours.
+        unsafe { camel_folder_get_flags(self.folder) }
+    }
 }
 
-impl Drop for Inbox {
+impl Drop for Purpose {
     fn drop(&mut self) {
         // SAFETY: the call handed over one reference to the folder and
         // ownership of the error.
@@ -1263,7 +1294,7 @@ impl Drop for Inbox {
 fn the_inbox_is_the_mailbox_holding_the_inbox_role() {
     let (_server, account, inbox) = with_inbox();
 
-    let opened = Inbox::of(account.store);
+    let opened = Purpose::inbox(account.store);
 
     assert!(opened.error.is_null(), "opening the inbox set an error");
     assert_eq!(opened.path(), "Accounts/Posteingang");
@@ -1280,7 +1311,7 @@ fn the_inbox_is_the_mailbox_holding_the_inbox_role() {
 fn the_inbox_is_the_folder_camel_already_has_open_for_that_path() {
     let (_server, account, _) = with_inbox();
 
-    let by_purpose = Inbox::of(account.store);
+    let by_purpose = Purpose::inbox(account.store);
     // SAFETY: a live store of ours, a NUL-terminated path, and a NULL GError **
     // which the wrapper tolerates.
     let by_path = unsafe {
@@ -1316,7 +1347,7 @@ fn an_account_with_no_inbox_role_has_no_inbox_to_open() {
     let account = Account::open();
     account.connect(sync_against(&server));
 
-    let opened = Inbox::of(account.store);
+    let opened = Purpose::inbox(account.store);
 
     assert!(opened.folder.is_null(), "a folder for a role nobody claims");
     assert!(!opened.error.is_null(), "no reason given");
@@ -1338,7 +1369,7 @@ fn an_inbox_that_appeared_since_the_listing_is_found_by_looking_again() {
     let account = Account::open();
     account.connect(sync_against(&server));
     assert!(
-        Inbox::of(account.store).folder.is_null(),
+        Purpose::inbox(account.store).folder.is_null(),
         "an inbox before there was one"
     );
 
@@ -1346,7 +1377,7 @@ fn an_inbox_that_appeared_since_the_listing_is_found_by_looking_again() {
         state.create_mailbox("Inbox", Some(role::INBOX), None)
     });
 
-    let opened = Inbox::of(account.store);
+    let opened = Purpose::inbox(account.store);
     assert!(opened.error.is_null(), "opening the inbox set an error");
     assert_eq!(opened.path(), "Inbox");
 }
@@ -1356,7 +1387,7 @@ fn an_inbox_that_appeared_since_the_listing_is_found_by_looking_again() {
 fn a_disconnected_store_has_no_inbox_to_open() {
     let account = Account::open();
 
-    let opened = Inbox::of(account.store);
+    let opened = Purpose::inbox(account.store);
 
     assert!(opened.folder.is_null(), "a disconnected store opened one");
     assert!(!opened.error.is_null(), "no reason given");
@@ -1391,4 +1422,237 @@ fn a_null_store_has_no_inbox_either() {
     assert!(!error.is_null(), "no reason given");
     // SAFETY: owned by us, set above.
     unsafe { glib_sys::g_error_free(error) };
+}
+
+// ---------------------------------------------------------------------------
+// and the other two: where deleted mail and spam are delivered
+
+/// An account whose trash and junk are named and placed the way a real server
+/// is free to name and place them: in the user's own language, nested under
+/// another mailbox — and with decoys called `Trash` and `Junk` at the top level
+/// claiming no role at all.
+///
+/// The decoys are what a provider that matched on names would open, and what
+/// makes this account tell the two apart. RFC 8621 §2 gives a mailbox a `role`;
+/// its name is a label for the user.
+fn with_trash_and_junk() -> (MockServer, Account, Id, Id) {
+    let server = MockServer::builder().start();
+    let (trash, junk) = edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX));
+        account.seed_mailbox("Trash", None);
+        account.seed_mailbox("Junk", None);
+        let system = account.seed_mailbox("System", None);
+        (
+            account.seed_child_mailbox("Papierkorb", Some(role::TRASH), &system),
+            account.seed_child_mailbox("Werbung", Some(role::JUNK), &system),
+        )
+    });
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    (server, account, trash, junk)
+}
+
+/// "The folder in @store into which trash is delivered", which for a JMAP
+/// account is the mailbox holding the `trash` role and nothing else. Camel's own
+/// answer — the one this override replaces — is a virtual folder over the
+/// `DELETED` flag, and that flag is local to this client: no JMAP keyword
+/// carries it, so a message another client moved to trash is not in it and a
+/// message this one deleted is in no folder any other client can see.
+#[test]
+fn the_trash_is_the_mailbox_holding_the_trash_role() {
+    let (_server, account, trash, _) = with_trash_and_junk();
+
+    let opened = Purpose::trash(account.store);
+
+    assert!(opened.error.is_null(), "opening the trash set an error");
+    assert_eq!(opened.path(), "System/Papierkorb");
+    assert_eq!(opened.mailbox(), trash);
+    // And nothing about the folder says "trash" yet: Camel's wrapper does not
+    // mark what a store hands it, so `CAMEL_FOLDER_IS_TRASH` stays off until
+    // something sets it. `crate::folder`'s `flags` is where that decision will
+    // have to be taken, and it is not this increment's — see the note there.
+    assert_eq!(opened.flags(), CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY);
+}
+
+/// And the same for junk. `$junk` *is* a JMAP keyword, so Camel's virtual folder
+/// over the `JUNK` flag would not be empty here — it would be a second, and
+/// differently populated, spam folder sitting next to the account's own: the
+/// server files spam into the mailbox, and marking a message read on a phone
+/// does not move it out of a search.
+#[test]
+fn the_junk_is_the_mailbox_holding_the_junk_role() {
+    let (_server, account, _, junk) = with_trash_and_junk();
+
+    let opened = Purpose::junk(account.store);
+
+    assert!(opened.error.is_null(), "opening the junk set an error");
+    assert_eq!(opened.path(), "System/Werbung");
+    assert_eq!(opened.mailbox(), junk);
+    assert_eq!(opened.flags(), CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY);
+}
+
+/// The same folder Camel already has open for that path, for the reason the
+/// inbox has to be: Evolution reaches the trash both ways — by purpose when the
+/// user empties it, by path when they click it — and two `CamelFolder`s over one
+/// mailbox would be two summaries and two sets of flags.
+#[test]
+fn the_trash_is_the_folder_camel_already_has_open_for_that_path() {
+    let (_server, account, _, _) = with_trash_and_junk();
+
+    let by_purpose = Purpose::trash(account.store);
+    // SAFETY: a live store of ours, a NUL-terminated path, and a NULL GError **
+    // which the wrapper tolerates.
+    let by_path = unsafe {
+        camel_store_get_folder_sync(
+            account.store,
+            c"System/Papierkorb".as_ptr(),
+            CAMEL_STORE_FOLDER_NONE,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+
+    assert!(!by_path.is_null(), "the path opened no folder");
+    assert_eq!(
+        by_purpose.folder, by_path,
+        "a second folder over the same mailbox"
+    );
+
+    // SAFETY: one reference, handed over by the wrapper.
+    unsafe { g_object_unref(by_path.cast()) };
+}
+
+/// An account whose server assigns neither role — legal, like the role-less
+/// inbox, and answered the same way. Camel documents NULL as meaning "no such
+/// folder exists" as well as "it went wrong", but the error is set regardless:
+/// the account plainly has mailboxes called `Trash` and `Junk`, and a silent
+/// NULL would leave nothing anywhere saying why neither of them is the trash.
+#[test]
+fn an_account_with_no_trash_or_junk_role_has_neither_to_open() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| {
+        account.seed_mailbox("Trash", None);
+        account.seed_mailbox("Junk", None)
+    });
+    let account = Account::open();
+    account.connect(sync_against(&server));
+
+    for opened in [Purpose::trash(account.store), Purpose::junk(account.store)] {
+        assert!(opened.folder.is_null(), "a folder for a role nobody claims");
+        assert!(!opened.error.is_null(), "no reason given");
+        // SAFETY: the error is the one the vfunc set, checked non-NULL above.
+        unsafe {
+            assert_eq!((*opened.error).domain, camel_store_error_quark());
+            assert_eq!((*opened.error).code, CAMEL_STORE_ERROR_NO_FOLDER as i32);
+        }
+    }
+}
+
+/// The second look the other two openers take, for the same reason: a mailbox
+/// the user made in webmail after this store listed the account is one the
+/// server would file deleted mail into, and reporting no trash until something
+/// else refreshed would send the next delete nowhere.
+#[test]
+fn a_trash_that_appeared_since_the_listing_is_found_by_looking_again() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| account.seed_mailbox("Inbox", None));
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    assert!(
+        Purpose::trash(account.store).folder.is_null(),
+        "a trash before there was one"
+    );
+
+    edit(&server, |state| {
+        state.create_mailbox("Bin", Some(role::TRASH), None)
+    });
+
+    let opened = Purpose::trash(account.store);
+    assert!(opened.error.is_null(), "opening the trash set an error");
+    assert_eq!(opened.path(), "Bin");
+}
+
+/// The other NULL, told apart from the one above by the error alone.
+#[test]
+fn a_disconnected_store_has_no_trash_or_junk_to_open() {
+    let account = Account::open();
+
+    for opened in [Purpose::trash(account.store), Purpose::junk(account.store)] {
+        assert!(opened.folder.is_null(), "a disconnected store opened one");
+        assert!(!opened.error.is_null(), "no reason given");
+        // SAFETY: the error is the one the vfunc set, checked non-NULL above.
+        unsafe {
+            assert_eq!((*opened.error).domain, camel_service_error_quark());
+            assert_eq!(
+                (*opened.error).code,
+                CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
+            );
+        }
+    }
+}
+
+/// And the same guard as every other vfunc here, reached through the class
+/// because the wrappers assert `CAMEL_IS_STORE`.
+#[test]
+fn a_null_store_has_no_trash_or_junk_either() {
+    // SAFETY: referencing the class installs the vfuncs; NULL is exactly the
+    // instance pointer under test, and each `error` is writable and NULL.
+    unsafe {
+        let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
+        let vfuncs = [
+            (*class).get_trash_folder_sync.expect("the trash vfunc"),
+            (*class).get_junk_folder_sync.expect("the junk vfunc"),
+        ];
+        for vfunc in vfuncs {
+            let mut error: *mut GError = ptr::null_mut();
+            let folder = vfunc(ptr::null_mut(), ptr::null_mut(), &mut error);
+            assert!(folder.is_null());
+            assert!(!error.is_null(), "no reason given");
+            glib_sys::g_error_free(error);
+        }
+        g_type_class_unref(class.cast());
+    }
+}
+
+/// The other half of the same decision, and the visible one: Camel's listing
+/// *wrapper* adds `.#evolution/Trash` and `.#evolution/Junk` to whatever a
+/// store answers with, for as long as the store's flags claim it wants them.
+/// A JMAP account that kept them would show the user two trash folders — the
+/// server's, where their phone puts deleted mail, and a search over a flag only
+/// this client ever sets — and two junk folders, disagreeing about what spam is.
+///
+/// Through the wrapper rather than the vfunc, because the virtual folders are
+/// the wrapper's doing: the vfunc never sees them.
+#[test]
+fn the_listing_offers_no_virtual_trash_or_junk_beside_the_accounts_own() {
+    let (_server, account, _, _) = with_trash_and_junk();
+
+    let mut paths = Vec::new();
+    // SAFETY: a live store of ours, a NULL `top` — the whole account — and an
+    // error out-parameter the wrapper tolerates being NULL. The forest is
+    // walked and then freed with the function Camel's contract names.
+    unsafe {
+        let head = camel_store_get_folder_info_sync(
+            account.store,
+            ptr::null(),
+            RECURSIVE,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        );
+        collect(head, &mut paths);
+        camel_folder_info_free(head);
+    }
+
+    assert_eq!(
+        paths,
+        [
+            "Inbox",
+            "Junk",
+            "System",
+            "System/Papierkorb",
+            "System/Werbung",
+            "Trash"
+        ],
+        "the listing gained a folder the account does not have"
+    );
 }

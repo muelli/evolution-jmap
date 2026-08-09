@@ -60,6 +60,25 @@ impl FolderRole {
             _ => None,
         }
     }
+
+    /// The JMAP `role` this is, for a caller that has to name it.
+    ///
+    /// The inverse of [`from_jmap`](Self::from_jmap) on everything it accepts,
+    /// spelled the way RFC 8621 §2 requires — lower-case — rather than the way
+    /// a shouting server may have sent it. What wants it is a message about a
+    /// role the account has no mailbox for: Camel asks a store for its trash
+    /// and its junk by purpose, and "no mailbox of this account has the trash
+    /// role" is the only useful thing such a store can say back.
+    pub fn as_jmap(self) -> &'static str {
+        match self {
+            Self::Inbox => role::INBOX,
+            Self::Drafts => role::DRAFTS,
+            Self::Sent => role::SENT,
+            Self::Trash => role::TRASH,
+            Self::Junk => role::JUNK,
+            Self::Archive => role::ARCHIVE,
+        }
+    }
 }
 
 /// One folder, with its subfolders.

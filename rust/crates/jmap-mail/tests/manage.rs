@@ -394,11 +394,12 @@ fn the_store_fills_the_rename_slot_too() {
 /// On a store Camel constructed, because flags are instance state: a detached
 /// store is not a `CamelStore` to ask.
 ///
-/// `VTRASH` and `VJUNK` are in the word too, and they are Camel's defaults
-/// rather than a decision this provider has taken: they ask Camel to build the
-/// account a virtual Trash and Junk out of the messages flagged as such.
-/// Whether a JMAP account wants those or the mailboxes its server gives roles
-/// to is what `get_trash_folder_sync` and `get_junk_folder_sync` still wait on.
+/// `VTRASH` and `VJUNK` are the two bits this provider *does* have a line
+/// about, and it is a line that clears them: `camel_store_init` asks Camel to
+/// build every account a virtual Trash and Junk out of the messages flagged as
+/// such, and a JMAP account's trash and junk are mailboxes its server gave a
+/// role to — see `crate::store`'s `instance_init` for the decision and
+/// `tests/folders.rs` for what the listing looks like either way.
 #[test]
 fn the_store_offers_folder_management() {
     let account = common::Account::open();
@@ -411,9 +412,13 @@ fn the_store_offers_folder_management() {
         "the store does not offer folder management: flags {flags:#x}"
     );
     assert_eq!(
-        flags,
-        CAMEL_STORE_CAN_EDIT_FOLDERS | CAMEL_STORE_VTRASH | CAMEL_STORE_VJUNK,
-        "the store's flags are no longer Camel's defaults"
+        flags & (CAMEL_STORE_VTRASH | CAMEL_STORE_VJUNK),
+        0,
+        "the store asks Camel for virtual trash and junk folders: flags {flags:#x}"
+    );
+    assert_eq!(
+        flags, CAMEL_STORE_CAN_EDIT_FOLDERS,
+        "the store's flags are no longer Camel's defaults minus the virtual folders"
     );
 }
 

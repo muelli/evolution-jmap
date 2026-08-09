@@ -90,7 +90,10 @@
 //! Evolution offers "New Folder", "Rename Folder" and "Delete Folder" for a
 //! store whose flags carry `CAMEL_STORE_CAN_EDIT_FOLDERS` — and Camel's own
 //! `camel_store_init` sets that bit, along with `VTRASH` and `VJUNK`, on every
-//! store there is. `tests/manage.rs` pins the value it leaves behind.
+//! store there is. `tests/manage.rs` pins the whole word this store ends up
+//! with: this bit as Camel left it, and those two cleared by
+//! [`crate::store`]'s `instance_init` for a reason that has nothing to do with
+//! folder management.
 //!
 //! So the flag was never the thing standing between the user and these three
 //! vfuncs: a store *opts out* of folder management by clearing the bit, and

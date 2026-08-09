@@ -405,6 +405,34 @@ fn the_role_is_found_on_the_folder_that_kept_it() {
     assert_eq!(inbox.display_name, "Real inbox");
 }
 
+/// And the way back: the JMAP name of a role, which is what the caller that
+/// asked for one writes into its error when the account has no such mailbox.
+/// Round-tripping through [`FolderRole::from_jmap`] is the property worth
+/// pinning — a name that did not map back would be one this crate itself would
+/// not recognise in a mailbox — and the spelling is checked against
+/// `jmap_proto` rather than against a literal, because those constants are what
+/// a server's `role` is compared with.
+#[test]
+fn every_role_is_named_by_the_jmap_role_it_is_read_from() {
+    let roles = [
+        (FolderRole::Inbox, role::INBOX),
+        (FolderRole::Drafts, role::DRAFTS),
+        (FolderRole::Sent, role::SENT),
+        (FolderRole::Trash, role::TRASH),
+        (FolderRole::Junk, role::JUNK),
+        (FolderRole::Archive, role::ARCHIVE),
+    ];
+
+    for (role, name) in roles {
+        assert_eq!(role.as_jmap(), name, "{role:?}");
+        assert_eq!(
+            FolderRole::from_jmap(role.as_jmap()),
+            Some(role),
+            "{role:?}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // the one editable property
 

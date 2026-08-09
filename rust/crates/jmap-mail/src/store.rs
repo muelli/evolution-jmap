@@ -23,8 +23,10 @@ use std::mem::MaybeUninit;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    CAMEL_STORE_FOLDER_INFO_REFRESH, CamelOfflineStore, CamelOfflineStoreClass, CamelServiceClass,
-    CamelStore, CamelStoreClass, CamelStoreGetFolderInfoFlags, camel_offline_store_get_type,
+    CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_VJUNK, CAMEL_STORE_VTRASH, CamelOfflineStore,
+    CamelOfflineStoreClass, CamelServiceClass, CamelStore, CamelStoreClass,
+    CamelStoreGetFolderInfoFlags, camel_offline_store_get_type, camel_store_get_flags,
+    camel_store_set_flags,
 };
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
@@ -633,6 +635,29 @@ unsafe impl ObjectSubclass for JmapStore {
         unsafe {
             (*instance).connection.init(RwLock::new(None));
             (*instance).folders.init(RwLock::new(None));
+        };
+
+        // And what a JMAP account's trash and junk are: mailboxes of the
+        // account, not searches over local flags. `CamelStore` starts every
+        // store with `CAMEL_STORE_VTRASH | CAMEL_STORE_VJUNK`, which makes
+        // `camel_store_get_folder_info_sync` append `.#evolution/Trash` and
+        // `.#evolution/Junk` to every listing the store answers with — so a
+        // provider that left them on and overrode the two getters (see
+        // [`crate::folders`]) would show the user two trash folders and two junk
+        // folders, one pair real and one pair a view of flags no other client
+        // shares. Cleared here rather than per account, because it is a fact
+        // about the protocol and not a setting: RFC 8621 gives a mailbox a role.
+        //
+        // Every other bit is left exactly as Camel set it — `CAN_EDIT_FOLDERS`
+        // in particular, which [`crate::manage`] earns.
+        //
+        // SAFETY: the parent's `instance_init` has already run — GObject
+        // initialises base to derived — so this is a `CamelStore` whose private
+        // data exists, which is all either call touches.
+        unsafe {
+            let store = instance.cast::<CamelStore>();
+            let flags = camel_store_get_flags(store) & !(CAMEL_STORE_VTRASH | CAMEL_STORE_VJUNK);
+            camel_store_set_flags(store, flags);
         };
     }
 

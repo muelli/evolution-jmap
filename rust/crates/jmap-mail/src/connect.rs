@@ -55,7 +55,7 @@ use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::source::SourceError;
 use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, Credentials, Error};
-use jmap_mail_sync::{MailSync, SyncError};
+use jmap_mail_sync::{FolderRole, MailSync, SyncError};
 use jmap_proto::session::CAPABILITY_MAIL;
 
 use crate::server::ServerConfig;
@@ -91,14 +91,16 @@ pub enum StoreError {
     /// is wrong with the connection or the account, and a service error would
     /// be a working account reported as broken because one folder went away.
     NoFolder(String),
-    /// Camel asked for the account's inbox and no mailbox claims that role.
+    /// Camel asked for a folder by purpose — the inbox, the trash, the junk —
+    /// and no mailbox of the account claims that role.
     ///
     /// A legal account rather than a broken one — RFC 8621 §2 makes `role`
     /// nullable on every mailbox — but the question still has no answer, and
-    /// falling back to a mailbox *named* "Inbox" would be the provider guessing
-    /// where the user's mail arrives. Reported like [`Self::NoFolder`], whose
-    /// case this is: a folder Camel asked for that the account does not have.
-    NoInbox,
+    /// falling back to a mailbox *named* "Inbox" or "Trash" would be the
+    /// provider guessing where the user's mail arrives and where it goes when
+    /// they delete it. Reported like [`Self::NoFolder`], whose case this is: a
+    /// folder Camel asked for that the account does not have.
+    NoRole(FolderRole),
     /// Camel asked for a message the account does not hold, by uid.
     ///
     /// The folder's own domain rather than the store's: the store is fine and
@@ -151,7 +153,13 @@ impl fmt::Display for StoreError {
             Self::Client(error) => error.fmt(f),
             Self::Disconnected => f.write_str("not connected to the JMAP server"),
             Self::NoFolder(path) => write!(f, "no such folder: {path}"),
-            Self::NoInbox => f.write_str("no mailbox of this account is the inbox"),
+            Self::NoRole(role) => {
+                write!(
+                    f,
+                    "no mailbox of this account has the {} role",
+                    role.as_jmap()
+                )
+            }
             Self::NoMessage(uid) => write!(f, "no such message: {uid}"),
         }
     }
@@ -197,7 +205,7 @@ impl StoreError {
                 (gio_sys::g_io_error_quark(), gio_sys::G_IO_ERROR_CANCELLED)
             },
             // SAFETY: as above.
-            Self::NoFolder(_) | Self::NoInbox => unsafe {
+            Self::NoFolder(_) | Self::NoRole(_) => unsafe {
                 (
                     camel_store_error_quark(),
                     CAMEL_STORE_ERROR_NO_FOLDER as i32,
