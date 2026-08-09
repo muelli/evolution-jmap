@@ -38,6 +38,7 @@ use jmap_mail_sync::{
 use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
+use crate::service::Connected;
 use crate::settings::settings_type;
 use crate::subscribe::Subscribable;
 
@@ -566,15 +567,44 @@ impl JmapStore {
     }
 }
 
+/// The store as the service [`crate::service`]'s vfuncs connect.
+///
+/// Three methods that forward to the inherent ones above, because what the
+/// vfuncs need is the part the store has in common with the transport and the
+/// store's own callers need the part it does not: a `folders` that a
+/// [`JmapStore::store_connection`] clears is a store concern, and one the trait
+/// has no business naming.
+///
+// SAFETY: `JmapStore` is the instance struct of the type `store_type`
+// registers, and that type derives from `CamelOfflineStore` — from
+// `CamelStore`, from `CamelService`.
+unsafe impl Connected for JmapStore {
+    fn hold_connection(&self, sync: MailSync) {
+        self.store_connection(sync);
+    }
+
+    fn release_connection(&self) {
+        self.drop_connection();
+    }
+
+    fn holds_connection(&self) -> bool {
+        self.is_connected()
+    }
+}
+
 /// A poisoned lock means some other operation panicked while holding it. What
 /// it guards is not damaged by that — a `MailSync` is an HTTP client and an
 /// account id, a `Listing` is a tree and a state string — so carrying on is
 /// better than taking the store down with whatever already went wrong.
-fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+///
+/// `pub(crate)` for [`crate::transport`], which holds a connection of its own
+/// under the same rule. Two copies of three lines would be two places for that
+/// judgement to be made differently.
+pub(crate) fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
     lock.read().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+pub(crate) fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     lock.write().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -630,7 +660,7 @@ unsafe impl ObjectSubclass for JmapStore {
         // rather than here because what they do is one operation split across
         // three slots by Camel's re-prompt loop, and reads as one file.
         // SAFETY: as above.
-        unsafe { crate::service::install_vfuncs(service) };
+        unsafe { crate::service::install_vfuncs::<Self>(service) };
 
         // And the folder listing. `CamelStore` leaves `get_folder_info_sync`
         // NULL and `camel_store_get_folder_info_sync` refuses to call a store

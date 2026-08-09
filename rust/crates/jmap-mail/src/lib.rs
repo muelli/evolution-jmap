@@ -99,6 +99,12 @@
 //!   of sending that is a pure reading of Camel's objects — and because it is
 //!   where the rule lives that an address with nothing deliverable in it
 //!   refuses the send rather than shortening it.
+//! - [`transport`] is the object that half hangs off: `CamelJmapTransport`, the
+//!   second service Camel gives an account and the one that reads no folder. It
+//!   is a service of its own rather than a view of the store because Camel gives
+//!   it no way to reach one — so it has a connection of its own to the same
+//!   server, opened by the same [`service`] vfuncs, and `send_to_sync` is the
+//!   one slot on it still empty.
 //! - [`provider`] is the struct itself: the protocol, what Evolution is allowed
 //!   to offer a JMAP account as, and the store slot pointing at that type.
 //! - [`module`] is the exported symbol, guarded like every other C entry point
@@ -133,3 +139,4 @@ pub mod subscribe;
 pub mod summary;
 pub mod synchronize;
 pub mod transfer;
+pub mod transport;

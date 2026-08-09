@@ -7971,3 +7971,107 @@ Next in M5: `CamelJmapTransport` itself — the `CamelTransport` subclass and it
 connection, `send_to_sync` joining `read_envelope`, `identity_for` and
 `MailSync::send_message`, the Drafts/Sent lookup out of the folder tree, and the
 provider's transport slot. Both of its pure pieces are now done.
+
+## 2026-08-09 (eighty-second session)
+
+**The second service the account has.** `jmap-mail/src/transport.rs`:
+`CamelJmapTransport`, the `CamelTransport` subclass Camel instantiates for the
+sending half of a JMAP account, with a connection of its own. It is the first
+of the four things the previous session left on the transport's list — the
+subclass and its connection — and it is the one that had to come first, because
+`send_to_sync` is a slot on this type's class and there was no class.
+
+Red first: `jmap-mail/tests/transport.rs`, nine tests against a type that did
+not exist. A compile failure is a weak red, so every rule was re-checked against
+a deliberately broken implementation: not installing the service vfuncs fails
+`the_transport_names_the_account_it_sends_through` (`camel_service_get_name`
+answers NULL for a class that filled none of the slot in); leaving
+`settings_type` inherited fails both that test and
+`the_transport_is_configured_through_the_accounts_settings_class`; making the
+`Connected` impl's `hold_connection` a no-op fails all four connection tests;
+and giving the type `camel_service_get_type` as its parent fails
+`the_transport_is_a_camel_transport`.
+
+Decisions taken:
+
+- **Its own connection, not a view of the store's.** Camel gives an account two
+  services and no supported way for either to reach the other:
+  `camel_session_get_service` needs a uid the transport does not carry, and the
+  pairing of the two lives in Evolution's `EMailAccountStore`, above Camel. So
+  the transport opens a second HTTP client against the same server. That is one
+  more connection than JMAP needs and the only shape Camel offers; what it buys
+  is that neither service's disconnect can take the other's away, which is the
+  case that matters — Evolution disconnects a store on its own schedule, and a
+  message in the outbox should not lose what it was going to go out over.
+- **One slot, and no folder listing.** A transport lists nothing. The two
+  mailboxes sending needs — where the message is staged, where it is filed
+  afterwards — are a read over the connection at send time and not state this
+  object keeps, so the type has exactly the connection in it.
+- **The account's settings class, not an inherited one.** Same account, same
+  server: a transport that inherited `CamelSettings` would have no host, no port
+  and no user, and `e_source_camel_configure_service` would have nowhere to
+  write what the user typed.
+- **The four `CamelService` vfuncs are written once and installed on both
+  services.** `service::install_vfuncs` is now generic over a new
+  `service::Connected` trait — three methods, all about where the connection
+  that opening the account produced is put — and `authenticate` is generic with
+  it. Connecting is the same operation on either service, and the alternative
+  was a second copy of the connect/authenticate/disconnect trio in which
+  Camel's re-prompt rule (only an `ERROR` verdict carries a `GError`) could be
+  got right in one place and wrong in the other.
+- **The provider's transport slot stays `G_TYPE_INVALID`.** A registered
+  transport whose `send_to_sync` is NULL is an account that offers to send and
+  fails with a GLib critical, which is worse than an account that does not offer
+  to send. `tests/provider.rs` already pins the slot as invalid with that
+  reasoning written out; it is left exactly as it was.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Still no `send_to_sync`,** so nothing in this session changes what the user
+   sees: Evolution still cannot send through a JMAP account. What it changes is
+   that the object the vfunc goes on exists, is connected the same way the store
+   is, and has somewhere to read a connection from.
+2. **`install_vfuncs::<T>` mis-parameterised is not caught by any test.**
+   Installing the store's vfuncs on the transport's class would have every
+   connect on that service read a `CamelTransport` as a `CamelJmapStore` — a
+   cast the compiler cannot object to. The guard is that both `class_init`s pass
+   `Self` rather than a named type, which is a convention and not a check; a
+   test would need a `CamelSession` to drive the vfuncs through Camel, and the
+   read it would catch is undefined behaviour rather than a wrong answer.
+3. **The vfuncs are exercised only through `authenticate`,** as the store's are.
+   `connect_sync` and `disconnect_sync` on a real transport need a
+   `CamelSession` that authenticates, which is `EMailSession` over a source
+   registry on the session bus — the same gap `service.rs` has had since it was
+   written. `get_name` is the one vfunc tested through Camel, because it needs
+   no session.
+4. **Nothing about two sends at once.** The `RwLock` is documented as letting a
+   second send proceed while the first uploads, and no test provokes it: there
+   is no send yet to run twice.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, `jmap-mail/src/transport.rs` and
+`jmap-mail/tests/transport.rs`, both with the SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (428 tests,
+unchanged — nothing there was touched) and on the five EDS crates (612, up from
+603).
+
+Making `authenticate` generic broke one call in `tests/cancellation.rs`, where
+`&store` on a `Box<JmapStore>` no longer coerces; it is `&*store` now. No
+behaviour changed.
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Next in M5: `send_to_sync` itself — the vfunc joining `read_envelope`,
+`MailSync::identity_for` and `MailSync::send_message`, the Drafts/Sent lookup
+out of a folder tree read over the transport's connection, the
+`CamelMimeMessage` written out to the bytes that get imported, the
+`out_sent_message_saved` out-parameter, and — once all of that is there and
+tested — the provider's transport slot. It is the last piece of sending with
+nothing under it.
