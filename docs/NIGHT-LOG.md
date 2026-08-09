@@ -9380,3 +9380,130 @@ Next in M6: the credentials question above, and then `populate` itself —
 `removal::remove_obsolete` over the children EDS lists. It cannot be driven by
 EDS here, so the increment that writes it must be marked *needs human
 verification in real Evolution*.
+
+## 2026-08-09 (ninety-fifth session)
+
+**Where a collection backend's credentials come from.** The previous session
+stopped on it and called it "a reading-and-deciding question before it is a code
+one", so this session read the headers and then wrote the answer down as a
+module with tests.
+
+The answer is that `populate` is *not* where the fan-out happens.
+`ECollectionBackendClass::populate` returns `void`, is handed no credentials and
+has nowhere to put a prompt. What EDS gives a collection backend instead is its
+grandparent's vfunc, `EBackendClass::authenticate_sync`:
+
+```c
+ESourceAuthenticationResult (*authenticate_sync) (EBackend *backend,
+                                                  const ENamedParameters *credentials,
+                                                  gchar **out_certificate_pem,
+                                                  GTlsCertificateFlags *out_certificate_errors,
+                                                  GCancellable *cancellable,
+                                                  GError **error);
+```
+
+and the loop is: a `populate` that needs the server calls
+`e_backend_schedule_credentials_required()`, `evolution-source-registry` resolves
+the password (libsecret, OAuth2, or a prompt through Evolution), and calls back
+into `authenticate_sync` with an `ENamedParameters` — the same shape
+`connect_sync` on the book and calendar backends is handed. **Read off the
+installed 3.52 headers, not guessed:** `e-backend.h` declares the vfunc and the
+three `e_backend_credentials_required*` entry points, and
+`e-webdav-collection-backend.h` declares
+`e_webdav_collection_backend_discover_sync (…, const ENamedParameters *credentials,
+gchar **out_certificate_pem, …) -> ESourceAuthenticationResult` — EDS's own
+collection backend has exactly this signature for exactly this reason. So the
+credentials never come from this crate and never from a config file, and the
+fan-out belongs inside the call that receives them.
+
+New module `rust/crates/jmap-backend-collection/src/authenticate.rs`:
+
+- `authenticate_with(source, credentials, cancellable, error, fan_out) ->
+  ESourceAuthenticationResult` — that vfunc minus the instance.
+- `Login { server, parts, credentials }` — everything a fan-out needs, out of
+  one read of the account and one set of credentials from EDS.
+
+`fan_out` is a closure because it is the only part that needs a live
+`ECollectionBackend`: `e_collection_backend_new_child()` and
+`e_collection_backend_list_*_sources()` are instance methods, and none of the
+decisions above are about children at all.
+
+Red first, and recorded as red: against a stub returning `ERROR` and calling
+nothing, all 12 tests in `tests/authenticate.rs` failed (0 passed). Green now.
+
+What was decided, and why:
+
+- **Parts are read before the server, and that order is the test that pins it.**
+  An account with every part switched off is `ACCEPTED` — not `ERROR`, which
+  would put a dialog in front of someone for an account they deliberately turned
+  down, and not `REJECTED`, which would discard a password that was never tried
+  — and it is accepted *without the fan-out running*, so nothing is contacted.
+  Asking for the host first would report a half-written account as broken the
+  moment its owner unticked the last part. This is the ordering
+  `collection_source`'s module comment already documented; here it is enforced.
+- **`ESourceAuthenticationResult` is not a status code, it is what Evolution
+  does next.** `REQUIRED` is the prompt; anything else for an account with no
+  password yet is an account that can never be completed. `REJECTED` discards
+  the stored password; answering it for a 403 or a server that is down asks
+  someone to fix something a password cannot fix, forever. The 401-and-only-401
+  rule is *not* restated here — it is `ConnectError::auth_result`'s, in
+  `jmap-backend-core`, reached through `ConnectError::from(jmap_client::Error)`,
+  because `connect_sync` answers the same question with the same enum and a rule
+  like that written twice is a rule corrected once.
+- **A `GError` on every non-`ACCEPTED` path and on none of the accepting ones.**
+  GLib's convention read against an enum whose only success is `ACCEPTED`. EDS
+  reads the out-parameter whatever the result was, so a stale error is how an
+  account that is fine gets reported as broken.
+- **`out_certificate_pem` / `out_certificate_errors` are deliberately not
+  filled in.** They are how a backend invites Evolution to offer "trust this
+  certificate?". TLS here is `ureq`'s and the system trust store's, and a
+  certificate this code cannot see is one it must not invite anyone to accept.
+  The cost is honest and small: a self-signed JMAP server fails with an error
+  rather than a trust dialog.
+- **The cancellable is observed for the length of the fan-out and no longer** —
+  `jmap_backend_core::cancel::observe`, same as every other vfunc. A test drives
+  an already-cancelled `GCancellable` through the call and asserts both halves:
+  the fan-out sees `jmap_client::transport::observed()` cancelled, and after the
+  call this thread observes nothing again. A flag that outlived the call would
+  belong to the *account*, and an authenticate someone stopped would leave every
+  later request on the thread refusing.
+- **An empty stored password is sent, not prompted for.** `marshal::password`'s
+  rule, now pinned at this layer too: reading it as absent would prompt, and a
+  user who answers the prompt with nothing would be prompted again forever.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The vfunc slot is not installed.** `class_init` still only overrides
+   `dup_resource_id`; wiring `authenticate_sync` means writing the fan-out body,
+   which needs the instance. Until then `authenticate_with` has no caller, like
+   `removal::remove_obsolete` before it.
+2. **That EDS actually calls `authenticate_sync` on a collection backend after
+   `e_backend_schedule_credentials_required()`** is read off the 3.52 headers
+   and EDS's own WebDAV collection backend, not observed — this VM has no
+   `evolution-source-registry` on a session bus. **Needs human verification in
+   real Evolution.**
+3. **Nothing here talks to a server.** The fan-out is a closure in every test,
+   so what is verified is the classification and the plumbing, not
+   `Fanout::discover` against `jmap-mockd` through this path.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491 tests
+on the default members, unchanged) and `cargo clippy --all-targets --locked --
+-D warnings` are clean, as is `cargo test`/`clippy` over the six EDS crates
+(`jmap-backend-collection` now 53 tests, up from 41).
+`RUSTDOCFLAGS=-D warnings cargo doc` is clean for `jmap-backend-collection`.
+`jmap-backend-collection` gained two dependencies it did not have —
+`evolution-jmap-client` (for `Credentials`) and `gio-sys` (for `GCancellable`).
+
+No milestone tag: M6 can now read an account, write a child, remove one, and say
+what it authenticates as — and still cannot fan one out.
+
+Next in M6: the fan-out body itself, which is now the only thing left before a
+`populate` exists — `Fanout::discover` against `Login::server`, an
+`e_collection_backend_new_child` plus `child_source::apply` per `Child`, and
+`removal::remove_obsolete` over `e_collection_backend_list_contacts_sources()`
+and `…_list_calendar_sources()`. Then the two vfunc slots: a `populate` that
+schedules credentials, and the `authenticate_sync` that does the work. None of
+that can be driven by EDS here, so the increment that writes it must be marked
+*needs human verification in real Evolution*.
