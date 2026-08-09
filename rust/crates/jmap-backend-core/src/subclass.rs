@@ -25,9 +25,9 @@ use std::sync::Mutex;
 
 use glib_sys::{GType, gpointer};
 use gobject_sys::{
-    GInterfaceInfo, GObject, GObjectClass, GTypeInfo, GTypeInstance, GTypeModule,
-    g_type_add_interface_static, g_type_class_peek, g_type_from_name, g_type_module_add_interface,
-    g_type_module_register_type, g_type_register_static,
+    GInterfaceInfo, GInterfaceInitFunc, GObject, GObjectClass, GTypeInfo, GTypeInstance,
+    GTypeModule, g_type_add_interface_static, g_type_class_peek, g_type_from_name,
+    g_type_module_add_interface, g_type_module_register_type, g_type_name, g_type_register_static,
 };
 
 use crate::trampoline::{guard, log_critical};
@@ -73,12 +73,10 @@ pub unsafe trait ObjectSubclass: Sized {
     /// window, implements nothing — and anything that referenced its class in
     /// that window would fix the omission permanently.
     ///
-    /// The interfaces are registered with a NULL `interface_init`, which is
-    /// the whole implementation for an interface whose vfunc slots this type
-    /// does not fill. A type that *does* need to fill one overrides them in
-    /// `class_init`, where the interface struct is reachable through
-    /// `g_type_interface_peek`.
-    fn interfaces() -> Vec<GType> {
+    /// Each entry says how the interface's vtable is filled:
+    /// [`InterfaceDecl::defaults`] for one this type only claims, and
+    /// [`InterfaceDecl::filled_by`] for one whose vfunc slots it fills.
+    fn interfaces() -> Vec<InterfaceDecl> {
         Vec::new()
     }
 
@@ -113,6 +111,127 @@ pub unsafe trait ObjectSubclass: Sized {
     /// `instance` points at an instance struct of this type that is being
     /// finalized; nothing else can still reach it.
     unsafe fn finalize(_instance: *mut Self::Instance) {}
+}
+
+/// One interface a type declares, and how the copy of that interface's vtable
+/// GObject gives the type is filled in.
+///
+/// Built by one of the two constructors rather than by naming its fields: the
+/// choice between them is the whole content of the type, and a caller that
+/// could write `init: None` beside an interface with vfuncs would be declaring
+/// an implementation that dispatches to whatever the interface's `default_init`
+/// left there — for Camel's interfaces, a NULL the wrapper function calls
+/// straight through.
+pub struct InterfaceDecl {
+    gtype: GType,
+    init: GInterfaceInitFunc,
+}
+
+impl InterfaceDecl {
+    /// An interface this type claims without filling any slot of its own: the
+    /// implementation is whatever the interface's `default_init` put in the
+    /// vtable.
+    ///
+    /// Right for an interface that is all properties, which the implementer
+    /// satisfies in [`class_init`](ObjectSubclass::class_init) with
+    /// `g_object_class_override_property` and not through the vtable at all —
+    /// `CamelNetworkSettings`, the one this hook was first written for, declares
+    /// no vfuncs.
+    pub fn defaults(gtype: GType) -> Self {
+        Self { gtype, init: None }
+    }
+
+    /// An interface whose vtable `I` fills in, once, when GObject initialises
+    /// this type's class.
+    pub fn filled_by<I: InterfaceImpl>() -> Self {
+        Self {
+            gtype: I::gtype(),
+            init: Some(interface_init_trampoline::<I>),
+        }
+    }
+}
+
+/// Filling in one implementing type's copy of one interface's vtable — the
+/// `G_IMPLEMENT_INTERFACE` init function, in Rust.
+///
+/// This is a trait of its own, implemented by a type *beside* the class rather
+/// than by the class itself, because a class may implement several interfaces
+/// and would then need several of these. The Camel provider's store is already
+/// that shape: `CamelSubscribable` is one interface it fills, and it is not
+/// going to be the last.
+///
+/// # Why not from `class_init`
+///
+/// Not because it cannot be done: `g_type_interface_peek` inside
+/// [`class_init`](ObjectSubclass::class_init) does hand back this type's own
+/// copy of the vtable, and a slot written through it does survive — checked,
+/// rather than assumed, before this hook was written.
+///
+/// It works by an ordering GLib does not promise. `gtype.c` happens to
+/// base-initialise a type's interface vtables before it calls the class's
+/// initialiser and to run the `interface_init` functions after it; nothing in
+/// the documentation says so, and `g_type_interface_peek` is specified in terms
+/// of a type's interfaces, not of a class that is halfway through being built.
+/// `GInterfaceInfo.interface_init` is the documented contract for exactly this,
+/// so that is what we take — and taking it also means the implementer is handed
+/// a typed `*mut Vtable` under a panic guard instead of casting a `gpointer` at
+/// the call site, with the filling declared next to the interface rather than
+/// among the class's own overrides.
+///
+/// # Safety
+///
+/// GObject writes through `Vtable` using the layout the C interface struct has,
+/// so implementations must guarantee:
+///
+/// - `Vtable` is `#[repr(C)]`, is the binding of the interface struct
+///   [`gtype`](InterfaceImpl::gtype) names, and leads with `GTypeInterface`.
+/// - [`gtype`](InterfaceImpl::gtype) really is that interface's `GType`.
+///
+/// A mismatch puts a function pointer at some other slot's offset, which the
+/// compiler cannot catch and which surfaces as the wrong vfunc being called
+/// with the wrong arguments.
+pub unsafe trait InterfaceImpl {
+    /// The interface's vtable struct — `CamelSubscribableInterface` and the
+    /// like.
+    type Vtable;
+
+    /// The interface this fills. A type accessor rather than a constant,
+    /// because a `GType` is only a number once the interface has registered
+    /// itself.
+    fn gtype() -> GType;
+
+    /// Writes this type's implementations into the slots it fills, leaving the
+    /// rest at the interface's own defaults.
+    ///
+    /// # Safety
+    ///
+    /// `vtable` points at the implementing type's own copy of the interface's
+    /// vtable, freshly initialised from the interface's defaults and reachable
+    /// by nothing else yet.
+    unsafe fn interface_init(vtable: *mut Self::Vtable);
+}
+
+/// GObject calls this from inside `g_type_class_ref`, while it holds the type
+/// system's global lock, so it is guarded exactly like
+/// [`class_init_trampoline`]: a panic unwinding from here would abort the
+/// process rather than break one account.
+///
+/// A caught panic leaves the vtable however far the init got — which for a slot
+/// never reached is the interface's own default. That is the honest outcome:
+/// the alternative, putting the defaults back, would mean copying a vtable this
+/// code does not know the size of.
+unsafe extern "C" fn interface_init_trampoline<I: InterfaceImpl>(
+    vtable: gpointer,
+    _data: gpointer,
+) {
+    // SAFETY: the interface is registered — `filled_by` asked it for its GType
+    // — so `g_type_name` returns its name rather than NULL.
+    let name = unsafe { CStr::from_ptr(g_type_name(I::gtype())) };
+    let context = format!("{}::interface_init", name.to_string_lossy());
+
+    guard(&context, (), || unsafe {
+        I::interface_init(vtable.cast::<I::Vtable>())
+    });
 }
 
 /// Registers `T` as a static type, or returns the existing `GType` if it has
@@ -211,27 +330,23 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
     // Before the type is handed back, and so before anything can reference its
     // class: an interface added after class_init has run is an interface whose
     // properties the class never overrode.
-    //
-    // A NULL `interface_init` leaves the interface's vfunc slots at whatever
-    // its `default_init` put there, which is the right implementation for an
-    // interface that is all properties — `CamelNetworkSettings`, the one this
-    // hook exists for, declares no vfuncs at all.
-    let interface_info = GInterfaceInfo {
-        interface_init: None,
-        interface_finalize: None,
-        interface_data: ptr::null_mut(),
-    };
     for interface in interfaces {
-        // SAFETY: `gtype` was just registered and `interface` came from a type
-        // accessor; `interface_info` outlives both calls. On the static path
-        // the type is new, so the interface cannot already be on it; on the
-        // dynamic path `g_type_module_add_interface` is documented to be
+        let interface_info = GInterfaceInfo {
+            interface_init: interface.init,
+            interface_finalize: None,
+            interface_data: ptr::null_mut(),
+        };
+
+        // SAFETY: `gtype` was just registered and `interface.gtype` came from a
+        // type accessor; `interface_info` outlives both calls. On the static
+        // path the type is new, so the interface cannot already be on it; on
+        // the dynamic path `g_type_module_add_interface` is documented to be
         // called again on every load, like the registration above.
         unsafe {
             if module.is_null() {
-                g_type_add_interface_static(gtype, interface, &interface_info);
+                g_type_add_interface_static(gtype, interface.gtype, &interface_info);
             } else {
-                g_type_module_add_interface(module, gtype, interface, &interface_info);
+                g_type_module_add_interface(module, gtype, interface.gtype, &interface_info);
             }
         }
     }
