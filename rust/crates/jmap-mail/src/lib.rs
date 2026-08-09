@@ -107,6 +107,7 @@ pub mod append;
 pub mod cache;
 pub mod changes;
 pub mod connect;
+pub mod expunge;
 pub mod folder;
 pub mod folder_info;
 pub mod folders;

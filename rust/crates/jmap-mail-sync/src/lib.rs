@@ -470,6 +470,96 @@ impl MailSync {
         self.update_email(uid, filing.patch())
     }
 
+    /// Makes one message leave a mailbox for good — `expunge_sync`.
+    ///
+    /// The one write here that reads before it writes, and the reason is a
+    /// mismatch between the two models rather than caution. Camel's vfunc asks
+    /// a *folder* to get rid of the messages marked deleted in it; in IMAP that
+    /// is one thing, because a message is in one mailbox and removing it from
+    /// the mailbox is removing it. RFC 8621 §4.6 makes `mailboxIds` a set, so
+    /// the same message may be in the inbox and in a folder the user filed it
+    /// in, and the two writes that could be sent mean different things:
+    ///
+    /// - **destroy** takes the message out of the account. Right when this
+    ///   mailbox is its last home, and data loss otherwise — emptying the trash
+    ///   would take the user's own copy of the message with it.
+    /// - **`mailboxIds/<this>: null`** takes it out of this mailbox only.
+    ///   Right when there is another mailbox left, and a request a server that
+    ///   keeps §4.6's invariant refuses when there is not, because it would
+    ///   leave the message filed nowhere.
+    ///
+    /// Nothing on the Camel side can tell the two apart: a summary row records
+    /// the mailbox it was listed from and was never told about any other. So
+    /// the message's `mailboxIds` is read first — one `Email/get` of one
+    /// property — and the write chosen from it. It is a round trip per message
+    /// on top of the write, which is the price of not guessing; the alternative
+    /// is a provider that either loses mail or fails to empty a trash.
+    ///
+    /// A message that is not in `mailbox` at all is no work rather than either
+    /// write. A uid is a claim about the last listing, so another client can
+    /// have moved the message out while Evolution held the folder open, and
+    /// destroying it on the strength of where it *was* would be deleting mail
+    /// from a stale row. Removing a member that is already absent would be
+    /// harmless (RFC 8620 §5.3), but it would also be a request that says
+    /// nothing.
+    ///
+    /// A uid the account no longer holds is [`SyncError::NoSuchMessage`], the
+    /// judgement every other write here makes about the same situation.
+    ///
+    /// Not `ifInState`, for the reason [`MailSync::set_keywords`] gives, with
+    /// one extra: the state that would matter is the message's own membership,
+    /// and there is no conditional in JMAP that expresses it. What the read
+    /// narrows is the window, not the race — a client that files this message
+    /// into a second mailbox between the read and the destroy loses it. That
+    /// window is the same one `Email/set` has for every unconditional write,
+    /// and closing it would need a server-side "destroy if in no other mailbox"
+    /// the protocol does not have.
+    pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), SyncError> {
+        let filed_in = self.message_mailboxes(uid)?;
+        if !filed_in.contains(mailbox) {
+            return Ok(());
+        }
+        if filed_in.len() > 1 {
+            return self.update_email(uid, mailboxes::out_of(mailbox));
+        }
+        self.client
+            .email_destroy(&self.account_id, uid)
+            .map_err(|error| match &error {
+                jmap_client::Error::Set(set_error)
+                    if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
+                {
+                    SyncError::NoSuchMessage(uid.clone())
+                }
+                _ => SyncError::Client(error),
+            })
+    }
+
+    /// The mailboxes the account has one message filed in.
+    ///
+    /// One property of one message, named explicitly: the default property set
+    /// of `Email/get` is everything (RFC 8621 §4.2), and asking for it to learn
+    /// where a message is filed would download the message.
+    ///
+    /// An id the answer does not name is [`SyncError::NoSuchMessage`] — RFC
+    /// 8620 §5.1 reports it in `notFound` and leaves it out of the list, which
+    /// is the shape this reads it in.
+    fn message_mailboxes(&self, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
+        let found = self.client.email_get(
+            &self.account_id,
+            std::slice::from_ref(uid),
+            Some(&[mailboxes::MAILBOX_IDS]),
+        )?;
+        let email = found
+            .into_iter()
+            .find(|email| email.id.as_ref() == Some(uid))
+            .ok_or_else(|| SyncError::NoSuchMessage(uid.clone()))?;
+        // Membership is the member being there. RFC 8621 §4.6 gives every value
+        // in the set as `true`, so a `false` from a server that spelled absence
+        // out is still a mailbox naming the message — and counting it is the
+        // reading that cannot turn into a destroy.
+        Ok(email.mailbox_ids.unwrap_or_default().into_keys().collect())
+    }
+
     /// Puts a message the caller already holds into a mailbox —
     /// `append_message_sync`.
     ///
