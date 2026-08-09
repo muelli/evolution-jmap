@@ -41,7 +41,7 @@ pub use folder::{FolderInfo, FolderRole, FolderTree};
 pub use keywords::{KeywordChange, Keywords};
 pub use mailboxes::Filing;
 pub use message::{MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES};
-pub use send::Outgoing;
+pub use send::{Outgoing, OutgoingMailboxes};
 
 /// What a folder-list refresh found.
 ///
@@ -732,6 +732,33 @@ impl MailSync {
                 "Identity/get returned an identity for {address} without an id"
             ))
         })
+    }
+
+    /// The two mailboxes a message goes out through — the lookup a
+    /// `CamelTransport` makes before it can fill in [`Outgoing::staging`] and
+    /// [`Outgoing::destination`].
+    ///
+    /// Which mailboxes those are, and what their absence means, is
+    /// [`OutgoingMailboxes::of`]'s judgement, documented there. What this adds
+    /// is the round trip: one `Mailbox/get`, per send, caching nothing.
+    ///
+    /// That is [`MailSync::identity_for`]'s decision made again, and the same
+    /// reasoning holds — a folder tree held across a session is a cache that
+    /// goes wrong quietly, by staging a message in a mailbox another client has
+    /// since deleted, or by not finding the Sent folder the user has just made.
+    /// A send is not a hot path, and it already costs an upload.
+    ///
+    /// It is deliberately not the [`FolderTree`] the *store* keeps from its own
+    /// listing, although that would save the request: the transport is a
+    /// separate `CamelService` with no pointer to the store — see
+    /// `crate::transport` in `jmap-mail` — and reaching for one would be this
+    /// crate inventing a relationship Camel does not have.
+    ///
+    /// An account with nowhere to put an outgoing message is
+    /// [`SyncError::NoOutgoingFolder`], before anything is uploaded.
+    pub fn outgoing_mailboxes(&self) -> Result<OutgoingMailboxes, SyncError> {
+        let (_, tree) = self.folder_tree()?;
+        OutgoingMailboxes::of(&tree).ok_or(SyncError::NoOutgoingFolder)
     }
 
     /// Says whether the user wants to see a folder — the write behind

@@ -43,6 +43,17 @@ pub enum SyncError {
     /// recognises — they chose it in the composer, and it is what they would
     /// have to change.
     NoIdentity(String),
+    /// A message was to be sent and the account has no mailbox an outgoing
+    /// message may be put in — no Drafts, and no Sent.
+    ///
+    /// Its own variant for [`SyncError::NoIdentity`]'s reason, and it carries
+    /// nothing because there is nothing to name: the missing thing is a mailbox
+    /// that does not exist. RFC 8621 §7 gives a client no way to submit a
+    /// message that is not already in the account's store, so this is a send
+    /// that cannot happen rather than one that failed — see
+    /// [`OutgoingMailboxes::of`](crate::send::OutgoingMailboxes::of) for why
+    /// the Inbox is not used instead.
+    NoOutgoingFolder,
 }
 
 impl SyncError {
@@ -65,6 +76,9 @@ impl std::fmt::Display for SyncError {
             Self::NoIdentity(address) => {
                 write!(f, "the account cannot send mail as {address}")
             }
+            Self::NoOutgoingFolder => {
+                f.write_str("the account has no Drafts or Sent folder to send a message from")
+            }
         }
     }
 }
@@ -73,7 +87,10 @@ impl std::error::Error for SyncError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Client(error) => Some(error),
-            Self::NoSuchMessage(_) | Self::NoSuchFolder(_) | Self::NoIdentity(_) => None,
+            Self::NoSuchMessage(_)
+            | Self::NoSuchFolder(_)
+            | Self::NoIdentity(_)
+            | Self::NoOutgoingFolder => None,
         }
     }
 }
