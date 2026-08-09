@@ -8393,3 +8393,104 @@ subscriptions and sending. What is left is not another vfunc but the two things
 no test here can reach: a manual test recipe for the mail provider, like
 `docs/manual-test-book-backend.md` has for the address book, and a run against a
 real server.
+
+## 2026-08-09 (eighty-sixth session)
+
+**What one JMAP login fans out into.** M5's surface is feature-complete against
+the mock and what is left of it needs a real Evolution and a real server, so
+this session started M6 at the only end of it that a test on this machine can
+reach: the decision, taken from the session document at `/.well-known/jmap`,
+of which JMAP account serves mail, which serves contacts, which serves
+calendars, and whether the mail one can also send. New crate
+`rust/crates/jmap-collection-sync` (`evolution-jmap-collection-sync`, lib
+`jmap_collection_sync`), sibling to `jmap-book-sync`/`jmap-cal-sync`/
+`jmap-mail-sync` and, like them, free of GObject and the EDS headers, so it is
+in `default-members` and `cargo test` covers it — `cmake/Rust.cmake`'s
+`rust-test` target is a plain `cargo test` and needed no change.
+
+Red first, and recorded as red: `CollectionLayout::from_session` was stubbed to
+resolve nothing and all 9 unit tests in `src/layout.rs` failed; the 3
+mock-driven tests in `tests/layout.rs` went with them. Then green, then five
+deliberately wrong implementations checked against the suite — trusting
+`accountCapabilities` alone, trusting `capabilities` alone, inferring from
+shared accounts, taking the first of several candidates, and accepting
+submission in any account — each caught by exactly the test named for it.
+
+Decisions taken:
+
+- **A service needs both statements, because the two failure modes are
+  different sentences to the user.** `capabilities` is what the server
+  implements and `accountCapabilities` is what this account offers, and they
+  are not the same claim. Believing the account alone gives a child source
+  whose every refresh names a capability in `using` that the server answers
+  with `unknownCapability` — which fails the whole request, not the one call.
+  Believing the server alone gives one whose every refresh is an
+  `accountNotFound`. Neither is a folder worth creating, so both must say yes.
+- **`primaryAccounts` is honoured as given; absence is inferred from, but only
+  where there is nothing to guess.** Where the server names an account for a
+  capability that is the answer, including when the account is not the user's
+  own — a server that designates a shared account as primary has said something
+  deliberate. Where it names none, the account is inferred only when exactly one
+  account with `isPersonal` offers the capability. Two of them and the answer is
+  none: a collection fanned out to the wrong mailbox is worse than one that
+  reports it could not tell, because the user cannot see which JMAP account a
+  folder came from and would have to be told by us.
+- **A submission capability in another account is no transport, not a second
+  one.** `EmailSubmission` names an `emailId` (RFC 8621 §7) and ids are scoped
+  to an account, so submitting through account B a message uploaded into
+  account A is not a thing the protocol can express. `MailService::can_send` is
+  therefore true only when submission resolves to the *same* account as mail;
+  false is a receive-only account, which is a usable account.
+- **`isReadOnly` is carried through rather than acted on here.** It is the whole
+  account's flag, not one collection's, and what a read-only account should
+  become on the EDS side — a child source marked read-only, or no child at all —
+  is a question for the code that creates sources, not for the code that reads
+  the document.
+- **`is_empty()` is a distinct answer.** A login can authenticate and offer
+  nothing this backend can use (a server with only `…:jmap:core`, an account
+  with its capabilities stripped). That is a sentence for the user, not an empty
+  account tree to leave them puzzling over.
+- **Turning a layout into `ESource`s is deliberately not in this crate.** That
+  half needs the headers (`e_collection_backend_new_child`, the
+  `[Mail Account]`/`[Mail Transport]`/`[Address Book]`/`[Calendar]` extensions)
+  and it is the half no test here can verify.
+
+**Not covered by a test, and the honest limits:**
+
+1. **There is no collection backend yet.** Nothing has turned a
+   `CollectionLayout` into an `ESource`, nothing has been loaded by
+   `evolution-source-registry`, and M6 is not started beyond this decision
+   layer. What is tested is a reading of a document.
+2. **The inference fallback is untested against any real server.** `jmap-mockd`
+   always writes a full `primaryAccounts`, so the sole-personal-account path is
+   exercised only by hand-written session documents. It exists as a defence
+   against servers that omit entries RFC 8620 §2 lets them omit; whether
+   Stalwart or Fastmail ever do is unknown here.
+3. **Whether Evolution wants mail as children of the collection source or as
+   properties on it** — one `[Mail Account]` child plus `[Mail Identity]` and
+   `[Mail Transport]` siblings, which is what the other collection backends
+   appear to do — is an EDS structural fact this crate does not answer and the
+   next increment must check against the installed 3.52 headers rather than
+   guess at.
+4. **The mail identity's address is not derived from `username`.** The session's
+   `username` is credentials-shaped, not necessarily an address; the account's
+   `Identity` objects are the authoritative source and `jmap-mail-sync`'s
+   `identity` module already reads them. Which of them a `[Mail Identity]`
+   child should be written from is left to the increment that writes one.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Four new files — the crate's `Cargo.toml`,
+`src/lib.rs`, `src/layout.rs` and `tests/layout.rs` — each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (446
+tests, up from 434) and `cargo clippy --all-targets --locked -- -D warnings` are
+clean on the default member set, and clippy is clean on the five EDS crates,
+which this change does not touch.
+
+No milestone tag: M5 still wants the provider exercised through a real
+Evolution, and M6 has one decision layer and no backend.
+
+Next in M6: the EDS side — a `jmap-backend-collection` crate subclassing
+`ECollectionBackend`, its `populate` creating the children this layout warrants,
+and `dup_resource_id`/`create_resource` for the address books and calendars
+enumerated per account. The structural question in limit 3 is the first thing to
+settle, from the headers.
