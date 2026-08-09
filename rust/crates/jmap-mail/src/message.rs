@@ -43,16 +43,14 @@
 //! why the cache is keyed by the uid Camel asked for rather than by anything the
 //! fetch produced.
 //!
-//! ## What is not here yet
+//! ## Stopping one
 //!
-//! `cancellable` is not observed, the same gap [`crate::refresh`] documents and
-//! for the same reason: [`Client`] takes its [`CancelFlag`] when it is built. A
-//! blob download of a large message is the longest single request this provider
-//! makes, so it is the place that gap is most visible.
+//! A blob download of a large message is the longest single request this
+//! provider makes, and the `cancellable` Camel passes is [`observe`]d for the
+//! length of the call. A stopped open caches nothing: the bytes are only written
+//! once they are all here.
 //!
 //! [`MailSync::message_source`]: jmap_mail_sync::MailSync::message_source
-//! [`Client`]: jmap_client::Client
-//! [`CancelFlag`]: jmap_client::transport::CancelFlag
 
 use std::ptr;
 
@@ -65,6 +63,7 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, g_error_new_literal, gchar, gssize};
 use gobject_sys::g_object_unref;
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_ptr;
@@ -94,7 +93,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 unsafe extern "C" fn get_message_sync(
     folder: *mut CamelFolder,
     message_uid: *const gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> *mut CamelMimeMessage {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a
@@ -102,6 +101,11 @@ unsafe extern "C" fn get_message_sync(
     // currently NULL.
     unsafe {
         guard_ptr("get_message_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             // The wrapper rejects a NULL uid before it dispatches, so this is
             // the empty string a caller reaching the vfunc directly could pass.
             // Reported as the missing message it describes rather than asserted:

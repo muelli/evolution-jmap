@@ -50,10 +50,10 @@
 //!
 //! ## What is not here
 //!
-//! **`cancellable`**, the same gap [`crate::refresh`] and [`crate::message`]
-//! document, for the same reason: [`Client`] takes its [`CancelFlag`] when it is
-//! built. An append uploads the whole message, so it is the longest request this
-//! provider makes going the other way.
+//! Nothing about cancellation any more: an append uploads the whole message, so
+//! it is the longest request this provider makes going the other way, and the
+//! `cancellable` Camel passes is [`observe`]d for the length of the call like
+//! every other vfunc's.
 //!
 //! ## The one refusal that costs nothing
 //!
@@ -70,8 +70,6 @@
 //! [`Client::upload_blob`]: jmap_client::Client::upload_blob
 //!
 //! [`MailSync::import_message`]: jmap_mail_sync::MailSync::import_message
-//! [`Client`]: jmap_client::Client
-//! [`CancelFlag`]: jmap_client::transport::CancelFlag
 
 use std::ffi::CString;
 use std::ptr;
@@ -88,6 +86,7 @@ use gio_sys::{
 };
 use glib_sys::{GError, GFALSE, GTRUE, g_error_new_literal, g_strdup, gboolean, gchar};
 use gobject_sys::g_object_unref;
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
@@ -123,7 +122,7 @@ unsafe extern "C" fn append_message_sync(
     message: *mut CamelMimeMessage,
     info: *mut CamelMessageInfo,
     appended_uid: *mut *mut gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a live
@@ -131,6 +130,11 @@ unsafe extern "C" fn append_message_sync(
     // NULL or writable.
     unsafe {
         guard_bool("append_message_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let Some(mailbox) = JmapFolder::borrow(folder).and_then(JmapFolder::mailbox) else {
                 return fail(error, &StoreError::NoFolder(name_of(folder)));
             };

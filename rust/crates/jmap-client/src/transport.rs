@@ -6,8 +6,10 @@
 //! The client only needs plain request/response HTTP. Keeping it behind a
 //! trait lets the Evolution Data Server integration substitute a
 //! libsoup-backed transport later without touching protocol logic; the
-//! [`CancelFlag`] is the seam that will map to `GCancellable`.
+//! [`CancelFlag`] is the seam that maps to `GCancellable`.
 
+use std::cell::RefCell;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -26,6 +28,77 @@ impl CancelFlag {
 
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
+    }
+}
+
+thread_local! {
+    /// The flag this thread's current operation is cancelled through, if it
+    /// installed one. See [`CancelScope`].
+    static OBSERVED: RefCell<Option<CancelFlag>> = const { RefCell::new(None) };
+}
+
+/// The flag every request made on this thread is currently checked against,
+/// if an operation installed one.
+///
+/// Public because the layer that bridges a `GCancellable` onto it lives in
+/// another crate and its tests have to be able to ask what this thread is
+/// observing without making a request to find out.
+pub fn observed() -> Option<CancelFlag> {
+    OBSERVED.with(|observed| observed.borrow().clone())
+}
+
+/// A [`CancelFlag`] installed for the length of one operation, on the thread
+/// running it.
+///
+/// The problem this exists for: a [`Client`] is built once per account and used
+/// for every operation on it, but the thing that cancels an operation belongs to
+/// the *operation*. Camel and EDS both hand a sync vfunc a `GCancellable` that
+/// means "stop this call", and that vfunc has no way to reach into a client
+/// built long before it and re-point a flag — nor should it, because the next
+/// vfunc along may be running on another thread at the same moment, under a
+/// cancellable of its own.
+///
+/// A thread-local is the exact shape of that: these are *blocking* vfuncs, so
+/// the operation being cancelled is the one this thread is inside, and one
+/// thread is inside exactly one at a time. What was observed before is restored
+/// when the scope drops, so a folder operation that calls into its store leaves
+/// the outer operation's cancellation in place.
+///
+/// A client checks a scope in preference to the flag it was built with — see
+/// [`Client::execute`].
+///
+/// [`Client`]: crate::Client
+/// [`Client::execute`]: crate::Client
+pub struct CancelScope {
+    /// What this thread observed before, put back on drop.
+    previous: Option<CancelFlag>,
+    /// Not `Send`: the guard restores a thread-local, so it has to be dropped
+    /// on the thread that installed it.
+    _thread_bound: PhantomData<*const ()>,
+}
+
+impl CancelScope {
+    /// Makes `flag` the cancellation of every request this thread makes until
+    /// the returned scope is dropped.
+    ///
+    /// Scopes nest, and are expected to be dropped in the reverse of the order
+    /// they were installed — which is what holding one in a local of the vfunc
+    /// it belongs to guarantees. Dropping them out of order restores an older
+    /// observation over a newer one; nothing here can detect that, and no
+    /// caller has reason to do it.
+    pub fn install(flag: &CancelFlag) -> Self {
+        let previous = OBSERVED.with(|observed| observed.replace(Some(flag.clone())));
+        Self {
+            previous,
+            _thread_bound: PhantomData,
+        }
+    }
+}
+
+impl Drop for CancelScope {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        OBSERVED.with(|observed| observed.replace(previous));
     }
 }
 

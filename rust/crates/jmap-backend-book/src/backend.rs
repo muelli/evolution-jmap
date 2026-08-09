@@ -20,16 +20,17 @@
 //! ## What is not wired up yet
 //!
 //! Cancellation reaches the *connect*, which is the operation that blocks
-//! longest, but not the ones after it: [`Client`] takes its
-//! [`CancelFlag`] when it is built and offers no way to re-point it, so a
-//! `GCancellable` handed to `list_existing_sync` is currently observed by
-//! nobody. Making that work needs a resettable flag shared between the client
-//! and a per-operation [`CancelBridge`], which is a change to `jmap-client`
-//! rather than to this file.
+//! longest, but not the ones after it: a `GCancellable` handed to
+//! `list_existing_sync` is still observed by nobody. The mechanism it needs now
+//! exists — [`observe`] installs a cancellable for the length of one operation
+//! and the client honours it in preference to whatever it was built with, which
+//! is what the Camel mail provider's vfuncs do — so what is left here is one
+//! line at the top of each vfunc, and the tests to go with them. Until then the
+//! flag this backend's client was built with is what answers, which also means
+//! a connect the user cancelled leaves a client that refuses everything
+//! afterwards.
 //!
-//! [`Client`]: jmap_client::Client
-//! [`CancelFlag`]: jmap_client::transport::CancelFlag
-//! [`CancelBridge`]: jmap_backend_core::cancel::CancelBridge
+//! [`observe`]: jmap_backend_core::cancel::observe
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;

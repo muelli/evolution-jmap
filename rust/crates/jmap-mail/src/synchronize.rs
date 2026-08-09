@@ -77,13 +77,13 @@
 //! out by [`crate::expunge`], which this hands over to when the argument is
 //! set. The walk below runs first — see the call site.
 //!
-//! ## What is not here
+//! ## Stopping one
 //!
-//! **`cancellable`**, the same gap [`crate::refresh`] documents and for the same
-//! reason: [`Client`] takes its [`CancelFlag`] when it is built.
-//!
-//! [`Client`]: jmap_client::Client
-//! [`CancelFlag`]: jmap_client::transport::CancelFlag
+//! The `cancellable` is [`observe`]d for the length of the call, so a stop lands
+//! between two writes rather than inside one. What was already written stays
+//! written and its rows are no longer marked changed — which is the honest
+//! record: those messages *were* updated on the server, and the ones behind the
+//! stop are still on the list for the next synchronisation.
 
 use std::ffi::{CStr, CString};
 
@@ -95,6 +95,7 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
 use gobject_sys::g_object_unref;
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
@@ -127,13 +128,18 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 unsafe extern "C" fn synchronize_sync(
     folder: *mut CamelFolder,
     expunge: gboolean,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, and an
     // out-parameter that is NULL or writable and currently NULL.
     unsafe {
         guard_bool("synchronize_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let summary = camel_folder_get_folder_summary(folder);
             if summary.is_null() {
                 return fail(error, &StoreError::NoFolder(name_of(folder)));

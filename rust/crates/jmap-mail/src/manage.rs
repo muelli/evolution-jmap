@@ -113,6 +113,7 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::{guard_bool, guard_ptr};
@@ -242,17 +243,15 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
 /// NULL is the failure value, and unlike in `get_folder_info_sync` it is only
 /// that: a create either made a folder or did not.
 ///
-/// `cancellable` is not observed, the gap the rest of this provider documents:
-/// [`Client`] takes its [`CancelFlag`] when it is built and offers no way to
-/// re-point it. This call is one `Mailbox/set`, and one listing at worst.
-///
-/// [`Client`]: jmap_client::Client
-/// [`CancelFlag`]: jmap_client::transport::CancelFlag
+/// `cancellable` is [`observe`]d for the length of the call. This is one
+/// `Mailbox/set`, and one listing at worst, so a stop almost always lands before
+/// the write — and a folder the user stopped creating is one the server was
+/// never asked to create.
 unsafe extern "C" fn create_folder_sync(
     store: *mut CamelStore,
     parent_name: *const gchar,
     folder_name: *const gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> *mut CamelFolderInfo {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, two
@@ -260,6 +259,11 @@ unsafe extern "C" fn create_folder_sync(
     // writable and currently NULL.
     unsafe {
         guard_ptr("create_folder_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let Some(instance) = JmapStore::borrow(store) else {
                 return fail(error, &StoreError::Disconnected);
             };
@@ -290,11 +294,11 @@ unsafe extern "C" fn create_folder_sync(
 /// boolean — so it is freed when this function returns, one line after the
 /// signal that borrows it, as it is in IMAPX.
 ///
-/// `cancellable` is not observed, for the reason [`create_folder_sync`] gives.
+/// `cancellable` is [`observe`]d, as in [`create_folder_sync`].
 unsafe extern "C" fn delete_folder_sync(
     store: *mut CamelStore,
     folder_name: *const gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a
@@ -302,6 +306,11 @@ unsafe extern "C" fn delete_folder_sync(
     // writable and currently NULL.
     unsafe {
         guard_bool("delete_folder_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let Some(instance) = JmapStore::borrow(store) else {
                 return fail_bool(error, &StoreError::Disconnected);
             };
@@ -331,12 +340,12 @@ unsafe extern "C" fn delete_folder_sync(
 /// under it, whose paths the rename changed too. A second emission from here
 /// would be the same rename announced twice.
 ///
-/// `cancellable` is not observed, for the reason [`create_folder_sync`] gives.
+/// `cancellable` is [`observe`]d, as in [`create_folder_sync`].
 unsafe extern "C" fn rename_folder_sync(
     store: *mut CamelStore,
     old_name: *const gchar,
     new_name: *const gchar,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, two
@@ -344,6 +353,11 @@ unsafe extern "C" fn rename_folder_sync(
     // writable and currently NULL.
     unsafe {
         guard_bool("rename_folder_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let Some(instance) = JmapStore::borrow(store) else {
                 return fail_bool(error, &StoreError::Disconnected);
             };

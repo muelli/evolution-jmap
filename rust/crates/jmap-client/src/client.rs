@@ -225,6 +225,23 @@ impl Client {
         self.single_call(&[session::CAPABILITY_CORE], "Core/echo", &value)
     }
 
+    /// What the request about to be made is cancelled through.
+    ///
+    /// The operation's own scope if the thread running it installed one (see
+    /// [`CancelScope`]), and otherwise the flag this client was built with.
+    ///
+    /// The order is the point. A client-wide flag can only ever be set once —
+    /// there is no way to unset one — so a client whose flag was cancelled at
+    /// connect time would refuse every operation the account ever performed
+    /// afterwards, including the one the user is waiting on. An operation that
+    /// says what its own cancellation is has said something more specific, and
+    /// it is what gets honoured.
+    ///
+    /// [`CancelScope`]: crate::transport::CancelScope
+    fn cancel_for_request(&self) -> Option<CancelFlag> {
+        crate::transport::observed().or_else(|| self.cancel.clone())
+    }
+
     pub(crate) fn execute(
         &self,
         method: HttpMethod,
@@ -241,7 +258,8 @@ impl Client {
         body: Option<&[u8]>,
         content_type: Option<&str>,
     ) -> Result<HttpResponse, Error> {
-        if self.cancel.as_ref().is_some_and(CancelFlag::is_cancelled) {
+        let cancel = self.cancel_for_request();
+        if cancel.as_ref().is_some_and(CancelFlag::is_cancelled) {
             return Err(Error::Cancelled);
         }
 
@@ -261,7 +279,7 @@ impl Client {
                 url,
                 headers: &headers,
                 body,
-                cancel: self.cancel.as_ref(),
+                cancel: cancel.as_ref(),
             })
             .map_err(|error| match error {
                 TransportError::Cancelled => Error::Cancelled,

@@ -20,7 +20,6 @@ use eds_sys::{
     camel_folder_error_quark, camel_service_error_quark,
 };
 use jmap_backend_core::source::SourceError;
-use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail};
 use jmap_mail::server::ServerConfig;
@@ -38,7 +37,7 @@ fn config(server: &MockServer) -> ServerConfig {
 }
 
 fn open(config: &ServerConfig, password: Option<&str>) -> Result<MailSync, StoreError> {
-    open_mail(config, password, CancelFlag::new())
+    open_mail(config, password)
 }
 
 /// `MailSync` is not `Debug`, and naming the account it opened is a more useful

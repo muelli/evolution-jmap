@@ -13,6 +13,16 @@
 //! the lifetime of the backend: the same cancellable is not reused across
 //! operations, and a handler left connected would keep firing at a flag
 //! nobody reads.
+//!
+//! What a vfunc wants is one call — [`observe`] — because the flag on its own
+//! is only half of the path. A backend's [`Client`] is built once per account,
+//! at connect time, and the vfunc that wants to be cancellable runs long after
+//! that with no way to reach into it; [`observe`] closes the gap by installing
+//! the bridged flag as the cancellation of every request the *calling thread*
+//! makes until the operation returns. See [`CancelScope`] for why the thread is
+//! the right thing to hang it on.
+//!
+//! [`Client`]: jmap_client::Client
 
 use std::ffi::c_ulong;
 use std::ptr;
@@ -20,6 +30,51 @@ use std::ptr;
 use gio_sys::{GCancellable, g_cancellable_connect, g_cancellable_disconnect};
 use glib_sys::gpointer;
 use jmap_client::CancelFlag;
+use jmap_client::transport::CancelScope;
+
+/// One operation's cancellable, bridged and installed for as long as the
+/// operation runs.
+///
+/// Held in a local of the vfunc it belongs to and dropped when that returns,
+/// which is what makes it the operation's and not the account's.
+pub struct Cancellation {
+    /// Declared first so it is dropped first: the thread stops observing the
+    /// flag before the handler feeding it is disconnected.
+    ///
+    /// `None` for a NULL cancellable — see [`observe`].
+    _scope: Option<CancelScope>,
+    _bridge: CancelBridge,
+}
+
+/// Makes `cancellable` the thing every request this thread issues is cancelled
+/// through, until the returned value is dropped.
+///
+/// The one call a vfunc needs: `let _cancel = unsafe { observe(cancellable) };`
+/// at the top of it, and everything below — through a client built at connect
+/// time, through layers that know nothing of GIO — stops when the user presses
+/// Stop.
+///
+/// **NULL installs nothing.** GIO's NULL cancellable means "this call cannot be
+/// cancelled", and a flag that can never fire, installed over the scope of the
+/// operation this one is nested inside, would not merely fail to cancel — it
+/// would *hide* an outer cancellation that had already arrived. Leaving the
+/// thread observing what it was observing is the honest reading of "nothing to
+/// say".
+///
+/// # Safety
+///
+/// `cancellable` must be NULL or a valid `GCancellable` that outlives the
+/// returned value — which the one EDS and Camel pass to a sync vfunc does, for
+/// the duration of that call.
+pub unsafe fn observe(cancellable: *mut GCancellable) -> Cancellation {
+    // SAFETY: this function's contract is the bridge's.
+    let bridge = unsafe { CancelBridge::new(cancellable) };
+    let scope = (!cancellable.is_null()).then(|| CancelScope::install(bridge.flag()));
+    Cancellation {
+        _scope: scope,
+        _bridge: bridge,
+    }
+}
 
 /// A `GCancellable` observed through a [`CancelFlag`], disconnected on drop.
 pub struct CancelBridge {
