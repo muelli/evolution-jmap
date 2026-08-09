@@ -27,4 +27,10 @@ glib-sys = { workspace = true }
 # as the account that was written, so the tests link the reader and hold the two
 # against each other.
 jmap-backend-collection = { workspace = true }
+# And the mail sources are only right if the Camel provider connects to the
+# server they name. A dev-dependency and deliberately not a dependency: what
+# the library writes is `ESource` groups, and the only thing the provider is
+# needed for is the `CamelJmapSettings` GType an `ESourceCamel` subtype is
+# generated from — which is a reader of this crate's output, not a part of it.
+jmap-mail = { workspace = true }
 gobject-sys = { workspace = true }

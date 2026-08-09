@@ -9,40 +9,98 @@
 // way round. There the reader was somebody else's and this crate's writer had
 // to agree with it; here there are two *writers* — this one, which runs in
 // Evolution's process where the user's answers are, and the vfunc, which runs
-// in `evolution-source-registry` where the factory is — and no reader of ours at
-// all. Two writers of one file that are only checked separately are two writers
-// that drift, and the drift is silent: an account whose mail sources name a
-// protocol Camel has no provider for is an inbox that never opens, with nothing
-// in any log to say which of the two wrote the name.
+// in `evolution-source-registry` where the factory is. Two writers of one file
+// that are only checked separately are two writers that drift, and the drift is
+// silent: an account whose mail sources name a protocol Camel has no provider
+// for is an inbox that never opens, with nothing in any log to say which of the
+// two wrote the name.
+//
+// And then there is a reader after all, one source further down than the account
+// tests could reach: the `CamelSettings` object an `ESourceCamel` extension hands
+// a `CamelJmapStore`. It is not this crate's, it is `jmap-mail`'s, and it is the
+// only place to ask an account the question the provider will ask it — because
+// none of the four fields that answer it is stored where it appears to be. Host,
+// port, user and encryption are bound out of `[Authentication]` and `[Security]`
+// into a settings object by machinery neither writer mentions, over a conversion
+// that turns one of them into a different vocabulary and silently keeps its own
+// default when it cannot. So these tests generate the subtype, ask the extension
+// for its settings, and read them with the provider's own `ServerConfig`.
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
+use std::sync::OnceLock;
 
 use eds_sys::{
+    CAMEL_NETWORK_SECURITY_METHOD_NONE, CAMEL_NETWORK_SECURITY_METHOD_SSL_ON_ALTERNATE_PORT,
+    CamelNetworkSecurityMethod, CamelSettings, E_SOURCE_EXTENSION_AUTHENTICATION,
     E_SOURCE_EXTENSION_MAIL_ACCOUNT, E_SOURCE_EXTENSION_MAIL_IDENTITY,
-    E_SOURCE_EXTENSION_MAIL_SUBMISSION, E_SOURCE_EXTENSION_MAIL_TRANSPORT, ESource, ESourceBackend,
-    ESourceMailAccount, ESourceMailIdentity, ESourceMailSubmission,
-    e_collection_backend_factory_prepare_mail, e_source_backend_get_backend_name,
+    E_SOURCE_EXTENSION_MAIL_SUBMISSION, E_SOURCE_EXTENSION_MAIL_TRANSPORT,
+    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceBackend, ESourceCamel, ESourceMailAccount,
+    ESourceMailIdentity, ESourceMailSubmission, ESourceSecurity,
+    camel_network_settings_get_security_method, e_collection_backend_factory_prepare_mail,
+    e_source_backend_get_backend_name, e_source_camel_generate_subtype,
+    e_source_camel_get_extension_name, e_source_camel_get_settings,
     e_source_collection_get_identity, e_source_get_extension, e_source_get_parent,
     e_source_get_uid, e_source_has_extension, e_source_mail_account_get_identity_uid,
     e_source_mail_identity_get_address, e_source_mail_submission_get_transport_uid, e_source_new,
-    e_source_new_with_uid,
+    e_source_new_with_uid, e_source_security_get_secure,
+    e_util_can_use_collection_as_credential_source,
 };
 use glib_sys::GFALSE;
 use gobject_sys::{g_object_unref, g_type_create_instance};
 use jmap_backend_collection::factory::JmapCollectionFactory;
 use jmap_backend_collection::resource_id::resource_id_of;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::source::SourceError;
 use jmap_backend_core::subclass::register_static;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, apply as apply_account};
 use jmap_config::mail::{MAIL_BACKEND_NAME, MailSources, apply};
+use jmap_mail::server::ServerConfig;
+use jmap_mail::settings::settings_type;
 
 /// The uid the account source is created with, so that the parent the three
 /// mail sources carry is a string this file can name rather than one it read
 /// off the very source it is checking.
 const ACCOUNT_UID: &str = "jmap-account";
+
+/// The name `[JMAP Backend]` — the extension a `jmap` service's Camel settings
+/// live under — having first generated the `ESourceCamel` subtype that carries
+/// it.
+///
+/// `e_source_camel_register_types()` is what normally does this, by loading
+/// every installed Camel provider module and generating one subtype per service
+/// class it finds. Here the provider is linked in rather than installed, so the
+/// one subtype these tests need is generated directly, which is the case
+/// `e_source_camel_generate_subtype` documents as its own reason to be public
+/// API. It is also what M7's module will have to do, for the same reason
+/// Evolution's own account editor does not have to: nothing has loaded
+/// `libcameljmap.so` at the point the setup writes an account.
+///
+/// The `OnceLock` is not decoration. `generate_subtype` reads the type name and
+/// then registers it, which is two steps, and Rust runs the tests in this file
+/// as threads of one process; losing that race is an abort inside GObject. The
+/// name is kept as a `usize` because a raw pointer is not `Sync` — the string
+/// itself is `g_intern_string`'d and so lives as long as the process.
+fn camel_extension_name() -> *const c_char {
+    static NAME: OnceLock<usize> = OnceLock::new();
+    let name = *NAME.get_or_init(|| {
+        // SAFETY: a NUL-terminated protocol name and a GType derived from
+        // CamelSettings, which is what `settings_type` registers; the name it
+        // hands back is interned and never freed.
+        unsafe {
+            let gtype =
+                e_source_camel_generate_subtype(MAIL_BACKEND_NAME.as_ptr(), settings_type());
+            assert_ne!(
+                gtype, 0,
+                "no ESourceCamel subtype was generated for the jmap protocol"
+            );
+            e_source_camel_get_extension_name(MAIL_BACKEND_NAME.as_ptr()) as usize
+        }
+    });
+    name as *const c_char
+}
 
 /// An `ESource` and the one reference to it.
 struct Source(*mut ESource);
@@ -145,6 +203,70 @@ impl Source {
             let identity: *mut ESourceMailIdentity =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_MAIL_IDENTITY.as_ptr()).cast();
             read_string(e_source_mail_identity_get_address(identity))
+        }
+    }
+
+    /// The `CamelSettings` object a Camel service configured from this source
+    /// would be given.
+    ///
+    /// These are `e_source_camel_configure_service`'s own two steps with the
+    /// service left out — ask the source for the provider's extension, ask the
+    /// extension for its settings — so what comes back is the very object a
+    /// `CamelJmapStore` is handed, host, port, user and all. None of those four
+    /// is stored *in* the extension: `ESourceCamel` binds them bidirectionally
+    /// to `[Authentication]` and `[Security]` on this same source, which is why
+    /// the setup writes those groups and why this is the only reader that proves
+    /// it did.
+    fn camel_settings(&self) -> *mut CamelSettings {
+        // SAFETY: a live source and the interned extension name of a
+        // registered `ESourceCamel` subtype; the extension is created on demand
+        // and owned by the source, and so is the settings object it holds.
+        unsafe {
+            let extension: *mut ESourceCamel =
+                e_source_get_extension(self.0, camel_extension_name()).cast();
+            assert!(
+                !extension.is_null(),
+                "the jmap ESourceCamel subtype is not registered, so no source \
+                 has Camel settings to read"
+            );
+            let settings = e_source_camel_get_settings(extension);
+            assert!(!settings.is_null(), "the extension holds no settings");
+            settings
+        }
+    }
+
+    /// The `CamelNetworkSecurityMethod` those settings arrived at — the value
+    /// the string in `[Security] Method` was converted into, rather than the
+    /// string itself, because the conversion is where a wrong spelling goes
+    /// quiet.
+    fn security_method(&self) -> CamelNetworkSecurityMethod {
+        // SAFETY: the settings object of a live source. It implements
+        // `CamelNetworkSettings` — `CamelJmapSettings` claims the interface, and
+        // an `ESourceCamel` subtype generated from a settings class that did not
+        // would have nothing to bind.
+        unsafe { camel_network_settings_get_security_method(self.camel_settings().cast()) }
+    }
+
+    /// The server `jmap-mail` reads off those settings — the last thing its
+    /// `connect_sync` needs before it builds a client, and therefore the whole
+    /// question this source is written to answer.
+    fn server(&self) -> Result<ServerConfig, SourceError> {
+        // SAFETY: the settings object of a live source, only read from.
+        unsafe { ServerConfig::from_settings(self.camel_settings()) }
+    }
+
+    /// `[Security] Secure` — the boolean EDS derives from the method string,
+    /// and what every non-mail reader of this account asks.
+    fn secure(&self) -> bool {
+        assert!(
+            self.has_extension(E_SOURCE_EXTENSION_SECURITY),
+            "the source says nothing about transport security"
+        );
+        // SAFETY: the extension is present, so this returns the source's own.
+        unsafe {
+            let security: *mut ESourceSecurity =
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
+            e_source_security_get_secure(security) != GFALSE
         }
     }
 
@@ -554,6 +676,216 @@ fn the_setup_writes_the_services_the_registry_side_vfunc_would_write() {
     assert_eq!(
         committed.identity.transport_uid(),
         committed.transport.uid()
+    );
+}
+
+/// The mail account names the server the store would connect to, read back
+/// through the provider that will do the connecting.
+///
+/// This is the assertion the whole module exists for, and it is deliberately
+/// made at the far end: `ServerConfig::from_settings` is `jmap-mail`'s own
+/// reader, called on the very `CamelSettings` object
+/// `e_source_camel_configure_service` would hand a `CamelJmapStore`. Everything
+/// in between — that `[Authentication] Host` and `[Security] Method` are where
+/// an `ESourceCamel` binds host and encryption from, that the two spellings of
+/// "encrypted" are not the same string on the two sides — is machinery this test
+/// does not have to name, and would fail on if any of it were wrong.
+#[test]
+fn the_mail_account_names_the_server_the_store_would_connect_to() {
+    let committed = Committed::new(&account());
+
+    assert_eq!(
+        committed.account.server(),
+        Ok(ServerConfig {
+            origin: "https://jmap.example.com:8443".to_owned(),
+            user: Some("vera".to_owned()),
+        })
+    );
+}
+
+/// And the transport sends through the same server, because there is one
+/// server.
+///
+/// Camel splits an account into a store and a transport with no pointer between
+/// them, and configures each from its own `ESource`; JMAP submits over the
+/// session it reads through, so the two sources have to say the same thing. A
+/// transport left unwritten is not a broken account either — it is an account
+/// that receives mail and cannot send it, discovered the first time the user
+/// presses Send.
+#[test]
+fn the_transport_sends_through_the_same_server_the_account_receives_from() {
+    let committed = Committed::new(&account());
+
+    assert_eq!(committed.transport.server(), committed.account.server());
+    assert!(
+        committed.transport.server().is_ok(),
+        "both are equally unconfigured, which proves nothing"
+    );
+}
+
+/// One account, one password: the mail sources are written so that EDS reads
+/// their credentials off the collection rather than asking for their own.
+///
+/// `e_source_credentials_provider_ref_credentials_source` walks a source's
+/// parents to the collection and then applies exactly the rule this asserts —
+/// `e_util_can_use_collection_as_credential_source`, which compares the two
+/// sources' `[Authentication] Host` so that an account may put its outgoing
+/// service on a different server with a password of its own. That is a feature
+/// for SMTP-beside-IMAP and a trap here: a mail source whose host disagreed with
+/// the account's would be a second password prompt for the same server, and a
+/// second libsecret entry to get out of sync.
+#[test]
+fn the_two_mail_services_share_the_password_stored_on_the_account() {
+    let committed = Committed::new(&account());
+
+    for (what, source) in [
+        ("the mail account", &committed.account),
+        ("the transport", &committed.transport),
+    ] {
+        // The rule has a trivial branch — a child with no `[Authentication]` at
+        // all shares by definition — and a mail source cannot take it: host,
+        // port and user have nowhere else to live. So this is checked first,
+        // or the assertion below would hold for a source that says nothing.
+        assert!(
+            source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
+            "{what} names no server, so sharing a password is not yet the \
+             question"
+        );
+        // SAFETY: two live sources, the first of which carries `[Collection]`.
+        let shared = unsafe {
+            e_util_can_use_collection_as_credential_source(committed.collection.0, source.0)
+        };
+        assert_ne!(
+            shared, GFALSE,
+            "{what} would ask for a password of its own instead of the \
+             account's"
+        );
+    }
+}
+
+/// Both readers of a mail source's `[Security] Method` have to agree about what
+/// it means, and they read it in different ways.
+///
+/// The field is a string, and on a mail source it is read twice: EDS derives
+/// `ESourceSecurity:secure` from it by comparing against `"none"`, while
+/// `ESourceCamel` looks it up as a `CamelNetworkSecurityMethod` **enum nick**.
+/// Only the first accepts EDS's own `"tls"`, the spelling `jmap_config::account`
+/// writes on the collection — and the way the second one fails is why this test
+/// asserts the enum value rather than the connection that comes out of it.
+/// `e_binding_transform_enum_nick_to_value` returns `FALSE` on a string that is
+/// not a nick and the binding then sets *nothing*, so the settings object keeps
+/// the property's default; in EDS 3.52 that default is
+/// `STARTTLS_ON_STANDARD_PORT`, which `jmap-mail` — which only distinguishes
+/// `NONE` from not — reads as encrypted. An account written as `"tls"` therefore
+/// connects perfectly well over TLS while telling Evolution's account editor a
+/// setting the user did not choose, and would become a refusal to connect the
+/// day Camel's default changed. Asserting the origin alone does not see any of
+/// that; asserting the value does.
+#[test]
+fn both_readers_of_the_security_method_agree_that_the_account_is_encrypted() {
+    let committed = Committed::new(&account());
+
+    for (what, source) in [
+        ("the mail account", &committed.account),
+        ("the transport", &committed.transport),
+    ] {
+        assert!(source.secure(), "EDS reads {what} as unencrypted");
+        assert_eq!(
+            source.security_method(),
+            CAMEL_NETWORK_SECURITY_METHOD_SSL_ON_ALTERNATE_PORT,
+            "Camel reads {what} as some other kind of connection than HTTPS"
+        );
+        assert_eq!(
+            source.server().map(|server| server.origin),
+            Ok("https://jmap.example.com:8443".to_owned()),
+            "{what} does not assemble the origin a store would open"
+        );
+    }
+}
+
+/// An account the user did not secure reaches its server in plaintext, which is
+/// the other half of the same field and only allowed to loopback.
+///
+/// Written because the interesting spelling is the one that is *not* an enum
+/// nick of its own: `"none"` is the string EDS and Camel happen to share, so a
+/// writer that got the secure case right by mapping to Camel's vocabulary could
+/// still get this one wrong by mapping too eagerly. The host is `localhost`
+/// because `jmap_backend_core::source::origin` refuses plaintext anywhere else,
+/// and because that is the account the mock server is reached by.
+#[test]
+fn an_account_the_user_did_not_secure_reaches_its_server_in_plaintext() {
+    let account = Account {
+        connection: Connection {
+            host: "localhost".to_owned(),
+            port: Some(8080),
+            secure: false,
+            ..account().connection
+        },
+        ..account()
+    };
+    let committed = Committed::new(&account);
+
+    assert!(!committed.account.secure());
+    assert_eq!(
+        committed.account.security_method(),
+        CAMEL_NETWORK_SECURITY_METHOD_NONE,
+        "the account is not encrypted and Camel has to be told so explicitly — \
+         its own default for this property is a TLS method"
+    );
+    assert_eq!(
+        committed.account.server(),
+        Ok(ServerConfig {
+            origin: "http://localhost:8080".to_owned(),
+            user: Some("vera".to_owned()),
+        })
+    );
+}
+
+/// Editing an account's server reaches the settings object Camel is already
+/// holding, rather than only the keyfile.
+///
+/// The order matters and is the reverse of every other test here: the
+/// `ESourceCamel` extension — and with it the `CamelSettings` instance and the
+/// bindings onto `[Authentication]` — is created *before* the commit, which is
+/// the real case. A running Evolution has a store with settings on it long
+/// before the user opens the account editor, and `G_BINDING_SYNC_CREATE` only
+/// explains the first read; what carries an edit afterwards is
+/// `G_BINDING_BIDIRECTIONAL`, in that direction, on properties this writer
+/// never touches by name.
+#[test]
+fn moving_an_account_to_another_server_reaches_the_settings_camel_holds() {
+    let committed = Committed::new(&account());
+    let settings = committed.account.camel_settings();
+    assert_eq!(
+        committed.account.server().map(|server| server.origin),
+        Ok("https://jmap.example.com:8443".to_owned())
+    );
+
+    let moved = Account {
+        connection: Connection {
+            host: "jmap.example.org".to_owned(),
+            port: None,
+            user: Some("vera.new".to_owned()),
+            ..account().connection
+        },
+        ..account()
+    };
+    let committed = committed.written(&moved);
+
+    assert_eq!(
+        committed.account.camel_settings(),
+        settings,
+        "the extension was replaced, so this tests a different object than the \
+         one a running store would hold"
+    );
+    assert_eq!(
+        committed.account.server(),
+        Ok(ServerConfig {
+            // No port: the account stopped naming one, so the scheme's default
+            // applies rather than the one it named before.
+            origin: "https://jmap.example.org".to_owned(),
+            user: Some("vera.new".to_owned()),
+        })
     );
 }
 

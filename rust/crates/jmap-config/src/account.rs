@@ -210,7 +210,7 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
 }
 
 /// The string a `CString` holds, or NULL for the absence of one.
-fn as_ptr(value: &Option<std::ffi::CString>) -> *const std::ffi::c_char {
+pub(crate) fn as_ptr(value: &Option<std::ffi::CString>) -> *const std::ffi::c_char {
     value.as_ref().map_or(ptr::null(), |value| value.as_ptr())
 }
 
