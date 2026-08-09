@@ -7,8 +7,9 @@ use std::collections::BTreeMap;
 
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
-    Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailQueryFilter, EmailSubmission,
-    EmailSubmissionSetRequest, Envelope, EnvelopeAddress, Identity, Mailbox,
+    Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImportRequest, EmailImportResponse,
+    EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Envelope, EnvelopeAddress,
+    Identity, Mailbox, email_import_error,
 };
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -720,6 +721,144 @@ fn filed_somewhere(account: &AccountState, email: &Email) -> Result<(), SetError
         ),
         None => Ok(()),
     }
+}
+
+/// `Email/import` (RFC 8621 §4.8): a message that is already a message, filed
+/// into the account from a blob.
+///
+/// The one method here that runs the mock's usual direction backwards. Every
+/// other message in this server starts as an `Email` and gets a message written
+/// out of it by [`rfc5322`]; an import starts with the bytes and derives the
+/// `Email`, which is what a real server always does. [`crate::message`] is the
+/// reading half and says what little of RFC 5322 it takes on.
+///
+/// Three decisions worth naming, because each is a branch the RFC leaves open:
+///
+/// - **The blob is kept as it arrived**, so the `blobId` answered is the one that
+///   was handed in and a download of the imported message returns the uploaded
+///   octets byte for byte. RFC 8621 §4.8 allows a server to repair a message
+///   instead and answer with a blob of its own; a mock that rewrote what it was
+///   given would make it impossible to test that what a client appended is what
+///   it later opens.
+/// - **Duplicates are allowed.** Forbidding two copies of one message with an
+///   `alreadyExists` is a MAY, and the account this mock stands in for is a test
+///   account into which the same fixture is imported twice on purpose.
+/// - **`receivedAt` is the one given, or the mock's fixed clock.** The RFC's
+///   default is the most recent `Received` header's date, which is a zone offset
+///   away from a `UtcDate` and therefore calendar arithmetic this crate does not
+///   do. The provider that will drive this has the date parsed already — Camel
+///   hands it over as a `time_t` — so it sends `receivedAt` rather than leaving
+///   it to be guessed at.
+///
+/// Keyword *grammar* (RFC 8621 §4.1.1) is not checked, exactly as `Email/set`
+/// does not check it: a keyword is a map key here as it is there.
+pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+    let request: EmailImportRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let old_state = account.emails.state();
+    if let Some(expected) = &request.if_in_state
+        && expected != &old_state
+    {
+        return Err(MethodError::new(error::method::STATE_MISMATCH));
+    }
+
+    let mut created: BTreeMap<String, Email> = BTreeMap::new();
+    let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
+    let mut to_create: Vec<(Id, Email)> = Vec::new();
+
+    for (creation_id, import) in request.emails {
+        match imported(account, &import) {
+            Ok(email) => {
+                // The four properties the RFC has the response carry: what the
+                // server chose, and nothing the client already knows.
+                created.insert(
+                    creation_id,
+                    Email {
+                        id: email.id.clone(),
+                        blob_id: email.blob_id.clone(),
+                        thread_id: email.thread_id.clone(),
+                        size: email.size,
+                        ..Email::default()
+                    },
+                );
+                to_create.push((email.id.clone().expect("imported email has an id"), email));
+            }
+            Err(refusal) => {
+                not_created.insert(creation_id, refusal);
+            }
+        }
+    }
+
+    account.emails.transaction(|transaction| {
+        for (id, email) in to_create {
+            transaction.create(id, email);
+        }
+    });
+
+    to_result(&EmailImportResponse {
+        account_id: request.account_id,
+        old_state: Some(old_state),
+        new_state: account.emails.state(),
+        created: (!created.is_empty()).then_some(created),
+        not_created: (!not_created.is_empty()).then_some(not_created),
+    })
+}
+
+/// The `Email` one `EmailImport` becomes, or the server's reason for refusing it.
+///
+/// Nothing is allocated and nothing is stored until every refusal has been ruled
+/// out — an id spent on a message that was rejected would make the ids in a
+/// test's assertions depend on the failures beside them.
+fn imported(
+    account: &mut AccountState,
+    import: &jmap_proto::mail::EmailImport,
+) -> Result<Email, SetError> {
+    let Some(blob_id) = import.blob_id.clone() else {
+        return Err(
+            SetError::new(error::set::INVALID_PROPERTIES).with_description("blobId must be given")
+        );
+    };
+    let Some(blob) = account.blobs.get(&blob_id) else {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("blobId names {blob_id}, which is not a blob")));
+    };
+    let size = blob.data.len() as u64;
+    let Some(message) = crate::message::Message::read(&blob.data) else {
+        return Err(SetError::new(email_import_error::INVALID_EMAIL)
+            .with_description("the blob is not an RFC 5322 message"));
+    };
+
+    let mut email = Email {
+        blob_id: Some(blob_id),
+        mailbox_ids: import.mailbox_ids.clone(),
+        keywords: Some(import.keywords.clone().unwrap_or_default()),
+        size: Some(size),
+        received_at: Some(
+            import
+                .received_at
+                .clone()
+                .unwrap_or_else(|| UtcDate::new(MOCK_NOW)),
+        ),
+        message_id: message.message_ids("message-id"),
+        in_reply_to: message.message_ids("in-reply-to"),
+        references: message.message_ids("references"),
+        from: message.addresses("from"),
+        to: message.addresses("to"),
+        cc: message.addresses("cc"),
+        subject: message.subject(),
+        preview: message.preview(),
+        ..Email::default()
+    };
+    // The same rule a create and an update are held to, asked in the same place:
+    // what makes `mailboxIds` invalid does not depend on how the message got
+    // here.
+    filed_somewhere(account, &email)?;
+
+    let id = account.emails.alloc_id();
+    email.thread_id = Some(Id::new(format!("T{}", id.as_str())));
+    email.id = Some(id);
+    Ok(email)
 }
 
 pub fn email_submission_set(

@@ -126,6 +126,127 @@ pub struct Email {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// One message handed to `Email/import` (RFC 8621 §4.8): the blob the raw
+/// message was uploaded as, and what the account should file it under.
+///
+/// Every property is optional although the RFC makes `blobId` and `mailboxIds`
+/// required, for the reason [`Email`]'s are: this type is what a request is
+/// *deserialized into* as well as what a client fills in, and RFC 8621 §4.8 is
+/// explicit that a `blobId`, `mailboxIds` or `keywords` that is "missing, wrong
+/// type, id not found" is refused with an `invalidProperties` `SetError` — a
+/// per-message refusal, in a method whose other messages must still be
+/// imported. A required field here would turn one client mistake into a whole
+/// call failing to parse, which is the answer the RFC reserves for a request
+/// that is not an `Email/import` at all.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailImport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mailbox_ids: Option<BTreeMap<Id, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<BTreeMap<String, bool>>,
+    /// The date the message should sort by. Absent leaves it to the server,
+    /// which RFC 8621 §4.8 defines as the most recent `Received` header's date
+    /// or, failing that, the time of the import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub received_at: Option<UtcDate>,
+}
+
+impl EmailImport {
+    /// A message to file in one mailbox with no keywords.
+    pub fn new(blob_id: impl Into<Id>, mailbox_id: impl Into<Id>) -> Self {
+        Self {
+            blob_id: Some(blob_id.into()),
+            mailbox_ids: Some([(mailbox_id.into(), true)].into()),
+            keywords: None,
+            received_at: None,
+        }
+    }
+
+    pub fn keyword(mut self, keyword: impl Into<String>) -> Self {
+        self.keywords
+            .get_or_insert_with(BTreeMap::new)
+            .insert(keyword.into(), true);
+        self
+    }
+
+    pub fn received_at(mut self, received_at: impl Into<UtcDate>) -> Self {
+        self.received_at = Some(received_at.into());
+        self
+    }
+}
+
+/// `Email/import` arguments (RFC 8621 §4.8).
+///
+/// Not a [`crate::methods::SetRequest`]: an import has no update and no destroy
+/// half, its creations are `EmailImport`s rather than `Email`s, and the map is
+/// named `emails` rather than `create`. What it does share is `ifInState` and
+/// the `stateMismatch` that comes of it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailImportRequest {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_in_state: Option<crate::state::State>,
+    pub emails: BTreeMap<String, EmailImport>,
+}
+
+impl EmailImportRequest {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            if_in_state: None,
+            emails: BTreeMap::new(),
+        }
+    }
+
+    pub fn import(mut self, creation_id: impl Into<String>, email: EmailImport) -> Self {
+        self.emails.insert(creation_id.into(), email);
+        self
+    }
+
+    pub fn if_in_state(mut self, state: impl Into<crate::state::State>) -> Self {
+        self.if_in_state = Some(state.into());
+        self
+    }
+}
+
+/// `Email/import` response (RFC 8621 §4.8).
+///
+/// `created` carries the properties the server chose — the RFC names `id`,
+/// `blobId`, `threadId` and `size` — as an [`Email`], whose properties are all
+/// optional, so what the server left out stays left out rather than arriving as
+/// a default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailImportResponse {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_state: Option<crate::state::State>,
+    pub new_state: crate::state::State,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<BTreeMap<String, Email>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_created: Option<BTreeMap<String, crate::error::SetError>>,
+}
+
+/// The `SetError` type RFC 8621 §4.8 adds for `Email/import`.
+///
+/// The generic types of RFC 8620 §5.3 cannot say this one: the properties of
+/// the `EmailImport` are all fine and the blob is there — what is wrong is the
+/// *content* of the blob, which is not a message. A server is allowed to repair
+/// such a blob instead and answer with a `blobId` of its own; refusing it is
+/// the other branch of the same paragraph.
+///
+/// `alreadyExists` is the paragraph before it and is deliberately not here: it
+/// belongs to a server that forbids two copies of one message in an account,
+/// which RFC 8621 §4.8 leaves as a MAY.
+pub mod email_import_error {
+    pub const INVALID_EMAIL: &str = "invalidEmail";
+}
+
 /// Well-known keywords (RFC 8621 §4.1.1, which defers the rest of the set to
 /// the IMAP keywords registry of RFC 5788).
 pub mod keyword {
