@@ -62,6 +62,11 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelService.*",
     "CamelStore.*",
     "CamelOfflineStore.*",
+    // What a store implements so the user can tick a folder off the account.
+    // An interface rather than a class, and one with three vfuncs Camel puts no
+    // default behind — tests/camel.rs pins both — so it is the first interface
+    // whose vtable one of our types has to fill in rather than merely claim.
+    "CamelSubscribable.*",
     "CamelTransport.*",
     "CamelSession.*",
     "CamelSettings.*",
@@ -199,6 +204,10 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_service_.*",
     "camel_store_.*",
     "camel_offline_store_.*",
+    // The interface above: its type accessor, the three wrappers Evolution's
+    // subscription editor calls a store through, and the two that emit the
+    // signals a store sends back when the answer to one of them changed.
+    "camel_subscribable_.*",
     // `camel_folder_info_new` and `_free` are the allocator pair the folder
     // tree is built and torn down with; the type accessor is what
     // tests/layout.rs queries.
