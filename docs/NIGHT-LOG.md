@@ -9644,3 +9644,166 @@ first, since it is the one that runs offline —
 `e_source_registry_server_.*` in `eds-sys`'s allowlist, and neither can be
 driven by EDS here, so the increment that writes them must be marked *needs
 human verification in real Evolution*.
+
+## 2026-08-09 (ninety-seventh session)
+
+**The `populate` slot, installed.** The first of the two vfunc slots M6 was
+missing, and the one that runs *offline*: `jmap-backend-collection/src/populate.rs`
+plus the slot in `class_init`. An account's address books and calendars now have
+a path from their cached `.source` files to the sidebar that does not go through a
+login.
+
+New module, 10 tests in `tests/populate.rs`, and three more in
+`tests/collection_source.rs` for the one account field a populate needs:
+
+- `Populating` — an `unsafe trait` holding the seven `ECollectionBackend`/
+  `EBackend` calls a populate makes and nothing else of a GObject: `freeze`,
+  `thaw`, `chain_up`, `claim_all_resources`, `publish`, `request_credentials`,
+  `authenticate_anonymously`.
+- `populate(collection, parts, user) -> Option<Restored>` — the vfunc body minus
+  the instance. `None` is a populate that lost the freeze.
+- `Restored` — what it did, for the log line a `void`-returning vfunc can write:
+  `children`, `unidentified`, `asked`.
+- `Asked` — which of EDS's two "authenticate me" calls was made, if either.
+- `collection_source::user_of` — whom the account authenticates as, read without
+  `server_of` being involved.
+- `backend.rs`: the `populate` slot, a `Live` struct implementing `Populating`
+  over the real instance (one line per method), `parent_class()` for the
+  chain-up, and `debug_print` onto EDS's own `e_source_registry_debug_print`
+  channel.
+
+Red first, and recorded as red: against a stub `populate` returning
+`Some(Restored::default())` and calling nothing, 9 of the 10 tests failed. The
+one that passed is `every_reference_the_claim_handed_over_is_given_back`, which a
+stub that claims nothing satisfies by construction — the same shape as last
+session's two.
+
+**One decision deliberately departs from EDS's own WebDAV backend, and it is the
+main thing this session got right.** `EWebDAVCollectionBackend::populate` calls
+`e_collection_backend_new_child()` for each claimed source before exporting it,
+and last session's plan (in this log) said to copy that. Reading
+`e-collection-backend.c` through says not to:
+
+- `e_collection_backend_claim_all_resources()` *empties* the `unclaimed_resources`
+  table it draws from — "previously used sources can only be claimed once".
+- `collection_backend_claim_resource()`, which is all `new_child` is, looks in
+  exactly two places: that now-empty table, and the backend's `children` table.
+  The claimed sources are not in `children` either — that table is filled from
+  the `child-added` signal, and nothing has exported them yet.
+- So a `new_child()` after the claim finds neither and takes the third branch:
+  `collection_backend_new_user_file` + `collection_backend_new_source`, i.e. a
+  brand-new `EServerSideSource` with a fresh uid, recorded in `new_sources`. The
+  WebDAV backend then passes the **claimed** source to `add_source` and
+  unreferences the new one, so the only trace of it is
+  `e_collection_backend_is_new_source` answering TRUE for a uid nothing holds.
+
+Copying that would mean minting and discarding one source per cached child per
+populate. So this populate exports the claimed source directly, which is what
+`claim_all_resources()`'s own documentation asks for ("export the remaining
+instances with `e_source_registry_server_add_source()`").
+
+**And the pairing that `new_child` might have looked necessary for happens
+anyway**, verified end to end in EDS's source rather than assumed. Fetched
+`e-source-registry-server.c` from GNOME's GitLab (`master`; the 3.52 branch name
+404s) to close the last link:
+`e_source_registry_server_add_source` → emits `source-added` →
+`collection_backend_source_added_cb` recognises a source whose parent is its own
+collection and emits `child-added` → `collection_backend_child_added` →
+`collection_backend_children_insert`. And `collection_backend_ref_child_source`
+walks that same `children` table asking `dup_resource_id` about each entry. So
+the fan-out's later `new_child(resource_id)` finds this child and reuses it
+instead of creating a second source for the collection.
+
+Other decisions, and why:
+
+- **The freeze is a debt, not a lock.**
+  `e_collection_backend_freeze_populate` is `return !g_atomic_int_add (&count, 1)`
+  — it increments whatever it answers — so the populate that *lost* the race
+  still owes a thaw, which is why EDS spells the guard
+  `if (!freeze) { thaw (); return; }`. Both halves are a test: the loser calls
+  `freeze`, `thaw` and nothing else, and the counter is left where the winner put
+  it. And the thaw is a `Drop` impl rather than a statement at the end, because
+  the panic guard in front of the vfunc cannot undo a freeze — a panic between
+  the two would silence *this account's* populate for the life of the process.
+  There is a test that panics inside `publish` and asserts the counter came back
+  to zero.
+- **The cached children are exported whatever the account's parts say.** A child
+  of a switched-off part is dormant, not gone: EDS binds each child's `enabled`
+  to the account's part flag, so withholding it would make it vanish from the
+  sidebar *and* leave its resource id unclaimed — and the next populate that
+  found the part switched back on would create a fresh source with a fresh uid
+  beside the cached file. That is the same destruction `Fanout::is_obsolete`
+  refuses to do, reached from the other side.
+- **Credentials are asked for only when contacts or calendars is on**, which is
+  EDS's WebDAV condition and, here, the honest one: this backend creates no mail
+  children yet, so a mail-only account would spend a password prompt to produce
+  nothing anyone can see.
+- **A password is asked for only when the account names a user.** Otherwise
+  `e_backend_schedule_authenticate (backend, NULL)`, because
+  `jmap_backend_core::connect::credentials` reads an account with no user as
+  anonymous *on purpose* — asking for a password there would prompt someone who
+  needs none and then drop what they typed. `user_of` reads an empty `User=` as
+  no user for the same reason: `read_string` already does, and the two spellings
+  must not decide differently. That is a test.
+- **`user_of` and not `server_of`.** A populate needs one field of
+  `[Authentication]` and must not fail on the host: an account with a user and a
+  broken host has to reach `authenticate_sync`, which is the vfunc that has a
+  `GError` to say so through. Tested with a host `server_of` refuses.
+- **A claimed source this backend cannot name is dropped unexported and
+  counted.** Unreachable through EDS, which only caches a source
+  `dup_resource_id` answered for — and defined anyway, because exporting it would
+  put a child in the sidebar that no resource id can be paired with again (see
+  `ref_child_source` above), so every later populate would recreate it. Same
+  shape as `Adopted::Abandoned`.
+- **`eds-sys` needed no change.** Last session's note that
+  `e_source_registry_server_.*` was not allowlisted is wrong: the existing
+  `e_source_.*` pattern already matches it, and
+  `e_source_registry_server_add_source`, `e_collection_backend_claim_all_resources`,
+  `_freeze_populate`, `_thaw_populate`, `_ref_server`,
+  `e_backend_schedule_credentials_required`, `e_backend_schedule_authenticate`
+  and `E_SOURCE_CREDENTIALS_REASON_REQUIRED` were all already in the generated
+  bindings. Checked in `bindings.rs` rather than assumed.
+
+**Not covered by a test, and the honest limits:**
+
+1. **The vfunc body itself cannot be driven here.** `populate`'s first act is
+   `e_collection_backend_freeze_populate` on the instance, so unlike
+   `dup_resource_id` it cannot be driven from `JmapCollectionBackend::detached()`
+   — that would be undefined behaviour, and the `detached` doc comment now says
+   so. What `tests/backend.rs` can hold is the slot: two new tests assert it is
+   installed, that it is not EDS's placeholder, and that the pointer the chain-up
+   walk finds is the placeholder and not our own. **Needs human verification in
+   real Evolution** that a JMAP account's cached address books and calendars
+   appear in the sidebar offline and that a password is asked for exactly once.
+2. **`Live`'s seven method bodies are unverified**, by construction: they are the
+   part that needs a session bus. Each is one EDS call, with the ownership spelled
+   out in a SAFETY comment — the `(transfer full)` list from
+   `claim_all_resources` (`g_list_free`, not `_full`, and one `g_object_unref` per
+   source once it has been published) and the `(transfer full)` server from
+   `ref_server`.
+3. **`Restored.unidentified` reaches `log_critical`, and the rest reaches EDS's
+   debug channel**, which is silent unless `SOURCE_REGISTRY_DEBUG` is set. That
+   is all a `void` vfunc has.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, each with the SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491 tests
+on the default members, unchanged) and `cargo clippy --all-targets --locked --
+-D warnings` are clean, as is `cargo test`/`clippy` over the six EDS crates
+(`jmap-backend-collection` now 78 tests, up from 63).
+`RUSTDOCFLAGS=-D warnings cargo doc` is clean for `jmap-backend-collection`.
+
+No milestone tag: M6's `authenticate_sync` slot is still missing, so EDS can
+reach the offline half of this backend and not the fan-out.
+
+Next in M6, and it is the last of it: `authenticate_sync` on
+`EBackendClass` — `authenticate_with` (already written and tested) with a closure
+that calls `fan_out` against a `Collection` implemented over the instance, the
+same way `Live` implements `Populating` here. Every EDS call it needs
+(`e_collection_backend_new_child`, `_is_new_source`, `_list_contacts_sources`,
+`_list_calendar_sources`, `e_source_registry_server_add_source`) is already in
+the bindings, and it needs one more `parent_class()` — `EBackendClass`'s, not
+`ECollectionBackendClass`'s, since that is where the slot lives. It cannot be
+driven here either, so the increment that writes it is *needs human verification
+in real Evolution* too, and after it M6 is a module entry point and a CMake
+target away from being installable.

@@ -223,3 +223,53 @@ fn a_source_this_backend_did_not_create_gets_a_null_back() {
         None
     );
 }
+
+#[test]
+fn class_init_replaces_the_default_populate_rather_than_leaving_it() {
+    // `ECollectionBackendClass::populate` is a placeholder — "so subclasses can
+    // safely chain up" — so an override that is written but not installed is a
+    // backend whose sidebar is simply empty: nothing claims the cached children
+    // of previous sessions, nothing exports them, and nothing ever asks EDS for
+    // the account's credentials, so no fan-out happens either. There is no error
+    // and no log line anywhere in that, which is why the slot itself is a test.
+    let class = Class::get();
+    // SAFETY: the parent type's class is alive for as long as ours is.
+    let parent: *mut ECollectionBackendClass =
+        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+    assert!(!parent.is_null(), "the parent class was not referenced");
+
+    let ours = class
+        .vfuncs()
+        .populate
+        .expect("class_init installed no populate");
+    // SAFETY: a live class struct.
+    let inherited = unsafe { (*parent).populate }.expect("EDS installs a placeholder");
+
+    assert!(
+        ours as usize != inherited as usize,
+        "the slot still holds EDS's placeholder"
+    );
+}
+
+#[test]
+fn the_installed_populate_is_the_one_the_parent_can_still_be_reached_through() {
+    // The chain-up the vfunc makes, from the other end: it reaches the parent's
+    // populate through `g_type_class_peek` of `ECollectionBackend` rather than
+    // through the instance's own class, which for a further subclass of ours
+    // would point back at our own slot and recurse until the stack ran out. What
+    // is asserted here is only that the pointer that walk finds is the parent's
+    // placeholder and not ours — the call itself needs a live instance, and so a
+    // running `evolution-source-registry`.
+    let class = Class::get();
+    // SAFETY: as above.
+    let parent: *mut ECollectionBackendClass =
+        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+    // SAFETY: a live class struct.
+    let inherited = unsafe { (*parent).populate }.expect("EDS installs a placeholder");
+    let ours = class.vfuncs().populate.expect("class_init installed one");
+
+    assert!(
+        inherited as usize != ours as usize,
+        "chaining up through the parent type's class would call our own populate"
+    );
+}
