@@ -9929,3 +9929,141 @@ registers one is, so the current guess is that the registry finds them by walkin
 the registry's module dir found with `pkg_check_variable`. That is the first
 increment of M6 whose acceptance is a manual recipe rather than a test, so it
 belongs with a documented `.source` keyfile like M3's and M4's.
+
+## 2026-08-09 (ninety-ninth session)
+
+**The module entry point, the factory, and the install rule — M6's Rust reaches
+`evolution-source-registry`.** Everything before this session was code no
+process outside `cargo test` could ever have run: the backend type existed, its
+three vfuncs were installed, and there was no `.so` for the registry to open and
+nothing in it to find if there had been. This session is the four pieces that
+close that: an `ECollectionBackendFactory` subclass, the two `e_module_*`
+symbols, `crate-type = ["cdylib", "rlib"]`, and an `add_cargo_cdylib` installing
+`module-jmap-backend.so` into `pkg-config --variable=moduledir libebackend-1.2`.
+
+Thirteen tests, red first (9 in `tests/factory.rs`, 4 in `tests/recipe.rs`):
+`jmap-backend-collection` is now 93 tests, up from 80.
+
+**The open question from last session is answered, and the guess was wrong.**
+The note left behind said the registry probably "finds factories by walking
+`g_type_children`, and that is a guess". Read `e-collection-backend-factory.c`
+and `e-source-registry-server.c` from EDS 3.52.3 rather than guessing again:
+
+- `e_collection_backend_factory_class_init` sets
+  `EExtensionClass.extensible_type = E_TYPE_SOURCE_REGISTRY_SERVER`. The server
+  is an `EExtensible`, so its own `e_extensible_load_extensions` instantiates one
+  of every registered subclass. **No registration call exists, and none is
+  needed** — inheriting from `ECollectionBackendFactory` *is* the registration.
+  `the_factory_is_an_extension_of_the_registry_server` pins the inheritance,
+  because a factory that lost it (deriving from `EBackendFactory` directly, say)
+  would register cleanly, pass every other test in the file, and never be
+  constructed.
+- The lookup is `e_data_factory_ref_backend_factory (server, backend_name,
+  "Collection")` against `collection_backend_factory_get_hash_key`, which builds
+  `"<factory_name>:Collection"`. So the key is `jmap:Collection`, and
+  `tests/factory.rs` asserts that string through EDS's own `get_hash_key` rather
+  than by reading our own field back — the only test here that crosses into
+  compiled EDS code and so the only one that would notice the class struct's
+  fields having moved under a bindgen that still agrees with itself.
+
+**Every field this factory installs has a *working* default under it, which is
+the whole reason the tests are worth writing.** `factory_name` defaults to
+`"none"` and `backend_type` to `E_TYPE_COLLECTION_BACKEND`. Neither is an error:
+the first is an account the registry files under `none:Collection` and never
+finds; the second passes `new_backend`'s own
+`g_type_is_a (backend_type, E_TYPE_COLLECTION_BACKEND)` check and builds EDS's
+own do-nothing collection backend — an account that appears in the sidebar,
+connects, fans out to nothing, and reports nothing anywhere. That is the same
+shape of hazard as the three inherited vfunc defaults from last session, so the
+tests name the defaults (`EDS_DEFAULTS`) and assert *away* from them rather than
+merely towards the right value.
+
+Other decisions, and why:
+
+- **`prepare_mail` is deliberately not overridden**, and there is a test that it
+  is still the parent's. It is the hook a vendor backend fills an account's mail
+  host/port/security into, and this backend creates no mail children at all — so
+  an override would be an opinion about mail in the class struct that no code
+  backs up. That is also the one part of M6's roadmap text still unbuilt, and it
+  is now written down in the crate's own docs rather than only here.
+- **The layout guard is three pointer comparisons, not two.** `factory_name` and
+  `backend_type` are written into the parent's half of the class struct, between
+  `EBackendFactoryClass` and `prepare_mail`; a wrong offset there compiles and
+  then calls through a bad pointer. So `get_hash_key` and `new_backend` on the
+  near side and `prepare_mail` on the far side are all asserted still
+  pointer-identical to the parent's — plus an assertion that EDS installs a
+  `prepare_mail` at all, since comparing two `None`s would say nothing.
+- **`g_type_create_instance` and not `g_object_new`** in the hash-key test.
+  `EExtension:extensible` is `G_PARAM_CONSTRUCT_ONLY`, and GObject sets every
+  construct property during construction whether or not it was supplied — so a
+  bare `g_object_new` hands `extension_set_extensible` a NULL and earns a
+  critical from its `E_IS_EXTENSIBLE` assertion. Harmless (the assertion returns
+  early and the field would have been NULL anyway) but not something to leave in
+  a green run, where it sits next to real criticals and under
+  `G_DEBUG=fatal-criticals` would abort. Creating the instance directly skips
+  property defaults and `constructed`, which is what GObject's own
+  `g_object_new_internal` does before it sets any; neither `EExtension` nor
+  `EBackendFactory` overrides `constructed`, and `g_object_unref` still runs the
+  normal dispose/finalize chain that ends in the paired `g_type_free_instance`.
+- **`module-jmap-backend.so`, and the name is for humans.** Unlike
+  `libebookbackend<name>.so` and `libcamel<protocol>.so`, nothing derives this:
+  the registry dlopens every file in its module directory regardless of name.
+  `module-*` is what every in-tree registry module is called
+  (`module-google-backend.so`, `module-cache-reaper.so`), and the `-backend`
+  suffix is there to distinguish it from M7's `module-jmap-configuration.so`,
+  which lives in Evolution's module directory instead.
+- **The recipe's keyfile is a file with tests on it**, as M3's and M4's are:
+  `docs/examples/jmap-mock-collection.source` is loaded through
+  `e_server_side_source_new` — the registry's own call, no bus needed — and
+  `tests/recipe.rs` asserts the origin, the anonymous connection, the parts
+  switched on, and that the `[Collection] BackendName` is the string the factory
+  answers to. Plus the check the other two recipes have: the ini block quoted in
+  the prose is byte-identical to the file.
+- **`MailEnabled=false` in the documented account**, and that is not cosmetic:
+  `mail` is one of the three bits `Parts::any` is a disjunction over, so a recipe
+  that switched on a part nothing serves would be documenting an account whose
+  populate contacts a server on behalf of children it will never create.
+
+**Not covered by a test, and the honest limits:**
+
+1. **Nothing here has run inside a real `evolution-source-registry`.** The
+   install-check ctest proves `module-jmap-backend.so` lands in the directory
+   `libebackend-1.2` reports and exports both entry points, and
+   `tests/factory.rs` drives `e_module_load` through a stand-in `GTypeModule`
+   the way `EModule` would. What neither can do is construct a backend —
+   `new_backend` passes the server itself, so a real registry is required.
+   **Needs human verification in real Evolution**, per
+   `docs/manual-test-collection-backend.md`: the account appears, its address
+   book and calendar appear under it, restarting the registry does not duplicate
+   them, and switching a part off removes them.
+2. **The credentials round trip is still unexercised end to end.** The
+   documented account is anonymous on purpose; the `User=` + `--basic` variant is
+   in the recipe as the way to reach it, and it is the half of
+   `authenticate_sync` no test on this VM can drive.
+3. **This VM has no `registry-modules` directory at all** (only
+   `camel-providers` and `ui-modules` exist under
+   `/usr/lib/evolution-data-server`), which is why the install check stages into
+   a `DESTDIR` rather than proving the real directory is writable. The recipe
+   documents `EDS_REGISTRY_MODULES` as the no-sudo path, read off
+   `e-source-registry-server.h`.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new Rust files, both with SPDX headers; the
+two new `docs/` files are covered by `REUSE.toml`'s `docs/**` annotation.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as is `cargo clippy`/`test` over the six EDS crates. Full `ctest` in a fresh
+build tree: 6/6, including the new `install-collection-backend`.
+`RUSTDOCFLAGS=-D warnings cargo doc` is clean for the changed crate. The new
+tests were mutation-checked: commenting out both `class_init` assignments turns
+exactly three of them red.
+
+No milestone tag, deliberately. M6's Rust is complete and its module is
+installable, but two of its acceptance criteria are not met: the roadmap asks
+for a fan-out to **mail** as well as book and cal, and nothing of M6 has been
+observed working inside a running registry. Tagging it would be claiming both.
+
+Next, and in this order: the mail child (an `ESource` triple — account,
+identity, transport — plus the `prepare_mail` override that configures them,
+which is the piece that finally joins M5's Camel provider to an account), and
+then M6 is a candidate for a tag as soon as a human has walked the recipe.
