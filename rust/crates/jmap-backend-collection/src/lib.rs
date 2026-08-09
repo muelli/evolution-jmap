@@ -56,6 +56,13 @@
 //!   `authenticate_sync` — and a panic guard in front of each. It is also where
 //!   the live `ECollectionBackend` finally appears, as the one implementation of
 //!   [`populate::Populating`] and [`fan_out::Collection`] that is not a test's.
+//! - [`prepare_mail`] is the mail half, and the one part of this crate that is
+//!   not about children of this collection: the mail account, identity and
+//!   transport sources cannot be cached children — `dup_resource_id` would have
+//!   to claim them and EDS deletes the cache file of every source it does not —
+//!   so they belong to the registry's own source directory and to the setup UI.
+//!   What is left for a collection factory is the vfunc that says which service
+//!   they are, which for JMAP is one Camel protocol on both.
 //! - [`factory`] is what the registry actually looks up, because it never
 //!   instantiates a backend itself: an `ECollectionBackendFactory` subclass whose
 //!   two fields say which `BackendName` this is and which type to build. Both
@@ -77,13 +84,13 @@
 //! [`Fanout::is_obsolete`]: jmap_collection_sync::Fanout::is_obsolete
 //!
 //! Still missing, and the one part of M6 the roadmap asks for that is not here:
-//! the *mail* child. An account fans out to address books and calendars; the
-//! mail account, identity and transport sources M5's Camel provider would serve
-//! are not written, which is why [`fan_out::Collection::existing_children`] has
-//! no opinion about them and why [`factory`] leaves `prepare_mail` — the hook a
-//! vendor backend fills those three in through — at the inherited default.
-//! `docs/manual-test-collection-backend.md` is the recipe for what does work,
-//! and the account it documents has `MailEnabled=false` for this reason.
+//! the mail sources are *filled in* by [`prepare_mail`] but nothing yet
+//! **creates** them. That is the setup UI's job (M7) in every reference
+//! implementation, and it is also why [`fan_out::Collection::existing_children`]
+//! has no opinion about mail: a source this backend neither creates nor caches
+//! is not one it may remove. `docs/manual-test-collection-backend.md` is the
+//! recipe for what does work, and the account it documents has
+//! `MailEnabled=false` for that reason.
 //!
 //! Like `jmap-backend-core`, this crate needs the installed EDS headers and so
 //! stays out of the workspace's `default-members`; CMake runs its tests via the
@@ -97,5 +104,6 @@ pub mod factory;
 pub mod fan_out;
 pub mod module;
 pub mod populate;
+pub mod prepare_mail;
 pub mod removal;
 pub mod resource_id;

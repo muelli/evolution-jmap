@@ -10067,3 +10067,135 @@ Next, and in this order: the mail child (an `ESource` triple — account,
 identity, transport — plus the `prepare_mail` override that configures them,
 which is the piece that finally joins M5's Camel provider to an account), and
 then M6 is a candidate for a tag as soon as a human has walked the recipe.
+
+## 2026-08-09 (hundredth session)
+
+**`prepare_mail`, and the answer to a question this crate had been guessing at
+since `children.rs` was written: mail sources are not children of a collection
+backend.** Last session's log named "the mail child (an `ESource` triple —
+account, identity, transport — plus the `prepare_mail` override)" as the next
+item, on the assumption that populate would create the triple. It would not have
+worked, and the reason is in EDS's own source rather than in its headers.
+
+Six tests, red first, in `tests/prepare_mail.rs`; `tests/factory.rs`'s layout
+guard rewritten. `jmap-backend-collection` is now 99 tests, up from 93.
+
+**What was read, and what it settled.** `children.rs` said the shape of the mail
+children was "Evolution convention rather than anything the installed headers
+state, and this machine has no reference account to read it off". This VM has a
+network, so the reference was fetched rather than guessed: `libebackend/
+e-collection-backend.c` and `e-collection-backend-factory.c` from EDS 3.52.3,
+`modules/google-backend/module-google-backend.c` and `modules/yahoo-backend/`,
+evolution-ews's `src/EWS/registry/e-ews-backend{,-factory}.c`, and a sparse
+checkout of evolution 3.52.3's `src/`.
+
+- **A collection backend's cached children cannot be mail sources.**
+  `collection_backend_load_resources()` reads every `.source` file in the
+  backend's cache directory, asks `dup_resource_id` what each one is, and
+  **deletes** the file when the answer is `NULL`. So keeping mail sources there
+  would require `dup_resource_id` to claim them — and
+  `google_backend_dup_resource_id` chains up for `[Calendar]`, `[Memo List]`,
+  `[Task List]` and `[Address Book]` and returns `NULL` for everything else, i.e.
+  for exactly the mail extensions. EWS answers with its own folder id, which the
+  mail sources do not carry. Neither backend creates them.
+- **They are children of the *account*, not resources of the *backend*.** The
+  three sources live in the registry's own source directory with `Parent` set to
+  the collection's uid, written by the setup UI. `child_added`,
+  `collection_backend_bind_child_enabled` (mail children bind to
+  `mail-enabled`) and `e_collection_backend_list_mail_sources()` all still find
+  them; only the cache directory does not hold them.
+- **So `prepare_mail` is the whole of a collection factory's say in mail.** The
+  inherited implementation does the vendor-independent wiring — the account's
+  `identity-uid`, the identity's `[Mail Submission] transport-uid`, and the
+  extension that makes each source recognisable. The vendor part is naming the
+  service: Google writes `imapx`/`smtp` plus host, port and security into an
+  `ESourceCamel`; evolution-ews writes the single name `ews` on the account and
+  the transport and nothing else, because an EWS account's server comes from the
+  collection. JMAP is the EWS shape, with one name on both sources — M5's
+  provider registers one `CamelProvider` carrying a store type *and* a transport
+  type, since JMAP submits over the session it reads through.
+
+`children.rs`'s conservative decision therefore stands and is now verified
+rather than assumed; its `the_mail_account_is_not_one_of_these_children` test
+keeps meaning what it said.
+
+**Decisions, and why:**
+
+- **The host, port and security method are deliberately not written.** Google can
+  write them because they are constants of the vendor. Here they are the user's,
+  and they already live on the collection source — which this vfunc is not
+  handed. It gets the three mail sources and the *factory*, nothing else. Same
+  for `[Mail Identity] Address`: `Identity/get` states it, but this runs before
+  anything has connected, and a guessed identity is a wrong `From:`.
+- **The name is checked against `libcameljmap.urls`, not against a constant.**
+  `the_name_written_is_the_protocol_camel_dlopens_the_provider_for` reads the
+  file out of the source tree with `include_str!` rather than adding a
+  `jmap-mail` dependency — that crate links Camel and this one does not. It is
+  the same check `jmap-mail`'s own `tests/provider.rs` makes from the other
+  side, and CTest's `install-camel-provider` checks the same file is installed.
+- **The vfunc is driven through `e_collection_backend_factory_prepare_mail`**,
+  EDS's public wrapper, not by calling our function. That is what makes the test
+  cross the class struct: the wrapper reads the slot at the offset the *parent*
+  believes it is at, one past the two fields `class_init` already wrote. It is
+  the only test in this crate that both writes and dispatches through that
+  struct.
+- **`tests/factory.rs`'s layout guard changed shape rather than being deleted.**
+  It used to assert `prepare_mail` was still pointer-identical to the parent's,
+  which is now false by design. It asserts the opposite — the slot changed, and
+  the `reserved` array past it did *not*, on our class and on EDS's — so a write
+  landing one slot too far is still red.
+- **No `e_source_mail_*_get_type()` calls before the chain-up**, and this is a
+  correction to a belief the crate already held. `crate::child_source` makes such
+  calls with a comment saying `e_source_get_extension` cannot find an
+  unregistered type. The premise is right and the conclusion is not:
+  `e_source_class_init` ends with a `g_type_ensure` of every built-in extension,
+  all four mail ones included, and any source reaching either function is a live
+  `ESource`, so that has already run. The calls were written here first, then
+  removed when the mutation test showed nothing noticed; the comment now records
+  the fact instead. **Follow-up:** `child_source.rs`'s five equivalent calls are
+  dead for the same reason and its comment overstates their necessity — left
+  alone tonight to keep this increment one thing, and they are harmless.
+
+**Mutation-checked, since the tests and the code were written close together.**
+Removing `factory.prepare_mail = Some(...)` turns
+`the_mail_account_is_served_by_the_jmap_camel_provider`,
+`the_transport_is_the_same_provider_and_not_a_second_one` and
+`writing_the_fields_left_the_parent_vfuncs_alone` red. Removing the chain-up
+turns `chaining_up_left_the_three_sources_pointing_at_each_other` red, and
+nothing else — which is the point of it being a separate test.
+
+**Not covered by a test, and the honest limits:**
+
+1. **`e_collection_backend_factory_prepare_mail` has no caller.** Not in
+   evolution-data-server 3.52.3, not in evolution 3.52.3 — grepped both trees.
+   It is public API that vendor backends implement and that an account-setup
+   path is expected to call; evolution-ews implements it anyway, and so does
+   this. So the tests check the vfunc, not that anything reaches it. When M7
+   creates the three sources it will be M7 that calls it.
+2. **Nothing yet creates a JMAP account's mail sources**, which is why
+   `docs/manual-test-collection-backend.md` still documents `MailEnabled=false`,
+   with the reason rewritten to say *creates* rather than *wires*.
+3. **Still no run inside a real `evolution-source-registry`**, unchanged from
+   last session and still the reason M6 carries no completion tag.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM). One new source file and one new test file, both
+with SPDX headers. `cargo fmt --check`, `cargo test --locked` (491 tests on the
+default members, unchanged) and `cargo clippy --all-targets --locked -- -D
+warnings` are clean, as is `cargo clippy`/`test` over the six EDS crates. Full
+`ctest` in a fresh build tree: 6/6. `RUSTDOCFLAGS=-D warnings cargo doc` clean
+for the changed crate.
+
+No milestone tag. M6's roadmap text asks for a fan-out to mail as well as book
+and cal; what this session established is that the fan-out is not where mail
+comes from, so the criterion belongs to M7 and the question of whether M6 is
+done is now only the one that was already open — that none of it has been
+observed inside a running registry.
+
+Next: M7 is the natural continuation — it is what creates the three sources this
+vfunc fills in — but it is GUI/config code this VM cannot verify, so it should be
+approached as conservatively as the roadmap's rules demand. The tractable
+alternatives are the `child_added` binding EWS uses to keep a child's host, user
+and method following the collection's (this backend copies once at populate
+instead, so an account whose server changes leaves stale children), and the
+`child_source.rs` cleanup noted above.
