@@ -7638,3 +7638,116 @@ carrying that can be done here. Beyond it, the remaining `CamelStoreClass` slots
 are worth a look now that the source is available — `initial_setup_sync`
 (EWS uses it to write folder ids into the ESource at first connect, which is
 M6/M7 territory), `synchronize_sync`, and `get_can_auto_save_changes`.
+
+## 2026-08-09 (seventy-ninth session)
+
+**The half of M5 that leaves the account.** The roadmap names three objects for
+M5 — `CamelJmapStore`, `CamelJmapFolder`, `CamelJmapTransport` — and the third
+does not exist: `provider.rs` leaves `CAMEL_PROVIDER_TRANSPORT` at
+`G_TYPE_INVALID`, with a comment saying naming a type there before there is one
+is a crash the first time a user hits Send. This session did the protocol half
+of that transport, at the layer where it can be tested against `jmap-mockd`:
+`MailSync::send_message`, so that the Camel object a later session registers has
+something to call.
+
+Red first, seven tests in `jmap-mail-sync/tests/send.rs`, all failing to compile
+against a `send_message` that did not exist. Two of them were then re-checked
+against a deliberately broken implementation, because a compile failure is a weak
+red: with the `onSuccessUpdateEmail` patch dropped the two filing tests fail on
+"still a draft after being sent", and with the envelope dropped the envelope test
+fails with the header address in place of the envelope one.
+
+What landed:
+
+- `jmap-client`: `Client::submit_email` — `EmailSubmission/set` for a message the
+  account already holds, naming it by id rather than by a `#draft` creation
+  reference. `submission_request` gained an `envelope` parameter; the two
+  existing callers inside `send_email` pass `None`, which is what they were
+  sending before.
+- `jmap-mail-sync`: `send::Outgoing` (source bytes, identity, envelope, staging
+  mailbox, optional destination) and `MailSync::send_message`, which imports the
+  message into the staging mailbox as a `$draft` and submits it with the patch
+  that files it where sent mail is kept.
+
+Decisions taken:
+
+- **Bytes, not properties.** Sending goes through `Email/import` over an
+  uploaded blob rather than the `Email/set` create `Client::send_email` uses.
+  What Evolution's composer hands a transport is a finished MIME document, and a
+  client that took it apart into JMAP properties for the server to write out
+  again would send a different message than the one it was given — one whose
+  signature no longer verifies. That is `import_message`'s judgement, made again
+  for the message the user just wrote, and it is why `send_email` could not
+  simply be reused.
+- **The envelope is a field of its own.** RFC 8621 §7 lets the server derive an
+  envelope from the message's headers, which is right for a message the client
+  composed and wrong for one it was handed: a `Bcc` recipient is a recipient with
+  no header. Camel hands `send_to_sync` the recipients as their own argument, so
+  they travel as their own field the whole way down, and the test that pins this
+  uses addresses that appear in no header of the message.
+- **Staged, then filed, in the server's own transaction.** The message is
+  imported into Drafts and moved to Sent by `onSuccessUpdateEmail` (RFC 8621
+  §7.5) rather than by a second `Email/set` of ours. A message imported straight
+  into Sent would be one sitting in Sent that may never go out; a move made by a
+  follow-up request would be a message that has gone out and still claims to be
+  an unsent draft if the client dies in between.
+- **A refused submission leaves the draft behind, deliberately.** The import
+  succeeded, so the user's message exists, unsent, in the mailbox unsent messages
+  live in — which is where they would look for it. Destroying it to keep the
+  account tidy would throw away work on behalf of a server that said no. Pinned
+  by `an_identity_the_account_does_not_have_sends_nothing`, which asserts the
+  draft is still there and still a draft.
+- **`$seen` is set at import, not in the patch.** The sender has read every word
+  of their own message, and setting it at import means the message left behind by
+  a refusal is not also an unread one. `$draft` is the only keyword the patch
+  clears.
+- **Not chained into one request**, although RFC 8620 §5.3 would let the
+  submission name the import's creation id. The upload has to happen first
+  either way — `Email/import` takes a blob id — so the chain saves one round trip
+  of three, and buys it by making "the account would not take this message" and
+  "this message did not go out" indistinguishable to the caller. Those two are
+  exactly what the user needs told apart.
+- **`destination` is optional and no mailbox is invented for it.** An account
+  with no Sent role, or one where Evolution saves its own copy, passes `None` and
+  the message stays where it was staged — still not a draft, because it has been
+  sent. Which mailbox is Drafts and which is Sent is the caller's lookup, out of
+  the folder tree it already holds; `send_message` making that lookup would be a
+  `Mailbox/get` per send.
+
+**Not covered by a test, and the honest limits:**
+
+1. **There is still no `CamelJmapTransport`,** and the provider's transport slot
+   is still `G_TYPE_INVALID` — so Evolution cannot send through a JMAP account
+   yet. Nothing in this session changes what the user sees. What it changes is
+   that the next session's Camel object has a tested call to make.
+2. **Nothing here has been seen against a real server.** The mock accepts a
+   submission by recording it in an outbox; it has no MTA, so "the mail went out"
+   is untested by construction, and so is a server that refuses a `From` that
+   disagrees with the identity — RFC 8621 §7 requires that check and the mock
+   does not make it.
+3. **Which identity to submit through is not decided anywhere yet.** `Outgoing`
+   takes one; nothing picks it. `Client::identities` exists and is unused. That
+   is the transport's job — Evolution knows the account's configured address —
+   and it is the first thing the next session has to answer.
+4. **`sendAt`, `undoStatus` and delayed sending are untouched.** The submission
+   is created with neither, which is immediate send.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, `jmap-mail-sync/src/send.rs` and
+`jmap-mail-sync/tests/send.rs`, both with the SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (417 tests, up from
+410) and on the five EDS crates (592, unchanged — nothing there was touched).
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Next in M5: `CamelJmapTransport` itself — the `CamelTransport` subclass, its
+`send_to_sync` turning Camel's `CamelAddress` arguments into the envelope above,
+the identity lookup, and the provider's transport slot. It is the largest single
+object left in M5 and wants a session of its own.
