@@ -212,6 +212,14 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // Not an EDS symbol, but the entry point every loadable EDS module must
     // export; having the signature in scope keeps M2's trampoline honest.
     "e_module_.*",
+    // The base class of everything that extends something else in this
+    // ecosystem — a collection backend factory is one, and so is M7's
+    // `EMailConfigServiceBackend`, which lives in Evolution rather than here
+    // and is bound in `evo-sys`. The type accessor is what a test on that side
+    // holds its parent against, so that the `EExtension` in the parent slot is
+    // provably this crate's and not a second one generated from the same
+    // header.
+    "e_extension_.*",
     // The mail provider's side. `camel_provider_module_init` is in here for the
     // same reason as `e_module_load`: it is declared, not defined, by Camel, so
     // having the declaration in scope is what makes the module's `extern "C"`

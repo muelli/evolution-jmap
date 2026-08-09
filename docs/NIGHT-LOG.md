@@ -10806,3 +10806,106 @@ decisions — what an account is written as, what it starts from, and whether it
 may be committed — are now decided and tested in plain Rust, so what is left is
 the widgets and the plumbing, and that is where the part this VM cannot verify
 begins.
+
+## 2026-08-09 (hundred-and-seventh session)
+
+**The headers the setup module is written against: a new `evo-sys` crate.**
+Three tests, red first (as a missing crate, then as a missing symbol), in
+`rust/crates/evo-sys/tests/layout.rs`; a bindgen `build.rs` one class wide; one
+line added to `eds-sys`'s function allowlist. The crate stays out of
+`default-members` and is run by CMake's `rust-test-eds` target with the others.
+
+**Why this and not the module.** The last three sessions each took one of
+`EMailConfigServiceBackend`'s decisions — what an account is written as, what it
+starts from, whether it may be committed — because each was ordinary Rust over
+an `ESource` and so could be *tested* here, and each ended saying the module was
+next. It is, and this is the first half of it: before a vfunc can be overridden,
+the class it lives in has to exist in Rust, and it did not. Nothing in this
+repository had ever crossed into Evolution's own libraries; everything so far
+stops at EDS.
+
+**Two sys crates, not one.** `eds-sys` could have grown the Evolution headers
+the way it grew Camel's, and that would have been wrong: the backends M3–M6
+install are loaded by `evolution-source-registry` and the data factories, which
+are EDS processes that never link GTK, while M7's module is loaded by Evolution,
+which does. One crate would put GTK, WebKit and Evolution's four private
+libraries behind every address book backend that only ever wanted `ESource`. So
+`evo-sys` is its own crate with its own `links` key, and the split is by *host
+process*, which is the thing that actually differs.
+
+**The blocklist is the whole design.** `eds-sys` blocks `G[A-Z].*` and
+re-exports the gtk-rs sys crates, because a regenerated `GObject` has the right
+layout and the wrong identity. The same argument applies one library up and with
+a second owner: `EMailConfigServiceBackend` is an `EExtension` and hands out
+`ESource`s, `CamelProvider`s and `CamelSettings`, all of which `eds-sys` already
+generated from the very same headers. Blocked here, re-exported with a single
+`pub use eds_sys::*` — which brings the GLib ones along, since `eds-sys`
+re-exports those in turn — they stay one type, so the module's vfuncs can be
+written in terms of `jmap-config` and `jmap-mail`, which read and write those
+objects already. `tests/layout.rs` asserts the join rather than assuming it: the
+`g_type_parent` of the class must be *`eds-sys`'s* `e_extension_get_type`.
+
+**GTK is the exception, and deliberately opaque.** `GtkBox` appears in these
+headers only as the container `insert_widgets` is handed, and there is no
+`gtk-sys` to re-export it from: GTK 3's sys crate is frozen at the 0.18
+generation and depends on `glib-sys` 0.18 while this workspace is on 0.22, so
+depending on both would put two incompatible `GObject`s in one process —
+precisely the failure the blocklist exists to prevent. The pointer types are
+`c_void` for now, and the widget calls M7 eventually needs will be generated
+from these same headers rather than borrowed from a second ecosystem. It also
+keeps `GtkWidgetClass` and the hundred vfuncs under it out of a binding surface
+nobody reads.
+
+**One thing tried and removed.** `build.rs` first emitted an explicit
+`-Wl,-rpath` for each of pkg-config's link paths, on the reasoning that
+Evolution's libraries live in `/usr/lib/evolution` rather than in the system
+directory and a binary that does not record that will not start. Both `.pc`
+files already carry `-Wl,-R<libdir>` in their `Libs:` for that exact reason, and
+the `pkg_config` crate forwards it — dropping the loop and checking with
+`readelf -d` leaves the directory in the test binary's `RUNPATH`, and the loop
+had only been duplicating the entry. The comment now records the check rather
+than the code.
+
+**Mutation-checked, and the useful mutants were to the header, not the code.**
+Making the structs `opaque_type` proves nothing — bindgen keeps the size — so
+the drift was simulated the way it will really arrive, with a patched copy of
+`e-mail-config-service-backend.h` on the include path ahead of the system one. A
+vfunc added before `commit_changes`, as a future Evolution would: class size 216
+against the runtime's 208, one red. The instance's private pointer removed: two
+red, the size and the `EExtension`-plus-a-pointer assertion. `backend_name`
+moved behind the first vfunc, which changes no size at all: the offset test
+alone, 152 against 144 — which is the case for that third test existing, since
+Evolution finds a backend by `strcmp`ing that field against a Camel protocol
+name and would otherwise be reading a function pointer as a string.
+
+**Also fixed:** `jmap-config`'s docs called the vfunc `check_completeness` in
+five places. It is `check_complete`; the header is now in the tree to check
+against.
+
+**The honest limits, which this does not change.** A layout test is not a
+working module: there is still no `EMailConfigServiceBackend` subclass, no
+`module-jmap-configuration.so`, and no account has been created through
+Evolution's UI, which is M7's actual acceptance and not something this VM can
+do. What is new is only that the class can now be named from Rust — and that if
+a future Evolution reshapes it, this fails as a red test rather than as a
+misplaced vfunc pointer in the process the user types their password into. So
+M7 carries no completion tag. `docs/manual-test-collection-backend.md` still
+documents `MailEnabled=false`.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Five new files, all with SPDX headers.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as are `clippy`/`test` over the EDS crates — 807 tests, `evo-sys`'s 3 included.
+`RUSTDOCFLAGS=-D warnings cargo doc` clean for the new crate. The CI image
+installs `evolution-dev` and CMake already `REQUIRED`s `evolution-shell-3.0` and
+`evolution-mail-3.0`, so nothing new has to be present for this to build there.
+Pre-existing and untouched: `example-module` does not build on this VM, which is
+why the workspace-wide runs exclude it.
+
+No milestone tag.
+
+Next: the subclass itself — `class_init` filling in `backend_name` with the
+Camel protocol name and the vfuncs delegating to `jmap-config`'s three
+functions, and the `e_module_load` that registers it into Evolution's module
+directory. That is the part this VM can compile and cannot verify.

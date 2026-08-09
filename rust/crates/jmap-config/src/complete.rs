@@ -3,7 +3,7 @@
 
 //! What a setup refuses to commit.
 //!
-//! `EMailConfigServiceBackend` has a `check_completeness` vfunc, and Evolution
+//! `EMailConfigServiceBackend` has a `check_complete` vfunc, and Evolution
 //! greys out the assistant's *Next* until every backend on the page answers
 //! yes. [`check`] is what this project's answer will be made of — the deciding
 //! part of that vfunc, which is ordinary Rust over an [`Account`] and so can be
@@ -60,7 +60,7 @@
 //!   collection backend's to add and remove as the switches move, and the
 //!   switches are on the account editor the user can open again.
 //! - **Whether the server is *there*.** That is a network round trip, not a
-//!   completeness check — `check_completeness` runs on every keystroke.
+//!   completeness check — `check_complete` runs on every keystroke.
 //!   Reaching the server belongs in the assistant's own "look up account
 //!   details" step, which is a later increment and a different vfunc.
 //!
@@ -76,7 +76,7 @@ use crate::account::Account;
 ///
 /// The [`Display`](fmt::Display) text is written to be read by the person who
 /// typed the answer in, in the place they typed it: it names the field, not the
-/// function. `check_completeness` itself has nowhere to put a message — the
+/// function. `check_complete` itself has nowhere to put a message — the
 /// vfunc answers a boolean — so this exists for the tooltip, the status label,
 /// and for the log line when a commit is refused from somewhere without a
 /// display.
