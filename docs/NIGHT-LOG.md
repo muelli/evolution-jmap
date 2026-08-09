@@ -8181,3 +8181,95 @@ in a private `serialize`, which wants lifting out of the folder's error domain
 before a transport can share it — and then the vfunc joining it to
 `read_envelope`, `identity_for`, `outgoing_mailboxes` and `send_message`, the
 `out_sent_message_saved` out-parameter, and the provider's transport slot.
+
+## 2026-08-09 (eighty-fourth session)
+
+**The bytes a message goes up as, and the line endings they did not have.**
+`jmap-mail/src/mime.rs`: `write_message`, lifted out of `append.rs`'s private
+`serialize` so that a `CamelTransport` with no folder in the call can share it,
+plus `Unwritable`, which is a write failure that has no error domain yet — the
+caller names one. Along the way the round-trip test found something: what Camel's
+emitter writes is Camel's *internal* form, with bare LF line endings, so every
+message this provider has been importing since the append landed went up
+malformed. `write_message` now converts, and `append.rs` is its first caller.
+
+Red first: `jmap-mail/tests/mime.rs` (5 tests, real `CamelMimeMessage`s) and
+seven unit tests beside the implementation. The line-ending pair was red on
+behaviour rather than on compilation — 7 bare LFs in a 9-line message. Five
+deliberately wrong implementations were then checked against the suite, and each
+is caught by exactly the test that should catch it: dropping the conversion
+fails the RFC 5322 test and the whole-message test; inserting a CR before *every*
+LF fails `a_line_that_already_ended_crlf_does_not_gain_a_second_cr` and the unit
+test; reading one byte less than the stream holds fails
+`a_message_larger_than_one_buffer_is_written_out_whole`; synthesising an error
+even when Camel set one fails `a_failure_the_writer_explained_...`; hardcoding
+the folder's domain fails `the_same_failure_is_reported_in_the_transports_domain...`.
+
+Decisions taken:
+
+- **CRLF is added here or nowhere.** Camel's own transports put a
+  `CamelMimeFilterCrlf` between the message and the socket; this provider is a
+  transport *and* an importer, and both of its callers put the bytes somewhere
+  that outlives the call. RFC 5322 §2.1 defines a line as CRLF-terminated, RFC
+  8621 §4.8 imports "an RFC 5322 message", and RFC 5321 §2.3.8 forbids a bare LF
+  in what an SMTP server is handed — which is what an `EmailSubmission` hands one
+  eventually. Bare LFs mean a DKIM signature computed over different bytes than
+  the recipient verifies, and a body a strict relay may cut short.
+- **The same rule Camel's filter applies, minus the dots.** A CR is inserted
+  before an LF that has none; a lone CR is left alone, because it is not a line
+  ending; `CRLF_MODE_CRLF_DOTS`'s leading-dot stuffing is deliberately *not*
+  done, since it is an SMTP wire escape and would end up inside an imported
+  message.
+- **Written in Rust rather than reached for through `CamelStream`.** The filter
+  is a `CamelStream`-era API this crate otherwise has no use for, and taking it
+  would mean four new symbol families in `eds-sys`'s allowlist for a rule that is
+  four lines and whose edge cases are directly testable. Not a MIME operation —
+  no second MIME implementation is created by it.
+- **`Unwritable` carries the failure and not the domain.** Camel's own `GError`
+  is passed through untouched, as before. What is new is the *unexplained*
+  refusal: it used to be a `CAMEL_FOLDER_ERROR` written inside `append.rs`, which
+  is right for a folder and wrong for a transport Camel never asked a folder of.
+  `into_gerror(domain, code)` takes it from the caller and keeps the sentence,
+  because the thing that went wrong is the same either way.
+- **It owns the error it holds.** `Unwritable` frees the `GError` on drop and
+  `into_gerror` forgets itself, so a caller that drops a failure rather than
+  reporting it does not leak the message it never showed anyone.
+
+**Not covered by a test, and the honest limits:**
+
+1. **No `CamelMimeMessage` here is one its own writer refuses,** so the failure
+   path is unit-tested from a constructed `Unwritable` rather than end to end.
+   Nothing was found that makes Camel's emitter fail on demand without also
+   being undefined behaviour.
+2. **The CRLF exposure is Camel's own, unchanged:** a part whose content is raw
+   8-bit or binary rather than transfer-encoded has its LFs rewritten too —
+   exactly as it would going out through `camel-smtp-transport`, which is the
+   comparison this follows, but it is a rewrite of body bytes and it is worth
+   knowing about.
+3. **No real server has seen either form.** The mock stores blobs verbatim, so
+   what is pinned is that the bytes are CRLF-ended, not that Stalwart or Fastmail
+   would have rejected the LF-ended ones. The RFCs are the argument; interop is
+   untested.
+4. **Still no `send_to_sync`,** so the transport that this was lifted out for
+   still has no caller. Four of its four pieces now exist.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, `jmap-mail/src/mime.rs` and
+`jmap-mail/tests/mime.rs`, both with the SPDX `GPL-3.0-or-later` header. `cargo
+fmt --check`, `cargo test --locked` and `cargo clippy --all-targets --locked --
+-D warnings` are clean on the default member set (434 tests, unchanged — nothing
+there was touched) and on the five EDS crates (624, up from 612).
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Next in M5: `send_to_sync` itself, which now has nothing missing under it — the
+vfunc joining `read_envelope`, `write_message`, `identity_for`,
+`outgoing_mailboxes` and `send_message`, the `out_sent_message_saved`
+out-parameter derived from whether a destination mailbox was needed, and the
+provider's transport slot that stays `G_TYPE_INVALID` until it exists.
