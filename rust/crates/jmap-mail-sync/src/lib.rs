@@ -30,7 +30,7 @@ pub(crate) mod pointer;
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_client::Client;
-use jmap_proto::mail::{Email, EmailQueryFilter};
+use jmap_proto::mail::{Email, EmailQueryFilter, Mailbox};
 use jmap_proto::methods::Comparator;
 use jmap_proto::{Id, State};
 
@@ -503,14 +503,109 @@ impl MailSync {
                 mailbox,
                 serde_json::json!({ "isSubscribed": subscribed }),
             )
-            .map_err(|error| match &error {
-                jmap_client::Error::Set(set_error)
-                    if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
-                {
-                    SyncError::NoSuchFolder(mailbox.clone())
-                }
-                _ => SyncError::Client(error),
-            })
+            .map_err(|error| folder_error(mailbox, error))
+    }
+
+    /// Makes a folder — `create_folder_sync`.
+    ///
+    /// The answer is the folder rather than its id, because that is what Camel
+    /// asks for: `camel_store_create_folder_sync` hands the `CamelFolderInfo`
+    /// it gets straight to Evolution's folder tree, and a caller given an id
+    /// would have to list the account again to learn the one thing the id does
+    /// not carry — the Camel *path*, which is this crate's invention and is
+    /// built here out of the parent's path and the encoded name.
+    ///
+    /// `parent` is the folder the new one hangs under, and it is a
+    /// [`FolderInfo`] rather than an [`Id`] for exactly that reason: the id is
+    /// what the request needs and the path is what the answer needs, and only
+    /// the caller's tree has both.
+    ///
+    /// **What the answer is built from is what was *sent*, not what came
+    /// back.** RFC 8620 §5.3 lets a server return, for a created record, only
+    /// the properties it set itself — so `name` and `parentId` may legitimately
+    /// be absent from the object in the response, and reading the path out of
+    /// it would give an empty one against a perfectly correct server. The id is
+    /// the property a create exists to learn, and it is the one the RFC
+    /// guarantees.
+    ///
+    /// The counts are zero and there are no children, which is not optimism: a
+    /// mailbox that did not exist a moment ago has had nowhere for mail to
+    /// arrive in, and nothing can hang under it yet. The role is `None` for a
+    /// different kind of reason — none is requested, and a role read back from
+    /// the response would be this function assigning one outside
+    /// [`FolderTree`]'s arbitration, which is what keeps an account from
+    /// showing two inboxes.
+    ///
+    /// `isSubscribed`, in contrast, *is* read from the response when the server
+    /// sent it: RFC 8621 §2 leaves the default to the server, and it is the one
+    /// property here whose value the client cannot work out. `true` when the
+    /// server said nothing, because a folder the user has just asked for is one
+    /// they want to see — the other guess hides the folder Evolution was told
+    /// to make until the next listing.
+    ///
+    /// A refusal — a name a sibling already has, a parent that is gone — stays
+    /// the server's own [`SyncError::Client`], because the reason is a sentence
+    /// for the user and this crate has nothing to add to it.
+    pub fn create_folder(
+        &self,
+        parent: Option<&FolderInfo>,
+        name: &str,
+    ) -> Result<FolderInfo, SyncError> {
+        let requested = Mailbox {
+            name: name.to_owned(),
+            parent_id: parent.map(|parent| parent.id.clone()),
+            ..Mailbox::default()
+        };
+        let created = self.client.mailbox_create(&self.account_id, &requested)?;
+        let id = created
+            .id
+            .ok_or_else(|| SyncError::protocol("Mailbox/set created a mailbox without an id"))?;
+
+        Ok(FolderInfo {
+            id,
+            path: path::join(
+                parent.map(|parent| parent.path.as_str()),
+                &path::encode_component(name),
+            ),
+            display_name: name.to_owned(),
+            role: None,
+            total: 0,
+            unread: 0,
+            subscribed: created.is_subscribed.unwrap_or(true),
+            children: Vec::new(),
+        })
+    }
+
+    /// Removes a folder — `delete_folder_sync`.
+    ///
+    /// By mailbox id rather than by path, like every other write here: the
+    /// caller named a folder out of a listing, and the path that folder had is
+    /// the part of the listing another client's rename can already have
+    /// invalidated.
+    ///
+    /// No `onDestroyRemoveEmails`. RFC 8621 §2.5 makes that argument the
+    /// difference between "remove this folder" and "remove this folder and
+    /// everything in it", and the second is not what Camel asked for: a store
+    /// that quietly sent it would delete the user's mail on a click that says
+    /// nothing about mail. What comes back instead is the server's refusal —
+    /// `mailboxHasChild` or `mailboxHasEmail` — and those are kept whole, as
+    /// [`SyncError::Client`], for the caller to put in front of the user.
+    ///
+    /// They deliberately get no variant of their own, unlike the missing folder
+    /// below. The test for a variant here is whether Camel has a *code* the
+    /// caller could map it onto, and for these two it does not — the reason is
+    /// prose either way, and re-encoding the server's own vocabulary into ours
+    /// would only lose the description that came with it.
+    ///
+    /// A mailbox the account no longer holds is [`SyncError::NoSuchFolder`],
+    /// the judgement [`MailSync::set_subscribed`] makes about the same
+    /// situation: another client having removed the folder first is the outcome
+    /// the user asked for, and reporting it as a failure would turn someone
+    /// else's tidying into a broken account.
+    pub fn delete_folder(&self, mailbox: &Id) -> Result<(), SyncError> {
+        self.client
+            .mailbox_destroy(&self.account_id, mailbox)
+            .map_err(|error| folder_error(mailbox, error))
     }
 
     /// One `Email/set` update, with the one refusal that is not a failure
@@ -592,6 +687,25 @@ fn filing_properties() -> Vec<&'static str> {
     let mut properties = SUMMARY_PROPERTIES.to_vec();
     properties.push("mailboxIds");
     properties
+}
+
+/// The one refusal a write to a mailbox has to be told apart from the rest:
+/// the mailbox is not there any more.
+///
+/// Shared by the two writes that name a mailbox rather than a message, because
+/// the judgement is the same in both and it is the kind that goes wrong by
+/// drifting apart: a `notFound` read as an ordinary failure in one place and as
+/// a vanished folder in another is the same account reported two ways depending
+/// on which vfunc the user happened to trigger.
+fn folder_error(mailbox: &Id, error: jmap_client::Error) -> SyncError {
+    match &error {
+        jmap_client::Error::Set(set_error)
+            if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
+        {
+            SyncError::NoSuchFolder(mailbox.clone())
+        }
+        _ => SyncError::Client(error),
+    }
 }
 
 /// The most messages a delta may name before listing the mailbox is the cheaper
