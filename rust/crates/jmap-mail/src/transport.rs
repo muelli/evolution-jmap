@@ -38,17 +38,13 @@
 //! Not shared: the connection itself. Two services, two clients, and neither
 //! disconnect takes the other's away.
 //!
-//! ## What is not here yet
+//! ## What it does
 //!
-//! `send_to_sync`, which is the reason the type exists. Every piece it joins is
-//! now written and tested — [`crate::envelope`] for the addresses Camel hands
-//! it, [`crate::mime`] for the message it is handed as the bytes that go up,
-//! [`MailSync::identity_for`] for the identity to submit through,
-//! [`MailSync::outgoing_mailboxes`] for where the message waits and is filed,
-//! and [`MailSync::send_message`] for the import-and-submit itself — but
-//! nothing calls them yet, and until something does the provider's transport
-//! slot stays `G_TYPE_INVALID`. A registered transport whose `send_to_sync` is
-//! NULL would be an account that offers to send and fails with a GLib critical.
+//! `send_to_sync`, which is the reason the type exists, and which is
+//! [`crate::send`]: everything about the GObject and the connection is here,
+//! everything about Camel's arguments and its answers is there.
+//! [`JmapTransport::send_message`] below is the join in between — the three
+//! account-side operations a send is made of, under one hold of the connection.
 //!
 //! [`MailSync::identity_for`]: jmap_mail_sync::MailSync::identity_for
 //! [`MailSync::outgoing_mailboxes`]: jmap_mail_sync::MailSync::outgoing_mailboxes
@@ -64,9 +60,30 @@ use jmap_backend_core::instance::Slot;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::MailSync;
 
+use jmap_mail_sync::Outgoing;
+use jmap_proto::Id;
+use jmap_proto::mail::Envelope;
+
+use crate::connect::StoreError;
 use crate::service::Connected;
 use crate::settings::settings_type;
 use crate::store::{read, write};
+
+/// What a message that went out left behind.
+pub struct Sent {
+    /// The id the account holds the message under now — the one the server
+    /// minted for the import, and the uid the sent copy is listed by.
+    pub uid: Id,
+    /// Whether that copy is in the mailbox the account keeps sent mail in,
+    /// which is Camel's `out_sent_message_saved`: a caller told `false` saves a
+    /// copy of its own, and a caller told `true` does not.
+    ///
+    /// It is [`OutgoingMailboxes::saves_sent_copy`] unchanged, and it is
+    /// deliberately not "was the message filed anywhere" — see there.
+    ///
+    /// [`OutgoingMailboxes::saves_sent_copy`]: jmap_mail_sync::OutgoingMailboxes::saves_sent_copy
+    pub saved: bool,
+}
 
 /// The instance struct. `#[repr(C)]` leading with the parent's instance struct
 /// is what makes a `*mut JmapTransport` usable as the `CamelTransport *` every
@@ -111,6 +128,51 @@ impl JmapTransport {
             Some(connection) => write(connection).take().is_some(),
             None => false,
         }
+    }
+
+    /// Sends one message over this transport's connection.
+    ///
+    /// The account-side half of `send_to_sync`: the identity the envelope
+    /// sender goes out through, the two mailboxes the message waits in and is
+    /// filed into, and the import-and-submit itself. Three operations on
+    /// [`MailSync`] that this joins and nothing else — the RFC 5322 bytes and
+    /// the envelope are already what they will be on the wire when they arrive
+    /// here, because [`crate::send`] built them out of Camel's arguments before
+    /// looking for a connection at all.
+    ///
+    /// **One hold of the read lock across all three.** Taking it once per
+    /// operation would let a `disconnect_sync` land between the identity lookup
+    /// and the submission, so that a message is imported over one connection
+    /// and submitted over another — or not submitted at all, with a draft left
+    /// behind for a send that reported a failure. It stays a *read* lock, which
+    /// is the whole reason the slot holds an `RwLock`: Evolution's outbox
+    /// hands a transport several messages in a row, and a second send does not
+    /// queue behind the first one's upload.
+    ///
+    /// **The identity first, then the mailboxes.** Both are round trips that
+    /// cost nothing to lose — they happen before the upload — so the order is
+    /// only about which sentence the user gets when both are wrong, and "this
+    /// account cannot send as that address" names something they chose and can
+    /// change in the composer.
+    pub fn send_message(&self, source: Vec<u8>, envelope: Envelope) -> Result<Sent, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+
+        let identity = sync.identity_for(&envelope.mail_from.email)?;
+        let mailboxes = sync.outgoing_mailboxes()?;
+        let uid = sync.send_message(Outgoing {
+            source,
+            identity,
+            envelope: Some(envelope),
+            staging: mailboxes.staging,
+            destination: mailboxes.destination,
+        })?;
+
+        Ok(Sent {
+            uid,
+            saved: mailboxes.saves_sent_copy,
+        })
     }
 
     /// Whether a send would find a connection.
@@ -213,6 +275,15 @@ unsafe impl ObjectSubclass for JmapTransport {
         //
         // SAFETY: as above, and `Self` is the type being registered.
         unsafe { crate::service::install_vfuncs::<Self>(service) };
+
+        // The reason the type exists. `camel_transport_send_to_sync` is a
+        // `g_return_val_if_fail (class->send_to_sync != NULL, FALSE)`, so a
+        // transport that installed none would be an account that offers to send
+        // and answers a GLib critical.
+        //
+        // SAFETY: the class leads with `CamelTransportClass`, which is the
+        // contract at the top of this impl.
+        unsafe { crate::send::install_vfuncs(class.cast::<CamelTransportClass>()) };
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {

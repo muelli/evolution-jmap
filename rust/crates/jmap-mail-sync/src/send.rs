@@ -160,6 +160,21 @@ pub struct OutgoingMailboxes {
     /// Where the server files it once the submission is accepted, if that is
     /// somewhere else.
     pub destination: Option<Id>,
+    /// Whether the copy this send leaves behind is in the mailbox the account
+    /// keeps sent mail in.
+    ///
+    /// It is the answer to Camel's `out_sent_message_saved`, which asks whether
+    /// the transport has already saved the sent copy — a caller told `false`
+    /// saves one of its own, and a caller told `true` does not.
+    ///
+    /// A field rather than something the caller derives, because neither id
+    /// above answers it: [`Self::destination`] is `None` both for the account
+    /// that stages *in* Sent, where the copy is saved, and for the account that
+    /// has only a Drafts, where it is not. Reading "no destination" as "not
+    /// saved" would have Evolution append a second copy of every message the
+    /// first kind of account sends; reading it as "saved" would lose the sent
+    /// copy of the second kind altogether.
+    pub saves_sent_copy: bool,
 }
 
 impl OutgoingMailboxes {
@@ -193,9 +208,15 @@ impl OutgoingMailboxes {
     /// Not an optimisation but the same rule [`Filing::is_empty`] is built on:
     /// a message cannot be filed out of a mailbox into that same mailbox, and
     /// asking for it would put a pointer that is both `true` and `null` in one
-    /// patch. `None` is also what the caller wants to hear — it is the answer
-    /// to "did this provider already save the sent copy somewhere else", which
-    /// is what Camel's `out_sent_message_saved` out-parameter asks.
+    /// patch.
+    ///
+    /// ## Whether the copy counts as saved
+    ///
+    /// [`Self::saves_sent_copy`] is that question and it is not the one above,
+    /// which is the whole reason it is carried separately: it is true exactly
+    /// when the account *has* a Sent mailbox, because the message ends up in
+    /// one either way — filed there from Drafts, or staged there to begin with.
+    /// The absent destination means only that no move is needed.
     pub fn of(tree: &FolderTree) -> Option<Self> {
         let sent = tree.role(FolderRole::Sent).map(|folder| folder.id.clone());
         let drafts = tree
@@ -203,10 +224,12 @@ impl OutgoingMailboxes {
             .map(|folder| folder.id.clone());
 
         let staging = drafts.or_else(|| sent.clone())?;
+        let saves_sent_copy = sent.is_some();
         let destination = sent.filter(|sent| *sent != staging);
         Some(Self {
             staging,
             destination,
+            saves_sent_copy,
         })
     }
 }

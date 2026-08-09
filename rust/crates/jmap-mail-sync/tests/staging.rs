@@ -62,6 +62,9 @@ fn a_message_waits_in_drafts_and_is_filed_in_sent() {
     // one that is still being submitted has not.
     assert_eq!(mailboxes.staging, drafts);
     assert_eq!(mailboxes.destination, Some(sent));
+    // And the copy the user keeps is the one the server files, so the caller
+    // must not keep a second.
+    assert!(mailboxes.saves_sent_copy);
 }
 
 #[test]
@@ -101,6 +104,10 @@ fn an_account_with_no_sent_mailbox_leaves_the_message_where_it_waited() {
     // is [`Outgoing::accepted_patch`]'s half of this.
     assert_eq!(mailboxes.staging, drafts);
     assert_eq!(mailboxes.destination, None);
+    // The one account where the sent copy is *not* saved where sent mail
+    // belongs, because there is no such mailbox. The caller is told so, and
+    // Evolution keeps its own copy wherever it was configured to.
+    assert!(!mailboxes.saves_sent_copy);
 }
 
 #[test]
@@ -119,6 +126,12 @@ fn an_account_with_no_drafts_waits_in_the_mailbox_it_will_be_filed_in() {
     // filed out of a mailbox into the same one.
     assert_eq!(mailboxes.staging, sent);
     assert_eq!(mailboxes.destination, None);
+    // The case that makes this a field rather than `destination.is_some()`:
+    // there is no destination and the copy *is* saved where sent mail belongs,
+    // because that is where it was staged. A caller that read the absent
+    // destination as "not saved" would have Evolution append a second copy of
+    // every message this account sends.
+    assert!(mailboxes.saves_sent_copy);
 }
 
 #[test]
@@ -152,6 +165,7 @@ fn the_mailboxes_are_read_from_the_account_at_every_send() {
 
     let before = sync.outgoing_mailboxes().expect("the account can send");
     assert_eq!(before.destination, None);
+    assert!(!before.saves_sent_copy);
 
     // Another client — or the user, in another window — gives the account a
     // Sent mailbox. Nothing caches the tree, for [`MailSync::identity_for`]'s
@@ -162,4 +176,5 @@ fn the_mailboxes_are_read_from_the_account_at_every_send() {
     let after = sync.outgoing_mailboxes().expect("the account can send");
     assert_eq!(after.staging, drafts);
     assert_eq!(after.destination, Some(sent));
+    assert!(after.saves_sent_copy);
 }
