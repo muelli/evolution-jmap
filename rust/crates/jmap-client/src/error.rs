@@ -35,6 +35,18 @@ pub enum Error {
     /// attachment as a link instead. Flattened into prose they would have to be
     /// parsed back out.
     TooLarge { size: u64, limit: u64 },
+    /// More octets in one request to `apiUrl` than the session's
+    /// `maxSizeRequest` (RFC 8620 §2).
+    ///
+    /// Distinct from [`Self::TooLarge`] because the remedy is: an upload that
+    /// is too big cannot be made smaller by the caller, so that one is the end
+    /// of the road, while a request that is too long can nearly always be sent
+    /// as several. This variant is what is left when it cannot — a single id so
+    /// long that a call naming only it is still over the limit — and it says
+    /// so with both numbers rather than with the server's
+    /// `urn:ietf:params:jmap:error:limit`, which is the same string for every
+    /// request-level limit there is.
+    RequestTooLarge { size: u64, limit: u64 },
 }
 
 impl Error {
@@ -84,6 +96,10 @@ impl std::fmt::Display for Error {
             Error::TooLarge { size, limit } => write!(
                 f,
                 "{size} bytes is larger than the {limit} bytes this account accepts in one upload"
+            ),
+            Error::RequestTooLarge { size, limit } => write!(
+                f,
+                "{size} bytes is larger than the {limit} bytes this account accepts in one request"
             ),
         }
     }

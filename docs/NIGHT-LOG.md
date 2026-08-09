@@ -7397,3 +7397,121 @@ one — it bounds the *bytes* of a request, which for `Email/import` and a large
 `Email/set` is a number the client would have to measure before sending rather
 than count. Otherwise `get_folder_info_sync`'s NULL-versus-GError question, or
 the README.
+
+## 2026-08-09 (seventy-seventh session)
+
+**The octets nobody had counted.** `maxCallsInRequest` was read last session;
+`maxSizeRequest` — its sibling, counting octets where that one counts calls —
+was not, and the mock advertised a hardcoded 10 MB it never enforced. RFC 8620
+§2 refuses an over-long request on its *bytes*, before it is a request at all,
+with `urn:ietf:params:jmap:error:limit`. The one call this client builds whose
+length is the user's mailbox rather than the client's choice is `Email/get`
+naming a list of ids: a folder of ten thousand messages is a list of ten
+thousand ids, and over the limit the client got none of them.
+
+Red first, in three layers, the same three as last session:
+
+- `evolution-jmap-proto`: two tests for a `Session::max_size_request()` that did
+  not exist — `Some(10_000_000)` off the RFC fixture, `None` for a session with
+  the property stripped.
+- `evolution-jmap-mock`: `size_request(n)` / `no_size_request()` on the builder,
+  advertised **and enforced** — the hardcoded `maxSizeRequest` in the session
+  document is gone, replaced by the configured one. Enforcement happens on
+  `body.len()` before `serde_json::from_slice`, because a server counting octets
+  has not parsed anything yet and cannot have run any of the calls inside. A
+  test pins that (a 400 `…:error:limit` with `"limit": "maxSizeRequest"`, and
+  `Core/echo` never runs), sent through `UreqTransport` rather than the client,
+  since the client now refuses such a request itself and a client-side assertion
+  there would have been about the client twice.
+- `evolution-jmap-client`: four tests over `email_get`, two of which failed.
+
+What landed:
+
+- **`Session::max_size_request()`**, the fourth accessor of its shape, `None`
+  for a silent server for the same reason as the other three.
+- **`Client::api_call` refuses an oversized request without sending it**, with a
+  new `Error::RequestTooLarge { size, limit }`. This is the backstop under every
+  caller that builds its own envelope.
+- **`Client::email_get` splits a long id list across several requests.** Each
+  chunk gets its call id first, then the request naming *no* ids is serialized
+  once to measure everything whose length is not the id list; a JSON array grows
+  by exactly each element's serialized length plus one comma between them, so
+  that single measurement places every boundary, and places it on the same count
+  the server will — the bytes measured are the bytes `api_call` sends. No
+  estimate, no slack constant.
+- `email_query_then_get`'s split path and `jmap-mail-sync`'s chunked catch-up
+  both go through `email_get`, so both inherit this without a line of their own
+  changing.
+- **`ServerState::api_requests` is now incremented at the top of `handle_api`**,
+  before the body is parsed rather than after. A request refused on its size is
+  still a round trip the client spent, which is exactly what a test asserting
+  "nothing was sent" needs to be able to see. The comment that already claimed
+  this is now true of the malformed-body path too.
+
+Decisions taken:
+
+- **Split, rather than fail with a good error** — the same call as last
+  session's, and for the same reason: an upload that is too big cannot be made
+  smaller by the client, but a request that is too long can nearly always be
+  sent as several. `Error::RequestTooLarge` is what is left when it cannot: a
+  single id so long that a call naming only it is still over the limit. A call
+  naming one id cannot be made into two, and that is where splitting ends.
+- **`RequestTooLarge` is its own variant, not `TooLarge`.** The two differ in
+  what the caller can do — and in `jmap-mail` they differ in the GError: the
+  upload one is a `CAMEL_FOLDER_ERROR_INVALID` because one message is what could
+  not be used, while this one reaches the wildcard and is reported as a service
+  error, because a server handing out ids too long for the request size it
+  itself named is the account being inconsistent. Written into the comment at
+  that arm rather than left to be rediscovered.
+- **The whole list stays the default.** Splitting is only what the limit forces:
+  between two requests another client may destroy a message the first named, and
+  it comes back one short rather than as an error. A server naming no limit is
+  sent the list whole, like the other three limits.
+- **`maxObjectsInGet` and `maxSizeRequest` do not imply each other**, so the
+  count chunking in `jmap-mail-sync` is not made redundant by this and was left
+  alone: ids may be up to 255 characters (RFC 8620 §1.2), so a list well inside
+  one limit can be well outside the other.
+
+**Not covered by a test, and the honest limits:**
+
+1. **No real server was asked.** The mock now enforces what it advertises, but
+   whether a real server counts the same octets — body only, as RFC 8620 §2
+   says, and not headers or a decompressed length — is unverified. A server that
+   counts more than the body will still refuse a request this client measured as
+   fitting. Stalwart is where to check that, not this VM.
+2. **Only `Email/get` splits.** Every other call this client builds is a fixed
+   shape whose length does not grow with the user's data, so `api_call`'s
+   refusal is the whole answer for them — but `Email/set` with many `update`
+   entries would be the next one to grow, and nothing here splits it. It is not
+   built that way today.
+3. **The test's limit is 220 octets**, chosen because an `Email/get` naming no
+   ids is 150 here. That is a measured number written into a comment, not a
+   number a server would use, and a change to the capability list would move it.
+   The test asserts the split happened rather than how many requests it took, so
+   it fails loudly rather than silently stopping exercising the split.
+4. **Nothing here has been seen in Evolution** — *needs human verification in
+   real Evolution*, like the rest of this surface.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). One new file,
+`jmap-client/tests/request_size.rs`, with the SPDX `GPL-3.0-or-later` header.
+`cargo fmt --check`, `cargo test --locked` and `cargo clippy --all-targets
+--locked -- -D warnings` are clean on the default member set (410 tests, up from
+402) and on the five EDS crates (589, unchanged — the mail provider reads mail
+through the client, so it inherits the splitting without a line of its own
+changing).
+
+No milestone tag is claimed.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; `get_folder_info_sync`'s NULL-versus-GError
+question; `service.rs` unexercised against a real `CamelSession`; and the
+README's architecture block still listing only the round-1 crates.
+`maxConcurrentUpload` is the last core limit still unread — and, unlike the
+three now read, it is about concurrency rather than about a number to compare
+against, so it means nothing to a blocking client that makes one request at a
+time. Worth writing down as answered-by-design rather than carrying as open.
+
+Next in M5: `get_folder_info_sync`'s NULL-versus-GError question, or the README's
+architecture block. The core limits are done.

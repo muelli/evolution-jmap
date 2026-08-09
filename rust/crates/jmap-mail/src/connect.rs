@@ -225,6 +225,12 @@ impl StoreError {
             // reads to decide an account is unusable. The sentence carries the
             // limit; the code only has to not lie about whose fault it is.
             //
+            // Deliberately not `Error::RequestTooLarge`, which reaches the
+            // wildcard below and is reported as a service error: that one means
+            // the server handed out an id too long to fit in a request of the
+            // size the server itself named, which is the account being
+            // inconsistent rather than one message being unusable.
+            //
             // SAFETY: as above.
             Self::Client(Error::TooLarge { .. }) => unsafe {
                 (
