@@ -57,6 +57,28 @@
 //! - A transfer that failed without moving a row announces nothing. The one
 //!   failure that does announce is a message another client destroyed, which
 //!   leaves the folder precisely because it is not in it any more.
+//!
+//! ## A selection, and what only a selection can say
+//!
+//! Everything above transfers one message, and the vfunc is handed a *list* —
+//! whatever the user had highlighted when they dragged. Three of this file's
+//! claims are about the list rather than about a message, and none of them can
+//! be made with one uid in it:
+//!
+//! - **The walk is a request per uid, and it finishes.** This is the module's
+//!   own "one request per message, not one per transfer" decision, seen from
+//!   outside: a message another client destroyed must not take the rest of the
+//!   user's selection with it, so
+//!   [`a_message_that_is_gone_does_not_hold_up_the_rest_of_the_selection`] moves
+//!   the second message behind a first that cannot move.
+//! - **The out-parameter's slots line up with the list that came in.** Camel
+//!   reads the answer for a message by its position, so a half-worked transfer
+//!   leaves NULL in the slot of the message that did not land rather than a
+//!   shorter array — [`a_partial_transfer_reports_only_the_messages_that_landed`].
+//! - **One emission for the whole selection.** Camel's change info is four
+//!   *lists* precisely so that a drag of twenty messages redraws the message
+//!   list once, and
+//!   [`the_rows_a_selection_left_behind_are_announced_together`] is that.
 
 mod common;
 
@@ -86,8 +108,28 @@ use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 
-/// One connected account with two folders open — an inbox holding one message,
-/// and an archive holding none — which is the state every transfer starts from.
+/// The messages the fixture can seed, in the order it seeds them. A transfer of
+/// a *message* takes the first; a transfer of a *selection* takes both.
+const MESSAGES: [(&str, &str, &str, &str, &str); 2] = [
+    (
+        "Bob",
+        "bob@example.com",
+        "Lunch?",
+        "One o'clock.",
+        "2026-01-15T09:30:00Z",
+    ),
+    (
+        "Carla",
+        "carla@example.com",
+        "The invoice",
+        "Attached, as promised.",
+        "2026-01-15T11:05:00Z",
+    ),
+];
+
+/// One connected account with two folders open — an inbox holding the seeded
+/// messages, and an archive holding none — which is the state every transfer
+/// starts from.
 struct Fixture {
     server: MockServer,
     account: Account,
@@ -95,27 +137,47 @@ struct Fixture {
     archive: *mut CamelFolder,
     inbox_id: Id,
     archive_id: Id,
-    uid: Id,
+    uids: Vec<Id>,
 }
 
 impl Fixture {
+    /// One message in the inbox: a transfer of a single message, which is what
+    /// most of this file is about.
     fn start() -> Self {
+        Self::seeded(1)
+    }
+
+    /// Two, for the transfers that are about a selection rather than a message.
+    /// Evolution hands the vfunc whatever the user had highlighted, and what a
+    /// selection asserts is what one message cannot: that the walk makes a
+    /// request per uid, that the out-parameter's slots line up with the list
+    /// that came in, and that the rows that left are announced together.
+    fn selection() -> Self {
+        Self::seeded(2)
+    }
+
+    fn seeded(messages: usize) -> Self {
         let server = MockServer::builder().start();
         let account_id = server.account_id();
-        let (inbox_id, archive_id, uid) = {
+        let (inbox_id, archive_id, uids) = {
             let state = server.state();
             let mut state = state.lock().unwrap();
             let account = state.account_mut(&account_id).unwrap();
             let inbox_id = account.seed_mailbox("Inbox", Some(role::INBOX));
             let archive_id = account.seed_mailbox("Archive", None);
-            let uid = account.seed_email(EmailSeed::new(
-                inbox_id.clone(),
-                ("Bob", "bob@example.com"),
-                "Lunch?",
-                "One o'clock.",
-                "2026-01-15T09:30:00Z",
-            ));
-            (inbox_id, archive_id, uid)
+            let uids = MESSAGES[..messages]
+                .iter()
+                .map(|(name, address, subject, body, received_at)| {
+                    account.seed_email(EmailSeed::new(
+                        inbox_id.clone(),
+                        (*name, *address),
+                        subject,
+                        body,
+                        received_at,
+                    ))
+                })
+                .collect();
+            (inbox_id, archive_id, uids)
         };
 
         let account = Account::open();
@@ -145,8 +207,19 @@ impl Fixture {
             archive,
             inbox_id,
             archive_id,
-            uid,
+            uids,
         }
+    }
+
+    /// The first seeded message, which is the one a test transfers unless it
+    /// says otherwise.
+    fn uid(&self) -> &Id {
+        &self.uids[0]
+    }
+
+    /// The second, for a fixture built by [`Fixture::selection`].
+    fn second(&self) -> &Id {
+        &self.uids[1]
     }
 
     /// The same fixture, with one of its folders listened to from here on.
@@ -154,13 +227,12 @@ impl Fixture {
     /// The setup is pumped away first and only then is the handler connected,
     /// because the emission the inbox's refresh queued would otherwise be
     /// delivered into a test that is asking what the *transfer* announced. The
-    /// context is the caller's, and has to have been pushed before
-    /// [`Fixture::start`] opened the account: see `common::signals::Context`.
-    fn watching(context: &Context, folder: fn(&Self) -> *mut CamelFolder) -> Self {
-        let fixture = Self::start();
+    /// context is the caller's, and has to have been pushed before the fixture
+    /// opened the account: see `common::signals::Context`.
+    fn watched(self, context: &Context, folder: fn(&Self) -> *mut CamelFolder) -> Self {
         emissions(context);
-        watch(folder(&fixture));
-        fixture
+        watch(folder(&self));
+        self
     }
 
     /// Through Camel's own wrapper, which is what Evolution calls when the user
@@ -234,14 +306,14 @@ impl Fixture {
     }
 
     /// Which mailboxes the server has the message in now.
-    fn mailboxes_on_server(&self) -> BTreeMap<Id, bool> {
+    fn mailboxes_on_server(&self, uid: &Id) -> BTreeMap<Id, bool> {
         let account_id = self.server.account_id();
         let state = self.server.state();
         let state = state.lock().unwrap();
         let account = state.account(&account_id).unwrap();
         account
             .emails
-            .get(&self.uid)
+            .get(uid)
             .expect("the seeded message")
             .mailbox_ids
             .clone()
@@ -249,14 +321,14 @@ impl Fixture {
     }
 
     /// And what it holds for its keywords.
-    fn keywords_on_server(&self) -> BTreeMap<String, bool> {
+    fn keywords_on_server(&self, uid: &Id) -> BTreeMap<String, bool> {
         let account_id = self.server.account_id();
         let state = self.server.state();
         let state = state.lock().unwrap();
         let account = state.account(&account_id).unwrap();
         account
             .emails
-            .get(&self.uid)
+            .get(uid)
             .expect("the seeded message")
             .keywords
             .clone()
@@ -264,12 +336,12 @@ impl Fixture {
     }
 
     /// Destroys the message the way another client would.
-    fn destroyed_elsewhere(&self) {
+    fn destroyed_elsewhere(&self, uid: &Id) {
         let account_id = self.server.account_id();
         let state = self.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&account_id).unwrap();
-        let uid = self.uid.clone();
+        let uid = uid.clone();
         account.emails.transaction(|emails| {
             assert!(emails.destroy(&uid), "the seeded message was not there");
         });
@@ -278,7 +350,7 @@ impl Fixture {
     /// Changes the message's flags the way Evolution's message list does, and
     /// without saving them.
     fn mark_read(&self) {
-        let uid = CString::new(self.uid.as_str()).expect("a uid with no NUL");
+        let uid = CString::new(self.uid().as_str()).expect("a uid with no NUL");
         // SAFETY: a live folder that has a summary, a NUL-terminated uid alive
         // across the call, and one reference to the row, released here.
         unsafe {
@@ -470,10 +542,10 @@ impl Drop for Transferred {
 fn a_message_the_user_copied_is_in_both_mailboxes() {
     let fixture = Fixture::start();
 
-    fixture.transfer(&[&fixture.uid], false).expect_ok();
+    fixture.transfer(&[fixture.uid()], false).expect_ok();
 
     assert_eq!(
-        fixture.mailboxes_on_server(),
+        fixture.mailboxes_on_server(fixture.uid()),
         BTreeMap::from([
             (fixture.inbox_id.clone(), true),
             (fixture.archive_id.clone(), true)
@@ -487,9 +559,9 @@ fn a_message_the_user_copied_is_in_both_mailboxes() {
 fn a_copied_message_stays_in_the_folder_it_came_from() {
     let fixture = Fixture::start();
 
-    fixture.transfer(&[&fixture.uid], false).expect_ok();
+    fixture.transfer(&[fixture.uid()], false).expect_ok();
 
-    assert_eq!(listed(fixture.inbox), vec![fixture.uid.to_string()]);
+    assert_eq!(listed(fixture.inbox), vec![fixture.uid().to_string()]);
 }
 
 /// The move half: one patch, and the mailbox it came out of is gone from the
@@ -498,10 +570,10 @@ fn a_copied_message_stays_in_the_folder_it_came_from() {
 fn a_message_the_user_moved_is_only_in_the_destination() {
     let fixture = Fixture::start();
 
-    fixture.transfer(&[&fixture.uid], true).expect_ok();
+    fixture.transfer(&[fixture.uid()], true).expect_ok();
 
     assert_eq!(
-        fixture.mailboxes_on_server(),
+        fixture.mailboxes_on_server(fixture.uid()),
         BTreeMap::from([(fixture.archive_id.clone(), true)])
     );
 }
@@ -513,7 +585,7 @@ fn a_message_the_user_moved_is_only_in_the_destination() {
 fn a_moved_message_leaves_the_folder_it_came_from() {
     let fixture = Fixture::start();
 
-    fixture.transfer(&[&fixture.uid], true).expect_ok();
+    fixture.transfer(&[fixture.uid()], true).expect_ok();
 
     assert!(
         listed(fixture.inbox).is_empty(),
@@ -529,12 +601,12 @@ fn a_moved_message_leaves_the_folder_it_came_from() {
 fn the_uid_of_a_transferred_message_is_the_one_it_had() {
     let fixture = Fixture::start();
 
-    let transferred = fixture.transfer(&[&fixture.uid], true);
+    let transferred = fixture.transfer(&[fixture.uid()], true);
 
     transferred.expect_ok();
     assert_eq!(
         transferred.reported(),
-        vec![Some(fixture.uid.to_string())],
+        vec![Some(fixture.uid().to_string())],
         "the transfer did not report where the message ended up"
     );
 }
@@ -549,15 +621,15 @@ fn a_move_settles_a_flag_the_user_had_not_saved_yet() {
     let fixture = Fixture::start();
     fixture.mark_read();
 
-    fixture.transfer(&[&fixture.uid], true).expect_ok();
+    fixture.transfer(&[fixture.uid()], true).expect_ok();
 
     assert_eq!(
-        fixture.keywords_on_server(),
+        fixture.keywords_on_server(fixture.uid()),
         BTreeMap::from([("$seen".to_owned(), true)]),
         "the move lost the user's unsaved flag change"
     );
     assert_eq!(
-        fixture.mailboxes_on_server(),
+        fixture.mailboxes_on_server(fixture.uid()),
         BTreeMap::from([(fixture.archive_id.clone(), true)])
     );
 }
@@ -574,12 +646,12 @@ fn a_move_into_the_folder_the_message_is_already_in_is_not_a_request() {
     assert!(fixture.account.jmap().drop_connection());
 
     fixture
-        .transfer_straight(fixture.inbox, fixture.inbox, &[&fixture.uid], true)
+        .transfer_straight(fixture.inbox, fixture.inbox, &[fixture.uid()], true)
         .expect_ok();
 
     assert_eq!(
         listed(fixture.inbox),
-        vec![fixture.uid.to_string()],
+        vec![fixture.uid().to_string()],
         "a message that went nowhere was taken out of its folder"
     );
 }
@@ -607,7 +679,7 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
     assert!(fixture.account.jmap().drop_connection());
 
     let transferred =
-        fixture.transfer_straight(fixture.inbox, fixture.archive, &[&fixture.uid], true);
+        fixture.transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true);
 
     assert!(!transferred.ok, "a disconnected folder transferred anyway");
     assert!(!transferred.error.is_null(), "it failed without saying why");
@@ -621,7 +693,7 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
     }
     assert_eq!(
         listed(fixture.inbox),
-        vec![fixture.uid.to_string()],
+        vec![fixture.uid().to_string()],
         "a message that never moved was taken out of its folder"
     );
 }
@@ -636,9 +708,9 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
 #[test]
 fn a_message_another_client_deleted_is_reported_and_leaves_the_folder() {
     let fixture = Fixture::start();
-    fixture.destroyed_elsewhere();
+    fixture.destroyed_elsewhere(fixture.uid());
 
-    let transferred = fixture.transfer(&[&fixture.uid], true);
+    let transferred = fixture.transfer(&[fixture.uid()], true);
 
     assert!(!transferred.ok, "a message that is gone was transferred");
     // SAFETY: a live GError, and the quark accessor takes no arguments.
@@ -661,15 +733,15 @@ fn a_message_another_client_deleted_is_reported_and_leaves_the_folder() {
 #[test]
 fn a_move_tells_camel_the_row_that_left() {
     let context = Context::push();
-    let fixture = Fixture::watching(&context, |fixture| fixture.inbox);
+    let fixture = Fixture::start().watched(&context, |fixture| fixture.inbox);
 
-    fixture.transfer(&[&fixture.uid], true).expect_ok();
+    fixture.transfer(&[fixture.uid()], true).expect_ok();
 
     assert_eq!(
         emissions(&context),
         vec![Emission {
             added: Vec::new(),
-            removed: vec![fixture.uid.to_string()],
+            removed: vec![fixture.uid().to_string()],
             changed: Vec::new(),
             recent: Vec::new(),
         }]
@@ -682,9 +754,9 @@ fn a_move_tells_camel_the_row_that_left() {
 #[test]
 fn a_copy_says_nothing_about_the_folder_it_came_from() {
     let context = Context::push();
-    let fixture = Fixture::watching(&context, |fixture| fixture.inbox);
+    let fixture = Fixture::start().watched(&context, |fixture| fixture.inbox);
 
-    fixture.transfer(&[&fixture.uid], false).expect_ok();
+    fixture.transfer(&[fixture.uid()], false).expect_ok();
 
     let emissions = emissions(&context);
     assert!(
@@ -704,9 +776,9 @@ fn a_copy_says_nothing_about_the_folder_it_came_from() {
 #[test]
 fn a_move_says_nothing_about_the_folder_it_arrives_in() {
     let context = Context::push();
-    let fixture = Fixture::watching(&context, |fixture| fixture.archive);
+    let fixture = Fixture::start().watched(&context, |fixture| fixture.archive);
 
-    fixture.transfer(&[&fixture.uid], true).expect_ok();
+    fixture.transfer(&[fixture.uid()], true).expect_ok();
 
     let emissions = emissions(&context);
     assert!(
@@ -727,11 +799,11 @@ fn a_move_says_nothing_about_the_folder_it_arrives_in() {
 #[test]
 fn a_message_another_client_deleted_is_announced_as_its_row_goes() {
     let context = Context::push();
-    let fixture = Fixture::watching(&context, |fixture| fixture.inbox);
-    fixture.destroyed_elsewhere();
+    let fixture = Fixture::start().watched(&context, |fixture| fixture.inbox);
+    fixture.destroyed_elsewhere(fixture.uid());
 
     assert!(
-        !fixture.transfer(&[&fixture.uid], true).ok,
+        !fixture.transfer(&[fixture.uid()], true).ok,
         "a message that is gone was transferred"
     );
 
@@ -739,7 +811,7 @@ fn a_message_another_client_deleted_is_announced_as_its_row_goes() {
         emissions(&context),
         vec![Emission {
             added: Vec::new(),
-            removed: vec![fixture.uid.to_string()],
+            removed: vec![fixture.uid().to_string()],
             changed: Vec::new(),
             recent: Vec::new(),
         }]
@@ -753,16 +825,127 @@ fn a_message_another_client_deleted_is_announced_as_its_row_goes() {
 #[test]
 fn a_transfer_that_failed_leaves_the_message_list_alone() {
     let context = Context::push();
-    let fixture = Fixture::watching(&context, |fixture| fixture.inbox);
+    let fixture = Fixture::start().watched(&context, |fixture| fixture.inbox);
     assert!(fixture.account.jmap().drop_connection());
 
     let transferred =
-        fixture.transfer_straight(fixture.inbox, fixture.archive, &[&fixture.uid], true);
+        fixture.transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true);
 
     assert!(!transferred.ok, "a disconnected folder transferred anyway");
     let emissions = emissions(&context);
     assert!(
         emissions.is_empty(),
         "a transfer that failed announced {emissions:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// a selection rather than a message
+
+/// The ordinary drag: the user highlighted two messages and dropped both. Each
+/// is its own `Email/set`, and both are written.
+#[test]
+fn every_message_of_a_selection_is_filed() {
+    let fixture = Fixture::selection();
+
+    fixture
+        .transfer(&[fixture.uid(), fixture.second()], true)
+        .expect_ok();
+
+    let archived = BTreeMap::from([(fixture.archive_id.clone(), true)]);
+    assert_eq!(fixture.mailboxes_on_server(fixture.uid()), archived);
+    assert_eq!(fixture.mailboxes_on_server(fixture.second()), archived);
+    assert!(
+        listed(fixture.inbox).is_empty(),
+        "a selection the user moved is still in the folder it left"
+    );
+}
+
+/// The reason the walk is a request per uid rather than one `Email/set` for the
+/// whole selection: a message another client destroyed must not take the rest of
+/// the user's selection with it. One `Email/set` carrying every update would be
+/// applied as a single state change, so a half-failed transfer would come back
+/// as one failure with no way to say which messages moved — and a walk that
+/// stopped at the first error would leave messages behind for a reason that says
+/// nothing about them.
+///
+/// The transfer is still reported as failed, because one of the messages the
+/// user asked about did not move.
+#[test]
+fn a_message_that_is_gone_does_not_hold_up_the_rest_of_the_selection() {
+    let fixture = Fixture::selection();
+    fixture.destroyed_elsewhere(fixture.uid());
+
+    let transferred = fixture.transfer(&[fixture.uid(), fixture.second()], true);
+
+    assert!(!transferred.ok, "a message that is gone was transferred");
+    // SAFETY: a live GError, and the quark accessor takes no arguments.
+    unsafe {
+        assert_eq!((*transferred.error).domain, camel_folder_error_quark());
+        assert_eq!(
+            (*transferred.error).code,
+            CAMEL_FOLDER_ERROR_INVALID_UID as i32
+        );
+    }
+    assert_eq!(
+        fixture.mailboxes_on_server(fixture.second()),
+        BTreeMap::from([(fixture.archive_id.clone(), true)]),
+        "the message behind the one that is gone was left where it was"
+    );
+}
+
+/// And what the caller is told about a transfer that half worked. Camel's
+/// out-parameter is an array with one slot per uid the caller passed, so the
+/// answer for a message is read by its position: the uid it kept for the one
+/// that landed — see [`the_uid_of_a_transferred_message_is_the_one_it_had`] for
+/// why that is the uid it came in as — and NULL in the slot of the one that did
+/// not. A shorter array, or one that closed the gap up, would tell the caller
+/// the wrong message had moved.
+#[test]
+fn a_partial_transfer_reports_only_the_messages_that_landed() {
+    let fixture = Fixture::selection();
+    fixture.destroyed_elsewhere(fixture.uid());
+
+    let transferred = fixture.transfer(&[fixture.uid(), fixture.second()], true);
+
+    assert!(!transferred.ok, "a message that is gone was transferred");
+    assert_eq!(
+        transferred.reported(),
+        vec![None, Some(fixture.second().to_string())]
+    );
+}
+
+/// One emission for the whole selection, not one per message. Camel's change
+/// info is four *lists* for exactly this reason: a message list redrawn once
+/// for a drag of twenty messages is the point of it, and twenty emissions would
+/// be twenty redraws of a list the user is looking at.
+///
+/// Both rows are on it although only one message moved — the other is not in
+/// this mailbox because it is not anywhere, which is what
+/// [`a_message_another_client_deleted_is_announced_as_its_row_goes`] asserts for
+/// a selection of one. So this is also the case where the announcement and the
+/// reported outcome deliberately disagree: the transfer failed, and both rows
+/// still left the folder.
+#[test]
+fn the_rows_a_selection_left_behind_are_announced_together() {
+    let context = Context::push();
+    let fixture = Fixture::selection().watched(&context, |fixture| fixture.inbox);
+    fixture.destroyed_elsewhere(fixture.uid());
+
+    assert!(
+        !fixture
+            .transfer(&[fixture.uid(), fixture.second()], true)
+            .ok,
+        "a message that is gone was transferred"
+    );
+
+    assert_eq!(
+        emissions(&context),
+        vec![Emission {
+            added: Vec::new(),
+            removed: vec![fixture.uid().to_string(), fixture.second().to_string()],
+            changed: Vec::new(),
+            recent: Vec::new(),
+        }]
     );
 }
