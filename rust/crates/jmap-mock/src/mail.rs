@@ -36,12 +36,7 @@ pub fn mailbox_get(state: &mut ServerState, arguments: Value) -> Result<Value, M
         .iter()
         .map(|(id, mailbox)| {
             let mut mailbox = mailbox.clone();
-            let in_mailbox = |email: &&Email| {
-                email
-                    .mailbox_ids
-                    .as_ref()
-                    .is_some_and(|mailbox_ids| mailbox_ids.get(id).copied().unwrap_or(false))
-            };
+            let in_mailbox = |email: &&Email| filed_in(email, id);
             let total = account
                 .emails
                 .iter()
@@ -91,6 +86,269 @@ pub fn mailbox_get(state: &mut ServerState, arguments: Value) -> Result<Value, M
         list,
         not_found,
     })
+}
+
+/// `Mailbox/set` (RFC 8621 §2.5): making, changing and removing a folder.
+///
+/// Written out rather than handed to [`crate::setops::simple_set`] for the
+/// reason `Email/set` is: every decision here is about the *rest* of the store
+/// rather than about the object in hand. A name is only wrong beside its
+/// siblings, a `parentId` is only a loop when the tree above it is walked, and
+/// a destroy is only refused because of what is filed inside. The generic
+/// helper validates a creation and nothing else, which is exactly the half of
+/// this method that matters least.
+///
+/// The tree the checks run against is a copy that this request updates as it
+/// goes, so a creation is refused by a sibling made two entries earlier in the
+/// same call — a client that sends two folders of one name in one request is
+/// told about the second, not handed both.
+pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+    let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let old_state = account.mailboxes.state();
+    if let Some(expected) = &request.if_in_state
+        && expected != &old_state
+    {
+        return Err(MethodError::new(error::method::STATE_MISMATCH));
+    }
+
+    let mut tree: BTreeMap<Id, Mailbox> = account
+        .mailboxes
+        .iter()
+        .map(|(id, mailbox)| (id.clone(), mailbox.clone()))
+        .collect();
+
+    let mut created: BTreeMap<String, Mailbox> = BTreeMap::new();
+    let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
+    let mut to_create: Vec<(Id, Mailbox)> = Vec::new();
+    for (creation_id, mut mailbox) in request.create.unwrap_or_default() {
+        // `id` is server-set (RFC 8620 §5.3). A backend that sent one would be
+        // offering some local name — a Camel folder path, say — as a JMAP id,
+        // and accepting it would hide the mistake until the two disagreed.
+        if mailbox.id.is_some() {
+            not_created.insert(
+                creation_id,
+                SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("id is set by the server and must not be given in a create"),
+            );
+            continue;
+        }
+        if let Err(refusal) = placeable(&tree, None, &mailbox) {
+            not_created.insert(creation_id, refusal);
+            continue;
+        }
+        let id = account.mailboxes.alloc_id();
+        mailbox.id = Some(id.clone());
+        if mailbox.sort_order.is_none() {
+            mailbox.sort_order = Some(0);
+        }
+        // A folder the user has just asked for is one they are watching; RFC
+        // 8621 §2 leaves the default to the server, and every other answer
+        // would hide the new folder from a client that lists subscribed ones.
+        if mailbox.is_subscribed.is_none() {
+            mailbox.is_subscribed = Some(true);
+        }
+        created.insert(creation_id, counted_empty(&mailbox));
+        tree.insert(id.clone(), mailbox.clone());
+        to_create.push((id, mailbox));
+    }
+
+    let mut updated: BTreeMap<Id, Option<Mailbox>> = BTreeMap::new();
+    let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+    let mut to_update: Vec<(Id, Mailbox)> = Vec::new();
+    for (id, patch) in request.update.unwrap_or_default() {
+        let Some(existing) = tree.get(&id) else {
+            not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        };
+        let Some(patch_map) = patch.as_object() else {
+            not_updated.insert(id, SetError::new(error::set::INVALID_PATCH));
+            continue;
+        };
+        let mut value = serde_json::to_value(existing).map_err(|e| {
+            MethodError::new(error::method::SERVER_FAIL).with_description(e.to_string())
+        })?;
+        let patched = match apply_patch(&mut value, patch_map)
+            .map_err(|message| SetError::new(error::set::INVALID_PATCH).with_description(message))
+            .and_then(|()| {
+                serde_json::from_value::<Mailbox>(value).map_err(|e| {
+                    SetError::new(error::set::INVALID_PATCH).with_description(e.to_string())
+                })
+            }) {
+            Ok(patched) => patched,
+            Err(set_error) => {
+                not_updated.insert(id, set_error);
+                continue;
+            }
+        };
+        // The counts are derived (see `mailbox_get`) and the id is immutable;
+        // a patch that touched either would be describing a different mailbox
+        // than the one it names.
+        if patched.id.as_ref() != Some(&id) {
+            not_updated.insert(
+                id,
+                SetError::new(error::set::INVALID_PROPERTIES).with_description("id is immutable"),
+            );
+            continue;
+        }
+        if let Err(refusal) = placeable(&tree, Some(&id), &patched) {
+            not_updated.insert(id, refusal);
+            continue;
+        }
+        tree.insert(id.clone(), patched.clone());
+        to_update.push((id, patched));
+    }
+
+    let mut destroyed: Vec<Id> = Vec::new();
+    let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
+    for id in request.destroy.unwrap_or_default() {
+        if !tree.contains_key(&id) {
+            not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        }
+        if tree
+            .values()
+            .any(|mailbox| mailbox.parent_id.as_ref() == Some(&id))
+        {
+            not_destroyed.insert(
+                id,
+                SetError::new(jmap_proto::mail::mailbox_set_error::HAS_CHILD),
+            );
+            continue;
+        }
+        // `onDestroyRemoveEmails` is the argument that would make this a
+        // question rather than a refusal, and this mock does not implement it:
+        // a client that wants the mail gone says so about the mail. What the
+        // refusal is here for is the answer a backend has to be able to pass
+        // on to the user unchanged.
+        if account.emails.iter().any(|(_, email)| filed_in(email, &id)) {
+            not_destroyed.insert(
+                id,
+                SetError::new(jmap_proto::mail::mailbox_set_error::HAS_EMAIL),
+            );
+            continue;
+        }
+        tree.remove(&id);
+        destroyed.push(id);
+    }
+
+    account.mailboxes.transaction(|transaction| {
+        for (id, mailbox) in to_create {
+            transaction.create(id, mailbox);
+        }
+        for (id, mailbox) in to_update {
+            transaction.update(&id, mailbox);
+            updated.insert(id, None);
+        }
+        for id in &destroyed {
+            transaction.destroy(id);
+        }
+    });
+
+    to_result(&SetResponse {
+        account_id: request.account_id,
+        old_state: Some(old_state),
+        new_state: account.mailboxes.state(),
+        created: (!created.is_empty()).then_some(created),
+        updated: (!updated.is_empty()).then_some(updated),
+        destroyed: (!destroyed.is_empty()).then_some(destroyed),
+        not_created: (!not_created.is_empty()).then_some(not_created),
+        not_updated: (!not_updated.is_empty()).then_some(not_updated),
+        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
+    })
+}
+
+/// Whether `mailbox` may stand where it says it does, in the tree `tree`.
+///
+/// `of` is the id of the mailbox being changed, or `None` for one being made —
+/// it is what stops a mailbox being its own sibling or its own ancestor when a
+/// rename leaves it exactly where it was.
+///
+/// The three rules are RFC 8621 §2's, and each of them is one a client would
+/// otherwise only discover by finding two folders it cannot tell apart:
+/// a name is unique among siblings and nowhere else, a `parentId` names a
+/// mailbox that exists and is not below the one being moved, and a role belongs
+/// to one mailbox of an account.
+fn placeable(
+    tree: &BTreeMap<Id, Mailbox>,
+    of: Option<&Id>,
+    mailbox: &Mailbox,
+) -> Result<(), SetError> {
+    if mailbox.name.is_empty() {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description("name must not be empty"));
+    }
+    if let Some(parent) = &mailbox.parent_id {
+        if !tree.contains_key(parent) {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description(format!("parentId names {parent}, which is not a mailbox")));
+        }
+        if let Some(of) = of {
+            // Up from the parent, one step at a time. The walk is bounded by
+            // the size of the tree because a loop it did not put there is
+            // still a loop it must not hang on.
+            let mut above = Some(parent.clone());
+            for _ in 0..=tree.len() {
+                let Some(here) = above else { break };
+                if &here == of {
+                    return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                        .with_description("a mailbox cannot be inside itself"));
+                }
+                above = tree
+                    .get(&here)
+                    .and_then(|mailbox| mailbox.parent_id.clone());
+            }
+        }
+    }
+    let elsewhere = |id: &Id| of != Some(id);
+    if tree.iter().any(|(id, sibling)| {
+        elsewhere(id) && sibling.parent_id == mailbox.parent_id && sibling.name == mailbox.name
+    }) {
+        return Err(
+            SetError::new(error::set::INVALID_PROPERTIES).with_description(format!(
+                "another mailbox of the same parent is already named {}",
+                mailbox.name
+            )),
+        );
+    }
+    if let Some(role) = &mailbox.role
+        && tree
+            .iter()
+            .any(|(id, other)| elsewhere(id) && other.role.as_ref() == Some(role))
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("another mailbox already has the role {role}")));
+    }
+    Ok(())
+}
+
+/// A mailbox as a `/set` response describes one that has just been made.
+///
+/// The counts are derived rather than stored (see [`mailbox_get`]), and a
+/// mailbox created a moment ago holds nothing — so they are answered here
+/// rather than left out, which would send the client back for a `Mailbox/get`
+/// to learn a number it could not fail to know.
+fn counted_empty(mailbox: &Mailbox) -> Mailbox {
+    Mailbox {
+        total_emails: Some(0),
+        unread_emails: Some(0),
+        total_threads: Some(0),
+        unread_threads: Some(0),
+        ..mailbox.clone()
+    }
+}
+
+/// Whether `email` is filed in the mailbox `id`.
+///
+/// RFC 8621 §4.1 makes `mailboxIds` a set written as a map to `true`, so a
+/// member that maps to `false` is one that is not there — which a client
+/// removing a message from a folder with a patch produces.
+fn filed_in(email: &Email, id: &Id) -> bool {
+    email
+        .mailbox_ids
+        .as_ref()
+        .is_some_and(|mailbox_ids| mailbox_ids.get(id).copied().unwrap_or(false))
 }
 
 pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {

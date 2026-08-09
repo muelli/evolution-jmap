@@ -56,6 +56,73 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
+    /// Ask the server to make a mailbox (`Mailbox/set` create); answers the
+    /// one it made.
+    ///
+    /// Answered with the object rather than with nothing because the id is the
+    /// server's to hand out: a folder the caller cannot name afterwards is one
+    /// it would have to go looking for by name, in a list where the name is
+    /// unique only among siblings.
+    ///
+    /// A refusal is [`Error::Set`] with the server's own reason — RFC 8621 §2's
+    /// `invalidProperties` for a name a sibling already has, a `parentId` that
+    /// is not a mailbox, or a role the account has already given away.
+    pub fn mailbox_create(&self, account_id: &Id, mailbox: &Mailbox) -> Result<Mailbox, Error> {
+        let request = SetRequest::<Mailbox>::new(account_id.clone()).create("new", mailbox.clone());
+        let response = self.mailbox_set(&request)?;
+        expect_created(&response, "new")
+    }
+
+    /// Change a mailbox (`Mailbox/set` update): its name, where it hangs, or
+    /// whether it is subscribed.
+    ///
+    /// A `PatchObject` (RFC 8620 §5.3) rather than a whole `Mailbox`, for the
+    /// reason [`Client::email_update`] takes one: most of what a `Mailbox`
+    /// carries is the server's — the message counts above all — and sending it
+    /// back would be a client telling a server what it has just been told.
+    pub fn mailbox_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
+        let request = SetRequest::<Mailbox>::new(account_id.clone()).update(id.clone(), patch);
+        let response = self.mailbox_set(&request)?;
+        if response
+            .updated
+            .as_ref()
+            .is_some_and(|updated| updated.contains_key(id))
+        {
+            return Ok(());
+        }
+        Err(crate::contacts::set_failure(
+            response.not_updated.as_ref().and_then(|map| map.get(id)),
+        ))
+    }
+
+    /// Remove a mailbox (`Mailbox/set` destroy).
+    ///
+    /// The two refusals worth expecting are RFC 8621 §2.5's own:
+    /// `mailboxHasChild` and `mailboxHasEmail`, which arrive as
+    /// [`Error::Set`] and are the server declining rather than failing — what
+    /// is inside the folder is the user's to decide about, and this client
+    /// sends no `onDestroyRemoveEmails`.
+    pub fn mailbox_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
+        let request = SetRequest::<Mailbox>::new(account_id.clone()).destroy(id.clone());
+        let response = self.mailbox_set(&request)?;
+        if response
+            .destroyed
+            .as_ref()
+            .is_some_and(|destroyed| destroyed.contains(id))
+        {
+            return Ok(());
+        }
+        Err(crate::contacts::set_failure(
+            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
+        ))
+    }
+
+    fn mailbox_set(&self, request: &SetRequest<Mailbox>) -> Result<SetResponse<Mailbox>, Error> {
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Mailbox/set", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
     /// `Email/query`: matching email ids.
     ///
     /// `position` is the offset into the result set the answer should start at
