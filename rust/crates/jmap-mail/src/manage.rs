@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `create_folder_sync` and `delete_folder_sync`: the two `CamelStore` vfuncs
-//! behind the folder the user adds to an account and the one they take away.
+//! `create_folder_sync`, `delete_folder_sync` and `rename_folder_sync`: the
+//! three `CamelStore` vfuncs behind the folder the user adds to an account, the
+//! one they take away, and the one they move or rename.
 //!
-//! One module, because they are one operation seen from either end and they
-//! share every decision in it. [`crate::folders`] answers questions about the
-//! account's folders; this is where the account gains and loses one.
+//! One module, because Evolution offers all three behind one flag and they
+//! share every decision in them. [`crate::folders`] answers questions about the
+//! account's folders; this is where the account gains, loses and reshapes one.
 //!
 //! ## What the store adds to the write
 //!
@@ -34,6 +35,33 @@
 //! user typed is a character of the name they chose, and the path
 //! `jmap-mail-sync` builds is where it gets encoded.
 //!
+//! The rename's `new_name` is both at once, and telling which part is which is
+//! the decision this module turns on. It is a whole path, so everything up to
+//! the last separator is the parent the folder is to hang under — that is how
+//! Camel spells a move, there being no separate vfunc for one. What the last
+//! component is depends on whether it *changed*:
+//!
+//! * **Unchanged, and the folder keeps its name.** Evolution builds the path
+//!   for a drag and drop out of the folder's existing one, so the component
+//!   that arrives is this crate's *encoding* of the name rather than the name.
+//!   Reading it as a new name would rename `Bills/2026` to `Bills%2F2026` for
+//!   the crime of being dragged, and there is no decoder to read it back with —
+//!   the folder's name is in the listing, which is where this takes it from.
+//! * **Changed, and it is the name the user typed**, verbatim, exactly as a
+//!   create reads `folder_name`. Evolution's rename dialog is prefilled with
+//!   the display name and refuses a `/`, so what arrives is a name and not a
+//!   path component.
+//!
+//! The limit that comes with the second half, stated rather than hidden: a
+//! typed name this crate has to encode — one containing a `%`, or a lone `.` —
+//! puts the folder at a path that is *not* the one Camel asked for, because the
+//! path is the encoding of the name and the caller wrote the name unencoded.
+//! The name is the one the user asked for and the answer carries the folder's
+//! real path, so what Evolution draws is right; anything above that remembered
+//! the path it *requested* is out of step until the account is listed again.
+//! The alternative — refusing a rename this crate would have to encode — is
+//! refusing a legal folder name, which is worse.
+//!
 //! ## What is not covered by a test
 //!
 //! The emission at the end of each vfunc, for the reason [`crate::subscribe`]
@@ -41,37 +69,44 @@
 //! and queueing the signal on it, so a store without a `CamelSession` behind it
 //! cannot emit at all, and the stores these tests use are
 //! [`JmapStore::detached`] instances. Everything the vfuncs decide is
-//! [`create_folder`] and [`delete_folder`], which `tests/manage.rs` drives
-//! against the mock.
+//! [`create_folder`], [`delete_folder`] and [`rename_folder`], which
+//! `tests/manage.rs` drives against the mock.
 //!
-//! Camel does not emit either signal for us. Its own
+//! Camel does not emit any of the three signals for us. Its own
 //! `camel_store_create_folder_sync` and `camel_store_delete_folder_sync` call
 //! the vfunc and nothing else — the emitters are called nowhere in libcamel
-//! outside `CamelVeeStore` — which is why the two lines are here, as they are
-//! in every other provider.
+//! outside `CamelVeeStore` — which is why the lines are here, as they are in
+//! every other provider.
 //!
-//! ## What still keeps this out of the user's reach
+//! ## What puts all three in front of the user
 //!
-//! Evolution offers "New Folder" and "Delete Folder" for a store whose flags
-//! carry `CAMEL_STORE_CAN_EDIT_FOLDERS`, and this store does not set it. That
-//! is deliberate and it is the next increment's job: the same flag also offers
-//! "Rename Folder", and `rename_folder_sync` is still NULL on this class, so
-//! setting the flag today would put a menu item in front of the user that
-//! reaches a slot Camel refuses to call.
+//! Evolution offers "New Folder", "Rename Folder" and "Delete Folder" for a
+//! store whose flags carry `CAMEL_STORE_CAN_EDIT_FOLDERS` — and Camel's own
+//! `camel_store_init` sets that bit, along with `VTRASH` and `VJUNK`, on every
+//! store there is. `tests/manage.rs` pins the value it leaves behind.
+//!
+//! So the flag was never the thing standing between the user and these three
+//! vfuncs: a store *opts out* of folder management by clearing the bit, and
+//! this one never did. What that means for the two vfuncs written before this
+//! one is that the menu items have been on offer all along, and the third —
+//! Rename — reached a NULL slot, which Camel answers by refusing to call it and
+//! the user sees as nothing happening. Filling the slot is what fixes that; the
+//! flag needs no line of ours, and a line that OR-ed in a bit already set would
+//! be one nothing could ever observe.
 
 use std::ptr;
 use std::slice;
 
 use eds_sys::{
     CamelFolderInfo, CamelStore, CamelStoreClass, camel_store_folder_created,
-    camel_store_folder_deleted,
+    camel_store_folder_deleted, camel_store_folder_renamed,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::{guard_bool, guard_ptr};
-use jmap_mail_sync::FolderInfo;
+use jmap_mail_sync::{FolderInfo, path};
 
 use crate::connect::StoreError;
 use crate::folder_info::FolderInfoChain;
@@ -125,11 +160,51 @@ pub fn delete_folder(store: &JmapStore, path: &str) -> Result<FolderInfo, StoreE
     Ok(folder.clone())
 }
 
+/// Moves the folder at `from` to `to`, and answers with it as it now is.
+///
+/// Both are Camel paths and both are resolved against the same look at the
+/// tree, so a move names two folders in one listing: the folder itself, and the
+/// parent its new path hangs it under. Either being absent is
+/// [`StoreError::NoFolder`] with the path that is missing — a move under a
+/// parent that is not there would put the folder somewhere nothing can reach
+/// it, so nothing is written.
+///
+/// The last component of `to` is read as the module documents: the folder's own
+/// name when it is the component the folder already has, and otherwise the name
+/// the user typed.
+pub fn rename_folder(store: &JmapStore, from: &str, to: &str) -> Result<FolderInfo, StoreError> {
+    let (parent, component) = path::split(to);
+
+    let tree = tree_holding(store, |tree| {
+        tree.find(from).is_some() && parent.is_none_or(|parent| tree.find(parent).is_some())
+    })?;
+
+    let Some(folder) = tree.find(from) else {
+        return Err(StoreError::NoFolder(from.to_owned()));
+    };
+    let parent = match parent {
+        Some(path) => match tree.find(path) {
+            Some(parent) => Some(parent),
+            None => return Err(StoreError::NoFolder(path.to_owned())),
+        },
+        None => None,
+    };
+
+    let (_, held) = path::split(&folder.path);
+    let name = if component == held {
+        folder.display_name.as_str()
+    } else {
+        component
+    };
+
+    store.rename_folder(folder, parent, name)
+}
+
 // ---------------------------------------------------------------------------
 // the vfunc slots
 
-/// Installs the two folder-management vfuncs on a class whose first member is a
-/// `CamelStoreClass`.
+/// Installs the three folder-management vfuncs on a class whose first member is
+/// a `CamelStoreClass`.
 ///
 /// # Safety
 ///
@@ -140,6 +215,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
     let vfuncs = unsafe { &mut *class };
     vfuncs.create_folder_sync = Some(create_folder_sync);
     vfuncs.delete_folder_sync = Some(delete_folder_sync);
+    vfuncs.rename_folder_sync = Some(rename_folder_sync);
 }
 
 /// Makes a folder and answers with it: `camel_store_create_folder_sync`'s
@@ -232,6 +308,56 @@ unsafe extern "C" fn delete_folder_sync(
             let announcement = FolderInfoChain::from_forest(slice::from_ref(&removed), Some(0));
             // SAFETY: as in `create_folder_sync`.
             camel_store_folder_deleted(store, announcement.as_ptr());
+            GTRUE
+        })
+    }
+}
+
+/// Renames a folder, and moves it: `camel_store_rename_folder_sync`'s vfunc.
+///
+/// The chain built here is not handed over — the vfunc answers with a
+/// boolean — so it is freed one line after the signal that borrows it, as in
+/// [`delete_folder_sync`]. Its depth is `None` rather than `Some(0)`, unlike
+/// both of those: a rename changes the path of every folder *under* the one
+/// renamed, and `camel_store_folder_renamed` is what tells Evolution about
+/// them — its handler walks the children of what it is handed.
+///
+/// `old_name` is passed on as it arrived, since it is what the signal names the
+/// folder by, and it cannot be NULL here: a NULL path resolves to no folder and
+/// the rename has already failed.
+///
+/// `cancellable` is not observed, for the reason [`create_folder_sync`] gives.
+unsafe extern "C" fn rename_folder_sync(
+    store: *mut CamelStore,
+    old_name: *const gchar,
+    new_name: *const gchar,
+    _cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> gboolean {
+    // SAFETY: Camel's contract for the vfunc: a valid instance of ours, two
+    // NULL-or-NUL-terminated strings, and an out-parameter that is NULL or
+    // writable and currently NULL.
+    unsafe {
+        guard_bool("rename_folder_sync", error, || {
+            let Some(instance) = JmapStore::borrow(store) else {
+                return fail_bool(error, &StoreError::Disconnected);
+            };
+            // Borrowed from Camel and NUL-terminated; `read_string` copies, and
+            // reads a NULL or empty path as no path — which no mailbox answers
+            // to, and which no mailbox may be moved to either, a folder needing
+            // a component of its own.
+            let from = read_string(old_name).unwrap_or_default();
+            let to = read_string(new_name).unwrap_or_default();
+
+            let renamed = match rename_folder(instance, &from, &to) {
+                Ok(folder) => folder,
+                Err(failure) => return fail_bool(error, &failure),
+            };
+
+            let announcement = FolderInfoChain::from_forest(slice::from_ref(&renamed), None);
+            // SAFETY: as in `create_folder_sync`, and `old_name` is the
+            // borrowed string this call was handed.
+            camel_store_folder_renamed(store, old_name, announcement.as_ptr());
             GTRUE
         })
     }

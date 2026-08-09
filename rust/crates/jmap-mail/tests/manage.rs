@@ -1,32 +1,37 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The folder the user adds to an account and the one they take away, from the
-//! store's side of the two vfuncs.
+//! The folder the user adds to an account, the one they take away, and the one
+//! they rename or move — from the store's side of the three vfuncs.
 //!
-//! `jmap-mail-sync` already puts both writes on the wire and already decides
-//! what the new folder *is*. What is tested here is the part only a store can
-//! do, and it is the same part the subscription vfuncs needed: the folder
-//! listing the store keeps between calls. Camel hands the `CamelFolderInfo` a
-//! create answers with straight to Evolution's folder tree and then opens that
-//! folder by path — through `get_folder_sync`, which is answered out of the
-//! listing — so a store that made the folder on the server and left its own
-//! listing without it would offer the user a folder it then refuses to open.
-//! The same one step behind for a delete: a folder that is gone from the
-//! account and still in the listing is one Camel will happily open again.
+//! `jmap-mail-sync` already puts all three writes on the wire and already
+//! decides what the new folder *is*. What is tested here is the part only a
+//! store can do, and it is the same part the subscription vfuncs needed: the
+//! folder listing the store keeps between calls. Camel hands the
+//! `CamelFolderInfo` a create answers with straight to Evolution's folder tree
+//! and then opens that folder by path — through `get_folder_sync`, which is
+//! answered out of the listing — so a store that made the folder on the server
+//! and left its own listing without it would offer the user a folder it then
+//! refuses to open. The same one step behind for a delete: a folder that is
+//! gone from the account and still in the listing is one Camel will happily
+//! open again. And a rename is both at once, for the folder and for everything
+//! under it, since every one of those paths is a key Camel opens a folder by.
 //!
-//! Two things above that are *not* covered, and both are the vfunc rather than
-//! what it decides. The `camel_store_folder_created`/`_deleted` emission at the
-//! end of each needs a store with a `CamelSession` behind it —
+//! One thing above is *not* covered, and it is the vfunc rather than what it
+//! decides: the `camel_store_folder_created`/`_deleted`/`_renamed` emission at
+//! the end of each needs a store with a `CamelSession` behind it —
 //! `camel_store_folder_created` starts by taking the service's session and
 //! queueing the emission on it — which is the same limit `subscriptions.rs`
-//! documents. And the path from the user's "New Folder" menu item to the vfunc
-//! is not reachable at all yet: Evolution offers those items for a store
-//! carrying `CAMEL_STORE_CAN_EDIT_FOLDERS`, which this store does not set,
-//! because the flag also offers Rename and there is no `rename_folder_sync`
-//! behind it.
+//! documents.
+//!
+//! What is covered, at the bottom, is the pair that decides whether the user
+//! ever reaches any of it: the three slots being filled, and the store's flags
+//! word carrying `CAMEL_STORE_CAN_EDIT_FOLDERS`.
 
-use eds_sys::{CamelStoreClass, camel_offline_store_get_type};
+use eds_sys::{
+    CAMEL_STORE_CAN_EDIT_FOLDERS, CAMEL_STORE_VJUNK, CAMEL_STORE_VTRASH, CamelStoreClass,
+    camel_offline_store_get_type, camel_store_get_flags,
+};
 use gobject_sys::{g_type_class_peek, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
@@ -35,6 +40,8 @@ use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail_sync::{FolderTree, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::mail::role;
+
+mod common;
 
 /// No flags: the tree the store already holds, with no request behind it.
 const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
@@ -350,20 +357,287 @@ fn the_store_fills_both_folder_management_slots() {
     }
 }
 
-/// The one folder id nothing may be built from: `rename_folder_sync` is still
-/// unfilled, and this pins the pairing the module documents — the store must
-/// not claim `CAMEL_STORE_CAN_EDIT_FOLDERS` while one of the three vfuncs
-/// Evolution offers behind that flag is missing.
+/// The third of them, and the one the other two waited on: Evolution offers
+/// New, Rename and Delete Folder behind one flag, so a store that set the flag
+/// while this slot was NULL would put a menu item in front of the user that
+/// reaches a slot Camel refuses to call.
 #[test]
-fn the_store_does_not_yet_claim_it_can_rename() {
+fn the_store_fills_the_rename_slot_too() {
     // SAFETY: as above.
     unsafe {
         let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
         assert!(
-            (*class).rename_folder_sync.is_none(),
-            "rename_folder_sync is filled in; CAMEL_STORE_CAN_EDIT_FOLDERS is \
-             now the thing that turns folder management on"
+            (*class).rename_folder_sync.is_some(),
+            "the store cannot rename a folder"
         );
+
+        let parent = g_type_class_peek(camel_offline_store_get_type()).cast::<CamelStoreClass>();
+        assert!(!parent.is_null(), "the parent class is not initialised");
+        assert!(
+            (*parent).rename_folder_sync.is_none(),
+            "CamelOfflineStore grew an implementation of its own; the override \
+             above is no longer the only thing filling the slot"
+        );
+
         g_type_class_unref(class.cast());
     }
+}
+
+/// And the flag the three are offered behind, which this provider does not set
+/// and does not have to: `camel_store_init` turns `CAN_EDIT_FOLDERS` on for
+/// every store there is, and a provider that cannot edit folders is the one
+/// with a line to write. What is pinned here is therefore the whole word, so
+/// that Camel changing its defaults — or this provider growing a line that
+/// clears a bit — is a red test rather than a menu item that quietly goes away.
+///
+/// On a store Camel constructed, because flags are instance state: a detached
+/// store is not a `CamelStore` to ask.
+///
+/// `VTRASH` and `VJUNK` are in the word too, and they are Camel's defaults
+/// rather than a decision this provider has taken: they ask Camel to build the
+/// account a virtual Trash and Junk out of the messages flagged as such.
+/// Whether a JMAP account wants those or the mailboxes its server gives roles
+/// to is what `get_trash_folder_sync` and `get_junk_folder_sync` still wait on.
+#[test]
+fn the_store_offers_folder_management() {
+    let account = common::Account::open();
+
+    // SAFETY: a live store, constructed by Camel through `g_initable_new`.
+    let flags = unsafe { camel_store_get_flags(account.store) };
+
+    assert!(
+        flags & CAMEL_STORE_CAN_EDIT_FOLDERS != 0,
+        "the store does not offer folder management: flags {flags:#x}"
+    );
+    assert_eq!(
+        flags,
+        CAMEL_STORE_CAN_EDIT_FOLDERS | CAMEL_STORE_VTRASH | CAMEL_STORE_VJUNK,
+        "the store's flags are no longer Camel's defaults"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// and the one they rename
+
+/// The path Camel hands over is the whole new path, and its last component is
+/// the name the user typed into the rename dialog — verbatim, the same reading
+/// a create makes of `folder_name`.
+#[test]
+fn the_rename_reaches_the_server() {
+    let (server, store) = connected();
+
+    manage::rename_folder(&store, "Projects", "Work").expect("renamed");
+
+    let served = on_the_server(&server);
+    assert!(served.find("Work").is_some());
+    assert!(served.find("Projects").is_none());
+}
+
+/// The answer is the folder as it now is — what the vfunc hands
+/// `camel_store_folder_renamed`, which is how Evolution's folder tree learns
+/// the new path.
+#[test]
+fn the_answer_is_the_folder_at_its_new_path() {
+    let (server, store) = connected();
+    let listed = store.folders(CACHED).expect("listed");
+    let before = listed.find("Projects").expect("a folder").clone();
+
+    let renamed = manage::rename_folder(&store, "Projects", "Work").expect("renamed");
+    drop(server);
+
+    assert_eq!(renamed.id, before.id);
+    assert_eq!(renamed.path, "Work");
+    assert_eq!(renamed.display_name, "Work");
+}
+
+#[test]
+fn the_held_listing_follows_the_rename() {
+    let (server, store) = connected();
+    store.folders(CACHED).expect("listed");
+
+    manage::rename_folder(&store, "Projects", "Work").expect("renamed");
+    drop(server);
+
+    assert_eq!(held(&store), ["Inbox", "Work"]);
+}
+
+/// A move is a rename to a path under another parent — Camel has no separate
+/// vfunc for one — and the parent is named by path, like everything else.
+#[test]
+fn a_move_is_a_rename_to_a_path_under_another_parent() {
+    let (server, store) = connected();
+    store.folders(CACHED).expect("listed");
+
+    let moved = manage::rename_folder(&store, "Projects", "Inbox/Projects").expect("moved");
+
+    assert_eq!(moved.path, "Inbox/Projects");
+    assert!(on_the_server(&server).find("Inbox/Projects").is_some());
+    assert_eq!(held(&store), ["Inbox", "Inbox/Projects"]);
+}
+
+/// Whatever hung under the folder moves with it, at paths rebuilt from the new
+/// one. Evolution keys every open folder by path, so a descendant left at its
+/// old one is a folder Camel would open twice.
+///
+/// The renamed folder joins its siblings at the end, which is `FolderTree`'s
+/// judgement and is why the order here is not alphabetical: sibling order is
+/// the server's — sortOrder, then name — and this side has been told about one
+/// folder, not about where the account now sorts it.
+#[test]
+fn the_descendants_move_with_the_folder() {
+    let (server, store) = connected();
+    {
+        let account_id = server.account_id();
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let projects = account.create_mailbox("Reports", None, None);
+        account.create_mailbox("2026", None, Some(&projects));
+    }
+    store.folders(CACHED).expect("listed");
+
+    manage::rename_folder(&store, "Reports", "Archive").expect("renamed");
+    drop(server);
+
+    assert_eq!(
+        held(&store),
+        ["Inbox", "Projects", "Archive", "Archive/2026"]
+    );
+}
+
+/// The decision this vfunc turns on. Camel spells a move as a rename to a path
+/// whose last component is the folder's *existing* one — Evolution's drag and
+/// drop builds it from the old path — so a component that did not change is not
+/// a new name, and reading it as one would rename `Bills/2026` to
+/// `Bills%2F2026` for the crime of being dragged.
+#[test]
+fn a_move_leaves_the_name_alone() {
+    let (server, store) = connected();
+    {
+        let account_id = server.account_id();
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .create_mailbox("Bills/2026", None, None);
+    }
+    store.folders(CACHED).expect("listed");
+
+    let moved =
+        manage::rename_folder(&store, "Bills%2F2026", "Projects/Bills%2F2026").expect("moved");
+
+    assert_eq!(moved.path, "Projects/Bills%2F2026");
+    assert_eq!(moved.display_name, "Bills/2026");
+    assert_eq!(
+        on_the_server(&server)
+            .find("Projects/Bills%2F2026")
+            .map(|folder| folder.display_name.clone()),
+        Some("Bills/2026".to_owned())
+    );
+}
+
+/// A component that *did* change is the name the user typed, and it is taken as
+/// one character for character — including a `/`, which Evolution's rename
+/// dialog refuses but nothing here relies on.
+///
+/// The limit that comes with it, stated rather than hidden: a typed name this
+/// crate has to encode ends up at a path that is not the one Camel asked for.
+/// The name is what the user asked for and the answer carries the real path, so
+/// the folder tree is right; a `CamelFolder` Camel had already rekeyed to the
+/// requested path is not, until the account is listed again.
+#[test]
+fn a_new_last_component_is_the_name_the_user_typed() {
+    let (server, store) = connected();
+    store.folders(CACHED).expect("listed");
+
+    let renamed = manage::rename_folder(&store, "Projects", "100%").expect("renamed");
+
+    assert_eq!(renamed.display_name, "100%");
+    assert_eq!(renamed.path, "100%25");
+    assert_eq!(
+        on_the_server(&server)
+            .find("100%25")
+            .map(|folder| folder.display_name.clone()),
+        Some("100%".to_owned())
+    );
+}
+
+#[test]
+fn a_path_the_account_does_not_have_is_reported_as_missing_by_a_rename() {
+    let (_server, store) = connected();
+
+    let failure = manage::rename_folder(&store, "Nowhere", "Work").expect_err("no such folder");
+
+    assert!(
+        matches!(failure, StoreError::NoFolder(path) if path == "Nowhere"),
+        "expected a missing folder"
+    );
+}
+
+/// The new parent is resolved the same way and reported the same way — and
+/// nothing is written, because a folder moved under a parent that is not there
+/// is a folder nothing can reach.
+#[test]
+fn a_new_parent_the_account_does_not_have_is_reported_as_missing() {
+    let (server, store) = connected();
+    store.folders(CACHED).expect("listed");
+
+    let failure =
+        manage::rename_folder(&store, "Projects", "Nowhere/Projects").expect_err("no such parent");
+
+    assert!(
+        matches!(failure, StoreError::NoFolder(path) if path == "Nowhere"),
+        "expected a missing folder"
+    );
+    assert!(on_the_server(&server).find("Projects").is_some());
+}
+
+/// And a parent another client made since the last listing is looked for again,
+/// the second look every other folder vfunc takes.
+#[test]
+fn a_new_parent_created_since_the_listing_is_looked_for_again() {
+    let (server, store) = connected();
+    store.folders(CACHED).expect("listed");
+    {
+        let account_id = server.account_id();
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .create_mailbox("Archive", None, None);
+    }
+
+    let moved = manage::rename_folder(&store, "Projects", "Archive/Projects").expect("moved");
+
+    assert_eq!(moved.path, "Archive/Projects");
+}
+
+/// The server refusing is not the store failing, and the listing says what the
+/// account says: the folder is still where it was.
+#[test]
+fn a_refused_rename_leaves_the_listing_alone() {
+    let (_server, store) = connected();
+    store.folders(CACHED).expect("listed");
+
+    let failure = manage::rename_folder(&store, "Projects", "Inbox").expect_err("a name in use");
+
+    assert!(
+        matches!(failure, StoreError::Client(_)),
+        "expected the server's own refusal, got {failure:?}"
+    );
+    assert_eq!(held(&store), ["Inbox", "Projects"]);
+}
+
+#[test]
+fn a_store_with_no_connection_cannot_rename_a_folder() {
+    let store = JmapStore::detached();
+
+    let failure = manage::rename_folder(&store, "Projects", "Work").expect_err("no connection");
+
+    assert!(
+        matches!(failure, StoreError::Disconnected),
+        "expected a disconnected store, got {failure:?}"
+    );
 }

@@ -397,6 +397,58 @@ impl JmapStore {
         Ok(())
     }
 
+    /// Renames a folder, and moves it — the write behind `rename_folder_sync`.
+    ///
+    /// Locked and ordered like the two writes above, and it edits the held
+    /// listing for their reason with one more on top: a rename changes the path
+    /// of everything *under* the folder as well, and every one of those paths
+    /// is a key Camel opens a folder by. A store that renamed the folder and
+    /// left its listing alone would answer `get_folder_sync` for the new paths
+    /// with nothing and for the old ones with folders the account no longer has.
+    ///
+    /// `folder` is passed whole rather than by id because both halves are
+    /// needed — the id for the write, the folder for the answer when the
+    /// listing cannot supply one — and `parent` for the reason
+    /// [`JmapStore::create_folder`] takes one: the path of the answer is built
+    /// from the parent's.
+    ///
+    /// The answer is the folder as the listing now has it, subfolders and all,
+    /// because that is what `camel_store_folder_renamed` is emitted with and
+    /// Evolution walks the children of what it is handed. A store with no
+    /// listing — one a disconnect emptied between the lookup and the write —
+    /// answers with the folder it was given, at its new path and without the
+    /// children whose paths only the tree edit knows. That is one announcement
+    /// short of complete rather than wrong, and the account is being listed
+    /// again anyway.
+    pub fn rename_folder(
+        &self,
+        folder: &FolderInfo,
+        parent: Option<&FolderInfo>,
+        name: &str,
+    ) -> Result<FolderInfo, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let connection = read(connection);
+        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let path = sync.rename_folder(&folder.id, parent, name)?;
+
+        // Only after the server agreed, and while the connection it agreed over
+        // is still ours — the ordering rule the `folders` field documents.
+        let renamed = self.folder_listing().and_then(|folders| {
+            let mut folders = write(folders);
+            let listing = folders.as_mut()?;
+            let tree = Arc::make_mut(&mut listing.tree);
+            tree.rename(&folder.id, &path, name);
+            tree.find(&path).cloned()
+        });
+
+        Ok(renamed.unwrap_or_else(|| FolderInfo {
+            path,
+            display_name: name.to_owned(),
+            children: Vec::new(),
+            ..folder.clone()
+        }))
+    }
+
     /// The folder listing the store is holding, if it is holding one — and
     /// nothing else: no request, and no connection needed to ask.
     ///
