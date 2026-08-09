@@ -195,6 +195,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "serde_json",
 ]
 
 [[package]]
