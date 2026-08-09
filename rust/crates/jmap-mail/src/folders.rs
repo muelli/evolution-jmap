@@ -72,6 +72,7 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, gchar};
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_ptr;
@@ -273,20 +274,17 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
 /// separates them, and why nothing here returns NULL and sets one for a
 /// question that simply had no folders in it.
 ///
-/// `cancellable` is not observed, the same gap the address book backend
-/// documents: [`Client`] takes its [`CancelFlag`] when it is built and offers
-/// no way to re-point it, so only the connect is cancellable. The listing is
-/// one or two round trips rather than a paged walk, which is why this is a gap
-/// worth naming rather than one worth working around here; closing it is a
-/// change to `jmap-client`.
-///
-/// [`Client`]: jmap_client::Client
-/// [`CancelFlag`]: jmap_client::transport::CancelFlag
+/// `cancellable` is [`observe`]d for the length of the call, so a listing the
+/// user stopped answers with `G_IO_ERROR_CANCELLED` and no tree. The listing is
+/// one or two round trips rather than a paged walk, so the stop usually lands
+/// before the request rather than between two of them — which is still the
+/// difference between an account that answers and one that hangs on a server
+/// that has stopped replying.
 unsafe extern "C" fn get_folder_info_sync(
     store: *mut CamelStore,
     top: *const gchar,
     flags: CamelStoreGetFolderInfoFlags,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> *mut CamelFolderInfo {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a
@@ -294,6 +292,11 @@ unsafe extern "C" fn get_folder_info_sync(
     // currently NULL.
     unsafe {
         guard_ptr("get_folder_info_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let Some(store) = JmapStore::borrow(store) else {
                 return fail(error, &StoreError::Disconnected);
             };
@@ -333,13 +336,14 @@ unsafe extern "C" fn get_folder_info_sync(
 /// is about vFolder membership, which is the wrapper's business; and `EXCL` is
 /// documented as not honoured.
 ///
-/// `cancellable` is not observed, the same gap [`get_folder_info_sync`]
-/// documents and for the same reason.
+/// `cancellable` is [`observe`]d for the length of the call, as in
+/// [`get_folder_info_sync`]: opening a folder Camel has not heard of relists
+/// the account, which is a request the user can stop.
 unsafe extern "C" fn get_folder_sync(
     store: *mut CamelStore,
     folder_name: *const gchar,
     _flags: CamelStoreGetFolderFlags,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> *mut CamelFolder {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a
@@ -347,6 +351,11 @@ unsafe extern "C" fn get_folder_sync(
     // currently NULL.
     unsafe {
         guard_ptr("get_folder_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let Some(instance) = JmapStore::borrow(store) else {
                 return fail(error, &StoreError::Disconnected);
             };
@@ -481,10 +490,10 @@ unsafe extern "C" fn get_junk_folder_sync(
 /// what to fix in their account and one whose deletes go nowhere for no stated
 /// reason. It also keeps all three vfuncs answering alike.
 ///
-/// `cancellable` *is* passed on, unlike in the two vfuncs above this section: it
-/// is not observed by the listing this function may do itself, for the reason
-/// [`get_folder_info_sync`] documents, but the call it delegates to is Camel's
-/// own and has no such gap.
+/// `cancellable` is both [`observe`]d here — the role lookup may relist the
+/// account — and passed on to `camel_store_get_folder_sync`, which reaches
+/// [`get_folder_sync`] and observes it again. The two nest: the inner scope
+/// gives the outer one back when it returns.
 ///
 /// # Safety
 ///
@@ -504,6 +513,15 @@ unsafe fn open_by_role(
         let Some(instance) = JmapStore::borrow(store) else {
             return fail(error, &StoreError::Disconnected);
         };
+
+        // Installed here rather than in each of the three vfuncs above,
+        // because this is where the request they can make is made: looking the
+        // role up may relist the tree. The `camel_store_get_folder_sync` below
+        // takes the same cancellable and installs it again for itself, which
+        // nests and restores.
+        //
+        // SAFETY: Camel keeps its cancellable alive for the length of the call.
+        let _cancel = observe(cancellable);
 
         let tree = match tree_holding(instance, |tree| tree.role(role).is_some()) {
             Ok(tree) => tree,

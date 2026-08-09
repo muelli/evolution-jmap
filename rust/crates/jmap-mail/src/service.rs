@@ -57,12 +57,11 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, g_error_new_literal, gboolean, gchar};
 use gobject_sys::{GObject, g_object_unref, g_type_class_peek};
-use jmap_backend_core::cancel::CancelBridge;
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::guard_bool;
-use jmap_client::CancelFlag;
 
 use crate::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail};
 use crate::server::{ServerConfig, network, take_string};
@@ -81,13 +80,18 @@ use crate::store::JmapStore;
 /// serving folders it was serving a moment ago. A *success* does replace it,
 /// listing and all, because the account was re-authenticated for a reason and
 /// the tree the old connection produced may describe a different server.
+///
+/// Cancellation is the caller's, and is not passed: the connection this opens
+/// outlives the call that opened it, so a flag built into it would be one this
+/// operation could set and no later operation could unset. What stops the
+/// connect is the scope the vfunc installed — see [`observe`] — which is also
+/// what stops every operation afterwards.
 pub fn authenticate(
     store: &JmapStore,
     config: &ServerConfig,
     password: Option<&str>,
-    cancel: CancelFlag,
 ) -> Result<(), StoreError> {
-    let sync = open_mail(config, password, cancel)?;
+    let sync = open_mail(config, password)?;
     store.store_connection(sync);
     Ok(())
 }
@@ -333,9 +337,9 @@ unsafe fn attempt(
     let password = unsafe { read_string(camel_service_get_password(service)) };
 
     // SAFETY: the cancellable is Camel's, and it outlives the call — which is
-    // exactly the scope of the bridge.
-    let cancel = unsafe { CancelBridge::new(cancellable) };
-    authenticate(store, &config, password.as_deref(), cancel.flag().clone())
+    // exactly the scope this observation wants.
+    let _cancel = unsafe { observe(cancellable) };
+    authenticate(store, &config, password.as_deref())
 }
 
 /// Drops the connection, then lets `CamelService` do its half.

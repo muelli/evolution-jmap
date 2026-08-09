@@ -54,7 +54,6 @@ use glib_sys::{GError, GQuark, g_error_new_literal};
 use jmap_backend_core::connect::is_wrong_password;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::source::SourceError;
-use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail_sync::{FolderRole, MailSync, SyncError};
 use jmap_proto::session::CAPABILITY_MAIL;
@@ -271,19 +270,19 @@ impl StoreError {
 /// there is nothing to send in either: a user name with an empty password is
 /// not a weaker credential, it is a wrong one, and a server that counts failed
 /// attempts would count it.
-pub fn open_mail(
-    config: &ServerConfig,
-    password: Option<&str>,
-    cancel: CancelFlag,
-) -> Result<MailSync, StoreError> {
+pub fn open_mail(config: &ServerConfig, password: Option<&str>) -> Result<MailSync, StoreError> {
     let credentials = match (config.user.as_deref(), password) {
         (Some(user), Some(password)) => Credentials::basic(user, password),
         _ => Credentials::none(),
     };
 
-    let client = Client::builder()
-        .cancel_flag(cancel)
-        .connect(&config.origin, credentials)?;
+    // No cancellation flag is built into the client, and that is deliberate: a
+    // client lives as long as the account and a flag can only ever be set, so
+    // one taken from the operation that opened the connection would be a Stop
+    // pressed once and honoured forever. What cancels a JMAP operation is the
+    // scope its vfunc installs — `jmap_backend_core::cancel::observe` — which
+    // the client checks in preference to anything it was built with.
+    let client = Client::connect(&config.origin, credentials)?;
     // Under `urn:ietf:params:jmap:mail`, the way the address book backend
     // resolves its own account under `:contacts`. An account that offers the
     // one and not the other is not a mail account, and a store that ignored

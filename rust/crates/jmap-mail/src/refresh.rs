@@ -67,16 +67,15 @@
 //! summary's row count is passed down with the state it was current at. The
 //! judgement itself is `jmap-mail-sync`'s, in `catch_up_limit`.
 //!
-//! ## What is not here yet
+//! ## Stopping one
 //!
-//! `cancellable` is not observed, the same gap [`crate::folders`] documents and
-//! for the same reason: [`Client`] takes its [`CancelFlag`] when it is built.
-//! It matters more here than there — a listing of a large mailbox is many round
-//! trips where a folder list is one or two — which is why it is named again
-//! rather than assumed to be understood.
-//!
-//! [`Client`]: jmap_client::Client
-//! [`CancelFlag`]: jmap_client::transport::CancelFlag
+//! A listing of a large mailbox is many round trips where a folder list is one
+//! or two, so this is the vfunc whose `cancellable` matters most, and it is
+//! [`observe`]d for the length of the call: the user's Stop lands between two
+//! requests and the rest are never made. What has already been written to the
+//! summary stays written, and the state is only recorded for an update that
+//! completed — a refresh stopped half way is a refresh that did not happen, and
+//! the next one asks the same question again.
 
 use eds_sys::{
     CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
@@ -84,6 +83,7 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean};
+use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
@@ -118,13 +118,18 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 /// folder.
 unsafe extern "C" fn refresh_info_sync(
     folder: *mut CamelFolder,
-    _cancellable: *mut GCancellable,
+    cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, and an
     // out-parameter that is NULL or writable and currently NULL.
     unsafe {
         guard_bool("refresh_info_sync", error, || {
+            // SAFETY: Camel keeps its cancellable alive for the length of the
+            // call, so it outlives this observation — which is what makes
+            // every request below here stop when the user presses Stop.
+            let _cancel = observe(cancellable);
+
             let Some((mailbox, summary)) = target(folder) else {
                 return fail(error, &StoreError::NoFolder(name_of(folder)));
             };

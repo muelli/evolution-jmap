@@ -6985,3 +6985,112 @@ No milestone tag is claimed; M5's open questions are the ones listed above.
 Next in M5: still **answering the delete-versus-trash question**, and after it
 either `CAMEL_FOLDER_IS_TRASH` or the cache items above, which are the tractable
 ones left that need no display server.
+
+## 2026-08-09 (seventy-third session)
+
+**The Stop button, wired to nothing since the first folder listing.** Every
+sync vfunc in the mail provider is handed a `GCancellable`, and every one of
+them named it `_cancellable` and ignored it. The one place cancellation reached
+was the connect, through a `CancelFlag` taken from the *authentication's*
+`CancelBridge` and built into the `Client` — and that bridge is disconnected the
+moment `authenticate_sync` returns. So a user stopping a refresh that was
+fetching a large mailbox, or a message download, was pressing a button attached
+to nothing, in a provider where those are the two longest operations there are.
+
+Worse than a gap: a flag can be set and never unset. A cancellation arriving in
+the window between `open_mail` returning and the vfunc returning latched the
+flag the store's whole connection was built around — an account that refuses
+every operation for the rest of the session, curable only by reconnecting.
+
+Red first: seven tests in `jmap-client` naming a `CancelScope` that did not
+exist, two in `jmap-backend-core` naming an `observe` that did not, and six in
+`jmap-mail` calling vfuncs through their class pointers with an already-stopped
+`GCancellable` and expecting `G_IO_ERROR_CANCELLED`.
+
+What landed:
+
+- **`CancelScope` in `jmap-client`'s transport**: a `CancelFlag` installed as
+  the cancellation of every request *the calling thread* makes, restored to
+  whatever it was when the scope drops.
+- **`Client::cancel_for_request`**: the scope if the thread installed one, and
+  otherwise the flag the client was built with.
+- **`observe(cancellable)` in `jmap-backend-core`**: a `CancelBridge` and a
+  scope in one value, which is the whole of what a vfunc has to hold.
+- **Sixteen vfuncs in `jmap-mail`** now hold one for the length of their call —
+  the refresh, the message fetch, the listing, the folder opens, create/delete/
+  rename, transfer, synchronise, expunge, append, both subscription writes — and
+  `open_mail` no longer takes a flag at all.
+
+Decisions taken:
+
+- **A thread, not a resettable shared flag.** The note this session inherited
+  (in `jmap-backend-book`) imagined "a resettable flag shared between the client
+  and a per-operation `CancelBridge`". That design is wrong for this provider and
+  the reason is already written in `folder.rs`: Camel drives one store from
+  several threads at once — a refresh and two message opens are three operations
+  in flight. One resettable slot on the client would let one operation's Stop
+  cancel another's request, and one operation's reset clear another's Stop.
+  These are *blocking* vfuncs, so the operation being cancelled is the one the
+  calling thread is inside, and a thread is inside exactly one at a time. A
+  thread-local is that fact, not a trick.
+- **The scope outranks the flag the client was built with**, rather than either
+  cancelling. Precedence is what un-latches: the operation's own cancellable is
+  the more specific statement, and a client-wide flag that fired once must not
+  get to veto every operation afterwards. Pinned by
+  `an_operation_that_was_not_cancelled_runs_under_a_client_flag_that_latched`.
+- **A NULL cancellable installs nothing.** GIO's NULL means "this call cannot be
+  cancelled"; installing a never-firing flag for it would *hide* the
+  cancellation of the operation this one is nested inside, and vfuncs here do
+  nest — `open_by_role` calls `camel_store_get_folder_sync`, which reaches
+  `get_folder_sync`.
+- **The connection carries no flag.** `open_mail` builds a plain `Client`: what
+  stops the connect is the scope `authenticate_sync` installed, which is also
+  what stops every operation after it. The latch cannot come back.
+- **Tests go through the class pointer, not through Camel's wrappers.**
+  `camel_folder_refresh_info_sync` and friends check the cancellable themselves
+  before dispatching, so a test through the wrapper would pass whether or not
+  this provider observed anything at all.
+
+**Not covered by a test, and the honest limits:**
+
+1. **No test cancels a request in flight.** Every test here stops the
+   cancellable *before* the call, which is what EDS and Camel produce for an
+   operation stopped while queued, and what `g_cancellable_connect` fires
+   immediately for. Cancellation is checked between requests and by the ureq
+   transport before it sends — it does not abort a socket that is already
+   blocked in `read`, so a Stop during a slow download waits for that one
+   response. Naming it because it is the difference between "stops soon" and
+   "stops now", and closing it is a transport change (libsoup, or ureq with a
+   read deadline), not this one.
+2. **Six of the sixteen vfuncs are covered behaviourally**; the other ten hold
+   the same single line and are covered by the mechanism's own tests. A vfunc
+   added later that forgets the line is not caught by anything.
+3. **Nothing here has been seen in Evolution.** That the Stop button in a real
+   session reaches these cancellables is Camel's business and is not verified
+   here — *needs human verification in real Evolution*.
+4. **`jmap-backend-book` and `jmap-backend-cal` are untouched.** Their vfuncs
+   still observe nobody, and their clients still carry a connect-time flag with
+   the same latch. The mechanism they need now exists; their docs were updated
+   to say so and to say what is left, which is one line per vfunc plus tests.
+
+Still open from earlier sessions, unchanged by this one: **whether Evolution's
+Delete key files into the trash or only marks the row** — **needs human
+verification in real Evolution**; bounding the cache; the cache entry written by
+`write_all` rather than to a temporary name and renamed; `get_folder_info_sync`'s
+NULL-versus-GError question; `maxSizeRequest`, `maxCallsInRequest` and
+`maxConcurrentUpload` still unread; `service.rs` unexercised against a real
+`CamelSession`; and the README's architecture block still listing only the
+round-1 crates.
+
+Not verified locally, as in every session so far: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Two new files, `jmap-client/tests/cancellation.rs`
+and `jmap-mail/tests/cancellation.rs`, both with the SPDX `GPL-3.0-or-later`
+header. `cargo fmt --check`, `cargo test --locked` and `cargo clippy
+--all-targets --locked -- -D warnings` are clean on the default member set (393
+tests, up from 386) and on the five EDS crates (575, up from 567).
+
+No milestone tag is claimed; M5's open questions are the ones listed above.
+
+Next in M5: the cancellation line for the book and calendar backends' vfuncs is
+now a small, tractable item; after that the cache items above, or the
+delete-versus-trash question if a human has answered it.
