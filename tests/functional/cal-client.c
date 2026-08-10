@@ -46,6 +46,16 @@
  * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_LOCATION "Room 42"
 
+/* And what it is filed under. Evolution's "Categories…" button writes
+ * CATEGORIES, which on the server is a JSCalendar `keywords` Set (RFC 8984
+ * §4.2.9) rather than a line of text. Two tags on one line deliberately:
+ * libical re-renders a multi-valued CATEGORIES as one property per value —
+ * measured in `rust/crates/jmap-backend-cal/tests/marshal.rs` — so this is the
+ * leg that says the whole set survives the trip through the meta backend's
+ * cache and not just its first member. The same literals are asserted from both
+ * ends; see `KEYWORDS` in `rust/crates/jmap-functional/tests/calendar.rs`. */
+#define TEST_CATEGORIES "offsite,planning"
+
 /* And an all-day event, written the way Evolution writes one: DATE values
  * rather than DATE-TIMEs, on both ends. RFC 5545 §3.6.1's other form of an
  * event, and the only thing in iCalendar that says "this is a day, not a time
@@ -226,20 +236,21 @@ is_detached_instance (ICalComponent *component)
 	return TRUE;
 }
 
-/* Every instant a component says does not happen, joined by commas — the
- * EXDATEs of RFC 5545 §3.8.5.1, read back as text.
+/* Every value a component states for one property, joined by commas — the
+ * EXDATEs of RFC 5545 §3.8.5.1, or the CATEGORIES of §3.8.1.2.
  *
- * Each property is asked for its value rather than for a time, which folds the
- * two shapes libical may hold a list in — one property carrying `a,b` or two
+ * Each property is asked for its value rather than for a typed one, which folds
+ * the two shapes libical may hold a list in — one property carrying `a,b` or two
  * properties carrying one each — into the same string, so what this reports
- * depends on which instants are excluded and not on how they were written. */
+ * depends on what the component states and not on how it was written. */
 static gchar *
-exdate_values (ICalComponent *component)
+joined_values (ICalComponent *component,
+	       ICalPropertyKind kind)
 {
 	GString *values = g_string_new (NULL);
 	ICalProperty *property;
 
-	property = i_cal_component_get_first_property (component, I_CAL_EXDATE_PROPERTY);
+	property = i_cal_component_get_first_property (component, kind);
 	while (property) {
 		ICalProperty *next;
 		gchar *value = i_cal_property_get_value_as_string (property);
@@ -249,7 +260,7 @@ exdate_values (ICalComponent *component)
 		g_string_append (values, value ? value : "");
 		g_free (value);
 
-		next = i_cal_component_get_next_property (component, I_CAL_EXDATE_PROPERTY);
+		next = i_cal_component_get_next_property (component, kind);
 		g_object_unref (property);
 		property = next;
 	}
@@ -370,6 +381,7 @@ main (int argc,
 	ICalTimezone *zone;
 	ICalTimezone *moved_zone;
 	gchar *icalendar;
+	gchar *categories;
 	gchar *exdates;
 	gchar *rrule;
 	gchar *tzid;
@@ -471,8 +483,9 @@ main (int argc,
 		"DTEND:%s\r\n"
 		"SUMMARY:%s\r\n"
 		"LOCATION:%s\r\n"
+		"CATEGORIES:%s\r\n"
 		"END:VEVENT\r\n",
-		TEST_DTSTART, TEST_DTEND, summary, TEST_LOCATION);
+		TEST_DTSTART, TEST_DTEND, summary, TEST_LOCATION, TEST_CATEGORIES);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 
@@ -511,6 +524,12 @@ main (int argc,
 	 * `locations` entry and has to come back on the LOCATION line, or the user
 	 * sees the appointment lose its room the moment EDS re-reads it. */
 	g_print ("read-back-location=%s\n", i_cal_component_get_location (read_back_event));
+	/* And the tags, out of the same cached component. Joined rather than read as
+	 * one line, because libical splits a multi-valued CATEGORIES into a property
+	 * per value: what is reported is the set, however it was spelled. */
+	categories = joined_values (read_back_event, I_CAL_CATEGORIES_PROPERTY);
+	g_print ("read-back-categories=%s\n", categories);
+	g_free (categories);
 	g_object_unref (read_back_event);
 
 	/* The all-day one, through the same path. Written second so that a
@@ -720,7 +739,7 @@ main (int argc,
 		return 1;
 	}
 
-	exdates = exdate_values (read_back_event);
+	exdates = joined_values (read_back_event, I_CAL_EXDATE_PROPERTY);
 	g_object_unref (read_back_event);
 
 	g_print ("recurring-exdates=%s\n", exdates);
@@ -953,7 +972,7 @@ main (int argc,
 	/* And that it took none of the series' exceptions with it. The two
 	 * cancelled occurrences are both before the split, so an EXDATE here is an
 	 * exclusion EDS moved onto days it does not belong to. */
-	exdates = exdate_values (split_event);
+	exdates = joined_values (split_event, I_CAL_EXDATE_PROPERTY);
 	g_print ("split-exdates=%s\n", exdates);
 	g_free (exdates);
 

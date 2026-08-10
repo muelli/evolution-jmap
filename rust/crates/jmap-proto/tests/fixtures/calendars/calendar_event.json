@@ -17,6 +17,10 @@
       "coordinates": "geo:52.520008,13.404954"
     }
   },
+  "keywords": {
+    "offsite": true,
+    "planning": true
+  },
   "recurrenceRules": [
     {
       "@type": "RecurrenceRule",

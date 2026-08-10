@@ -8,8 +8,8 @@
 //! their own carrying a RECURRENCE-ID.
 
 use jmap_ical::{
-    ICalError, event_to_ical, ical_to_event, maps_locations, maps_recurrence_override,
-    maps_recurrence_rule, names_time_zone,
+    ICalError, event_to_ical, ical_to_event, maps_keywords, maps_locations,
+    maps_recurrence_override, maps_recurrence_rule, names_time_zone,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -990,6 +990,189 @@ fn an_edited_instance_is_drawn_at_the_series_place() {
     // And it is not read back as an instance that moved: an override may not
     // name a place (see OVERRIDE_PROPERTIES), so a difference here would be one
     // the save path could neither send nor explain.
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+}
+
+/// An event tagged the way a server tags it: RFC 8984 §4.2.9's `keywords` is an
+/// RFC 8984 §1.4.3 Set, so the keys are the tags and every value is `true`.
+fn tagged<const N: usize>(keywords: [(&str, Value); N]) -> CalendarEvent {
+    CalendarEvent {
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        keywords: Some(
+            keywords
+                .into_iter()
+                .map(|(keyword, set)| (keyword.to_owned(), set))
+                .collect(),
+        ),
+        ..CalendarEvent::default()
+    }
+}
+
+#[test]
+fn the_tags_an_event_carries_are_the_categories() {
+    // Unlike `locations`, this property is drawn *whole*: RFC 5545 §3.8.1.2's
+    // CATEGORIES is a value list, and a JSCalendar keyword is a bare string, so
+    // every tag fits on the line and the save can replace the property.
+    let event = tagged([("offsite", json!(true)), ("planning", json!(true))]);
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        content_line(&ics, "CATEGORIES"),
+        "CATEGORIES:offsite,planning",
+        "the set in the order a set has, so a re-rendering is stable"
+    );
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").keywords,
+        event.keywords,
+        "the tags survive the round trip"
+    );
+    assert!(maps_keywords(event.keywords.as_ref().unwrap()));
+}
+
+#[test]
+fn a_tag_is_escaped_as_text_rather_than_read_as_the_separator() {
+    // CATEGORIES is a list of TEXT values (RFC 5545 §3.8.1.2), so a comma inside
+    // one tag has to be escaped or the tag comes back as two — and a semicolon
+    // would otherwise end the value and start a parameter.
+    let event = tagged([("Berlin, offsite; 2026".to_owned().as_str(), json!(true))]);
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        content_line(&ics, "CATEGORIES"),
+        "CATEGORIES:Berlin\\, offsite\\; 2026"
+    );
+    assert_eq!(ical_to_event(&ics).expect("parse").keywords, event.keywords);
+    assert!(maps_keywords(event.keywords.as_ref().unwrap()));
+}
+
+#[test]
+fn an_event_with_no_tags_carries_no_categories() {
+    let ics = event_to_ical(&fixture_event());
+
+    assert!(without(&ics, "CATEGORIES"), "{ics}");
+    // `None` rather than an empty map: the save path reads an edit off a
+    // difference from what was shown, and an empty set is a claim the component
+    // never made.
+    assert_eq!(ical_to_event(&ics).expect("parse").keywords, None);
+}
+
+#[test]
+fn categories_spread_over_several_lines_are_read_as_one_set() {
+    // RFC 5545 §3.8.1.2 admits CATEGORIES more than once in a VEVENT, and a tag
+    // named twice is still one member of a set. Both are what another client's
+    // component looks like; neither is what this crate writes.
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+UID:E1\r\nDTSTART;TZID=Europe/Berlin:20260115T130000\r\n\
+CATEGORIES:offsite,planning\r\nCATEGORIES:offsite,travel\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+
+    assert_eq!(
+        event.keywords,
+        Some(
+            [
+                ("offsite".to_owned(), json!(true)),
+                ("planning".to_owned(), json!(true)),
+                ("travel".to_owned(), json!(true)),
+            ]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn a_tag_the_component_cannot_show_is_flagged_rather_than_drawn() {
+    // RFC 8984 §1.4.3 has every value of a Set be `true`. Anything else is an
+    // entry this mapping will not put on the line — writing it would say the tag
+    // is set when the server said it is not, and drawing nothing at all would
+    // have a save replacing the property delete it.
+    for set in [json!(false), json!("yes"), json!(null)] {
+        let event = tagged([("offsite", json!(true)), ("odd", set.clone())]);
+        assert_eq!(
+            content_line(&event_to_ical(&event), "CATEGORIES"),
+            "CATEGORIES:offsite",
+            "{set} was drawn"
+        );
+        assert!(
+            !maps_keywords(event.keywords.as_ref().unwrap()),
+            "{set} was called covered"
+        );
+    }
+}
+
+#[test]
+fn an_empty_tag_is_flagged_rather_than_drawn() {
+    // There is no value slot for it: an empty part of a value list reads back as
+    // nothing at all, so the tag would vanish and a save would delete it.
+    let event = tagged([("", json!(true)), ("offsite", json!(true))]);
+
+    assert_eq!(
+        content_line(&event_to_ical(&event), "CATEGORIES"),
+        "CATEGORIES:offsite"
+    );
+    assert!(!maps_keywords(event.keywords.as_ref().unwrap()));
+}
+
+#[test]
+fn a_tag_carrying_a_carriage_return_is_flagged_rather_than_drawn() {
+    // A CR is dropped on its way onto a content line — it would otherwise end
+    // the line and turn the rest of the tag into a property of its own — so the
+    // tag would come back changed, and a save would rename it behind the user's
+    // back. A line feed is not the same case: it has an escape (`\n`) and
+    // survives.
+    let event = tagged([("off\rsite", json!(true))]);
+    assert!(without(&event_to_ical(&event), "CATEGORIES"), "{event:?}");
+    assert!(!maps_keywords(event.keywords.as_ref().unwrap()));
+
+    let event = tagged([("off\nsite", json!(true))]);
+    let ics = event_to_ical(&event);
+    assert_eq!(content_line(&ics, "CATEGORIES"), "CATEGORIES:off\\nsite");
+    assert_eq!(ical_to_event(&ics).expect("parse").keywords, event.keywords);
+    assert!(maps_keywords(event.keywords.as_ref().unwrap()));
+}
+
+#[test]
+fn an_event_whose_every_tag_is_undrawable_carries_no_categories() {
+    // And not an empty CATEGORIES line, which states a tag that is the empty
+    // string rather than no tags at all.
+    let event = tagged([("", json!(true))]);
+
+    assert!(without(&event_to_ical(&event), "CATEGORIES"), "{event:?}");
+    assert!(!maps_keywords(event.keywords.as_ref().unwrap()));
+}
+
+#[test]
+fn an_edited_instance_is_drawn_with_the_series_tags() {
+    // RFC 8984 §4.3.4: an instance holds every property its override does not
+    // restate, and an override may not restate the tags (see
+    // OVERRIDE_PROPERTIES). A component that left them off would show one
+    // occurrence of a tagged series as untagged.
+    let mut event = tagged([("offsite", json!(true))]);
+    event.recurrence_rules = Some(vec![RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        ..RecurrenceRule::default()
+    }]);
+    event.recurrence_overrides = Some(
+        [(
+            "2026-01-29T13:00:00".to_owned(),
+            json!({"title": "Sprint review"}),
+        )]
+        .into(),
+    );
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(
+        content_line(vevent(&ics, 1), "CATEGORIES"),
+        "CATEGORIES:offsite"
+    );
+    // And the instance is not read back as one whose tags differ: there is no
+    // patch that could say so.
     assert_eq!(
         ical_to_event(&ics).expect("parse").recurrence_overrides,
         event.recurrence_overrides

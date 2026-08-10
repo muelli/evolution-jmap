@@ -46,7 +46,7 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
 
     // A property the iCalendar mapping drops: EDS cannot see it change, so
     // re-downloading every event because of it would be pure churn.
-    fixture.patch(&id, json!({"keywords": {"offsite": true}}));
+    fixture.patch(&id, json!({"priority": 5}));
     assert_eq!(sync.load_component(id.as_str()).unwrap().revision, before);
 
     fixture.patch(&id, json!({"title": "Standup (short)"}));
@@ -60,6 +60,12 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
         &id,
         json!({"locations": {"l1": {"@type": "Location", "name": "Room 3"}}}),
     );
+    assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
+
+    // The same for the tags, which reach it as CATEGORIES: a tag added on the
+    // server has to show up in Evolution's category list.
+    let before = sync.load_component(id.as_str()).unwrap().revision;
+    fixture.patch(&id, json!({"keywords": {"offsite": true}}));
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 }
 

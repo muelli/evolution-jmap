@@ -187,14 +187,15 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     // Properties no component we produce can carry. (`locations` was the
-    // exemplar here until the place an event happens at became mapped; the guest
-    // list, the priority and the tags are still nowhere on a component.)
+    // exemplar here until the place an event happens at became mapped, and
+    // `keywords` until the tags did; the guest list, the priority and the free/busy
+    // status are still nowhere on a component.)
     fixture.patch(
         &id,
         json!({
             "participants": {"p1": {"@type": "Participant", "email": "vera@example.com"}},
             "priority": 5,
-            "keywords": {"offsite": true},
+            "freeBusyStatus": "free",
         }),
     );
     let sync = fixture.sync();
@@ -206,8 +207,8 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let stored = fixture.event(&id);
     assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
     assert_eq!(
-        stored.extra.get("keywords"),
-        Some(&json!({"offsite": true})),
+        stored.extra.get("freeBusyStatus"),
+        Some(&json!("free")),
         "an unmapped property was overwritten"
     );
     assert_eq!(stored.extra.get("priority"), Some(&json!(5)));
@@ -1866,6 +1867,178 @@ fn a_second_place_the_component_could_not_show_is_left_alone() {
         stored.title.as_deref(),
         Some("Standup (short)"),
         "the edit the user made must still arrive"
+    );
+}
+
+/// An event tagged the way a server tags it, and the component Evolution is
+/// shown for it.
+fn tagged(fixture: &Fixture, keywords: serde_json::Value) -> (jmap_proto::Id, String) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"keywords": keywords}));
+    let icalendar = fixture
+        .sync()
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar;
+    (id, icalendar)
+}
+
+#[test]
+fn tagging_an_event_reaches_the_server_as_keywords() {
+    // What Evolution's "Categories…" button writes. Unlike a place, the set is
+    // shown whole, so it goes back replaced whole — no key to patch into.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    let edited = icalendar.replace(
+        "SUMMARY:Standup",
+        "SUMMARY:Standup\r\nCATEGORIES:offsite,planning",
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).keywords,
+        Some(
+            [
+                ("offsite".to_owned(), json!(true)),
+                ("planning".to_owned(), json!(true)),
+            ]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn adding_a_tag_to_a_tagged_event_sends_the_whole_set() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = tagged(&fixture, json!({"offsite": true}));
+    assert!(icalendar.contains("CATEGORIES:offsite"), "{icalendar}");
+
+    let edited = icalendar.replace("CATEGORIES:offsite", "CATEGORIES:offsite,travel");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(
+        fixture.event(&id).keywords,
+        Some(
+            [
+                ("offsite".to_owned(), json!(true)),
+                ("travel".to_owned(), json!(true)),
+            ]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn a_tag_set_that_did_not_change_is_not_sent_at_all() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = tagged(&fixture, json!({"offsite": true}));
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(
+        stored.keywords,
+        Some([("offsite".to_owned(), json!(true))].into())
+    );
+}
+
+#[test]
+fn clearing_every_tag_removes_the_property() {
+    // A PatchObject removes a property to say "back to the default", and RFC 8984
+    // §4.2.9's default is no keywords at all. An empty map would be a different
+    // thing to store and to send back.
+    let fixture = Fixture::start();
+    let (id, icalendar) = tagged(&fixture, json!({"offsite": true, "planning": true}));
+
+    let edited = icalendar.replace("CATEGORIES:offsite,planning\r\n", "");
+    assert!(!edited.contains("CATEGORIES"), "{edited}");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).keywords, None);
+}
+
+#[test]
+fn a_tag_the_component_could_not_show_leaves_the_whole_set_alone() {
+    // RFC 8984 §1.4.3 has every value of a Set be `true`; this server said
+    // otherwise, so the tag never reached the CATEGORIES line — and a set shown
+    // in part is not the user's to have edited. The property goes back replaced
+    // whole, so writing it would delete the entry the user never saw.
+    let fixture = Fixture::start();
+    let keywords = json!({"offsite": true, "odd": "yes"});
+    let (id, icalendar) = tagged(&fixture, keywords.clone());
+    assert_eq!(
+        icalendar
+            .lines()
+            .find(|line| line.starts_with("CATEGORIES"))
+            .map(str::trim_end),
+        Some("CATEGORIES:offsite"),
+        "{icalendar}"
+    );
+
+    let edited = icalendar
+        .replace("CATEGORIES:offsite", "CATEGORIES:offsite,travel")
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.keywords,
+        Some(serde_json::from_value(keywords).unwrap()),
+        "a property shown in part must not be written back"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
+        "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn a_tag_holding_a_comma_survives_the_save_as_one_tag() {
+    // CATEGORIES is a value list, so the escaping is what keeps one tag from
+    // becoming two on the way through the component and back.
+    let fixture = Fixture::start();
+    let (id, icalendar) = tagged(&fixture, json!({"Berlin, offsite": true}));
+    assert!(
+        icalendar.contains("CATEGORIES:Berlin\\, offsite"),
+        "{icalendar}"
+    );
+
+    let edited = icalendar.replace(
+        "CATEGORIES:Berlin\\, offsite",
+        "CATEGORIES:Berlin\\, offsite,travel",
+    );
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(
+        fixture.event(&id).keywords,
+        Some(
+            [
+                ("Berlin, offsite".to_owned(), json!(true)),
+                ("travel".to_owned(), json!(true)),
+            ]
+            .into()
+        )
     );
 }
 

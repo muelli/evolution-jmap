@@ -83,6 +83,19 @@ pub struct CalendarEvent {
     /// if it can see what else is in there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locations: Option<BTreeMap<String, Value>>,
+    /// The tags the event carries (RFC 8984 §4.2.9), an RFC 8984 §1.4.3 Set:
+    /// the keys are the keywords and every value is `true`.
+    ///
+    /// The values are left as JSON rather than as `bool`, which is how
+    /// [`crate::mail::Email`] holds its keywords, because of what this type is:
+    /// a whole `CalendarEvent/get` response is deserialized into it at once, so
+    /// a server answering `{"offsite": 1}` for one event would fail the response
+    /// and take every event in the calendar down with it. Held as values, the
+    /// odd entry is visible as itself and the mapping refuses to write the
+    /// property back — the calendar still opens, which is the trade the
+    /// iCalendar mapping makes everywhere else too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_rules: Option<Vec<RecurrenceRule>>,
     /// The instances named one at a time rather than by a rule (RFC 8984

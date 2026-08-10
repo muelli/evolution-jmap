@@ -4,10 +4,10 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps ten properties and
+//! lossy view of a JSCalendar event. The mapping keeps eleven properties and
 //! drops everything else, so a save that sent the parsed event back whole
 //! would silently delete what it could not represent — participants, alerts,
-//! links, keywords — none of which the user ever saw, let alone asked to
+//! links, priority — none of which the user ever saw, let alone asked to
 //! remove.
 //!
 //! The lossiness also recurs *inside* the properties that are mapped, and
@@ -24,13 +24,16 @@
 //! - and a `status` outside the closed vocabulary is not cleared by a save
 //!   that never touched it.
 //!
-//! Four properties need more than the baseline, because for them "no
+//! Five properties need more than the baseline, because for them "no
 //! difference" is not the whole question:
 //!
 //! - **`locations` is a map of places and the component has one line.** So the
 //!   name is patched *into* the server's own entry rather than the property
 //!   being replaced, which is the one place this module reaches below the top
 //!   level — see [`diff_locations`].
+//! - **`keywords` is a set, and a set shown in part is not editable.** The
+//!   property goes back replaced whole, which is only safe if every tag the
+//!   server holds reached the `CATEGORIES` line — see [`diff_keywords`].
 //! - **`recurrenceRules` is one property, not a merge point.** A rule with
 //!   `rscale` cannot be spelled as an `RRULE` this crate emits, so patching
 //!   the array at all would narrow the user's recurrence behind their back.
@@ -60,8 +63,8 @@
 use std::collections::BTreeMap;
 
 use jmap_ical::{
-    event_to_ical, ical_to_event, maps_locations, maps_recurrence_override, maps_recurrence_rule,
-    names_time_zone,
+    event_to_ical, ical_to_event, maps_keywords, maps_locations, maps_recurrence_override,
+    maps_recurrence_rule, names_time_zone,
 };
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value};
@@ -123,6 +126,7 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     }
 
     diff_locations(&mut patch, current, &baseline, edited);
+    diff_keywords(&mut patch, current, &baseline, edited);
     diff_recurrence(&mut patch, current, &baseline, edited);
     diff_overrides(&mut patch, current, &baseline, edited);
     patch
@@ -215,6 +219,45 @@ fn name_of(key: &str) -> String {
         "locations/{}/name",
         key.replace('~', "~0").replace('/', "~1")
     )
+}
+
+/// The tags the event carries — replaced whole, which is what separates this
+/// from [`diff_locations`].
+///
+/// A `CATEGORIES` line holds a list of TEXT values and a JSCalendar keyword is a
+/// bare string, so the whole set fits on the component and there is nothing in an
+/// entry to preserve: the baseline says what was shown, and the difference from
+/// it is the set the user now wants. Clearing the field is
+/// `"keywords": null`, which is how a PatchObject asks for RFC 8984 §4.2.9's
+/// default of no tags — an empty map would be a different thing to store.
+///
+/// [`maps_keywords`] is asked of the server's own set, for the reason the other
+/// properties ask it: a tag the `CATEGORIES` line could not carry was never shown,
+/// so a set replaced whole would delete it. The *edited* side needs no such check
+/// — every tag it holds was read off a content line, and any string is a keyword
+/// RFC 8984 admits.
+fn diff_keywords(
+    patch: &mut Map<String, Value>,
+    current: &CalendarEvent,
+    baseline: &CalendarEvent,
+    edited: &CalendarEvent,
+) {
+    let empty = BTreeMap::new();
+    if !maps_keywords(current.keywords.as_ref().unwrap_or(&empty)) {
+        return;
+    }
+    if baseline.keywords == edited.keywords {
+        return;
+    }
+    patch.insert(
+        "keywords".to_owned(),
+        match &edited.keywords {
+            // Serialising a set this crate's own reader built cannot fail: it
+            // holds strings and `true`.
+            Some(tags) => serde_json::to_value(tags).unwrap_or(Value::Null),
+            None => Value::Null,
+        },
+    );
 }
 
 /// The recurrence, replaced whole or not at all — and not at all whenever
