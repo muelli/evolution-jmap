@@ -109,6 +109,23 @@ fn recurrence_rule_days_of_the_year_roundtrip() {
 }
 
 #[test]
+fn recurrence_rule_weeks_of_the_year_roundtrip() {
+    // `byWeekNo` is iCalendar's `BYWEEKNO` — "the first and the last week of the
+    // year", the negative value counting back from the end of the year as RFC 8984
+    // §4.3.3 has it. Which dates those weeks hold depends on `firstDayOfWeek`, so
+    // the fixture states one: RFC 5545 §3.3.10 numbers weeks by ISO 8601, where a
+    // week belongs to the year holding most of its days, counted from `WKST`.
+    let value = fixture("calendars/recurrence_rule_weeks_of_year.json");
+    assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
+
+    let rule: RecurrenceRule = serde_json::from_value(value).unwrap();
+    assert_eq!(rule.frequency, "yearly");
+    assert_eq!(rule.by_week_no.as_deref(), Some(&[1, -1][..]));
+    assert_eq!(rule.first_day_of_week.as_deref(), Some("su"));
+    assert!(rule.extra.is_empty());
+}
+
+#[test]
 fn recurrence_rule_months_roundtrip() {
     // `byMonth` is the months of the year a rule repeats in — iCalendar's
     // `BYMONTH`. RFC 8984 §4.3.3 holds each as a *string*, not a number, so

@@ -520,6 +520,11 @@ fn libical_keeps_the_recurrence_parts_this_mapping_writes() {
         // `BYYEARDAY` is written in gets tested: between the days of the month
         // and the months.
         "FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYMONTH=3",
+        "FREQ=YEARLY;COUNT=4;BYWEEKNO=1,-1;WKST=SU",
+        "FREQ=YEARLY;BYWEEKNO=53",
+        // And where `BYWEEKNO` is written: between the days of the year and the
+        // months, before the day the week is counted from.
+        "FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;WKST=SU",
         // RFC 5545 §3.3.10 defines BYYEARDAY beside a period shorter than a day
         // as well, limiting what those expand to.
         "FREQ=HOURLY;BYYEARDAY=100",
@@ -626,6 +631,53 @@ fn libical_answers_for_a_day_of_the_year_this_mapping_refuses() {
     }
 }
 
+/// The same question for the weeks of the year, whose answers split the same
+/// three ways the days of the year's do — and, as there, not along the boundary
+/// RFC 5545 draws, which is why `jmap-ical`'s `week_no_token` and its frequency
+/// gate are measured here rather than assumed.
+#[test]
+fn libical_answers_for_a_week_of_the_year_this_mapping_refuses() {
+    // Some values cost the whole `RRULE`: an event written that way would reach
+    // EDS's cache as a single appointment with the user's series gone.
+    for rrule in [
+        "FREQ=YEARLY;BYWEEKNO=0",
+        "FREQ=YEARLY;BYWEEKNO=999",
+        "FREQ=YEARLY;BYWEEKNO=20,XX",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
+    }
+    // But not every week outside RFC 5545's `ordwk`: 54 and -54 libical keeps
+    // verbatim, where 999 costs the rule. So the reason to refuse a week just past
+    // the end of the longest year is not that the parser objects — it is that no
+    // year has one, and the rule would sit in EDS's cache as a series that never
+    // occurs.
+    for rrule in ["FREQ=YEARLY;BYWEEKNO=54", "FREQ=YEARLY;BYWEEKNO=-54"] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // The frequency gate libical does not enforce either: it keeps `BYWEEKNO=20`
+    // beside every frequency RFC 5545 §3.3.10 forbids it next to — which here is
+    // every frequency but `YEARLY`. `jmap-ical` leaves the part off anyway, because
+    // no other reader of the rule is obliged to be as forgiving.
+    for rrule in [
+        "FREQ=MONTHLY;BYWEEKNO=20",
+        "FREQ=WEEKLY;BYWEEKNO=20",
+        "FREQ=DAILY;BYWEEKNO=20",
+        "FREQ=HOURLY;BYWEEKNO=20",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // And the third shape, a spelling kept but *changed*: `weeknum` admits the
+    // leading zero and the leading plus, and both come back canonical. As with
+    // `BYYEARDAY`, that cannot bite the save path — `byWeekNo` holds a number, so
+    // the only spelling this mapping can write is the canonical one.
+    for (written, back) in [
+        ("FREQ=YEARLY;BYWEEKNO=020", "FREQ=YEARLY;BYWEEKNO=20"),
+        ("FREQ=YEARLY;BYWEEKNO=+20", "FREQ=YEARLY;BYWEEKNO=20"),
+    ] {
+        assert_eq!(reparsed_rrule(written).as_deref(), Some(back), "{written}");
+    }
+}
+
 /// The same question for the day a rule's weeks start on, which decides the one
 /// asymmetry in `jmap-ical`'s `first_day_of_week_part`: the default is *dropped*
 /// on the way out rather than written, and this is the measurement that says it
@@ -678,6 +730,11 @@ fn libical_answers_for_the_day_a_week_starts_on() {
 
 /// The `RRULE` value libical hands back after reading a component carrying
 /// `value`, or `None` if it kept no `RRULE` at all.
+///
+/// The folds are undone first: RFC 5545 §3.1 splits a content line past 75
+/// octets across several physical ones, which a rule naming six parts reaches,
+/// and reading only the first fragment would compare half a rule against a whole
+/// one.
 fn reparsed_rrule(value: &str) -> Option<String> {
     let vevent = format!(
         "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:S\r\nDTSTART:20260810T070000Z\r\n\
@@ -691,8 +748,13 @@ fn reparsed_rrule(value: &str) -> Option<String> {
         glib_sys::g_slist_free(list);
         g_object_unref(component.cast());
     }
-    saved
+    let unfolded = saved
         .icalendar
+        .replace("\r\n ", "")
+        .replace("\r\n\t", "")
+        .replace("\n ", "")
+        .replace("\n\t", "");
+    unfolded
         .lines()
         .find_map(|line| line.strip_prefix("RRULE:"))
         .map(str::to_owned)

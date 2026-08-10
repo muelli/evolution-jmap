@@ -29,6 +29,15 @@ fn line<'a>(ics: &'a str, prefix: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no line starting {prefix} in\n{ics}"))
 }
 
+/// The same, with the line's folds undone: RFC 5545 §3.1 splits a content line
+/// longer than 75 octets across several physical ones, so an assertion about a
+/// long `RRULE` has to name the line the reader sees rather than the first
+/// fragment the emitter wrote.
+fn content_line(ics: &str, prefix: &str) -> String {
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+    line(&unfolded, prefix).to_owned()
+}
+
 fn without(ics: &str, prefix: &str) -> bool {
     !ics.split("\r\n").any(|line| line.starts_with(prefix))
 }
@@ -1768,6 +1777,186 @@ fn a_day_no_week_starts_on_is_flagged_rather_than_written() {
             "{day}"
         );
     }
+}
+
+#[test]
+fn a_yearly_rule_names_the_weeks_of_the_year_it_repeats_in() {
+    // "The first and the last week of the year, weeks counted from Sunday" —
+    // RFC 8984 §4.3.3's `byWeekNo`, iCalendar's `BYWEEKNO`, whose negative value
+    // counts back from the end of the year the way `byYearDay`'s does.
+    //
+    // The day beside it is not decoration: RFC 5545 §3.3.10 numbers the weeks by
+    // ISO 8601 from `WKST`, so "week 1" counted from Sunday and from Monday can
+    // name different days. That day is modeled now, which is what makes this part
+    // safe to carry at all.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_week_no: Some(vec![1, -1]),
+            first_day_of_week: Some("su".to_owned()),
+            count: Some(4),
+            ..RecurrenceRule::new("yearly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=YEARLY;COUNT=4;BYWEEKNO=1,-1;WKST=SU"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].by_week_no.as_deref(), Some(&[1, -1][..]));
+    // Which is what tells the save path it may write the property back.
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn the_weeks_of_the_year_are_written_after_the_days_of_the_year() {
+    // Every modeled part at once, in the order libical writes them — `BYWEEKNO`
+    // between `BYYEARDAY` and `BYMONTH` — so that a rule read back out of EDS's
+    // own cache compares equal to the one that went in.
+    //
+    // The sixth part is what first pushes an `RRULE` past 75 octets, so this is
+    // also the first rule the emitter folds; the assertion is on the unfolded line
+    // because that is the one a reader reconstructs.
+    let rule = RecurrenceRule {
+        by_day: Some(vec![NDay::new("we")]),
+        by_month_day: Some(vec![15]),
+        by_year_day: Some(vec![100]),
+        by_week_no: Some(vec![20]),
+        by_month: Some(vec!["3".to_owned()]),
+        first_day_of_week: Some("su".to_owned()),
+        ..RecurrenceRule::new("yearly")
+    };
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![rule.clone()]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        content_line(&ics, "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;WKST=SU"
+    );
+
+    // And the fold survives the trip back: every part arrives as it left, so a
+    // save comparing the two sees no edit.
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0], rule);
+}
+
+#[test]
+fn reads_the_weeks_of_the_year_off_a_rule_written_by_hand() {
+    // RFC 5545 §3.3.10's `weeknum` may carry the leading plus JSCalendar has no
+    // room for, and counts to 53 — the week a long year has and a short one does
+    // not.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=YEARLY;BYWEEKNO=+1,-53\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_week_no.as_deref(), Some(&[1, -53][..]));
+    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYWEEKNO=1,-53"
+    );
+}
+
+#[test]
+fn weeks_of_the_year_are_refused_at_every_frequency_but_yearly() {
+    // RFC 5545 §3.3.10 is narrower here than for any other part this mapping
+    // writes: BYWEEKNO MUST NOT be specified when FREQ is anything *other than*
+    // YEARLY — not even `HOURLY`, which `BYYEARDAY` is allowed beside. So the gate
+    // names the one frequency that is allowed rather than the ones that are not.
+    //
+    // The part is left off whole and the save path told the rule was seen in part,
+    // rather than writing a line libical is entitled to refuse.
+    for frequency in [
+        "daily", "weekly", "monthly", "hourly", "minutely", "secondly",
+    ] {
+        let rule = RecurrenceRule {
+            by_week_no: Some(vec![20]),
+            ..RecurrenceRule::new(frequency)
+        };
+        assert!(!maps_recurrence_rule(&rule), "{frequency}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            format!("RRULE:FREQ={}", frequency.to_ascii_uppercase()),
+            "{frequency}"
+        );
+    }
+}
+
+#[test]
+fn a_week_no_year_has_is_flagged_rather_than_written() {
+    // RFC 5545's `ordwk` is 1 to 53 and RFC 8984 §4.3.3 counts backwards to -53;
+    // zero is no week of any year, and 54 is a week no year has. A set holding one
+    // such value is refused whole, because a `BYWEEKNO` holding the rest is a
+    // different recurrence rather than a narrower view of this one.
+    //
+    // 54 has to be refused *here*: libical keeps it verbatim rather than dropping
+    // the rule — `jmap-backend-cal/tests/marshal.rs` measures that — so nothing
+    // below this mapping would catch it.
+    for weeks in [vec![0], vec![54], vec![-54], vec![20, 0], vec![]] {
+        let rule = RecurrenceRule {
+            by_week_no: Some(weeks.clone()),
+            ..RecurrenceRule::new("yearly")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{weeks:?}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=YEARLY",
+            "{weeks:?}"
+        );
+    }
+}
+
+#[test]
+fn a_week_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
+    // The refusal above, reached the way a component really arrives: through the
+    // parser. `54` is outside RFC 5545's `ordwk`, so the mapping is the one that
+    // has to refuse it — and refuse the whole set, leaving the `RRULE` at its
+    // frequency.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=YEARLY;BYWEEKNO=20,54\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_week_no.as_deref(), Some(&[20, 54][..]));
+    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=YEARLY",
+        "and the weeks are left off the rule it is drawn as"
+    );
 }
 
 /// A recurring event in one zone, with `overrides` naming single instances.

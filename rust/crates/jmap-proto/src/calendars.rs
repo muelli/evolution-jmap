@@ -132,6 +132,13 @@ pub struct RecurrenceRule {
     /// counting from 1 January, -1 to -366 from 31 December.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_year_day: Option<Vec<i32>>,
+    /// The weeks of the year it repeats in — iCalendar's `BYWEEKNO`. 1 to 53
+    /// counting from the first week of the year, -1 to -53 from its last.
+    ///
+    /// Which days a week holds depends on [`Self::first_day_of_week`]: RFC 5545
+    /// §3.3.10 numbers the weeks by ISO 8601, counting from that day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_week_no: Option<Vec<i32>>,
     /// The months of the year it repeats in — iCalendar's `BYMONTH`.
     ///
     /// A string rather than a number, as RFC 8984 §4.3.3 has it: the month

@@ -1,0 +1,6 @@
+{
+  "@type": "RecurrenceRule",
+  "frequency": "yearly",
+  "byWeekNo": [1, -1],
+  "firstDayOfWeek": "su"
+}
