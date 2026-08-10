@@ -22,16 +22,16 @@ use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceBackend, ESourceCollection, e_source_backend_get_backend_name,
     e_source_collection_get_identity, e_source_get_extension, e_source_has_extension,
-    e_source_new_with_uid,
+    e_source_new_with_uid, e_source_set_enabled,
 };
-use glib_sys::GFALSE;
+use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::{Server, parts_of, server_of, user_of};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::source::SourceError;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
-use jmap_config::account::{Account, BACKEND_NAME, apply};
+use jmap_config::account::{Account, BACKEND_NAME, apply, read};
 
 /// An `ESource` in the state a setup commits into: a uid and nothing else.
 /// `e_source_new_with_uid` with a NULL D-Bus object is what EDS itself uses for
@@ -104,6 +104,19 @@ impl TestSource {
     fn identity(&self) -> Option<String> {
         // SAFETY: a live extension of the type the name selects.
         unsafe { read_string(e_source_collection_get_identity(self.collection())) }
+    }
+
+    /// The account as the *setup* reads it back — what the widgets are filled
+    /// from and what `check_complete` is asked about.
+    fn account(&self) -> Account {
+        // SAFETY: a live source.
+        unsafe { read(self.0) }
+    }
+
+    fn set_enabled(self, enabled: bool) -> Self {
+        // SAFETY: a live source; the flag is a plain property.
+        unsafe { e_source_set_enabled(self.0, if enabled { GTRUE } else { GFALSE }) };
+        self
     }
 }
 
@@ -344,4 +357,149 @@ fn an_interior_nul_in_a_typed_string_is_truncated_rather_than_lost() {
     assert_eq!(source.identity().as_deref(), Some("vera@example.com"));
     let server = source.server().expect("the account names a server");
     assert_eq!(server.connection.host, "jmap.example.com");
+}
+
+// `read`, the inverse: the account the widgets are filled from, and the one
+// `check_complete` and `commit_changes` are handed. Its acceptance is that it
+// and `apply` describe one keyfile — so most of what follows writes an account
+// and asks for it back, and the rest holds it against the reader the registry
+// will use on the same file.
+
+#[test]
+fn an_account_that_was_written_is_the_account_that_is_read_back() {
+    let source = TestSource::new().written(&account());
+
+    assert_eq!(source.account(), account());
+}
+
+#[test]
+fn an_account_with_nothing_optional_in_it_round_trips_but_for_the_method() {
+    let mut written = account();
+    written.connection.user = None;
+    written.connection.auth_method = None;
+    written.connection.port = None;
+    written.parts = Parts::NONE;
+    let source = TestSource::new().written(&written);
+
+    assert_eq!(
+        source.account(),
+        Account {
+            connection: Connection {
+                // The one field that does not survive the trip, and the reason
+                // `read` reports what the source says rather than mapping it
+                // back: `ESourceAuthentication:method` has no unset state, so
+                // "none" is what an account with no method *is* once written —
+                // see `an_anonymous_account_is_read_back_as_anonymous`. Turning
+                // it back into `None` here would be this crate disagreeing with
+                // the collection backend about the same string.
+                auth_method: Some("none".to_owned()),
+                ..written.connection.clone()
+            },
+            ..written
+        }
+    );
+}
+
+#[test]
+fn a_plain_text_account_is_read_back_as_one() {
+    let mut written = account();
+    written.connection.secure = false;
+    written.connection.host = "127.0.0.1".to_owned();
+    written.connection.port = Some(8080);
+    let source = TestSource::new().written(&written);
+
+    // The account the mock-server recipe documents, and the one case where the
+    // difference between "TLS off" and "said nothing" decides whether a
+    // password goes out in the clear: an absent `[Security]` group reads as
+    // TLS, so this only comes back as insecure because `apply` wrote it.
+    assert_eq!(source.account(), written);
+}
+
+#[test]
+fn the_connection_the_setup_reads_back_is_the_one_the_registry_will_read() {
+    let source = TestSource::new().written(&account());
+
+    // The join, in the direction `read` adds: two descriptions of one keyfile,
+    // one used to fill the dialog's entries and one used to open the
+    // connection the account is for. A field this crate read out of the wrong
+    // group would show the user a server the backend never contacts.
+    let server = source.server().expect("the account names a server");
+    assert_eq!(source.account().connection, server.connection);
+    assert_eq!(source.account().parts, source.parts());
+}
+
+#[test]
+fn a_source_that_says_nothing_reads_as_an_account_with_nothing_in_it() {
+    let source = TestSource::new();
+
+    assert_eq!(
+        source.account(),
+        Account {
+            identity: String::new(),
+            connection: Connection {
+                // Empty rather than absent: `Account` is what the entries hold,
+                // and an entry the user has not filled in is the empty string.
+                // `complete::check` is where that becomes the `None` the shared
+                // `origin` rules take.
+                host: String::new(),
+                port: None,
+                user: None,
+                auth_method: None,
+                // Absent `[Security]` is TLS, which is the collection
+                // backend's rule and not a second one: reading the `secure`
+                // property of an extension that is not there would answer
+                // FALSE, and a dialog opened on a hand-written account would
+                // offer to commit it back with TLS switched off.
+                secure: true,
+            },
+            // And absent `[Collection]` is every part, because that is what
+            // `e_collection_backend_get_part_enabled` answers for a source that
+            // says nothing — the dialog has to show the account the registry
+            // sees, not an emptier one.
+            parts: Parts::ALL,
+        }
+    );
+}
+
+#[test]
+fn reading_an_account_does_not_add_a_group_to_it() {
+    let source = TestSource::new();
+
+    let _ = source.account();
+
+    // `read` is handed the user's own file, and `e_source_get_extension`
+    // creates what it cannot find. A read that left three groups behind would
+    // turn opening the account editor and pressing Cancel into a write.
+    for name in [
+        E_SOURCE_EXTENSION_COLLECTION,
+        E_SOURCE_EXTENSION_AUTHENTICATION,
+        E_SOURCE_EXTENSION_SECURITY,
+    ] {
+        assert!(
+            !source.has_extension(name),
+            "reading created the {} group",
+            name.to_string_lossy()
+        );
+    }
+}
+
+#[test]
+fn the_parts_of_a_disabled_account_are_still_the_ones_it_was_set_up_with() {
+    let mut written = account();
+    written.parts = Parts {
+        mail: true,
+        contacts: false,
+        calendars: true,
+    };
+    let source = TestSource::new().written(&written).set_enabled(false);
+
+    // Deliberately *not* the registry's answer, which is the one place the two
+    // readers differ on purpose. `parts_of` folds in the source's own `enabled`
+    // flag because a disabled account has no parts to populate; `read` must not,
+    // because `enabled` is not a field of `Account` and `apply` writes all three
+    // switches every time. A `read` that answered `NONE` here would show the
+    // user three cleared check boxes and then commit them, turning "hide this
+    // account for now" into permanently losing which parts it offered.
+    assert_eq!(source.parts(), Parts::NONE);
+    assert_eq!(source.account(), written);
 }

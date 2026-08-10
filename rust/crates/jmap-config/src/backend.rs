@@ -46,11 +46,17 @@
 //! for the entries themselves, and for the email address the user typed on the
 //! page before, which is [`defaults::from_identity`](crate::defaults::from_identity)'s
 //! one input — and reaching either means binding more of Evolution's headers
-//! than [`evo-sys`] currently generates, GTK among them. The second two need
-//! the inverse of [`account::apply`](crate::account::apply): a read of the
-//! account back out of the collection source the widgets have been editing,
-//! which this crate does not have yet. All four are the next increments, and
-//! none of them is claimed here.
+//! than [`evo-sys`] currently generates, GTK among them.
+//!
+//! The second two no longer wait on a decision: what they need out of the
+//! collection source the widgets have been editing is
+//! [`account::read`](crate::account::read), which exists and is tested, and
+//! what `check_complete` has to decide about the account it answers is
+//! [`complete::check`](crate::complete::check). What is left for those two
+//! slots is the vfunc plumbing itself — overriding a class slot, and
+//! `commit_changes` also writing the three mail sources
+//! ([`crate::mail`]) it is handed. All four are the next increments, and none
+//! of them is claimed here.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
