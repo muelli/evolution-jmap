@@ -12824,3 +12824,85 @@ stop saying `example-module`. Unchanged: M7 still **needs human verification in
 real Evolution**, the manual-test recipes are unlinked from the README,
 `jmap-mail`'s rustdoc is dirty, and the once-seen `jmap-mail`
 `tests/transport.rs` hang from the last session is still unexplained.
+
+## 2026-08-10 (hundred-and-twenty-eighth session)
+
+M9 layer 1's third leg: the Camel mail provider, driven the way Camel actually
+finds one. `tests/functional/mail-client.c` and
+`rust/crates/jmap-functional/tests/mail.rs`, registered as `functional-mail`.
+
+**Why it is not a third mirror of the other two.** The book and calendar legs
+are a client talking to a factory daemon that hosts the module; the daemon
+finds the module by it being a file in a directory it scans. A Camel provider
+has no daemon. It is dlopened into the *mail client's own process*, and only
+when something asks for a protocol that a `.urls` file in Camel's provider
+directory claims. So this client program is not a consumer of the host — it is
+the host. Nothing links the provider in (`jmap-mail`'s own tests do, which is
+exactly why they cannot check this): the harness stages `libjmap_mail.so` as
+`libcameljmap.so` into a scratch `EDS_CAMEL_PROVIDER_DIR` with the *installed*
+`.urls` file beside it, and `camel_session_add_service` is where the dlopen
+either happens or does not.
+
+Reaching `store-connected=1` therefore already proves the three spellings
+agree that live in three files — `BackendName=jmap` in the keyfile, the one
+line in `libcameljmap.urls`, and the string `camel_provider_module_init`
+registers. The protocol is read off the `ESource` rather than spelled in the
+client, so a client that hardcoded it would only be agreeing with itself.
+
+Beyond that: the folder tree is the mock's three mailboxes from one
+`Mailbox/get`; the inbox is the mailbox with the JMAP `inbox` role, asked for
+by role through `camel_store_get_inbox_folder_sync`; the summaries are the two
+seeded messages; and *every* body downloads, which is a different request
+again — a blob download is a plain HTTP GET, not a method call.
+
+**Red first, then the mutation that matters.** Red: `JMAP_FUNCTIONAL_MAIL_*`
+unset, then the test's first real run failed on `message-subject` — it fetched
+`uids->pdata[0]` and got the second seeded message, because a folder's uid
+order is the provider's business and not the test's. That is a finding about
+the test, not the provider, and the fix is the shape the whole client now has:
+every list it prints is sorted, and it fetches *all* the messages rather than
+one by position. A test that compared an order nobody promised would have been
+a flake with a plausible-looking failure message.
+
+The mutation with teeth: stage the module without its `.urls` file. The client
+fails at `add-service` with *No provider available for protocol 'jmap'* — the
+exact failure `docs/manual-test-mail-provider.md` warns about, arriving at
+exactly the call the document says it arrives at, and proof the assertion is
+about Camel's loading and not about a provider that happened to be linked in.
+
+**A CamelSession is instantiated directly rather than subclassed**, and the
+base class's `authenticate_sync` warns on stderr that it "is not intended for
+production use". That warning is expected output: the provider asks its session
+to authenticate from `connect_sync`, as every Camel provider does, and with no
+`User=` in the keyfile there is nothing to resolve. Evolution's subclass
+(EMailSession) exists to answer the vfuncs that need a user, and a subclass
+here would be a second implementation of an interface nothing in this test
+calls. Documented in the client rather than silenced.
+
+Sending is deliberately not covered. A transport is a second `CamelService`
+configured from a second source, and the thing worth testing about it — that it
+kept a server of its own, the failure the manual recipe calls the quietest one
+here — is its own leg.
+
+Verified locally: `ctest` 13/13 with `-DENABLE_FUNCTIONAL_TESTS=ON`,
+`cargo fmt --check`, `cargo test --locked` (491, unchanged — `jmap-functional`
+is out of `default-members`), `cargo clippy --all-targets --locked -- -D
+warnings` clean and the same for `-p jmap-functional -p jmap-mail`, and
+`mail-client.c` compiled standalone under `-Wall -Wextra` clean. `reuse lint`
+and `cargo deny` not run (neither binary is on this VM); the new files carry
+SPDX `GPL-3.0-or-later` headers.
+
+No milestone tag. M9 layer 1 is now all three surfaces, which is the last of
+what the roadmap asks of it *except* the gated CI job — and that is still a
+maintainer decision (`evolution-data-server` + `dbus-daemon` in the CI image),
+not something this session could land. Tier 2, the GUI smoke test, is untouched
+and needs a display this VM does not have.
+
+Next, in order: (1) the mail *transport* through Camel — the send half, and the
+one place a source that lost its `[Authentication]` group shows up. (2) The M8
+test tag, by hand. (3) Unchanged maintainer decisions: `evolution-data-server`
++ `dbus-daemon` in the CI image, gettext in the CI image, and whether
+`GETTEXT_PACKAGE` should stop saying `example-module`. Unchanged: M7 still
+**needs human verification in real Evolution**, the manual-test recipes are
+unlinked from the README, `jmap-mail`'s rustdoc is dirty, and the once-seen
+`jmap-mail` `tests/transport.rs` hang is still unexplained.

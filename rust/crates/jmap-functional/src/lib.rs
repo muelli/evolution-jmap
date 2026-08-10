@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The harness for the headless functional tests (M9 layer 1): a real
-//! `evolution-source-registry` and a real `evolution-addressbook-factory` or
-//! `evolution-calendar-factory`, loading a real build of this repository's
-//! modules, talking to an in-process mock JMAP server.
+//! `evolution-source-registry` and a real host for the module under test —
+//! `evolution-addressbook-factory`, `evolution-calendar-factory`, or, for the
+//! Camel provider, the client program itself — loading a real build of this
+//! repository's modules and talking to an in-process mock JMAP server.
 //!
 //! Every other test in this workspace stops at the edge of EDS — it calls a
 //! vfunc body directly, or checks a mapping against a fixture. That leaves
@@ -24,9 +25,10 @@
 //!   empty is load-bearing, not hygiene: `EBookMetaBackend` connects during
 //!   the open only when it has never connected before, so a reused cache
 //!   would make the connect path race with a background refresh.
-//! - a scratch module directory named by `EDS_ADDRESS_BOOK_MODULES` or
-//!   `EDS_CALENDAR_MODULES`, holding the one backend under test and nothing
-//!   else. Nothing is installed system-wide and no `sudo` is involved.
+//! - a scratch module directory named by `EDS_ADDRESS_BOOK_MODULES`,
+//!   `EDS_CALENDAR_MODULES` or `EDS_CAMEL_PROVIDER_DIR`, holding the one
+//!   module under test and nothing else. Nothing is installed system-wide and
+//!   no `sudo` is involved.
 //! - a private session bus from `dbus-run-session`, so the daemons that
 //!   D-Bus activates are this test's daemons, started with this test's
 //!   environment, and are killed with the bus when the client exits. A test
@@ -144,14 +146,36 @@ impl Session {
         );
     }
 
+    /// Stage a built cdylib as the one Camel mail provider this session can
+    /// see, together with the `.urls` file that is what makes Camel open it.
+    ///
+    /// Unlike the two above, this directory is not scanned by a daemon: the
+    /// provider is dlopened in the *client's* own process, and only when
+    /// something asks for a protocol one of the `.urls` files in here claims.
+    /// So the `.urls` file is staged rather than written — it is the file the
+    /// build installs, and a test that wrote its own copy would keep passing
+    /// after the installed one stopped naming the protocol.
+    pub fn stage_camel_provider(&mut self, built_module: &Path, urls: &Path) {
+        self.stage_backend(
+            "EDS_CAMEL_PROVIDER_DIR",
+            "camel-providers",
+            "libcameljmap.so",
+            built_module,
+        );
+
+        let directory = self.root.join("camel-providers");
+        fs::copy(urls, directory.join("libcameljmap.urls"))
+            .unwrap_or_else(|error| panic!("copy {} beside the provider: {error}", urls.display()));
+    }
+
     /// Copy `built_module` into a scratch directory of this session's and
     /// point `variable` at it.
     ///
-    /// Both `EDS_ADDRESS_BOOK_MODULES` and `EDS_CALENDAR_MODULES` *replace*
-    /// their factory's backend directory rather than adding to it, so a
-    /// factory started here has this backend and no other — which is why a
-    /// stray "no backend factory for jmap" is unambiguous evidence about this
-    /// module.
+    /// All three of `EDS_ADDRESS_BOOK_MODULES`, `EDS_CALENDAR_MODULES` and
+    /// `EDS_CAMEL_PROVIDER_DIR` *replace* their host's module directory rather
+    /// than adding to it, so a host started here has this module and no other
+    /// — which is why a stray "no backend factory for jmap", or "no provider
+    /// available for protocol", is unambiguous evidence about this module.
     fn stage_backend(
         &mut self,
         variable: &str,
