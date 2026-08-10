@@ -11686,3 +11686,103 @@ so it wants a deliberate decision rather than a drive-by: either write it
 conservatively and mark it unverified, or hold M7 until there is a session with a
 real Evolution. The other still-open items are unchanged: the four manual-test
 recipes are unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-seventeenth session)
+
+**`setup_defaults`, the third vfunc whose answer is an `ESource` — plus the one
+binding it was missing.** Last session's "next" named it and said it wanted a
+deliberate decision rather than a drive-by, because its body would be the first
+here that no test on this machine runs. It turned out not to be: the vfunc splits
+the same way `check_complete` and `commit_changes` do, into a trampoline that
+fetches two pointers and a `pub unsafe fn setup(collection, address)` that is
+ordinary Rust over an `ESource`. Seven new tests in `jmap-config`, two in
+`evo-sys`; red first in both.
+
+**`evo-sys`: `e_mail_config_service_page_get_email_address`.** The one input
+`setup_defaults` has, and the one thing this module asks of Evolution rather than
+of a source. `wrapper.h` now reads `mail/e-mail-config-service-page.h`, and the
+accessor is allowlisted by name — a `e_mail_config_service_page_.*` would have
+taken on the page's scratch sources, its backend lookup and its
+auto-configuration, none of which this module may touch. The page *type* joins
+the opaque handles (`EVO_HANDLES`, beside `GTK_HANDLES`): it is a
+`GtkScrolledWindow` two classes down, so generating it means generating the GTK
+class structs the blocklist exists to keep out — bindgen said so itself, with a
+`parent: GtkScrolledWindow` naming a type nothing defines. One wrinkle worth
+recording: a blocklisted Evolution class comes through in the generated
+signatures under its *struct tag* (`_EMailConfigServicePage`), unlike the GTK
+ones which come through under their typedef, so the handle is emitted under the
+tag with the typedef aliased to it — which is also how bindgen writes the
+Evolution classes it does generate. `tests/page.rs` checks the two things that
+fail silently otherwise: that the accessor links (the `undefined symbol`
+Evolution would hit on dlopen, moved to a red test), and — as a pair of typed
+function pointers, so the compiler is the assertion — that the page a backend
+hands back is the same type the address is read from.
+
+**What the defaults are, and why they are not simply `from_identity` applied.**
+`from_identity` describes a whole account: address, the server its domain
+implies, the login name it offers, *and* the three parts and the TLS switch. Only
+the first three are things the address says; the other two were written by
+`new_collection` before the user saw the page, and by the time this runs they may
+be answers the user gave. So `setup` takes the derived fields from the offer and
+leaves the rest of the account as it stands — a *Calendars* box the user unticked
+stays unticked. On a collection fresh from `new_collection` the result is exactly
+`from_identity(address)`, which is asserted rather than assumed, read back
+through the registry's own reader.
+
+And an address that has not changed writes nothing at all. A JMAP server may
+perfectly well not live at the domain of the address — RFC 8620 §2.2 only says
+that is where to *ask* — so a user who corrected the server by hand must not have
+the correction reverted merely because they looked at the previous page again. A
+*changed* address is the opposite case and is re-derived: the server they typed
+was for the address they have just stopped naming.
+
+**What could not be checked, and was therefore not claimed.** How often Evolution
+calls this vfunc. The assistant's page-preparation order is in a source this
+machine does not have (no `deb-src`) and a dialog it cannot run, so the first
+draft's "runs every time the assistant reaches the page" came out of the comments
+and what is written instead is that the implementation is correct for one call or
+for many — which is the property the merge rule above actually gives it.
+
+**One thing that *was* checked rather than assumed.** The first draft of the slot
+test asserted Evolution installs no `setup_defaults` of its own; it does. Rather
+than guess what it does, the pointer was resolved to a file offset through
+`/proc/self/maps` and disassembled: `endbr64; ret`, an empty stub, as is
+`insert_widgets` next to it. So the test reads like the other three —
+`setup_defaults_displaces_the_inherited_one` — and the class comment says
+"an empty function (read off the installed library, not assumed)".
+
+Checked by mutation, restored after: applying the whole `from_identity` instead
+of merging fails exactly the two tests that describe the merge, and dropping the
+allowlist line fails `tests/page.rs` as a compile error. (Note to future
+sessions: restore a mutation with the editor, not `git checkout` — that reverted
+the whole file and the build.rs work had to be typed again.)
+
+**What this is not.** Not a dialog anyone has seen. No widget is created, the
+page is still opaque on this side of the ABI, and `insert_widgets` remains
+unwritten — which now means an account arrives on the server settings page
+filled in and *cannot be corrected there*, since there are no entries. M7 still
+**needs human verification in real Evolution** and carries no completion tag.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny` (neither
+binary is on this VM); both new source files carry an SPDX `GPL-3.0-or-later`
+header. `cargo fmt --check`, `cargo test --locked` (491 on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean, as
+are `clippy`/`test` over the EDS crates — 873 tests, was 864; `evo-sys`'s suite
+is now 9 and `jmap-config`'s `tests/backend.rs` 24. The one ignored test is the
+pre-existing `ignore` doctest in `jmap-backend-core`'s `instance::Slot`.
+`RUSTDOCFLAGS=-D warnings cargo doc` is clean for `evo-sys` and `jmap-config`;
+still open and untouched is the same command over `jmap-mail`, 25 pre-existing
+`rustdoc::private_intra_doc_links`. Pre-existing and untouched: `example-module`
+does not build on this VM.
+
+No milestone tag.
+
+Next: `insert_widgets` is now the only unwritten slot, and it is still the one
+whose body no test here can run — the entries would bind onto the same collection
+source every other vfunc reads, which is the decision already made and recorded
+in `check_complete`'s comment. It is work for a session with a real Evolution or
+for M9's Xvfb tier, and the standing directive on translatable strings starts
+biting with the first label it adds (`bindtextdomain` in the module's init, and a
+`po/POTFILES.in` that has this crate in it). The other still-open items are
+unchanged: the four manual-test recipes are unlinked from the README, and
+`jmap-mail`'s rustdoc is dirty.
