@@ -107,7 +107,7 @@ impl CalendarEvent {
 }
 
 /// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly —
-/// `byMonthDay` & friends ride in `extra`.
+/// `bySetPosition` & friends ride in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RecurrenceRule {
@@ -124,6 +124,10 @@ pub struct RecurrenceRule {
     /// The days of the week the rule repeats on — iCalendar's `BYDAY`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_day: Option<Vec<NDay>>,
+    /// The days of the *month* it repeats on — iCalendar's `BYMONTHDAY`. 1 to 31
+    /// counting from the start of the month, -1 to -31 from its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_month_day: Option<Vec<i32>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

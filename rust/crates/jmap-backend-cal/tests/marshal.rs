@@ -496,3 +496,56 @@ fn utc_is_a_zone_with_nothing_to_define() {
         g_object_unref(component.cast());
     }
 }
+
+/// The recurrence parts `jmap-ical` writes, run through the parser that
+/// actually reads them.
+///
+/// `jmap-ical` emits `BYDAY` before `BYMONTHDAY` because that is the order
+/// libical writes them in, and a rule that comes back out of EDS's own cache
+/// spelled differently than it went in compares unequal to itself — which the
+/// save path reads as an edit. Nothing in `jmap-ical` can check that claim:
+/// calcard is what parses there. This is where libical is available to be asked.
+#[test]
+fn libical_keeps_the_recurrence_parts_this_mapping_writes() {
+    for rrule in [
+        "FREQ=MONTHLY;COUNT=6;BYDAY=WE;BYMONTHDAY=15,-1",
+        "FREQ=MONTHLY;BYMONTHDAY=-1",
+        "FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=1,15",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule));
+    }
+}
+
+/// And why a day of the month outside RFC 5545's `ordmoday` is refused whole
+/// rather than written: libical answers such a rule by dropping the **entire**
+/// `RRULE`, so an event written that way reaches EDS's cache as a single
+/// appointment and the user's series is gone. `jmap-ical`'s `month_day_token`
+/// leaving the part off is what keeps that from ever being written.
+#[test]
+fn a_day_of_the_month_no_month_has_would_cost_libical_the_whole_rule() {
+    for rrule in ["FREQ=MONTHLY;BYMONTHDAY=32", "FREQ=MONTHLY;BYMONTHDAY=0"] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
+    }
+}
+
+/// The `RRULE` value libical hands back after reading a component carrying
+/// `value`, or `None` if it kept no `RRULE` at all.
+fn reparsed_rrule(value: &str) -> Option<String> {
+    let vevent = format!(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:S\r\nDTSTART:20260810T070000Z\r\n\
+         RRULE:{value}\r\nEND:VEVENT\r\n"
+    );
+    let component = instance(&vevent);
+    let list = instance_list(&[component]);
+    // SAFETY: `list` holds one live component, freed below with the instance.
+    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    unsafe {
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+    saved
+        .icalendar
+        .lines()
+        .find_map(|line| line.strip_prefix("RRULE:"))
+        .map(str::to_owned)
+}

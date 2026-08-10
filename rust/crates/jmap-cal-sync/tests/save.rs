@@ -351,14 +351,14 @@ fn a_recurrence_the_mapping_can_carry_is_patched() {
 fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // `byMonthDay` has no place in the RecurrenceRule this crate models, so the
-    // RRULE the user edited is a narrower rule than the one on the server.
+    // `bySetPosition` has no place in the RecurrenceRule this crate models, so
+    // the RRULE the user edited is a narrower rule than the one on the server.
     fixture.patch(
         &id,
         json!({"recurrenceRules": [{
             "@type": "RecurrenceRule",
             "frequency": "monthly",
-            "byMonthDay": [15],
+            "bySetPosition": [-1],
         }]}),
     );
     let sync = fixture.sync();
@@ -370,8 +370,8 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let rules = fixture.event(&id).recurrence_rules.unwrap();
     assert_eq!(rules.len(), 1);
     assert_eq!(
-        rules[0].extra.get("byMonthDay"),
-        Some(&json!([15])),
+        rules[0].extra.get("bySetPosition"),
+        Some(&json!([-1])),
         "a rule part the RRULE could not carry was dropped"
     );
     assert_eq!(
@@ -408,6 +408,66 @@ fn the_days_a_weekly_rule_repeats_on_reach_the_server() {
     assert_eq!(
         rules[0].by_day.as_deref(),
         Some(&[NDay::new("mo"), NDay::new("th")][..])
+    );
+}
+
+#[test]
+fn the_days_of_the_month_a_rule_repeats_on_reach_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "monthly",
+            "byMonthDay": [15],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=MONTHLY;BYMONTHDAY=15"),
+        "{icalendar}"
+    );
+    // Moving it to the last day of the month, which is what the appointment
+    // editor's recurrence page writes for "on the last day".
+    let edited = icalendar.replace("BYMONTHDAY=15", "BYMONTHDAY=-1");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_month_day.as_deref(), Some(&[-1][..]));
+}
+
+#[test]
+fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
+    // `FREQ=WEEKLY;BYMONTHDAY=15` is a rule RFC 5545 §3.3.10 does not admit, and
+    // calcard hands it back rather than judging it — so, as with an ordinal
+    // weekday, the check is on the way out: `recurrenceRules` goes to the server
+    // replaced whole, and one part it may reject would cost every other edit in
+    // the save.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "weekly"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("RRULE:FREQ=WEEKLY", "RRULE:FREQ=WEEKLY;BYMONTHDAY=15")
+        .replace("SUMMARY:Standup", "SUMMARY:Daily standup");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.recurrence_rules.unwrap()[0].by_month_day, None);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Daily standup"),
+        "the edit the save could carry still has to land"
     );
 }
 
@@ -705,7 +765,7 @@ fn a_save_that_changes_nothing_sends_no_patch() {
             "recurrenceRules": [{
                 "@type": "RecurrenceRule",
                 "frequency": "weekly",
-                "byDay": [{"@type": "NDay", "day": "mo"}],
+                "bySetPosition": [-1],
             }],
             "recurrenceOverrides": {
                 "2026-01-22T09:00:00": {"title": "Standup (long)"},
