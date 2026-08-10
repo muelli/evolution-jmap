@@ -14,13 +14,22 @@
 //! provider module — the provider struct it keeps names types that must stay
 //! instantiable — so this is the whole of the C surface.
 
+use jmap_backend_core::i18n::bind;
 use jmap_backend_core::trampoline::guard;
 
-/// Registers the JMAP provider with Camel.
+/// Registers the JMAP provider with Camel, and binds the domain its strings
+/// are translated in.
 ///
 /// Called once per process in the field, but written to tolerate being reached
 /// again: [`crate::provider::register`] is idempotent, and the alternative is a
-/// second provider struct for the same protocol.
+/// second provider struct for the same protocol. [`bind`] is idempotent for the
+/// same reason and one more — a process can hold several of this repository's
+/// modules at once.
+///
+/// The binding comes first because the provider registered by the line after it
+/// is immediately visible to Camel, and the provider's name and description are
+/// looked up in that domain by Camel rather than by us. There is no later point
+/// at which we are called and could still get in front of the first lookup.
 ///
 /// Guarded, like every other C entry point in this repository. Nothing in here
 /// should be able to panic, but a panic unwinding out of this symbol would
@@ -35,6 +44,7 @@ use jmap_backend_core::trampoline::guard;
 #[unsafe(no_mangle)]
 pub extern "C" fn camel_provider_module_init() {
     guard("camel_provider_module_init", (), || {
+        bind();
         crate::provider::register();
     });
 }

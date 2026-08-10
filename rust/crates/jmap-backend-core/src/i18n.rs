@@ -45,6 +45,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::ptr;
 use std::sync::OnceLock;
 
 unsafe extern "C" {
@@ -124,6 +125,30 @@ pub fn bind_to(dir: &CStr) -> CString {
     }
     // SAFETY: a non-NULL return is a C string glibc owns and keeps until the
     // domain is rebound; it is copied here and not held.
+    unsafe { CStr::from_ptr(bound) }.to_owned()
+}
+
+/// Where gettext currently thinks this project's catalogues are.
+///
+/// The question [`bind`] and [`bind_to`] cannot answer for a caller that has
+/// not just called one of them: asking gettext by binding it would make the
+/// answer yes whatever the truth was. `bindtextdomain` with a NULL directory is
+/// the read-only form — it reports the binding and changes nothing — which is
+/// how a test can hold a module's entry point to having bound the domain.
+///
+/// Before anything binds, this is gettext's compiled-in default rather than
+/// [`LOCALE_DIR`]; the two coincide on an uninstalled build, which is why the
+/// tests that care start from a directory neither of them would be.
+pub fn binding() -> CString {
+    // SAFETY: a NUL-terminated domain and a NULL directory, which is the
+    // documented query form; the returned string is glibc's and is copied out
+    // before anything can rebind the domain.
+    let bound = unsafe { bindtextdomain(DOMAIN.as_ptr(), ptr::null()) };
+    if bound.is_null() {
+        return CString::default();
+    }
+    // SAFETY: a non-NULL return is a C string glibc owns and keeps until the
+    // domain is rebound.
     unsafe { CStr::from_ptr(bound) }.to_owned()
 }
 
