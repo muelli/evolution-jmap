@@ -28,6 +28,15 @@ const START: &str = "2026-01-15T13:00:00";
 /// seen this event before.
 const LOCATION: &str = "Room 42";
 
+/// And what it is filed under — the `CATEGORIES` in
+/// `tests/functional/cal-client.c`, which has to reach the server as a
+/// JSCalendar `keywords` Set (RFC 8984 §4.2.9). Two tags on one line, because
+/// libical re-renders a multi-valued `CATEGORIES` as one property per value: a
+/// mapping that read only the first would send a set of one, and the save after
+/// it would delete the rest. Sorted, since that is the order a set is held in on
+/// both sides.
+const KEYWORDS: [&str; 2] = ["offsite", "planning"];
+
 /// The length of that event, which the client states as a `DTEND` — the way
 /// Evolution's editor does — an hour and a half after the start. Nothing but
 /// this test says the two forms end up alike on the server.
@@ -311,6 +320,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(&LOCATION),
         "the event EDS handed back happens nowhere\n{report}"
     );
+    // And the tags, which cross the mapping as a set rather than as a line: the
+    // client joins every CATEGORIES value it finds, so a set that lost a member
+    // between the write and EDS's cache shows up here as a shorter list.
+    assert_eq!(
+        seen.get("read-back-categories")
+            .map(|values| values.split(',').collect::<Vec<_>>()),
+        Some(KEYWORDS.to_vec()),
+        "the event EDS handed back lost a tag\n{report}"
+    );
     // What EDS made of the edit, read back through the client rather than off
     // the server: `ECalMetaBackend` holds a series and its detached instances
     // as one object, so a component set that lost the override here would have
@@ -470,6 +488,16 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             .into()
         ),
         "the place the client named did not reach the server: {event:?}"
+    );
+    // The tags, as the server holds them: an RFC 8984 §1.4.3 Set of both, not the
+    // first of a line libical split into two properties on the way here.
+    assert_eq!(
+        event
+            .keywords
+            .as_ref()
+            .map(|tags| tags.keys().map(String::as_str).collect::<Vec<_>>()),
+        Some(KEYWORDS.to_vec()),
+        "the tags the client wrote did not reach the server: {event:?}"
     );
 
     // The all-day one, and the property that is the whole point of it: without
