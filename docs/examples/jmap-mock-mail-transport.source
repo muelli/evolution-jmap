@@ -1,0 +1,7 @@
+[Data Source]
+DisplayName=JMAP mock transport
+Enabled=true
+Parent=jmap-mock-mail-collection
+
+[Mail Transport]
+BackendName=jmap

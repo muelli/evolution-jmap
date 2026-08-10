@@ -1,0 +1,16 @@
+[Data Source]
+DisplayName=JMAP mock mail account
+Enabled=true
+
+[Collection]
+BackendName=jmap
+ContactsEnabled=true
+CalendarEnabled=true
+MailEnabled=true
+
+[Authentication]
+Host=127.0.0.1
+Port=8080
+
+[Security]
+Method=none

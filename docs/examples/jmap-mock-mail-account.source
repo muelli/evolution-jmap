@@ -1,0 +1,8 @@
+[Data Source]
+DisplayName=JMAP mock inbox
+Enabled=true
+Parent=jmap-mock-mail-collection
+
+[Mail Account]
+BackendName=jmap
+IdentityUid=jmap-mock-mail-identity
