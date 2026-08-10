@@ -352,6 +352,15 @@ mod tests {
             assert!(is_loopback(host), "{host} should be loopback");
         }
         // The near-misses that a plausible-looking name could exploit.
+        //
+        // The last four are the spellings that *do* reach 127.0.0.1 through a
+        // resolver but are not this function's idea of loopback: an
+        // IPv4-mapped IPv6 literal, the address as one decimal integer, the
+        // octal-per-octet form, and the short form. Each therefore fails
+        // *closed* — plaintext is refused and TLS is required — which is the
+        // safe direction for a check that decides whether credentials may go
+        // out in the clear. Pinned so that "loosening this to be helpful"
+        // has to be a deliberate act.
         for host in [
             "localhost.example.com",
             "notlocalhost",
@@ -359,6 +368,10 @@ mod tests {
             "0.0.0.0",
             "127.0.0.1.example.com",
             "::2",
+            "::ffff:127.0.0.1",
+            "2130706433",
+            "0177.0.0.1",
+            "127.1",
         ] {
             assert!(!is_loopback(host), "{host} should not be loopback");
         }
