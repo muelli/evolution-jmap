@@ -769,10 +769,14 @@ fn an_unknown_status_is_dropped_rather_than_passed_through() {
 
 #[test]
 fn a_recurrence_rule_carries_freq_interval_and_count() {
+    // The end before the interval, which is the order libical writes them in —
+    // measured in `jmap-backend-cal/tests/marshal.rs`, and the same contract the
+    // `BYxxx` parts are emitted under: a rule that goes out in another order
+    // comes back out of EDS's own cache respelled.
     let ics = event_to_ical(&fixture_event());
     assert_eq!(
         line(&ics, "RRULE:"),
-        "RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=10"
+        "RRULE:FREQ=WEEKLY;COUNT=10;INTERVAL=2"
     );
 
     let rules = ical_to_event(&ics)

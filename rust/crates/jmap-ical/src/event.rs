@@ -1268,10 +1268,10 @@ fn rule_to_rrule(
         return None;
     }
     let mut parts = vec![format!("FREQ={}", rule.frequency.to_ascii_uppercase())];
-    // INTERVAL=1 is the RFC 5545 default and only makes the line longer.
-    if let Some(interval) = rule.interval.filter(|interval| *interval != 1) {
-        parts.push(format!("INTERVAL={interval}"));
-    }
+    // The end comes before the interval, which is the order libical writes the
+    // two in (measured in `jmap-backend-cal/tests/marshal.rs`) — the same reason
+    // the `BYxxx` parts below are emitted in its order rather than the RFC's
+    // grammar order.
     if let Some(count) = rule.count {
         parts.push(format!("COUNT={count}"));
     }
@@ -1296,6 +1296,10 @@ fn rule_to_rrule(
                 format!("UNTIL={until}{suffix}")
             }
         });
+    }
+    // INTERVAL=1 is the RFC 5545 default and only makes the line longer.
+    if let Some(interval) = rule.interval.filter(|interval| *interval != 1) {
+        parts.push(format!("INTERVAL={interval}"));
     }
     // Last, where RFC 5545's own examples put them, and in the order libical
     // writes them — so a rule that went out this way and came back through EDS's
