@@ -82,6 +82,28 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-cal-client PRIVATE ${LIBECAL_LIBRARIES})
 	target_link_directories(functional-cal-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 
+	# The mail client is the odd one out and does not link a client library
+	# at all: there is no libecamel to match libebook and libecal, because a
+	# Camel provider is loaded into the mail client's own process. This
+	# program *is* that process, so it links camel itself, plus
+	# libedataserver for the ESourceRegistry and the ESourceCamel machinery
+	# that turns the keyfile's settings into a configured CamelService.
+	#
+	# No connection-status.c: that is an EClient notion, and a CamelService
+	# reports its own connection status synchronously.
+	pkg_check_modules(CAMEL_CLIENT REQUIRED camel-1.2>=${REQUIRE_EVOLUTION_VERSION})
+	pkg_check_modules(LIBEDATASERVER REQUIRED libedataserver-1.2>=${REQUIRE_EVOLUTION_VERSION})
+
+	add_executable(functional-mail-client tests/functional/mail-client.c)
+	target_include_directories(functional-mail-client PRIVATE
+		${CAMEL_CLIENT_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-mail-client PRIVATE
+		${CAMEL_CLIENT_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-mail-client PRIVATE
+		${CAMEL_CLIENT_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-mail-client PRIVATE
+		${CAMEL_CLIENT_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	# The Rust side builds the scratch EDS installation, runs the client on
 	# a private bus and holds both ends to what they should have said. Each
 	# test is registered on its own — `cargo test --test <name>` rather than
@@ -119,5 +141,21 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# The mail leg needs a third path the other two do not: the `.urls` file,
+	# which is what makes Camel open the module at all and which is
+	# therefore staged from the source tree rather than written by the test.
+	add_test(
+		NAME functional-mail
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test mail
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-mail PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_CLIENT=$<TARGET_FILE:functional-mail-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 endif()
