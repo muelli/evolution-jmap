@@ -11399,3 +11399,90 @@ half. Writing it — a hand-written mail account against `jmap-mockd`, with the
 `.urls` file and the `camel-provider` install component — would give this section
 somewhere to hand off to, and `tests/` an obvious place for the same
 quoted-verbatim check.
+
+## 2026-08-10 (hundred-and-fourteenth session)
+
+**The mail provider's own recipe.** `docs/manual-test-mail-provider.md`, the
+three keyfiles it tells the reader to copy — `jmap-mock-standalone-mail.source`,
+`-identity` and `-transport` under `docs/examples/` — and five tests in
+`rust/crates/jmap-mail/tests/recipe.rs`, red first (four of the five; the fifth,
+the no-`Parent=` check, passed vacuously because `RegistrySource::load` returns
+an empty source for a path with nothing at it, so it only became a real
+assertion once the files existed).
+
+**Why this rather than more code.** M3, M4 and M6 each have a documented manual
+recipe and a `tests/recipe.rs` holding it to the source tree; M5 had neither,
+and it is the one surface a reader reaches through Evolution's mail view. Last
+session's mail run in the collection recipe was written as if this document
+existed — it now points at it, with the reason: running the standalone account
+first is how you tell a broken provider from a broken binding.
+
+**What the account is, and the one line that differs from the collection run.**
+No `Parent=`, because until M7's assistant exists there is no account to hang
+these off — the same shape as the book and calendar recipes. The consequence is
+that `[Authentication]`/`[Security]` appear *twice*, once on the store and once
+on the transport: two `CamelService`s configured from two sources, with no
+collection above them to copy a server from one to the other. A transport that
+lost its copy is the quietest failure in the document — the account receives
+mail perfectly and fails only at Send — so
+`the_documented_services_both_reach_the_mock_server` runs `ServerConfig::from_settings`
+over *both* files, off the `CamelSettings` an `e_source_camel_configure_service`
+would hand the service, and both come back `http://127.0.0.1:8080` with no user
+and `CAMEL_NETWORK_SECURITY_METHOD_NONE`. The other four: both services name the
+protocol `camel_provider_module_init` registers and the identity names none; the
+two uids the sources point at each other with, read through
+`ESourceMailAccount:identity-uid` and `ESourceMailSubmission:transport-uid`;
+none of the three has a parent; and every ```` ```ini ```` block in the document
+is one of the three files verbatim.
+
+**One claim checked rather than assumed.** The scratch-tree instructions name
+`EDS_CAMEL_PROVIDER_DIR`, and the document says it *replaces* Camel's provider
+directory rather than adding to it — which matters more here than for the
+registry, since every other mail provider lives in the directory being replaced.
+Verified on this VM with a throwaway C program against the installed
+`libcamel-1.2`: `camel_provider_get("rss")` finds the stock provider by default
+and answers *No provider available for protocol 'rss'* with the variable set to
+an empty directory. That error string is quoted in the document as the symptom
+of a `BackendName` typo, for the same reason.
+
+Checked by mutation, one file at a time and restoring in between: a transport
+with its `[Authentication]` group removed, `BackendName=jmapp` on the account, a
+misspelt `TransportUid`, a `Parent=` added to the account, `Method=tls` on the
+transport, and an `Address=` changed in the document each fail exactly the test
+that names them (plus the verbatim check, whenever a file moved and the document
+did not) and nothing else.
+
+**What this is not.** Not run. That Camel dlopens the installed module by its
+`.urls` file, that Evolution offers the account, and that the mock then serves
+`Mailbox/get`, `Email/query`+`Email/get`, a blob download, `Email/set` and
+`EmailSubmission/set` are what the recipe exists to have a human check; this VM
+has no Evolution and no display. The document's closing paragraph says which
+half the test suite covers and which is the reader's. M5 gets no completion tag
+from a document.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM); the one new source file carries an SPDX
+`GPL-3.0-or-later` header, and the three new `.source` keyfiles are under
+`docs/`, which `REUSE.toml` annotates as a directory. `cargo fmt --check`,
+`cargo test --locked` (491 tests on the default members, unchanged) and
+`cargo clippy --all-targets --locked -- -D warnings` are clean, as are
+`clippy`/`test` over the EDS crates — 855 tests, was 850, `jmap-mail`'s suite now
+410. The one ignored test is the pre-existing `ignore` doctest in
+`jmap-backend-core`'s `instance::Slot`. Pre-existing and untouched:
+`example-module` does not build on this VM.
+
+**A finding for a later session.** `RUSTDOCFLAGS=-D warnings cargo doc -p
+jmap-mail` fails with 25 errors, all `rustdoc::private_intra_doc_links` in
+`src/cache.rs` and its neighbours — module-level prose linking `[`UNUSED_FOR`]`,
+`[`valid_key`]`, `[`claimed`]` and friends, which are private. Confirmed
+pre-existing by stashing this session's work and rerunning: the same 25 on clean
+master. Nothing here touches those files; it is a self-contained cleanup worth
+its own commit, and worth a check in CI afterwards so it cannot come back.
+
+No milestone tag.
+
+Next: the README's "Trying the address book backend in Evolution" section still
+points only at `docs/manual-test-book-backend.md`, and there are now four
+recipes. A short list there, or a `docs/README.md` index the four hang off, is
+the cheap way to make the other three findable — the calendar and collection
+ones have been unlinked from anywhere a newcomer reads since they landed.

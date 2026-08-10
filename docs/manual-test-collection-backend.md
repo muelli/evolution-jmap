@@ -362,6 +362,10 @@ picks the new account up when you launch it after the registry.
   job through the settings this backend wrote — if the folders appear but the
   account cannot connect, compare the transport's `[Authentication] Host` with
   the account's before looking anywhere else.
+  `docs/manual-test-mail-provider.md` is that half on its own, against a mail
+  account with no collection above it: the folder tree, the message list, the
+  send. Running it first is the way to tell a provider that is broken from a
+  binding that is.
 - Moving the account moves its mail sources with it, exactly as it moves the
   address books: change `[Authentication] Host` on the account, restart the
   registry, and both mail files name the new host too. A stale one is not only a
