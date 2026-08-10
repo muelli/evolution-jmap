@@ -12,10 +12,14 @@ publish = false
 
 [lib]
 name = "jmap_backend_collection"
-# cdylib is what evolution-source-registry dlopens (installed as
-# module-jmap-backend.so); rlib is what the integration tests link against, and
-# building both keeps the two from drifting apart.
-crate-type = ["cdylib", "rlib"]
+# rlib only. What evolution-source-registry dlopens (installed as
+# module-jmap-backend.so) is the companion `jmap-backend-collection-module`
+# crate, which is a cdylib holding nothing but the two
+# `#[unsafe(no_mangle)]` entry points and delegating both to
+# `module::load`/`module::unload` here. This crate is why the split exists:
+# `jmap-config` dev-depends on it, and two rlibs that both defined
+# `e_module_load` collapsed into one entry point answering for both.
+crate-type = ["rlib"]
 
 [dependencies]
 eds-sys = { workspace = true }

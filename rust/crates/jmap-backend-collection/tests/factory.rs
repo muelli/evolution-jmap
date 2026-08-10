@@ -40,7 +40,7 @@ use gobject_sys::{
 };
 use jmap_backend_collection::backend::JmapCollectionBackend;
 use jmap_backend_collection::factory::JmapCollectionFactory;
-use jmap_backend_collection::module::{e_module_load, e_module_unload};
+use jmap_backend_collection::module::{load, unload};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
 /// What `e_collection_backend_factory_class_init` leaves in the two fields this
@@ -96,13 +96,13 @@ unsafe impl ObjectSubclass for TestModule {
 unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
     // SAFETY: GLib passes the module being loaded, which is what the entry
     // point wants.
-    unsafe { e_module_load(module) };
+    unsafe { load(module) };
     GTRUE
 }
 
 unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     // SAFETY: as `module_load`.
-    unsafe { e_module_unload(module) };
+    unsafe { unload(module) };
 }
 
 /// The one module in the process, used, unused, and used again.

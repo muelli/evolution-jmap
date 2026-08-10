@@ -37,6 +37,16 @@
 //! `e_module_load` would cross into C from the process that owns the user's
 //! whole session — the mail view, every open composer, every unsaved draft —
 //! not just the account dialog that has yet to be opened.
+//!
+//! ## The C symbols are not here
+//!
+//! [`load`] and [`unload`] are the bodies; the `#[unsafe(no_mangle)]`
+//! definitions of `e_module_load` and `e_module_unload` that call them live in
+//! the companion `jmap-config-module` crate, which is built as a `cdylib` and
+//! nothing else. This crate is one of the two where the distinction was forced:
+//! its tests link `jmap-backend-collection`'s rlib, which used to define the
+//! same two C symbols, and a `no_mangle` function *is* its C symbol — so the
+//! two definitions collapsed into one entry point that answered for both.
 
 use gobject_sys::GTypeModule;
 use jmap_backend_core::subclass::register_dynamic;
@@ -54,10 +64,9 @@ use crate::backend::JmapConfigServiceBackend;
 ///
 /// # Safety
 ///
-/// `type_module` must be the `GTypeModule *` Evolution passed to this symbol;
-/// it has to stay alive for the duration of the call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
+/// `type_module` must be the `GTypeModule *` Evolution passed to
+/// `e_module_load`; it has to stay alive for the duration of the call.
+pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
         // SAFETY: the module is Evolution's, by this function's contract.
         unsafe { register_dynamic::<JmapConfigServiceBackend>(type_module) };
@@ -71,6 +80,5 @@ pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
 ///
 /// # Safety
 ///
-/// As [`e_module_load`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn e_module_unload(_type_module: *mut GTypeModule) {}
+/// As [`load`].
+pub unsafe extern "C" fn unload(_type_module: *mut GTypeModule) {}
