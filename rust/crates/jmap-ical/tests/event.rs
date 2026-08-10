@@ -899,10 +899,10 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
 
 #[test]
 fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
-    // byHour & friends ride in `extra` and do not survive the trip through
+    // byMinute & friends ride in `extra` and do not survive the trip through
     // iCalendar, so the save path must not patch recurrenceRules for them.
     let mut rule = RecurrenceRule::new("monthly");
-    rule.extra.insert("byHour".to_owned(), json!([9, 17]));
+    rule.extra.insert("byMinute".to_owned(), json!([15, 45]));
     assert!(!maps_recurrence_rule(&rule));
     assert!(maps_recurrence_rule(&RecurrenceRule::new("weekly")));
 }
@@ -2136,6 +2136,207 @@ fn a_position_a_hand_written_rule_invents_is_not_written_back() {
         "RRULE:FREQ=MONTHLY;BYDAY=FR",
         "and the position is left off the rule it is drawn as"
     );
+}
+
+#[test]
+fn carries_the_hours_of_the_day_a_rule_repeats_at() {
+    // RFC 8984 §4.3.3's `byHour` is RFC 5545 §3.3.10's BYHOUR: the hours within
+    // each interval the series happens at, 0 to 23. The first part modeled here
+    // that names a time of day rather than a date.
+    let rule = RecurrenceRule {
+        by_hour: Some(vec![9, 17]),
+        ..RecurrenceRule::new("daily")
+    };
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![rule.clone()]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=DAILY;BYHOUR=9,17");
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 17][..]));
+    assert_eq!(rules[0], rule);
+    // Which is what tells the save path it may write the property back.
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn the_hours_of_the_day_are_written_before_every_other_part() {
+    // Every modeled part at once, in the order libical writes them — and this
+    // one goes *first*, ahead of `BYDAY`, unlike every part added before it.
+    // Measured in `jmap-backend-cal/tests/marshal.rs`: a rule that went out in
+    // another order comes back out of EDS's own cache reordered and compares
+    // unequal to itself, which the save path reads as an edit.
+    let rule = RecurrenceRule {
+        by_hour: Some(vec![9]),
+        by_day: Some(vec![NDay::new("we")]),
+        by_month_day: Some(vec![15]),
+        by_year_day: Some(vec![100]),
+        by_week_no: Some(vec![20]),
+        by_month: Some(vec!["3".to_owned()]),
+        by_set_position: Some(vec![2]),
+        first_day_of_week: Some("su".to_owned()),
+        ..RecurrenceRule::new("yearly")
+    };
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![rule.clone()]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        content_line(&ics, "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYHOUR=9;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;\
+         BYWEEKNO=20;BYMONTH=3;BYSETPOS=2;WKST=SU"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0], rule);
+}
+
+#[test]
+fn reads_the_hours_of_the_day_off_a_rule_written_by_hand() {
+    // And the hours are a set `BYSETPOS` may select out of: RFC 5545 §3.3.10
+    // asks only that *some* other BYxxx part be there, and BYHOUR is one — so
+    // "the last of 09:00 and 17:00 each day" is a rule this mapping now writes
+    // where before it dropped the position for having nothing to select from.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=DAILY;BYHOUR=9,17;BYSETPOS=-1\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 17][..]));
+    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=DAILY;BYHOUR=9,17;BYSETPOS=-1"
+    );
+}
+
+#[test]
+fn an_hour_no_day_has_is_flagged_rather_than_written() {
+    // RFC 5545's `hour` is 0 to 23, and RFC 8984 §4.3.3 has `byHour` unsigned,
+    // so there is no backwards count here as there is for the days and weeks. A
+    // set holding one unwritable value is refused whole, because a `BYHOUR`
+    // holding the rest names different hours rather than fewer of these.
+    //
+    // libical drops the **entire** `RRULE` for an hour out of range — measured
+    // in `jmap-backend-cal/tests/marshal.rs` — so a rule written that way would
+    // reach EDS's cache as a single appointment with the user's series gone.
+    // And it answers an *empty* `BYHOUR` by inventing `BYHOUR=0`, which would
+    // move the whole series to midnight, so the empty set is refused too.
+    for hours in [vec![24], vec![99], vec![9, 24], vec![]] {
+        let rule = RecurrenceRule {
+            by_hour: Some(hours.clone()),
+            by_day: Some(vec![NDay::new("fr")]),
+            ..RecurrenceRule::new("daily")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{hours:?}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=DAILY;BYDAY=FR",
+            "{hours:?}"
+        );
+    }
+}
+
+#[test]
+fn an_hour_a_hand_written_rule_invents_is_not_written_back() {
+    // The refusal above, reached the way a component really arrives. `24` is
+    // outside RFC 5545's `hour`, and the part is left off while the days it
+    // would have limited stay in place.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=DAILY;BYDAY=FR;BYHOUR=9,24\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=DAILY;BYDAY=FR",
+        "and the hours are left off the rule it is drawn as"
+    );
+}
+
+#[test]
+fn an_all_day_event_whose_rule_names_hours_is_drawn_as_a_timed_one() {
+    // RFC 5545 §3.3.10: BYHOUR MUST NOT be specified when DTSTART has a value
+    // type of DATE — an hour of the day means nothing beside a day with no
+    // clock. libical keeps such a rule anyway (measured in
+    // `jmap-backend-cal/tests/marshal.rs`), so this mapping is the only place
+    // the contradiction can be resolved.
+    //
+    // It is resolved the way a 09:00 start and a zone already are: the DATE
+    // form is dropped and the event is drawn timed, which is wrong about its
+    // day-ness but right about when it happens. Refusing the hours instead
+    // would draw an all-day series every day where the real one is at 09:00,
+    // and hide the difference from the user.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_hour: Some(vec![9]),
+            ..RecurrenceRule::new("daily")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
+    assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=DAILY;BYHOUR=9");
+
+    // And the save path compares against this same rendering, so the flag lost
+    // here is not read back as the user having cleared it.
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.show_without_time, None);
+    assert_eq!(read_back.recurrence_rules, event.recurrence_rules);
+}
+
+#[test]
+fn an_all_day_event_whose_hours_are_unwritable_stays_a_date() {
+    // The other side of that: an `RRULE` that will not carry the hours anyway
+    // leaves nothing for the DATE form to contradict, so the event keeps its
+    // day-ness. `maps_recurrence_rule` is what stops the save path patching the
+    // recurrence it was shown only in part.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_hour: Some(vec![24]),
+            ..RecurrenceRule::new("daily")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
+    assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=DAILY");
+    assert!(!maps_recurrence_rule(
+        &event.recurrence_rules.as_ref().unwrap()[0]
+    ));
 }
 
 /// A recurring event in one zone, with `overrides` naming single instances.

@@ -106,7 +106,7 @@ impl CalendarEvent {
     }
 }
 
-/// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly — `byHour`
+/// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly — `byMinute`
 /// & friends ride in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +121,18 @@ pub struct RecurrenceRule {
     pub count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
+    /// The hours of the day it repeats at — iCalendar's `BYHOUR`. 0 to 23.
+    ///
+    /// Unsigned, unlike the day and week parts below: RFC 8984 §4.3.3 has
+    /// `byHour` as `UnsignedInt[]` and RFC 5545 §3.3.10's `hour` gives no way to
+    /// count an hour backwards from the end of the day.
+    ///
+    /// It is also the first part here that names a *time* rather than a date,
+    /// which RFC 5545 §3.3.10 says MUST NOT stand beside a `DTSTART` of value
+    /// type DATE — so an all-day event carrying one is drawn as a timed event
+    /// instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_hour: Option<Vec<u32>>,
     /// The days of the week the rule repeats on — iCalendar's `BYDAY`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_day: Option<Vec<NDay>>,
