@@ -18,6 +18,10 @@ name = "jmap_config"
 
 [dependencies]
 eds-sys = { workspace = true }
+# The Evolution side of the ABI: the one class `backend` subclasses. Every EDS
+# and GLib type it mentions comes back out of `eds-sys` above, so an `ESource`
+# handed over by a vfunc is the same Rust type the writers here take.
+evo-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
 evolution-jmap-collection-sync = { workspace = true }
 glib-sys = { workspace = true }

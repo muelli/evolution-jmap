@@ -443,6 +443,7 @@ name = "jmap-config"
 version = "0.1.0"
 dependencies = [
  "eds-sys",
+ "evo-sys",
  "evolution-jmap-collection-sync",
  "glib-sys",
  "gobject-sys",
