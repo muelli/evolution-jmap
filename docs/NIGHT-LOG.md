@@ -12352,3 +12352,97 @@ verification in real Evolution** (`insert_widgets` remains unwritten, so an
 account arrives on the server settings page filled in and cannot be corrected
 there), the four manual-test recipes are unlinked from the README, and
 `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-twenty-third session)
+
+**The `.deb` this repository produces was not reproducible, and now it is.**
+The previous session ranked its own follow-ups: (1) wire the package into
+`release.yml`, (2) find out whether a `.deb` built twice is byte-identical.
+Taken in the other order deliberately. Item (1) cannot be run on this VM — a
+release workflow that compiles is not a release workflow that works — whereas
+item (2) is exactly the kind of question this machine can answer, and it is a
+question that has to be answered *before* the package is published, not after:
+the whole point of publishing a digest is that someone else can rebuild and get
+the same bytes. Shipping an irreproducible artifact next to `SHA256SUMS` and
+in-toto attestation would have been a promise the artifact could not keep.
+
+It could not keep it. Packaging the same build tree twice, two seconds apart,
+gave two different files:
+
+    08f9771b3e375157bc4273188aa3ad0c40c9792ff864476250f57c07fd150266
+    efe5c3ca4ae1f16e39475cdf2bf24f37c9951d773085032c2a2a0032965ae827
+
+Taken apart with `ar x`, the difference was byte 5 of both `control.tar.gz` and
+`data.tar.gz` — the gzip header's MTIME — and, underneath, byte 146 of the tar
+streams, which is inside a tar header's `mtime` field. The entry it belonged to
+was `./usr/`. `cpack` re-runs the install into a fresh staging tree, so every
+directory in the archive is created at packaging time; the ar member headers
+carry the same clock. The file entries had a second problem of their own: they
+keep the mtimes of the modules as linked, so an unclamped package is dated by
+`ld` rather than by anything anyone chose. Five distinct timestamps in one
+package, none of them a property of the sources.
+
+**The fix is `CPACK_PROJECT_CONFIG_FILE`, which is the only hook in the right
+place.** CMake 3.28's DEB generator honours `SOURCE_DATE_EPOCH` and — worth
+knowing, because it is not what the name suggests — does not *clamp* to it but
+*sets* every entry to it: the Camel `.urls` file, whose mtime is older than the
+last commit, comes out dated with the epoch and not with its own. So one
+environment variable collapses all five timestamps to one. But it must be an
+environment variable in the `cpack` process, and `CPackConfig.cmake` carries
+only CPack variables. `CPACK_PROJECT_CONFIG_FILE` names a script CPack includes
+inside that process, once per generator, before it stages anything; a generated
+`build/cpack-project-config.cmake` doing `set(ENV{SOURCE_DATE_EPOCH} ...)` is
+therefore enough, and it has to be set before `include(CPack)`, which is what
+writes the path into the config.
+
+The value is the one the build already resolved for the Rust side (exported
+`SOURCE_DATE_EPOCH`, else `git log -1 --format=%ct`), so the package is dated by
+the same instant as the binaries inside it. Deliberately *not* deferring to
+whatever happens to be exported when `cpack` runs: that would let whoever
+packages redate a build they did not make.
+
+**The test is three runs, not two, and that is the part worth defending.**
+`ctest -R package-deb-reproducible` packages the tree three times — once with
+`SOURCE_DATE_EPOCH=1600000000` exported, once with `1700000000`, once with the
+variable removed from the environment via `cmake -E env --unset=` — and
+requires all three to be byte-identical. A plain run-it-twice test would have
+gone green on any machine that exports nothing and then failed on the release
+runner, which exports the commit timestamp; the decoy epochs are what turn "the
+caller's environment does not reach the package" into an assertion. The red
+output named both defects at once — three different digests, and the unset run
+listing all five timestamps.
+
+Byte-equality across three runs still would not prove the *file* entries are
+pinned, since one build tree gives all three runs the same module mtimes. So
+the second assertion is that every entry in the package — control tar and data
+tar, via `dpkg-deb --ctrl-tarfile`/`--fsys-tarfile` piped to `tar --utc
+--full-time -tv` — carries one and the same timestamp. Nothing about a real
+tree makes that true by accident: the modules here are linked two seconds
+apart, the `.urls` is two days older, the directories are made at packaging
+time. Checked out of band that this is the property that matters: `touch` on
+every module `.so` and on `libcameljmap.urls`, then repackage, gives
+`d923b111…` both before and after. That is the fresh-clone case, where git sets
+every mtime to the moment of checkout.
+
+`ctest` is 9/9 (was 8/8), `cargo fmt --check`, `cargo test --locked` (491,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` clean — no
+Rust changed, the increment is one CMake template, one CMake test script, and
+two hunks of `cmake/Packaging.cmake`. Not verified locally, as in every
+session: `reuse lint` and `cargo deny` (neither binary is on this VM); both new
+files carry SPDX `GPL-3.0-or-later` headers as `#` comments, and neither needs
+a `REUSE.toml` entry.
+
+No milestone tag; M8's second half is still the one thing left. Next, in order:
+(1) `release.yml` — add the `.deb` to what the release job builds, hashes into
+`SHA256SUMS` and attests, and describe it in `docs/verifying-artifacts.md`;
+that is the point at which M8 could be tagged, and it is now safe to publish
+because the artifact is reproducible. The runner needs `dpkg-dev` for
+`dpkg-shlibdeps`, which fails loudly rather than silently if absent — worth
+confirming before a release rather than during one. (2) Consider whether the
+`reproducible` CI job, which today builds twice and compares the `.so`s, should
+compare the `.deb` too; `ctest` now proves it within one tree, and that job
+would prove it across two. (3) Unchanged maintainer decisions: gettext in the
+CI image, and whether `GETTEXT_PACKAGE` should stop saying `example-module`.
+Unchanged: M7 still **needs human verification in real Evolution**, the four
+manual-test recipes are unlinked from the README, and `jmap-mail`'s rustdoc is
+dirty.
