@@ -25,22 +25,33 @@
 //! into one entry point that answers for both.
 
 use gobject_sys::GTypeModule;
+use jmap_backend_core::i18n::bind;
 use jmap_backend_core::subclass::register_dynamic;
 use jmap_backend_core::trampoline::guard;
 
 use crate::backend::JmapBookBackend;
 use crate::factory::{JmapBookFactory, remember_backend_type};
 
-/// Registers the backend and its factory against `type_module`.
+/// Binds this project's gettext domain, and registers the backend and its
+/// factory against `type_module`.
 ///
 /// Called once per use of the module, not once per process: EDS unuses a
 /// module when the last backend it provided goes away, which marks every type
 /// it registered as unloaded, and calls this again when the next account wants
 /// one. So registering is what happens on *every* call, and
-/// `register_dynamic` is idempotent for exactly that reason.
+/// `register_dynamic` is idempotent for exactly that reason. [`bind`] is
+/// idempotent too, and for one more: a process can hold several of this
+/// repository's modules at once, and each has to assume it might be the first.
 ///
-/// The backend goes first, because the factory's `class_init` needs the type
-/// it produced.
+/// The binding comes first because it has to be in place before anything can
+/// ask for a translated string, and this is the only code of ours that
+/// `evolution-addressbook-factory` is guaranteed to run. Doing it lazily at the
+/// first lookup would need us to own every lookup, and we do not — the strings
+/// this backend hands back travel out in `GError`s that Evolution displays,
+/// by which point the text has been chosen.
+///
+/// The backend then goes before the factory, because the factory's `class_init`
+/// needs the type it produced.
 ///
 /// # Safety
 ///
@@ -48,6 +59,7 @@ use crate::factory::{JmapBookFactory, remember_backend_type};
 /// has to stay alive for the duration of the call.
 pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
+        bind();
         // SAFETY: the module is EDS's, by this function's contract.
         unsafe {
             remember_backend_type(register_dynamic::<JmapBookBackend>(type_module));

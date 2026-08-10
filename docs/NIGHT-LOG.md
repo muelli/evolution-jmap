@@ -12010,3 +12010,88 @@ a compiled `.mo` under `LANGUAGE_SUPPORT_DIRECTORY`; while there, the top-level
 Unchanged: M7 still **needs human verification in real Evolution**
 (`insert_widgets` remains unwritten), the four manual-test recipes are unlinked
 from the README, and `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-twentieth session)
+
+**The `bind()` call in the other four entry points**, which the previous two
+sessions ranked next: `jmap-backend-book`, `jmap-backend-cal`,
+`jmap-backend-collection` and `jmap-config` now bind this project's gettext
+domain from `module::load`, as `jmap-mail`'s `camel_provider_module_init`
+already did. Red first, in four new `tests/textdomain.rs` files:
+
+    the entry point did not bind the domain, so this backend's translated
+    strings would be looked for wherever the address book factory happened to
+    point
+      left: "/nonexistent/jmap-book-decoy-locale"
+     right: "/usr/share/locale"
+
+The decoy binding is the whole design of the test. On an uninstalled build
+`LOCALE_DIR` *is* gettext's compiled-in `/usr/share/locale`, so a process that
+had never bound anything reports exactly what a correct module would — asserting
+`binding() == LOCALE_DIR` from a clean process passes against a module that does
+nothing. Binding to a directory neither of them would be, first, is what makes
+the assertion able to fail.
+
+**`module::load`, not the cdylib.** The previous session moved the C symbols out
+into four `*-module` cdylib crates and noted the binding's natural home had moved
+with them. It went into `load` rather than into those crates: `load` is what
+actually runs, it is where the existing `GTypeModule` stand-in tests can reach
+it, and the cdylibs were deliberately left with no behaviour of their own to
+drift with. Inside the `guard`, and before the registrations — a translated
+string can be asked for as soon as a class exists, and there is no later point
+at which we are called and could still get in front of the first lookup.
+
+**Four files, not one shared helper, and four separate bindings.** Each test
+needs its own process: `bind` is a `OnceLock`, so a sibling test in the same
+binary that reached the entry point first would spend it and leave the decoy in
+place, failing this one for the wrong reason. Cargo gives each file in `tests/`
+its own process, so being the only test in the file *is* the isolation — the
+same reason `jmap-mail/tests/textdomain.rs` is its own file. The `GTypeModule`
+stand-in is therefore duplicated per crate, as it already is between each
+crate's `factory.rs`/`module.rs` tests. Each test drives `g_type_module_use`
+rather than calling `load` directly, so the entry point is reached through the
+vfunc the way EDS/Evolution reach it. And the binding is made in all four
+modules rather than in one, because they are dlopened by *different processes*:
+a calendar-only account never loads the book module, and neither can rely on the
+other having bound anything.
+
+Nothing looks a string up in the domain yet — no string anywhere in this
+repository is marked for translation. That is deliberate and is what the
+standing directive asks for in this order: the binding has to be in place before
+the first marked string, or it would be marked and silently untranslated.
+
+`cargo fmt --check`, `cargo test --locked` (491 on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean, as
+are clippy and test over the EDS crates — 885 tests, was 881, the four new ones
+being one `textdomain` per crate. The one ignored test is the pre-existing
+`ignore` doctest in `jmap-backend-core`'s `instance::Slot`. `cmake -S . -B
+build-verify -G Ninja && cmake --build build-verify && ctest` is 7/7, including
+`rust-test-eds` and the five staged-install checks.
+`RUSTDOCFLAGS=-D warnings cargo doc --no-deps` is clean for `jmap-config` and
+`jmap-backend-collection`. Not verified locally, as in every session: `reuse
+lint` and `cargo deny` (neither binary is on this VM); every new file carries an
+SPDX `GPL-3.0-or-later` header. Pre-existing and untouched: `example-module` does
+not build on this VM, and `jmap-mail`, `jmap-backend-book` and `jmap-backend-cal`
+carry `rustdoc::private_intra_doc_links`.
+
+No milestone tag. The translatable-strings directive is now half carried out:
+all five module entry points bind the domain, and no catalogue exists for them
+to find.
+
+Next, in the order they would be taken: (1) `po/` with `POTFILES.in` and
+`LINGUAS`, the lint the standing directive asks for, and an install rule putting
+a compiled `.mo` under `LANGUAGE_SUPPORT_DIRECTORY` — until that exists every
+lookup falls back to English by construction, so the bindings just landed are
+untested against a real catalogue end to end (`jmap-backend-core`'s
+`tests/catalogue.rs` proves the mechanism against one it writes itself, which is
+as far as that can go without an installed `.mo`). While there: the top-level
+`GETTEXT_PACKAGE` is still the skeleton's `example-module` while our domain is
+`evolution-jmap` — the C example module and the Rust modules do not share a
+catalogue and probably should not, but that should be a decision rather than an
+oversight. (2) The first actually-marked strings, which by the directive means
+the collection backend's child-source display names, since those are the
+user-visible strings this repository already originates. Unchanged from previous
+sessions: M7 still **needs human verification in real Evolution**
+(`insert_widgets` remains unwritten, so an account arrives on the server settings
+page filled in and cannot be corrected there), the four manual-test recipes are
+unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
