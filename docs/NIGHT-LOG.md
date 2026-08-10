@@ -12749,3 +12749,78 @@ CI image, gettext in the CI image, and whether `GETTEXT_PACKAGE` should stop
 saying `example-module`. Unchanged: M7 still **needs human verification in
 real Evolution**, the manual-test recipes are unlinked from the README, and
 `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-twenty-seventh session)
+
+The `connection-status` question, answered, and the answer turned into an
+assertion. It had been first in the queue for two sessions and skipped twice as
+"open-ended reading"; it took about an hour of reading
+`evolution-data-server-3.52.3` and it is not open-ended at all.
+
+**The finding: the 30-second stall is the test program's fault, not the
+backend's.** `ESource` does not apply a connection-status change where it
+learns of it — `source_notify_dbus_connection_status_cb` queues an *idle* on
+the source's `GMainContext` (`e-source.c:899`), and that context is whatever
+was thread-default when `ESourceRegistry` was constructed
+(`e-source-registry.c:1726`, and `:683` where each `ESource` is handed it) — in
+a synchronous program with no main loop, the default context on the main
+thread. `e_client_wait_for_connected_sync` then blocks *that thread* on an
+`EFlag` until `notify::connection-status` fires (`e-client.c:1732`). The signal
+comes from the idle; the idle needs the context iterated; the only thread that
+would iterate it is the one blocked on the flag. The wait therefore always
+expires, whatever the backend did. Evolution never meets this because it has a
+main loop and does the wait on a worker thread.
+
+So there was no backend bug to fix, and — worth stating, because it was the
+obvious guess — no missing `e_backend_ensure_source_status_connected` either:
+`e_book_meta_backend_ensure_connected_sync` sets the status itself
+(`e-book-meta-backend.c:3576-3579`), `connecting` before the vfunc and
+`connected`/`disconnected` after it. That call is for backends which connect
+outside the meta-backend machinery (LDAP and weather use it; nothing else in
+3.52 does).
+
+**What landed instead of a fix: the observation the question was really
+about.** Both functional clients now report `connection-status=<nick>`, waited
+for with an actual main loop, from a new shared `tests/functional/
+connection-status.c` compiled into both — one file because the question is the
+same for a book and a calendar, and because the reasoning above needed one
+place to live. The two Rust tests assert `connected`.
+
+This is worth more than a tidied comment. It is EDS's own verdict on our
+connect, and for the *calendar* it is the sharp signal the last session said
+was missing: `e_cal_client_connect_sync` succeeds even when the backend's
+`connect_sync` failed, so `readonly` could not tell "could not open the
+calendar" from "opened it and forgot to claim it writable". `connection-status`
+can, so it is asserted before `readonly` in both tests — cause before symptom.
+
+**Red first, then two mutations.** Red: both tests failed on `left: None`, the
+key not being printed yet. Green in 0.24 s per test — the status was already
+`connected` before the first iteration, which is itself the point: the value
+was always there, only nobody was iterating the context that delivers it. Then
+(1) replace the `g_main_loop_run` with a busy poll of the same condition →
+both tests fail after the full 10 s with `connection-status=disconnected`,
+which is the deadlock above reproduced on demand, and proof the new assertion
+has teeth. (2) Seed the mock's calendar as non-default so the backend's
+connect fails → `connection-status=disconnected` while `readonly=1`, the two
+distinguished exactly as claimed.
+
+Verified locally: `ctest` 12/12 with `-DENABLE_FUNCTIONAL_TESTS=ON`, a
+configure with it off registering 10 tests and no functional ones (CI's path,
+unchanged), `cargo fmt --check`, `cargo test --locked` (491, unchanged),
+`cargo clippy --all-targets --locked -- -D warnings` clean, and
+`connection-status.c` compiled standalone under `-Wall -Wextra` clean since
+the project does not pass those. `reuse lint` and `cargo deny` not run (neither
+binary is on this VM); both new files carry SPDX `GPL-3.0-or-later` headers and
+`docs/functional-tests.md` is covered by `REUSE.toml`'s `docs/**` annotation.
+
+No milestone tag. M9 layer 1 is still two backends of three and still has no CI
+job; nothing about tonight changes either.
+
+Next, in order: (1) the mail provider through Camel, layer 1's third leg — now
+unambiguously first, with nothing ahead of it. (2) The M8 test tag, by hand.
+(3) Unchanged maintainer decisions: `evolution-data-server` + `dbus-daemon` in
+the CI image, gettext in the CI image, and whether `GETTEXT_PACKAGE` should
+stop saying `example-module`. Unchanged: M7 still **needs human verification in
+real Evolution**, the manual-test recipes are unlinked from the README,
+`jmap-mail`'s rustdoc is dirty, and the once-seen `jmap-mail`
+`tests/transport.rs` hang from the last session is still unexplained.

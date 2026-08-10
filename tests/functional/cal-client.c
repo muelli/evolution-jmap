@@ -20,6 +20,8 @@
 
 #include <libecal/libecal.h>
 
+#include "connection-status.h"
+
 /* When the event this test writes starts. A UTC instant, so that nothing
  * here depends on a timezone database being reachable from the scratch
  * session, and the value the mock is checked for is the same string in
@@ -101,6 +103,12 @@ main (int argc,
 		return fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
+
+	/* EDS's own verdict on the connect, waited for properly. It says more
+	 * here than it does for the address book: e_cal_client_connect_sync()
+	 * succeeds even when the backend's connect_sync() failed, and this is
+	 * the observation that tells those two apart. */
+	functional_report_connection_status (source, 10);
 
 	/* Over the bus rather than out of the client's cached copy, which is
 	 * updated from D-Bus notifications on a main context this program

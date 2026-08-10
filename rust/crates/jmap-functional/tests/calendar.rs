@@ -98,6 +98,19 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             output.status
         )
     });
+    // Asserted before `readonly` even though the client prints them in this
+    // order anyway, because this one is the cause and that one is a symptom
+    // of it: the source's connection status is set to connected by
+    // `e_cal_meta_backend_ensure_connected_sync` only when the backend's
+    // `connect_sync` returned TRUE, so a calendar the backend could not open
+    // — the case `readonly` cannot distinguish — fails here first, saying
+    // which of the two happened.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+
     assert_eq!(readonly, "0", "EDS opened the calendar read-only\n{report}");
 
     assert!(
