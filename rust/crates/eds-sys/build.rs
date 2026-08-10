@@ -194,6 +194,27 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // property- and value-level work in Rust on the text, so the component is
     // the only libical type that has to cross the boundary.
     "i_cal_component_.*",
+    // The zones a calendar object refers to, which the envelope a save is built
+    // into has to *define* — RFC 5545 §3.2.19 says a `TZID` parameter names a
+    // `VTIMEZONE` in the same object, and libical's identifier for a builtin
+    // zone is `/freeassociation.sourceforge.net/Europe/Berlin`, which nothing
+    // outside libical can resolve. `_from_tzid` resolves that form and
+    // `get_builtin_timezone` a plain IANA name; `get_component` hands back the
+    // `VTIMEZONE`, whose `X-LIC-LOCATION` is what `jmap-ical` translates the
+    // identifier by. Named one at a time rather than as `i_cal_timezone_.*`,
+    // which is another forty functions for changing the zone directory and
+    // computing UTC offsets that nothing here does.
+    "i_cal_timezone_get_builtin_timezone",
+    "i_cal_timezone_get_builtin_timezone_from_tzid",
+    "i_cal_timezone_get_component",
+    // And the two ends of that: reading the `TZID` parameter off a property,
+    // which is the only place a component says which zone it means, and setting
+    // the `TZID` property of the `VTIMEZONE` copied in beside it, so the
+    // definition carries the identifier the properties actually use rather than
+    // libical's own.
+    "i_cal_property_get_first_parameter",
+    "i_cal_property_set_tzid",
+    "i_cal_parameter_get_tzid",
     "e_cal_component_.*",
     "e_client_error_.*",
     "e_(book|cal)_client_error_.*",

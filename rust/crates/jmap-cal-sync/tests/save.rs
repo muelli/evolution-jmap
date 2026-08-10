@@ -676,13 +676,12 @@ const LIBICAL_TZID: &str = "/freeassociation.sourceforge.net/Europe/Berlin";
 /// The `VTIMEZONE` libical writes beside it, trimmed to the two lines that
 /// matter here; `X-LIC-LOCATION` is its record of which IANA zone this is.
 ///
-/// **The envelope the backend builds today does not carry it.**
-/// `marshal::icalendar_from_instances` puts the instances EDS handed the save
-/// into a fresh `VCALENDAR` and nothing else, so what reaches this crate from
-/// real Evolution is the `TZID` with nothing to translate it — the case
-/// [`a_zone_the_document_could_not_name_leaves_the_servers_alone`] pins. The
-/// tests that supply it are the mapping's half of the answer, and the other
-/// half is putting the referenced zones in the envelope.
+/// The envelope the backend builds does carry it:
+/// `marshal::icalendar_from_instances` copies in a definition for every zone the
+/// instances refer to, which is the other half of the answer these tests are the
+/// mapping's half of. `jmap-functional`'s calendar leg is what says the two
+/// halves meet through real EDS — this crate can only supply the identifier by
+/// hand.
 const LIBICAL_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
 TZID:/freeassociation.sourceforge.net/Europe/Berlin\r\n\
 X-LIC-LOCATION:Europe/Berlin\r\n\
@@ -750,14 +749,16 @@ fn a_move_to_another_zone_arrives_under_its_iana_name() {
 }
 
 /// A zone nothing in the document explains: a Windows name from Exchange, and
-/// libical's own identifier with no `VTIMEZONE` beside it to translate it —
-/// which is what the envelope the backend builds today hands over, so this is
-/// the shape a save from real Evolution arrives in.
+/// libical's own identifier with no `VTIMEZONE` beside it to translate it. The
+/// backend's envelope now defines the zones its components name, so the second
+/// shape no longer reaches this crate from Evolution — but a document is not
+/// only ever built there, and an identifier no zone database knows (the first
+/// shape) still arrives undefined however careful the envelope is.
 ///
 /// Neither is a value JSCalendar can carry, so neither is sent; the server
-/// keeps the zone it had, which is the zone the component was showing. What
-/// this costs is on the record: a zone the user really did change is not seen
-/// either, and only the envelope carrying the `VTIMEZONE` fixes that.
+/// keeps the zone it had, which is the zone the component was showing. The cost
+/// stays on the record for the case that remains: a zone the user really did
+/// change to something unresolvable is not seen either.
 #[test]
 fn a_zone_the_document_could_not_name_leaves_the_servers_alone() {
     for tzid in ["W. Europe Standard Time", LIBICAL_TZID] {
