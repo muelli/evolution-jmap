@@ -1,0 +1,5 @@
+{
+  "@type": "RecurrenceRule",
+  "frequency": "yearly",
+  "byYearDay": [1, -1]
+}

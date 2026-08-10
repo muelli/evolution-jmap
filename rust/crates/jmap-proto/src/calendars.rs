@@ -128,6 +128,10 @@ pub struct RecurrenceRule {
     /// counting from the start of the month, -1 to -31 from its end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_month_day: Option<Vec<i32>>,
+    /// The days of the *year* it repeats on — iCalendar's `BYYEARDAY`. 1 to 366
+    /// counting from 1 January, -1 to -366 from 31 December.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_year_day: Option<Vec<i32>>,
     /// The months of the year it repeats in — iCalendar's `BYMONTH`.
     ///
     /// A string rather than a number, as RFC 8984 §4.3.3 has it: the month

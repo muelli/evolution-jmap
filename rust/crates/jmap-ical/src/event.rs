@@ -126,17 +126,18 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
-/// Only `frequency`, `interval`, `count`, `until`, `byDay`, `byMonthDay` and
-/// `byMonth` are modeled; `bySetPosition` and the rest of RFC 8984 §4.3.3 ride
-/// in [`RecurrenceRule::extra`] and would be lost. A caller that patches
-/// `recurrenceRules` for a rule this returns `false` for narrows the user's
-/// recurrence behind their back.
+/// Only `frequency`, `interval`, `count`, `until`, `byDay`, `byMonthDay`,
+/// `byYearDay` and `byMonth` are modeled; `bySetPosition` and the rest of
+/// RFC 8984 §4.3.3 ride in [`RecurrenceRule::extra`] and would be lost. A caller
+/// that patches `recurrenceRules` for a rule this returns `false` for narrows
+/// the user's recurrence behind their back.
 ///
 /// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
 /// never patches over a recurrence the user was not shown — as does one whose
-/// days of the week, days of the month or months of the year the `RRULE` cannot
-/// carry, which [`by_day_part`], [`by_month_day_part`] and [`by_month_part`]
-/// decide and [`rule_to_rrule`] then leaves off.
+/// days of the week, days of the month, days of the year or months of the year
+/// the `RRULE` cannot carry, which [`by_day_part`], [`by_month_day_part`],
+/// [`by_year_day_part`] and [`by_month_part`] decide and [`rule_to_rrule`] then
+/// leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
         && writable(rule)
@@ -148,6 +149,10 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
             .by_month_day
             .as_ref()
             .is_none_or(|_| by_month_day_part(rule).is_some())
+        && rule
+            .by_year_day
+            .as_ref()
+            .is_none_or(|_| by_year_day_part(rule).is_some())
         && rule
             .by_month
             .as_ref()
@@ -1265,6 +1270,7 @@ fn rule_to_rrule(
     // own cache compares equal to itself.
     parts.extend(by_day_part(rule));
     parts.extend(by_month_day_part(rule));
+    parts.extend(by_year_day_part(rule));
     parts.extend(by_month_part(rule));
     Some(parts.join(";"))
 }
@@ -1356,6 +1362,49 @@ fn month_day_token(day: i32) -> Option<String> {
     }
 }
 
+/// The `BYYEARDAY` part of a rule's `RRULE`, or `None` when the rule names no
+/// days of the year — and, as with [`by_day_part`], when it names ones this
+/// mapping will not write.
+///
+/// It is all the days or none of them, for the same reason: a `BYYEARDAY`
+/// holding a subset is a different recurrence, not a narrower view of one.
+///
+/// The frequency gate names the three periods RFC 5545 §3.3.10 excludes rather
+/// than allowing `YEARLY` alone: `BYYEARDAY` MUST NOT be specified beside
+/// `DAILY`, `WEEKLY` or `MONTHLY` — none of which holds a year — but it *is*
+/// defined beside `HOURLY`, `MINUTELY` and `SECONDLY`, limiting the occurrences
+/// those expand to.
+fn by_year_day_part(rule: &RecurrenceRule) -> Option<String> {
+    let days = rule.by_year_day.as_ref()?;
+    // `BYYEARDAY=` names no day, and a content line libical refuses costs the
+    // whole component — every field of the event, not just its recurrence.
+    if days.is_empty() || !holds_a_year(&rule.frequency) {
+        return None;
+    }
+    let tokens: Option<Vec<String>> = days.iter().copied().map(year_day_token).collect();
+    Some(format!("BYYEARDAY={}", tokens?.join(",")))
+}
+
+/// Whether a frequency leaves room for a day of the year — everything outside
+/// the `DAILY`/`WEEKLY`/`MONTHLY` column of RFC 5545 §3.3.10's table.
+fn holds_a_year(frequency: &str) -> bool {
+    !["daily", "weekly", "monthly"]
+        .iter()
+        .any(|period| period.eq_ignore_ascii_case(frequency))
+}
+
+/// One day of the year as an `RRULE` writes it — `100`, `-1` — or `None` for a
+/// value no `BYYEARDAY` can carry.
+fn year_day_token(day: i32) -> Option<String> {
+    match day {
+        // RFC 5545's `yeardaynum` is 1 to 366 — 366 for the leap day — which
+        // RFC 8984 §4.3.3 counts backwards from 31 December as well. Zero is no
+        // day of any year, and neither format admits it.
+        -366..=-1 | 1..=366 => Some(day.to_string()),
+        _ => None,
+    }
+}
+
 /// The `BYMONTH` part of a rule's `RRULE`, or `None` when the rule names no
 /// months of the year — and, as with [`by_day_part`], when it names ones this
 /// mapping will not write.
@@ -1418,6 +1467,11 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             "BYDAY" => rule.by_day = Some(value.split(',').map(to_nday).collect()),
             "BYMONTHDAY" => {
                 rule.by_month_day = Some(value.split(',').map(to_month_day).collect());
+            }
+            // Read like a day of the month, and for the same reasons — see
+            // [`to_month_day`], whose spelling `yeardaynum` shares.
+            "BYYEARDAY" => {
+                rule.by_year_day = Some(value.split(',').map(to_month_day).collect());
             }
             // Each token verbatim: JSCalendar holds a month as the string
             // iCalendar spells it with, so one this mapping will not write back —

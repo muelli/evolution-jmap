@@ -514,6 +514,15 @@ fn libical_keeps_the_recurrence_parts_this_mapping_writes() {
         "FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=1,15",
         "FREQ=YEARLY;COUNT=4;BYMONTH=3,9",
         "FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYMONTH=3",
+        "FREQ=YEARLY;COUNT=4;BYYEARDAY=1,-1",
+        "FREQ=YEARLY;BYYEARDAY=366",
+        // Every modeled part at once, which is where the claim about the order
+        // `BYYEARDAY` is written in gets tested: between the days of the month
+        // and the months.
+        "FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYMONTH=3",
+        // RFC 5545 §3.3.10 defines BYYEARDAY beside a period shorter than a day
+        // as well, limiting what those expand to.
+        "FREQ=HOURLY;BYYEARDAY=100",
         // RFC 5545 §3.3.10 defines BYMONTH at every frequency, so a weekly rule
         // may carry one and `jmap-ical` does not gate it as it gates BYMONTHDAY.
         "FREQ=WEEKLY;BYDAY=MO;BYMONTH=12",
@@ -567,6 +576,54 @@ fn libical_answers_for_a_month_this_mapping_refuses() {
         reparsed_rrule("FREQ=YEARLY;BYMONTH=03").as_deref(),
         Some("FREQ=YEARLY;BYMONTH=3"),
     );
+}
+
+/// The same question for the days of the year, whose answers split the same
+/// three ways the months' do — and not along the boundary RFC 5545 draws, which
+/// is why `jmap-ical`'s `year_day_token` and its frequency gate are measured here
+/// rather than assumed.
+#[test]
+fn libical_answers_for_a_day_of_the_year_this_mapping_refuses() {
+    // Some values cost the whole `RRULE`, as a day of the month out of range
+    // does: an event written that way would reach EDS's cache as a single
+    // appointment with the user's series gone.
+    for rrule in [
+        "FREQ=YEARLY;BYYEARDAY=0",
+        "FREQ=YEARLY;BYYEARDAY=999",
+        "FREQ=YEARLY;BYYEARDAY=100,XX",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
+    }
+    // But not every day outside RFC 5545's `yeardaynum`: 367 and -367 libical
+    // keeps verbatim, where 999 costs the rule. So the reason to refuse a day just
+    // past the end of a leap year is not that the parser objects — it is that no
+    // year has one, and the rule would sit in EDS's cache as a series that never
+    // occurs.
+    for rrule in ["FREQ=YEARLY;BYYEARDAY=367", "FREQ=YEARLY;BYYEARDAY=-367"] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // The frequency gate libical does not enforce either: it keeps
+    // `BYYEARDAY=100` beside all three frequencies RFC 5545 §3.3.10 forbids it
+    // next to. `jmap-ical` leaves the part off anyway, because a month is not a
+    // period a day of the year sits inside and every other reader of the rule is
+    // free to make of that what it likes.
+    for rrule in [
+        "FREQ=MONTHLY;BYYEARDAY=100",
+        "FREQ=WEEKLY;BYYEARDAY=100",
+        "FREQ=DAILY;BYYEARDAY=100",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // And the third shape, a spelling kept but *changed*: RFC 5545's `yeardaynum`
+    // admits the leading zero and the leading plus, and both come back canonical.
+    // Unlike `BYMONTH=03`, that cannot bite the save path here — `byYearDay` holds
+    // a number, so the only spelling this mapping can write is the canonical one.
+    for (written, back) in [
+        ("FREQ=YEARLY;BYYEARDAY=010", "FREQ=YEARLY;BYYEARDAY=10"),
+        ("FREQ=YEARLY;BYYEARDAY=+100", "FREQ=YEARLY;BYYEARDAY=100"),
+    ] {
+        assert_eq!(reparsed_rrule(written).as_deref(), Some(back), "{written}");
+    }
 }
 
 /// The `RRULE` value libical hands back after reading a component carrying

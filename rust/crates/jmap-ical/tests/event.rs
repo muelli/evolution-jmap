@@ -1205,6 +1205,181 @@ fn a_day_of_the_month_a_hand_written_rule_invents_is_not_written_back() {
 }
 
 #[test]
+fn a_yearly_rule_names_the_days_of_the_year_it_repeats_on() {
+    // "Every 1 January and every 31 December" — RFC 8984 §4.3.3's `byYearDay`,
+    // iCalendar's `BYYEARDAY`, whose negative value counts back from the end of
+    // the year the way `byMonthDay`'s does from the end of the month.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_year_day: Some(vec![1, -1]),
+            count: Some(4),
+            ..RecurrenceRule::new("yearly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=YEARLY;COUNT=4;BYYEARDAY=1,-1"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].by_year_day.as_deref(), Some(&[1, -1][..]));
+    // Which is what tells the save path it may write the property back.
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn the_days_of_the_year_are_written_after_the_days_of_the_month() {
+    // Every modeled part at once, in the order libical writes them —
+    // `BYYEARDAY` between `BYMONTHDAY` and `BYMONTH` — so that a rule read back
+    // out of EDS's own cache compares equal to the one that went in.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_day: Some(vec![NDay::new("we")]),
+            by_month_day: Some(vec![15]),
+            by_year_day: Some(vec![100]),
+            by_month: Some(vec!["3".to_owned()]),
+            ..RecurrenceRule::new("yearly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYMONTH=3"
+    );
+}
+
+#[test]
+fn reads_the_days_of_the_year_off_a_rule_written_by_hand() {
+    // RFC 5545 §3.3.10's `yeardaynum` may carry the leading plus JSCalendar has no
+    // room for, and counts to 366 for the leap day.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=YEARLY;BYYEARDAY=+1,-366\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_year_day.as_deref(), Some(&[1, -366][..]));
+    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYYEARDAY=1,-366"
+    );
+}
+
+#[test]
+fn days_of_the_year_are_refused_where_the_period_is_shorter_than_one() {
+    // RFC 5545 §3.3.10: BYYEARDAY MUST NOT be specified when FREQ is DAILY,
+    // WEEKLY, or MONTHLY — none of those periods holds a year. The part is left
+    // off whole and the save path told the rule was seen in part, rather than
+    // writing a line libical is entitled to refuse.
+    for frequency in ["daily", "weekly", "monthly"] {
+        let rule = RecurrenceRule {
+            by_year_day: Some(vec![100]),
+            ..RecurrenceRule::new(frequency)
+        };
+        assert!(!maps_recurrence_rule(&rule), "{frequency}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            format!("RRULE:FREQ={}", frequency.to_ascii_uppercase()),
+            "{frequency}"
+        );
+    }
+}
+
+#[test]
+fn a_day_of_the_year_is_carried_at_a_frequency_shorter_than_a_day() {
+    // The other half of §3.3.10's table: `BYYEARDAY` is defined for `HOURLY`,
+    // `MINUTELY` and `SECONDLY` — limiting the occurrences those expand to,
+    // "the ninth hour of every hundredth day of the year" — so the gate names the
+    // three frequencies the RFC excludes rather than allowing `YEARLY` alone.
+    for frequency in ["hourly", "minutely", "secondly", "yearly"] {
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![RecurrenceRule {
+                by_year_day: Some(vec![100]),
+                ..RecurrenceRule::new(frequency)
+            }]),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert!(
+            line(&ics, "RRULE:").ends_with(";BYYEARDAY=100"),
+            "{frequency}"
+        );
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .unwrap();
+        assert!(maps_recurrence_rule(&rules[0]), "{frequency}");
+    }
+}
+
+#[test]
+fn a_day_no_year_has_is_flagged_rather_than_written() {
+    // RFC 5545's `yeardaynum` is 1 to 366 and RFC 8984 §4.3.3 counts backwards to
+    // -366; zero is no day of any year, and 367 is a day no year has. A set
+    // holding one such value is refused whole, because a `BYYEARDAY` holding the
+    // rest is a different recurrence rather than a narrower view of this one.
+    for days in [vec![0], vec![367], vec![-367], vec![100, 0], vec![]] {
+        let rule = RecurrenceRule {
+            by_year_day: Some(days.clone()),
+            ..RecurrenceRule::new("yearly")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{days:?}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=YEARLY",
+            "{days:?}"
+        );
+    }
+}
+
+#[test]
+fn a_day_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
+    // The refusal above, reached the way a component really arrives: through the
+    // parser. `367` is outside RFC 5545's `yeardaynum`, so the mapping is the one
+    // that has to refuse it — and refuse the whole set, leaving the `RRULE` at its
+    // frequency.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=YEARLY;BYYEARDAY=100,367\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_year_day.as_deref(), Some(&[100, 367][..]));
+    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=YEARLY",
+        "and the days are left off the rule it is drawn as"
+    );
+}
+
+#[test]
 fn a_yearly_rule_names_the_months_it_repeats_in() {
     // "Every March and September" — RFC 8984 §4.3.3's `byMonth`, iCalendar's
     // `BYMONTH`. JSCalendar holds each month as a string; the numbers 1 to 12 of
