@@ -156,6 +156,103 @@ fn an_event_without_a_time_zone_stays_floating() {
     assert_eq!(ical_to_event(&ics).expect("parse").time_zone, None);
 }
 
+/// An event made in Evolution says how long it is with `DTEND`, not
+/// `DURATION`: the appointment editor calls `e_cal_component_set_dtend`, and
+/// RFC 5545 §3.6.1 makes the two mutually exclusive, so a component that has
+/// one does not have the other. Reading only `DURATION` therefore dropped the
+/// length of every appointment a user created, and an event with no duration
+/// is `P0D` by RFC 8984 §4.2.2 — the calendar the user shares shows a
+/// zero-length blip where their afternoon meeting was.
+#[test]
+fn an_events_length_may_arrive_as_a_dtend_instead_of_a_duration() {
+    for (start, end, duration) in [
+        // The ordinary case: an hour and a half of one afternoon.
+        ("20260115T130000", "20260115T143000", "PT1H30M"),
+        // Over midnight, where the difference is not a subtraction of clock
+        // fields.
+        ("20260115T230000", "20260116T003000", "PT1H30M"),
+        // Over a month boundary and a leap day: 2024 has a 29 February.
+        ("20240228T090000", "20240301T100000", "P2DT1H"),
+        // A whole day, as an all-day event is written — DTEND is exclusive,
+        // so the next day means one day long.
+        ("20260115", "20260116", "P1D"),
+        ("20260115", "20260122", "P7D"),
+        // Over a year, to the second.
+        ("20261231T235959", "20270101T000000", "PT1S"),
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E8\r\n\
+             DTSTART:{start}\r\nDTEND:{end}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse");
+        assert_eq!(event.duration.as_deref(), Some(duration), "{start}/{end}");
+    }
+}
+
+#[test]
+fn a_length_read_from_a_dtend_is_written_back_as_a_duration() {
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E8\r\n",
+        "DTSTART;TZID=Europe/Berlin:20260115T130000\r\n",
+        "DTEND;TZID=Europe/Berlin:20260115T143000\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+
+    // Written back the one way this crate spells a length. Emitting DTEND too
+    // would make the component invalid, and emitting it instead would need the
+    // zone arithmetic this crate does not do.
+    let back = event_to_ical(&event);
+    assert_eq!(line(&back, "DURATION:"), "DURATION:PT1H30M");
+    assert!(without(&back, "DTEND"), "{back}");
+    assert_eq!(
+        ical_to_event(&back).expect("parse").duration.as_deref(),
+        Some("PT1H30M")
+    );
+}
+
+#[test]
+fn a_duration_wins_over_a_dtend_that_contradicts_it() {
+    // RFC 5545 §3.6.1 allows only one of the two, so a component with both is
+    // already malformed. DURATION is the one that maps to the JSCalendar
+    // property without arithmetic, so it is the one believed.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E8\r\n",
+        "DTSTART:20260115T130000\r\nDURATION:PT30M\r\nDTEND:20260115T170000\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n",
+    );
+    assert_eq!(
+        ical_to_event(ics).expect("parse").duration.as_deref(),
+        Some("PT30M")
+    );
+}
+
+#[test]
+fn a_dtend_that_is_not_after_the_start_leaves_the_event_without_a_length() {
+    // Each of these is a component that says nothing usable about how long the
+    // event is, and "nothing" is what the event should then say: a negative
+    // duration is not a JSCalendar Duration the server would accept, and a
+    // guessed one would be an appointment the user never made.
+    for (start, end) in [
+        // Ends before it starts.
+        ("20260115T130000", "20260115T120000"),
+        // Ends when it starts, which is the P0D default anyway.
+        ("20260115T130000", "20260115T130000"),
+        // An end nobody can read, and one that names no real instant.
+        ("20260115T130000", "next tuesday"),
+        ("20260115T130000", "20260230T130000"),
+        // No start to measure from.
+        ("tuesday", "20260115T140000"),
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E8\r\n\
+             DTSTART:{start}\r\nDTEND:{end}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse");
+        assert_eq!(event.duration, None, "{start}/{end}");
+    }
+}
+
 #[test]
 fn a_date_only_dtstart_is_read_as_midnight() {
     // Evolution writes VALUE=DATE for an all-day event. showWithoutTime is not

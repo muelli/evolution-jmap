@@ -28,6 +28,13 @@
  * both halves of the test. */
 #define TEST_DTSTART "20260115T130000Z"
 
+/* And when it ends. Stated as DTEND rather than DURATION because that is
+ * what Evolution's appointment editor writes — e_cal_component_set_dtend —
+ * and RFC 5545 §3.6.1 makes the two mutually exclusive, so this is the form
+ * the backend has to understand for a user-created event to reach the server
+ * with a length at all. */
+#define TEST_DTEND "20260115T143000Z"
+
 static int
 fail (const gchar *step,
       GError *error)
@@ -142,10 +149,10 @@ main (int argc,
 		"BEGIN:VEVENT\r\n"
 		"UID:jmap-functional-event\r\n"
 		"DTSTART:%s\r\n"
-		"DURATION:PT1H\r\n"
+		"DTEND:%s\r\n"
 		"SUMMARY:%s\r\n"
 		"END:VEVENT\r\n",
-		TEST_DTSTART, summary);
+		TEST_DTSTART, TEST_DTEND, summary);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 

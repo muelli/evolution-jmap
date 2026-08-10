@@ -12,6 +12,10 @@
 //! [`MAPPED_PROPERTIES`] and [`maps_recurrence_rule`], which are that
 //! knowledge in machine-readable form.
 //!
+//! The one property read but never written is `DTEND`: it is how Evolution
+//! states an event's length, so [`read_duration`] measures it, while the
+//! length always goes back out as the `DURATION` the two formats share.
+//!
 //! Nothing here fails on unrecognised input. A property whose value the
 //! mapping cannot read is treated as absent, because an event that loses a
 //! field is better than a calendar that refuses to open; only a document
@@ -185,10 +189,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
         description: text("DESCRIPTION"),
         start,
         time_zone,
-        duration: vevent
-            .property("DURATION")
-            .map(Property::raw_value)
-            .filter(|value| !value.is_empty()),
+        duration: read_duration(vevent),
         status: vevent.text("STATUS").and_then(|status| {
             STATUSES
                 .iter()
@@ -217,6 +218,97 @@ fn read_start(vevent: &Component) -> (Option<String>, Option<String>) {
             .map(str::to_owned),
     };
     (Some(start), zone)
+}
+
+/// How long the event lasts, as a JSCalendar Duration.
+///
+/// `DURATION` is what this crate writes and it is passed straight back — the
+/// two formats spell an ISO 8601 duration identically. But it is *not* what
+/// Evolution writes: the appointment editor calls `e_cal_component_set_dtend`,
+/// and RFC 5545 §3.6.1 makes `DTEND` and `DURATION` mutually exclusive, so an
+/// event a user just created says how long it is only through its end. Reading
+/// `DURATION` alone left every such event with no duration at all, which is
+/// `P0D` by RFC 8984 §4.2.2 — a zero-length blip in place of the meeting.
+///
+/// The difference is taken on the wall clock, which is also how JSCalendar
+/// reads the answer: its `P1D` is a nominal day, the same time on the next
+/// day, rather than 24 exact hours. The two agree for as long as both ends are
+/// in one zone, which is the only shape Evolution writes. A `DTEND` in a
+/// *different* zone than the `DTSTART` — legal, and not something this mapping
+/// can resolve — comes out short or long by the offset between them; the
+/// alternative is dropping the length of an event that plainly states it, and
+/// a zone database is a dependency this crate does not carry (see
+/// [`rule_to_rrule`] for the same trade made about `UNTIL`).
+fn read_duration(vevent: &Component) -> Option<String> {
+    if let Some(duration) = vevent
+        .property("DURATION")
+        .map(Property::raw_value)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(duration);
+    }
+    let start = instant(&vevent.property("DTSTART")?.raw_value())?;
+    let end = instant(&vevent.property("DTEND")?.raw_value())?;
+    to_duration(end - start)
+}
+
+/// A `DTSTART`/`DTEND` value as seconds from 1970-01-01T00:00:00 on its own
+/// wall clock — a number to subtract, not an instant on any timeline.
+fn instant(value: &str) -> Option<i64> {
+    let local = to_local_date_time(value)?;
+    let fields: Vec<i64> = local
+        .split(['-', 'T', ':'])
+        .filter_map(|field| field.parse().ok())
+        .collect();
+    // Six fields, and each parses, because `to_local_date_time` wrote them.
+    let [year, month, day, hour, minute, second] = fields[..] else {
+        return None;
+    };
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+/// Days from 1970-01-01 to a proleptic Gregorian date, by Howard Hinnant's
+/// `days_from_civil`. Exact for every year either format can spell.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    // Count the year as starting in March, which puts a leap day at the end of
+    // it and so needs no special case.
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// `5400` → `PT1H30M`, and `86400` → `P1D`.
+///
+/// Whole days are named as days rather than as 24 hours each, because that is
+/// what was measured: the difference came off a wall clock, and JSCalendar's
+/// day is the nominal one that survives a daylight saving change.
+///
+/// A length that is zero or negative yields nothing. Zero is the RFC 8984
+/// default anyway, and a negative duration — an event ending before it begins
+/// — is a component saying nothing usable about its length, which is better
+/// answered with silence than with a value the server would reject or, worse,
+/// accept.
+fn to_duration(seconds: i64) -> Option<String> {
+    if seconds <= 0 {
+        return None;
+    }
+    let (days, rest) = (seconds / 86_400, seconds % 86_400);
+    let mut duration = String::from("P");
+    if days > 0 {
+        duration.push_str(&format!("{days}D"));
+    }
+    if rest > 0 {
+        duration.push('T');
+        for (amount, unit) in [(rest / 3_600, 'H'), (rest / 60 % 60, 'M'), (rest % 60, 'S')] {
+            if amount > 0 {
+                duration.push_str(&format!("{amount}{unit}"));
+            }
+        }
+    }
+    Some(duration)
 }
 
 fn is_utc(zone: &str) -> bool {
