@@ -351,14 +351,15 @@ fn a_recurrence_the_mapping_can_carry_is_patched() {
 fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // `byMinute` has no place in the RecurrenceRule this crate models, so the
-    // RRULE the user edited is a narrower rule than the one on the server.
+    // `rscale` has no place in the RecurrenceRule this crate models — a rule
+    // counted in the Chinese calendar has no `RRULE` spelling libical reads — so
+    // the RRULE the user edited is a narrower rule than the one on the server.
     fixture.patch(
         &id,
         json!({"recurrenceRules": [{
             "@type": "RecurrenceRule",
             "frequency": "monthly",
-            "byMinute": [15, 45],
+            "rscale": "chinese",
         }]}),
     );
     let sync = fixture.sync();
@@ -370,8 +371,8 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let rules = fixture.event(&id).recurrence_rules.unwrap();
     assert_eq!(rules.len(), 1);
     assert_eq!(
-        rules[0].extra.get("byMinute"),
-        Some(&json!([15, 45])),
+        rules[0].extra.get("rscale"),
+        Some(&json!("chinese")),
         "a rule part the RRULE could not carry was dropped"
     );
     assert_eq!(
@@ -955,6 +956,109 @@ fn hours_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
 
     let rules = fixture.event(&id).recurrence_rules.unwrap();
     assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 14][..]));
+    assert_eq!(rules[0].count, Some(4), "the edit itself still has to land");
+}
+
+#[test]
+fn the_minutes_and_seconds_a_rule_repeats_at_reach_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sensor poll", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "hourly",
+            "byMinute": [0],
+            "bySecond": [0],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=HOURLY;BYSECOND=0;BYMINUTE=0"),
+        "{icalendar}"
+    );
+    // A second poll on the half hour — both parts are sets, so the added value
+    // goes out beside the one that was there.
+    let edited = icalendar.replace("BYMINUTE=0", "BYMINUTE=0,30");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_minute.as_deref(), Some(&[0, 30][..]));
+    assert_eq!(rules[0].by_second.as_deref(), Some(&[0][..]));
+}
+
+#[test]
+fn the_sixtieth_second_is_sent_and_the_sixtieth_minute_is_not() {
+    // RFC 5545 §3.3.10's `seconds` runs to 60 and its `minutes` only to 59, and
+    // libical answers a rule naming the sixtieth minute by dropping the whole
+    // `RRULE` — so the check is on the way out, before a rule the server might
+    // keep and no reader can expand reaches it. The leap second, in the same save,
+    // is a value that must *not* be caught by that check.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sensor poll", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "minutely"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("RRULE:FREQ=MINUTELY", "RRULE:FREQ=MINUTELY;BYSECOND=60")
+        .replace("SUMMARY:Sensor poll", "SUMMARY:Poll on the second");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+    assert_eq!(
+        fixture.event(&id).recurrence_rules.unwrap()[0]
+            .by_second
+            .as_deref(),
+        Some(&[60][..]),
+        "the leap second is a value RFC 5545 admits"
+    );
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("BYSECOND=60", "BYSECOND=60;BYMINUTE=60")
+        .replace("SUMMARY:Poll on the second", "SUMMARY:Sensor poll");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.recurrence_rules.unwrap()[0].by_minute, None);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Sensor poll"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
+fn minutes_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
+    // The direction that loses data: `recurrenceRules` is replaced whole, so a
+    // save that touched the rule for another reason has to carry the minutes and
+    // seconds the server already held back out with it.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sensor poll", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "hourly",
+            "byMinute": [0, 30],
+            "bySecond": [15],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar.replace("BYMINUTE=0,30", "BYMINUTE=0,30;COUNT=4");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_minute.as_deref(), Some(&[0, 30][..]));
+    assert_eq!(rules[0].by_second.as_deref(), Some(&[15][..]));
     assert_eq!(rules[0].count, Some(4), "the edit itself still has to land");
 }
 

@@ -903,10 +903,13 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
 
 #[test]
 fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
-    // byMinute & friends ride in `extra` and do not survive the trip through
-    // iCalendar, so the save path must not patch recurrenceRules for them.
+    // `rscale` & friends ride in `extra` and do not survive the trip through
+    // iCalendar, so the save path must not patch recurrenceRules for them. (It
+    // has an iCalendar spelling of its own, RFC 7529's `RSCALE`, which neither
+    // this mapping nor libical carries — a rule counted in another calendar
+    // drawn as a Gregorian one repeats on the wrong days entirely.)
     let mut rule = RecurrenceRule::new("monthly");
-    rule.extra.insert("byMinute".to_owned(), json!([15, 45]));
+    rule.extra.insert("rscale".to_owned(), json!("chinese"));
     assert!(!maps_recurrence_rule(&rule));
     assert!(maps_recurrence_rule(&RecurrenceRule::new("weekly")));
 }
@@ -2169,13 +2172,16 @@ fn carries_the_hours_of_the_day_a_rule_repeats_at() {
 }
 
 #[test]
-fn the_hours_of_the_day_are_written_before_every_other_part() {
-    // Every modeled part at once, in the order libical writes them — and this
-    // one goes *first*, ahead of `BYDAY`, unlike every part added before it.
-    // Measured in `jmap-backend-cal/tests/marshal.rs`: a rule that went out in
-    // another order comes back out of EDS's own cache reordered and compares
-    // unequal to itself, which the save path reads as an edit.
+fn the_times_of_day_are_written_before_every_other_part() {
+    // Every modeled part at once, in the order libical writes them — and the
+    // three that name a time of day go *first*, finest unit outwards, ahead of
+    // `BYDAY` and of each other. Measured in `jmap-backend-cal/tests/marshal.rs`:
+    // a rule that went out in another order comes back out of EDS's own cache
+    // reordered and compares unequal to itself, which the save path reads as an
+    // edit.
     let rule = RecurrenceRule {
+        by_second: Some(vec![0]),
+        by_minute: Some(vec![30]),
         by_hour: Some(vec![9]),
         by_day: Some(vec![NDay::new("we")]),
         by_month_day: Some(vec![15]),
@@ -2193,8 +2199,8 @@ fn the_hours_of_the_day_are_written_before_every_other_part() {
     let ics = event_to_ical(&event);
     assert_eq!(
         content_line(&ics, "RRULE:"),
-        "RRULE:FREQ=YEARLY;BYHOUR=9;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;\
-         BYWEEKNO=20;BYMONTH=3;BYSETPOS=2;WKST=SU"
+        "RRULE:FREQ=YEARLY;BYSECOND=0;BYMINUTE=30;BYHOUR=9;BYDAY=WE;BYMONTHDAY=15;\
+         BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;BYSETPOS=2;WKST=SU"
     );
 
     let rules = ical_to_event(&ics)
@@ -2331,6 +2337,209 @@ fn an_all_day_event_whose_hours_are_unwritable_stays_a_date() {
         show_without_time: Some(true),
         recurrence_rules: Some(vec![RecurrenceRule {
             by_hour: Some(vec![24]),
+            ..RecurrenceRule::new("daily")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
+    assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=DAILY");
+    assert!(!maps_recurrence_rule(
+        &event.recurrence_rules.as_ref().unwrap()[0]
+    ));
+}
+
+#[test]
+fn carries_the_minutes_and_seconds_a_rule_repeats_at() {
+    // RFC 8984 §4.3.3's `byMinute` and `bySecond` are RFC 5545 §3.3.10's
+    // BYMINUTE and BYSECOND: "on the hour and the half hour, on the second".
+    // With these the rule is modeled to the bottom of §4.3.3 but for `rscale`
+    // and `skip`.
+    let rule = RecurrenceRule {
+        by_minute: Some(vec![0, 30]),
+        by_second: Some(vec![0]),
+        ..RecurrenceRule::new("hourly")
+    };
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![rule.clone()]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=HOURLY;BYSECOND=0;BYMINUTE=0,30"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].by_minute.as_deref(), Some(&[0, 30][..]));
+    assert_eq!(rules[0].by_second.as_deref(), Some(&[0][..]));
+    assert_eq!(rules[0], rule);
+    // Which is what tells the save path it may write the property back.
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn reads_the_minutes_and_seconds_off_a_rule_written_by_hand() {
+    // Both are sets `BYSETPOS` may select out of, as the hours are: RFC 5545
+    // §3.3.10 asks only that *some* other BYxxx part be there, and libical
+    // agrees (measured in `jmap-backend-cal/tests/marshal.rs`).
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=HOURLY;BYSECOND=0,30;BYMINUTE=15,45;BYSETPOS=-1\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_minute.as_deref(), Some(&[15, 45][..]));
+    assert_eq!(rules[0].by_second.as_deref(), Some(&[0, 30][..]));
+    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=HOURLY;BYSECOND=0,30;BYMINUTE=15,45;BYSETPOS=-1"
+    );
+}
+
+#[test]
+fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
+    // The one place the two ranges differ: RFC 5545 §3.3.10's `seconds` runs 0
+    // to 60, the sixtieth being the leap second UTC occasionally inserts, while
+    // `minutes` stops at 59. libical enforces exactly that (measured in
+    // `jmap-backend-cal/tests/marshal.rs`), so the mapping does too rather than
+    // treating the two parts as one range.
+    let leap = RecurrenceRule {
+        by_second: Some(vec![60]),
+        ..RecurrenceRule::new("minutely")
+    };
+    assert!(maps_recurrence_rule(&leap));
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![leap]),
+        ..CalendarEvent::default()
+    };
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=MINUTELY;BYSECOND=60"
+    );
+
+    // A set holding one unwritable value is refused whole, because a part
+    // holding the rest names different times rather than fewer of these — and
+    // an out-of-range value costs libical the *whole* rule, so the event would
+    // reach EDS's cache as a single appointment with the series gone. The empty
+    // set is refused for the reason the empty `BYHOUR` is: libical answers it
+    // with the zeroth minute or second, moving every occurrence.
+    for (minutes, seconds) in [
+        (Some(vec![60]), None),
+        (Some(vec![u32::MAX]), None),
+        (Some(vec![0, 60]), None),
+        (Some(vec![]), None),
+        (None, Some(vec![61])),
+        (None, Some(vec![0, 61])),
+        (None, Some(vec![])),
+    ] {
+        let rule = RecurrenceRule {
+            by_minute: minutes.clone(),
+            by_second: seconds.clone(),
+            by_day: Some(vec![NDay::new("fr")]),
+            ..RecurrenceRule::new("daily")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{minutes:?} {seconds:?}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=DAILY;BYDAY=FR",
+            "{minutes:?} {seconds:?}"
+        );
+    }
+}
+
+#[test]
+fn a_minute_a_hand_written_rule_invents_is_not_written_back() {
+    // The refusal above, reached the way a component really arrives. `60` is
+    // outside RFC 5545's `minutes` and `61` outside its `seconds`, and — as for
+    // an out-of-range `BYHOUR` — the parts are left off while the days they
+    // would have limited stay in place.
+    //
+    // Both values are *numbers* out of range rather than unreadable tokens,
+    // because a token the parser below this crate cannot read is dropped there
+    // and never arrives: `BYSECOND=XX` reaches this mapping as no `BYSECOND` at
+    // all, the narrowing already noted for `BYDAY` and `WKST`. What arrives here
+    // is a number, which is why [`to_time_of_day`]'s sentinel is one no part can
+    // carry rather than a signal the mapping relies on seeing.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=DAILY;BYDAY=FR;BYMINUTE=30,60;BYSECOND=15,61\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_minute.as_deref(), Some(&[30, 60][..]));
+    assert_eq!(rules[0].by_second.as_deref(), Some(&[15, 61][..]));
+    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=DAILY;BYDAY=FR",
+        "and the minutes and seconds are left off the rule it is drawn as"
+    );
+}
+
+#[test]
+fn an_all_day_event_whose_rule_names_minutes_is_drawn_as_a_timed_one() {
+    // RFC 5545 §3.3.10 forbids BYMINUTE and BYSECOND beside a DATE-valued
+    // DTSTART for the reason it forbids BYHOUR: a day with no clock has no
+    // minute to repeat at. Resolved the way the hours are — the DATE form is
+    // dropped and the event drawn timed — so all three parts are asked about
+    // together rather than one at a time.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_minute: Some(vec![30]),
+            by_second: Some(vec![15]),
+            ..RecurrenceRule::new("daily")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=DAILY;BYSECOND=15;BYMINUTE=30"
+    );
+
+    // And the save path compares against this same rendering, so the flag lost
+    // here is not read back as the user having cleared it.
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.show_without_time, None);
+    assert_eq!(read_back.recurrence_rules, event.recurrence_rules);
+}
+
+#[test]
+fn an_all_day_event_whose_minutes_are_unwritable_stays_a_date() {
+    // The other side of that, as for the hours: an `RRULE` that will not carry
+    // the minutes anyway leaves nothing for the DATE form to contradict, so the
+    // event keeps its day-ness and `maps_recurrence_rule` stops the save path
+    // patching the recurrence it was shown only in part.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_minute: Some(vec![60]),
             ..RecurrenceRule::new("daily")
         }]),
         ..CalendarEvent::default()

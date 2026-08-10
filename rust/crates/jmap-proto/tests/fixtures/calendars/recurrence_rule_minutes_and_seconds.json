@@ -1,0 +1,6 @@
+{
+  "@type": "RecurrenceRule",
+  "frequency": "hourly",
+  "byMinute": [0, 30],
+  "bySecond": [0]
+}
