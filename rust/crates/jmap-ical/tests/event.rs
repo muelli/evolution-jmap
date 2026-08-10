@@ -270,6 +270,109 @@ fn a_dtend_that_is_not_after_the_start_leaves_the_event_without_a_length() {
 }
 
 #[test]
+fn a_duration_that_states_no_length_leaves_the_event_without_one() {
+    // DURATION was passed through untouched, so whatever the component said
+    // became the JSCalendar `duration` a save hands the server. RFC 5545 §3.3.6
+    // spells a *negative* duration, and RFC 8984 §1.4.6 has none to map it onto:
+    // a component saying an event lasts minus an hour became a set the server
+    // rejects — and the save that carried it takes the user's real edits down
+    // with it. Everything else here is not a duration at all.
+    for value in [
+        // Negative, both designators, and the RFC 5545 spelling of "backwards".
+        "-PT1H",
+        "-P1D",
+        "-PT1H30M",
+        // Not a duration.
+        "next tuesday",
+        "1H",
+        "3600",
+        // A designator with nothing measured after it.
+        "P",
+        "PT",
+        // A measurement with no unit.
+        "PT1",
+        "P1",
+        // A unit that measures nothing RFC 5545 knows.
+        "PT1X",
+        "P1Y",
+        // A second designator part way through.
+        "PT1HP2D",
+        // Fractional, which neither format's grammar admits.
+        "PT0.5S",
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E8\r\n\
+             DTSTART:20260115T130000\r\nDURATION:{value}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse");
+        assert_eq!(event.duration, None, "{value}");
+    }
+}
+
+#[test]
+fn a_length_stated_as_a_duration_is_passed_through_as_written() {
+    // The other half of the same rule: a value that *is* a length still crosses
+    // untouched, because the two formats spell an ISO 8601 duration identically.
+    // Refusing one of these would drop the length of an event that plainly
+    // states it, which is the failure the check exists to avoid, not to cause.
+    for (value, duration) in [
+        ("PT1H", "PT1H"),
+        ("PT30M", "PT30M"),
+        ("PT45S", "PT45S"),
+        ("P1D", "P1D"),
+        ("P2W", "P2W"),
+        ("PT1H30M", "PT1H30M"),
+        ("PT1H30M15S", "PT1H30M15S"),
+        ("P1DT2H30M", "P1DT2H30M"),
+        // Zero is a length, and the one this mapping hands over as written
+        // rather than recognising — see the RDATE period tests for why.
+        ("PT0S", "PT0S"),
+        // An explicit plus sign is RFC 5545 §3.3.6's, and is the same length;
+        // RFC 8984 §1.4.6 has no sign at all, so it is dropped rather than
+        // handed to a server that has nowhere to put it.
+        ("+PT1H", "PT1H"),
+        // An hour and a quarter minute, skipping the minutes: outside RFC 5545's
+        // nesting, which lets an hour be followed only by minutes, but what
+        // every reader adds up and what some emitters write. The check refuses
+        // values that are not lengths, not values that are unfashionable ones.
+        ("PT1H15S", "PT1H15S"),
+        // Three the parser has already repaired by the time the check sees
+        // them: a trailing designator dropped, a missing count read as none,
+        // and units put back in order. What is checked is calcard's rendering
+        // of the value, not the octets the component carried, so these are
+        // lengths — and refusing them would be refusing the parser's answer.
+        ("P1DT", "P1D"),
+        ("PTH", "PT0S"),
+        ("PT30M1H", "PT1H30M"),
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E8\r\n\
+             DTSTART:20260115T130000\r\nDURATION:{value}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse");
+        assert_eq!(event.duration.as_deref(), Some(duration), "{value}");
+    }
+}
+
+#[test]
+fn a_duration_that_states_no_length_lets_a_dtend_state_it_instead() {
+    // A value the mapping cannot read is treated as absent, like every other
+    // one, and what an absent DURATION leaves is the DTEND branch. RFC 5545
+    // §3.6.1 forbids the pair, so this is a malformed component either way —
+    // but one of its two statements about the length is usable, and using it
+    // beats showing the meeting as a zero-length blip.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E8\r\n",
+        "DTSTART:20260115T130000\r\nDURATION:-PT30M\r\nDTEND:20260115T143000\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n",
+    );
+    assert_eq!(
+        ical_to_event(ics).expect("parse").duration.as_deref(),
+        Some("PT1H30M")
+    );
+}
+
+#[test]
 fn a_date_only_dtstart_is_read_as_an_all_day_event_starting_at_midnight() {
     // Evolution writes VALUE=DATE for an all-day event. The start is read as
     // midnight, because dropping it would leave an event with no time at all,
@@ -1309,6 +1412,11 @@ fn an_rdate_period_naming_no_usable_length_leaves_the_instance_with_none() {
     for value in [
         "20260205T130000Z/20260205T120000Z",
         "20260205T130000Z/-PT1H",
+        // A half that begins like a duration and measures nothing. It used to
+        // reach the server as the occurrence's `duration`, since anything
+        // starting with the designator was handed over as written.
+        "20260205T130000Z/PT",
+        "20260205T130000Z/P1X",
     ] {
         assert_eq!(
             ical_to_event(&series_with_rdate(value))

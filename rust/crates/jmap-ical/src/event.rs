@@ -708,7 +708,7 @@ fn read_duration(vevent: &Component) -> Option<String> {
     if let Some(duration) = vevent
         .property("DURATION")
         .map(Property::raw_value)
-        .filter(|value| !value.is_empty())
+        .and_then(|value| stated_duration(&value))
     {
         return Some(duration);
     }
@@ -717,16 +717,73 @@ fn read_duration(vevent: &Component) -> Option<String> {
     to_duration(end - start)
 }
 
+/// A `DURATION` value as a JSCalendar Duration, or `None` when it states no
+/// length an event can have.
+///
+/// The two formats spell a length identically, so a value that *is* one is
+/// handed over as written rather than re-rendered. But they do not spell the
+/// same *set* of lengths: RFC 5545 §3.3.6 admits a sign, and a `DURATION:-PT1H`
+/// — an event lasting minus an hour — has nothing to map onto in RFC 8984
+/// §1.4.6. Passing it through put a value the server rejects into the save
+/// patch, which fails the whole `CalendarEvent/set` and takes the user's real
+/// edits down with it. So the value is checked here, and one that does not pass
+/// is treated as absent like every other unreadable value: the caller falls
+/// through to `DTEND`, and an event ends up without a length rather than with
+/// one nobody can use.
+///
+/// A leading `+` is the same length said RFC 5545's way, and is dropped rather
+/// than handed to a format with nowhere to put it.
+///
+/// The grammar accepted is deliberately a little looser than RFC 5545's, which
+/// nests its units (an hour may be followed only by minutes, a week stands
+/// alone): here any of `W D H M S` may be measured, each at most once and in
+/// that order, at least one of them, with `T` before the first time unit. That
+/// admits `PT1H15S` and `P1W2D`, which every reader adds up the same way and
+/// some emitters write. The check exists to refuse values that are not lengths,
+/// not to be a conformance test — refusing a length an event plainly states is
+/// the failure it is here to avoid, not to cause.
+///
+/// What it sees is calcard's rendering of the value, not the octets the
+/// component carried: a `P1DT` arrives already trimmed to `P1D`. Only what
+/// survives *that* is judged here.
+fn stated_duration(value: &str) -> Option<String> {
+    let value = value.strip_prefix('+').unwrap_or(value);
+    let mut rest = value.strip_prefix(['P', 'p'])?;
+    let mut measured = false;
+    for unit in ['W', 'D', 'T', 'H', 'M', 'S'] {
+        if unit == 'T' {
+            // Not a unit but the divider before the first of the time ones; it
+            // stands only if something is measured after it.
+            if let Some(after) = rest.strip_prefix(['T', 't']) {
+                rest = after;
+                measured = false;
+            }
+            continue;
+        }
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 {
+            continue;
+        }
+        let Some(after) = rest[digits..].strip_prefix([unit, unit.to_ascii_lowercase()]) else {
+            continue;
+        };
+        rest = after;
+        measured = true;
+    }
+    (measured && rest.is_empty()).then(|| value.to_owned())
+}
+
 /// How long a period lasts, as a JSCalendar Duration, given its two halves.
 ///
 /// RFC 5545 §3.3.9 spells a period either way — `19960403T020000Z/PT3H` or
 /// `19960403T020000Z/19960403T050000Z` — and the two halves of this mapping
 /// answer them exactly as [`read_duration`] answers `DURATION` and `DTEND`: a
-/// stated duration is passed through, because both formats spell an ISO 8601
-/// duration identically, and a stated end is measured on the wall clock.
+/// stated duration goes through [`stated_duration`], because both formats spell
+/// an ISO 8601 duration identically but not the same set of them, and a stated
+/// end is measured on the wall clock.
 ///
 /// `None` is "this period states no length an occurrence could have": a period
-/// that ends at or before it starts, and a duration written negative — RFC 5545
+/// that ends at or before it starts, and a half that is not a length — RFC 5545
 /// §3.3.9 requires the end to be after the start, and RFC 8984 §1.4.6 has no
 /// negative duration to map one onto. The negative case falls out of the second
 /// branch for free: `-PT1H` is not a `P`, and it is not a date-time either.
@@ -738,7 +795,7 @@ fn read_duration(vevent: &Component) -> Option<String> {
 /// spellings differ on paper and not in the calendar.
 fn period_length(start: &str, end: &str) -> Option<String> {
     if end.starts_with(['P', 'p']) {
-        return Some(end.to_owned());
+        return stated_duration(end);
     }
     to_duration(instant(end)? - instant(start)?)
 }
