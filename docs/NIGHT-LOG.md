@@ -11320,3 +11320,82 @@ Next: `docs/manual-test-collection-backend.md` is written for an account with
 extending with a mail account whose transport can be read back out of the
 registry's own directory after a populate — that is the one place this session's
 binding becomes observable without a GUI.
+
+## 2026-08-10 (hundred-and-thirteenth session)
+
+**The mail run in the collection recipe.** Four new keyfiles under
+`docs/examples/` — `jmap-mock-mail-collection.source` and the three sources a
+mail account is made of, parented to it — a second run in
+`docs/manual-test-collection-backend.md` that quotes them, and six tests in
+`rust/crates/jmap-backend-collection/tests/recipe.rs`, red first (the files did
+not exist; `RegistrySource::load` happily returns an empty source for a path with
+nothing at it, so the failures were about content rather than about opening a
+file).
+
+**Why the recipe was the next thing rather than more code.** Last session gave
+an account's mail sources a server, and nothing a reader can run showed it.
+`docs/manual-test-collection-backend.md` was written for `MailEnabled=false` and
+says, in the bullet explaining that line, that mail is the setup UI's to create.
+That is still true — this backend creates no mail children — but it is not the
+same as "there is nothing to test": the binding `child_added` puts on a mail
+source is exactly what the assistant *cannot* supply, and writing the three
+sources by hand is the only way to see it before M7 exists. So the run is an
+account with `MailEnabled=true`, the three files, a restart, and then reading the
+transport's own `.source` back to find two groups in it that the reader did not
+write.
+
+**What the tests assert, and the one that is worth the file.** The parents (a
+`Parent=` typo is three sources belonging to nothing, shown nowhere and logged
+nowhere); the two uids the sources point at each other with, read through
+`ESourceMailAccount:identity-uid` and `ESourceMailSubmission:transport-uid`
+rather than out of the text; which of the three `mail_service_of` claims, with
+the identity claimed by nothing; that the account switches on all three parts,
+because `collection_backend_bind_child_enabled()` binds each mail source's
+`enabled` to the account's `mail-enabled` and mail off is three sources that
+arrive disabled with nothing said about it. And the far end: `follow_collection`
+over the documented account and the documented transport, then
+`ServerConfig::from_settings` on the `CamelSettings` object
+`e_source_camel_configure_service` would hand a `CamelJmapTransport` — the same
+assertion `tests/mail_child.rs` makes, over the files a reader copies rather than
+over sources a test built. It comes back `http://127.0.0.1:8080` with no user and
+`CAMEL_NETWORK_SECURITY_METHOD_NONE`.
+
+Checked by mutation, one file at a time, restoring in between: a wrong `Parent`,
+`BackendName=smtp` on the transport, a misspelt `TransportUid`, `Method=tls` on
+the account, `MailEnabled=false`, and a moved `Host` each fail exactly the tests
+that name them and nothing else. `the_recipe_quotes_the_keyfile_verbatim` became
+`the_recipe_quotes_every_keyfile_verbatim` over an ordered list of five files —
+which makes an ```` ```ini ```` block in that document a whole keyfile and
+nothing else, so the fragment showing what a mail source *grows* is fenced
+without a language, and the test comment says so.
+
+**What this is not.** Not run. That a live `evolution-source-registry`
+dispatches `child-added` for hand-written mail sources, that EDS writes the
+changed child back out to the file the reader will inspect, and that Evolution
+then shows the mock's mailboxes are the three things the recipe exists to have a
+human check; this VM has no registry on its bus and no display. The document says
+which parts the test suite covers and which are left to the reader, in the
+closing paragraph of the new section. M6 and M7 both still need human
+verification in real Evolution and neither carries a completion tag.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny` (neither
+binary is on this VM); the four new files are `.source` keyfiles under `docs/`,
+which `REUSE.toml` annotates as a directory rather than per file, so there are no
+new headers to write. `cargo fmt --check`, `cargo test --locked` (491 tests on
+the default members, unchanged) and `cargo clippy --all-targets --locked -- -D
+warnings` are clean, as are `clippy`/`test` over the EDS crates — 850 tests, was
+845, `jmap-backend-collection`'s recipe suite now 9 (was 4). The one ignored test
+is the pre-existing `ignore` doctest in `jmap-backend-core`'s `instance::Slot`.
+`RUSTDOCFLAGS=-D warnings cargo doc` clean for the crate. Pre-existing and
+untouched: `example-module` does not build on this VM.
+
+No milestone tag.
+
+Next: `docs/` now has recipes for the book, cal and collection backends and none
+for M5's Camel provider, which is the one surface a reader reaches through
+Evolution's mail view; the mail run added here is written as if a
+`docs/manual-test-mail-provider.md` existed to point at for the folder-listing
+half. Writing it — a hand-written mail account against `jmap-mockd`, with the
+`.urls` file and the `camel-provider` install component — would give this section
+somewhere to hand off to, and `tests/` an obvious place for the same
+quoted-verbatim check.
