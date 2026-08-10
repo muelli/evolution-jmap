@@ -1,47 +1,25 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# CI, tuned to stay inside the private-repo Actions-minutes allowance
-# while the autonomous night shift pushes frequently:
-#
-#   * One consolidated `checks` job on GitHub-hosted runners (minutes are
-#     billed per job, rounded up per minute — five small jobs cost far
-#     more than one). This is the always-on signal; it runs even when the
-#     self-hosted VM is asleep.
-#   * The heavy jobs (`build-full`, `reproducible`) run on the self-hosted
-#     GCP runner, which costs ZERO GitHub minutes. The VM already carries
-#     the Evolution 3.52 headers, so no container pull is needed.
-#   * concurrency cancels superseded runs (a burst of night-shift commits
-#     only fully builds the newest), and path filters skip docs/log/infra
-#     -only commits (the agent's diary updates no longer trigger builds).
-#
-# Self-hosted note: the runner shares the VM with the night-shift agent.
-# That is fine for this solo private repo; if the repo ever takes
-# untrusted PRs, move the heavy jobs back to hosted or a separate VM
-# (a malicious workflow on a self-hosted runner can read the agent's
-# credentials).
+# Thin wrapper around the ci/ scripts — the actual logic lives there and
+# is shared verbatim with .gitlab-ci.yml, the runner VM, and local runs,
+# so the platforms cannot drift. Public repo: GitHub-hosted runners are
+# free and unlimited, so everything runs here (no self-hosted runner in
+# the pipeline — a public repo plus a self-hosted runner would let a fork
+# PR run code on the VM that holds the agent's credentials).
 
 name: CI
 
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "infra/**"
-      - "LICENSES/**"
-      - "REUSE.toml"
+    paths-ignore: ["**/*.md", "docs/**", "LICENSES/**", "REUSE.toml"]
   pull_request:
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "infra/**"
-      - "LICENSES/**"
-      - "REUSE.toml"
+    paths-ignore: ["**/*.md", "docs/**", "LICENSES/**", "REUSE.toml"]
   workflow_dispatch:
 
-# Collapse bursts: a newer push to the same ref cancels the older run.
+# A newer push to the same ref cancels the older run (collapses the
+# autonomous agent's commit bursts into one build).
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -54,9 +32,6 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # fmt + clippy + test + deny + reuse in one hosted job. Sequential, so
-  # the first failure stops the rest — the night shift fixes iteratively
-  # anyway, and one billed job beats five.
   checks:
     runs-on: ubuntu-24.04
     steps:
@@ -65,48 +40,19 @@ jobs:
         with:
           shared-key: checks
           workspaces: rust
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-      - name: Cache advisory database (refreshed weekly)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/advisory-db
-          key: advisory-db-${{ github.run_id }}
-          restore-keys: advisory-db-
-      - name: rustfmt
-        run: cargo fmt --check
-        working-directory: rust
-      - name: REUSE lint
-        run: pipx run reuse lint
-      - name: clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-        working-directory: rust
-      - name: tests
-        run: cargo test --locked
-        working-directory: rust
-      - name: cargo-deny (licenses, advisories, bans)
-        run: cargo deny check
-        working-directory: rust
+      - run: ci/checks.sh
 
-  # Full build (Evolution example module + CMake glue) on the self-hosted
-  # runner — the VM has the EDS 3.52 dev headers, so it builds natively
-  # with no container pull. Zero GitHub minutes.
-  build-full:
-    runs-on: [self-hosted, gcp]
+  build:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Put the runner user's cargo on PATH
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Trust the workspace checkout
-        run: git config --global --add safe.directory "$(pwd)"
-      - name: Configure and build with CMake (runs cargo tests via CTest)
-        run: |
-          cmake -S . -B build -G Ninja
-          cmake --build build
-          ctest --test-dir build --output-on-failure
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - run: ci/install-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+          workspaces: rust
+      - run: ci/build.sh
+      - uses: actions/upload-artifact@v4
         with:
           name: rust-artifacts
           path: |
@@ -114,41 +60,8 @@ jobs:
             build/cargo-target/release/*.so
           if-no-files-found: error
 
-  # Two clean builds in different absolute paths must produce bit-identical
-  # binaries. Cacheless by design; on the self-hosted runner, so free.
   reproducible:
-    runs-on: [self-hosted, gcp]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: build-a/src
-      - uses: actions/checkout@v4
-        with:
-          path: build-b/src
-      - name: Put the runner user's cargo on PATH
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Build twice in distinct paths
-        run: |
-          export SOURCE_DATE_EPOCH=$(git -C build-a/src log -1 --format=%ct)
-          for d in build-a build-b; do
-            (
-              cd "$d/src/rust"
-              export CARGO_HOME="$GITHUB_WORKSPACE/$d/cargo-home"
-              export RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=$CARGO_HOME=/cargo"
-              cargo build --release --locked -p evolution-jmap-mock
-            )
-          done
-      - name: Compare checksums
-        run: |
-          sha256sum build-a/src/rust/target/release/jmap-mockd \
-                    build-b/src/rust/target/release/jmap-mockd
-          a=$(sha256sum build-a/src/rust/target/release/jmap-mockd | cut -d' ' -f1)
-          b=$(sha256sum build-b/src/rust/target/release/jmap-mockd | cut -d' ' -f1)
-          test "$a" = "$b"
-      - name: Clean up the extra checkouts (self-hosted disk is persistent)
-        if: always()
-        run: rm -rf build-a build-b
-
-  # Planned (next round): a workflow_dispatch-gated `integration` job that
-  # runs the suite against a digest-pinned Stalwart container via
-  # `cargo test --features live-server`.
+      - run: ci/reproducible.sh

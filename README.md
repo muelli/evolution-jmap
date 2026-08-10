@@ -102,9 +102,13 @@ JMAP suite including contacts and calendars.
 
 ## CI, reproducibility, transparency
 
-- Same jobs on GitHub Actions and GitLab CI; images pinned by digest;
-  cargo caches keyed on `Cargo.lock`.
-- A dedicated cacheless CI job builds everything twice in different paths
+- One definition of the build, run everywhere: the [`ci/`](ci/) scripts
+  (`checks.sh`, `build.sh`, `reproducible.sh`) are the single source of
+  truth. GitHub Actions and GitLab CI are thin wrappers that call them,
+  the autonomous agent runs `ci/checks.sh` before every push, and you can
+  run the same script on your laptop — so "green" means the same thing
+  in all four places and the platforms can't drift.
+- A dedicated cacheless CI job builds the mock twice in different paths
   and fails on any checksum difference (`--remap-path-prefix`,
   `SOURCE_DATE_EPOCH`, pinned toolchain, committed lockfile).
 - Releases ship `SHA256SUMS` plus Sigstore provenance recorded in the
