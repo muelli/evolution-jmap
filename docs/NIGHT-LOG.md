@@ -11486,3 +11486,99 @@ points only at `docs/manual-test-book-backend.md`, and there are now four
 recipes. A short list there, or a `docs/README.md` index the four hang off, is
 the cheap way to make the other three findable — the calendar and collection
 ones have been unlinked from anywhere a newcomer reads since they landed.
+
+## 2026-08-10 (hundred-and-fifteenth session)
+
+**The module M7's class was missing.** `jmap-config` grew `src/module.rs` —
+`e_module_load` and `e_module_unload`, the two symbols Evolution's shell
+resolves out of `module-jmap-configuration.so` — became a `cdylib` as well as an
+rlib, and got an install rule in `cmake/Backends.cmake` beside the four that
+were already there. Five tests in `tests/module.rs`, red first (they would not
+compile: there was no `jmap_config::module`).
+
+**Why this and not more decisions.** Everything in the crate so far is a
+function over an `ESource`, tested and reached by nothing: the class
+`tests/backend.rs` pins down was registered only by the test that pinned it.
+The crate's own header said so — "there is a subclass now, but nothing
+registers it" — and until a module registered it, no part of M7 was a thing
+Evolution could do. The two vfuncs still missing (`insert_widgets`,
+`setup_defaults`) need GTK bound in `evo-sys`, which is a bigger piece than one
+increment; the module is the small one that was blocking nothing but its own
+absence.
+
+**The one way it differs from the three EDS modules already in tree, and the
+test that came out of it.** The book, calendar and collection modules each
+register a *factory* as well, because their hosts look a backend up by name in
+a table the factory puts it in. Evolution's account editor has no such table:
+`EMailConfigServicePage` is an `EExtensible`, and `e_extensible_load_extensions`
+walks the children of `EExtension` that exist at that moment and instantiates
+every one whose class `extensible_type` is the page's own type. So registering
+the type *is* the registration — there is nowhere to add it and nobody to tell
+— and the thing that can silently go wrong is not a missing factory but a
+clobbered `extensible_type`, which registers a type nothing ever instantiates
+with no error anywhere. Hence
+`the_registered_type_is_an_extension_of_the_page_that_will_load_it`, which reads
+the field through `EExtensionClass` and asserts `g_type_name` of it is
+`EMailConfigServicePage`. The other four: the type is registered and is an
+`EMailConfigServiceBackend`; it belongs to the `GTypeModule` rather than being
+static (a static type in a dlopened module outlives the code its vfunc pointers
+point into); a use/unuse/use cycle hands the types back, because a second
+`e_module_load` that treated "already registered" as "nothing to do" would leave
+the account type gone for the rest of the session; and the class the *module*
+registered still carries `backend_name` and the three installed vfunc slots,
+since the dynamic path initialises the class later and again after every reload.
+
+Checked by mutation, restoring in between: `register_static` in place of
+`register_dynamic` fails only `the_registered_type_belongs_to_the_module`, and
+zeroing `extensible_type` in `backend`'s `class_init` fails only the extensible
+test.
+
+**The install rule.** `add_cargo_cdylib(jmap_config OUTPUT_NAME
+module-jmap-configuration.so DESTINATION ${EVOLUTION_MODULE_DIR} COMPONENT
+config-module SYMBOLS e_module_load e_module_unload VERIFY_DESTINATION_FROM
+evolution-shell-3.0 moduledir)` — the fifth `install-*` CTest, and the first
+into Evolution's own module directory (`/usr/lib/evolution/modules` here) rather
+than one of the data server's. Run on this VM: `ctest -R install-config-module`
+passes, staging
+`usr/lib/evolution/modules/module-jmap-configuration.so`, and `nm -D` over the
+built object shows exactly two defined symbols, `e_module_load` and
+`e_module_unload`. CI needed no change — it runs `ctest` over the whole tree and
+uploads `build/cargo-target/release/*.so` by glob.
+
+`gobject-sys` moved from dev-dependencies to dependencies, for the `GTypeModule`
+in the entry point's signature and nothing else.
+
+**What this is not.** Not run. That Evolution dlopens the installed module, that
+JMAP then appears in the account type list, and that the page it opens behaves
+are what needs a running Evolution and a display this VM has neither of. M7
+**still needs human verification in real Evolution** and carries no completion
+tag — and it would not deserve one yet regardless: `insert_widgets` and
+`setup_defaults` are missing, so the assistant would show a JMAP account with no
+entry to type an address into and *Next* correctly greyed out. `src/lib.rs` and
+`src/backend.rs` were updated to say that rather than the older "no module loads
+this class".
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM); the two new source files carry SPDX
+`GPL-3.0-or-later` headers. `cargo fmt --check`, `cargo test --locked` (491
+tests on the default members, unchanged) and `cargo clippy --all-targets
+--locked -- -D warnings` are clean, as are `clippy`/`test` over the EDS crates —
+860 tests, was 855. The one ignored test is the pre-existing `ignore` doctest in
+`jmap-backend-core`'s `instance::Slot`. `RUSTDOCFLAGS=-D warnings cargo doc -p
+jmap-config` is clean. Still open from last session and untouched here: the same
+command over `jmap-mail` fails with 25 pre-existing
+`rustdoc::private_intra_doc_links`. Pre-existing and untouched: `example-module`
+does not build on this VM.
+
+No milestone tag.
+
+Next: the two vfuncs, which means GTK in `evo-sys` — `insert_widgets` takes a
+`GtkBox`, currently an opaque pointer there on purpose (gtk-rs's `gtk-sys` is
+frozen on `glib-sys` 0.18 and this workspace is on 0.22, so the widget calls
+have to be generated from Evolution's own headers rather than borrowed). That is
+a self-contained `evo-sys` increment — allowlist the handful of GTK entry points
+an entry-and-label page needs, with a `layout.rs` check on each — before any of
+it can be a vfunc. The standing directive on translatable strings starts biting
+there too: the first labels this project originates are the ones
+`insert_widgets` adds, and `bindtextdomain` has to be wired into this module's
+init at the same time.

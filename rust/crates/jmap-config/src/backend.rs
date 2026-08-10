@@ -68,8 +68,7 @@
 //! *Next* greyed out with no way to un-grey it, and `commit_changes` would
 //! therefore never be reached with an account it would write.
 //!
-//! That is the honest state and not a regression — no module loads this class,
-//! so nothing reaches the dialog at all — and it is the right order to build in:
+//! That is the honest state, and it is the right order to build in:
 //! the alternative is the inherited `return TRUE`, which is an assistant that
 //! cheerfully commits an account with no address and no server, failing later in
 //! another process. The two slots above are what finish it.

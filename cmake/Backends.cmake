@@ -104,3 +104,22 @@ add_cargo_cdylib(jmap_backend_collection
 	SYMBOLS e_module_load e_module_unload
 	VERIFY_DESTINATION_FROM libebackend-1.2 moduledir
 )
+
+# The JMAP account setup module, and the one of the five that Evolution itself
+# loads rather than one of the data server's processes: EVOLUTION_MODULE_DIR is
+# `moduledir` from evolution-shell-3.0, established by the top-level
+# CMakeLists.txt because the example module installs there too.
+#
+# `module-*.so` again, and again not derived from anything — the shell dlopens
+# every file in the directory. The `-configuration` suffix is what distinguishes
+# it from M6's module-jmap-backend.so, which is a different module in a
+# different directory loaded by a different process; the two would otherwise be
+# one name apart in a directory listing and impossible to tell apart in a bug
+# report.
+add_cargo_cdylib(jmap_config
+	OUTPUT_NAME module-jmap-configuration.so
+	DESTINATION ${EVOLUTION_MODULE_DIR}
+	COMPONENT config-module
+	SYMBOLS e_module_load e_module_unload
+	VERIFY_DESTINATION_FROM evolution-shell-3.0 moduledir
+)

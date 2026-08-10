@@ -62,7 +62,16 @@
 //!   behind it becomes testable, which is the same order the four modules above
 //!   were written in.
 //!
-//! ## Why an rlib with no module in it yet
+//! - [`module`] is the shared object the rest of it arrives in: `e_module_load`
+//!   and `e_module_unload`, the two symbols Evolution's shell resolves out of
+//!   `module-jmap-configuration.so`, and the dynamic registration of
+//!   [`backend`]'s class against the `GTypeModule` it is handed. There is no
+//!   factory and nothing to register the class *with* — Evolution's account
+//!   editor finds a mail config backend by walking the children of `EExtension`,
+//!   so putting the type in the type system is the whole of it; the module says
+//!   why at length.
+//!
+//! ## Why the decisions came before the module
 //!
 //! M7's deliverable is a GObject module Evolution dlopens out of *its* module
 //! directory (`pkg-config --variable=moduledir evolution-shell-3.0`), one
@@ -72,25 +81,27 @@
 //! writes, and an `ESource` can be built and read back in a plain test with no
 //! display, no session bus and no running Evolution.
 //!
-//! So those came first and are tested, and the `EMailConfigServiceBackend`
-//! subclass that calls them comes after — [`backend`], which is a class and
-//! not yet a module. The roadmap's rule about this
-//! milestone is the reason for the order: GUI code cannot be verified on the
-//! machine this is developed on, so the smaller the part of M7 that is GUI, the
-//! more of M7 is actually *checked* rather than merely compiled.
-//!
-//! ## What is not here yet
-//!
-//! **The module**: there is a subclass now, but nothing registers it —
-//! `e_module_load` and the `module-jmap-configuration.so` it lives in are still
-//! to come, so what is verified here is a class and its functions, not a thing
-//! Evolution does. That is also the reason the two writers above are as
+//! So those came first and are tested, then the `EMailConfigServiceBackend`
+//! subclass that calls them ([`backend`]), and only then the module that
+//! registers it. The roadmap's rule about this milestone is the reason for the
+//! order: GUI code cannot be verified on the machine this is developed on, so
+//! the smaller the part of M7 that is GUI, the more of M7 is actually *checked*
+//! rather than merely compiled. It is also why the two writers above are as
 //! complete as they are — an account this crate commits is one a store can open
 //! and a transport can send through, with no step left for the caller to
-//! remember — and the reason [`complete`] is a function rather than a vfunc:
+//! remember — and why [`complete`] is a function rather than a vfunc:
 //! everything the subclass has to *decide* is decided here, so what is left for
 //! it is the widgets and the plumbing, which is the part no test on this
 //! machine could cover anyway.
+//!
+//! ## What is not here yet
+//!
+//! **The dialog actually working.** The module registers a class Evolution will
+//! instantiate, and that is as far as anything here has been checked: that a
+//! shell which dlopens the installed `.so` then offers JMAP in the account type
+//! list, and that the page it opens behaves, needs a running Evolution and a
+//! display this machine has neither of. See [`backend`] for the state the
+//! missing two vfuncs leave that dialog in.
 //!
 //! **The vfuncs that need more than an `ESource`**: `insert_widgets` and
 //! `setup_defaults` need the `EMailConfigServicePage` this extension extends,
@@ -112,3 +123,4 @@ pub mod backend;
 pub mod complete;
 pub mod defaults;
 pub mod mail;
+pub mod module;
