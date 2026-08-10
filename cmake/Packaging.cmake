@@ -140,3 +140,15 @@ add_test(
 		"-DEPOCH_B=1700000000"
 		-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-deb-reproducible.cmake"
 )
+
+# The package these two tests inspect is only worth building if a release
+# actually carries it, and the release workflow is the one part of this
+# repository that cannot be run here or in CI — only by pushing a tag. So it is
+# checked as a document: that what it publishes is what it attests, that the
+# package is among it, and that it builds in the same pinned image CI does.
+add_test(
+	NAME release-workflow
+	COMMAND ${CMAKE_COMMAND}
+		"-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+		-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-release-workflow.cmake"
+)

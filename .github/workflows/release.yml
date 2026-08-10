@@ -6,6 +6,12 @@
 # transparency log). Verify with:
 #   gh attestation verify <file> --repo muelli/evolution-jmap
 # See docs/verifying-artifacts.md.
+#
+# Two jobs, because the artifacts need two different environments: the mock
+# server and the source tarball need nothing but Rust and git, while the .deb
+# needs the Evolution/EDS headers the modules link against and dpkg-shlibdeps
+# to read the result. cmake/tests/check-release-workflow.cmake checks the
+# properties of this file that only a pushed tag would otherwise exercise.
 
 name: Release
 
@@ -17,12 +23,54 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+  # The container the package job builds in is this repo's (private) ghcr
+  # package, pulled with the job token.
+  packages: read
 
 env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # The binary package, built in the same digest-pinned image as CI's
+  # build-full job — deliberately, and not on the stock runner with apt-get:
+  # dpkg-shlibdeps derives the package's dependencies by reading our modules
+  # against the libraries actually present, so the .deb describes the
+  # distribution it was built in. Pinning it to the image CI tests in is what
+  # makes that description one somebody has checked.
+  package:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/muelli/evolution-jmap/ci@sha256:e479fc1333c4b38ccf1afb47427d8e7e2d1fe307822347d743bc0a04fb5c126b
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The checkout is owned by a different uid than the container user;
+      # without this, git inside CMake refuses to report the commit timestamp
+      # that seeds SOURCE_DATE_EPOCH — and the package would be dated from the
+      # packaging clock instead of from the tag.
+      - name: Trust the workspace checkout
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Build and package (cacheless)
+        run: |
+          cmake -S . -B build -G Ninja
+          cmake --build build
+          ctest --test-dir build --output-on-failure -R '^package-deb'
+          cmake --build build --target package
+          ls -l build/*.deb
+
+      - name: Upload the package for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: build/*.deb
+          if-no-files-found: error
+
   release:
+    needs: [package]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -40,21 +88,29 @@ jobs:
           git archive --prefix="evolution-jmap-${GITHUB_REF_NAME}/" HEAD \
             | xz -z > "evolution-jmap-${GITHUB_REF_NAME}.tar.xz"
 
+      - name: Download the package
+        uses: actions/download-artifact@v4
+        with:
+          name: deb
+          path: deb
+
       - name: Collect artifacts and checksums
         run: |
           mkdir -p dist
           cp rust/target/release/jmap-mockd dist/
           cp "evolution-jmap-${GITHUB_REF_NAME}.tar.xz" dist/
+          cp deb/*.deb dist/
           (cd dist && sha256sum * > SHA256SUMS)
           cat dist/SHA256SUMS
 
+      # dist/* on both this step and `gh release create` below, so the set that
+      # is attested and the set that is published are the same set by
+      # construction: an artifact added to dist/ cannot be released without
+      # provenance, and one attested here cannot go unreleased.
       - name: Attest build provenance (Sigstore/Rekor)
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: |
-            dist/jmap-mockd
-            dist/evolution-jmap-*.tar.xz
-            dist/SHA256SUMS
+          subject-path: dist/*
 
       - name: Create GitHub release
         env:
