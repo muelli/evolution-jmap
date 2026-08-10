@@ -4,7 +4,7 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps eleven properties and
+//! lossy view of a JSCalendar event. The mapping keeps twelve properties and
 //! drops everything else, so a save that sent the parsed event back whole
 //! would silently delete what it could not represent — participants, alerts,
 //! links, priority — none of which the user ever saw, let alone asked to
@@ -45,13 +45,14 @@
 //! - **`recurrenceOverrides` is the same story one level down.** An
 //!   `EXDATE`, an `RDATE` and a `RECURRENCE-ID` component between them say that
 //!   an instance is off, that it happens, and that it happens with another
-//!   title, start, zone, length, description or status — but not that it happens
-//!   in another place or with another guest list. An override the component could
-//!   only place with a bare `RDATE` would come back as the empty patch,
-//!   deleting what it could not draw, so if any override the server holds fails
-//!   [`maps_recurrence_override`], the property is left alone entirely — as it
-//!   is when an override the *save* brings holds a value that cannot be sent,
-//!   which is the same check the series' `timeZone` gets below.
+//!   title, start, zone, length, description, status or transparency — but not
+//!   that it happens in another place or with another guest list. An override
+//!   the component could only place with a bare `RDATE` would come back as the
+//!   empty patch, deleting what it could not draw, so if any override the
+//!   server holds fails [`maps_recurrence_override`], the property is left
+//!   alone entirely — as it is when an override the *save* brings holds a value
+//!   that cannot be sent, which is the same check the series' `timeZone` gets
+//!   below.
 //! - **`start` is required by RFC 8984.** A component whose `DTSTART` the
 //!   mapping cannot read yields no start, and `"start": null` is not a legal
 //!   way to say so, so the server's start stands.
@@ -102,6 +103,16 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
         ("description", &baseline.description, &edited.description),
         ("duration", &baseline.duration, &edited.duration),
         ("status", &baseline.status, &edited.status),
+        // Whether the event blocks time. Like `status` it needs nothing beyond
+        // the baseline: a value outside RFC 8984 §4.4.2's two states is dropped
+        // on both sides of the comparison, so a save that never touched it sends
+        // nothing, and clearing it is the `null` that asks for the default — the
+        // same state a component with no `TRANSP` on it is in.
+        (
+            "freeBusyStatus",
+            &baseline.free_busy_status,
+            &edited.free_busy_status,
+        ),
     ] {
         if was != now {
             set(&mut patch, property, now.as_deref());

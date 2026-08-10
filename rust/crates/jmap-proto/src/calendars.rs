@@ -72,6 +72,16 @@ pub struct CalendarEvent {
     pub show_without_time: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// Whether the event blocks the time it occupies — RFC 8984 §4.4.2's
+    /// `freeBusyStatus`, one of `free` and `busy`, which is what Evolution's
+    /// "Show Time as" states.
+    ///
+    /// `None` is "nothing was said" rather than the RFC's default of `busy`, for
+    /// the reason [`Self::show_without_time`] gives: a save reads an edit off a
+    /// difference from what the component showed, so answering with the default
+    /// would have it state the value where the server never did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_busy_status: Option<String>,
     /// The places the event happens at (RFC 8984 §4.2.5), keyed by an id of
     /// whoever wrote them.
     ///

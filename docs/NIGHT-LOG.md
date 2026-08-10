@@ -15843,3 +15843,112 @@ per-instance zone through real EDS is untested; calcard silently drops an
 unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`;
 whether Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the
 user edited is untested.
+
+## 2026-08-10 (hundred-and-fifty-ninth session)
+
+**Whether an event blocks the time it occupies** now crosses: JSCalendar
+`freeBusyStatus` (RFC 8984 §4.4.2) ↔ iCalendar `TRANSP` (RFC 5545 §3.8.2.7),
+both directions, which is Evolution's "Show Time as: Busy/Free". The twelfth
+mapped property, and the first one where the *defaults* of the two formats do the
+interesting work.
+
+**The two formats agree about silence, which is what makes this cheap.** RFC 8984
+defaults `freeBusyStatus` to `busy` and RFC 5545 defaults `TRANSP` to `OPAQUE` —
+the same state. So an event with no property is a component with no line, in both
+directions, and neither side has to invent a value: the writer emits nothing for
+`None`, the reader answers `None` for a component that carries no `TRANSP`.
+Answering `Some("busy")` there was the tempting alternative and would have been
+wrong for the reason `showWithoutTime` reads `None` rather than `Some(false)`: the
+save path reads an edit off a difference from what was *shown*, so a reader that
+supplies the default has every save state it where the server said nothing.
+Clearing the field is `"freeBusyStatus": null`, which asks for that same default.
+
+**A scalar over a closed vocabulary needs no `maps_*` predicate.** This is the
+`status` shape rather than the `keywords` or `locations` one: nothing is shown in
+part, so there is no "seen in part, do not write back" question and `diff` needs
+nothing beyond the baseline. A value outside the two states is dropped by the
+drawing *and* by the baseline's re-drawing, so a save that never touched it sends
+nothing — pinned by
+`a_transparency_the_component_could_not_show_is_not_cleared_by_a_save`, where the
+mock answers `"maybe"` and keeps it across an unrelated title edit.
+
+**The override direction was taken, unlike `keywords`.** RFC 8984 §4.3.4 lets an
+instance restate the property and iCalendar spells it on that instance's own
+component, so `freeBusyStatus` joins `OVERRIDE_PROPERTIES` (now seven) beside
+`status` — "Show Time as: Free" on one occurrence of a series reaches the server
+as a one-key patch. That put three places in step at once, and the inheritance is
+the one that bites: an instance is *drawn* with the series' transparency, because
+its own component is the only place the state is stated, and one drawn without the
+line reads back as an occurrence the user just set to the default. Mutation-checked
+— deleting `free_busy_status` from the instance `modified_instance` builds fails
+`an_edited_instance_is_drawn_at_the_series_transparency`, and short-circuiting the
+`known_transparency` guard in `maps_override_field` fails the catalogue of shapes
+the mapping refuses.
+
+**libical neither invents a transparency nor respells one**, measured in
+`jmap-backend-cal/tests/marshal.rs` against the real library: a `VEVENT` with no
+`TRANSP` comes back with none. That is the measurement the "silence means the
+default" reading rests on — had libical filled the default in, every save of an
+event the server gave no transparency would carry a patch stating `busy`. What the
+probe cannot say is what Evolution's *appointment editor* writes: it may well set
+the property explicitly from its combo, in which case one redundant patch stating
+the default is sent. Redundant, not wrong — RFC 8984 §4.4.2 makes `busy` and no
+value the same state — and not checkable on this VM.
+
+**Verified through real EDS.** `tests/functional/cal-client.c` writes
+`TRANSP:TRANSPARENT` on the event it creates and reports what EDS's own cache
+hands back (as text, not through `i_cal_property_get_transp`, whose enum reports a
+missing property as OPAQUE and would hide exactly the failure this watches for);
+the leg asserts that *and* the `freeBusyStatus` of `"free"` the mock received.
+Both halves mutation-checked: expecting `busy` on the server side and `OPAQUE` on
+the cache side each fail the leg, the latter printing
+`read-back-transp=TRANSPARENT`. TRANSPARENT and not OPAQUE deliberately — the
+default is the state a component with no line is already in, so only the other
+value distinguishes a mapping that carried something from one that dropped it.
+
+**One exemplar moved.** `freeBusyStatus` was the third "property no component can
+carry" example in `jmap-cal-sync/tests/save.rs`; `participants` and `priority` are
+what is left of that list, and `priority` now carries the assertion.
+
+Tests: red first at every layer — 5 compile-red in `jmap-ical` (the field did not
+exist), 2 behaviour-red in the two override catalogues, 6 behaviour-red in
+`jmap-cal-sync/tests/save.rs` against the mock, and the functional leg
+mutation-checked in both directions since it passed on its first run. Counts:
+`cargo test --locked` 716, up 11 from 705; `jmap-backend-cal` 31 in `marshal.rs`,
+up one; `ctest` 14/14 including all four functional legs against real EDS.
+
+Not done, deliberately: an **override** still may not restate its tags or its
+place, and `showWithoutTime` is still decided once for the whole document. A
+`TRANSP` parameter is not a thing, so nothing here needs the `X-JMAP-KEY`
+treatment `locations` got.
+
+Verified locally: `cargo test --locked` 716 green, `cargo test -p jmap-backend-cal
+--locked` green, `ctest` 14/14, `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal` and `jmap-functional`. `ci/checks.sh` again stops at its first
+step: `reuse` is not on this VM and neither `pipx` nor `uvx` is installed.
+Exposure is nil — **no file was added**, only edits to files that already carry
+SPDX headers — and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one
+it gave on the last green run.
+
+Disk: 3.2G free of 58G after deleting `target/tmp` and `target/debug/incremental`
+at the start, with `rust/target` at 23G and `~/audit-ffi` at 14G;
+`CARGO_INCREMENTAL=0` throughout. **The maintainer decision is still wanted**: a
+periodic `cargo clean` in the night-shift driver, a bigger disk, or a shared
+target directory.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two; the *reading* direction of a
+per-instance zone through real EDS is untested; calcard silently drops an
+unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`;
+whether Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the
+user edited is untested. New from this session: whether that editor writes a
+`TRANSP` it was not asked to is untested, and would cost one redundant patch.
