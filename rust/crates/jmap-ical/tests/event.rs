@@ -234,6 +234,90 @@ fn a_dtstart_missing_its_seconds_is_completed_rather_than_dropped() {
 }
 
 #[test]
+fn a_start_that_names_no_real_instant_is_left_out_rather_than_passed_on() {
+    // Digits in the right places are not a date: neither this crate's shape
+    // check nor calcard's parse looks at what the fields say, so a month of 13
+    // or an hour of 25 used to travel intact in both directions. Outbound that
+    // reaches libical, which refuses the component and takes the whole event
+    // with it; inbound it reaches the server as a JSON value it has to reject,
+    // failing the whole CalendarEvent/set rather than the one property.
+    for start in [
+        "2026-13-15T13:00:00",
+        "2026-00-15T13:00:00",
+        "2026-01-32T13:00:00",
+        "2026-01-00T13:00:00",
+        "2026-02-30T13:00:00",
+        // 2026 is not a leap year.
+        "2026-02-29T13:00:00",
+        "2026-01-15T24:00:00",
+        "2026-01-15T13:60:00",
+        "2026-01-15T13:00:61",
+    ] {
+        let event = CalendarEvent {
+            start: Some(start.to_owned()),
+            time_zone: Some("Etc/UTC".to_owned()),
+            ..CalendarEvent::default()
+        };
+        assert!(without(&event_to_ical(&event), "DTSTART"), "{start}");
+    }
+
+    for value in [
+        "20261315T130000",
+        "20260015T130000",
+        "20260132T130000",
+        "20260100T130000",
+        "20260230T130000",
+        "20260229T130000",
+        "20260115T240000",
+        "20260115T136000",
+        "20260115T130061",
+        // A VALUE=DATE carries the same risk with no time to check.
+        "20260230",
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E6\r\n\
+             DTSTART:{value}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse");
+        assert_eq!(event.start, None, "{value}");
+        assert_eq!(event.time_zone, None, "{value}");
+    }
+}
+
+#[test]
+fn a_leap_day_and_a_leap_second_are_real_and_survive() {
+    // The range check must not swallow the two dates that look wrong and are
+    // not: 29 February of a leap year, and the leap second RFC 5545 §3.3.12 and
+    // RFC 3339 both spell as :60.
+    for start in ["2024-02-29T13:00:00", "2026-06-30T23:59:60"] {
+        let event = CalendarEvent {
+            start: Some(start.to_owned()),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert!(!without(&ics, "DTSTART"), "{start}: {ics}");
+        assert_eq!(
+            ical_to_event(&ics).expect("parse").start.as_deref(),
+            Some(start),
+            "{start}"
+        );
+    }
+    // And 2000 was a leap year where 1900 and 2100 were not.
+    let event = CalendarEvent {
+        start: Some("2000-02-29T00:00:00".to_owned()),
+        ..CalendarEvent::default()
+    };
+    assert!(!without(&event_to_ical(&event), "DTSTART"));
+    for start in ["1900-02-29T00:00:00", "2100-02-29T00:00:00"] {
+        let event = CalendarEvent {
+            start: Some(start.to_owned()),
+            ..CalendarEvent::default()
+        };
+        assert!(without(&event_to_ical(&event), "DTSTART"), "{start}");
+    }
+}
+
+#[test]
 fn status_changes_case_between_the_two_formats() {
     for (jscalendar, ical) in [
         ("confirmed", "CONFIRMED"),
@@ -319,6 +403,31 @@ fn until_is_a_date_time_in_the_events_own_zone() {
         .recurrence_rules
         .unwrap();
     assert_eq!(rules[0].until.as_deref(), Some("2026-12-31T09:00:00"));
+}
+
+#[test]
+fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() {
+    // An UNTIL that cannot be rendered used to be left off the RRULE, which
+    // turns a recurrence that ends into one that never does — an event repeated
+    // into every week of the user's calendar for ever. Showing the rule not at
+    // all is the smaller lie, and the save path is told so: recurrenceRules is
+    // patched only when every rule the server holds survives the trip.
+    for until in ["2026-13-31T09:00:00", "whenever", "2026-02-30T09:00:00"] {
+        let rule = RecurrenceRule {
+            until: Some(until.to_owned()),
+            ..RecurrenceRule::new("weekly")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{until}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert!(without(&event_to_ical(&event), "RRULE"), "{until}");
+    }
+
+    // A rule with no frequency has no RRULE spelling at all, and never had one.
+    assert!(!maps_recurrence_rule(&RecurrenceRule::new("")));
 }
 
 #[test]

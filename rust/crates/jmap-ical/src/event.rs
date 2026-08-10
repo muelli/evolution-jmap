@@ -58,8 +58,28 @@ pub const MAPPED_PROPERTIES: [&str; 6] = [
 /// the rest of RFC 8984 §4.3.3 ride in [`RecurrenceRule::extra`] and would be
 /// lost. A caller that patches `recurrenceRules` for a rule this returns
 /// `false` for narrows the user's recurrence behind their back.
+///
+/// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
+/// never patches over a recurrence the user was not shown.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
-    rule.extra.is_empty()
+    rule.extra.is_empty() && writable(rule)
+}
+
+/// Whether an `RRULE` can carry this rule's frequency and its end — the two
+/// parts that cannot be narrowed, only lost.
+///
+/// A rule that names no frequency has no `RRULE` spelling at all: an empty one
+/// is rejected by libical and means nothing to a reader. A rule whose `until`
+/// is not a date-time this mapping can write must be refused rather than
+/// written without it, because a recurrence that ends and one that never does
+/// are different events, and the unbounded one repeats into every week of the
+/// user's calendar for ever.
+fn writable(rule: &RecurrenceRule) -> bool {
+    !rule.frequency.is_empty()
+        && rule
+            .until
+            .as_deref()
+            .is_none_or(|until| to_ical_date_time(until).is_some())
 }
 
 /// Render an event as an iCalendar object, ready for
@@ -208,7 +228,7 @@ fn to_ical_date_time(local: &str) -> Option<String> {
     let (date, time) = local.split_once('T')?;
     let date: String = strip(date, '-', 8)?;
     let time: String = strip(time, ':', 6)?;
-    Some(format!("{date}T{time}"))
+    exists(&date, &time).then(|| format!("{date}T{time}"))
 }
 
 /// `20260115T130000`, `20260115T130000Z` or `20260115` (`VALUE=DATE`) →
@@ -230,6 +250,9 @@ fn to_local_date_time(value: &str) -> Option<String> {
     if !date.bytes().chain(time.bytes()).all(|b| b.is_ascii_digit()) {
         return None;
     }
+    if !exists(date, time) {
+        return None;
+    }
     Some(format!(
         "{}-{}-{}T{}:{}:{}",
         &date[..4],
@@ -247,10 +270,55 @@ fn strip(value: &str, separator: char, digits: usize) -> Option<String> {
     (stripped.len() == digits && stripped.bytes().all(|b| b.is_ascii_digit())).then_some(stripped)
 }
 
-/// An `RRULE` value, or `None` for a rule that names no frequency — an empty
-/// RRULE is rejected by libical and means nothing to a reader.
+/// Whether `YYYYMMDD` and `HHMMSS` digits name an instant that exists.
+///
+/// Digits in the right places are not a date, and neither format's reader
+/// checks which: calcard reads `20261315T250000` into a date-time whose month
+/// is 13, and libical is asked for the value only after this mapping has
+/// written it. So the check is here, and a month of 13 is treated the same way
+/// as a value that cannot be read at all — as absent — because both directions
+/// are worse than losing the property. Handed to libical, an impossible
+/// `DTSTART` costs the whole component and with it every field of the event;
+/// sent to the server, `"start": "2026-13-15T25:00:00"` is not a JSCalendar
+/// LocalDateTime and fails the entire `CalendarEvent/set`, so the user's edit
+/// to the title is lost along with it.
+///
+/// Both callers have already established that the arguments are 8 and 6 ASCII
+/// digits.
+fn exists(date: &str, time: &str) -> bool {
+    let field = |value: &str| value.parse::<u32>().unwrap_or(u32::MAX);
+    let (year, month, day) = (field(&date[..4]), field(&date[4..6]), field(&date[6..8]));
+    let (hour, minute, second) = (field(&time[..2]), field(&time[2..4]), field(&time[4..6]));
+    (1..=12).contains(&month)
+        && (1..=days_in_month(year, month)).contains(&day)
+        && hour <= 23
+        && minute <= 59
+        // RFC 5545 §3.3.12 and RFC 3339 §5.6 both allow the leap second, and a
+        // server that stores one has to get it back unchanged.
+        && second <= 60
+}
+
+/// The length of a month, in the proleptic Gregorian calendar both formats use.
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) => {
+            29
+        }
+        2 => 28,
+        _ => 0,
+    }
+}
+
+/// An `RRULE` value, or `None` for a rule [`writable`] refuses.
+///
+/// A rule carrying unmodeled parts in `extra` *is* written, narrowed to what an
+/// `RRULE` holds — showing a weekly event on the wrong days beats showing none
+/// — and [`maps_recurrence_rule`] is how the save path knows not to write that
+/// narrowing back.
 fn rule_to_rrule(rule: &RecurrenceRule, time_zone: Option<&str>) -> Option<String> {
-    if rule.frequency.is_empty() {
+    if !writable(rule) {
         return None;
     }
     let mut parts = vec![format!("FREQ={}", rule.frequency.to_ascii_uppercase())];
