@@ -372,6 +372,73 @@ fn a_duration_that_states_no_length_lets_a_dtend_state_it_instead() {
     );
 }
 
+/// An event of one length, with nothing else that would change how it is
+/// written.
+fn lasting(duration: &str) -> CalendarEvent {
+    CalendarEvent {
+        id: Some("E19".into()),
+        title: Some("Standup".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        duration: Some(duration.to_owned()),
+        ..CalendarEvent::default()
+    }
+}
+
+#[test]
+fn a_duration_that_states_no_length_is_not_written_to_the_component() {
+    // The same rule on the way out. A `duration` the server sends was put into
+    // DURATION verbatim, so a value RFC 8984 §1.4.6 has no room for — or one
+    // that is no length at all — became a content line libical has to read, and
+    // libical refusing a property costs the whole component: the appointment
+    // disappears from the calendar rather than merely losing its length.
+    for value in [
+        "-PT1H",
+        "-P1D",
+        "next tuesday",
+        "1H",
+        "3600",
+        "P",
+        "PT",
+        "PT1",
+        "P1",
+        "PT1X",
+        "P1Y",
+        "PT1HP2D",
+        "PT0.5S",
+    ] {
+        let ics = event_to_ical(&lasting(value));
+        assert!(without(&ics, "DURATION"), "{value}: {ics}");
+    }
+}
+
+#[test]
+fn a_length_the_event_states_is_written_as_the_duration_it_is() {
+    // The other half, and the one that matters: the check can only go wrong by
+    // refusing too much, and nothing else in the suite would notice a length
+    // that stopped being written. `+PT1H` is the one value that changes on the
+    // way through — RFC 5545 §3.3.6's sign, which RFC 8984 has nowhere to put,
+    // and which is dropped rather than handed on.
+    for (value, written) in [
+        ("PT1H", "PT1H"),
+        ("PT30M", "PT30M"),
+        ("P1D", "P1D"),
+        ("P2W", "P2W"),
+        ("PT1H30M15S", "PT1H30M15S"),
+        ("P1DT2H30M", "P1DT2H30M"),
+        ("PT0S", "PT0S"),
+        ("PT1H15S", "PT1H15S"),
+        ("+PT1H", "PT1H"),
+    ] {
+        let ics = event_to_ical(&lasting(value));
+        assert_eq!(line(&ics, "DURATION"), format!("DURATION:{written}"));
+        assert_eq!(
+            ical_to_event(&ics).expect("parse").duration.as_deref(),
+            Some(written),
+            "{value}"
+        );
+    }
+}
+
 #[test]
 fn a_date_only_dtstart_is_read_as_an_all_day_event_starting_at_midnight() {
     // Evolution writes VALUE=DATE for an all-day event. The start is read as
@@ -1501,6 +1568,45 @@ fn an_override_whose_instant_cannot_be_written_is_flagged() {
         assert!(
             maps_recurrence_override("2026-01-29T13:00:00", &patch),
             "{patch}"
+        );
+    }
+}
+
+#[test]
+fn an_overrides_duration_that_states_no_length_is_flagged() {
+    // One level down, and for the same reason: the only place a component states
+    // an instance's own length is that VEVENT's DURATION, so a length that
+    // cannot be written there is an override the document shows in part. Read
+    // back, the instance is at the series' length, and a save replacing
+    // recurrenceOverrides would hand the server that as the user's edit —
+    // quietly shortening an occurrence nobody touched.
+    for value in ["-PT1H", "next tuesday", "PT", "3600"] {
+        assert!(
+            !maps_recurrence_override("2026-01-29T13:00:00", &json!({"duration": value})),
+            "{value}"
+        );
+
+        // Still drawn as far as it goes: the occurrence is placed by an RDATE
+        // at the series' length, as any other override this mapping cannot
+        // describe is.
+        let ics = event_to_ical(&recurring_with(
+            json!({"2026-01-29T13:00:00": {"duration": value}}),
+        ));
+        assert_eq!(vevents(&ics), 1, "{value}: {ics}");
+        assert_eq!(
+            line(&ics, "RDATE"),
+            "RDATE;TZID=Europe/Berlin:20260129T130000",
+            "{value}"
+        );
+    }
+
+    // And the lengths that do cross, including the one value the check changes
+    // on the way through: RFC 5545's `+` is dropped, and what comes back means
+    // the same thing, which is what an override has to promise.
+    for value in [json!("PT30M"), json!("P1D"), json!("+PT1H"), Value::Null] {
+        assert!(
+            maps_recurrence_override("2026-01-29T13:00:00", &json!({"duration": value})),
+            "{value}"
         );
     }
 }

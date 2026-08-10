@@ -258,6 +258,69 @@ fn moving_an_event_to_another_zone_lengthening_it_and_unconfirming_it_all_arrive
 }
 
 #[test]
+fn a_length_the_component_could_not_state_survives_a_save() {
+    // The server's own `duration` can be one iCalendar has no room for: RFC 5545
+    // §3.3.6 spells a negative length and RFC 8984 §1.4.6 does not, so a value
+    // this way round is a value the mapping refuses to write — libical refusing
+    // the content line would cost the whole component, and the appointment with
+    // it. What must not follow is a save *clearing* it. The baseline a save diffs
+    // against is the server's event put through the same rendering, so the length
+    // is absent on both sides and an edit elsewhere leaves the server's value
+    // where it was.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"duration": "-PT1H"}));
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(!icalendar.contains("DURATION"), "{icalendar}");
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Daily standup");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Daily standup"));
+    assert_eq!(
+        stored.duration.as_deref(),
+        Some("-PT1H"),
+        "a length the component could not state is not a length the user cleared"
+    );
+}
+
+#[test]
+fn an_occurrence_whose_length_the_component_could_not_state_is_left_alone() {
+    // One level down, where the property is replaced whole rather than patched
+    // key by key. An override the component cannot describe comes back as the
+    // empty patch, so writing the map would delete the length the server holds —
+    // the same reason a rule with a `byDay` leaves `recurrenceRules` untouched.
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    fixture.patch(
+        &id,
+        json!({"recurrenceOverrides": {"2026-01-20T09:00:00": {"duration": "-PT1H"}}}),
+    );
+    let sync = fixture.sync();
+
+    // Placed by an RDATE, at the series' length: the occurrence is shown, and
+    // the length it really has is not.
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(icalendar.contains("RDATE:20260120T090000Z"), "{icalendar}");
+    let edited = with_line(&icalendar, "EXDATE:20260116T090000Z");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).recurrence_overrides,
+        Some(
+            [(
+                "2026-01-20T09:00:00".to_owned(),
+                json!({"duration": "-PT1H"})
+            )]
+            .into()
+        ),
+        "the occurrence the mapping saw in part must not be rewritten from that view",
+    );
+}
+
+#[test]
 fn a_recurrence_the_mapping_can_carry_is_patched() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");

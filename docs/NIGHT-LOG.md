@@ -14005,3 +14005,85 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last thirteen sessions asked for is still unwritten; the
 manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
 dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-forty-second session)
+
+The mirror the last session named and deliberately left: a `duration` the server
+sends went into `DURATION` verbatim. The read side had just learned to refuse a
+value that is no length RFC 8984 §1.4.6 admits; the write side still handed one
+to libical. That is the worse direction of the two. A rejected `CalendarEvent/set`
+loses the user's edits; a content line libical refuses costs the **whole
+component**, so an event whose `duration` is `-PT1H` or `3600` disappears from
+the calendar rather than merely losing its length.
+
+**One check, three callers.** `stated_duration` is now what decides in both
+directions, so the property crosses only as a value both formats spell. Nothing
+was re-rendered to get there — the check passes a length through as written, and
+the single value it changes is RFC 5545's leading `+`, which RFC 8984 has nowhere
+to put.
+
+**Why last session's worry did not materialise, and the test that says so.** The
+concern was that dropping the property would make the next save patch
+`duration: null` over the server's value untouched. It does not: the baseline a
+save diffs against is the server's event put through *this same rendering*, so a
+refused length is absent on both sides and an edit elsewhere leaves it alone.
+The save test asserts exactly that — the title reaches the server, `-PT1H` stays
+where it was. What *can* still change the value is Evolution supplying a `DTEND`
+for an event shown with no length, which is a real edit on a real occurrence, not
+a silent one.
+
+**The half that was not just one line.** An override's `duration` was accepted by
+`maps_override_field` as any non-empty string, and the only place a component
+states an instance's own length is that `VEVENT`'s `DURATION`. Refusing the value
+on the way out without tightening the check would have made the instance come
+back at the *series'* length — so a save that legitimately replaces
+`recurrenceOverrides` (deleting a different occurrence, say) would write that
+back as the user's edit, quietly shortening an occurrence nobody touched. So the
+same rule applies one level down, and an override stating a length the component
+cannot carry now makes `maps_recurrence_override` false: the property is left
+alone entirely, exactly as a rule with a `byDay` leaves `recurrenceRules` alone.
+The occurrence is still *placed*, by a bare `RDATE` at the series' length — shown
+in part beats not shown. The cost is on the record in the test: the `EXDATE` the
+user added in that save does not reach the server.
+
+**An F2 regression test now passes for a stronger reason, and was rewritten to
+say so rather than to keep passing.** `a_crlf_in_the_duration_cannot_add_a_property`
+asserted the injected `DURATION` line was emitted with the break stripped; the
+value is now refused as a length, so no `DURATION` is written at all. The
+assertion that matters — no injected `SUMMARY` — is untouched, and the expected
+line list lost `DURATION`. To keep the strip itself under test rather than let
+that coverage decay into a tautology, `a_bare_lf_or_cr_is_stripped_as_well` now
+carries the injection in the recurrence `frequency` too, which has no such check
+in front of it, and asserts the `RRULE` stays one property.
+
+Four tests red first (the series' unwritable durations dropped, the override
+flagged, and the two save-path tests) plus one that passed the day it was written
+and is the one that matters: the lengths that must keep crossing, `+PT1H`
+included. The change can only regress by refusing too much, and nothing else in
+the suite would notice a length that stopped being written.
+
+Verified locally: `cargo test --locked` 553 (up 5), `ctest` 14/14 including
+`rust-test-eds` and all four functional legs against real EDS, `cargo fmt
+--check`, and `cargo clippy --all-targets --locked -- -D warnings` clean for the
+default set and for `jmap-backend-cal`/`jmap-functional`. `reuse lint` and
+`cargo deny` not run (neither is on this VM); no files were added, so no new SPDX
+headers were needed, and no dependency changed. Noted, not fixed: this crate's
+rustdoc already fails `-D warnings` on ten public-doc links to private items, a
+deliberate house style here; the module doc's new `stated_duration` link is an
+eleventh of the same kind.
+
+Next in this area: a per-instance `timeZone` still has no spelling, and `DTEND`
+is still the only way Evolution states a length while `DURATION` is the only way
+we write one. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two, nor what a failure of the second
+leaves behind.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so the
+M8 tag the last fourteen sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
