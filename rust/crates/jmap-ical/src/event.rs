@@ -5,12 +5,14 @@
 //!
 //! The mapped set is the one the calendar backend needs to be useful — UID,
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
-//! the event is shown without a time), DURATION, STATUS and RRULE — and no
-//! more. Everything else on an event (participants, alarms, locations, links,
+//! the event is shown without a time), DURATION, STATUS, RRULE, and the
+//! instances an EXDATE or an RDATE names one at a time — and no more.
+//! Everything else on an event (participants, alarms, locations, links,
 //! …) is *dropped*, which is only safe because saving goes back to the server
 //! as a PatchObject naming the mapped properties: a property we never mapped is
-//! a property we never overwrite. See [`MAPPED_PROPERTIES`] and
-//! [`maps_recurrence_rule`], which are that knowledge in machine-readable form.
+//! a property we never overwrite. See [`MAPPED_PROPERTIES`],
+//! [`maps_recurrence_rule`] and [`maps_recurrence_override`], which are that
+//! knowledge in machine-readable form.
 //!
 //! The one property read but never written is `DTEND`: it is how Evolution
 //! states an event's length, so [`read_duration`] measures it, while the
@@ -27,7 +29,10 @@
 //! field is better than a calendar that refuses to open; only a document
 //! without any `VEVENT` in it is an error.
 
+use std::collections::BTreeMap;
+
 use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
+use serde_json::{Value, json};
 
 use crate::error::ICalError;
 use crate::syntax::{self, Component, Property};
@@ -53,7 +58,10 @@ const STATUSES: [(&str, &str); 3] = [
 
 /// The JSCalendar properties this mapping covers, and therefore the only ones
 /// a save may name in a `CalendarEvent/set` update patch.
-pub const MAPPED_PROPERTIES: [&str; 7] = [
+///
+/// The last two are covered *conditionally* — see [`maps_recurrence_rule`] and
+/// [`maps_recurrence_override`], which say when a save may name them.
+pub const MAPPED_PROPERTIES: [&str; 9] = [
     "title",
     "description",
     "start",
@@ -61,6 +69,8 @@ pub const MAPPED_PROPERTIES: [&str; 7] = [
     "duration",
     "showWithoutTime",
     "status",
+    "recurrenceRules",
+    "recurrenceOverrides",
 ];
 
 /// Whether a recurrence rule survives the trip through iCalendar.
@@ -74,6 +84,47 @@ pub const MAPPED_PROPERTIES: [&str; 7] = [
 /// never patches over a recurrence the user was not shown.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty() && writable(rule)
+}
+
+/// Whether a recurrence override survives the trip through iCalendar.
+///
+/// iCalendar names a single instance of a recurring event in two properties that
+/// carry a date-time and nothing else: `EXDATE` says the instance does not
+/// happen, `RDATE` says it does (RFC 5545 §3.8.5.1, §3.8.5.2). JSCalendar says
+/// both of those with one `recurrenceOverrides` entry (RFC 8984 §4.3.4) — but
+/// the entry is a PatchObject, so it can also say the *third* thing: this
+/// instance happens differently, with another title or another length. That one
+/// is a `VEVENT` of its own carrying a `RECURRENCE-ID`, which this mapping does
+/// not emit, so a caller that patches `recurrenceOverrides` over it deletes an
+/// edit the user never saw.
+///
+/// The `id` is checked as well as the patch. It is the instance's own start as a
+/// LocalDateTime, and one no `EXDATE` can spell is an override that would vanish
+/// from a property replaced whole.
+///
+/// As with [`maps_recurrence_rule`], an override this returns `false` for is
+/// still *drawn* where it can be — see [`event_to_ical`], which places an
+/// edited instance with a bare `RDATE` rather than hiding the occurrence.
+pub fn maps_recurrence_override(id: &str, patch: &Value) -> bool {
+    let Some(fields) = patch.as_object() else {
+        return false;
+    };
+    to_ical_date_time(id).is_some()
+        && fields
+            .iter()
+            .all(|(name, value)| name == "excluded" && value.is_boolean())
+}
+
+/// Whether an override says its instance does not happen — the `EXDATE` half of
+/// [`recurrence_dates`].
+///
+/// Anything that is not literally `"excluded": true` counts as an instance that
+/// happens, including the `false` RFC 8984 §4.3.4 defaults to and a value of the
+/// wrong type. That is the reading that cannot make an appointment disappear:
+/// [`maps_recurrence_override`] refuses the malformed shape separately, so the
+/// mistake cannot be written back to the server either way.
+fn excluded(patch: &Value) -> bool {
+    patch.get("excluded") == Some(&Value::Bool(true))
 }
 
 /// Whether an `RRULE` can carry this rule's frequency and its end — the two
@@ -127,28 +178,20 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     let start = event.start.as_deref().and_then(to_ical_date_time);
     // Whether this event goes out as a date rather than a date-time, which is
     // the whole of `showWithoutTime` on this side. Decided once: `DTSTART`,
-    // `DURATION` and an `RRULE`'s `UNTIL` all have to agree about it.
+    // `DURATION`, an `RRULE`'s `UNTIL` and the named instances all have to agree
+    // about it.
     let as_a_date = start
         .as_deref()
         .is_some_and(|start| shows_without_time(event, start));
 
+    let zone = event.time_zone.as_deref();
     if let Some(start) = &start {
-        vevent = vevent.with(match (as_a_date, event.time_zone.as_deref()) {
-            // A DATE value, RFC 5545 §3.6.1's other form of an event. The
-            // parameter is required: DTSTART is a DATE-TIME by default, and
-            // libical refuses the whole component over a value that is not one.
-            (true, _) => Property::raw("DTSTART", &start[..8]).with_param("VALUE", "DATE"),
-            // Form 2, a UTC instant. Form 3 with TZID=Etc/UTC would be legal
-            // but obliges us to ship a VTIMEZONE for it.
-            (false, Some(zone)) if is_utc(zone) => Property::raw("DTSTART", &format!("{start}Z")),
-            // Form 3. libical resolves an IANA name from its built-in zone
-            // table, so no VTIMEZONE is emitted; a zone it does not know falls
-            // back to floating on its side, which is the same guess we would
-            // have to make.
-            (false, Some(zone)) => Property::raw("DTSTART", start).with_param("TZID", zone),
-            // Form 1, floating. Inventing UTC here would move the event.
-            (false, None) => Property::raw("DTSTART", start),
-        });
+        vevent = vevent.with(dated(
+            "DTSTART",
+            std::slice::from_ref(start),
+            as_a_date,
+            zone,
+        ));
     }
 
     if let Some(duration) = event.duration.as_deref().filter(|value| !value.is_empty()) {
@@ -165,8 +208,17 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     }
 
     for rule in event.recurrence_rules.iter().flatten() {
-        if let Some(value) = rule_to_rrule(rule, event.time_zone.as_deref(), as_a_date) {
+        if let Some(value) = rule_to_rrule(rule, zone, as_a_date) {
             vevent = vevent.with(Property::raw("RRULE", &value));
+        }
+    }
+
+    // The instances named one at a time. Both properties take a list, so each
+    // kind is one content line however many instances it holds.
+    for (name, is_excluded) in [("EXDATE", true), ("RDATE", false)] {
+        let dates = recurrence_dates(event, is_excluded);
+        if !dates.is_empty() {
+            vevent = vevent.with(dated(name, &dates, as_a_date, zone));
         }
     }
 
@@ -175,6 +227,63 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
         .with(Property::raw("PRODID", PRODID))
         .with_child(vevent)
         .to_ics()
+}
+
+/// A property carrying date-times in the one form this event spells them in.
+///
+/// `DTSTART` decides that form, and RFC 5545 obliges the properties that name
+/// instances of it to agree: an `EXDATE` or `RDATE` in a different value type or
+/// a different zone (§3.8.5.1, §3.8.5.2) resolves against another clock than the
+/// occurrences it is meant to add to or remove from, so the exclusion misses and
+/// the deleted appointment comes back. One function for all three is how they
+/// are kept from drifting apart.
+///
+/// Each value is a rendered `YYYYMMDDTHHMMSS`; the caller has already decided
+/// whether the event is written as a date, which is the only case where the time
+/// may be dropped.
+fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> Property {
+    let join = |render: &dyn Fn(&String) -> String| -> String {
+        values.iter().map(render).collect::<Vec<_>>().join(",")
+    };
+    match (as_a_date, zone) {
+        // A DATE value, RFC 5545 §3.6.1's other form of an event. The parameter
+        // is required: these properties are DATE-TIME by default, and libical
+        // refuses the whole component over a value that is not one.
+        (true, _) => {
+            Property::raw(name, &join(&|value| value[..8].to_owned())).with_param("VALUE", "DATE")
+        }
+        // Form 2, a UTC instant. Form 3 with TZID=Etc/UTC would be legal but
+        // obliges us to ship a VTIMEZONE for it.
+        (false, Some(zone)) if is_utc(zone) => {
+            Property::raw(name, &join(&|value| format!("{value}Z")))
+        }
+        // Form 3. libical resolves an IANA name from its built-in zone table, so
+        // no VTIMEZONE is emitted; a zone it does not know falls back to
+        // floating on its side, which is the same guess we would have to make.
+        (false, Some(zone)) => Property::raw(name, &join(&String::clone)).with_param("TZID", zone),
+        // Form 1, floating. Inventing UTC here would move the event.
+        (false, None) => Property::raw(name, &join(&String::clone)),
+    }
+}
+
+/// The instances of `event` to name in an `EXDATE` (`is_excluded`) or an
+/// `RDATE`, rendered and in chronological order.
+///
+/// Every override with a writable id gets a date, including one
+/// [`maps_recurrence_override`] refuses: an instance edited on its own still
+/// *happens*, and an `RDATE` placing it at the parent's title is a narrowing of
+/// the same kind as an `RRULE` that had to drop its `byDay` — better than an
+/// occurrence the user cannot see at all. Where the rules already generate that
+/// instant the `RDATE` is a duplicate, and RFC 5545 §3.8.5.2 has the recurrence
+/// set absorb it.
+fn recurrence_dates(event: &CalendarEvent, is_excluded: bool) -> Vec<String> {
+    event
+        .recurrence_overrides
+        .iter()
+        .flatten()
+        .filter(|(_, patch)| excluded(patch) == is_excluded)
+        .filter_map(|(id, _)| to_ical_date_time(id))
+        .collect()
 }
 
 /// Read an iCalendar object's first `VEVENT` into a calendar event.
@@ -216,6 +325,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
                 .map(|(jscalendar, _)| (*jscalendar).to_owned())
         }),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
+        recurrence_overrides: read_overrides(vevent),
         extra: Default::default(),
     })
 }
@@ -256,6 +366,38 @@ fn read_start(vevent: &Component) -> (Option<String>, Option<String>, Option<boo
             .map(str::to_owned),
     };
     (Some(start), zone, None)
+}
+
+/// The instances the component names one at a time, as `recurrenceOverrides`.
+///
+/// An `RDATE` becomes an override that patches nothing — the instance happens as
+/// the rules would have it — and an `EXDATE` one that is `excluded`. A value
+/// neither property can be read as a date-time is skipped, like any other
+/// unreadable value, and `None` rather than an empty map is the answer for a
+/// component that names none: the save path reads an edit off a difference from
+/// what was shown, so an empty map would be a claim that there are no overrides
+/// where the component made no claim at all.
+///
+/// `EXDATE` is read last deliberately. A component naming one instant in both
+/// properties contradicts itself, and taking it as excluded is the reading that
+/// cannot invent an appointment; RFC 5545 §3.8.5.1 also has an `EXDATE` win over
+/// the rest of the recurrence set.
+fn read_overrides(vevent: &Component) -> Option<BTreeMap<String, Value>> {
+    let mut overrides: BTreeMap<String, Value> = BTreeMap::new();
+    for (name, patch) in [
+        ("RDATE", Value::Object(Default::default())),
+        ("EXDATE", json!({"excluded": true})),
+    ] {
+        let dates = vevent
+            .all(name)
+            .into_iter()
+            .flat_map(Property::texts)
+            .filter_map(|value| to_local_date_time(&value));
+        for date in dates {
+            overrides.insert(date, patch.clone());
+        }
+    }
+    (!overrides.is_empty()).then_some(overrides)
 }
 
 /// How long the event lasts, as a JSCalendar Duration.
@@ -384,6 +526,12 @@ fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
                     .and_then(to_ical_date_time)
                     .is_none_or(|until| at_midnight(&until))
             })
+        // An instance named at 09:00 cannot be truncated to its date without
+        // excluding — or adding — a different occurrence than the server named.
+        && [true, false]
+            .into_iter()
+            .flat_map(|is_excluded| recurrence_dates(event, is_excluded))
+            .all(|date| at_midnight(&date))
 }
 
 /// Whether a rendered `YYYYMMDDTHHMMSS` names the top of its day.

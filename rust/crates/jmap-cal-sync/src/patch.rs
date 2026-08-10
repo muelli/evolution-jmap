@@ -4,7 +4,7 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps eight properties and
+//! lossy view of a JSCalendar event. The mapping keeps nine properties and
 //! drops everything else, so a save that sent the parsed event back whole
 //! would silently delete what it could not represent — locations,
 //! participants, alerts, links — none of which the user ever saw, let alone
@@ -24,7 +24,7 @@
 //! - and a `status` outside the closed vocabulary is not cleared by a save
 //!   that never touched it.
 //!
-//! Two properties need more than the baseline, because for them "no
+//! Three properties need more than the baseline, because for them "no
 //! difference" is not the whole question:
 //!
 //! - **`recurrenceRules` is one property, not a merge point.** A rule with
@@ -32,11 +32,17 @@
 //!   the array at all would narrow the user's recurrence behind their back.
 //!   If any rule the server holds fails [`maps_recurrence_rule`], the
 //!   property is left alone entirely.
+//! - **`recurrenceOverrides` is the same story one level down.** An
+//!   `EXDATE`/`RDATE` can say that an instance is off or on, but not that it
+//!   was edited on its own, so an override the component placed with a bare
+//!   `RDATE` would come back as the empty patch — deleting the instance's own
+//!   title. If any override the server holds fails
+//!   [`maps_recurrence_override`], the property is left alone entirely.
 //! - **`start` is required by RFC 8984.** A component whose `DTSTART` the
 //!   mapping cannot read yields no start, and `"start": null` is not a legal
 //!   way to say so, so the server's start stands.
 
-use jmap_ical::{event_to_ical, ical_to_event, maps_recurrence_rule};
+use jmap_ical::{event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule};
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value};
 
@@ -87,6 +93,7 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     }
 
     diff_recurrence(&mut patch, current, &baseline, edited);
+    diff_overrides(&mut patch, current, &baseline, edited);
     patch
 }
 
@@ -115,6 +122,43 @@ fn diff_recurrence(
             // Serialising rules built from an RRULE cannot fail: they hold
             // strings and numbers.
             Some(rules) => serde_json::to_value(rules).unwrap_or(Value::Null),
+            None => Value::Null,
+        },
+    );
+}
+
+/// The instances named one at a time, replaced whole or not at all — and not at
+/// all whenever the server holds an override the two iCalendar properties could
+/// not carry.
+///
+/// Deleting one occurrence of a recurring event is the whole point of this: it
+/// reaches EDS as an `EXDATE` on the component and has to reach the server as an
+/// `excluded` override. Removing that line again is a restore, which is
+/// `"recurrenceOverrides": null` — a PatchObject removes a property to mean "back
+/// to the default", and the default is no named instances.
+fn diff_overrides(
+    patch: &mut Map<String, Value>,
+    current: &CalendarEvent,
+    baseline: &CalendarEvent,
+    edited: &CalendarEvent,
+) {
+    if current
+        .recurrence_overrides
+        .iter()
+        .flatten()
+        .any(|(id, override_patch)| !maps_recurrence_override(id, override_patch))
+    {
+        return;
+    }
+    if baseline.recurrence_overrides == edited.recurrence_overrides {
+        return;
+    }
+    patch.insert(
+        "recurrenceOverrides".to_owned(),
+        match &edited.recurrence_overrides {
+            // Serialising a map of the two patches this mapping reads cannot
+            // fail: they hold one boolean between them.
+            Some(overrides) => serde_json::to_value(overrides).unwrap_or(Value::Null),
             None => Value::Null,
         },
     );

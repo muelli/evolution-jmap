@@ -21,4 +21,6 @@ pub mod event;
 pub mod syntax;
 
 pub use error::ICalError;
-pub use event::{MAPPED_PROPERTIES, event_to_ical, ical_to_event, maps_recurrence_rule};
+pub use event::{
+    MAPPED_PROPERTIES, event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule,
+};
