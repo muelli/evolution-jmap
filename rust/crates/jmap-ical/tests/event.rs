@@ -767,6 +767,101 @@ fn an_unknown_status_is_dropped_rather_than_passed_through() {
     assert!(without(&event_to_ical(&event), "STATUS"), "{event:?}");
 }
 
+#[test]
+fn whether_an_event_blocks_time_is_the_transparency_of_the_component() {
+    // Evolution's "Show Time as: Busy/Free" — RFC 8984 §4.4.2's `freeBusyStatus`
+    // on one side, RFC 5545 §3.8.2.7's `TRANSP` on the other. Both vocabularies
+    // are closed and both spell the same two states, so this is a table and not
+    // a judgement.
+    for (jscalendar, ical) in [("free", "TRANSPARENT"), ("busy", "OPAQUE")] {
+        let event = CalendarEvent {
+            free_busy_status: Some(jscalendar.to_owned()),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert_eq!(line(&ics, "TRANSP:"), format!("TRANSP:{ical}"));
+        assert_eq!(
+            ical_to_event(&ics)
+                .expect("parse")
+                .free_busy_status
+                .as_deref(),
+            Some(jscalendar),
+            "the state survives the round trip"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_free_busy_status_is_dropped_rather_than_passed_through() {
+    // The same closed-vocabulary rule STATUS follows: a TRANSP libical does not
+    // know costs the whole component, and JSCalendar admits only the two states.
+    let event = CalendarEvent {
+        free_busy_status: Some("maybe".to_owned()),
+        ..CalendarEvent::default()
+    };
+    assert!(without(&event_to_ical(&event), "TRANSP"), "{event:?}");
+
+    // And in the other direction, where the value came off a content line: a
+    // transparency this mapping cannot name is read as nothing said, not passed
+    // on for the server to reject.
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+UID:E1\r\nDTSTART:20260115T130000Z\r\nTRANSP:MAYBE\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+    assert_eq!(ical_to_event(ics).expect("parse").free_busy_status, None);
+}
+
+#[test]
+fn an_event_that_says_nothing_about_blocking_time_carries_no_transp() {
+    let ics = event_to_ical(&fixture_event());
+
+    assert!(without(&ics, "TRANSP"), "{ics}");
+    // `None` rather than `Some("busy")`, even though RFC 8984 §4.4.2 defaults to
+    // busy and RFC 5545 §3.8.2.7 defaults to OPAQUE, which is the same state: the
+    // save path reads an edit off a difference from what was shown, so answering
+    // with the default would have a save state it where the server said nothing.
+    assert_eq!(ical_to_event(&ics).expect("parse").free_busy_status, None);
+}
+
+#[test]
+fn an_edited_instance_may_show_a_transparency_of_its_own() {
+    // RFC 8984 §4.3.4 lets an override restate the property and iCalendar spells
+    // it on the instance's own component, so an occurrence the user marked free
+    // in a series that blocks time is a difference this mapping can carry whole.
+    let patch = json!({"freeBusyStatus": "free"});
+    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    event.free_busy_status = Some("busy".to_owned());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(line(&ics, "TRANSP:"), "TRANSP:OPAQUE");
+    assert_eq!(line(vevent(&ics, 1), "TRANSP:"), "TRANSP:TRANSPARENT");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+}
+
+#[test]
+fn an_edited_instance_is_drawn_at_the_series_transparency() {
+    // The inheritance of RFC 8984 §4.3.4, and the reason it has to be drawn: the
+    // instance's own component is the only place its transparency is stated, so
+    // one written without the line reads back as an occurrence the user just set
+    // to the default — a patch removing the property the series holds.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
+    event.free_busy_status = Some("free".to_owned());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(line(vevent(&ics, 1), "TRANSP:"), "TRANSP:TRANSPARENT");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides,
+        "the instance inherited the series' transparency, so nothing differs"
+    );
+}
+
 /// An event happening at one place, keyed the way a server keys it.
 fn placed(key: &str, location: Value) -> CalendarEvent {
     CalendarEvent {
@@ -3398,6 +3493,7 @@ fn an_override_the_mapping_cannot_draw_is_still_placed_at_the_parents_title() {
         json!({"title": 42}),
         json!({"title": ""}),
         json!({"status": "postponed"}),
+        json!({"freeBusyStatus": "maybe"}),
         json!({"start": "2026-02-30T13:00:00"}),
     ] {
         assert!(
@@ -3804,7 +3900,8 @@ fn an_override_whose_instant_cannot_be_written_is_flagged() {
         json!({"title": "Sprint review", "description": "the quarter"}),
         json!({"start": "2026-01-29T15:30:00", "duration": "PT30M"}),
         json!({"status": "cancelled"}),
-        json!({"status": null, "duration": null}),
+        json!({"freeBusyStatus": "free"}),
+        json!({"status": null, "duration": null, "freeBusyStatus": null}),
     ] {
         assert!(
             maps_recurrence_override("2026-01-29T13:00:00", &patch),
