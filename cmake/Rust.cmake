@@ -27,8 +27,17 @@ else()
 	)
 endif()
 
+# The directory the modules look for their translation catalogues in.
+#
+# jmap-backend-core's build.rs bakes this into the binaries, because a
+# dlopened module cannot work out where it was installed and gettext's
+# compiled-in default (/usr/share/locale) is right only when the prefix is
+# /usr. Deliberately not passed to the test invocations below: a test binary
+# is not installed anywhere, and the fallback build.rs applies without this
+# variable is the same /usr/share/locale gettext would have used.
 set(CARGO_ENV
 	"CARGO_INCREMENTAL=0"
+	"EVOLUTION_JMAP_LOCALEDIR=${LANGUAGE_SUPPORT_DIRECTORY}"
 	"RUSTFLAGS=--remap-path-prefix=${CMAKE_SOURCE_DIR}=/build --remap-path-prefix=$ENV{HOME}/.cargo=/cargo"
 )
 if(SOURCE_DATE_EPOCH MATCHES "^[0-9]+$")
