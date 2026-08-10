@@ -1,0 +1,7 @@
+{
+  "@type": "RecurrenceRule",
+  "frequency": "weekly",
+  "interval": 2,
+  "byDay": [{ "@type": "NDay", "day": "tu" }],
+  "firstDayOfWeek": "su"
+}
