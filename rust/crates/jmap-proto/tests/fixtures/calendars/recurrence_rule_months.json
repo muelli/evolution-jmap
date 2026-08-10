@@ -1,0 +1,5 @@
+{
+  "@type": "RecurrenceRule",
+  "frequency": "yearly",
+  "byMonth": ["3", "9"]
+}

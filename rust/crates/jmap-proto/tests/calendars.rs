@@ -92,3 +92,22 @@ fn recurrence_rule_days_of_the_month_roundtrip() {
     assert_eq!(rule.by_month_day.as_deref(), Some(&[15, -1][..]));
     assert!(rule.extra.is_empty());
 }
+
+#[test]
+fn recurrence_rule_months_roundtrip() {
+    // `byMonth` is the months of the year a rule repeats in — iCalendar's
+    // `BYMONTH`. RFC 8984 §4.3.3 holds each as a *string*, not a number, so
+    // that a leap month in a non-Gregorian calendar can be spelled `5L`; the
+    // model keeps the string it was given rather than a number it would have to
+    // spell back.
+    let value = fixture("calendars/recurrence_rule_months.json");
+    assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
+
+    let rule: RecurrenceRule = serde_json::from_value(value).unwrap();
+    assert_eq!(rule.frequency, "yearly");
+    assert_eq!(
+        rule.by_month.as_deref(),
+        Some(&["3".to_owned(), "9".to_owned()][..])
+    );
+    assert!(rule.extra.is_empty());
+}

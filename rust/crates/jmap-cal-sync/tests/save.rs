@@ -440,6 +440,69 @@ fn the_days_of_the_month_a_rule_repeats_on_reach_the_server() {
 }
 
 #[test]
+fn the_months_a_yearly_rule_repeats_in_reach_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Tax return", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "yearly",
+            "byMonth": ["3"],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=YEARLY;BYMONTH=3"),
+        "{icalendar}"
+    );
+    // Adding the second half-year, which is what the appointment editor's
+    // recurrence page writes for a yearly series in two months.
+    let edited = icalendar.replace("BYMONTH=3", "BYMONTH=3,9");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(
+        rules[0].by_month.as_deref(),
+        Some(&["3".to_owned(), "9".to_owned()][..])
+    );
+}
+
+#[test]
+fn a_leap_month_is_not_sent() {
+    // A month iCalendar can only name under RFC 7529's `RSCALE` (RFC 8984
+    // §4.3.3's `5L`). calcard carries the token rather than judging it, so the
+    // check is on the way out: `recurrenceRules` goes to the server replaced
+    // whole, and one part it is entitled to reject would cost every other edit in
+    // the save.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Festival", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "yearly"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("RRULE:FREQ=YEARLY", "RRULE:FREQ=YEARLY;BYMONTH=5L")
+        .replace("SUMMARY:Festival", "SUMMARY:Spring festival");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.recurrence_rules.unwrap()[0].by_month, None);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Spring festival"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
 fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
     // `FREQ=WEEKLY;BYMONTHDAY=15` is a rule RFC 5545 §3.3.10 does not admit, and
     // calcard hands it back rather than judging it — so, as with an ordinal
