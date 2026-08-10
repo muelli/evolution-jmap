@@ -82,6 +82,22 @@ and the account setup module.
 The modules are dlopened by evolution-data-server and by Evolution itself,
 and must be used with the versions they were built against.")
 
+# Dates every entry in the package — files, the directories cpack makes on the
+# way to them, and the ar member headers — from the timestamp this build
+# resolved, instead of from the packaging clock and the modules' link times.
+# Has to be a file rather than a variable because CPack's DEB generator reads
+# SOURCE_DATE_EPOCH from the environment of the running `cpack`, and has to be
+# set before include(CPack), which is what writes the path into
+# CPackConfig.cmake. cmake/tests/check-deb-reproducible.cmake packages this tree
+# three times under three different environments and fails if the results
+# differ.
+set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_BINARY_DIR}/cpack-project-config.cmake")
+configure_file(
+	"${CMAKE_SOURCE_DIR}/cmake/cpack-project-config.cmake.in"
+	"${CPACK_PROJECT_CONFIG_FILE}"
+	@ONLY
+)
+
 include(CPack)
 
 # Every regular file the package must contain — and, because the check is an
@@ -109,4 +125,18 @@ add_test(
 		"-DPACKAGE_SUMMARY=${CPACK_PACKAGE_DESCRIPTION_SUMMARY}"
 		"-DEXPECTED=${_expected_package_files}"
 		-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-deb-package.cmake"
+)
+
+# The two epochs are decoys, deliberately wrong and deliberately different: the
+# test exports each in turn and requires the package not to notice. They are
+# 2020-09-13 and 2023-11-14, both long before anything in this tree, so a
+# package that did honour them would be unmistakable in the failure output.
+add_test(
+	NAME package-deb-reproducible
+	COMMAND ${CMAKE_COMMAND}
+		"-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+		"-DSTAGE_DIR=${CMAKE_BINARY_DIR}/package-reproducible-test"
+		"-DEPOCH_A=1600000000"
+		"-DEPOCH_B=1700000000"
+		-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-deb-reproducible.cmake"
 )
