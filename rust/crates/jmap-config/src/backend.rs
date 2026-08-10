@@ -28,6 +28,10 @@
 //!   appears in the account type list.
 //! - **`new_collection`** — see `new_collection` below. Evolution's own answers
 //!   NULL, which is right for POP3 and wrong for anything that fans out.
+//! - **`setup_defaults`** — see `setup_defaults` below. Evolution's own is an
+//!   empty function (read off the installed library, not assumed), which is a
+//!   server settings page that opens blank over an address the assistant
+//!   already knows.
 //! - **`check_complete`** — see `check_complete` below. Evolution's own is
 //!   `return TRUE` (read off the installed library, not assumed), which is an
 //!   assistant whose *Next* is sensitive over an account with no address and no
@@ -49,43 +53,36 @@
 //!
 //! ## What is not here yet
 //!
-//! `insert_widgets` and `setup_defaults`, which are the two that need the
-//! `EMailConfigServicePage` this extension extends — for the entries themselves,
-//! and for the email address the user typed on the page before, which is
-//! [`defaults::from_identity`](crate::defaults::from_identity)'s one input.
+//! `insert_widgets`, the one vfunc that has to *build* something rather than
+//! decide something: the entries the user types a server and a login name into.
 //!
-//! Half of what that took is now there: [`evo-sys`] generates the GTK calls a
-//! page of labels and entries is built out of (its `ALLOWED_GTK_FUNCTIONS`), and
-//! `e_mail_config_service_backend_get_page` was already bound. Still missing is
-//! the page's own accessor — `e_mail_config_service_page_get_email_address`,
-//! from a header `evo-sys` does not read yet — which is where
-//! `setup_defaults`'s one input comes from, and it is a header away rather than
-//! an ecosystem away.
+//! The bindings for it are there — [`evo-sys`] generates the GTK calls a page of
+//! labels and entries is made of (its `ALLOWED_GTK_FUNCTIONS`) — and the reason
+//! it is still unwritten is not the bindings but the machine: GTK 3 refuses to
+//! construct a widget without a display connection, so an `insert_widgets` body
+//! would be code no test here runs, which is the opposite of the order the rest
+//! of this crate was built in and of the roadmap's rule about this milestone. It
+//! is work for a session that can drive a real Evolution, or for M9's Xvfb tier.
 //!
-//! The reason neither vfunc is written yet is not the bindings, though: it is
-//! that a widget cannot be built on the machine this is developed on. GTK 3
-//! refuses to construct one without a display connection, so an
-//! `insert_widgets` body would be code no test here runs — which is the
-//! opposite of the order the rest of this crate was built in, and the roadmap's
-//! rule about this milestone. It is work for a session that can drive a real
-//! Evolution, or for M9's Xvfb tier.
-//!
-//! The three that are installed are exactly the three whose answer is a function
-//! of an `ESource` — which is why they could be written, and tested, first.
+//! The four that are installed are the four whose answer is a function of an
+//! `ESource` — three of them of the collection alone, and `setup_defaults` of
+//! the collection plus one string off the page — which is why they could be
+//! written, and tested, first.
 //!
 //! ## The state this leaves the dialog in, said plainly
 //!
-//! `check_complete` refuses an account with no address, and nothing yet *fills
-//! in* an address: `setup_defaults` would put the one from the identity page
-//! there and `insert_widgets` would give the user somewhere to type it, and
-//! neither exists. So a JMAP account in the assistant today would have its
-//! *Next* greyed out with no way to un-grey it, and `commit_changes` would
-//! therefore never be reached with an account it would write.
+//! An account whose address the assistant already knows now arrives on the
+//! server settings page filled in — the address, the server its domain implies
+//! and the login name it offers — so for the ordinary case *Next* is sensitive
+//! on a page the user need not touch, and `commit_changes` is reached with an
+//! account it will write.
 //!
-//! That is the honest state, and it is the right order to build in:
-//! the alternative is the inherited `return TRUE`, which is an assistant that
-//! cheerfully commits an account with no address and no server, failing later in
-//! another process. The two slots above are what finish it.
+//! What is missing is the ability to *change* any of it: with no
+//! `insert_widgets` there are no entries, so an account whose server is not at
+//! the address's domain, or whose login name is not the address, cannot be
+//! corrected in the dialog — `check_complete` will refuse what it must refuse
+//! and there is nothing on screen to fix it with. That is the remaining slot,
+//! and it is the honest state.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
@@ -96,8 +93,9 @@ use std::ptr;
 use eds_sys::{ESource, e_source_new};
 use evo_sys::{
     EMailConfigServiceBackend, EMailConfigServiceBackendClass,
-    e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_source,
-    e_mail_config_service_backend_get_type,
+    e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_page,
+    e_mail_config_service_backend_get_source, e_mail_config_service_backend_get_type,
+    e_mail_config_service_page_get_email_address,
 };
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean};
 use jmap_backend_core::marshal::read_string;
@@ -172,6 +170,7 @@ unsafe impl ObjectSubclass for JmapConfigServiceBackend {
         // never frees this.
         class.backend_name = MAIL_BACKEND_NAME.as_ptr();
         class.new_collection = Some(new_collection);
+        class.setup_defaults = Some(setup_defaults);
         class.check_complete = Some(check_complete);
         class.commit_changes = Some(commit_changes);
     }
@@ -248,6 +247,122 @@ unsafe extern "C" fn new_collection(backend: *mut EMailConfigServiceBackend) -> 
         unsafe { apply(source, &from_identity("")) };
         source
     })
+}
+
+/// What Evolution calls when the user reaches the server settings page: fill in
+/// what can be said about the account from the address alone.
+///
+/// How many times it is called is Evolution's business, and not something that
+/// can be checked here — the assistant's page-preparation order is in a source
+/// this machine does not have and a dialog it cannot run. So [`setup`] is
+/// written to be right either way: called once it fills the page in, and called
+/// again after the user has stepped back to the identity page and forward it
+/// keeps whatever they have since typed, unless the address itself has changed.
+///
+/// ## Where the address comes from
+///
+/// The `EMailConfigServicePage` this extension extends, which is the one thing
+/// any vfunc here asks of Evolution rather than of an `ESource`: the assistant's
+/// identity page writes the address onto the page, and
+/// `e_mail_config_service_page_get_email_address` is where every provider's
+/// `setup_defaults` reads it. A backend with no page — which is not a state
+/// Evolution produces, since `constructed` is what sets it — is the empty
+/// address, and [`from_identity`] answers that with the account
+/// [`new_collection`] already wrote.
+///
+/// ## Failure
+///
+/// Nothing: the vfunc returns void and there is nothing to report to. A panic
+/// is caught by the guard and leaves a critical; the page then opens on
+/// whatever the collection already said, which is [`new_collection`]'s account,
+/// and `check_complete` refuses it until the user fills the address in
+/// themselves.
+unsafe extern "C" fn setup_defaults(backend: *mut EMailConfigServiceBackend) {
+    guard("setup_defaults", (), || {
+        // SAFETY: a live backend of this class, which is what Evolution
+        // dispatches through this slot. Both come back `(transfer none)` — the
+        // backend's own references, which outlive this call.
+        let (page, collection) = unsafe {
+            (
+                e_mail_config_service_backend_get_page(backend),
+                e_mail_config_service_backend_get_collection(backend),
+            )
+        };
+
+        let address = if page.is_null() {
+            None
+        } else {
+            // SAFETY: a live page, and the address comes back `(transfer none)`
+            // as a NUL-terminated string the page owns — copied here rather
+            // than held.
+            unsafe { read_string(e_mail_config_service_page_get_email_address(page)) }
+        };
+
+        // SAFETY: NULL or the backend's live collection source, which is what
+        // `setup` documents it takes.
+        unsafe { setup(collection, address.as_deref().unwrap_or_default()) };
+    });
+}
+
+/// Writes onto `collection` what the address implies about the account — the
+/// deciding half of the `setup_defaults` vfunc, and the half that can be tested.
+///
+/// Answers whether it wrote, which is what the tests ask it; the vfunc has
+/// nowhere to put the answer and drops it.
+///
+/// ## Why this is not simply [`from_identity`] applied
+///
+/// Because it may run more than once. `from_identity` describes a whole account —
+/// the address, the server it implies, the login name it offers, *and* the three
+/// parts and the TLS switch — and only the first three of those are things the
+/// address says. The other two were written by `new_collection` before the
+/// user saw the page, and by the time this runs a second time they may be
+/// answers the user gave: a *Calendars* box they unticked, on a page they
+/// stepped away from to fix a typo in their address. Applying the whole default
+/// account again would tick it back.
+///
+/// So the fields the address determines are taken from the offer and the rest of
+/// the account is left as it stands. The join is asserted rather than assumed:
+/// on a collection fresh from `new_collection` the result is exactly
+/// `from_identity(address)`, which is what `tests/backend.rs` reads back through
+/// the registry's own reader.
+///
+/// ## And why an address that has not changed writes nothing at all
+///
+/// The same reasoning one step further. If the collection already names this
+/// address then the defaults for it have already been offered, and anything the
+/// account now says about the server is either that offer or the user's
+/// correction of it — a JMAP server may perfectly well not live at the domain of
+/// the address, RFC 8620 §2.2 only says that is where to *ask*. Re-deriving
+/// would overwrite a correction the user typed, and the trigger for it would be
+/// nothing more than having looked at the previous page again.
+///
+/// A *changed* address is the opposite case and is re-derived: the server the
+/// user typed was for the address they have just stopped naming.
+///
+/// # Safety
+///
+/// `collection` must be NULL or a valid `ESource` — the backend's collection.
+/// It is read and written, and nothing here outlives the call.
+pub unsafe fn setup(collection: *mut ESource, address: &str) -> bool {
+    if collection.is_null() {
+        return false;
+    }
+
+    // SAFETY: non-NULL and a valid source by this function's contract.
+    let mut account = unsafe { read(collection) };
+    if account.identity == address {
+        return false;
+    }
+
+    let offered = from_identity(address);
+    account.identity = offered.identity;
+    account.connection.host = offered.connection.host;
+    account.connection.user = offered.connection.user;
+
+    // SAFETY: as above; `apply` borrows the account for the call only.
+    unsafe { apply(collection, &account) };
+    true
 }
 
 /// What Evolution asks before it lets the assistant move on, and again on every
