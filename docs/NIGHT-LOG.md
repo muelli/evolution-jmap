@@ -16825,3 +16825,105 @@ have a meeting page, *rewrites* the `ATTENDEE` lines it was shown (harmless
 today, since no save can name the property, but it is the first thing to measure
 if the guest list is ever made writable); and the mock seeds no participant of
 its own, so every test here states the guest list by hand.
+
+## 2026-08-10 (hundred-and-sixty-seventh session)
+
+The objects this backend hands EDS now **define** the zones they refer to, which
+is the outgoing half of the fix the hundred-and-forty-fourth session made on the
+way in — and the item every session since has logged as still open.
+
+**The clause, and what was wrong about it.** RFC 5545 §3.2.19 says a `TZID`
+parameter names a `VTIMEZONE` *in the same object*. `jmap-ical` writes
+`DTSTART;TZID=Europe/Zurich:20260810T090000` and nothing beside it, leaning on
+libical resolving a plain IANA name out of its builtin table. libical does — so
+Evolution has always shown these events at the right time, and that is why this
+survived a hundred and sixty sessions. It is still not a calendar object.
+`i_cal_component_get_timezone`, which is what a reader handed the object and
+nothing else asks, searches the object's own definitions and does **not** fall
+back to the builtin table; measured here, it answered NULL for every zoned event
+this backend has ever produced. Anything that is not libical — a stricter
+parser, an event exported to a file, an invitation forwarded on — read a wall
+clock time in a zone that was named and never defined.
+
+**Where it goes, and why both places.** `marshal::info_list`, which is the
+object on an `ECalMetaBackendInfo` (`list_existing_sync` and `get_changes_sync`,
+and EDS uses that object rather than calling back when it is there), and
+`marshal::component_from_ical`, which is `load_component_sync`'s answer for
+everything else. Both now run through one helper, `take_event_time_zones`, which
+is the same `take_referenced_time_zones` the save path already had: every
+property of every `VEVENT` is asked which zone it means — a detached occurrence
+states the instant it replaces in the series' zone and may have been moved into
+another, and `EXDATE`/`RDATE` carry zones of their own — each name is resolved
+against libical's builtin table, and the definition is copied in **renamed to the
+identifier the properties use**, because a definition under another name defines
+another zone.
+
+**Three things it deliberately does not do.**
+- An object with no zone to define goes back **byte for byte**. Defining one
+  means rebuilding the object through libical, which respells what it was given;
+  with nothing to add, nothing is rebuilt. A test pins that, because the save
+  path compares a component against a re-rendering of what the server holds, and
+  a respelling is an edit that never happened.
+- A zone the object already defines is left alone — `defines_time_zone` asks
+  before adding. `jmap-ical` defines none today, so this is a guard rather than a
+  fix, and it is worth its four lines: a duplicate `TZID` in one object is not an
+  object any more, and this path is where one of these objects would come back
+  through if EDS ever handed it back.
+- A bare `VEVENT` gets none. `load_component_sync` may be asked for one and a
+  `VTIMEZONE` is a child of the *calendar*, so there is nowhere to put it; such a
+  component keeps naming a zone it does not define, which is exactly where it
+  stood before and no worse.
+
+And two carried over unchanged from the save side, each already with a test
+there: a zone no database knows (Windows' `W. Europe Standard Time`, what an
+Exchange invitation brings) is left undefined rather than guessed at, and `UTC`
+has no component to copy — `jmap-ical` writes UTC as a `Z` instant anyway, so it
+never reaches here.
+
+Six tests, three red first — the info-list path, the load path, and one zone
+named by a series and its detached occurrence coming out defined once. The other
+three passed the day they were written and are there to pin the branches that
+must *not* rebuild: the unzoned object byte for byte, the unresolvable
+identifier, the zone already defined. The assertion that matters is
+`resolves()` — libical asked whether it can get the zone out of the object and
+nothing else — and it is stated *first* in the info-list test on purpose, so the
+red run proved it discriminating rather than vacuous; it was, answering NULL
+before the change and the zone after. One existing test, the info-list ordering
+one, moved to a zone-free object so that its byte-for-byte claim keeps being a
+claim about marshalling rather than an assertion of the bug.
+
+No new FFI: `i_cal_component_get_timezone` and `_get_next_component` are already
+inside `eds-sys`'s `i_cal_component_.*` allowlist. Ownership read off
+`ICalGLib-3.0.gir` rather than guessed — `get_timezone` is transfer **full**,
+unlike the builtin-zone lookups beside it, so the reference is dropped.
+
+Verified locally: `cargo test --locked` 783 (unchanged — `jmap-backend-cal` is
+out of `default-members`), `cargo test -p jmap-backend-cal --locked` 107 (up 6),
+`ctest` 14/14 after a full `ninja`, including all four functional legs against
+real EDS — and `tests/functional/cal-client.c` reads its zoned event back through
+`e_cal_client_get_object_sync`, so real EDS ingested one of these objects rather
+than only the test suite. `cargo fmt --all --check` and `cargo clippy
+--all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal`. `ci/checks.sh` again stops at its first step: `reuse` is not
+on this VM and neither `pipx` nor `uvx` is installed. Exposure is nil — **no file
+was added**, only edits to two files that already carry SPDX headers — and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+No milestone tag. **Closed this session:** the outgoing `VTIMEZONE` asymmetry,
+open since the hundred-and-forty-fourth. Unchanged blockers: the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. New from this session: nothing measures what **EDS** does with the
+definition once it has it — `e_cal_client_get_object_sync` may attach, strip or
+substitute `VTIMEZONE`s of its own on the way back out, and the functional leg
+asserts the `TZID` on the `DTSTART` rather than the definition beside it, so
+whether the zone survives a round trip through the EDS cache is measured nowhere;
+and `jmap-ical` itself still emits no `VTIMEZONE`, which is fine while every
+reader of its text goes through this backend, but means the crate's own rendering
+is not a conforming object on its own — the natural home for that is the calcard
+migration, which has a builder for it.

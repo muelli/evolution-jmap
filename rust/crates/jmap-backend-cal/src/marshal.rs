@@ -20,14 +20,15 @@ use std::ptr;
 
 use eds_sys::{
     ECalComponent, I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY, I_CAL_TZID_PARAMETER,
-    I_CAL_TZID_PROPERTY, I_CAL_VEVENT_COMPONENT, ICalComponent, e_cal_component_get_icalcomponent,
-    e_cal_meta_backend_info_new, i_cal_component_as_ical_string, i_cal_component_clone,
-    i_cal_component_get_first_component, i_cal_component_get_first_property,
-    i_cal_component_get_next_property, i_cal_component_get_uid, i_cal_component_isa,
-    i_cal_component_new_from_string, i_cal_component_new_vcalendar, i_cal_component_take_component,
-    i_cal_parameter_get_tzid, i_cal_property_get_first_parameter, i_cal_property_set_tzid,
-    i_cal_timezone_get_builtin_timezone, i_cal_timezone_get_builtin_timezone_from_tzid,
-    i_cal_timezone_get_component,
+    I_CAL_TZID_PROPERTY, I_CAL_VCALENDAR_COMPONENT, I_CAL_VEVENT_COMPONENT, ICalComponent,
+    ICalComponentKind, e_cal_component_get_icalcomponent, e_cal_meta_backend_info_new,
+    i_cal_component_as_ical_string, i_cal_component_clone, i_cal_component_get_first_component,
+    i_cal_component_get_first_property, i_cal_component_get_next_component,
+    i_cal_component_get_next_property, i_cal_component_get_timezone, i_cal_component_get_uid,
+    i_cal_component_isa, i_cal_component_new_from_string, i_cal_component_new_vcalendar,
+    i_cal_component_take_component, i_cal_parameter_get_tzid, i_cal_property_get_first_parameter,
+    i_cal_property_set_tzid, i_cal_timezone_get_builtin_timezone,
+    i_cal_timezone_get_builtin_timezone_from_tzid, i_cal_timezone_get_component,
 };
 use glib_sys::{GSList, g_free, g_slist_prepend, gchar};
 use gobject_sys::g_object_unref;
@@ -49,6 +50,10 @@ pub struct SavedComponent {
 /// `list_existing_sync` and `get_changes_sync` hand back. An empty slice is the
 /// NULL list, which is what EDS reads as "no objects".
 ///
+/// Each object is handed on with the zones it refers to *defined* — see
+/// [`icalendar_with_time_zones`], which is why this is not the pure marshalling
+/// its address-book counterpart is.
+///
 /// The `extra` field stays NULL: it is per-object opaque state a backend can
 /// park in the EDS cache, and this backend has none — the JMAP id *is* the uid,
 /// and the revision already carries the change token.
@@ -59,7 +64,7 @@ pub fn info_list(infos: &[ComponentInfo]) -> *mut GSList {
     for info in infos.iter().rev() {
         let uid = cstring_lossy(&info.uid);
         let revision = cstring_lossy(&info.revision);
-        let object = cstring_lossy(&info.icalendar);
+        let object = cstring_lossy(&icalendar_with_time_zones(&info.icalendar));
         // SAFETY: the three pointers are valid for the call, which copies each
         // of them; a NULL `extra` is explicitly allowed.
         let node = unsafe {
@@ -108,6 +113,9 @@ pub fn removed_info_list(uids: &[String]) -> *mut GSList {
 /// from `load_component_sync` would reach Evolution as an appointment that
 /// exists and has no properties. So the envelope has to contain something:
 /// either the component is a `VEVENT` itself, or it has one inside.
+///
+/// What comes back defines the zones it refers to, for the reason
+/// [`icalendar_with_time_zones`] gives.
 pub fn component_from_ical(icalendar: &str) -> *mut ICalComponent {
     let text = cstring_lossy(icalendar);
     // SAFETY: `text` is a valid NUL-terminated string for the duration of the
@@ -118,11 +126,53 @@ pub fn component_from_ical(icalendar: &str) -> *mut ICalComponent {
     }
     // SAFETY: `component` is the fresh allocation just checked for NULL.
     if unsafe { holds_event(component) } {
+        // SAFETY: as above; the component is ours and this only adds to it.
+        unsafe { take_event_time_zones(component) };
         component
     } else {
         // SAFETY: the reference is ours and is being dropped unreturned.
         unsafe { component_unref(component) };
         ptr::null_mut()
+    }
+}
+
+/// `icalendar` with a `VTIMEZONE` in it for every zone its events name and
+/// libical can resolve, or the text as it stands when there is none to add.
+///
+/// This is the outgoing half of what [`icalendar_from_instances`] does on the
+/// way in, and it exists for the same clause: RFC 5545 §3.2.19 says a `TZID`
+/// parameter names a `VTIMEZONE` in the *same object*. `jmap-ical` writes a
+/// plain IANA name — `DTSTART;TZID=Europe/Zurich` — and no definition beside it,
+/// leaning on libical resolving the name out of its builtin table. libical does;
+/// nothing else has to, and an object that says a wall-clock time in an
+/// undefined zone is not a calendar object. It reaches a file export, an
+/// invitation forwarded on, and any reader of the EDS cache that is not libical.
+///
+/// Text that does not parse is handed back untouched: it is `jmap-ical`'s
+/// rendering, so a failure here is a bug on this side, and refusing it is
+/// [`load_component`](crate::ops::load_component)'s decision to make rather than
+/// this function's to make silently.
+///
+/// So is text with no zone to define — it goes back **byte for byte**, because
+/// defining one means rebuilding the object through libical, which respells what
+/// it was given. Nothing to add, nothing rebuilt.
+pub fn icalendar_with_time_zones(icalendar: &str) -> String {
+    let text = cstring_lossy(icalendar);
+    // SAFETY: `text` is valid for the call; the component is a fresh allocation
+    // this scope owns and drops.
+    unsafe {
+        let calendar = i_cal_component_new_from_string(text.as_ptr());
+        if calendar.is_null() {
+            return icalendar.to_owned();
+        }
+        let defined = take_event_time_zones(calendar);
+        let rendered = if defined {
+            ical_from_component(calendar)
+        } else {
+            None
+        };
+        component_unref(calendar);
+        rendered.unwrap_or_else(|| icalendar.to_owned())
     }
 }
 
@@ -315,8 +365,58 @@ unsafe fn find_master(components: &[*mut ICalComponent]) -> Option<*mut ICalComp
     }
 }
 
+/// Puts a `VTIMEZONE` into `calendar` for every zone the events *inside* it
+/// name, and says whether any was added.
+///
+/// Only into a `VCALENDAR`: a `VTIMEZONE` is a child of the calendar object, and
+/// `load_component_sync` may be asked for a bare `VEVENT`, which has nowhere to
+/// put one. Such a component keeps naming a zone it does not define, which is
+/// the state of everything this backend rendered before this existed and is no
+/// worse than it was.
+///
+/// # Safety
+///
+/// `calendar` must be a valid `ICalComponent` this caller owns.
+unsafe fn take_event_time_zones(calendar: *mut ICalComponent) -> bool {
+    // SAFETY: the caller guarantees the component.
+    unsafe {
+        if i_cal_component_isa(calendar) != I_CAL_VCALENDAR_COMPONENT {
+            return false;
+        }
+        let events = child_components(calendar, I_CAL_VEVENT_COMPONENT);
+        let defined = take_referenced_time_zones(calendar, &events);
+        for event in events {
+            component_unref(event);
+        }
+        defined
+    }
+}
+
+/// The children of `component` of the given kind, each an owned reference the
+/// caller drops.
+///
+/// # Safety
+///
+/// `component` must be a valid `ICalComponent`.
+unsafe fn child_components(
+    component: *mut ICalComponent,
+    kind: ICalComponentKind,
+) -> Vec<*mut ICalComponent> {
+    let mut children = Vec::new();
+    // SAFETY: the caller guarantees the component; each reference the iteration
+    // hands back is ours, and is handed on to the caller.
+    unsafe {
+        let mut child = i_cal_component_get_first_component(component, kind);
+        while !child.is_null() {
+            children.push(child);
+            child = i_cal_component_get_next_component(component, kind);
+        }
+    }
+    children
+}
+
 /// Puts a `VTIMEZONE` into `calendar` for every zone `components` refer to and
-/// libical can resolve.
+/// libical can resolve, and says whether any was added.
 ///
 /// The definition is libical's own, copied out of its builtin zone — the same
 /// text Evolution writes when it saves a zoned appointment to a file — and it is
@@ -333,6 +433,10 @@ unsafe fn find_master(components: &[*mut ICalComponent]) -> Option<*mut ICalComp
 /// - `UTC`, which libical resolves and has no component for. It is the absence
 ///   of transition rules, not a zone with any, and there is nothing to copy.
 ///
+/// A zone `calendar` already defines is left alone: a second copy of one
+/// `VTIMEZONE` is a duplicate `TZID` in one object. The envelope a save is built
+/// into is fresh and defines none, but an object that came from elsewhere may.
+///
 /// # Safety
 ///
 /// `calendar` must be a valid `ICalComponent` this caller owns, and each of
@@ -340,7 +444,8 @@ unsafe fn find_master(components: &[*mut ICalComponent]) -> Option<*mut ICalComp
 unsafe fn take_referenced_time_zones(
     calendar: *mut ICalComponent,
     components: &[*mut ICalComponent],
-) {
+) -> bool {
+    let mut defined = false;
     // SAFETY: the caller guarantees the components.
     for tzid in unsafe { referenced_tzids(components) } {
         let name = cstring_lossy(&tzid);
@@ -348,6 +453,9 @@ unsafe fn take_referenced_time_zones(
         // Both lookups hand back a builtin zone the library owns — transfer
         // none, so neither is unreffed here.
         unsafe {
+            if defines_time_zone(calendar, name.as_ptr()) {
+                continue;
+            }
             let zone = i_cal_timezone_get_builtin_timezone_from_tzid(name.as_ptr());
             let zone = if zone.is_null() {
                 i_cal_timezone_get_builtin_timezone(name.as_ptr())
@@ -373,10 +481,35 @@ unsafe fn take_referenced_time_zones(
             // that cannot be renamed is not put in at all.
             if rename_time_zone(copy, name.as_ptr()) {
                 i_cal_component_take_component(calendar, copy);
+                defined = true;
             } else {
                 component_unref(copy);
             }
         }
+    }
+    defined
+}
+
+/// Whether `calendar` already carries a `VTIMEZONE` defining `tzid`.
+///
+/// `i_cal_component_get_timezone` searches the object's own definitions and does
+/// not fall back to the builtin table, which is exactly the question: a zone
+/// libical could resolve anyway is one this object still has to define.
+///
+/// # Safety
+///
+/// `calendar` must be a valid `ICalComponent` and `tzid` a valid NUL-terminated
+/// string.
+unsafe fn defines_time_zone(calendar: *mut ICalComponent, tzid: *const gchar) -> bool {
+    // SAFETY: the caller guarantees both; the zone comes back transfer full and
+    // is dropped here — only its existence was asked about.
+    unsafe {
+        let zone = i_cal_component_get_timezone(calendar, tzid);
+        if zone.is_null() {
+            return false;
+        }
+        g_object_unref(zone.cast());
+        true
     }
 }
 
