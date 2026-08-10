@@ -14473,3 +14473,103 @@ README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
 `tests/transport.rs` hang is still unexplained. Still open from before: nothing
 asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
 two.
+
+## 2026-08-10 (hundred-and-forty-seventh session)
+
+A weekly meeting now keeps the days it repeats on. `byDay` — RFC 8984 §4.3.3's
+array of NDay objects, iCalendar's `BYDAY` — is modeled rather than parked in
+`RecurrenceRule::extra`, so it crosses in both directions and through real EDS.
+
+**What was wrong, and it was a data loss rather than a gap.** `rrule_to_rule`
+dropped `BYDAY` outright, and a rule read back without it is a *complete* rule as
+far as `maps_recurrence_rule` could tell: `extra` was empty and the frequency
+writable, so the save path was free to patch `recurrenceRules`. A "Mondays and
+Thursdays" standup created in Evolution therefore reached the server as
+`{"frequency": "weekly"}` — a series on whatever day its start fell on, for every
+other client reading the account. The reverse direction was already safe by
+accident: a rule the *server* held with `byDay` failed `maps_recurrence_rule`
+through `extra`, so it was drawn narrowed and never written back. Only the
+outgoing half lost anything, and only silently.
+
+**The vocabulary, and the one value that is refused.** `NDay` carries `@type`,
+`day` and `nthOfPeriod`; `WEEKDAYS` is the closed set both formats spell alike
+but for case, so a `day` outside it is dropped rather than passed through in the
+other format's clothes, exactly as `status` is. The ordinal is refused where
+**RFC 5545 §3.3.10** has no period to count within — `BYDAY` MUST NOT carry a
+numeric value unless `FREQ` is `MONTHLY` or `YEARLY` — and refused whole rather
+than written without it: `2MO` narrowed to `MO` is not a narrower view of the
+recurrence but a different one, an event every Monday instead of every second.
+Same for a zero ordinal, an empty `byDay`, and an `NDay` carrying a key this
+mapping does not read. Each of those leaves the `RRULE` at its frequency and
+tells the save path, through `maps_recurrence_rule`, that the rule was seen in
+part — the standing rule in this crate, now applied one level down inside a
+property rather than to it.
+
+`by_day_part` is all the days or none of them, and it is the single function
+both `rule_to_rrule` and `maps_recurrence_rule` ask, so the two cannot drift into
+disagreeing about which rules are writable. Reading, `to_nday` keeps a token it
+cannot take apart *whole* as the `day` — outside the vocabulary, hence flagged —
+rather than reading the weekday and dropping an ordinal the rule was written
+with.
+
+**`patch::diff` checks the rules the save brings, not only the ones the server
+holds.** `diff_recurrence` gated on `current` alone. calcard passes
+`FREQ=WEEKLY;BYDAY=2MO` through unjudged (verified: it drops `BYDAY=XX`
+entirely, but keeps an ordinal RFC 5545 does not admit at that frequency), so a
+component carrying one would have sent `byDay` the server is entitled to reject
+— and `recurrenceRules` goes out replaced whole, so that costs every other edit
+in the `CalendarEvent/set`. The gate is now `[current, edited]`, the same shape
+`diff_overrides` has had.
+
+Three existing tests used `byDay` as *the* example of an unmappable rule part;
+they now use `byMonthDay`, which really is one. The behaviour they pin is
+unchanged — only the example moved.
+
+**Through real EDS.** `TEST_RECURRING_RRULE` gained `;BYDAY=TH`, which generates
+exactly the occurrences it did without it (`TEST_DTSTART` is a Thursday), so
+every exclusion, detached instance and split in that leg is untouched. Both ends
+assert it: EDS's own cache hands the truncated master and the series it split off
+back as `FREQ=WEEKLY;COUNT=4;BYDAY=TH` and `…COUNT=2;BYDAY=TH` — libical writes
+`BYDAY` last, as this crate now does — and the mock holds `byDay: [{"@type":
+"NDay", "day": "th"}]` for both. The server-side assertion was checked for
+vacuity by flipping it to `fr` and watching the leg fail.
+
+Nine tests, red first: two in `jmap-proto/tests/calendars.rs` (the fixture's
+monthly `nthOfPeriod: 2` and the event's plain `th`, both modeled now and
+`extra` empty), five in `jmap-ical/tests/event.rs` (the days of a weekly rule out
+and back; a monthly rule's `2WE,-1FR`; a hand-written `+3TU`, whose plus
+JSCalendar has no room for; the ordinal refused at three frequencies; and six
+shapes of unwritable `byDay` flagged and left off the `RRULE`), and two in
+`jmap-cal-sync/tests/save.rs` against the mock (adding a Thursday to a rule
+reaching the server, and `BYDAY=2MO` leaving `recurrenceRules` alone while the
+title edit in the same save still lands).
+
+Verified locally: `cargo test --locked` 578 (up 7 — the two proto tests were
+extended rather than added), `cargo test -p jmap-backend-cal --locked` 81,
+`ctest` 14/14 including all four functional legs against real EDS, `cargo fmt
+--check`, and `cargo clippy --all-targets --locked -- -D warnings` clean for the
+default set and for `jmap-backend-cal`/`jmap-functional`. The C client compiles
+without warnings. `reuse lint` and `cargo deny` not run (neither is on this VM);
+no files were added, so no new SPDX headers were needed, and no dependency
+changed.
+
+No milestone tag. What this session did **not** do: `byMonthDay`, `bySetPosition`
+and the rest of RFC 8984 §4.3.3 are still unmodeled, and a rule holding one is
+still drawn narrowed and never written back — which is safe, and is now the only
+recurrence part in that state. `BYDAY` is also not consulted by anything that
+*expands* a recurrence here; nothing in this tree does, EDS does it.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, for an instance's zone
+as well as the series', relying on libical resolving an IANA name out of its
+builtin table; the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag the last nineteen sessions
+asked for is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is still unexplained. Still open from before: nothing
+asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
+two; the *reading* direction of a per-instance zone through real EDS is untested.

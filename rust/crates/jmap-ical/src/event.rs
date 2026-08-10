@@ -45,7 +45,7 @@
 
 use std::collections::BTreeMap;
 
-use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
+use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Map, Value, json};
 
 use crate::error::ICalError;
@@ -71,6 +71,12 @@ const X_LIC_LOCATION: &str = "X-LIC-LOCATION";
 /// start of the occurrence it stands in for (RFC 5545 §3.8.4.4), which is
 /// exactly the key of a JSCalendar `recurrenceOverrides` entry.
 const RECURRENCE_ID: &str = "RECURRENCE-ID";
+
+/// The weekdays a `BYDAY` names, in their iCalendar spelling (RFC 5545
+/// §3.3.10). JSCalendar's `day` (RFC 8984 §4.3.3) is the same closed set in
+/// lowercase, so the two differ only in case — and a value outside it is
+/// dropped rather than passed through in the other format's clothes.
+const WEEKDAYS: [&str; 7] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
 
 /// JSCalendar `status` values and their iCalendar `STATUS` spelling. Both sets
 /// are closed, so a value outside this table is dropped rather than passed
@@ -120,15 +126,23 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
-/// Only `frequency`, `interval`, `count` and `until` are modeled; `byDay` and
-/// the rest of RFC 8984 §4.3.3 ride in [`RecurrenceRule::extra`] and would be
-/// lost. A caller that patches `recurrenceRules` for a rule this returns
-/// `false` for narrows the user's recurrence behind their back.
+/// Only `frequency`, `interval`, `count`, `until` and `byDay` are modeled;
+/// `byMonthDay` and the rest of RFC 8984 §4.3.3 ride in
+/// [`RecurrenceRule::extra`] and would be lost. A caller that patches
+/// `recurrenceRules` for a rule this returns `false` for narrows the user's
+/// recurrence behind their back.
 ///
 /// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
-/// never patches over a recurrence the user was not shown.
+/// never patches over a recurrence the user was not shown — as does one whose
+/// days the `BYDAY` cannot carry, which [`by_day_part`] decides and
+/// [`rule_to_rrule`] then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
-    rule.extra.is_empty() && writable(rule)
+    rule.extra.is_empty()
+        && writable(rule)
+        && rule
+            .by_day
+            .as_ref()
+            .is_none_or(|_| by_day_part(rule).is_some())
 }
 
 /// Whether a recurrence override survives the trip through iCalendar.
@@ -1237,12 +1251,70 @@ fn rule_to_rrule(
             }
         });
     }
+    // Last, where RFC 5545's own examples put it.
+    parts.extend(by_day_part(rule));
     Some(parts.join(";"))
 }
 
+/// The `BYDAY` part of a rule's `RRULE`, or `None` when the rule names no days
+/// — and also when it names days this mapping will not write, which is what
+/// [`maps_recurrence_rule`] reads the answer for.
+///
+/// It is all the days or none of them. A `BYDAY` holding a subset is a
+/// *different* recurrence, not a narrower view of one: dropping `2MO` from
+/// `BYDAY=2MO,TH` leaves an event that no longer happens on the Monday at all,
+/// which is a worse lie than an event shown on every day of the week the series
+/// starts on.
+fn by_day_part(rule: &RecurrenceRule) -> Option<String> {
+    let days = rule.by_day.as_ref()?;
+    // `BYDAY=` names no day and is not a rule part any reader can use.
+    if days.is_empty() {
+        return None;
+    }
+    let tokens: Option<Vec<String>> = days
+        .iter()
+        .map(|day| by_day_token(day, &rule.frequency))
+        .collect();
+    Some(format!("BYDAY={}", tokens?.join(",")))
+}
+
+/// One weekday as an `RRULE` writes it — `TH`, `2WE`, `-1FR` — or `None` for
+/// an NDay no `BYDAY` can carry.
+///
+/// The ordinal is refused outright unless the frequency gives it a period to
+/// count within: RFC 5545 §3.3.10 says `BYDAY` MUST NOT carry a numeric value
+/// when `FREQ` is not `MONTHLY` or `YEARLY`, and a content line libical refuses
+/// costs the whole component — every field of the event, not just its
+/// recurrence. Writing the weekday without its ordinal is not the fallback,
+/// because "the second Monday" and "every Monday" are different events and the
+/// second one fills the user's calendar.
+fn by_day_token(day: &NDay, frequency: &str) -> Option<String> {
+    if !day.extra.is_empty() {
+        return None;
+    }
+    let weekday = WEEKDAYS
+        .iter()
+        .find(|weekday| weekday.eq_ignore_ascii_case(&day.day))?;
+    match day.nth_of_period {
+        None => Some((*weekday).to_owned()),
+        // RFC 8984 §4.3.3 forbids zero, and RFC 5545's ordwk starts at 1.
+        Some(0) => None,
+        Some(nth) if counts_within_a_period(frequency) => Some(format!("{nth}{weekday}")),
+        Some(_) => None,
+    }
+}
+
+/// Whether a frequency gives an `nthOfPeriod` a period to count within — the
+/// `MONTHLY`/`YEARLY` of RFC 5545 §3.3.10.
+fn counts_within_a_period(frequency: &str) -> bool {
+    ["monthly", "yearly"]
+        .iter()
+        .any(|period| period.eq_ignore_ascii_case(frequency))
+}
+
 /// The reverse. Parts outside the modeled set are dropped rather than parked
-/// in `extra`: a `BYDAY=MO` copied verbatim into JSCalendar would be rejected
-/// by the server, whose `byDay` is an array of objects.
+/// in `extra`: a `BYMONTHDAY=15` copied verbatim into JSCalendar would be
+/// rejected by the server, whose `byMonthDay` is an array of numbers.
 fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
     let mut rule = RecurrenceRule::default();
     for part in value.split(';') {
@@ -1254,6 +1326,7 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             "INTERVAL" => rule.interval = value.parse().ok(),
             "COUNT" => rule.count = value.parse().ok(),
             "UNTIL" => rule.until = to_local_date_time(value),
+            "BYDAY" => rule.by_day = Some(value.split(',').map(to_nday).collect()),
             _ => {}
         }
     }
@@ -1262,4 +1335,33 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
     }
     rule.rule_type = Some("RecurrenceRule".to_owned());
     Some(rule)
+}
+
+/// One `BYDAY` token as the NDay it names — `TH`, `2WE`, `-1FR`, and RFC 5545
+/// §3.3.10's signed spelling `+3TU`, whose plus JSCalendar has no room for.
+///
+/// A token this cannot take apart keeps its whole self as the `day`, which is
+/// outside the closed vocabulary and so is refused by [`by_day_token`] on the
+/// way back out and flagged by [`maps_recurrence_rule`]. Reading it as the
+/// weekday alone would drop an ordinal the rule was written with and repeat the
+/// event on every one of that weekday instead.
+fn to_nday(token: &str) -> NDay {
+    let unsigned = token.strip_prefix(['+', '-']).unwrap_or(token);
+    let digits = unsigned.len()
+        - unsigned
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .len();
+    if digits == 0 {
+        return NDay::new(&token.to_ascii_lowercase());
+    }
+    let (ordinal, weekday) = token.split_at(token.len() - unsigned.len() + digits);
+    match ordinal.parse::<i32>() {
+        // Zero is no occurrence of a weekday, and a value too large for the
+        // ordinal is one this cannot hand back unchanged; both keep the token.
+        Ok(nth) if nth != 0 => NDay {
+            nth_of_period: Some(nth),
+            ..NDay::new(&weekday.to_ascii_lowercase())
+        },
+        _ => NDay::new(&token.to_ascii_lowercase()),
+    }
 }

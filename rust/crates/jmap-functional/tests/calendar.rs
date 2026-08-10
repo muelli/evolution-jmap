@@ -12,6 +12,7 @@
 //! libecal consumer, the mock says what the backend asked the server for.
 
 use jmap_functional::{Session, observations, required_path};
+use jmap_proto::calendars::NDay;
 
 /// The event the client writes. The summary is passed on its command line
 /// and looked for in the mock's store, so the two ends cannot disagree about
@@ -106,8 +107,12 @@ const RECURRING_SPLIT_SUMMARY: &str = "Weekly standup (new plan)";
 /// still recurring over the days the new event now owns — the same appointment
 /// twice, under two titles — and a new series that kept `COUNT=6` would run six
 /// weeks past where the user cut it.
-const SERIES_RRULE: &str = "FREQ=WEEKLY;COUNT=4";
-const SPLIT_RRULE: &str = "FREQ=WEEKLY;COUNT=2";
+///
+/// Both keep the `BYDAY` the series was created with — the day of the week is
+/// not something a split changes — which is the client-side half of the
+/// question the `byDay` assertions below ask of the server.
+const SERIES_RRULE: &str = "FREQ=WEEKLY;COUNT=4;BYDAY=TH";
+const SPLIT_RRULE: &str = "FREQ=WEEKLY;COUNT=2;BYDAY=TH";
 const SPLIT_DTSTART: &str = "20260212T130000Z";
 
 /// The same two exclusions as EDS spells them back in its own cache: the one
@@ -503,6 +508,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     // the new one owns, which every other client reading the account would show
     // as two appointments a week apart under two titles.
     assert_eq!(rules[0].count, Some(4), "{recurring:?}");
+    // The day the rule repeats on, as the NDay objects RFC 8984 §4.3.3 spells
+    // it with. A rule that arrived without them is a weekly series pinned to
+    // whatever day its start happens to fall on, which is the same event only
+    // for as long as nobody moves the start.
+    assert_eq!(
+        rules[0].by_day.as_deref(),
+        Some(&[NDay::new("th")][..]),
+        "the day the series repeats on did not reach the server: {recurring:?}"
+    );
     // All three exceptions in one map, because they share it: an override
     // written for one of them that dropped another is a deletion or a rename
     // undone, and asserting them one at a time would not notice.
@@ -555,6 +569,12 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .unwrap_or_else(|| panic!("the event the split made has no rule: {split:?}"));
     assert_eq!(split_rules[0].frequency, "weekly", "{split:?}");
     assert_eq!(split_rules[0].count, Some(2), "{split:?}");
+    assert_eq!(
+        split_rules[0].by_day.as_deref(),
+        Some(&[NDay::new("th")][..]),
+        "the event the split made does not repeat on the day the series did: \
+         {split:?}"
+    );
     assert_eq!(
         split.recurrence_overrides, None,
         "the event the split made carries exceptions from before it starts: \
