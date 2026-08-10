@@ -1,0 +1,5 @@
+{
+  "@type": "RecurrenceRule",
+  "frequency": "daily",
+  "byHour": [9, 17]
+}

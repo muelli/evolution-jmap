@@ -127,20 +127,20 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
 /// Only `frequency`, `interval`, `count`, `until`, `byDay`, `byMonthDay`,
-/// `byYearDay`, `byWeekNo`, `byMonth`, `bySetPosition` and `firstDayOfWeek` are
-/// modeled; `byHour` and the rest of RFC 8984 §4.3.3 ride in
-/// [`RecurrenceRule::extra`] and would be lost. A caller that patches
+/// `byYearDay`, `byWeekNo`, `byMonth`, `byHour`, `bySetPosition` and
+/// `firstDayOfWeek` are modeled; `byMinute` and the rest of RFC 8984 §4.3.3 ride
+/// in [`RecurrenceRule::extra`] and would be lost. A caller that patches
 /// `recurrenceRules` for a rule this returns `false` for narrows the user's
 /// recurrence behind their back.
 ///
 /// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
 /// never patches over a recurrence the user was not shown — as does one whose
 /// days of the week, days of the month, days of the year, weeks of the year,
-/// months of the year, position in the set or day the week starts on the
-/// `RRULE` cannot carry, which [`by_day_part`], [`by_month_day_part`],
-/// [`by_year_day_part`], [`by_week_no_part`], [`by_month_part`],
-/// [`by_set_position_part`] and [`weekday_token`] decide and [`rule_to_rrule`]
-/// then leaves off.
+/// months of the year, hours of the day, position in the set or day the week
+/// starts on the `RRULE` cannot carry, which [`by_day_part`],
+/// [`by_month_day_part`], [`by_year_day_part`], [`by_week_no_part`],
+/// [`by_month_part`], [`by_hour_part`], [`by_set_position_part`] and
+/// [`weekday_token`] decide and [`rule_to_rrule`] then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
         && writable(rule)
@@ -164,6 +164,10 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
             .by_month
             .as_ref()
             .is_none_or(|_| by_month_part(rule).is_some())
+        && rule
+            .by_hour
+            .as_ref()
+            .is_none_or(|_| by_hour_part(rule).is_some())
         // Asked with the same answer [`rule_to_rrule`] computes, because this
         // part is writable only beside another one that was written.
         && rule
@@ -1089,6 +1093,14 @@ fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
                     .as_deref()
                     .and_then(to_ical_date_time)
                     .is_none_or(|until| at_midnight(&until))
+                    // §3.3.10 forbids `BYHOUR` beside a DATE-valued `DTSTART`,
+                    // and a rule naming the hours of the day is not something a
+                    // day with no clock can hold. Asked of the part
+                    // [`rule_to_rrule`] would actually write, not of the
+                    // property: hours it refuses are not on the component to
+                    // contradict the DATE form, and such an event keeps its
+                    // day-ness.
+                    && by_hour_part(rule).is_none()
             })
         // An instance named at 09:00 cannot be truncated to its date without
         // excluding — or adding — a different occurrence than the server named.
@@ -1299,10 +1311,16 @@ fn rule_to_rrule(
     Some(parts.join(";"))
 }
 
-/// The `BYxxx` parts of a rule's `RRULE` that name dates, in the order libical
-/// writes them — everything but `BYSETPOS`, which picks from what they produce.
+/// The `BYxxx` parts of a rule's `RRULE` that name a date or a time of day, in
+/// the order libical writes them — everything but `BYSETPOS`, which names
+/// neither and picks from what these produce.
+///
+/// `BYHOUR` comes first, ahead of the days: that is where libical puts it
+/// (measured in `jmap-backend-cal/tests/marshal.rs`), and it is not where the
+/// parts added before it went.
 fn named_by_parts(rule: &RecurrenceRule) -> Vec<String> {
     [
+        by_hour_part(rule),
         by_day_part(rule),
         by_month_day_part(rule),
         by_year_day_part(rule),
@@ -1312,6 +1330,46 @@ fn named_by_parts(rule: &RecurrenceRule) -> Vec<String> {
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// The `BYHOUR` part of a rule's `RRULE`, or `None` when the rule names no hours
+/// — and, as with [`by_day_part`], when it names ones this mapping will not
+/// write.
+///
+/// It is all the hours or none of them, for the same reason: a `BYHOUR` holding
+/// a subset names *different* hours rather than fewer of these.
+///
+/// There is no frequency gate. RFC 5545 §3.3.10 defines `BYHOUR` at every
+/// frequency — expanding a period of a day or more into several hours of it, and
+/// limiting the occurrences a shorter one produces. The gate this part does need
+/// is on the *event*, not the rule: §3.3.10 forbids `BYHOUR` beside a
+/// DATE-valued `DTSTART`, and [`shows_without_time`] is where that is honoured,
+/// by drawing an all-day event whose rule names hours as a timed one. libical
+/// keeps the contradiction rather than objecting to it
+/// (`jmap-backend-cal/tests/marshal.rs`), so nothing below this mapping would.
+fn by_hour_part(rule: &RecurrenceRule) -> Option<String> {
+    let hours = rule.by_hour.as_ref()?;
+    // `BYHOUR=` names no hour — and libical reads it as `BYHOUR=0`, moving the
+    // whole series to midnight, which is worse than a part left off.
+    if hours.is_empty() {
+        return None;
+    }
+    let tokens: Option<Vec<String>> = hours.iter().copied().map(hour_token).collect();
+    Some(format!("BYHOUR={}", tokens?.join(",")))
+}
+
+/// One hour of the day as an `RRULE` writes it — `0`, `23` — or `None` for a
+/// value no `BYHOUR` can carry.
+fn hour_token(hour: u32) -> Option<String> {
+    match hour {
+        // RFC 5545's `hour` is 0 to 23, and RFC 8984 §4.3.3's `byHour` is
+        // unsigned, so unlike the days and weeks there is no count backwards
+        // from the end of the day to admit. Midnight is a legitimate hour here,
+        // which is why an unreadable token cannot arrive as a zero the way one
+        // in [`to_month_day`] does — see [`to_hour`].
+        0..=23 => Some(hour.to_string()),
+        _ => None,
+    }
 }
 
 /// The `BYDAY` part of a rule's `RRULE`, or `None` when the rule names no days
@@ -1619,8 +1677,8 @@ fn weekday_token(day: &str) -> Option<&'static str> {
 }
 
 /// The reverse. Parts outside the modeled set are dropped rather than parked
-/// in `extra`: a `BYHOUR=9` copied verbatim into JSCalendar would be rejected
-/// by the server, whose `byHour` is an array of numbers.
+/// in `extra`: a `BYMINUTE=15` copied verbatim into JSCalendar would be rejected
+/// by the server, whose `byMinute` is an array of numbers.
 fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
     let mut rule = RecurrenceRule::default();
     for part in value.split(';') {
@@ -1652,6 +1710,10 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             // by [`month_token`] on the way out, which is what
             // [`maps_recurrence_rule`] then reads.
             "BYMONTH" => rule.by_month = Some(value.split(',').map(str::to_owned).collect()),
+            // An hour needs a sentinel of its own: zero is midnight, a real hour
+            // this has to be able to read, so it cannot double as "unreadable"
+            // the way it does for a day of the month — see [`to_hour`].
+            "BYHOUR" => rule.by_hour = Some(value.split(',').map(to_hour).collect()),
             // Likewise again: `setposday` is spelled as `monthdaynum` is, and a
             // token [`to_month_day`] cannot read becomes the zero that selects
             // no occurrence.
@@ -1718,4 +1780,17 @@ fn to_nday(token: &str) -> NDay {
 /// really held there.
 fn to_month_day(token: &str) -> i32 {
     token.parse().unwrap_or(0)
+}
+
+/// One `BYHOUR` token as the number JSCalendar holds — RFC 5545 §3.3.10's `hour`,
+/// which is unsigned.
+///
+/// A token this cannot read becomes [`u32::MAX`] rather than the zero
+/// [`to_month_day`] uses, for the reason [`hour_token`] gives: zero is midnight,
+/// an hour a rule may legitimately name, so it cannot also mean "no hour". What
+/// matters is only that the value be one [`hour_token`] refuses, so that the set
+/// is carried whole and flagged by [`maps_recurrence_rule`] rather than handed
+/// back a member short.
+fn to_hour(token: &str) -> u32 {
+    token.parse().unwrap_or(u32::MAX)
 }

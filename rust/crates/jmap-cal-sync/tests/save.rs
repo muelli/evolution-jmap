@@ -351,14 +351,14 @@ fn a_recurrence_the_mapping_can_carry_is_patched() {
 fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // `byHour` has no place in the RecurrenceRule this crate models, so the
+    // `byMinute` has no place in the RecurrenceRule this crate models, so the
     // RRULE the user edited is a narrower rule than the one on the server.
     fixture.patch(
         &id,
         json!({"recurrenceRules": [{
             "@type": "RecurrenceRule",
             "frequency": "monthly",
-            "byHour": [9, 17],
+            "byMinute": [15, 45],
         }]}),
     );
     let sync = fixture.sync();
@@ -370,8 +370,8 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let rules = fixture.event(&id).recurrence_rules.unwrap();
     assert_eq!(rules.len(), 1);
     assert_eq!(
-        rules[0].extra.get("byHour"),
-        Some(&json!([9, 17])),
+        rules[0].extra.get("byMinute"),
+        Some(&json!([15, 45])),
         "a rule part the RRULE could not carry was dropped"
     );
     assert_eq!(
@@ -868,6 +868,94 @@ fn a_position_the_server_holds_alone_is_not_cleared_from_its_rule() {
         Some("Annual stocktake"),
         "the edit the save could carry still has to land"
     );
+}
+
+#[test]
+fn the_hours_of_the_day_a_rule_repeats_at_reach_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "daily",
+            "byHour": [9],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=DAILY;BYHOUR=9"),
+        "{icalendar}"
+    );
+    // A second standup after lunch — the hours are a set, so the added one goes
+    // out beside the one that was there.
+    let edited = icalendar.replace("BYHOUR=9", "BYHOUR=9,14");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 14][..]));
+}
+
+#[test]
+fn an_hour_no_day_has_is_not_sent() {
+    // 24 is outside RFC 5545 §3.3.10's `hour`, and libical answers such a rule by
+    // dropping the whole `RRULE` — so the check is on the way out, before a rule
+    // the server might keep and no reader can expand reaches it.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "daily"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("RRULE:FREQ=DAILY", "RRULE:FREQ=DAILY;BYHOUR=24")
+        .replace("SUMMARY:Standup", "SUMMARY:Daily standup");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.recurrence_rules.unwrap()[0].by_hour, None);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Daily standup"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
+fn hours_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
+    // The direction that loses data. The server's own `byHour` is one this mapping
+    // *can* write — so what has to be checked is that it goes back out again
+    // rather than being dropped by a save that touched the rule for another
+    // reason, since `recurrenceRules` is replaced whole.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "daily",
+            "byHour": [9, 14],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar.replace(
+        "RRULE:FREQ=DAILY;BYHOUR=9,14",
+        "RRULE:FREQ=DAILY;BYHOUR=9,14;COUNT=4",
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 14][..]));
+    assert_eq!(rules[0].count, Some(4), "the edit itself still has to land");
 }
 
 #[test]
