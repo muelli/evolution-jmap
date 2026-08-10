@@ -20,6 +20,7 @@ mod contacts;
 mod error;
 mod mail;
 pub mod transport;
+mod url;
 
 pub use changes::ChangeSet;
 pub use client::{Client, ClientBuilder, Credentials};
