@@ -1316,3 +1316,58 @@ fn reparsed_object(lines: &str) -> String {
     }
     saved.icalendar
 }
+
+/// The reminders an event carries, through the parser that actually reads them.
+///
+/// This is the first mapped property that is a **child component**, so more of it
+/// rests on libical than a content line does: `jmap-ical` writes a `VALARM` per
+/// alert, and the key of the `alerts` entry rides on the RFC 9074 §6 `UID` inside
+/// it — a property RFC 5545 never gave a `VALARM`, and one nothing in `jmap-ical`
+/// can check the survival of, since calcard is what parses there. If libical
+/// dropped the alarm, the reminder would be gone by the time EDS handed the
+/// component back and the next save would delete it server-side; if it dropped
+/// just the `UID`, every save would re-key the property.
+///
+/// It keeps all of it: the alarm, its `UID`, the `RELATED=END` parameter and the
+/// **sign** on the trigger — a reminder a quarter of an hour *before* the event
+/// coming back as one a quarter of an hour after it is the failure this watches
+/// for. What libical adds is an `X-EVOLUTION-ALARM-UID` of its own, which is what
+/// Evolution keys alarms on and which this mapping ignores.
+#[test]
+fn libical_keeps_the_reminder_this_mapping_writes() {
+    let object = reparsed_object(
+        "BEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\nDESCRIPTION:S\r\n\
+         TRIGGER;RELATED=END:-PT15M\r\nEND:VALARM",
+    );
+
+    let event = jmap_ical::ical_to_event(&object).expect("parse");
+    let alerts = event
+        .alerts
+        .unwrap_or_else(|| panic!("the reminder did not come back at all:\n{object}"));
+    assert_eq!(
+        alerts.keys().collect::<Vec<_>>(),
+        ["k1"],
+        "the key the entry rides on was not kept:\n{object}"
+    );
+    let alert = &alerts["k1"];
+    assert_eq!(
+        alert.get("action").and_then(|action| action.as_str()),
+        Some("display"),
+        "{object}"
+    );
+    let trigger = alert
+        .get("trigger")
+        .unwrap_or_else(|| panic!("no trigger:\n{object}"));
+    assert_eq!(
+        trigger.get("offset").and_then(|offset| offset.as_str()),
+        Some("-PT15M"),
+        "the reminder moved to the other side of the event:\n{object}"
+    );
+    assert_eq!(
+        trigger
+            .get("relativeTo")
+            .and_then(|relative_to| relative_to.as_str()),
+        Some("end"),
+        "{object}"
+    );
+}

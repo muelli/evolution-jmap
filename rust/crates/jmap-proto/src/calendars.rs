@@ -134,6 +134,17 @@ pub struct CalendarEvent {
     /// iCalendar mapping makes everywhere else too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<BTreeMap<String, Value>>,
+    /// The reminders the event carries (RFC 8984 §4.5.2), keyed by an id of
+    /// whoever wrote them.
+    ///
+    /// Left as JSON, for the reason [`Self::locations`] is: an Alert holds a
+    /// `trigger` that is one of two object types — an offset from the event or an
+    /// absolute instant — and an `acknowledged` timestamp saying the user has
+    /// already dismissed it (RFC 9074 §6.1), none of which the `VALARM` this
+    /// mapping writes carries. The save path has to see them in order to refuse
+    /// to replace the property.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alerts: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_rules: Option<Vec<RecurrenceRule>>,
     /// The instances named one at a time rather than by a rule (RFC 8984

@@ -8,7 +8,7 @@
 //! their own carrying a RECURRENCE-ID.
 
 use jmap_ical::{
-    ICalError, event_to_ical, ical_to_event, maps_keywords, maps_locations,
+    ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keywords, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, names_time_zone,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
@@ -1630,6 +1630,270 @@ fn a_tag_an_instance_cannot_show_leaves_the_override_flagged() {
             "RDATE;TZID=Europe/Berlin:20260129T130000"
         );
     }
+}
+
+/// An event reminded the way a server reminds: RFC 8984 §4.5.2's `alerts` is a
+/// map of Alerts keyed by an RFC 8984 §1.4.4 Id.
+fn reminded<const N: usize>(alerts: [(&str, Value); N]) -> CalendarEvent {
+    CalendarEvent {
+        title: Some("Sprint planning".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        alerts: Some(
+            alerts
+                .into_iter()
+                .map(|(key, alert)| (key.to_owned(), alert))
+                .collect(),
+        ),
+        ..CalendarEvent::default()
+    }
+}
+
+/// The reminder Evolution's own editor asks for: a message a quarter of an hour
+/// before the appointment.
+fn quarter_of_an_hour_before() -> Value {
+    json!({
+        "@type": "Alert",
+        "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+        "action": "display",
+    })
+}
+
+#[test]
+fn a_reminder_is_a_valarm_of_its_own() {
+    let event = reminded([("k1", quarter_of_an_hour_before())]);
+    let ics = event_to_ical(&event);
+
+    // A component rather than a property, which is what makes this the first
+    // mapped property drawn as a child of the VEVENT.
+    assert!(ics.contains("BEGIN:VALARM\r\n"), "{ics}");
+    assert_eq!(content_line(&ics, "ACTION"), "ACTION:DISPLAY");
+    // RFC 5545 §3.8.6.3 spells the offset as a signed duration, negative for a
+    // reminder before the event, and defaults it to relating to the start —
+    // which is what RFC 8984 §4.5.3's `relativeTo` defaults to as well, so there
+    // is nothing to state.
+    assert_eq!(content_line(&ics, "TRIGGER"), "TRIGGER:-PT15M");
+    // RFC 9074 §6 gives a VALARM a UID, which is where the key of the `alerts`
+    // entry rides so that a save names the server's own reminder.
+    assert_eq!(content_line(&ics, "UID:k1"), "UID:k1");
+    // RFC 5545 §3.6.6 requires a DISPLAY alarm to say what to display, and the
+    // only text an Alert has is the event's own summary.
+    assert_eq!(
+        content_line(&ics, "DESCRIPTION"),
+        "DESCRIPTION:Sprint planning"
+    );
+
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").alerts,
+        event.alerts,
+        "the reminder survives the round trip"
+    );
+    assert!(maps_alerts(&event));
+}
+
+#[test]
+fn a_reminder_after_the_end_states_what_it_is_relative_to() {
+    // RFC 8984 §4.5.3's `relativeTo` is `start` or `end`, and RFC 5545 §3.2.14's
+    // `RELATED` parameter is the same choice with the same default, so only the
+    // end has to be written.
+    let event = reminded([(
+        "k1",
+        json!({
+            "@type": "Alert",
+            "trigger": {"@type": "OffsetTrigger", "offset": "PT10M", "relativeTo": "end"},
+            "action": "display",
+        }),
+    )]);
+    let ics = event_to_ical(&event);
+
+    assert_eq!(content_line(&ics, "TRIGGER"), "TRIGGER;RELATED=END:PT10M");
+    assert_eq!(ical_to_event(&ics).expect("parse").alerts, event.alerts);
+    assert!(maps_alerts(&event));
+}
+
+#[test]
+fn a_reminder_relative_to_the_start_says_so_no_more_than_the_default_does() {
+    // The other half of the pair: `relativeTo: "start"` is the default said out
+    // loud, so the component carries no `RELATED` and the reminder reads back
+    // without the member. That is a difference between the server's event and the
+    // baseline, not between the baseline and the save — see `jmap_cal_sync::diff`,
+    // which compares the latter two.
+    let mut alert = quarter_of_an_hour_before();
+    alert["trigger"]["relativeTo"] = json!("start");
+    let event = reminded([("k1", alert)]);
+    let ics = event_to_ical(&event);
+
+    assert_eq!(content_line(&ics, "TRIGGER"), "TRIGGER:-PT15M");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").alerts,
+        reminded([("k1", quarter_of_an_hour_before())]).alerts
+    );
+    assert!(maps_alerts(&event));
+}
+
+#[test]
+fn an_event_with_no_reminders_carries_no_valarm() {
+    let ics = event_to_ical(&fixture_event());
+
+    assert!(without(&ics, "BEGIN:VALARM"), "{ics}");
+    // `None` rather than an empty map, for the reason `keywords` gives: the save
+    // path reads an edit off a difference from what was shown, and an empty map
+    // is a claim the component never made.
+    assert_eq!(ical_to_event(&ics).expect("parse").alerts, None);
+    assert!(maps_alerts(&fixture_event()));
+}
+
+#[test]
+fn a_reminder_the_component_cannot_show_is_flagged_rather_than_drawn() {
+    // The property goes back replaced whole, so an alert left off the document is
+    // an alert the next save deletes. Each of these is one this mapping cannot
+    // put in a VALARM it would read back the same way:
+    for alert in [
+        // An action iCalendar can spell only with an ATTENDEE and a SUMMARY this
+        // mapping has nothing to fill in from.
+        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "action": "email"}),
+        // A trigger at an absolute instant (RFC 8984 §4.5.4), which is not the
+        // duration this mapping writes.
+        json!({"@type": "Alert", "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-15T12:45:00Z"}}),
+        // A reminder the user has already dismissed or snoozed (RFC 9074 §6.1),
+        // which a VALARM states and this mapping does not write: replacing the
+        // property would un-dismiss it.
+        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "acknowledged": "2026-01-15T12:46:00Z"}),
+        // Something else about the alert that is not drawn at all.
+        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "relatedTo": {}}),
+        // Not an Alert, not an object, and no trigger at all.
+        json!({"@type": "Location", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}}),
+        json!("-PT15M"),
+        json!({"@type": "Alert", "action": "display"}),
+        // An offset that is no duration, and one iCalendar cannot carry.
+        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "quarter of an hour"}}),
+        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": 900}}),
+        // A `relativeTo` outside the two RFC 8984 §4.5.3 admits: a `RELATED` this
+        // mapping guessed at would move the reminder.
+        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M", "relativeTo": "middle"}}),
+        // And a trigger with something on it this mapping does not draw.
+        json!({"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M", "feature": "audio"}}),
+    ] {
+        let event = reminded([("k1", quarter_of_an_hour_before()), ("k2", alert.clone())]);
+        let ics = event_to_ical(&event);
+
+        assert_eq!(
+            ics.matches("BEGIN:VALARM\r\n").count(),
+            1,
+            "{alert} was drawn"
+        );
+        assert!(!maps_alerts(&event), "{alert} was called covered");
+    }
+}
+
+#[test]
+fn a_reminder_under_a_key_no_uid_can_carry_is_flagged_rather_than_drawn() {
+    // The key is an RFC 8984 §1.4.4 Id, and it has to come back off the UID line
+    // as itself: one this mapping would read back as a different key — or as the
+    // invented one, having refused it — is a reminder a save renames behind the
+    // user's back.
+    for key in ["", "k 1", "k:1", "k\r1", &"k".repeat(256)] {
+        let event = reminded([
+            ("k1", quarter_of_an_hour_before()),
+            (key, quarter_of_an_hour_before()),
+        ]);
+
+        assert_eq!(
+            event_to_ical(&event).matches("BEGIN:VALARM\r\n").count(),
+            1,
+            "{key:?} was drawn"
+        );
+        assert!(!maps_alerts(&event), "{key:?} was called covered");
+    }
+}
+
+#[test]
+fn an_alarm_this_mapping_cannot_read_is_dropped_rather_than_guessed_at() {
+    // A sound, a program and a mail are all reminders Evolution's editor offers
+    // and RFC 8984 §4.5.2 has no `action` for — only `display` and `email` — so
+    // there is nothing to read them as. An absolute trigger is the third case,
+    // the one this mapping does not carry in either direction yet.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n",
+        "UID:E1\r\nDTSTART;TZID=Europe/Berlin:20260115T130000\r\n",
+        "BEGIN:VALARM\r\nACTION:AUDIO\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nACTION:PROCEDURE\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nACTION:EMAIL\r\nTRIGGER:-PT15M\r\n",
+        "SUMMARY:Soon\r\nDESCRIPTION:Soon\r\nATTENDEE:mailto:vera@example.com\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER;VALUE=DATE-TIME:20260115T124500Z\r\n",
+        "DESCRIPTION:Soon\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n",
+    );
+
+    assert_eq!(ical_to_event(ics).expect("parse").alerts, None);
+}
+
+#[test]
+fn an_alarm_that_names_itself_no_id_gets_a_key_of_its_own() {
+    // Evolution's editor writes a VALARM with an `X-EVOLUTION-ALARM-UID` and no
+    // RFC 9074 `UID`, so a reminder the user has just added arrives with no key
+    // for the `alerts` map. The keys invented for those are positional, which is
+    // what makes them stable: the same component read twice yields the same map,
+    // so a save that changed nothing else patches nothing.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n",
+        "UID:E1\r\nDTSTART;TZID=Europe/Berlin:20260115T130000\r\n",
+        "BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:Soon\r\nTRIGGER:-PT15M\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\nUID:a1\r\nACTION:DISPLAY\r\nDESCRIPTION:Soon\r\n",
+        "TRIGGER;RELATED=END:PT5M\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n",
+    );
+
+    let alerts = ical_to_event(ics).expect("parse").alerts.expect("alerts");
+
+    // `a1` is taken by the alarm that names it, so the nameless one is not given
+    // it: two reminders must not collapse into one entry.
+    assert_eq!(alerts.keys().collect::<Vec<_>>(), ["a1", "a2"]);
+    assert_eq!(alerts["a1"]["trigger"]["relativeTo"], json!("end"));
+    assert_eq!(alerts["a2"]["trigger"]["offset"], json!("-PT15M"));
+    assert!(alerts.values().all(|alert| alert["action"] == "display"));
+}
+
+#[test]
+fn an_event_that_uses_the_default_reminders_is_drawn_with_none() {
+    // RFC 8984 §4.5.1: with `useDefaultAlerts` true the `alerts` property is
+    // ignored, and the reminders that fire are the ones the user's own client
+    // defaults to. Drawing the ignored ones would show reminders that do not
+    // happen, and a save naming the property would edit what nothing reads.
+    let mut event = reminded([("k1", quarter_of_an_hour_before())]);
+    event
+        .extra
+        .insert("useDefaultAlerts".to_owned(), json!(true));
+
+    assert!(without(&event_to_ical(&event), "BEGIN:VALARM"), "{event:?}");
+    assert!(!maps_alerts(&event));
+}
+
+#[test]
+fn an_edited_instance_is_drawn_with_the_series_reminders() {
+    // RFC 8984 §4.3.4: an instance holds every property its override does not
+    // restate. A component drawn without the series' VALARMs would be an
+    // occurrence of a meeting nobody is reminded of.
+    let mut event =
+        recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint planning (long)"}}));
+    event.alerts = Some([("k1".to_owned(), quarter_of_an_hour_before())].into());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(ics.matches("BEGIN:VALARM\r\n").count(), 2, "{ics}");
+    // And the instance's own reminder is not read as a difference from the
+    // series': `alerts` is not one of the properties an override may restate, so
+    // the round trip states the title alone.
+    assert_eq!(
+        ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_overrides
+            .expect("overrides")["2026-01-29T13:00:00"],
+        json!({"title": "Sprint planning (long)"})
+    );
 }
 
 #[test]
@@ -4363,17 +4627,15 @@ fn properties_the_mapping_does_not_know_are_dropped_not_refused() {
         "UID:E8\r\n",
         "SUMMARY:Dentist\r\n",
         "LOCATION:Hauptstrasse 1\r\n",
-        "BEGIN:VALARM\r\n",
-        "ACTION:DISPLAY\r\n",
-        "TRIGGER:-PT15M\r\n",
-        "END:VALARM\r\n",
+        "SEQUENCE:3\r\n",
+        "ATTENDEE;ROLE=REQ-PARTICIPANT:mailto:vera@example.com\r\n",
         "END:VEVENT\r\n",
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
     assert_eq!(event.title.as_deref(), Some("Dentist"));
     // An unmapped property is a property we never write back, not a parse
-    // failure: an event that loses its alarm still opens.
+    // failure: an event that loses its guest list still opens.
     assert!(event.extra.is_empty(), "{:?}", event.extra);
 }
 

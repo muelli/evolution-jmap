@@ -21,6 +21,19 @@
     "offsite": true,
     "planning": true
   },
+  "alerts": {
+    "a1": {
+      "@type": "Alert",
+      "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+      "action": "display"
+    },
+    "a2": {
+      "@type": "Alert",
+      "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-15T11:00:00Z"},
+      "acknowledged": "2026-01-15T11:01:00Z",
+      "action": "email"
+    }
+  },
   "recurrenceRules": [
     {
       "@type": "RecurrenceRule",
