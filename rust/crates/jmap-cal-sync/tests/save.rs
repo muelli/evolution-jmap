@@ -187,15 +187,14 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     // Properties no component we produce can carry. (`locations` was the
-    // exemplar here until the place an event happens at became mapped, and
-    // `keywords` until the tags did; the guest list, the priority and the free/busy
-    // status are still nowhere on a component.)
+    // exemplar here until the place an event happens at became mapped,
+    // `keywords` until the tags did and `freeBusyStatus` until the transparency
+    // did; the guest list and the priority are still nowhere on a component.)
     fixture.patch(
         &id,
         json!({
             "participants": {"p1": {"@type": "Participant", "email": "vera@example.com"}},
             "priority": 5,
-            "freeBusyStatus": "free",
         }),
     );
     let sync = fixture.sync();
@@ -207,11 +206,10 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let stored = fixture.event(&id);
     assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
     assert_eq!(
-        stored.extra.get("freeBusyStatus"),
-        Some(&json!("free")),
+        stored.extra.get("priority"),
+        Some(&json!(5)),
         "an unmapped property was overwritten"
     );
-    assert_eq!(stored.extra.get("priority"), Some(&json!(5)));
     assert!(stored.extra.contains_key("participants"));
 }
 
@@ -2037,6 +2035,150 @@ fn a_tag_holding_a_comma_survives_the_save_as_one_tag() {
                 ("Berlin, offsite".to_owned(), json!(true)),
                 ("travel".to_owned(), json!(true)),
             ]
+            .into()
+        )
+    );
+}
+
+/// An event whose transparency the server states, and the component Evolution is
+/// shown for it.
+fn shown_as(fixture: &Fixture, free_busy_status: serde_json::Value) -> (jmap_proto::Id, String) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"freeBusyStatus": free_busy_status}));
+    let icalendar = fixture
+        .sync()
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar;
+    (id, icalendar)
+}
+
+#[test]
+fn showing_an_event_as_free_reaches_the_server_as_a_free_busy_status() {
+    // Evolution's "Show Time as: Free", which is a TRANSP line on the component
+    // and RFC 8984 §4.4.2's `freeBusyStatus` on the server. The event the mock
+    // holds says nothing about it, so this is also the case of a property the
+    // save creates rather than changes.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(!icalendar.contains("TRANSP"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup\r\nTRANSP:TRANSPARENT");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.event(&id).free_busy_status.as_deref(), Some("free"));
+}
+
+#[test]
+fn the_transparency_the_server_states_is_shown_and_left_alone_by_an_unrelated_edit() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = shown_as(&fixture, json!("free"));
+    assert!(icalendar.contains("TRANSP:TRANSPARENT"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(stored.free_busy_status.as_deref(), Some("free"));
+}
+
+#[test]
+fn marking_a_free_event_busy_again_sends_the_other_state() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = shown_as(&fixture, json!("free"));
+
+    let edited = icalendar.replace("TRANSP:TRANSPARENT", "TRANSP:OPAQUE");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).free_busy_status.as_deref(), Some("busy"));
+}
+
+#[test]
+fn removing_the_transp_line_removes_the_property() {
+    // A PatchObject removes a property to say "back to the default", and RFC 8984
+    // §4.4.2's default is busy — which is also what iCalendar means by a VEVENT
+    // with no TRANSP on it (RFC 5545 §3.8.2.7), so the two agree about what the
+    // user just asked for.
+    let fixture = Fixture::start();
+    let (id, icalendar) = shown_as(&fixture, json!("free"));
+
+    let edited = icalendar.replace("TRANSP:TRANSPARENT\r\n", "");
+    assert!(!edited.contains("TRANSP"), "{edited}");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).free_busy_status, None);
+}
+
+#[test]
+fn a_transparency_the_component_could_not_show_is_not_cleared_by_a_save() {
+    // JSCalendar's vocabulary is closed and this server answered outside it, so
+    // no TRANSP line was drawn. The baseline is what keeps that from reading as
+    // the user clearing the field: the server's own event goes through the same
+    // rendering, loses the value on both sides, and the save sends nothing.
+    let fixture = Fixture::start();
+    let (id, icalendar) = shown_as(&fixture, json!("maybe"));
+    assert!(!icalendar.contains("TRANSP"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.free_busy_status.as_deref(),
+        Some("maybe"),
+        "a value the component never showed cannot have been edited"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
+        "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn marking_one_occurrence_free_reaches_the_server_as_an_override() {
+    // "Show Time as: Free" on a single occurrence: EDS keeps the master and adds
+    // a VEVENT carrying its RECURRENCE-ID, and the transparency on that component
+    // is the one property of it that differs.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Everything the series states, restated — an instance is compared against
+    // the series property by property, so a line left off here would be an edit
+    // to that property and not to the transparency.
+    let instance = format!(
+        "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
+         DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
+         STATUS:CONFIRMED\r\nTRANSP:TRANSPARENT\r\nEND:VEVENT\r\n"
+    );
+    let edited = icalendar.replace("END:VCALENDAR", &format!("{instance}END:VCALENDAR"));
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).recurrence_overrides,
+        Some(
+            [(
+                "2026-01-22T09:00:00".to_owned(),
+                json!({"freeBusyStatus": "free"})
+            )]
             .into()
         )
     );

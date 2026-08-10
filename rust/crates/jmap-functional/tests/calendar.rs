@@ -37,6 +37,14 @@ const LOCATION: &str = "Room 42";
 /// both sides.
 const KEYWORDS: [&str; 2] = ["offsite", "planning"];
 
+/// And whether it blocks the time it occupies — the `TRANSP` in
+/// `tests/functional/cal-client.c`, which has to reach the server as a
+/// JSCalendar `freeBusyStatus` (RFC 8984 §4.4.2). The transparent state
+/// deliberately: both formats default to the other one, so only this direction
+/// distinguishes a state that crossed from a component that lost the line.
+const TRANSP: &str = "TRANSPARENT";
+const FREE_BUSY_STATUS: &str = "free";
+
 /// The length of that event, which the client states as a `DTEND` — the way
 /// Evolution's editor does — an hour and a half after the start. Nothing but
 /// this test says the two forms end up alike on the server.
@@ -329,6 +337,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(KEYWORDS.to_vec()),
         "the event EDS handed back lost a tag\n{report}"
     );
+    // And whether it blocks time. An empty string here is a component EDS handed
+    // back with no TRANSP on it, which reads as the OPAQUE both formats default
+    // to — so the state the client asked for would be gone and the next save
+    // would write the default over it.
+    assert_eq!(
+        seen.get("read-back-transp"),
+        Some(&TRANSP),
+        "the event EDS handed back blocks time after all\n{report}"
+    );
     // What EDS made of the edit, read back through the client rather than off
     // the server: `ECalMetaBackend` holds a series and its detached instances
     // as one object, so a component set that lost the override here would have
@@ -498,6 +515,14 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             .map(|tags| tags.keys().map(String::as_str).collect::<Vec<_>>()),
         Some(KEYWORDS.to_vec()),
         "the tags the client wrote did not reach the server: {event:?}"
+    );
+    // And the transparency, as the server holds it: the JSCalendar spelling of
+    // the state, not the iCalendar one the component carried.
+    assert_eq!(
+        event.free_busy_status.as_deref(),
+        Some(FREE_BUSY_STATUS),
+        "the event reached the server blocking time, so the TRANSP the client \
+         wrote was lost: {event:?}"
     );
 
     // The all-day one, and the property that is the whole point of it: without

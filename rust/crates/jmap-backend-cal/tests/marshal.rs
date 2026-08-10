@@ -1090,6 +1090,43 @@ fn libical_splits_the_categories_this_mapping_writes_and_keeps_every_tag() {
     );
 }
 
+/// Whether an event blocks time, through the parser that actually reads it.
+///
+/// `jmap-ical` reads a missing `TRANSP` as *nothing said* rather than as RFC 5545
+/// §3.8.2.7's OPAQUE default, so that a save can tell an event the server never
+/// gave a transparency from one the user just set back to busy. That reading is
+/// only sound if the component EDS hands back does not acquire a line the
+/// mapping never wrote — libical filling the default in would turn every save of
+/// such an event into a patch stating `busy`.
+///
+/// It does not: a `VEVENT` with no `TRANSP` comes back with none, and one that
+/// has it comes back with the same value, unrespelled. What this cannot say is
+/// what Evolution's *appointment editor* writes — it may well set the property
+/// explicitly from its "Show Time as" combo, and a patch stating the default
+/// would then be sent once. That is a redundant write, not a wrong one: RFC 8984
+/// §4.4.2 makes `busy` and no value the same state.
+#[test]
+fn libical_neither_invents_a_transparency_nor_respells_one() {
+    assert_eq!(
+        reparsed("TRANSP", "DESCRIPTION:the quarter"),
+        Vec::<String>::new(),
+        "libical filled in the OPAQUE default"
+    );
+    for line in ["TRANSP:TRANSPARENT", "TRANSP:OPAQUE"] {
+        assert_eq!(reparsed("TRANSP", line), vec![line.to_owned()]);
+        let object = reparsed_object(line);
+        let read_back = jmap_ical::ical_to_event(&object).expect("parse");
+        assert_eq!(
+            read_back.free_busy_status.as_deref(),
+            match line {
+                "TRANSP:TRANSPARENT" => Some("free"),
+                _ => Some("busy"),
+            },
+            "{object}"
+        );
+    }
+}
+
 /// The `LOCATION` lines of a `VEVENT` after libical has parsed and re-rendered
 /// it, unfolded.
 fn reparsed_lines(lines: &str) -> Vec<String> {

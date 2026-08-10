@@ -5,15 +5,16 @@
 //!
 //! The mapped set is the one the calendar backend needs to be useful — UID,
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
-//! the event is shown without a time), DURATION, STATUS, LOCATION, CATEGORIES,
-//! RRULE, and the instances an EXDATE, an RDATE or a `RECURRENCE-ID` component
-//! names one at a time — and no more. Everything else on an event
-//! (participants, alarms, links, priority, …) is *dropped*, which is only safe
-//! because saving goes back to the server as a PatchObject naming the mapped
-//! properties: a property we never mapped is a property we never overwrite. See
-//! [`MAPPED_PROPERTIES`], [`maps_locations`], [`maps_keywords`],
-//! [`maps_recurrence_rule`] and [`maps_recurrence_override`], which are that
-//! knowledge in machine-readable form.
+//! the event is shown without a time), DURATION, STATUS, TRANSP, LOCATION,
+//! CATEGORIES, RRULE, and the instances an EXDATE, an RDATE or a
+//! `RECURRENCE-ID` component names one at a time — and no more. Everything
+//! else on an event (participants, alarms, links, priority, …) is *dropped*,
+//! which is only safe because saving goes back to the server as a PatchObject
+//! naming the mapped properties: a property we never mapped is a property we
+//! never overwrite. See [`MAPPED_PROPERTIES`], [`maps_locations`],
+//! [`maps_keywords`], [`maps_recurrence_rule`] and
+//! [`maps_recurrence_override`], which are that knowledge in machine-readable
+//! form.
 //!
 //! A `VCALENDAR` here therefore holds more than one `VEVENT` whenever an
 //! instance of a recurring event was edited on its own: the series first, then
@@ -99,6 +100,18 @@ const STATUSES: [(&str, &str); 3] = [
     ("tentative", "TENTATIVE"),
 ];
 
+/// JSCalendar `freeBusyStatus` values (RFC 8984 §4.4.2) and their iCalendar
+/// `TRANSP` spelling (RFC 5545 §3.8.2.7) — whether the event blocks the time it
+/// occupies, which is Evolution's "Show Time as". Both sets are closed, so a
+/// value outside this table is dropped rather than passed through in the other
+/// format's clothes.
+///
+/// The two also agree about what a *missing* value means: RFC 8984 defaults the
+/// property to `busy` and RFC 5545 defaults `TRANSP` to `OPAQUE`, which is the
+/// same state. So a component with no line on it says exactly what an event with
+/// no property does, and neither direction has to invent one.
+const FREE_BUSY_STATUSES: [(&str, &str); 2] = [("free", "TRANSPARENT"), ("busy", "OPAQUE")];
+
 /// The JSCalendar properties this mapping covers, and therefore the only ones
 /// a save may name in a `CalendarEvent/set` update patch.
 ///
@@ -109,7 +122,7 @@ const STATUSES: [(&str, &str); 3] = [
 /// `locations` is also the one property named *into* rather than replaced: a
 /// save patches `locations/<key>/name`, so the rest of the entry stays. See
 /// [`X_JMAP_KEY`].
-pub const MAPPED_PROPERTIES: [&str; 11] = [
+pub const MAPPED_PROPERTIES: [&str; 12] = [
     "title",
     "description",
     "start",
@@ -117,6 +130,7 @@ pub const MAPPED_PROPERTIES: [&str; 11] = [
     "duration",
     "showWithoutTime",
     "status",
+    "freeBusyStatus",
     "locations",
     "keywords",
     "recurrenceRules",
@@ -134,13 +148,14 @@ pub const MAPPED_PROPERTIES: [&str; 11] = [
 ///
 /// `showWithoutTime` is absent, one step further out — see
 /// [`shows_without_time`], which is decided once for the whole document.
-pub const OVERRIDE_PROPERTIES: [&str; 6] = [
+pub const OVERRIDE_PROPERTIES: [&str; 7] = [
     "title",
     "description",
     "start",
     "timeZone",
     "duration",
     "status",
+    "freeBusyStatus",
 ];
 
 /// Whether the places an event happens at survive the trip through iCalendar
@@ -374,6 +389,12 @@ fn maps_override_field(name: &str, value: &Value) -> bool {
         // Outside the closed vocabulary there is no STATUS to write, so the
         // instance would come back at the series' status.
         "status" => value.is_null() || value.as_str().is_some_and(known_status),
+        // The same, one closed vocabulary over: a `TRANSP` this mapping cannot
+        // write leaves the instance blocking time however the series does, which
+        // is what the override said it does *not*. A null is the instance set
+        // back to the default, which the component says by carrying no line —
+        // the state an event with no property is in anyway.
+        "freeBusyStatus" => value.is_null() || value.as_str().is_some_and(known_transparency),
         // A start is required by RFC 8984, so a null says nothing, and the
         // value has to be one a DTSTART can carry.
         "start" => value.as_str().and_then(to_ical_date_time).is_some(),
@@ -545,6 +566,17 @@ fn vevent_of(
         vevent = vevent.with(Property::raw("STATUS", status));
     }
 
+    // Whether the event blocks the time it occupies. An event that says nothing
+    // gets no line: the default the two formats share means the property is
+    // absent from both, so there is nothing to state. See [`FREE_BUSY_STATUSES`].
+    if let Some(transparency) = event
+        .free_busy_status
+        .as_deref()
+        .and_then(ical_transparency)
+    {
+        vevent = vevent.with(Property::raw("TRANSP", transparency));
+    }
+
     // One place of possibly several, by name, with the key it came from riding
     // alongside so a save can patch that entry rather than replace the property.
     // See [`maps_locations`] for what the drawing leaves out.
@@ -608,6 +640,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         duration: event.duration.clone(),
         show_without_time: event.show_without_time,
         status: event.status.clone(),
+        free_busy_status: event.free_busy_status.clone(),
         // Inherited, not patchable: RFC 8984 §4.3.4 has an instance hold every
         // property its override does not restate, and an override may name
         // neither a place nor a tag ([`OVERRIDE_PROPERTIES`]). Leaving them off
@@ -631,6 +664,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
             "description" => instance.description = text,
             "duration" => instance.duration = text,
             "status" => instance.status = text,
+            "freeBusyStatus" => instance.free_busy_status = text,
             "start" => instance.start = text,
             "timeZone" => instance.time_zone = text,
             // `excluded: false`, which says only that the instance happens —
@@ -714,6 +748,31 @@ fn ical_status(status: &str) -> Option<&'static str> {
 
 fn known_status(status: &str) -> bool {
     ical_status(status).is_some()
+}
+
+/// The iCalendar `TRANSP` for a JSCalendar `freeBusyStatus`, or `None` for one
+/// outside the closed vocabulary the two share.
+fn ical_transparency(free_busy_status: &str) -> Option<&'static str> {
+    FREE_BUSY_STATUSES
+        .iter()
+        .find(|(jscalendar, _)| jscalendar.eq_ignore_ascii_case(free_busy_status))
+        .map(|(_, ical)| *ical)
+}
+
+fn known_transparency(free_busy_status: &str) -> bool {
+    ical_transparency(free_busy_status).is_some()
+}
+
+/// The JSCalendar `freeBusyStatus` a `TRANSP` states, or `None` where the
+/// component states none this mapping can name — which is read as nothing said,
+/// like every other unreadable value, rather than passed on for the server to
+/// reject.
+fn read_transparency(vevent: &Component) -> Option<String> {
+    let transparency = vevent.text("TRANSP")?;
+    FREE_BUSY_STATUSES
+        .iter()
+        .find(|(_, ical)| ical.eq_ignore_ascii_case(&transparency))
+        .map(|(jscalendar, _)| (*jscalendar).to_owned())
 }
 
 /// Read an iCalendar object into a calendar event.
@@ -858,6 +917,7 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
                 .find(|(_, ical)| ical.eq_ignore_ascii_case(&status))
                 .map(|(jscalendar, _)| (*jscalendar).to_owned())
         }),
+        free_busy_status: read_transparency(vevent),
         locations: read_locations(vevent),
         keywords: read_keywords(vevent),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
@@ -1085,6 +1145,11 @@ fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) ->
         ("timeZone", &series.time_zone, &instance.time_zone),
         ("duration", &series.duration, &instance.duration),
         ("status", &series.status, &instance.status),
+        (
+            "freeBusyStatus",
+            &series.free_busy_status,
+            &instance.free_busy_status,
+        ),
     ] {
         if was != now {
             patch.insert(

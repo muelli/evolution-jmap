@@ -56,6 +56,15 @@
  * ends; see `KEYWORDS` in `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_CATEGORIES "offsite,planning"
 
+/* And whether it blocks the time it occupies, which is Evolution's "Show Time
+ * as" combo: TRANSP on the component (RFC 5545 §3.8.2.7), a JSCalendar
+ * `freeBusyStatus` on the server (RFC 8984 §4.4.2). TRANSPARENT rather than the
+ * OPAQUE both formats default to, because the default is the state a component
+ * with no line on it is already in — only the other one says the mapping
+ * carried anything. The same value is asserted from both ends; see
+ * `FREE_BUSY_STATUS` in `rust/crates/jmap-functional/tests/calendar.rs`. */
+#define TEST_TRANSP "TRANSPARENT"
+
 /* And an all-day event, written the way Evolution writes one: DATE values
  * rather than DATE-TIMEs, on both ends. RFC 5545 §3.6.1's other form of an
  * event, and the only thing in iCalendar that says "this is a day, not a time
@@ -382,6 +391,7 @@ main (int argc,
 	ICalTimezone *moved_zone;
 	gchar *icalendar;
 	gchar *categories;
+	gchar *transp;
 	gchar *exdates;
 	gchar *rrule;
 	gchar *tzid;
@@ -484,8 +494,10 @@ main (int argc,
 		"SUMMARY:%s\r\n"
 		"LOCATION:%s\r\n"
 		"CATEGORIES:%s\r\n"
+		"TRANSP:%s\r\n"
 		"END:VEVENT\r\n",
-		TEST_DTSTART, TEST_DTEND, summary, TEST_LOCATION, TEST_CATEGORIES);
+		TEST_DTSTART, TEST_DTEND, summary, TEST_LOCATION, TEST_CATEGORIES,
+		TEST_TRANSP);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 
@@ -530,6 +542,13 @@ main (int argc,
 	categories = joined_values (read_back_event, I_CAL_CATEGORIES_PROPERTY);
 	g_print ("read-back-categories=%s\n", categories);
 	g_free (categories);
+	/* And whether it blocks time, read as text rather than through
+	 * i_cal_property_get_transp: an empty string is then a component that
+	 * carries no TRANSP at all, which is what the mapping losing the state
+	 * would look like, and the enum would report that as OPAQUE. */
+	transp = joined_values (read_back_event, I_CAL_TRANSP_PROPERTY);
+	g_print ("read-back-transp=%s\n", transp);
+	g_free (transp);
 	g_object_unref (read_back_event);
 
 	/* The all-day one, through the same path. Written second so that a
