@@ -12,9 +12,10 @@ publish = false
 
 [lib]
 name = "jmap_config"
-# An rlib only, so far. The cdylib Evolution dlopens as
-# module-jmap-configuration.so comes with the module entry point; a cdylib with
-# no entry point would install a file no host ever opens.
+# cdylib is what Evolution dlopens (installed as module-jmap-configuration.so);
+# rlib is what the integration tests link against, and building both keeps the
+# two from drifting apart.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 eds-sys = { workspace = true }
@@ -25,6 +26,10 @@ evo-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
 evolution-jmap-collection-sync = { workspace = true }
 glib-sys = { workspace = true }
+# For the `GTypeModule` the module entry point registers the class against, and
+# nothing else: every other GObject call this crate makes is behind
+# `jmap-backend-core`'s subclass helpers.
+gobject-sys = { workspace = true }
 
 [dev-dependencies]
 # The account this writes is only right if the collection backend reads it back
@@ -37,4 +42,3 @@ jmap-backend-collection = { workspace = true }
 # needed for is the `CamelJmapSettings` GType an `ESourceCamel` subtype is
 # generated from — which is a reader of this crate's output, not a part of it.
 jmap-mail = { workspace = true }
-gobject-sys = { workspace = true }
