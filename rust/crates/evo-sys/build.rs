@@ -21,7 +21,20 @@ const MIN_EVO: &str = "3.52";
 /// crate claims to have audited stays one file wide.
 const ALLOWED_TYPES: &[&str] = &["EMailConfigServiceBackend.*"];
 
-const ALLOWED_FUNCTIONS: &[&str] = &["e_mail_config_service_backend_.*"];
+/// The class's own accessors, and the one thing asked of the page it extends.
+///
+/// The prefix is the *backend*'s, because that is the class this module
+/// subclasses and every one of its accessors is a call its vfuncs may
+/// legitimately make. The page is not subclassed and not extended by anything
+/// here — it is only ever the object a backend hands back — so it is named a
+/// function at a time, the way the GTK calls below are: `setup_defaults` needs
+/// the address the user typed on the identity page and nothing else, and an
+/// `e_mail_config_service_page_.*` would take on the page's scratch sources, its
+/// backend lookup and its auto-configuration besides.
+const ALLOWED_FUNCTIONS: &[&str] = &[
+    "e_mail_config_service_backend_.*",
+    "e_mail_config_service_page_get_email_address",
+];
 
 /// The GTK calls, named one at a time rather than by prefix.
 ///
@@ -121,6 +134,33 @@ const BLOCKED_TYPES: &[&str] = &[
 /// about a layout for no reason to make one.
 const BLOCKED_GTK_TYPES: &[&str] = &["Gtk.*", "_Gtk.*"];
 
+/// Evolution's own page classes, blocked for exactly the reason the GTK ones
+/// are: they are widgets.
+///
+/// `EMailConfigServicePage` is a `GtkScrolledWindow` two classes down
+/// (`EMailConfigPage` → `EMailConfigActivityPage` → this), so generating it
+/// means generating the GTK class structs the blocklist above exists to keep
+/// out — bindgen says so plainly, with a `parent: GtkScrolledWindow` field
+/// naming a type nothing here defines. It is also a class this crate has no
+/// business knowing the shape of: nothing subclasses it, nothing allocates one,
+/// and the single call made on it takes it as a pointer.
+///
+/// So the page joins [`EVO_HANDLES`] instead. The backend class next door is the
+/// opposite case and stays generated: it *is* subclassed here, its layout is
+/// what `class_init` writes vfunc pointers into, and `tests/layout.rs` holds
+/// that layout against `g_type_query`.
+const BLOCKED_EVO_TYPES: &[&str] = &["_?EMailConfig(Page|ActivityPage|ServicePage)[A-Za-z]*"];
+
+/// Evolution's classes reached only through a pointer, as opaque handles — the
+/// same zero-sized `#[repr(C)]` treatment, and the same claim, as [`GTK_HANDLES`].
+///
+/// One entry: the page a service backend extends. `tests/page.rs` asserts it
+/// stayed zero-sized, and that it is the one type both
+/// `e_mail_config_service_backend_get_page` and
+/// `e_mail_config_service_page_get_email_address` speak of — which is the whole
+/// of what `setup_defaults` does with a page.
+const EVO_HANDLES: &[&str] = &["EMailConfigServicePage"];
+
 /// The GTK classes the calls above mention, as opaque handles.
 ///
 /// One `#[repr(C)]` zero-sized struct each, with a private field, so that
@@ -216,13 +256,31 @@ fn main() {
         ));
     }
 
+    // And Evolution's, which need the struct tag as well as the typedef: unlike
+    // the GTK ones, which bindgen writes into the signatures under their typedef
+    // name, a blocklisted `EMailConfigServicePage` comes through as
+    // `_EMailConfigServicePage` — the spelling the header's `typedef struct`
+    // introduces. So the handle is defined under the tag, which is what the
+    // generated declarations refer to, and aliased to the name the headers and
+    // the callers use; that is also how bindgen itself writes every Evolution
+    // class it does generate.
+    for t in EVO_HANDLES {
+        builder = builder.raw_line(format!(
+            "#[repr(C)]\npub struct _{t} {{\n    _opaque: [u8; 0],\n}}\npub type {t} = _{t};"
+        ));
+    }
+
     for t in ALLOWED_TYPES {
         builder = builder.allowlist_type(t);
     }
     for f in ALLOWED_FUNCTIONS.iter().chain(ALLOWED_GTK_FUNCTIONS) {
         builder = builder.allowlist_function(f);
     }
-    for t in BLOCKED_TYPES.iter().chain(BLOCKED_GTK_TYPES) {
+    for t in BLOCKED_TYPES
+        .iter()
+        .chain(BLOCKED_GTK_TYPES)
+        .chain(BLOCKED_EVO_TYPES)
+    {
         builder = builder.blocklist_type(t);
     }
 

@@ -8,3 +8,9 @@
  */
 
 #include <mail/e-mail-config-service-backend.h>
+
+/* And the page that class is an extension of, for the one accessor
+ * `setup_defaults` needs off it — the address typed on the identity page. The
+ * page itself stays an opaque handle (see build.rs); this is here so that the
+ * accessor's declaration is. */
+#include <mail/e-mail-config-service-page.h>
