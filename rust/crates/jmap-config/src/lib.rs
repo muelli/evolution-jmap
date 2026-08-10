@@ -19,7 +19,10 @@
 //!   one — `tests/account.rs` writes an
 //!   account with this and reads it back with that, because two descriptions of
 //!   one keyfile that are only checked separately are two descriptions that
-//!   drift.
+//!   drift. It reads as well as writes: [`account::read`] is what the widgets
+//!   are filled from and what the two vfuncs that decide anything are handed,
+//!   and it is total where the collection backend's reader is fallible —
+//!   a dialog being typed into is full of accounts that are not yet accounts.
 //! - [`mail`] is the three sources that hang off it — `[Mail Account]`,
 //!   `[Mail Identity]`, `[Mail Transport]`. Separate sources rather than three
 //!   more groups in the account's file, and not children of the collection
@@ -90,10 +93,11 @@
 //!
 //! **The vfuncs that need more than an `ESource`**: `insert_widgets` and
 //! `setup_defaults` need the `EMailConfigServicePage` this extension extends,
-//! and `check_complete` and `commit_changes` need the account read back *out*
-//! of the collection source the widgets have been editing — the inverse of
-//! [`account::apply`], which does not exist yet. [`backend`] says so slot by
-//! slot.
+//! and so are still out of reach here. `check_complete` and `commit_changes`
+//! are not: what they needed was the account read back *out* of the collection
+//! source the widgets have been editing, and [`account::read`] is that. What is
+//! left of them is the vfunc plumbing, which is the part no test on this
+//! machine covers. [`backend`] says so slot by slot.
 //!
 //! Like the backends, this crate needs the installed EDS headers and so stays
 //! out of the workspace's `default-members`; CMake runs its tests via the

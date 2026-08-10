@@ -10994,3 +10994,76 @@ Next: `account::read`, the inverse of `account::apply` — the account read back
 out of the collection source the widgets edit. It is ordinary Rust over an
 `ESource`, so it can be tested here, and it is what both `check_complete` and
 `commit_changes` are waiting on.
+
+## 2026-08-10 (hundred-and-ninth session)
+
+**`account::read`, the inverse of `account::apply`.** Seven tests, red first
+(they did not compile: there was no `read`), in
+`rust/crates/jmap-config/tests/account.rs`; the function in `src/account.rs`.
+It is the account the widgets are filled from and the one `check_complete` and
+`commit_changes` are handed — the last piece those two vfuncs were waiting on,
+which is why the crate docs that said "does not exist yet" now say what is
+actually left (the vfunc plumbing).
+
+**It is total where the registry's reader is fallible, and that is the point.**
+`collection_source::server_of` answers a `Result` and reports `MissingHost`,
+because a backend about to open a connection has no use for an account without
+one. `read` answers an `Account` and never fails: it is asked on every keystroke
+of a dialog the user is still filling in, where "no host yet" is the ordinary
+state. The verdict stays with `complete::check`, which already exists and
+already calls the same shared `origin` — so this adds a reader, not a second
+opinion about what a good account is.
+
+**The one deliberate disagreement with the registry's reader, and why.**
+`parts_of` folds the source's own `Enabled` flag in — a disabled account has no
+parts to populate — and `read` does not. `enabled` is not a field of `Account`,
+`apply` writes all three switches every time, and the two together mean a `read`
+that answered `Parts::NONE` for a hidden account would show three cleared check
+boxes and then *commit* them: "hide this account for now" turned into
+permanently losing which parts it offered. The test asserts both answers side by
+side on one source (`parts_of` says `NONE`, `read` says what was written) so the
+divergence is pinned rather than latent.
+
+**Every other absent-group rule is the collection backend's, restated nowhere.**
+No `[Collection]` is `Parts::ALL`, through `Parts::from_collection` itself; no
+`[Security]` is TLS, because reading the `secure` property of a group that is
+not there answers FALSE and a dialog that offered *that* back would switch TLS
+off on a hand-written account; no `[Authentication]` is the empty host and no
+user. And nothing here calls `e_source_get_extension` without
+`e_source_has_extension` first — this is handed the user's own account file, and
+a read that left three groups behind would turn opening the account editor and
+pressing Cancel into a write. That has its own test.
+
+**What does not round-trip, and is asserted not to.** `auth_method: None` comes
+back as `Some("none")`, because `ESourceAuthentication:method` has no unset
+state — the same fact `tests/account.rs` already pinned for the registry's
+reader. `read` reports what the source says rather than mapping "none" back to
+`None`: the alternative is this crate and the collection backend disagreeing
+about one string in one keyfile. The host is the only field translated at all —
+the keyfile's NULL becomes the empty string an unfilled entry holds, which is
+`complete::check`'s single line of translation read backwards.
+
+**What this is not.** Still no module, no `e_module_load`, no
+`module-jmap-configuration.so`, no widget, and no account created through
+Evolution's UI — M7's actual acceptance, which this VM cannot do. M7 carries no
+completion tag. `read` itself is ordinary Rust over an `ESource` and is tested
+here; the vfuncs that will call it are not, and will need human verification in
+real Evolution.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM); no new files this time, so no new SPDX headers
+either. `cargo fmt --check`, `cargo test --locked` (491 tests on the default
+members, unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are
+clean, as are `clippy`/`test` over the EDS crates — 820 tests, `jmap-config`'s
+64 (was 57) included. The one ignored test is a pre-existing `ignore` doctest in
+`jmap-backend-core`'s `instance::Slot`. `RUSTDOCFLAGS=-D warnings cargo doc`
+clean for the crate. Pre-existing and untouched: `example-module` does not build
+on this VM, which is why the workspace-wide runs exclude it.
+
+No milestone tag.
+
+Next: the `check_complete` vfunc — the first slot that is pure plumbing now that
+both halves of its answer exist (`account::read` and `complete::check`).
+Overriding it is `class_init` work of the kind `backend.rs` already does for
+`new_collection`, so it can be compiled and its trampoline tested here; what it
+cannot show is the greyed-out *Next* button, which stays human verification.
