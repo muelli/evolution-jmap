@@ -94,6 +94,21 @@ fn recurrence_rule_days_of_the_month_roundtrip() {
 }
 
 #[test]
+fn recurrence_rule_days_of_the_year_roundtrip() {
+    // `byYearDay` is iCalendar's `BYYEARDAY` — "the first and the last day of the
+    // year", the negative value counting back from 31 December as RFC 8984 §4.3.3
+    // has it. A number, unlike `byMonth`: a day of the year has no leap-month
+    // spelling to preserve.
+    let value = fixture("calendars/recurrence_rule_days_of_year.json");
+    assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
+
+    let rule: RecurrenceRule = serde_json::from_value(value).unwrap();
+    assert_eq!(rule.frequency, "yearly");
+    assert_eq!(rule.by_year_day.as_deref(), Some(&[1, -1][..]));
+    assert!(rule.extra.is_empty());
+}
+
+#[test]
 fn recurrence_rule_months_roundtrip() {
     // `byMonth` is the months of the year a rule repeats in — iCalendar's
     // `BYMONTH`. RFC 8984 §4.3.3 holds each as a *string*, not a number, so
