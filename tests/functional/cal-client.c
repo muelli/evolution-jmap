@@ -69,6 +69,16 @@
 #define TEST_RECURRING_EDITED_DTSTART "20260122T130000Z"
 #define TEST_RECURRING_EDITED_DTEND "20260122T143000Z"
 
+/* And the occurrence deleted the way a user deletes one, rather than by writing
+ * the EXDATE above into the component before it is created. "Delete this
+ * occurrence" is e_cal_client_remove_object_sync with a RECURRENCE-ID and
+ * E_CAL_OBJ_MOD_THIS, which ECalMetaBackend turns into a *save of the master*
+ * carrying one more EXDATE — the removal vfunc is never reached. That
+ * translation is EDS's, not this project's, and it is what the created-with-an-
+ * EXDATE case above cannot exercise. The fourth occurrence of the weekly
+ * series, so that it is neither the excluded one nor the edited one. */
+#define TEST_RECURRING_REMOVED_RECURRENCE_ID "20260205T130000Z"
+
 static int
 fail (const gchar *step,
       GError *error)
@@ -111,6 +121,37 @@ is_detached_instance (ICalComponent *component)
 	return TRUE;
 }
 
+/* Every instant a component says does not happen, joined by commas — the
+ * EXDATEs of RFC 5545 §3.8.5.1, read back as text.
+ *
+ * Each property is asked for its value rather than for a time, which folds the
+ * two shapes libical may hold a list in — one property carrying `a,b` or two
+ * properties carrying one each — into the same string, so what this reports
+ * depends on which instants are excluded and not on how they were written. */
+static gchar *
+exdate_values (ICalComponent *component)
+{
+	GString *values = g_string_new (NULL);
+	ICalProperty *property;
+
+	property = i_cal_component_get_first_property (component, I_CAL_EXDATE_PROPERTY);
+	while (property) {
+		ICalProperty *next;
+		gchar *value = i_cal_property_get_value_as_string (property);
+
+		if (values->len)
+			g_string_append_c (values, ',');
+		g_string_append (values, value ? value : "");
+		g_free (value);
+
+		next = i_cal_component_get_next_property (component, I_CAL_EXDATE_PROPERTY);
+		g_object_unref (property);
+		property = next;
+	}
+
+	return g_string_free (values, FALSE);
+}
+
 int
 main (int argc,
       char **argv)
@@ -125,6 +166,7 @@ main (int argc,
 	ICalComponent *read_back = NULL;
 	ICalComponent *read_back_event;
 	gchar *icalendar;
+	gchar *exdates;
 	gchar *added_uid = NULL;
 	gchar *all_day_uid = NULL;
 	gchar *recurring_uid = NULL;
@@ -362,13 +404,12 @@ main (int argc,
 		return fail ("read-back-occurrence", error);
 	}
 
-	g_free (recurring_uid);
-
 	read_back_event = first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
 		g_printerr ("read-back-occurrence: EDS returned an object with no VEVENT in it\n");
+		g_free (recurring_uid);
 		g_free (added_uid);
 		return 1;
 	}
@@ -381,6 +422,7 @@ main (int argc,
 		g_printerr ("read-back-occurrence: EDS answered with a component that "
 			    "replaces no occurrence\n");
 		g_object_unref (read_back_event);
+		g_free (recurring_uid);
 		g_free (added_uid);
 		return 1;
 	}
@@ -388,6 +430,45 @@ main (int argc,
 	g_print ("edited-occurrence-summary=%s\n",
 		 i_cal_component_get_summary (read_back_event));
 	g_object_unref (read_back_event);
+
+	/* And "Delete this occurrence" on a fourth one, which is a removal only
+	 * from the client's side: EDS answers it by handing the backend the
+	 * master with one more EXDATE. Done after the edit so that the series
+	 * already carries an exception of each kind when it happens, which is the
+	 * state a save that rebuilt the overrides from scratch would flatten. */
+	if (!e_cal_client_remove_object_sync (cal, recurring_uid,
+					      TEST_RECURRING_REMOVED_RECURRENCE_ID,
+					      E_CAL_OBJ_MOD_THIS,
+					      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
+		g_free (recurring_uid);
+		g_free (added_uid);
+		return fail ("remove-occurrence", error);
+	}
+
+	/* The series as EDS kept it: asking by UID with no RECURRENCE-ID answers
+	 * with the master alone, which is the component the exclusions live on. */
+	if (!e_cal_client_get_object_sync (cal, recurring_uid, NULL, &read_back, NULL, &error)) {
+		g_free (recurring_uid);
+		g_free (added_uid);
+		return fail ("read-back-series", error);
+	}
+
+	g_free (recurring_uid);
+
+	read_back_event = first_vevent (read_back);
+	g_object_unref (read_back);
+
+	if (!read_back_event) {
+		g_printerr ("read-back-series: EDS returned an object with no VEVENT in it\n");
+		g_free (added_uid);
+		return 1;
+	}
+
+	exdates = exdate_values (read_back_event);
+	g_object_unref (read_back_event);
+
+	g_print ("recurring-exdates=%s\n", exdates);
+	g_free (exdates);
 
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error)) {
 		g_free (added_uid);

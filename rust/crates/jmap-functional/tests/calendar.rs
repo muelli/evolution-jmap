@@ -52,6 +52,24 @@ const RECURRING_EXCLUDED: &str = "2026-01-29T13:00:00";
 const RECURRING_EDITED: &str = "2026-01-22T13:00:00";
 const RECURRING_EDITED_SUMMARY: &str = "Weekly standup (demo)";
 
+/// And "not that one" a second time, reached the way a user reaches it. The
+/// `EXDATE` above is written into the component the client creates, so it holds
+/// the *mapping* to account and says nothing about EDS: Evolution's "Delete
+/// this occurrence" calls `e_cal_client_remove_object_sync` with a
+/// `RECURRENCE-ID` and `E_CAL_OBJ_MOD_THIS`, and what `ECalMetaBackend` makes
+/// of that is a **save of the master** — not a removal — which is a code path
+/// nothing in this tree had ever asked EDS to take. The fourth occurrence of
+/// the weekly series, so that it is neither the excluded one nor the edited
+/// one and a mix-up cannot pass.
+const RECURRING_REMOVED: &str = "2026-02-05T13:00:00";
+
+/// The same two exclusions as EDS spells them back in its own cache: the one
+/// the client wrote with the event and the one it removed afterwards, both in
+/// the series' UTC. Named rather than counted, because two exclusions of which
+/// one names the wrong day is one cancelled appointment that comes back and
+/// another that was never cancelled at all.
+const RECURRING_EXDATES: [&str; 2] = ["20260129T130000Z", "20260205T130000Z"];
+
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
 /// mock's ephemeral port filled in. Kept as a literal here rather than read
 /// from `docs/` so that a change to the documented recipe fails this test
@@ -191,6 +209,25 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(&RECURRING_EDITED_SUMMARY),
         "EDS did not keep the occurrence the client edited\n{report}"
     );
+    // And what EDS made of the removal, in the same cache and for the same
+    // reason: the master it kept has to carry an `EXDATE` for every occurrence
+    // that no longer happens — the one the client wrote into the event and the
+    // one it removed through EDS afterwards. Sorted before comparing, because
+    // the order libical hands two exclusions back is not what this is about.
+    let exdates = seen
+        .get("recurring-exdates")
+        .unwrap_or_else(|| panic!("the client reported no exclusions\n{report}"));
+    let mut exdates: Vec<&str> = exdates
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .collect();
+    exdates.sort_unstable();
+    assert_eq!(
+        exdates, RECURRING_EXDATES,
+        "EDS's cache does not hold exactly the two occurrences that were \
+         cancelled\n{report}"
+    );
+
     // Four objects for three events: `ECalCache` keys on (uid, rid), so the
     // detached instance is a row of its own beside the series it belongs to.
     // Three would mean the edit never landed in the cache; five would mean a
@@ -293,10 +330,9 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .unwrap_or_else(|| panic!("the recurring event has no rule: {recurring:?}"));
     assert_eq!(rules[0].frequency, "weekly", "{recurring:?}");
     assert_eq!(rules[0].count, Some(6), "{recurring:?}");
-    // Both exceptions in one map, because they share it: an override written
-    // for the edited instance that dropped the excluded one — or the other way
-    // round — is a deletion or a rename undone, and asserting them separately
-    // would not notice.
+    // All three exceptions in one map, because they share it: an override
+    // written for one of them that dropped another is a deletion or a rename
+    // undone, and asserting them one at a time would not notice.
     assert_eq!(
         recurring.recurrence_overrides,
         Some(
@@ -309,11 +345,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
                     RECURRING_EDITED.to_owned(),
                     serde_json::json!({"title": RECURRING_EDITED_SUMMARY}),
                 ),
+                (
+                    RECURRING_REMOVED.to_owned(),
+                    serde_json::json!({"excluded": true}),
+                ),
             ]
             .into()
         ),
-        "the deleted and the edited occurrence did not both reach the server as \
+        "the deleted and the edited occurrences did not all reach the server as \
          overrides, so every other client shows a cancelled appointment or the \
-         series' own title on the day the user changed: {recurring:?}"
+         series' own title on a day the user changed: {recurring:?}"
     );
 }
