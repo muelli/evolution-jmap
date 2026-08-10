@@ -21,6 +21,13 @@ use jmap_proto::calendars::NDay;
 const SUMMARY: &str = "Sprint planning";
 const START: &str = "2026-01-15T13:00:00";
 
+/// And where it happens — the `LOCATION` in `tests/functional/cal-client.c`,
+/// which has to reach the server as an entry in a JSCalendar `locations` map
+/// (RFC 8984 §4.2.5) rather than as nothing at all. The key is the one
+/// `jmap-ical` invents for a component that carries none, since EDS has never
+/// seen this event before.
+const LOCATION: &str = "Room 42";
+
 /// The length of that event, which the client states as a `DTEND` — the way
 /// Evolution's editor does — an hour and a half after the start. Nothing but
 /// this test says the two forms end up alike on the server.
@@ -296,6 +303,14 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(&SUMMARY),
         "the event EDS handed back is not the one that went in\n{report}"
     );
+    // And the place it happens at, which crosses the mapping as a whole property
+    // rather than as a line of text: `locations` is a map of objects, so a
+    // LOCATION that does not come back here is one the round trip lost.
+    assert_eq!(
+        seen.get("read-back-location"),
+        Some(&LOCATION),
+        "the event EDS handed back happens nowhere\n{report}"
+    );
     // What EDS made of the edit, read back through the client rather than off
     // the server: `ECalMetaBackend` holds a series and its detached instances
     // as one object, so a component set that lost the override here would have
@@ -440,6 +455,21 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             .as_ref()
             .is_some_and(|calendars| calendars.values().any(|included| *included)),
         "the event on the server is in no calendar: {event:?}"
+    );
+    // The place, as the server holds it: a one-entry map of a Location object,
+    // not the string the component carried. Nothing below real EDS says whether
+    // a `LOCATION` a libecal consumer wrote survives the trip through the
+    // meta backend's cache to get here.
+    assert_eq!(
+        event.locations,
+        Some(
+            [(
+                "l1".to_owned(),
+                serde_json::json!({"@type": "Location", "name": LOCATION})
+            )]
+            .into()
+        ),
+        "the place the client named did not reach the server: {event:?}"
     );
 
     // The all-day one, and the property that is the whole point of it: without

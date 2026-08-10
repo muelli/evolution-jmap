@@ -998,3 +998,67 @@ fn reparsed_rrule(value: &str) -> Option<String> {
         .find_map(|line| line.strip_prefix("RRULE:"))
         .map(str::to_owned)
 }
+
+/// The place an event happens at, through the parser that actually reads it.
+///
+/// `jmap-ical` writes the key of the `locations` entry a `LOCATION` came from as
+/// an `X-JMAP-KEY` parameter, so that a save patches the server's own entry
+/// instead of replacing the property. Nothing in `jmap-ical` can check that
+/// libical keeps a parameter it has never heard of — calcard is what parses
+/// there — and if libical dropped it, the key would be gone by the time EDS
+/// handed the component back. It does keep it, verbatim, escaping and all.
+///
+/// This is a measurement, not a requirement: the save path deliberately takes
+/// the key from the event the *server* holds, because Evolution's appointment
+/// editor writes the `LOCATION` afresh and need not carry the parameter through
+/// an edit. What would break without libical's cooperation is only the case of a
+/// component saved back untouched.
+#[test]
+fn libical_keeps_the_location_key_this_mapping_writes() {
+    for line in [
+        "LOCATION;X-JMAP-KEY=srv1:Room 42",
+        // TEXT escaping (RFC 5545 §3.3.11) beside the parameter, since a room
+        // name holding a comma is what the escaping is there for.
+        "LOCATION;X-JMAP-KEY=srv1:Berlin\\, Room 42\\; 3rd floor",
+    ] {
+        assert_eq!(reparsed_lines(line), vec![line.to_owned()]);
+    }
+    // And what libical does *not* do: enforce RFC 5545 §3.6.1's one `LOCATION`
+    // per `VEVENT`. A component may therefore arrive naming two places, which
+    // `jmap-ical` reads as the first — the same narrowing as an event whose
+    // `locations` map holds two, and the same refusal to write it back.
+    assert_eq!(
+        reparsed_lines("LOCATION:Room 42\r\nLOCATION:Cafeteria"),
+        vec![
+            "LOCATION:Room 42".to_owned(),
+            "LOCATION:Cafeteria".to_owned()
+        ]
+    );
+}
+
+/// The `LOCATION` lines of a `VEVENT` after libical has parsed and re-rendered
+/// it, unfolded.
+fn reparsed_lines(lines: &str) -> Vec<String> {
+    let vevent = format!(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:S\r\nDTSTART:20260810T070000Z\r\n\
+         {lines}\r\nEND:VEVENT\r\n"
+    );
+    let component = instance(&vevent);
+    let list = instance_list(&[component]);
+    // SAFETY: `list` holds one live component, freed below with the instance.
+    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    unsafe {
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+    saved
+        .icalendar
+        .replace("\r\n ", "")
+        .replace("\r\n\t", "")
+        .replace("\n ", "")
+        .replace("\n\t", "")
+        .lines()
+        .filter(|line| line.starts_with("LOCATION"))
+        .map(str::to_owned)
+        .collect()
+}

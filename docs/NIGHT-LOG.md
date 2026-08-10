@@ -15615,3 +15615,118 @@ as one `CalendarEvent/set` or two; the *reading* direction of a per-instance zon
 through real EDS is untested; calcard silently drops an unreadable
 `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below this crate, which only an
 upstream fix reaches.
+
+## 2026-08-10 (hundred-and-fifty-seventh session)
+
+The **place an event happens at** is now mapped: JSCalendar `locations` ↔
+iCalendar `LOCATION`, both directions, and — the part that took the thinking —
+patched *into* the server's own entry rather than replacing the property. It is
+the tenth mapped property and the first one that is not a scalar, so most of the
+session went on the shape of the write rather than on the drawing.
+
+**Why not the obvious thing.** `locations` is a *map* of Location objects (RFC
+8984 §4.2.5), each holding a `description`, `coordinates`, `links`,
+`locationTypes` and a `timeZone` besides its `name`; RFC 5545 §3.6.1 gives a
+`VEVENT` one `LOCATION` line of text. Replaced whole — which is what every mapped
+property before this did — a user renaming their meeting room would have deleted
+the coordinates, the map link and the room's type, none of which they were ever
+shown. So the save patches `locations/<key>/name` and touches nothing else. That
+is the first time this tree reaches below the top level of a `CalendarEvent`
+patch; `jmap-book-sync` has done it for `emails`/`phones` since M3, and this is
+the same machinery arriving on the calendar side (RFC 8620 §5.3's pointer paths,
+which the mock already applies).
+
+**The key had to survive, and it does — measured.** The entry's key rides out and
+back in an `X-JMAP-KEY` parameter, exactly as the JSContact map keys do on the
+address book side. A probe in `jmap-backend-cal/tests/marshal.rs` asked real
+libical what it does with a parameter it has never heard of: it keeps it,
+verbatim, escaping and all, and it also keeps *two* `LOCATION` lines rather than
+enforcing §3.6.1's cardinality. Both answers are now assertions rather than
+assumptions.
+
+**But the design does not depend on the key coming back**, which is the decision
+worth recording. Evolution's appointment editor writes the `LOCATION` afresh, so
+the parameter may well be gone by the time a save arrives. So the diff compares
+**names**, not keys, and patches the key the *server* holds — read off `current`,
+not off the component. A rename therefore reaches the server's entry whether or
+not the round trip kept the parameter, which a test pins in both spellings. The
+key read off a content line is used for one thing only: creating an entry where
+the event had none, and there RFC 8984 §1.4.4's `Id` shape is enforced, because a
+key the server rejects costs every other edit in the same `CalendarEvent/set`.
+
+**What `maps_locations` refuses, and what it deliberately does not.** Unlike the
+recurrence gates, this one is *not* about the drawing being lossy — a place with
+coordinates is drawn by name and still renameable, because the patch cannot touch
+the coordinates. It refuses only what would make the *path* wrong or the edit
+invented: more than one place (the second has no line to be shown on, so the
+field stands for part of the property), an entry that is not an object (patching
+through a non-object is an RFC 8620 §5.3 error and fails the whole set), a `name`
+that is not a string (a value the user never saw), and an empty key (which names
+no member at all). Clearing the field removes the whole property where the entry
+said nothing but its name, and nulls just the name where it said more — the two
+cases a test pins separately.
+
+**Verified through real EDS, not just believed.** `tests/functional/cal-client.c`
+now writes a `LOCATION` on the event it creates and reports what EDS's own cache
+hands back; the leg asserts both that and the one-entry `locations` map the mock
+received. Mutation-checked: changing the expected name to `Room 43` fails the
+leg, with the client's `read-back-location=Room 42` in the output, so the
+assertion is live rather than vacuous. That makes this the rare mapping addition
+whose create direction is confirmed end to end on the first session rather than
+standing on a libical round trip.
+
+**Two exemplars moved.** `locations` was the example of "a property no component
+we produce can carry" in `jmap-cal-sync/tests/save.rs` and of "a property the
+mapping drops" in `tests/sync.rs`; both now use `keywords`, and the revision test
+gained the opposite assertion — a place changing on the server *must* move the
+revision, or Evolution keeps showing the room the meeting was moved out of.
+`participants`, `priority` and `keywords` are the remaining unmapped exemplars.
+
+Tests: red first at every layer — one compile-red in `jmap-proto` (the fixture
+grew a `locations` entry with coordinates), ten behaviour-red in `jmap-ical`, six
+in `jmap-cal-sync/tests/save.rs` against the mock (the seventh, "a place that did
+not change is not sent at all", passed before the code existed and is a
+regression guard, not a driver). Counts: `cargo test --locked` 690, up 17 from
+673; `jmap-backend-cal` 29 in `marshal.rs`, up one; `ctest` 14/14 including all
+four functional legs against real EDS.
+
+Not done, deliberately: an **override** may still not name a place. RFC 8984
+§4.3.4 lets one, and iCalendar spells it on the instance's own component, but
+`OVERRIDE_PROPERTIES` stays as it was — an instance is *drawn* at the series'
+place (inherited, per §4.3.4) and a patch naming `locations` still flags the
+whole property as unwritable. Doing it properly means comparing places per
+instance, which is a session of its own. `virtualLocations` (RFC 8984 §4.2.6 —
+the conference link) is untouched and has no `LOCATION` to share; RFC 9073's
+`VLOCATION` component, which is how iCalendar says "more than one place", is not
+something libical reads.
+
+Verified locally: `cargo test --locked` 690 green, `cargo test -p
+jmap-backend-cal --locked` green, `ctest` 14/14, `cargo fmt --check`, and `cargo
+clippy --all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal` and `jmap-functional`. `ci/checks.sh` again stops at its first
+step: `reuse` is not on this VM and neither `pipx` nor `uvx` is installed. Exposure
+is nil this time — **no file was added at all**, only edits to files that already
+carry SPDX headers — and `Cargo.lock` is untouched, so `cargo deny`'s answer is
+the one it gave on the last green run.
+
+Disk: 3.3G free of 58G, with `rust/target` at 22G and `~/audit-ffi` at 14G.
+`target/tmp` and `target/debug/incremental` deleted again at the start,
+`CARGO_INCREMENTAL=0` throughout. **The maintainer decision is still wanted**: a
+periodic `cargo clean` in the night-shift driver, a bigger disk, or a shared
+target directory.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two; the *reading* direction of a
+per-instance zone through real EDS is untested; calcard silently drops an
+unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`. New
+from this session: whether Evolution's appointment editor keeps an `X-JMAP-KEY`
+on a `LOCATION` the user edited is untested — it needs a real Evolution session,
+and the save path is built not to care either way.

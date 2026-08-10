@@ -49,6 +49,18 @@ fn calendar_event_roundtrip() {
         overrides["2026-01-29T13:00:00"]["title"],
         serde_json::json!("Team sync (long)")
     );
+    // `locations` is modeled but left as JSON: a Location holds coordinates,
+    // links and types the iCalendar mapping cannot draw, and the save path has
+    // to see them in order to patch the one field it can and leave the rest.
+    let locations = event.locations.as_ref().expect("locations");
+    assert_eq!(
+        locations.get("loc1"),
+        Some(&serde_json::json!({
+            "@type": "Location",
+            "name": "Room 42",
+            "coordinates": "geo:52.520008,13.404954",
+        }))
+    );
     // Unmodeled JSCalendar properties (participants, sequence) survive.
     assert!(event.extra.contains_key("participants"));
     assert!(event.extra.contains_key("sequence"));
