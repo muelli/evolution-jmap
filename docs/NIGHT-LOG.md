@@ -15952,3 +15952,132 @@ unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`;
 whether Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the
 user edited is untested. New from this session: whether that editor writes a
 `TRANSP` it was not asked to is untested, and would cost one redundant patch.
+
+## 2026-08-10 (hundred-and-sixtieth session)
+
+**How important an event is** now crosses: JSCalendar `priority` (RFC 8984 §4.4.1)
+↔ iCalendar `PRIORITY` (RFC 5545 §3.8.1.9), both directions. The thirteenth
+mapped property, and the first one that is a **number** on both sides rather than
+text — which is where all of the interest is, because every mechanism the mapping
+had built up assumed a string.
+
+**The two formats spell the same integer with the same meaning** — 0 undefined, 1
+highest, 9 lowest — so there is no translation table here at all, only a range:
+`PRIORITIES: RangeInclusive<i64> = 0..=9`. A value outside it is dropped exactly
+as a value outside a closed vocabulary is, on both sides. That makes this the
+`status`/`freeBusyStatus` shape rather than the `keywords` or `locations` one:
+nothing is shown in part, so `diff` needs nothing beyond the baseline and there is
+no `maps_*` predicate to add.
+
+**`PRIORITY:0` is written out rather than left off, and that is the one real
+decision.** Both RFCs make 0 and no value the same state, so leaving it off would
+be *legal*; it would also be the shape that costs something. An event the server
+states as 0 would be drawn with no line, read back as `None`, and every save of it
+would carry a redundant `"priority": null` — the same state, so not wrong, but a
+write nobody asked for. Worse, an override restating 0 would round-trip into a
+`null` patch, which is a different patch, so `maps_recurrence_override` would have
+had to refuse the shape. Writing the digit makes the round trip the identity and
+all of that disappears. `None` still reads back as `None`, for the reason
+`showWithoutTime` and `freeBusyStatus` do: the save path reads an edit off a
+difference from what was *shown*, so a reader that supplied the default would have
+every save state it where the server said nothing.
+
+**Which rests on a measurement, not an assumption.** `jmap-backend-cal`'s
+`libical_neither_invents_a_priority_nor_respells_one` puts all ten values through
+the real library and back: no line stays no line (libical does not fill the
+default in), and 0 to 9 each come back as themselves — libical does *not* drop
+`PRIORITY:0` as meaning nothing, which was the failure mode the decision above
+could have walked into.
+
+**And for once the "what does Evolution's editor write?" question has an answer
+that needs no display.** Every previous property left it open. Here it is
+measurable from the installed binary: `objdump` over Evolution 3.52's
+`libevolution-calendar.so` shows `e_comp_editor_property_part_priority_new` called
+only from `e_comp_editor_task` and `e_bulk_edit_tasks`, never from
+`e_comp_editor_event`. The appointment editor has no priority control at all — the
+task editor does — so it has nothing to write and leaves the line as it found it.
+That closes the one uncertainty the `TRANSP` session had to leave open beside its
+own equivalent probe.
+
+**The type is `Option<i64>`, signed and wider than the range it admits**, though
+RFC 8984 §4.4.1 says `UnsignedInt` 0–9. A whole `CalendarEvent/get` response is
+deserialized into `CalendarEvent` at once, so a server answering `-1` for one
+event must not fail the response and take every event in the calendar down with
+it — the same argument the `keywords` field's doc comment makes for holding its
+values as JSON. The mapping refuses the out-of-range value instead, which is a
+per-event loss rather than a per-calendar one.
+
+**Three places needed a non-string path, which is the whole cost of the new
+shape.** `modified_instance`'s patch loop is written around
+`value.as_str().map(str::to_owned)`, so `priority` short-circuits ahead of it;
+`instance_patch` and `diff` each grew a comparison of their own beside the
+`&Option<String>` tables. `maps_override_field` uses `as_i64`, which also refuses
+the number spelled as a string (`"1"`) and as a fraction — neither reaches a
+content line as the integer that would come back. `priority` joins
+`OVERRIDE_PROPERTIES` (now eight): RFC 8984 §4.3.4 lets an instance restate it and
+iCalendar spells it on that instance's own component, so one urgent occurrence of
+a series is a one-key patch. The inheritance is drawn, as it must be — an instance
+written without the line reads back as an occurrence the user just made
+unimportant.
+
+**Verified through real EDS.** `tests/functional/cal-client.c` writes `PRIORITY:1`
+on the event it creates and reports what EDS's own cache hands back — as text, not
+through `i_cal_property_get_priority`, whose integer reports a missing property as
+0 and would hide exactly the failure this watches for. Both halves
+mutation-checked, since the leg passed on its first run: expecting `2` fails on the
+cache side, and expecting `7` on the server side fails printing the event the mock
+holds with `priority: Some(1)` in it. 1 and not 0 deliberately, for the same reason
+the transparency leg picks TRANSPARENT: 0 is the state a component with no line is
+already in.
+
+**Two exemplars moved.** `priority` was the "property no component can carry"
+example in *two* tests — `jmap-cal-sync/tests/save.rs`'s
+`editing_an_event_leaves_unmapped_properties_alone` and `tests/sync.rs`'s
+`the_revision_tracks_the_mapped_content_and_nothing_else`. The latter failed on
+this change, which is the correct signal: the revision now *has* to move when the
+importance does, or Evolution keeps showing the old number. Both now use
+`useDefaultAlerts`; `participants` is what is left of that list beside it.
+
+Tests: red first at every layer — 7 compile-red in `jmap-ical` (the field did not
+exist), 2 behaviour-red in the two override catalogues, 6 behaviour-red in
+`jmap-cal-sync/tests/save.rs` against the mock, 1 behaviour-red in
+`tests/sync.rs`, and the functional leg mutation-checked in both directions.
+Counts: `cargo test --locked` 727, up 11 from 716; `jmap-backend-cal` 32 in
+`marshal.rs`, up one; `ctest` 14/14 including all four functional legs against
+real EDS.
+
+Not done, deliberately: an **override** still may not restate its tags or its
+place, and `showWithoutTime` is still decided once for the whole document. A
+`PRIORITY` parameter is not a thing, so nothing here needs the `X-JMAP-KEY`
+treatment `locations` got.
+
+Verified locally: `cargo test --locked` 727 green, `cargo test -p jmap-backend-cal
+--locked` green, `ctest` 14/14, `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal` and `jmap-functional`. `ci/checks.sh` again stops at its first
+step: `reuse` is not on this VM and neither `pipx` nor `uvx` is installed.
+Exposure is nil — **no file was added**, only edits to files that already carry
+SPDX headers — and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one
+it gave on the last green run.
+
+Disk: 3.1G free of 58G, with `rust/target` at 22G and `~/audit-ffi` at 14G;
+`CARGO_INCREMENTAL=0` throughout. **The maintainer decision is still wanted**: a
+periodic `cargo clean` in the night-shift driver, a bigger disk, or a shared
+target directory.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two; the *reading* direction of a
+per-instance zone through real EDS is untested; calcard silently drops an
+unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`;
+whether Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the
+user edited is untested; whether it writes a `TRANSP` it was not asked to is
+untested. New from this session: nothing — the appointment editor has no priority
+control, so there is no editor behaviour here left to wonder about.

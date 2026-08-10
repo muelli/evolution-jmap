@@ -862,6 +862,113 @@ fn an_edited_instance_is_drawn_at_the_series_transparency() {
     );
 }
 
+#[test]
+fn the_importance_of_an_event_is_the_priority_of_the_component() {
+    // RFC 8984 §4.4.1's `priority` and RFC 5545 §3.8.1.9's `PRIORITY` are the
+    // same integer with the same meaning — 0 undefined, 1 highest, 9 lowest — so
+    // the whole range crosses unchanged, digit for digit.
+    for priority in 0..=9 {
+        let event = CalendarEvent {
+            priority: Some(priority),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert_eq!(line(&ics, "PRIORITY:"), format!("PRIORITY:{priority}"));
+        assert_eq!(
+            ical_to_event(&ics).expect("parse").priority,
+            Some(priority),
+            "the importance survives the round trip"
+        );
+    }
+}
+
+#[test]
+fn a_priority_outside_the_range_the_two_formats_share_is_dropped() {
+    // Both formats close the range at 0..=9, so a value outside it is dropped
+    // rather than passed through in the other's clothes — the rule STATUS and
+    // TRANSP follow, one type over.
+    for priority in [-1, 10, 100] {
+        let event = CalendarEvent {
+            priority: Some(priority),
+            ..CalendarEvent::default()
+        };
+        assert!(without(&event_to_ical(&event), "PRIORITY"), "{priority}");
+    }
+
+    // And in the other direction, where the value came off a content line: an
+    // integer out of range, and something that is no integer at all, are read as
+    // nothing said rather than passed on for the server to reject.
+    for value in ["10", "-1", "high", "", "5.5", "1,2", " 5"] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+UID:E1\r\nDTSTART:20260115T130000Z\r\nPRIORITY:{value}\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        assert_eq!(
+            ical_to_event(&ics).expect("parse").priority,
+            None,
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn an_event_that_says_nothing_about_priority_carries_no_priority() {
+    let ics = event_to_ical(&fixture_event());
+
+    assert!(without(&ics, "PRIORITY"), "{ics}");
+    // `None` rather than `Some(0)`, even though RFC 8984 §4.4.1 defaults to 0 and
+    // RFC 5545 §3.8.1.9 says a `VEVENT` with no `PRIORITY` is undefined, which is
+    // the same state: the save path reads an edit off a difference from what was
+    // shown, so answering with the default would have a save state it where the
+    // server said nothing. Which is also why a `priority` of 0 the server *did*
+    // state is written out as `PRIORITY:0` rather than left off — see
+    // [`the_importance_of_an_event_is_the_priority_of_the_component`], where 0 is
+    // in the table.
+    assert_eq!(ical_to_event(&ics).expect("parse").priority, None);
+}
+
+#[test]
+fn an_edited_instance_may_show_a_priority_of_its_own() {
+    // RFC 8984 §4.3.4 lets an override restate the property and iCalendar spells
+    // it on the instance's own component, so one occurrence the user made urgent
+    // in an otherwise unremarkable series is a difference this mapping carries
+    // whole.
+    let patch = json!({"priority": 1});
+    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    event.priority = Some(5);
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(line(&ics, "PRIORITY:"), "PRIORITY:5");
+    assert_eq!(line(vevent(&ics, 1), "PRIORITY:"), "PRIORITY:1");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+}
+
+#[test]
+fn an_edited_instance_is_drawn_at_the_series_priority() {
+    // The inheritance of RFC 8984 §4.3.4, and the reason it has to be drawn: the
+    // instance's own component is the only place its priority is stated, so one
+    // written without the line reads back as an occurrence the user just made
+    // unimportant — a patch removing the property the series holds.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
+    event.priority = Some(2);
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(line(vevent(&ics, 1), "PRIORITY:"), "PRIORITY:2");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides,
+        "the instance inherited the series' priority, so nothing differs"
+    );
+}
+
 /// An event happening at one place, keyed the way a server keys it.
 fn placed(key: &str, location: Value) -> CalendarEvent {
     CalendarEvent {
@@ -3494,6 +3601,8 @@ fn an_override_the_mapping_cannot_draw_is_still_placed_at_the_parents_title() {
         json!({"title": ""}),
         json!({"status": "postponed"}),
         json!({"freeBusyStatus": "maybe"}),
+        json!({"priority": 10}),
+        json!({"priority": "1"}),
         json!({"start": "2026-02-30T13:00:00"}),
     ] {
         assert!(
@@ -3901,7 +4010,9 @@ fn an_override_whose_instant_cannot_be_written_is_flagged() {
         json!({"start": "2026-01-29T15:30:00", "duration": "PT30M"}),
         json!({"status": "cancelled"}),
         json!({"freeBusyStatus": "free"}),
-        json!({"status": null, "duration": null, "freeBusyStatus": null}),
+        json!({"priority": 0}),
+        json!({"priority": 9}),
+        json!({"status": null, "duration": null, "freeBusyStatus": null, "priority": null}),
     ] {
         assert!(
             maps_recurrence_override("2026-01-29T13:00:00", &patch),
