@@ -126,6 +126,21 @@ fn recurrence_rule_weeks_of_the_year_roundtrip() {
 }
 
 #[test]
+fn recurrence_rule_hours_roundtrip() {
+    // `byHour` is iCalendar's `BYHOUR` — "twice a day, at 09:00 and at 17:00".
+    // RFC 8984 §4.3.3 has it as `UnsignedInt[]`, so unlike the days of the month
+    // and the weeks of the year there is no backwards count to preserve: RFC 5545
+    // §3.3.10's `hour` gives no way to name an hour from the end of the day.
+    let value = fixture("calendars/recurrence_rule_hours.json");
+    assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
+
+    let rule: RecurrenceRule = serde_json::from_value(value).unwrap();
+    assert_eq!(rule.frequency, "daily");
+    assert_eq!(rule.by_hour.as_deref(), Some(&[9, 17][..]));
+    assert!(rule.extra.is_empty());
+}
+
+#[test]
 fn recurrence_rule_set_position_roundtrip() {
     // `bySetPosition` is iCalendar's `BYSETPOS` — "the last Friday of the
     // month". It is the one part of RFC 8984 §4.3.3 that names no date of its

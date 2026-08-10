@@ -743,6 +743,107 @@ fn libical_answers_for_a_position_in_the_set_this_mapping_refuses() {
     }
 }
 
+/// The same question for the hours of the day a rule repeats at, which is the
+/// part whose answers most needed measuring: the position it is *written* in is
+/// not the one every part before it took, and every value out of range costs the
+/// whole rule.
+#[test]
+fn libical_answers_for_the_hours_of_the_day() {
+    // Where `BYHOUR` goes: **first**, ahead of the days — not last, where each
+    // part added before it went. `jmap-ical`'s `named_by_parts` puts it there
+    // because of this measurement; a rule emitted in any other order comes back
+    // out of EDS's own cache reordered and compares unequal to itself, which the
+    // save path reads as an edit the user never made.
+    assert_eq!(
+        reparsed_rrule("FREQ=WEEKLY;BYDAY=MO;BYHOUR=9").as_deref(),
+        Some("FREQ=WEEKLY;BYHOUR=9;BYDAY=MO"),
+    );
+    assert_eq!(
+        reparsed_rrule(
+            "FREQ=YEARLY;BYHOUR=9;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;\
+             BYMONTH=3;BYSETPOS=2;WKST=SU"
+        )
+        .as_deref(),
+        Some(
+            "FREQ=YEARLY;BYHOUR=9;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;\
+             BYMONTH=3;BYSETPOS=2;WKST=SU"
+        ),
+    );
+    // The hours themselves survive verbatim, in the order given and at every
+    // frequency — §3.3.10 defines the part beside all of them — so the mapping
+    // neither sorts them nor gates them on the frequency.
+    for rrule in [
+        "FREQ=DAILY;BYHOUR=0",
+        "FREQ=DAILY;BYHOUR=23,9,0",
+        "FREQ=HOURLY;BYHOUR=9",
+        "FREQ=MINUTELY;BYHOUR=9",
+        "FREQ=YEARLY;BYHOUR=9",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // And why `hour_token` refuses anything outside RFC 5545's `hour`: unlike the
+    // days of the year and the positions in the set, where libical keeps an
+    // out-of-range value verbatim, *every* hour it cannot use costs the *whole*
+    // `RRULE` — the event reaches EDS's cache as a single appointment with the
+    // user's series gone.
+    for rrule in [
+        "FREQ=DAILY;BYHOUR=24",
+        "FREQ=DAILY;BYHOUR=99",
+        "FREQ=DAILY;BYHOUR=-1",
+        "FREQ=DAILY;BYHOUR=9,XX",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
+    }
+    // The empty part is worse than any of those, and is why `by_hour_part`
+    // refuses an empty set rather than writing `BYHOUR=`: libical reads it as
+    // midnight, quietly moving the whole series to 00:00.
+    assert_eq!(
+        reparsed_rrule("FREQ=DAILY;BYHOUR=").as_deref(),
+        Some("FREQ=DAILY;BYHOUR=0"),
+    );
+    // The spelling shape, as for the position in the set: the leading zero and
+    // the leading plus come back canonical, which cannot bite a mapping whose
+    // `byHour` holds numbers.
+    for written in ["FREQ=DAILY;BYHOUR=09", "FREQ=DAILY;BYHOUR=+9"] {
+        assert_eq!(
+            reparsed_rrule(written).as_deref(),
+            Some("FREQ=DAILY;BYHOUR=9"),
+            "{written}"
+        );
+    }
+}
+
+/// And the gate that is not libical's to enforce: RFC 5545 §3.3.10 forbids
+/// `BYHOUR` beside a `DTSTART` of value type DATE, since an hour of the day means
+/// nothing on a day with no clock. libical keeps such a component whole, so
+/// `jmap-ical` is the only place the contradiction is resolved — by drawing an
+/// all-day event whose rule names hours as a timed one instead.
+#[test]
+fn libical_keeps_the_hours_beside_an_all_day_start_that_forbids_them() {
+    let vevent = concat!(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:S\r\nDTSTART;VALUE=DATE:20260810\r\n",
+        "RRULE:FREQ=DAILY;BYHOUR=9\r\nEND:VEVENT\r\n",
+    );
+    let component = instance(vevent);
+    let list = instance_list(&[component]);
+    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    unsafe {
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+
+    assert!(
+        saved.icalendar.contains("RRULE:FREQ=DAILY;BYHOUR=9"),
+        "the rule libical is expected to keep as written: {}",
+        saved.icalendar
+    );
+    assert!(
+        saved.icalendar.contains("DTSTART;VALUE=DATE:20260810"),
+        "beside the DATE start §3.3.10 says it must not have: {}",
+        saved.icalendar
+    );
+}
+
 /// The same question for the day a rule's weeks start on, which decides the one
 /// asymmetry in `jmap-ical`'s `first_day_of_week_part`: the default is *dropped*
 /// on the way out rather than written, and this is the measurement that says it
