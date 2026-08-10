@@ -24,6 +24,8 @@
 //!   and codes Evolution actually routes on.
 //! - [`marshal`] reads and writes the strings and lists a vfunc's
 //!   out-parameters carry, which every backend does identically.
+//! - [`i18n`] binds this project's gettext domain, so that the strings a user
+//!   reads can be translated at all.
 //!
 //! [`CancelFlag`]: jmap_client::transport::CancelFlag
 //!
@@ -34,6 +36,7 @@
 pub mod cancel;
 pub mod connect;
 pub mod error;
+pub mod i18n;
 pub mod instance;
 pub mod marshal;
 pub mod source;
