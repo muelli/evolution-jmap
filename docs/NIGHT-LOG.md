@@ -12222,3 +12222,133 @@ Unchanged from previous sessions: M7 still **needs human verification in real
 Evolution** (`insert_widgets` remains unwritten, so an account arrives on the
 server settings page filled in and cannot be corrected there), the four manual-
 test recipes are unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-twenty-second session)
+
+**M8: the `.deb`, and the two things building one turned up.** The previous
+session's ranked "next" list began with getting gettext into the CI image,
+which needs `Containerfile.ci` and a CI image rebuild and is explicitly a
+maintainer decision, not an autonomous one; the second item is the same kind of
+decision about `GETTEXT_PACKAGE`. So this session took the next milestone
+instead. M8 is unusually well suited to this machine: `cpack` and `dpkg-deb`
+are both here, so a package is not something to be asserted about, it is
+something to be built and then taken apart.
+
+**The test is an equality over the file list, not a subset.** `ctest -R
+package-deb` runs `cpack -G DEB` into a scratch directory, then requires that
+the set of regular files in the `.deb` is *exactly* the six the install rules
+install — the five modules and Camel's `.urls`. A subset check ("are the
+modules in there?") would have passed the first package this repository could
+have produced, and that package was wrong: `src/` installs the upstream C
+example module into Evolution's module directory with no install `COMPONENT`
+of its own, so the obvious monolithic `include(CPack)` ships a demonstration
+module to every machine that installs JMAP support. It installs, it works, and
+it carries something nobody asked for — the failure mode a subset check cannot
+see. Mutation-checked rather than argued: flipping `CPACK_DEB_COMPONENT_INSTALL`
+back to `OFF` fails the test naming
+`/usr/lib/evolution/modules/libexample-module.so`.
+
+The package is therefore one `.deb` built from five named components
+(`ALL_COMPONENTS_IN_ONE`), which is what makes the exclusion a list someone
+maintains rather than a directory someone hopes stays clean.
+
+**`dpkg-shlibdeps` did not merely miss a dependency; it refused to run.**
+`CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON` is the whole point of packaging from the
+install tree — these modules are *dlopened*, so a library missing at runtime is
+not a link error anyone sees but a backend that never appears in the account
+type list, and the true list is knowable only by reading our own ELF files.
+The first attempt died: `cannot find library libevolution-mail.so.0 needed by
+module-jmap-configuration.so`. Evolution keeps its own libraries in a private
+directory (`privlibdir`, /usr/lib/evolution) off the loader's default path;
+they resolve at runtime because the shell process has already loaded them, and
+`dpkg-shlibdeps` is not that process. Fixed with
+`CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS` set from
+`pkg_check_variable(... evolution-shell-3.0 privlibdir)` — asked of pkg-config
+like every other directory in this build rather than written down. Worth noting
+that this was a hard error, not a warning: with no private dir, no package is
+produced at all.
+
+What comes out is the interesting part, and it is the M10 ABI contract stated
+by the package manager rather than by a document:
+
+    Depends: libc6 (>= 2.34), libcamel-1.2-64t64 (>= 3.45.2),
+      libebackend-1.2-11t64 (>= 3.38.0), libebook-contacts-1.2-4t64 (>= 3.16.2),
+      libecal-2.0-3 (>= 3.17), libedata-book-1.2-27t64 (>= 3.25.90),
+      libedata-cal-2.0-2t64 (>= 3.25.90), libedataserver-1.2-27t64 (>= 3.17),
+      libevolution (>= 3.52.3), libevolution (<< 3.53), libgcc-s1 (>= 4.2),
+      libglib2.0-0t64 (>= 2.36.0), libical3t64 (>= 3.0.0)
+
+`libevolution (>= 3.52.3), libevolution (<< 3.53)` is apt refusing to install
+this package next to an Evolution it was not built against — which is exactly
+what M10 says the deployment contract is, and it arrives for free from having
+derived the dependencies instead of writing them. Turning `SHLIBDEPS` off
+fails the test (`package declares no Depends`), so it cannot be quietly lost.
+
+**The `Description` check, which found a real defect in its own first draft.**
+Debian policy §5.6.13 gives the field a shape: a synopsis line, then extended
+lines each beginning with *exactly* one space, `.` alone for a paragraph break.
+An extra space means "preformatted", and `apt show` then declines to wrap.
+Writing `CPACK_DEBIAN_PACKAGE_DESCRIPTION` the way it should appear — synopsis
+included, lines indented — produced both defects at once, because CPack adds
+the synopsis and the indentation itself:
+
+    Description: JMAP support for GNOME Evolution
+     JMAP support for GNOME Evolution
+      Backends that let Evolution and evolution-data-server speak JMAP
+      …
+     must be built against the same versions they are installed alongside.
+
+Duplicated synopsis, double-indented body, and one line that lost its indent
+and would have run into the previous paragraph. The test asserts all three
+properties (opens with the summary, never repeats it, every continuation line
+is one space then text); it went red on exactly that output, and the variable
+now holds the extended description alone, unindented. This is a cosmetic bug in
+the sense that nothing crashes and a user-facing one in the sense that the
+Description is the one field a person reads before installing.
+
+**Naming.** `CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT"` gives
+`evolution-jmap_0.0.1_amd64.deb` rather than CPack's own CMake-flavoured
+spelling. The roadmap writes the goal as `apt install ./evolution-jmap.deb`;
+the versioned, arch-qualified name is what every tool that reads a directory of
+packages expects, and dropping the version off an artifact that pins an ABI
+would be the wrong economy. Also new: `PACKAGE_NAME` in the top-level
+`CMakeLists.txt` — this project installs as `evolution-jmap` while the CMake
+project is still the skeleton's `example-modules`, and that difference now has
+a name instead of being spelled out at each use.
+
+`ctest` is 8/8 (was 7/7; `package-deb` is the new one), `cargo fmt --check`,
+`cargo test --locked` (491, unchanged) and `cargo clippy --all-targets --locked
+-- -D warnings` are clean, as are clippy and test over the EDS crates — no Rust
+changed this session, the whole increment is CMake. Not verified locally, as in
+every session: `reuse lint` and `cargo deny` (neither binary is on this VM); the
+two new files carry SPDX `GPL-3.0-or-later` headers as `#` comments.
+Pre-existing and untouched: `example-module` does not build on this VM, and
+`jmap-mail`, `jmap-backend-book` and `jmap-backend-cal` carry
+`rustdoc::private_intra_doc_links`.
+
+No milestone tag. M8 has two halves and this is the first: the package exists,
+is checked, and can be built by hand from a clean tree. The second half —
+"wire into release.yml with attestation like the other artifacts" — is
+untouched, and deliberately not attempted in the same session as the thing it
+would publish: a release workflow cannot be run here, so it is the kind of
+change that compiles and is not known to work, and it should land on its own
+where its diff is the only thing under suspicion.
+
+Next, in the order they would be taken: (1) release.yml — add the `.deb` to the
+artifacts the release job builds, hashes into `SHA256SUMS` and attests, and
+mention it in `docs/verifying-artifacts.md`; that completes M8 and is the point
+at which the milestone could be tagged. Note the release runner must have
+`dpkg-dev` for `dpkg-shlibdeps` — the CI image is not this VM, and if it lacks
+it the packaging step fails loudly rather than silently emitting a
+dependency-less package, which is the right failure but wants checking before
+it is a release. (2) Reproducibility: the repo builds everything twice and
+compares checksums, and nothing yet says a `.deb` built twice is byte-identical.
+CPack's DEB generator does not obviously honour `SOURCE_DATE_EPOCH` for its ar
+member timestamps; worth a test before the package is something people verify
+against Rekor. (3) Still blocked on a maintainer decision, unchanged: gettext in
+the CI image, and whether the top-level `GETTEXT_PACKAGE` should stop saying
+`example-module`. Unchanged from previous sessions: M7 still **needs human
+verification in real Evolution** (`insert_widgets` remains unwritten, so an
+account arrives on the server settings page filled in and cannot be corrected
+there), the four manual-test recipes are unlinked from the README, and
+`jmap-mail`'s rustdoc is dirty.
