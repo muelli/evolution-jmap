@@ -41,7 +41,8 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# with a bus error that says nothing about what is missing, and it is
 	# worth spending a find_program to say it here instead. libexecdir is
 	# not on PATH, and no pkg-config module reports it.
-	foreach(_daemon evolution-source-registry evolution-addressbook-factory)
+	foreach(_daemon evolution-source-registry evolution-addressbook-factory
+			evolution-calendar-factory)
 		string(TOUPPER "${_daemon}" _daemon_variable)
 		string(REPLACE "-" "_" _daemon_variable "${_daemon_variable}")
 		find_program(${_daemon_variable}_EXECUTABLE ${_daemon}
@@ -56,10 +57,11 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		endif()
 	endforeach()
 
-	# The client half of the address book test: an ordinary libebook
-	# consumer, which is a surface no crate in this repository binds — see
+	# The client halves: ordinary libebook and libecal consumers, which are
+	# surfaces no crate in this repository binds — see
 	# tests/functional/book-client.c.
 	pkg_check_modules(LIBEBOOK REQUIRED libebook-1.2>=${REQUIRE_EVOLUTION_VERSION})
+	pkg_check_modules(LIBECAL REQUIRED libecal-2.0>=${REQUIRE_EVOLUTION_VERSION})
 
 	add_executable(functional-book-client tests/functional/book-client.c)
 	target_include_directories(functional-book-client PRIVATE ${LIBEBOOK_INCLUDE_DIRS})
@@ -67,14 +69,26 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-book-client PRIVATE ${LIBEBOOK_LIBRARIES})
 	target_link_directories(functional-book-client PRIVATE ${LIBEBOOK_LIBRARY_DIRS})
 
+	add_executable(functional-cal-client tests/functional/cal-client.c)
+	target_include_directories(functional-cal-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+	target_compile_options(functional-cal-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-client PRIVATE ${LIBECAL_LIBRARIES})
+	target_link_directories(functional-cal-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+
 	# The Rust side builds the scratch EDS installation, runs the client on
-	# a private bus and holds both ends to what they should have said. It is
-	# handed the two paths only CMake knows: the client just built, and the
-	# backend cargo built, which the harness stages as the factory's one
-	# address book module.
+	# a private bus and holds both ends to what they should have said. Each
+	# test is registered on its own — `cargo test --test <name>` rather than
+	# one run of the whole crate — so that a failure names the surface that
+	# broke, and so that each gets only the paths it needs. The paths are the
+	# ones only CMake knows: the client just built, and the backend cargo
+	# built, which the harness stages as that factory's one module.
+	#
+	# The two share a cargo target directory, so cargo's own lock serialises
+	# them however CTest schedules them.
 	add_test(
 		NAME functional-book
 		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test address-book
 		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 	)
 	set_tests_properties(functional-book PROPERTIES
@@ -85,5 +99,18 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
+	add_test(
+		NAME functional-cal
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 endif()

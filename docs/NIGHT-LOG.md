@@ -12659,3 +12659,93 @@ maintainer decisions: `evolution-data-server` + `dbus-daemon` in the CI image
 `GETTEXT_PACKAGE` should stop saying `example-module`. Unchanged: M7 still
 **needs human verification in real Evolution**, the manual-test recipes are
 unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10
+
+The calendar half of the functional harness, and the bug it was written to
+find. `jmap-backend-cal` had the address book's read-only bug, line for line,
+exactly where last session said it would be — and now there is a test that
+says so before a user does.
+
+**The fix is one call, and it is not the obvious one.** `connect_sync` was
+calling `e_cal_meta_backend_set_connected_writable`, which reads like the
+setter for "this connected backend accepts writes" and is not: the moment the
+vfunc returns TRUE, `ecmb_update_connection_values` overwrites
+connected-writable with `e_cal_backend_get_writable()`, which nothing had set
+— so FALSE, and our setter is undone by the very call that was about to read
+it. `e_cal_backend_set_writable` sets both, and it is what the vfunc's own
+documentation asks for ("The descendant should also call
+e_cal_backend_set_writable() after successful connect"). Read against
+`evolution-data-server-3.52.3/src/calendar/libedata-cal/e-cal-meta-backend.c`
+lines 358 and 1372–1374 and 4934, not guessed — the tarball is not on this VM
+by default, `download.gnome.org` has it.
+
+**Red first, and two more mutations.** The first run failed on `readonly=1`
+with `create: Cannot create calendar object: Permission denied` in the
+client's stderr — the user-visible shape of this bug, a calendar Evolution
+greys out. Then: stage the *book* module as the calendar backend → red with
+EDS's "Backend factory for source ... and extension ?Calendar? cannot be
+found"; seed the mock's calendar as non-default → red on `readonly` again.
+
+That third mutation is worth writing down rather than glossing: it does **not**
+produce a distinct message, because `e_cal_client_connect_sync` succeeds even
+when the backend's `connect_sync` failed — `ECalMetaBackend` opens the
+calendar and schedules the connect — so a calendar the backend could not open
+reaches the client looking exactly like one it opened and forgot to claim
+writable. The `readonly` assertion is therefore a broad net over both, which
+is fine (both are bugs) but means a future failure there needs the stderr in
+the report to tell which. The test comment says so.
+
+**The harness grew a second surface, not a second harness.** `Session` now has
+`stage_calendar_backend` beside `stage_address_book_backend`, both over one
+private `stage_backend`; the two module directories differ only in the
+variable EDS reads them from (`EDS_CALENDAR_MODULES`, from
+`e-data-cal-factory.h`) and the name the factory expects. The client is C
+again — `tests/functional/cal-client.c`, a plain libecal consumer — and builds
+its VEVENT from text through `i_cal_component_new_from_string` rather than a
+chain of libical-glib setters: the component sent is then exactly the one
+written in the file. `DTSTART` is a UTC instant so nothing depends on a
+timezone database being reachable from the scratch session.
+
+CTest registers the two as separate tests (`cargo test --test address-book`
+and `--test calendar`) rather than one run of the crate, so a failure names
+the surface and each gets only the paths it needs. They share a cargo target
+directory, so cargo's own lock serialises them however CTest schedules them.
+
+**An intermittent hang, seen once, not chased.** The first full `ctest` run of
+the night wedged for ten minutes in `jmap-mail`'s `tests/transport.rs`: four
+threads, all in `futex_do_wait`, zero CPU. Re-run standalone it passed in
+0.03 s, and the whole suite passed on the next full run. It is unrelated to
+tonight's change (nothing here touches `jmap-mail`) and smells like GType
+registration racing across concurrently-run tests in that binary. Recorded so
+the next person who sees it knows it is not new; if it recurs, `RUST_TEST_THREADS=1`
+on that binary is the first thing to try, and the real fix is finding which
+two tests register into the type system at once.
+
+Verified locally: `ctest` 12/12 with `-DENABLE_FUNCTIONAL_TESTS=ON`, a
+configure with it off registering zero functional tests (CI's path, unchanged),
+`cargo fmt --check`, `cargo test --locked` (491, unchanged), `cargo clippy
+--all-targets --locked -- -D warnings` clean and the same for `-p
+jmap-backend-cal -p jmap-functional`. `reuse lint` and `cargo deny` not run
+(neither binary is on this VM); both new files carry SPDX `GPL-3.0-or-later`
+headers.
+
+No milestone tag. M9 layer 1 is now two backends of three — the mail provider
+through Camel is the third and a different host process again — and still has
+no CI job.
+
+**Not done, and deliberately.** Last session's first item was the
+`ESource:connection-status` question (it never reaches `CONNECTED`, so a
+client that waits burns the full 30 s). It is untouched: it is open-ended
+reading with no obvious end, and the calendar bug was a known, user-visible
+defect with a known fix. Correctness over progress cuts that way — but the
+question is still first in the queue, and now the EDS source to answer it from
+is one `curl` away.
+
+Next, in order: (1) the `connection-status` question. (2) The mail provider
+through Camel, layer 1's third leg. (3) The M8 test tag, by hand. (4)
+Unchanged maintainer decisions: `evolution-data-server` + `dbus-daemon` in the
+CI image, gettext in the CI image, and whether `GETTEXT_PACKAGE` should stop
+saying `example-module`. Unchanged: M7 still **needs human verification in
+real Evolution**, the manual-test recipes are unlinked from the README, and
+`jmap-mail`'s rustdoc is dirty.
