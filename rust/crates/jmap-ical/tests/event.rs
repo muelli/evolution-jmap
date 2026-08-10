@@ -5066,3 +5066,242 @@ fn the_fixture_survives_a_round_trip() {
         }
     );
 }
+
+/// An event whose guest list is the given map of RFC 8984 §4.4.6 Participants.
+fn attended(participants: Value) -> CalendarEvent {
+    CalendarEvent {
+        title: Some("Sprint planning".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        participants: serde_json::from_value(participants).expect("a map of participants"),
+        ..CalendarEvent::default()
+    }
+}
+
+/// One participant: an address to send to, a name, and whatever else is passed.
+fn guest(address: &str, name: &str, rest: Value) -> Value {
+    let mut participant = json!({
+        "@type": "Participant",
+        "name": name,
+        "sendTo": {"imip": address},
+    });
+    for (key, value) in rest.as_object().expect("an object").clone() {
+        participant[key] = value;
+    }
+    participant
+}
+
+#[test]
+fn the_people_invited_to_an_event_are_written_as_attendees() {
+    // RFC 8984 §4.4.6's `participants` is a map of Participants, each with an
+    // address to reach them at, a name, the roles they hold and whether they
+    // have replied; RFC 5545 §3.8.4.1 spells one as an ATTENDEE line whose value
+    // is the CAL-ADDRESS and whose parameters carry the rest. The address comes
+    // from `sendTo/imip` — the method (RFC 8984 §4.4.6) whose URI is exactly the
+    // mailto: iCalendar wants.
+    let ics = event_to_ical(&attended(json!({
+        "bob": guest("mailto:bob@example.com", "Bob Example", json!({
+            "roles": {"attendee": true},
+            "participationStatus": "accepted",
+        })),
+        "carol": guest("mailto:carol@example.com", "Carol Example", json!({
+            "roles": {"optional": true},
+            "participationStatus": "needs-action",
+            "expectReply": true,
+        })),
+    })));
+
+    let attendees: Vec<String> = ics
+        .replace("\r\n ", "")
+        .split("\r\n")
+        .filter(|line| line.starts_with("ATTENDEE"))
+        .map(str::to_owned)
+        .collect();
+    // In the map's own order, so a document is stable across renderings.
+    assert_eq!(
+        attendees,
+        [
+            "ATTENDEE;CN=Bob Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:\
+             mailto:bob@example.com",
+            "ATTENDEE;CN=Carol Example;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION;\
+             RSVP=TRUE:mailto:carol@example.com",
+        ],
+        "{ics}"
+    );
+}
+
+#[test]
+fn the_participant_that_owns_the_event_is_its_organizer() {
+    // RFC 8984 §4.4.6 gives the organizer no property of its own: it is the
+    // participant holding the `owner` role. RFC 5545 §3.8.4.3 states it on a
+    // line of its own — and one whose only role is owner is not attending, so it
+    // gets no ATTENDEE line to go with it.
+    let ics = event_to_ical(&attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice Example", json!({
+            "roles": {"owner": true},
+        })),
+        "bob": guest("mailto:bob@example.com", "Bob Example", json!({
+            "roles": {"attendee": true},
+        })),
+    })));
+
+    assert_eq!(
+        content_line(&ics, "ORGANIZER"),
+        "ORGANIZER;CN=Alice Example:mailto:alice@example.com",
+        "{ics}"
+    );
+    assert!(
+        !ics.replace("\r\n ", "")
+            .split("\r\n")
+            .any(|line| line.starts_with("ATTENDEE") && line.contains("alice@example.com")),
+        "{ics}"
+    );
+    assert_eq!(
+        content_line(&ics, "ATTENDEE"),
+        "ATTENDEE;CN=Bob Example;ROLE=REQ-PARTICIPANT:mailto:bob@example.com",
+        "{ics}"
+    );
+}
+
+#[test]
+fn an_owner_who_is_also_attending_gets_both_lines() {
+    // The usual shape of a meeting somebody called and comes to: RFC 8984 has
+    // `roles` be a set for exactly this, and iCalendar states the organizer
+    // separately from the guest list rather than instead of it.
+    let ics = event_to_ical(&attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice Example", json!({
+            "roles": {"owner": true, "attendee": true},
+            "participationStatus": "accepted",
+        })),
+    })));
+
+    assert_eq!(
+        content_line(&ics, "ORGANIZER"),
+        "ORGANIZER;CN=Alice Example:mailto:alice@example.com",
+        "{ics}"
+    );
+    assert_eq!(
+        content_line(&ics, "ATTENDEE"),
+        "ATTENDEE;CN=Alice Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:\
+         mailto:alice@example.com",
+        "{ics}"
+    );
+}
+
+#[test]
+fn a_room_the_event_is_booked_in_is_written_as_one() {
+    // RFC 8984 §4.4.6's `kind` says what sort of participant it is, and RFC 5545
+    // §3.2.3's CUTYPE the same — the two vocabularies differ in one word, a
+    // JSCalendar `location` being iCalendar's ROOM.
+    for (kind, cutype) in [
+        ("individual", "INDIVIDUAL"),
+        ("group", "GROUP"),
+        ("resource", "RESOURCE"),
+        ("location", "ROOM"),
+    ] {
+        let ics = event_to_ical(&attended(json!({
+            "room": guest("mailto:room-1@example.com", "Room 1", json!({"kind": kind})),
+        })));
+
+        assert_eq!(
+            content_line(&ics, "ATTENDEE"),
+            format!("ATTENDEE;CN=Room 1;CUTYPE={cutype}:mailto:room-1@example.com"),
+            "{ics}"
+        );
+    }
+}
+
+#[test]
+fn a_participant_with_no_address_to_send_to_is_left_off() {
+    // An ATTENDEE's value is a CAL-ADDRESS (RFC 5545 §3.3.3), which is a URI:
+    // there is no way to write a guest the server gave no address for, and
+    // inventing one would name somebody it never named. So the participant is
+    // dropped, like every other value this mapping cannot spell — and it is only
+    // safe to drop because `participants` is written and never read back.
+    for participant in [
+        json!({"@type": "Participant", "name": "Nobody"}),
+        json!({"@type": "Participant", "sendTo": {}}),
+        json!({"@type": "Participant", "sendTo": {"other": "mailto:bob@example.com"}}),
+        // A bare address is not a URI: RFC 3986 §3.1 wants a scheme.
+        json!({"@type": "Participant", "sendTo": {"imip": "bob@example.com"}}),
+        json!({"@type": "Participant", "sendTo": {"imip": "mailto:"}}),
+        json!({"@type": "Participant", "sendTo": {"imip": ""}}),
+        // Whitespace is not in a URI, and a line break would end the content
+        // line and start a property of the server's choosing.
+        json!({"@type": "Participant", "sendTo": {"imip": "mailto:bob example.com"}}),
+        json!({"@type": "Participant", "sendTo": {"imip": "mailto:b@x\r\nSUMMARY:Gone"}}),
+        // Not an object at all.
+        json!("mailto:bob@example.com"),
+    ] {
+        let ics = event_to_ical(&attended(json!({"p": participant})));
+
+        assert!(without(&ics, "ATTENDEE"), "{participant}: {ics}");
+        assert!(without(&ics, "ORGANIZER"), "{participant}: {ics}");
+        assert!(!ics.contains("SUMMARY:Gone"), "{participant}: {ics}");
+    }
+}
+
+#[test]
+fn a_status_role_or_kind_outside_the_shared_vocabulary_is_left_off() {
+    // The rule every closed vocabulary in this mapping gets: a value the other
+    // format has no spelling for is dropped rather than passed through in its
+    // clothes. The guest still goes on the line — it is the parameter that is
+    // unwritable, not the participant.
+    let ics = event_to_ical(&attended(json!({
+        "bob": guest("mailto:bob@example.com", "Bob Example", json!({
+            "roles": {"x-cameo": true},
+            "participationStatus": "asleep",
+            "kind": "hologram",
+            // RFC 8984 §1.4.3 has every value of a Set be true; anything else
+            // says nothing was set.
+            "expectReply": "yes",
+        })),
+    })));
+
+    assert_eq!(
+        content_line(&ics, "ATTENDEE"),
+        "ATTENDEE;CN=Bob Example:mailto:bob@example.com",
+        "{ics}"
+    );
+}
+
+#[test]
+fn the_guest_list_is_written_and_never_read_back() {
+    // The precedent CREATED and LAST-MODIFIED set, for a different reason:
+    // changing who is invited, or what they replied, is *scheduling* — it means
+    // an iTIP REQUEST or REPLY going out (RFC 5546), which this backend does not
+    // send. So the guest list is drawn for the user to read and nothing more:
+    // `participants` is absent from MAPPED_PROPERTIES, so no save can name it,
+    // and the server's own guest list cannot be overwritten from here.
+    let ics = event_to_ical(&attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice Example", json!({
+            "roles": {"owner": true, "attendee": true},
+        })),
+    })));
+    let event = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(event.participants, None);
+}
+
+#[test]
+fn an_edited_instance_carries_the_guest_list_of_the_series() {
+    // The inheritance of RFC 8984 §4.3.4 again: an override may not restate the
+    // participants, so the occurrence's own component states the series' — an
+    // instance drawn without them would show a meeting nobody was invited to.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
+    event.participants = serde_json::from_value(json!({
+        "bob": guest("mailto:bob@example.com", "Bob Example", json!({
+            "roles": {"attendee": true},
+        })),
+    }))
+    .expect("a map of participants");
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(
+        content_line(vevent(&ics, 1), "ATTENDEE"),
+        "ATTENDEE;CN=Bob Example;ROLE=REQ-PARTICIPANT:mailto:bob@example.com",
+        "{ics}"
+    );
+}
