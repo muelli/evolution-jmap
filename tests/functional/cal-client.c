@@ -17,6 +17,7 @@
  *
  *   usage: functional-cal-client <source-uid> <summary> <all-day-summary>
  *                               <recurring-summary> <edited-occurrence-summary>
+ *                               <split-summary>
  */
 
 #include <libecal/libecal.h>
@@ -78,6 +79,32 @@
  * EXDATE case above cannot exercise. The fourth occurrence of the weekly
  * series, so that it is neither the excluded one nor the edited one. */
 #define TEST_RECURRING_REMOVED_RECURRENCE_ID "20260205T130000Z"
+
+/* And the third thing that menu offers, "Edit this and future occurrences":
+ * e_cal_client_modify_object_sync with E_CAL_OBJ_MOD_THIS_AND_FUTURE. It is the
+ * only one of the three that is not an exception to a series at all — EDS
+ * answers it by *splitting the series in two*. The master's RRULE is truncated
+ * to stop before the named instance, and that instance and everything after it
+ * becomes a second event under a UID of EDS's own invention, handed to the
+ * backend as a create (e_cal_util_split_at_instance_ex, then
+ * ecmb_create_object_sync). So this is the only menu item that reaches the
+ * backend as two writes, and the only one that makes a new event out of an
+ * occurrence — RANGE=THISANDFUTURE (RFC 5545 §3.2.13) never appears, because
+ * EDS has already resolved it into ordinary components by then.
+ *
+ * The component carries the series' RRULE, and that is not decoration. EDS
+ * builds an occurrence for a client by cloning the master and adding a
+ * RECURRENCE-ID (e_cal_util_construct_instance), so a component with the rule
+ * on it is exactly what Evolution has in hand to save; and
+ * e_cal_util_split_at_instance_ex answers a component with no recurrence in it
+ * with NULL, which ECalMetaBackend reports as success while dropping the edit.
+ *
+ * The fifth occurrence, which is after all three exceptions the series carries
+ * by now: the truncated master has to keep every one of them and the new event
+ * has to carry none. */
+#define TEST_RECURRING_SPLIT_RECURRENCE_ID "20260212T130000Z"
+#define TEST_RECURRING_SPLIT_DTSTART "20260212T130000Z"
+#define TEST_RECURRING_SPLIT_DTEND "20260212T143000Z"
 
 static int
 fail (const gchar *step,
@@ -152,6 +179,51 @@ exdate_values (ICalComponent *component)
 	return g_string_free (values, FALSE);
 }
 
+/* The recurrence rule a component carries, as text — the RRULE of RFC 5545
+ * §3.8.5.3, read back the same way for the truncated master and for the series
+ * EDS split off it. An empty string for a component with no rule, which is a
+ * series that stopped recurring rather than one whose rule this cannot see. */
+static gchar *
+rrule_value (ICalComponent *component)
+{
+	ICalProperty *property;
+	gchar *value;
+
+	property = i_cal_component_get_first_property (component, I_CAL_RRULE_PROPERTY);
+	if (!property)
+		return g_strdup ("");
+
+	value = i_cal_property_get_value_as_string (property);
+	g_object_unref (property);
+
+	return value ? value : g_strdup ("");
+}
+
+/* The one component in a list that is a series of its own with this SUMMARY:
+ * the event EDS made out of an occurrence. Matched on the summary because the
+ * UID is EDS's invention and then the server's, so nothing on this side knows
+ * it; the detached instances are skipped because an instance of the original
+ * series is not the new event however it is titled. */
+static ICalComponent *
+find_series_by_summary (GSList *components,
+			const gchar *summary)
+{
+	GSList *link;
+
+	for (link = components; link; link = g_slist_next (link)) {
+		ICalComponent *component = link->data;
+		const gchar *found = i_cal_component_get_summary (component);
+
+		if (is_detached_instance (component))
+			continue;
+
+		if (found && g_strcmp0 (found, summary) == 0)
+			return component;
+	}
+
+	return NULL;
+}
+
 int
 main (int argc,
       char **argv)
@@ -165,8 +237,11 @@ main (int argc,
 	ICalComponent *event;
 	ICalComponent *read_back = NULL;
 	ICalComponent *read_back_event;
+	ICalComponent *split_event;
+	ICalTime *dtstart;
 	gchar *icalendar;
 	gchar *exdates;
+	gchar *rrule;
 	gchar *added_uid = NULL;
 	gchar *all_day_uid = NULL;
 	gchar *recurring_uid = NULL;
@@ -175,10 +250,12 @@ main (int argc,
 	const gchar *all_day_summary;
 	const gchar *recurring_summary;
 	const gchar *edited_summary;
+	const gchar *split_summary;
 
-	if (argc != 6) {
+	if (argc != 7) {
 		g_printerr ("usage: %s <source-uid> <summary> <all-day-summary> "
-			    "<recurring-summary> <edited-occurrence-summary>\n", argv[0]);
+			    "<recurring-summary> <edited-occurrence-summary> "
+			    "<split-summary>\n", argv[0]);
 		return 2;
 	}
 
@@ -187,6 +264,7 @@ main (int argc,
 	all_day_summary = argv[3];
 	recurring_summary = argv[4];
 	edited_summary = argv[5];
+	split_summary = argv[6];
 
 	/* Activates evolution-source-registry on the session bus, which reads
 	 * the scratch sources directory the harness wrote. */
@@ -453,13 +531,12 @@ main (int argc,
 		return fail ("read-back-series", error);
 	}
 
-	g_free (recurring_uid);
-
 	read_back_event = first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
 		g_printerr ("read-back-series: EDS returned an object with no VEVENT in it\n");
+		g_free (recurring_uid);
 		g_free (added_uid);
 		return 1;
 	}
@@ -470,12 +547,108 @@ main (int argc,
 	g_print ("recurring-exdates=%s\n", exdates);
 	g_free (exdates);
 
+	/* And "Edit this and future occurrences" on the fifth one, which EDS turns
+	 * into a truncated series plus a second event. Last of the three, so the
+	 * series it cuts in two is the one the other two have already left their
+	 * exceptions on. */
+	icalendar = g_strdup_printf (
+		"BEGIN:VEVENT\r\n"
+		"UID:%s\r\n"
+		"RECURRENCE-ID:%s\r\n"
+		"DTSTART:%s\r\n"
+		"DTEND:%s\r\n"
+		"SUMMARY:%s\r\n"
+		"RRULE:%s\r\n"
+		"END:VEVENT\r\n",
+		recurring_uid, TEST_RECURRING_SPLIT_RECURRENCE_ID,
+		TEST_RECURRING_SPLIT_DTSTART, TEST_RECURRING_SPLIT_DTEND,
+		split_summary, TEST_RECURRING_RRULE);
+	event = i_cal_component_new_from_string (icalendar);
+	g_free (icalendar);
+
+	if (!event) {
+		g_printerr ("build: libical would not parse the split occurrence\n");
+		g_free (recurring_uid);
+		g_free (added_uid);
+		return 1;
+	}
+
+	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_THIS_AND_FUTURE,
+					      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
+		g_object_unref (event);
+		g_free (recurring_uid);
+		g_free (added_uid);
+		return fail ("modify-this-and-future", error);
+	}
+
+	g_object_unref (event);
+
+	/* What is left of the series EDS cut: the master again, whose rule has to
+	 * have been shortened to stop before the instance the split began at. A
+	 * rule EDS truncated and the backend's save undid is a series that still
+	 * recurs over the days the new event now owns — the same appointment
+	 * twice, under two titles. */
+	if (!e_cal_client_get_object_sync (cal, recurring_uid, NULL, &read_back, NULL, &error)) {
+		g_free (recurring_uid);
+		g_free (added_uid);
+		return fail ("read-back-truncated", error);
+	}
+
+	g_free (recurring_uid);
+
+	read_back_event = first_vevent (read_back);
+	g_object_unref (read_back);
+
+	if (!read_back_event) {
+		g_printerr ("read-back-truncated: EDS returned an object with no VEVENT in it\n");
+		g_free (added_uid);
+		return 1;
+	}
+
+	rrule = rrule_value (read_back_event);
+	g_object_unref (read_back_event);
+
+	g_print ("series-rrule=%s\n", rrule);
+	g_free (rrule);
+
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error)) {
 		g_free (added_uid);
 		return fail ("query-after", error);
 	}
 
 	g_print ("events-after=%u\n", g_slist_length (components));
+
+	/* And the other half of the split, found in the same listing: the event
+	 * EDS made out of the occurrence, which nothing on this side can ask for
+	 * by UID because EDS invented one and the server then replaced it. Its own
+	 * start and its own rule are what say the split happened where it was
+	 * asked for rather than at the head of the series. */
+	split_event = find_series_by_summary (components, split_summary);
+
+	if (!split_event) {
+		g_printerr ("split: no series titled '%s' is in the calendar\n", split_summary);
+		g_slist_free_full (components, g_object_unref);
+		g_free (added_uid);
+		return 1;
+	}
+
+	dtstart = i_cal_component_get_dtstart (split_event);
+	icalendar = dtstart ? i_cal_time_as_ical_string (dtstart) : NULL;
+	g_clear_object (&dtstart);
+
+	g_print ("split-dtstart=%s\n", icalendar ? icalendar : "");
+	g_free (icalendar);
+
+	rrule = rrule_value (split_event);
+	g_print ("split-rrule=%s\n", rrule);
+	g_free (rrule);
+
+	/* And that it took none of the series' exceptions with it. The two
+	 * cancelled occurrences are both before the split, so an EXDATE here is an
+	 * exclusion EDS moved onto days it does not belong to. */
+	exdates = exdate_values (split_event);
+	g_print ("split-exdates=%s\n", exdates);
+	g_free (exdates);
 
 	g_slist_free_full (components, g_object_unref);
 	g_free (added_uid);
