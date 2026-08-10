@@ -33,10 +33,12 @@
 //!   If any rule the server holds fails [`maps_recurrence_rule`], the
 //!   property is left alone entirely.
 //! - **`recurrenceOverrides` is the same story one level down.** An
-//!   `EXDATE`/`RDATE` can say that an instance is off or on, but not that it
-//!   was edited on its own, so an override the component placed with a bare
-//!   `RDATE` would come back as the empty patch — deleting the instance's own
-//!   title. If any override the server holds fails
+//!   `EXDATE`, an `RDATE` and a `RECURRENCE-ID` component between them say that
+//!   an instance is off, that it happens, and that it happens with another
+//!   title, start, length, description or status — but not that it happens in
+//!   another place or with another guest list. An override the component could
+//!   only place with a bare `RDATE` would come back as the empty patch,
+//!   deleting what it could not draw, so if any override the server holds fails
 //!   [`maps_recurrence_override`], the property is left alone entirely.
 //! - **`start` is required by RFC 8984.** A component whose `DTSTART` the
 //!   mapping cannot read yields no start, and `"start": null` is not a legal

@@ -176,32 +176,41 @@ pub unsafe fn component_uid(component: *mut ICalComponent) -> Option<String> {
 /// taking the first node would map a single moved occurrence as if it were the
 /// whole series.
 ///
-/// The overrides are then dropped, and that is the mapping's existing story
-/// rather than a new loss: JSCalendar keeps them in `recurrenceOverrides`,
-/// which `jmap-ical` does not cover, so a save never names that property and
-/// never overwrites what the server holds. A set of instances with no master at
-/// all is refused instead — there is nothing honest to send, and a visible
-/// failure beats rewriting a series to look like one moved day.
+/// All of them go into the envelope, master first — the shape `jmap-ical` reads
+/// a series and its `recurrenceOverrides` out of, and the shape it renders back.
+/// Dropping the detached ones here, which this used to do, is no longer merely
+/// a loss: the mapping now *draws* an edited instance, so a save that sent only
+/// the master would read the component as a series whose instance was edited
+/// back to the parent's title, and patch that over the server's copy.
+///
+/// A set of instances with no master at all is refused instead — there is
+/// nothing honest to send, and a visible failure beats rewriting a series to
+/// look like one moved day.
 ///
 /// # Safety
 ///
 /// `instances` must be NULL or a valid `GSList` whose nodes are
 /// `ECalComponent *`, which is what the vfunc receives.
 pub unsafe fn icalendar_from_instances(instances: *const GSList) -> Option<SavedComponent> {
-    // SAFETY: the caller guarantees the list's shape; the component is
-    // borrowed from the ECalComponent that owns it.
+    // SAFETY: the caller guarantees the list's shape; the components are
+    // borrowed from the ECalComponents that own them.
     let master = unsafe { find_master(instances) }?;
     // SAFETY: `master` is a valid component for as long as the list is.
     let uid = unsafe { component_uid(master) };
 
-    // SAFETY: a fresh envelope, and a clone of the master to put in it —
-    // `take_component` takes ownership, and the master is not ours to give.
+    // SAFETY: a fresh envelope, and clones of the instances to put in it —
+    // `take_component` takes ownership, and they are not ours to give.
     let icalendar = unsafe {
         let calendar = i_cal_component_new_vcalendar();
         if calendar.is_null() {
             return None;
         }
         i_cal_component_take_component(calendar, i_cal_component_clone(master));
+        for instance in instance_components(instances) {
+            if !ptr::eq(instance, master) {
+                i_cal_component_take_component(calendar, i_cal_component_clone(instance));
+            }
+        }
         let rendered = ical_from_component(calendar);
         component_unref(calendar);
         rendered?
@@ -240,13 +249,14 @@ unsafe fn holds_event(component: *mut ICalComponent) -> bool {
     }
 }
 
-/// The first instance in `instances` that carries no `RECURRENCE-ID`, borrowed
-/// from the `ECalComponent` that owns it.
+/// The `ICalComponent` inside each node of `instances`, in list order, borrowed
+/// from the `ECalComponent` that owns it. Nodes holding nothing are skipped.
 ///
 /// # Safety
 ///
 /// As [`icalendar_from_instances`].
-unsafe fn find_master(instances: *const GSList) -> Option<*mut ICalComponent> {
+unsafe fn instance_components(instances: *const GSList) -> Vec<*mut ICalComponent> {
+    let mut components = Vec::new();
     let mut node = instances;
     while !node.is_null() {
         // SAFETY: the caller guarantees a valid list of ECalComponent.
@@ -258,19 +268,34 @@ unsafe fn find_master(instances: *const GSList) -> Option<*mut ICalComponent> {
             }
             // Borrowed: the ECalComponent keeps owning it.
             let inner = e_cal_component_get_icalcomponent(component);
-            if inner.is_null() {
-                continue;
+            if !inner.is_null() {
+                components.push(inner);
             }
+        }
+    }
+    components
+}
+
+/// The first instance in `instances` that carries no `RECURRENCE-ID`, borrowed
+/// from the `ECalComponent` that owns it.
+///
+/// # Safety
+///
+/// As [`icalendar_from_instances`].
+unsafe fn find_master(instances: *const GSList) -> Option<*mut ICalComponent> {
+    // SAFETY: the caller guarantees a valid list of ECalComponent.
+    unsafe {
+        instance_components(instances).into_iter().find(|inner| {
             let recurrence_id =
-                i_cal_component_get_first_property(inner, I_CAL_RECURRENCEID_PROPERTY);
+                i_cal_component_get_first_property(*inner, I_CAL_RECURRENCEID_PROPERTY);
             if recurrence_id.is_null() {
-                return Some(inner);
+                return true;
             }
             // A property reference is ours to drop, like a component's.
             g_object_unref(recurrence_id.cast());
-        }
+            false
+        })
     }
-    None
 }
 
 /// Reads an owned `gchar *` and frees it.

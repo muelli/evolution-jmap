@@ -213,11 +213,16 @@ fn a_component_whose_uid_was_emptied_reports_none() {
     }
 }
 
-/// The master is the instance without a `RECURRENCE-ID`, and it is what the
-/// mapping reads — *whatever position it holds in the list*. Taking the first
-/// node instead would map a moved single occurrence as if it were the series.
+/// The master is the instance without a `RECURRENCE-ID`, and it leads the
+/// envelope — *whatever position it holds in the list*. Taking the first node
+/// instead would map a moved single occurrence as if it were the series.
+///
+/// The detached occurrences come with it. `jmap-ical` reads a series' overrides
+/// out of them, so leaving them behind would hand the mapping a component
+/// saying the edited day is like every other, and a save would patch that over
+/// the server's copy.
 #[test]
-fn the_master_is_found_among_the_instances_whatever_the_order() {
+fn the_master_leads_the_envelope_and_the_overrides_follow_it() {
     let components = [instance(OVERRIDE), instance(MASTER)];
     let list = instance_list(&components);
 
@@ -229,16 +234,23 @@ fn the_master_is_found_among_the_instances_whatever_the_order() {
             "not an envelope: {}",
             saved.icalendar
         );
+
+        let master = saved
+            .icalendar
+            .find("RRULE:FREQ=DAILY")
+            .unwrap_or_else(|| panic!("not the master: {}", saved.icalendar));
+        let detached = saved
+            .icalendar
+            .find("RECURRENCE-ID")
+            .unwrap_or_else(|| panic!("lost the override: {}", saved.icalendar));
+        assert!(master < detached, "{}", saved.icalendar);
         assert!(
-            saved.icalendar.contains("RRULE:FREQ=DAILY"),
-            "not the master: {}",
+            saved.icalendar.contains("SUMMARY:Standup\\, moved"),
+            "lost the override's own title: {}",
             saved.icalendar
         );
-        assert!(
-            !saved.icalendar.contains("RECURRENCE-ID"),
-            "carried an override: {}",
-            saved.icalendar
-        );
+        // One copy of each, rather than the master twice.
+        assert_eq!(saved.icalendar.matches("BEGIN:VEVENT").count(), 2);
 
         glib_sys::g_slist_free(list);
         for component in components {
@@ -267,10 +279,10 @@ fn the_instances_survive_being_marshalled() {
     }
 }
 
-/// Only a detached occurrence, with no series to attach it to. JSCalendar keeps
-/// overrides in `recurrenceOverrides`, which this mapping does not cover, so
-/// there is nothing honest to send — and a failure the user sees beats a save
-/// that silently rewrites the whole series to look like one moved day.
+/// Only a detached occurrence, with no series to attach it to. JSCalendar says
+/// "this instance differs" only relative to a series, so there is nothing
+/// honest to send — and a failure the user sees beats a save that silently
+/// rewrites the whole series to look like one moved day.
 #[test]
 fn a_save_of_nothing_but_an_override_is_refused() {
     let component = instance(OVERRIDE);

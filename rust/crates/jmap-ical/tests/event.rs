@@ -4,7 +4,8 @@
 //! JSCalendar `CalendarEvent` ↔ iCalendar `VEVENT`, the minimal property set
 //! the calendar backend needs: UID, SUMMARY, DESCRIPTION, DTSTART (+timeZone,
 //! or as a date for showWithoutTime), DURATION, STATUS, RRULE, and the
-//! instances named one at a time by an EXDATE or an RDATE.
+//! instances named one at a time by an EXDATE, an RDATE, or a component of
+//! their own carrying a RECURRENCE-ID.
 
 use jmap_ical::{
     ICalError, event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule,
@@ -29,6 +30,18 @@ fn line<'a>(ics: &'a str, prefix: &str) -> &'a str {
 
 fn without(ics: &str, prefix: &str) -> bool {
     !ics.split("\r\n").any(|line| line.starts_with(prefix))
+}
+
+/// The `n`th `VEVENT` of the document, from its first content line onwards, so
+/// that [`line`] and [`without`] can be pointed at one component of several.
+fn vevent(ics: &str, n: usize) -> &str {
+    ics.split("BEGIN:VEVENT\r\n")
+        .nth(n + 1)
+        .unwrap_or_else(|| panic!("no VEVENT {n} in\n{ics}"))
+}
+
+fn vevents(ics: &str) -> usize {
+    ics.matches("BEGIN:VEVENT\r\n").count()
 }
 
 #[test]
@@ -718,6 +731,9 @@ fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
 /// A recurring event in one zone, with `overrides` naming single instances.
 fn recurring_with(overrides: Value) -> CalendarEvent {
     CalendarEvent {
+        // A detached instance is tied to its series by the UID they share, so
+        // the series needs one.
+        id: Some("E11".into()),
         start: Some("2026-01-15T13:00:00".to_owned()),
         time_zone: Some("Europe/Berlin".to_owned()),
         duration: Some("PT1H".to_owned()),
@@ -854,20 +870,371 @@ fn an_all_day_event_whose_excluded_instance_has_a_time_stays_a_date_time() {
 }
 
 #[test]
-fn an_instance_edited_on_its_own_is_flagged_rather_than_silently_narrowed() {
-    // A patch that *changes* an instance is a VEVENT of its own carrying a
-    // RECURRENCE-ID, which this mapping does not emit. The instance is still
-    // drawn — an RDATE names the day it happens, at the parent's title — but
-    // the save path is told the property was not seen whole, exactly as it is
-    // told about a rule with byDay in it.
+fn an_instance_edited_on_its_own_is_a_vevent_of_its_own() {
+    // RFC 8984 §4.3.4's third kind of override: not off, not merely on, but
+    // *different*. iCalendar says that with a second VEVENT carrying the
+    // series' UID and a RECURRENCE-ID naming the instance it stands in for
+    // (RFC 5545 §3.8.4.4) — and the properties it does not restate are the
+    // series'.
     let patch = json!({"title": "Sprint review"});
+    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    let instance = vevent(&ics, 1);
+    assert_eq!(line(instance, "UID:"), "UID:E11", "{ics}");
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260129T130000"
+    );
+    assert_eq!(line(instance, "SUMMARY:"), "SUMMARY:Sprint review");
+    // The instance's own start defaults to the id, and the series' length and
+    // recurrence are not restated on it.
+    assert_eq!(
+        line(instance, "DTSTART"),
+        "DTSTART;TZID=Europe/Berlin:20260129T130000"
+    );
+    assert_eq!(line(instance, "DURATION"), "DURATION:PT1H");
+    assert!(without(instance, "RRULE"), "{ics}");
+    // Placed by the component of its own, so an RDATE for the same instant
+    // would only say a second time that it happens.
+    assert!(without(&ics, "RDATE"), "{ics}");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.title.as_deref(), None, "{ics}");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn an_instance_moved_to_another_time_keeps_the_recurrence_id_it_replaces() {
+    // The one place the two ends of an override differ: RECURRENCE-ID names
+    // the instance the series generated, DTSTART where it actually is. An
+    // override says the second only when it moved.
+    let event = recurring_with(json!({
+        "2026-01-29T13:00:00": {"start": "2026-01-29T15:30:00", "duration": "PT30M"},
+    }));
+    let ics = event_to_ical(&event);
+
+    let instance = vevent(&ics, 1);
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260129T130000"
+    );
+    assert_eq!(
+        line(instance, "DTSTART"),
+        "DTSTART;TZID=Europe/Berlin:20260129T153000"
+    );
+    assert_eq!(line(instance, "DURATION"), "DURATION:PT30M");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn an_instance_that_drops_a_property_reads_back_as_removing_it() {
+    // A PatchObject removes a property with a null, and the component says the
+    // same thing by not carrying the line at all. Round-tripping that is what
+    // keeps a save from restoring the series' description onto an instance the
+    // user cleared it from.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"description": null}}));
+    event.description = Some("bring the numbers".to_owned());
+    let ics = event_to_ical(&event);
+
+    let instance = vevent(&ics, 1);
+    assert!(without(instance, "DESCRIPTION"), "{ics}");
+    assert_eq!(
+        line(&ics, "DESCRIPTION"),
+        "DESCRIPTION:bring the numbers",
+        "the series keeps its own"
+    );
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+    assert!(maps_recurrence_override(
+        "2026-01-29T13:00:00",
+        &json!({"description": null})
+    ));
+}
+
+#[test]
+fn an_instance_both_edited_and_excluded_is_excluded_and_flagged() {
+    // An instance that does not happen has nothing to show an edited title on,
+    // so the exclusion wins and the rest of the patch is lost — which the save
+    // path has to be told, or the next save writes the loss back.
+    let patch = json!({"excluded": true, "title": "Sprint review"});
     assert!(!maps_recurrence_override("2026-01-29T13:00:00", &patch));
 
     let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 1, "{ics}");
     assert_eq!(
-        line(&ics, "RDATE"),
-        "RDATE;TZID=Europe/Berlin:20260129T130000"
+        line(&ics, "EXDATE"),
+        "EXDATE;TZID=Europe/Berlin:20260129T130000"
+    );
+}
+
+#[test]
+fn an_override_the_mapping_cannot_draw_is_still_placed_at_the_parents_title() {
+    // The narrowing that remains: a patch naming properties outside the drawn
+    // set — or carrying a value the drawing cannot take — is placed by a bare
+    // RDATE, so the occurrence is at least visible, and flagged so that a save
+    // never replaces the property it came from.
+    for patch in [
+        json!({"locations/1/name": "Room 3"}),
+        json!({"title": 42}),
+        json!({"title": ""}),
+        json!({"status": "postponed"}),
+        json!({"start": "2026-02-30T13:00:00"}),
+    ] {
+        assert!(
+            !maps_recurrence_override("2026-01-29T13:00:00", &patch),
+            "{patch}"
+        );
+
+        let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+        let ics = event_to_ical(&event);
+        assert_eq!(vevents(&ics), 1, "{ics}");
+        assert_eq!(
+            line(&ics, "RDATE"),
+            "RDATE;TZID=Europe/Berlin:20260129T130000"
+        );
+    }
+}
+
+#[test]
+fn an_override_naming_one_property_it_can_draw_is_drawn_and_the_rest_narrowed() {
+    // Half-known is the same trade as an RRULE that had to drop its byDay: draw
+    // what can be drawn, and flag the property so a save leaves it alone.
+    let patch = json!({"title": "Sprint review", "locations/1/name": "Room 3"});
+    assert!(!maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(line(vevent(&ics, 1), "SUMMARY:"), "SUMMARY:Sprint review");
+}
+
+#[test]
+fn an_all_day_events_edited_instance_is_written_as_a_date() {
+    // RFC 5545 §3.8.4.4, as for EXDATE and UNTIL: a RECURRENCE-ID's value type
+    // has to match DTSTART's, or it names an instant the series never
+    // generated and the edit attaches to nothing.
+    let event = CalendarEvent {
+        id: Some("E12".into()),
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_overrides: Some(
+            [(
+                "2026-01-29T00:00:00".to_owned(),
+                json!({"title": "Company day"}),
+            )]
+            .into(),
+        ),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
+    let instance = vevent(&ics, 1);
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID;VALUE=DATE:20260129"
+    );
+    assert_eq!(line(instance, "DTSTART"), "DTSTART;VALUE=DATE:20260129");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.show_without_time, Some(true));
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn an_all_day_event_whose_edited_instance_takes_a_time_stays_a_date_time() {
+    // The same trade as an excluded instance at 09:00: a DATE value cannot hold
+    // the time the instance moved to, and truncating it would move the
+    // appointment, so the whole event is written as the timed one it half is.
+    let event = CalendarEvent {
+        id: Some("E12".into()),
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_overrides: Some(
+            [(
+                "2026-01-29T00:00:00".to_owned(),
+                json!({"start": "2026-01-29T09:00:00", "duration": "PT2H"}),
+            )]
+            .into(),
+        ),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
+    let instance = vevent(&ics, 1);
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID:20260129T000000"
+    );
+    assert_eq!(line(instance, "DTSTART"), "DTSTART:20260129T090000");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn the_series_is_the_vevent_without_a_recurrence_id_whatever_the_order() {
+    // EDS hands a save every instance of one uid it holds, in no promised
+    // order. Taking the first component would read a single edited day as if
+    // it were the whole series.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E13\r\n",
+        "RECURRENCE-ID:20260129T130000Z\r\n",
+        "DTSTART:20260129T150000Z\r\n",
+        "SUMMARY:Sprint review\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E13\r\n",
+        "DTSTART:20260115T130000Z\r\n",
+        "SUMMARY:Standup\r\n",
+        "RRULE:FREQ=WEEKLY\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+
+    assert_eq!(event.title.as_deref(), Some("Standup"));
+    assert_eq!(event.start.as_deref(), Some("2026-01-15T13:00:00"));
+    assert_eq!(
+        event.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-29T13:00:00".to_owned(),
+                json!({"start": "2026-01-29T15:00:00", "title": "Sprint review"}),
+            )]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn a_detached_instance_that_restates_the_series_is_an_instance_that_happens() {
+    // Nothing differs, so the patch is empty — which is exactly what an RDATE
+    // says, and the same override either spelling produced.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E14\r\n",
+        "DTSTART:20260115T130000Z\r\n",
+        "SUMMARY:Standup\r\n",
+        "RRULE:FREQ=WEEKLY\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E14\r\n",
+        "RECURRENCE-ID:20260129T130000Z\r\n",
+        "DTSTART:20260129T130000Z\r\n",
+        "SUMMARY:Standup\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    assert_eq!(
+        ical_to_event(ics).expect("parse").recurrence_overrides,
+        Some([("2026-01-29T13:00:00".to_owned(), json!({}))].into())
+    );
+}
+
+#[test]
+fn an_override_for_this_and_future_instances_is_not_read_as_one_instance() {
+    // RFC 5545 §3.2.13's RANGE=THISANDFUTURE makes the component stand for
+    // every instance from that one on. Reading it as a single override would
+    // move one day and quietly drop the change to all the others, so it is
+    // skipped — the same answer this mapping gives any value it cannot read.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E15\r\n",
+        "DTSTART:20260115T130000Z\r\n",
+        "SUMMARY:Standup\r\n",
+        "RRULE:FREQ=WEEKLY\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E15\r\n",
+        "RECURRENCE-ID;RANGE=THISANDFUTURE:20260129T130000Z\r\n",
+        "DTSTART:20260129T150000Z\r\n",
+        "SUMMARY:Standup\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    assert_eq!(
+        ical_to_event(ics).expect("parse").recurrence_overrides,
+        None
+    );
+}
+
+#[test]
+fn a_detached_instance_with_no_series_is_still_read_as_an_event() {
+    // Nothing to attach it to and nothing honest to say about the series, so
+    // the component is read as the event it describes — which is what this
+    // mapping did before it knew what a RECURRENCE-ID was.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E16\r\n",
+        "RECURRENCE-ID:20260129T130000Z\r\n",
+        "DTSTART:20260129T150000Z\r\n",
+        "SUMMARY:Sprint review\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+
+    assert_eq!(event.title.as_deref(), Some("Sprint review"));
+    assert_eq!(event.start.as_deref(), Some("2026-01-29T15:00:00"));
+    assert_eq!(event.recurrence_overrides, None);
+}
+
+#[test]
+fn a_detached_instance_wins_over_an_rdate_for_the_same_instant() {
+    // A component naming one instant both ways says the more specific thing
+    // with the VEVENT; the RDATE only repeats that the instance happens.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E17\r\n",
+        "DTSTART:20260115T130000Z\r\n",
+        "SUMMARY:Standup\r\n",
+        "RRULE:FREQ=WEEKLY\r\n",
+        "RDATE:20260129T130000Z\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E17\r\n",
+        "RECURRENCE-ID:20260129T130000Z\r\n",
+        "DTSTART:20260129T130000Z\r\n",
+        "SUMMARY:Sprint review\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    assert_eq!(
+        ical_to_event(ics).expect("parse").recurrence_overrides,
+        Some(
+            [(
+                "2026-01-29T13:00:00".to_owned(),
+                json!({"title": "Sprint review"}),
+            )]
+            .into()
+        )
     );
 }
 
@@ -887,12 +1254,21 @@ fn an_override_whose_instant_cannot_be_written_is_flagged() {
         assert!(without(&ics, "RDATE"), "{ics}");
     }
 
-    // The two shapes an EXDATE or an RDATE can carry whole.
-    assert!(maps_recurrence_override(
-        "2026-01-29T13:00:00",
-        &json!({"excluded": true})
-    ));
-    assert!(maps_recurrence_override("2026-01-29T13:00:00", &json!({})));
+    // The shapes the component can carry whole: the two an EXDATE or an RDATE
+    // spells, and the properties a detached VEVENT restates.
+    for patch in [
+        json!({"excluded": true}),
+        json!({}),
+        json!({"title": "Sprint review", "description": "the quarter"}),
+        json!({"start": "2026-01-29T15:30:00", "duration": "PT30M"}),
+        json!({"status": "cancelled"}),
+        json!({"status": null, "duration": null}),
+    ] {
+        assert!(
+            maps_recurrence_override("2026-01-29T13:00:00", &patch),
+            "{patch}"
+        );
+    }
 }
 
 #[test]

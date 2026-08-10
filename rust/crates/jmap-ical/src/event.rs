@@ -6,13 +6,19 @@
 //! The mapped set is the one the calendar backend needs to be useful — UID,
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
 //! the event is shown without a time), DURATION, STATUS, RRULE, and the
-//! instances an EXDATE or an RDATE names one at a time — and no more.
-//! Everything else on an event (participants, alarms, locations, links,
-//! …) is *dropped*, which is only safe because saving goes back to the server
-//! as a PatchObject naming the mapped properties: a property we never mapped is
-//! a property we never overwrite. See [`MAPPED_PROPERTIES`],
+//! instances an EXDATE, an RDATE or a `RECURRENCE-ID` component names one at a
+//! time — and no more. Everything else on an event (participants, alarms,
+//! locations, links, …) is *dropped*, which is only safe because saving goes
+//! back to the server as a PatchObject naming the mapped properties: a property
+//! we never mapped is a property we never overwrite. See [`MAPPED_PROPERTIES`],
 //! [`maps_recurrence_rule`] and [`maps_recurrence_override`], which are that
 //! knowledge in machine-readable form.
+//!
+//! A `VCALENDAR` here therefore holds more than one `VEVENT` whenever an
+//! instance of a recurring event was edited on its own: the series first, then
+//! one component per edited instance, each carrying the series' `UID` and the
+//! `RECURRENCE-ID` of the occurrence it stands in for. That is also the shape
+//! `ECalMetaBackend` stores and hands back to a save.
 //!
 //! The one property read but never written is `DTEND`: it is how Evolution
 //! states an event's length, so [`read_duration`] measures it, while the
@@ -32,7 +38,7 @@
 use std::collections::BTreeMap;
 
 use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::error::ICalError;
 use crate::syntax::{self, Component, Property};
@@ -46,6 +52,11 @@ const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
 
 /// The JSCalendar spelling of `Etc/UTC`, the one the client and the mock use.
 const UTC: &str = "Etc/UTC";
+
+/// The property that ties an edited instance to the series it belongs to: the
+/// start of the occurrence it stands in for (RFC 5545 §3.8.4.4), which is
+/// exactly the key of a JSCalendar `recurrenceOverrides` entry.
+const RECURRENCE_ID: &str = "RECURRENCE-ID";
 
 /// JSCalendar `status` values and their iCalendar `STATUS` spelling. Both sets
 /// are closed, so a value outside this table is dropped rather than passed
@@ -73,6 +84,16 @@ pub const MAPPED_PROPERTIES: [&str; 9] = [
     "recurrenceOverrides",
 ];
 
+/// The event properties an edited instance may restate, and therefore the only
+/// keys — besides `excluded` — a `recurrenceOverrides` PatchObject may hold for
+/// [`maps_recurrence_override`] to call it covered.
+///
+/// `timeZone` is deliberately absent: every date-time in the document is
+/// written in the series' zone, so an instance in another one has no spelling
+/// here. So is `showWithoutTime`, one step further out — see
+/// [`shows_without_time`], which is decided once for the whole document.
+pub const OVERRIDE_PROPERTIES: [&str; 5] = ["title", "description", "start", "duration", "status"];
+
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
 /// Only `frequency`, `interval`, `count` and `until` are modeled; `byDay` and
@@ -88,31 +109,64 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
 
 /// Whether a recurrence override survives the trip through iCalendar.
 ///
-/// iCalendar names a single instance of a recurring event in two properties that
-/// carry a date-time and nothing else: `EXDATE` says the instance does not
-/// happen, `RDATE` says it does (RFC 5545 §3.8.5.1, §3.8.5.2). JSCalendar says
-/// both of those with one `recurrenceOverrides` entry (RFC 8984 §4.3.4) — but
-/// the entry is a PatchObject, so it can also say the *third* thing: this
-/// instance happens differently, with another title or another length. That one
-/// is a `VEVENT` of its own carrying a `RECURRENCE-ID`, which this mapping does
-/// not emit, so a caller that patches `recurrenceOverrides` over it deletes an
-/// edit the user never saw.
+/// iCalendar names a single instance of a recurring event three ways, and
+/// JSCalendar says all three with one `recurrenceOverrides` entry (RFC 8984
+/// §4.3.4). `EXDATE` says the instance does not happen and `RDATE` says it does
+/// (RFC 5545 §3.8.5.1, §3.8.5.2) — those are the empty patch and `excluded`.
+/// The third, an instance that happens *differently*, is a `VEVENT` of its own
+/// carrying a `RECURRENCE-ID`, and it can restate only the properties
+/// [`OVERRIDE_PROPERTIES`] lists; a patch touching anything else — a
+/// participant, a location, an alert — is a patch this mapping shows in part
+/// and must not write back.
 ///
 /// The `id` is checked as well as the patch. It is the instance's own start as a
 /// LocalDateTime, and one no `EXDATE` can spell is an override that would vanish
 /// from a property replaced whole.
 ///
+/// An instance that is `excluded` may say nothing else: there is no occurrence
+/// left to show an edited title on, so the `EXDATE` carries the exclusion and
+/// drops the rest.
+///
 /// As with [`maps_recurrence_rule`], an override this returns `false` for is
-/// still *drawn* where it can be — see [`event_to_ical`], which places an
-/// edited instance with a bare `RDATE` rather than hiding the occurrence.
+/// still *drawn* as far as it can be — see [`event_to_ical`], which places an
+/// override it cannot describe with a bare `RDATE` rather than hiding the
+/// occurrence.
 pub fn maps_recurrence_override(id: &str, patch: &Value) -> bool {
     let Some(fields) = patch.as_object() else {
         return false;
     };
-    to_ical_date_time(id).is_some()
-        && fields
-            .iter()
-            .all(|(name, value)| name == "excluded" && value.is_boolean())
+    if to_ical_date_time(id).is_none() {
+        return false;
+    }
+    if excluded(patch) {
+        return fields.len() == 1;
+    }
+    fields
+        .iter()
+        .all(|(name, value)| maps_override_field(name, value))
+}
+
+/// Whether one field of an override's PatchObject reaches the component and
+/// comes back meaning the same thing.
+///
+/// A PatchObject sets a property with a value and removes it with a null, and
+/// the component says the removal by not carrying the line at all — so a null
+/// round-trips wherever an absent property does. An *empty* string is neither:
+/// the writer drops it like an absent value, so it would come back as a
+/// removal, which is a different patch.
+fn maps_override_field(name: &str, value: &Value) -> bool {
+    match name {
+        "excluded" => value.is_boolean(),
+        _ if !OVERRIDE_PROPERTIES.contains(&name) => false,
+        // Outside the closed vocabulary there is no STATUS to write, so the
+        // instance would come back at the series' status.
+        "status" => value.is_null() || value.as_str().is_some_and(known_status),
+        // A start is required by RFC 8984, so a null says nothing, and the
+        // value has to be one a DTSTART can carry.
+        "start" => value.as_str().and_then(to_ical_date_time).is_some(),
+        // title, description, duration.
+        _ => value.is_null() || value.as_str().is_some_and(|text| !text.is_empty()),
+    }
 }
 
 /// Whether an override says its instance does not happen — the `EXDATE` half of
@@ -146,66 +200,21 @@ fn writable(rule: &RecurrenceRule) -> bool {
 
 /// Render an event as an iCalendar object, ready for
 /// `i_cal_component_new_from_string()`.
+///
+/// The series comes first, then one component per instance edited on its own —
+/// see [`modified_instances`].
 pub fn event_to_ical(event: &CalendarEvent) -> String {
-    let mut vevent = Component::new("VEVENT");
-
-    // EDS keys its cache on the iCalendar UID and passes it back to
-    // load_component_sync()/remove_component_sync(), so it has to be the
-    // identifier the JMAP methods take — the server-assigned id. The
-    // JSCalendar uid, which is a different namespace, rides alongside; before
-    // the first CalendarEvent/set there is no id and it stands in.
-    if let Some(uid) = event
-        .id
-        .as_ref()
-        .map(|id| id.as_str())
-        .or(event.uid.as_deref())
-    {
-        vevent = vevent.with(Property::new("UID", uid));
-    }
-    if let Some(uid) = &event.uid {
-        vevent = vevent.with(Property::new(X_JMAP_UID, uid));
-    }
-
-    for (name, value) in [
-        ("SUMMARY", &event.title),
-        ("DESCRIPTION", &event.description),
-    ] {
-        if let Some(value) = value.as_deref().filter(|value| !value.is_empty()) {
-            vevent = vevent.with(Property::new(name, value));
-        }
-    }
-
     let start = event.start.as_deref().and_then(to_ical_date_time);
     // Whether this event goes out as a date rather than a date-time, which is
-    // the whole of `showWithoutTime` on this side. Decided once: `DTSTART`,
-    // `DURATION`, an `RRULE`'s `UNTIL` and the named instances all have to agree
-    // about it.
+    // the whole of `showWithoutTime` on this side. Decided once for the whole
+    // document: `DTSTART`, `DURATION`, an `RRULE`'s `UNTIL`, the named instances
+    // and every edited instance's own `RECURRENCE-ID` have to agree about it.
     let as_a_date = start
         .as_deref()
         .is_some_and(|start| shows_without_time(event, start));
-
     let zone = event.time_zone.as_deref();
-    if let Some(start) = &start {
-        vevent = vevent.with(dated(
-            "DTSTART",
-            std::slice::from_ref(start),
-            as_a_date,
-            zone,
-        ));
-    }
 
-    if let Some(duration) = event.duration.as_deref().filter(|value| !value.is_empty()) {
-        // ISO 8601 durations, spelled identically on both sides.
-        vevent = vevent.with(Property::raw("DURATION", duration));
-    }
-
-    if let Some(status) = event.status.as_deref().and_then(|status| {
-        STATUSES
-            .iter()
-            .find(|(jscalendar, _)| jscalendar.eq_ignore_ascii_case(status))
-    }) {
-        vevent = vevent.with(Property::raw("STATUS", status.1));
-    }
+    let mut vevent = vevent_of(event, as_a_date, zone, None);
 
     for rule in event.recurrence_rules.iter().flatten() {
         if let Some(value) = rule_to_rrule(rule, zone, as_a_date) {
@@ -222,11 +231,156 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
         }
     }
 
-    Component::new("VCALENDAR")
+    let mut calendar = Component::new("VCALENDAR")
         .with(Property::raw("VERSION", "2.0"))
         .with(Property::raw("PRODID", PRODID))
-        .with_child(vevent)
-        .to_ics()
+        .with_child(vevent);
+    for (id, instance) in modified_instances(event) {
+        calendar = calendar.with_child(vevent_of(&instance, as_a_date, zone, Some(&id)));
+    }
+    calendar.to_ics()
+}
+
+/// One `VEVENT`: the properties an event and an edited instance of it spell the
+/// same way, plus the `RECURRENCE-ID` that makes it the latter.
+///
+/// The recurrence itself is *not* here. A series states its rules and its named
+/// instances; an instance edited on its own states neither, because it is one
+/// occurrence and RFC 5545 §3.8.4.4 already says which.
+fn vevent_of(
+    event: &CalendarEvent,
+    as_a_date: bool,
+    zone: Option<&str>,
+    recurrence_id: Option<&str>,
+) -> Component {
+    let mut vevent = Component::new("VEVENT");
+
+    // EDS keys its cache on the iCalendar UID and passes it back to
+    // load_component_sync()/remove_component_sync(), so it has to be the
+    // identifier the JMAP methods take — the server-assigned id. The
+    // JSCalendar uid, which is a different namespace, rides alongside; before
+    // the first CalendarEvent/set there is no id and it stands in. An edited
+    // instance carries the series' own, which is what ties the two together.
+    if let Some(uid) = event
+        .id
+        .as_ref()
+        .map(|id| id.as_str())
+        .or(event.uid.as_deref())
+    {
+        vevent = vevent.with(Property::new("UID", uid));
+    }
+    if let Some(uid) = &event.uid {
+        vevent = vevent.with(Property::new(X_JMAP_UID, uid));
+    }
+    if let Some(recurrence_id) = recurrence_id {
+        vevent = vevent.with(dated(
+            RECURRENCE_ID,
+            std::slice::from_ref(&recurrence_id.to_owned()),
+            as_a_date,
+            zone,
+        ));
+    }
+
+    for (name, value) in [
+        ("SUMMARY", &event.title),
+        ("DESCRIPTION", &event.description),
+    ] {
+        if let Some(value) = value.as_deref().filter(|value| !value.is_empty()) {
+            vevent = vevent.with(Property::new(name, value));
+        }
+    }
+
+    if let Some(start) = event.start.as_deref().and_then(to_ical_date_time) {
+        vevent = vevent.with(dated(
+            "DTSTART",
+            std::slice::from_ref(&start),
+            as_a_date,
+            zone,
+        ));
+    }
+
+    if let Some(duration) = event.duration.as_deref().filter(|value| !value.is_empty()) {
+        // ISO 8601 durations, spelled identically on both sides.
+        vevent = vevent.with(Property::raw("DURATION", duration));
+    }
+
+    if let Some(status) = event.status.as_deref().and_then(ical_status) {
+        vevent = vevent.with(Property::raw("STATUS", status));
+    }
+
+    vevent
+}
+
+/// The instances that get a `VEVENT` of their own, each with the rendered
+/// `RECURRENCE-ID` naming the occurrence it replaces.
+///
+/// In the map's chronological order, so a document is stable across renderings
+/// — the save path diffs against a re-rendering of what the server holds, and a
+/// difference that is only an order is a difference it would have to explain.
+fn modified_instances(event: &CalendarEvent) -> Vec<(String, CalendarEvent)> {
+    event
+        .recurrence_overrides
+        .iter()
+        .flatten()
+        .filter_map(|(id, patch)| {
+            Some((to_ical_date_time(id)?, modified_instance(event, id, patch)?))
+        })
+        .collect()
+}
+
+/// The event one override describes, or `None` when the override says nothing
+/// a `VEVENT` of its own would show.
+///
+/// The instance starts as the series with its recurrence dropped and its start
+/// moved to the occurrence's own — RFC 8984 §4.3.4's rule that an override's key
+/// *is* the instance's start unless the patch says otherwise. Then the patch is
+/// applied, one property at a time, and a key or a value outside what
+/// [`maps_override_field`] accepts is skipped rather than fatal: the instance is
+/// still worth drawing at the series' title, and [`maps_recurrence_override`]
+/// separately tells the save path that it was not seen whole.
+///
+/// An `excluded` instance yields `None`: it does not happen, so there is nothing
+/// to draw, and the `EXDATE` [`recurrence_dates`] emits is the whole of it.
+fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<CalendarEvent> {
+    if excluded(patch) {
+        return None;
+    }
+    let fields = patch.as_object()?;
+    let mut instance = CalendarEvent {
+        id: event.id.clone(),
+        uid: event.uid.clone(),
+        title: event.title.clone(),
+        description: event.description.clone(),
+        start: Some(id.to_owned()),
+        time_zone: event.time_zone.clone(),
+        duration: event.duration.clone(),
+        show_without_time: event.show_without_time,
+        status: event.status.clone(),
+        ..CalendarEvent::default()
+    };
+
+    let mut modified = false;
+    for (name, value) in fields {
+        if !maps_override_field(name, value) {
+            continue;
+        }
+        // Checked above: a null removes the property, and anything else here is
+        // the non-empty string that sets it.
+        let text = value.as_str().map(str::to_owned);
+        match name.as_str() {
+            "title" => instance.title = text,
+            "description" => instance.description = text,
+            "duration" => instance.duration = text,
+            "status" => instance.status = text,
+            "start" => instance.start = text,
+            // `excluded: false`, which says only that the instance happens —
+            // and it happening is what an override with no other content
+            // already means.
+            _ => continue,
+        }
+        modified = true;
+    }
+    modified.then_some(instance)
 }
 
 /// A property carrying date-times in the one form this event spells them in.
@@ -269,24 +423,51 @@ fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> 
 /// The instances of `event` to name in an `EXDATE` (`is_excluded`) or an
 /// `RDATE`, rendered and in chronological order.
 ///
-/// Every override with a writable id gets a date, including one
-/// [`maps_recurrence_override`] refuses: an instance edited on its own still
-/// *happens*, and an `RDATE` placing it at the parent's title is a narrowing of
-/// the same kind as an `RRULE` that had to drop its `byDay` — better than an
-/// occurrence the user cannot see at all. Where the rules already generate that
-/// instant the `RDATE` is a duplicate, and RFC 5545 §3.8.5.2 has the recurrence
-/// set absorb it.
+/// An instance drawn as a component of its own is left out of the `RDATE`: the
+/// component already places it, and the date would only repeat that it happens.
+/// What is left in is every override with a writable id that
+/// [`modified_instance`] found nothing to draw — a patch naming a property
+/// outside [`OVERRIDE_PROPERTIES`], say. Placing that one at the series' title
+/// is a narrowing of the same kind as an `RRULE` that had to drop its `byDay`,
+/// and better than an occurrence the user cannot see at all. Where the rules
+/// already generate that instant the `RDATE` is a duplicate, and RFC 5545
+/// §3.8.5.2 has the recurrence set absorb it.
 fn recurrence_dates(event: &CalendarEvent, is_excluded: bool) -> Vec<String> {
     event
         .recurrence_overrides
         .iter()
         .flatten()
         .filter(|(_, patch)| excluded(patch) == is_excluded)
+        .filter(|(id, patch)| modified_instance(event, id, patch).is_none())
         .filter_map(|(id, _)| to_ical_date_time(id))
         .collect()
 }
 
-/// Read an iCalendar object's first `VEVENT` into a calendar event.
+/// The iCalendar `STATUS` for a JSCalendar status, or `None` for one outside the
+/// closed vocabulary the two share.
+fn ical_status(status: &str) -> Option<&'static str> {
+    STATUSES
+        .iter()
+        .find(|(jscalendar, _)| jscalendar.eq_ignore_ascii_case(status))
+        .map(|(_, ical)| *ical)
+}
+
+fn known_status(status: &str) -> bool {
+    ical_status(status).is_some()
+}
+
+/// Read an iCalendar object into a calendar event.
+///
+/// The series is the `VEVENT` **without** a `RECURRENCE-ID`, found by that
+/// rather than by position: EDS hands a save every instance of one uid it holds,
+/// in no promised order, and taking the first component would read a single
+/// edited day as if it were the whole series. The rest become
+/// `recurrenceOverrides` entries — see [`read_overrides`].
+///
+/// A document holding *nothing but* detached instances has no series to attach
+/// them to, so the first component is read as the event it describes and the
+/// others are dropped. There is nothing better available: JSCalendar says
+/// "this instance differs" only relative to a series.
 ///
 /// The `id` is whatever the component's `UID` says, which for an event
 /// Evolution has just created is a locally invented string rather than a JMAP
@@ -294,8 +475,25 @@ fn recurrence_dates(event: &CalendarEvent, is_excluded: bool) -> Vec<String> {
 /// a create.
 pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
     let calendar = syntax::parse(text)?;
-    let vevent = calendar.child("VEVENT").ok_or(ICalError::NoEvent)?;
+    let vevents: Vec<&Component> = calendar
+        .children
+        .iter()
+        .filter(|child| child.name == "VEVENT")
+        .collect();
+    let series = *vevents
+        .iter()
+        .find(|vevent| vevent.property(RECURRENCE_ID).is_none())
+        .or_else(|| vevents.first())
+        .ok_or(ICalError::NoEvent)?;
 
+    let mut event = read_vevent(series);
+    event.recurrence_overrides = read_overrides(series, &vevents, &event);
+    Ok(event)
+}
+
+/// One `VEVENT` as an event, recurrence rules included and named instances not:
+/// those are the document's, not the component's.
+fn read_vevent(vevent: &Component) -> CalendarEvent {
     let text = |name: &str| vevent.text(name).filter(|value| !value.is_empty());
     let (start, time_zone, show_without_time) = read_start(vevent);
 
@@ -305,7 +503,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
         .filter_map(|property| rrule_to_rule(&property.raw_value()))
         .collect();
 
-    Ok(CalendarEvent {
+    CalendarEvent {
         id: text("UID").map(Into::into),
         // Membership follows from which EDS source is being served, not from
         // the component, so the backend fills it in on create.
@@ -325,9 +523,9 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
                 .map(|(jscalendar, _)| (*jscalendar).to_owned())
         }),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
-        recurrence_overrides: read_overrides(vevent),
+        recurrence_overrides: None,
         extra: Default::default(),
-    })
+    }
 }
 
 /// The event's start as a JSCalendar LocalDateTime, its time zone, and whether
@@ -368,27 +566,42 @@ fn read_start(vevent: &Component) -> (Option<String>, Option<String>, Option<boo
     (Some(start), zone, None)
 }
 
-/// The instances the component names one at a time, as `recurrenceOverrides`.
+/// The instances the document names one at a time, as `recurrenceOverrides`.
 ///
 /// An `RDATE` becomes an override that patches nothing — the instance happens as
 /// the rules would have it — and an `EXDATE` one that is `excluded`. A value
 /// neither property can be read as a date-time is skipped, like any other
 /// unreadable value, and `None` rather than an empty map is the answer for a
-/// component that names none: the save path reads an edit off a difference from
+/// document that names none: the save path reads an edit off a difference from
 /// what was shown, so an empty map would be a claim that there are no overrides
-/// where the component made no claim at all.
+/// where the document made no claim at all.
 ///
-/// `EXDATE` is read last deliberately. A component naming one instant in both
-/// properties contradicts itself, and taking it as excluded is the reading that
-/// cannot invent an appointment; RFC 5545 §3.8.5.1 also has an `EXDATE` win over
-/// the rest of the recurrence set.
-fn read_overrides(vevent: &Component) -> Option<BTreeMap<String, Value>> {
+/// `EXDATE` is read after `RDATE` deliberately. A component naming one instant
+/// in both properties contradicts itself, and taking it as excluded is the
+/// reading that cannot invent an appointment; RFC 5545 §3.8.5.1 also has an
+/// `EXDATE` win over the rest of the recurrence set.
+///
+/// The detached instances are read last, so a `VEVENT` describing an instant an
+/// `RDATE` also names wins: they agree that it happens, and only one of them
+/// says how. An `EXDATE` for the same instant is a document contradicting
+/// itself the other way round, and the edit is the more specific statement.
+///
+/// Two are skipped rather than read. One whose `RECURRENCE-ID` is not a
+/// date-time names no instance to attach to. One carrying `RANGE=THISANDFUTURE`
+/// (RFC 5545 §3.2.13) stands for *every* instance from that one on, which
+/// `recurrenceOverrides` has no single entry for; reading it as one would move
+/// one day and silently drop the change to all the others.
+fn read_overrides(
+    series: &Component,
+    vevents: &[&Component],
+    event: &CalendarEvent,
+) -> Option<BTreeMap<String, Value>> {
     let mut overrides: BTreeMap<String, Value> = BTreeMap::new();
     for (name, patch) in [
         ("RDATE", Value::Object(Default::default())),
         ("EXDATE", json!({"excluded": true})),
     ] {
-        let dates = vevent
+        let dates = series
             .all(name)
             .into_iter()
             .flat_map(Property::texts)
@@ -397,7 +610,58 @@ fn read_overrides(vevent: &Component) -> Option<BTreeMap<String, Value>> {
             overrides.insert(date, patch.clone());
         }
     }
+
+    for vevent in vevents {
+        if std::ptr::eq(*vevent, series) {
+            continue;
+        }
+        let Some(property) = vevent.property(RECURRENCE_ID) else {
+            continue;
+        };
+        if property.param("RANGE").is_some() {
+            continue;
+        }
+        let Some(id) = to_local_date_time(&property.raw_value()) else {
+            continue;
+        };
+        let patch = instance_patch(event, &read_vevent(vevent), &id);
+        overrides.insert(id, patch);
+    }
+
     (!overrides.is_empty()).then_some(overrides)
+}
+
+/// How a detached instance differs from the series it belongs to, as an RFC 8984
+/// §4.3.4 PatchObject.
+///
+/// Only [`OVERRIDE_PROPERTIES`] are compared, because only those are restated on
+/// the component; a property the instance carries and the mapping does not read
+/// is invisible here exactly as it is everywhere else. A property the series has
+/// and the instance does not comes back as a `null`, which is how a PatchObject
+/// removes one — and how the component said it, by not carrying the line.
+///
+/// `start` is compared against `id` rather than against the series: an override's
+/// key *is* its instance's start, so a `DTSTART` equal to it says nothing, and
+/// one that differs is an occurrence the user moved.
+fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) -> Value {
+    let mut patch = Map::new();
+    for (name, was, now) in [
+        ("title", &series.title, &instance.title),
+        ("description", &series.description, &instance.description),
+        ("duration", &series.duration, &instance.duration),
+        ("status", &series.status, &instance.status),
+    ] {
+        if was != now {
+            patch.insert(
+                (*name).to_owned(),
+                now.clone().map_or(Value::Null, Value::String),
+            );
+        }
+    }
+    if let Some(start) = instance.start.as_deref().filter(|start| *start != id) {
+        patch.insert("start".to_owned(), Value::String(start.to_owned()));
+    }
+    Value::Object(patch)
 }
 
 /// How long the event lasts, as a JSCalendar Duration.
@@ -528,10 +792,41 @@ fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
             })
         // An instance named at 09:00 cannot be truncated to its date without
         // excluding — or adding — a different occurrence than the server named.
-        && [true, false]
-            .into_iter()
-            .flat_map(|is_excluded| recurrence_dates(event, is_excluded))
-            .all(|date| at_midnight(&date))
+        && event
+            .recurrence_overrides
+            .iter()
+            .flatten()
+            .all(|(id, patch)| instance_shows_without_time(event, id, patch))
+}
+
+/// Whether one override can be named — and, where it is drawn as a component of
+/// its own, written whole — without a time.
+///
+/// An id no property could carry is dropped rather than written, so it puts no
+/// condition on the form. An id that *is* written has to land on a day, and an
+/// instance with a component of its own has to meet the same conditions the
+/// series does: a start at midnight and a length in whole days, since RFC 5545
+/// §3.6.1 lets nothing else stand beside a DATE-valued `DTSTART`.
+fn instance_shows_without_time(event: &CalendarEvent, id: &str, patch: &Value) -> bool {
+    let Some(rendered) = to_ical_date_time(id) else {
+        return true;
+    };
+    if !at_midnight(&rendered) {
+        return false;
+    }
+    let Some(instance) = modified_instance(event, id, patch) else {
+        return true;
+    };
+    instance
+        .start
+        .as_deref()
+        .and_then(to_ical_date_time)
+        .is_none_or(|start| at_midnight(&start))
+        && instance
+            .duration
+            .as_deref()
+            .filter(|duration| !duration.is_empty())
+            .is_none_or(whole_days)
 }
 
 /// Whether a rendered `YYYYMMDDTHHMMSS` names the top of its day.
