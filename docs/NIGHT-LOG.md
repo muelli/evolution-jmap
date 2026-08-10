@@ -11582,3 +11582,107 @@ it can be a vfunc. The standing directive on translatable strings starts biting
 there too: the first labels this project originates are the ones
 `insert_widgets` adds, and `bindtextdomain` has to be wired into this module's
 init at the same time.
+
+## 2026-08-10 (hundred-and-sixteenth session)
+
+**The widget calls M7's page needs, in `evo-sys`.** Last session's "next" was
+this: `insert_widgets` is handed a `GtkBox` and has to put widgets in it, and
+`evo-sys` spoke no GTK at all — `GtkBox` was there as `c_void`, a placeholder for
+the container of a page nothing could build. `build.rs` now generates eleven GTK
+entry points beside the Evolution ones (`ALLOWED_GTK_FUNCTIONS`): a grid packed
+into the box, and per setting a mnemonic label right-aligned beside an
+`hexpand`ing entry, plus the six `*_get_type` getters the new tests ask the type
+system through. Four tests in `tests/gtk.rs`, red first (25 compile errors: no
+`gtk_*` anything).
+
+**Named one function at a time, not by prefix.** `gtk_(grid|label|entry)_.*`
+would take several hundred functions, nearly all of them about a realized widget
+hierarchy, into a surface whose whole claim is that what is in it was looked at.
+The list is meant to grow a line at a time with the code that calls it, and the
+entry-point test names each one back, so adding a call to the module without
+adding it here is a compile error rather than a `dlopen` failure in Evolution.
+The property *bindings* stay out: an entry's `text` is
+`g_object_bind_property` onto the `CamelSettings`, which is `gobject-sys` and
+already available.
+
+**Distinct opaque handles instead of one `c_void`.** GTK's types are still not
+generated — no `gtk-sys` to re-export from (it is frozen on `glib-sys` 0.18
+against this workspace's 0.22, and two `GObject`s in one process is the failure
+the blocklist exists to prevent), and a generated GTK class layout would be the
+one thing in this crate nothing cross-checks against `g_type_query`, since no GTK
+class is subclassed or allocated here. So `GTK_HANDLES` emits a zero-sized
+`#[repr(C)]` struct with a private field per class. Separate types rather than
+five aliases for `c_void`, which is the change of mind from the older comment:
+GTK's C API takes one object as a `GtkGrid *` here and a `GtkWidget *` there, and
+with distinct types each crossing has to be written as a `.cast()` — the Rust
+spelling of `GTK_GRID()`. Aliased to `c_void` a `GtkBox` could be handed to
+`gtk_grid_attach`, which compiles and is undefined behaviour.
+
+**What the tests can and cannot check, since none of them builds a widget.** GTK
+3 will not construct one without a display: `gtk_grid_new()` reaches
+`GtkWidget`'s instance init, which wants a `GtkStyleContext`, which aborts with
+"Can't create a GtkStyleContext without a display connection" — verified here
+before writing the file, and there is no Xvfb on this VM either. So the page
+itself remains M9's Xvfb tier. What is checked is the part that fails silently:
+the entry points *link* (a missing name fails the test binary's link, which is
+the `undefined symbol` Evolution would hit on dlopen, moved to a red test); the
+six classes are registered under the names this crate calls them; they stand in
+the inheritance relations the casts assume (`g_type_is_a` against `GtkWidget` and
+`GtkContainer` — and note `GtkLabel`'s parent really is the deprecated `GtkMisc`
+on 3.24, which is why the assertion is `is_a` and not `g_type_parent`); and the
+handles stayed zero-sized.
+
+**A GTK thread-safety finding, caught by the first green run.** Two of the tests
+touched the type system in parallel — the harness runs `#[test]`s on separate
+threads — and the run printed `cannot register existing type 'GtkContainer'`,
+then a `<invalid>` type whose getter returns 0 forever, failing one test.
+`gtk_container_get_type()` in GTK 3 is hand-written rather than a `G_DEFINE_TYPE`
+macro, and its guard is a plain `static GType container_type = 0;` with no
+`g_once_init_enter`: two threads both see zero and both register. That is GTK
+behaving as documented (GTK 3 is a one-thread library), so the tests are what
+changed — all six types are resolved once behind an `OnceLock` and every test
+reads them from there. Worth remembering for any future test that touches GTK:
+it must not do so from two threads. The module itself is fine; Evolution calls
+these vfuncs on the main thread.
+
+Checked by mutation, restoring in between: dropping `gtk_label_set_xalign` from
+the allowlist fails the entry-point test (as a compile error, which is the
+intent), and `_opaque: [u8; 1]` in the handle template fails only
+`the_widget_handles_carry_no_layout`.
+
+**Two doc corrections that came with it.** `jmap-config`'s `backend` said
+reaching `insert_widgets`/`setup_defaults` "means binding more of Evolution's
+headers, GTK among them"; half of that is now done, and what is actually left is
+one accessor — `e_mail_config_service_page_get_email_address`, from a header
+`evo-sys` does not read yet — which is `setup_defaults`'s one input. It now says
+so, and says plainly that the reason neither vfunc is written is not the bindings
+but that a widget body would be code no test on this machine runs, which is the
+opposite of the order the rest of the crate was built in.
+
+**What this is not.** Not a working dialog, and not a step that can be verified
+in one: no widget was created, let alone shown. M7 still **needs human
+verification in real Evolution** and carries no completion tag.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM); the one new source file carries an SPDX
+`GPL-3.0-or-later` header. `cargo fmt --check`, `cargo test --locked` (491 tests
+on the default members, unchanged) and `cargo clippy --all-targets --locked -- -D
+warnings` are clean, as are `clippy`/`test` over the EDS crates — 864 tests, was
+860, `evo-sys`'s suite now 7. The one ignored test is the pre-existing `ignore`
+doctest in `jmap-backend-core`'s `instance::Slot`. `RUSTDOCFLAGS=-D warnings
+cargo doc` is clean for `evo-sys` and `jmap-config`; still open and untouched
+from two sessions ago is the same command over `jmap-mail`, 25 pre-existing
+`rustdoc::private_intra_doc_links`. Pre-existing and untouched: `example-module`
+does not build on this VM.
+
+No milestone tag.
+
+Next: `setup_defaults` is now within reach of being *written* if not run — it
+needs `e_mail_config_service_page_get_email_address` bound (one more allowlist
+line and a header in `wrapper.h`) and its body is
+`defaults::from_identity` followed by `mail::apply_server`, both already tested.
+It would be the first vfunc here whose body cannot be exercised on this machine,
+so it wants a deliberate decision rather than a drive-by: either write it
+conservatively and mark it unverified, or hold M7 until there is a session with a
+real Evolution. The other still-open items are unchanged: the four manual-test
+recipes are unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
