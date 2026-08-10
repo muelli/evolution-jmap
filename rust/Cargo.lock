@@ -280,6 +280,7 @@ dependencies = [
 name = "evolution-jmap-ical"
 version = "0.1.0"
 dependencies = [
+ "calcard",
  "evolution-jmap-proto",
  "serde_json",
 ]
