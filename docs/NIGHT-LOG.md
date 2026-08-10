@@ -13924,3 +13924,84 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last twelve sessions asked for is still unwritten; the
 manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
 dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-forty-first session)
+
+The thing the last session noticed while working next door and deliberately did
+not fix, because it lived on a different path: `read_duration` handed a
+`DURATION` value straight to the server. RFC 5545 §3.3.6 spells a length with a
+sign, RFC 8984 §1.4.6 has none, so a component saying `DURATION:-PT1H` became a
+JSCalendar `duration` of minus an hour. That is not a value a server accepts,
+and the `CalendarEvent/set` it rides in fails whole — so the save that carried
+it takes the user's *real* edits down with it. The same passthrough let
+anything through: `next tuesday`, `3600`, a bare `P`.
+
+**Checked rather than parsed.** `stated_duration` decides whether a value is a
+length and, if it is, hands it over exactly as written — the two formats spell
+an ISO 8601 duration identically, and re-rendering would mean owning a
+normalisation nobody asked for. A leading `+` is the one thing dropped, since
+it is RFC 5545's way of saying the same length and RFC 8984 has nowhere to put
+it. A value that fails is treated as absent like every other unreadable one,
+which is not a new rule but the module's oldest: the caller falls through to
+the `DTEND` branch, so a malformed component that states its length twice is
+read from the half that works, and one that states it only badly ends up
+without a length rather than with an unusable one.
+
+**Looser than RFC 5545 on purpose, and the loosening is tested.** The RFC nests
+its units — an hour may be followed only by minutes, a week stands alone — so
+`PT1H15S` and `P1W2D` are strictly invalid, while every reader adds them up the
+same way and some emitters write them. Refusing a length an event plainly
+states is the failure this check exists to *avoid*; it is here to refuse values
+that are not lengths. So the accepted grammar is `W D H M S`, each at most
+once, in that order, at least one of them, with `T` before the first time unit.
+
+**What the check actually sees is calcard's answer, not the octets.** Probing
+first rather than assuming was worth it: three values that look malformed never
+reach the check as written — `P1DT` arrives trimmed to `P1D`, `PTH` as `PT0S`,
+and `PT30M1H` with its units put back in order. They are in the *accepted*
+test's table with that noted, so the boundary is on the record and a future
+calcard that stops repairing them shows up as a red test rather than as a
+silently different reading.
+
+`period_length`'s duration half went through the same door: it used to return
+anything beginning with the designator, so an `RDATE;VALUE=PERIOD` ending in
+`/PT` gave the occurrence a `duration` of `PT`. The negative case there still
+falls out of the measuring branch for free, unchanged. The documented `PT0S`
+divergence is untouched — zero is a length, and it passes.
+
+Three tests red first (the refused values, the `DTEND` fallthrough, the two new
+period halves) plus one that passed on the day it was written, pinning the
+values that must keep crossing. That last one is the one that matters: the
+change can only regress by refusing too much, and nothing else in the suite
+would notice.
+
+Deliberately *not* done: the mirror on the write side. A `duration` the server
+sends is still put into `DURATION` verbatim, so a server sending a value this
+mapping would now refuse to read writes iCalendar libical may reject. It is the
+same rule and one line — but the save path diffs against a re-rendering of what
+the server holds, so dropping the property there would make the next save patch
+`duration: null` over the server's value without the user touching anything.
+That needs deciding, not just coding.
+
+Verified locally: `cargo test --locked` 548 (up 3), `ctest` 14/14 including
+`rust-test-eds` and all four functional legs against real EDS, `cargo fmt
+--check`, and `cargo clippy --all-targets --locked -- -D warnings` clean for the
+default set and for the EDS crates this touches (`jmap-ical`, `jmap-cal-sync`,
+`jmap-backend-cal`, `jmap-functional`). `reuse lint` and `cargo deny` not run
+(neither is on this VM); no files were added, so no new SPDX headers were
+needed, and no dependency changed.
+
+Next in this area: the write-side mirror above, and the two mapping gaps still
+named from before — a per-instance `timeZone` has no spelling, and nothing
+asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
+two, nor what a failure of the second leaves behind.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last thirteen sessions asked for is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
+dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
