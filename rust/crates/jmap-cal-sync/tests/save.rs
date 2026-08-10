@@ -351,14 +351,14 @@ fn a_recurrence_the_mapping_can_carry_is_patched() {
 fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // `bySetPosition` has no place in the RecurrenceRule this crate models, so
-    // the RRULE the user edited is a narrower rule than the one on the server.
+    // `byHour` has no place in the RecurrenceRule this crate models, so the
+    // RRULE the user edited is a narrower rule than the one on the server.
     fixture.patch(
         &id,
         json!({"recurrenceRules": [{
             "@type": "RecurrenceRule",
             "frequency": "monthly",
-            "bySetPosition": [-1],
+            "byHour": [9, 17],
         }]}),
     );
     let sync = fixture.sync();
@@ -370,8 +370,8 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let rules = fixture.event(&id).recurrence_rules.unwrap();
     assert_eq!(rules.len(), 1);
     assert_eq!(
-        rules[0].extra.get("bySetPosition"),
-        Some(&json!([-1])),
+        rules[0].extra.get("byHour"),
+        Some(&json!([9, 17])),
         "a rule part the RRULE could not carry was dropped"
     );
     assert_eq!(
@@ -758,6 +758,119 @@ fn a_week_no_year_has_is_not_cleared_from_the_servers_rule() {
 }
 
 #[test]
+fn the_occurrence_of_the_set_a_rule_takes_reaches_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Retro", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "monthly",
+            "byDay": [{"@type": "NDay", "day": "fr"}],
+            "bySetPosition": [-1],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1"),
+        "{icalendar}"
+    );
+    // Adding the first Friday of the month, which is the positive form counting
+    // from the start of the set the `BYDAY` expands to.
+    let edited = icalendar.replace("BYSETPOS=-1", "BYSETPOS=1,-1");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_set_position.as_deref(), Some(&[1, -1][..]));
+    assert_eq!(
+        rules[0].by_day.as_ref().unwrap()[0].day,
+        "fr",
+        "the days it selects from go with it"
+    );
+}
+
+#[test]
+fn a_position_with_nothing_to_select_from_is_not_sent() {
+    // `FREQ=MONTHLY;BYSETPOS=2` is a rule RFC 5545 §3.3.10 does not admit —
+    // `BYSETPOS` MUST only be used together with another `BYxxx` part — and
+    // libical keeps it rather than judging it, so the check is on the way out.
+    // Sent, it would name a series whose second-and-only occurrence per month
+    // does not exist.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "monthly"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("RRULE:FREQ=MONTHLY", "RRULE:FREQ=MONTHLY;BYSETPOS=2")
+        .replace("SUMMARY:Rent", "SUMMARY:Rent, due");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.recurrence_rules.unwrap()[0].by_set_position, None);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Rent, due"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
+fn a_position_the_server_holds_alone_is_not_cleared_from_its_rule() {
+    // The mirror of the above, in the direction that loses data. A
+    // `bySetPosition` the server holds with no other `by*` beside it is one no
+    // `RRULE` this mapping writes can carry, so the rule is shown without it —
+    // and `recurrenceRules` goes back replaced whole, so a save that only
+    // narrowed the rule would delete the position from the server's own copy.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Stocktake", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "yearly",
+            "bySetPosition": [-1],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=YEARLY\r\n"),
+        "the position is left off the rule the user is shown: {icalendar}"
+    );
+    let edited = icalendar
+        .replace("RRULE:FREQ=YEARLY", "RRULE:FREQ=YEARLY;COUNT=4")
+        .replace("SUMMARY:Stocktake", "SUMMARY:Annual stocktake");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let rules = stored.recurrence_rules.unwrap();
+    assert_eq!(
+        rules[0].by_set_position.as_deref(),
+        Some(&[-1][..]),
+        "the position the server holds is left alone rather than cleared"
+    );
+    assert_eq!(
+        rules[0].count, None,
+        "narrowing a rule we cannot fully see is worse than ignoring the edit"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Annual stocktake"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
 fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
     // `FREQ=WEEKLY;BYMONTHDAY=15` is a rule RFC 5545 §3.3.10 does not admit, and
     // calcard hands it back rather than judging it — so, as with an ordinal
@@ -1073,9 +1186,10 @@ fn a_save_that_changes_nothing_sends_no_patch() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     // Three things the component cannot say exactly: a time zone spelled the
-    // other legal way, a recurrence part the RRULE has to drop, and an instance
-    // edited on its own, which an RDATE can place but not describe. None of
-    // them is an edit, and none may look like one.
+    // other legal way, a recurrence part the RRULE has to drop — here a
+    // `bySetPosition` with no other `by*` beside it to select from — and an
+    // instance edited on its own, which an RDATE can place but not describe.
+    // None of them is an edit, and none may look like one.
     fixture.patch(
         &id,
         json!({

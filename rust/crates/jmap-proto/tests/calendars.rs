@@ -126,6 +126,23 @@ fn recurrence_rule_weeks_of_the_year_roundtrip() {
 }
 
 #[test]
+fn recurrence_rule_set_position_roundtrip() {
+    // `bySetPosition` is iCalendar's `BYSETPOS` — "the last Friday of the
+    // month". It is the one part of RFC 8984 §4.3.3 that names no date of its
+    // own: it selects out of the set the other `by*` properties expand to, so
+    // the fixture states the `byDay` it selects from, which RFC 5545 §3.3.10
+    // also requires.
+    let value = fixture("calendars/recurrence_rule_set_position.json");
+    assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
+
+    let rule: RecurrenceRule = serde_json::from_value(value).unwrap();
+    assert_eq!(rule.frequency, "monthly");
+    assert_eq!(rule.by_set_position.as_deref(), Some(&[-1][..]));
+    assert_eq!(rule.by_day.as_ref().unwrap()[0].day, "fr");
+    assert!(rule.extra.is_empty());
+}
+
+#[test]
 fn recurrence_rule_months_roundtrip() {
     // `byMonth` is the months of the year a rule repeats in — iCalendar's
     // `BYMONTH`. RFC 8984 §4.3.3 holds each as a *string*, not a number, so

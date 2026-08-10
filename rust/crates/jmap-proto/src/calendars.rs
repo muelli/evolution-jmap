@@ -106,8 +106,8 @@ impl CalendarEvent {
     }
 }
 
-/// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly —
-/// `bySetPosition` & friends ride in `extra`.
+/// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly — `byHour`
+/// & friends ride in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RecurrenceRule {
@@ -148,6 +148,16 @@ pub struct RecurrenceRule {
     /// invent a spelling for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_month: Option<Vec<String>>,
+    /// Which occurrences of the ones the rest of the rule names it keeps —
+    /// iCalendar's `BYSETPOS`. 1 to 366 counting from the first occurrence in
+    /// the interval, -1 to -366 from the last.
+    ///
+    /// The only part here that does not *name* dates: the others say which dates
+    /// an interval expands to, and this one selects out of that set afterwards,
+    /// so it means nothing on its own. RFC 5545 §3.3.10 says as much — it MUST
+    /// only be used together with another `BYxxx` part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_set_position: Option<Vec<i32>>,
     /// The day each week of the rule starts on — iCalendar's `WKST`. One of the
     /// two-letter lowercase weekdays [`NDay::day`] uses, and RFC 8984 §4.3.3's
     /// default is `mo`.
