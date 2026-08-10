@@ -36,6 +36,18 @@ fn calendar_event_roundtrip() {
     assert_eq!(event.duration.as_deref(), Some("PT1H"));
     let rules = event.recurrence_rules.as_ref().unwrap();
     assert_eq!(rules[0].frequency, "weekly");
+    // An override's patch stays JSON: "this instance is off" and "this instance
+    // was edited" are both PatchObjects, and only the caller knows which of
+    // them it can represent.
+    let overrides = event.recurrence_overrides.as_ref().unwrap();
+    assert_eq!(
+        overrides.get("2026-01-22T13:00:00"),
+        Some(&serde_json::json!({"excluded": true}))
+    );
+    assert_eq!(
+        overrides["2026-01-29T13:00:00"]["title"],
+        serde_json::json!("Team sync (long)")
+    );
     // Unmodeled JSCalendar properties (participants, sequence) survive.
     assert!(event.extra.contains_key("participants"));
     assert!(event.extra.contains_key("sequence"));

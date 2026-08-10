@@ -3,11 +3,14 @@
 
 //! JSCalendar `CalendarEvent` ↔ iCalendar `VEVENT`, the minimal property set
 //! the calendar backend needs: UID, SUMMARY, DESCRIPTION, DTSTART (+timeZone,
-//! or as a date for showWithoutTime), DURATION, STATUS, RRULE.
+//! or as a date for showWithoutTime), DURATION, STATUS, RRULE, and the
+//! instances named one at a time by an EXDATE or an RDATE.
 
-use jmap_ical::{ICalError, event_to_ical, ical_to_event, maps_recurrence_rule};
+use jmap_ical::{
+    ICalError, event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule,
+};
 use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn fixture_event() -> CalendarEvent {
     let path = format!(
@@ -710,6 +713,222 @@ fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
         .insert("byDay".to_owned(), json!([{"day": "mo"}]));
     assert!(!maps_recurrence_rule(&rule));
     assert!(maps_recurrence_rule(&RecurrenceRule::new("weekly")));
+}
+
+/// A recurring event in one zone, with `overrides` naming single instances.
+fn recurring_with(overrides: Value) -> CalendarEvent {
+    CalendarEvent {
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_overrides: Some(
+            overrides
+                .as_object()
+                .expect("an object")
+                .iter()
+                .map(|(id, patch)| (id.clone(), patch.clone()))
+                .collect(),
+        ),
+        ..CalendarEvent::default()
+    }
+}
+
+#[test]
+fn an_instance_that_does_not_occur_is_an_exdate() {
+    // RFC 8984 §4.3.4 says "this one is off" with an override; RFC 5545
+    // §3.8.5.1 says it with an EXDATE, in the same value type and zone as
+    // DTSTART, or a reader resolves the instance against the wrong clock and
+    // the exclusion misses the occurrence it was meant to remove.
+    let event = recurring_with(json!({"2026-01-29T13:00:00": {"excluded": true}}));
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        line(&ics, "EXDATE"),
+        "EXDATE;TZID=Europe/Berlin:20260129T130000"
+    );
+    assert!(without(&ics, "RDATE"), "{ics}");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn an_instance_the_rule_would_not_generate_is_an_rdate() {
+    // The other degenerate patch: an override that changes nothing is an
+    // instance that simply happens, which is what an RDATE names.
+    let event = recurring_with(json!({"2026-02-05T13:00:00": {}}));
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        line(&ics, "RDATE"),
+        "RDATE;TZID=Europe/Berlin:20260205T130000"
+    );
+    assert!(without(&ics, "EXDATE"), "{ics}");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn instances_of_the_same_kind_share_one_line() {
+    let event = recurring_with(json!({
+        "2026-01-29T13:00:00": {"excluded": true},
+        "2026-02-12T13:00:00": {"excluded": true},
+        "2026-02-05T13:00:00": {},
+    }));
+    let ics = event_to_ical(&event);
+
+    // One property per kind, its values in the chronological order a
+    // BTreeMap of LocalDateTimes iterates in.
+    assert_eq!(
+        line(&ics, "EXDATE"),
+        "EXDATE;TZID=Europe/Berlin:20260129T130000,20260212T130000"
+    );
+    assert_eq!(
+        line(&ics, "RDATE"),
+        "RDATE;TZID=Europe/Berlin:20260205T130000"
+    );
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn a_utc_events_excluded_instance_carries_the_z_its_start_does() {
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"excluded": true}}));
+    event.time_zone = Some("Etc/UTC".to_owned());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T130000Z");
+    assert_eq!(line(&ics, "EXDATE"), "EXDATE:20260129T130000Z");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+}
+
+#[test]
+fn an_all_day_events_excluded_instance_is_a_date_like_its_start() {
+    // RFC 5545 §3.8.5.1, as for UNTIL: the value type has to match DTSTART's,
+    // so an event written as a DATE excludes a day rather than an instant.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_overrides: Some(
+            [("2026-01-29T00:00:00".to_owned(), json!({"excluded": true}))].into(),
+        ),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
+    assert_eq!(line(&ics, "EXDATE"), "EXDATE;VALUE=DATE:20260129");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.show_without_time, Some(true));
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn an_all_day_event_whose_excluded_instance_has_a_time_stays_a_date_time() {
+    // The same trade as an UNTIL at 09:00: truncating the exclusion to a date
+    // would drop an instance the server still holds, so the event keeps its
+    // DATE-TIME form and shows as timed instead.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_overrides: Some(
+            [("2026-01-29T09:00:00".to_owned(), json!({"excluded": true}))].into(),
+        ),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
+    assert_eq!(line(&ics, "EXDATE"), "EXDATE:20260129T090000");
+}
+
+#[test]
+fn an_instance_edited_on_its_own_is_flagged_rather_than_silently_narrowed() {
+    // A patch that *changes* an instance is a VEVENT of its own carrying a
+    // RECURRENCE-ID, which this mapping does not emit. The instance is still
+    // drawn — an RDATE names the day it happens, at the parent's title — but
+    // the save path is told the property was not seen whole, exactly as it is
+    // told about a rule with byDay in it.
+    let patch = json!({"title": "Sprint review"});
+    assert!(!maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        line(&ics, "RDATE"),
+        "RDATE;TZID=Europe/Berlin:20260129T130000"
+    );
+}
+
+#[test]
+fn an_override_whose_instant_cannot_be_written_is_flagged() {
+    // No EXDATE can name it, so a save that replaced recurrenceOverrides would
+    // delete the exclusion outright.
+    for id in ["2026-13-29T13:00:00", "sometime", "2026-02-30T13:00:00"] {
+        assert!(
+            !maps_recurrence_override(id, &json!({"excluded": true})),
+            "{id}"
+        );
+
+        let event = recurring_with(json!({id: {"excluded": true}}));
+        let ics = event_to_ical(&event);
+        assert!(without(&ics, "EXDATE"), "{ics}");
+        assert!(without(&ics, "RDATE"), "{ics}");
+    }
+
+    // The two shapes an EXDATE or an RDATE can carry whole.
+    assert!(maps_recurrence_override(
+        "2026-01-29T13:00:00",
+        &json!({"excluded": true})
+    ));
+    assert!(maps_recurrence_override("2026-01-29T13:00:00", &json!({})));
+}
+
+#[test]
+fn an_instance_both_excluded_and_added_does_not_occur() {
+    // A component naming the same instant in both properties contradicts
+    // itself. Reading it as excluded is the reading that cannot invent an
+    // appointment; RFC 5545 §3.8.5.1 has EXDATE win over the recurrence set
+    // anyway.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E10\r\n",
+        "DTSTART:20260115T130000Z\r\n",
+        "RRULE:FREQ=WEEKLY\r\n",
+        "RDATE:20260129T130000Z\r\n",
+        "EXDATE:20260129T130000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let overrides = ical_to_event(ics).expect("parse").recurrence_overrides;
+    assert_eq!(
+        overrides,
+        Some([("2026-01-29T13:00:00".to_owned(), json!({"excluded": true}))].into())
+    );
+}
+
+#[test]
+fn an_event_with_no_named_instances_says_nothing_about_them() {
+    // None rather than an empty map: the save path reads an edit off a
+    // difference from what was shown, and an empty map is a claim.
+    let ics = event_to_ical(&fixture_event());
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, None);
+    assert!(without(&ics, "EXDATE"), "{ics}");
+    assert!(without(&ics, "RDATE"), "{ics}");
 }
 
 #[test]

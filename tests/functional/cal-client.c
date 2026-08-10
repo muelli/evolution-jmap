@@ -16,6 +16,7 @@
  * fails.
  *
  *   usage: functional-cal-client <source-uid> <summary> <all-day-summary>
+ *                               <recurring-summary>
  */
 
 #include <libecal/libecal.h>
@@ -42,6 +43,15 @@
  * told, in JSCalendar's showWithoutTime, that the user made a day of it. */
 #define TEST_ALL_DAY_DTSTART "20260201"
 #define TEST_ALL_DAY_DTEND "20260202"
+
+/* And a recurring event with one occurrence deleted, which is what a user
+ * does with "Delete this occurrence" in the appointment list: EDS keeps the
+ * master component and adds an EXDATE to it. RFC 5545 §3.8.5.1 is the only way
+ * iCalendar says "not that one", and JSCalendar says it with an entry in
+ * `recurrenceOverrides` — so an EXDATE the backend drops is an appointment
+ * every other client reading the account still sees. */
+#define TEST_RECURRING_RRULE "FREQ=WEEKLY;COUNT=6"
+#define TEST_RECURRING_EXDATE "20260129T130000Z"
 
 static int
 fail (const gchar *step,
@@ -83,18 +93,22 @@ main (int argc,
 	gchar *icalendar;
 	gchar *added_uid = NULL;
 	gchar *all_day_uid = NULL;
+	gchar *recurring_uid = NULL;
 	const gchar *source_uid;
 	const gchar *summary;
 	const gchar *all_day_summary;
+	const gchar *recurring_summary;
 
-	if (argc != 4) {
-		g_printerr ("usage: %s <source-uid> <summary> <all-day-summary>\n", argv[0]);
+	if (argc != 5) {
+		g_printerr ("usage: %s <source-uid> <summary> <all-day-summary> "
+			    "<recurring-summary>\n", argv[0]);
 		return 2;
 	}
 
 	source_uid = argv[1];
 	summary = argv[2];
 	all_day_summary = argv[3];
+	recurring_summary = argv[4];
 
 	/* Activates evolution-source-registry on the session bus, which reads
 	 * the scratch sources directory the harness wrote. */
@@ -229,6 +243,39 @@ main (int argc,
 	g_object_unref (event);
 	g_print ("added-all-day=%s\n", all_day_uid ? all_day_uid : "");
 	g_free (all_day_uid);
+
+	/* The recurring one, with an occurrence excluded. Written last for the
+	 * same reason as the all-day one. */
+	icalendar = g_strdup_printf (
+		"BEGIN:VEVENT\r\n"
+		"UID:jmap-functional-recurring-event\r\n"
+		"DTSTART:%s\r\n"
+		"DTEND:%s\r\n"
+		"SUMMARY:%s\r\n"
+		"RRULE:%s\r\n"
+		"EXDATE:%s\r\n"
+		"END:VEVENT\r\n",
+		TEST_DTSTART, TEST_DTEND, recurring_summary,
+		TEST_RECURRING_RRULE, TEST_RECURRING_EXDATE);
+	event = i_cal_component_new_from_string (icalendar);
+	g_free (icalendar);
+
+	if (!event) {
+		g_printerr ("build: libical would not parse the recurring event\n");
+		g_free (added_uid);
+		return 1;
+	}
+
+	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
+					      &recurring_uid, NULL, &error)) {
+		g_object_unref (event);
+		g_free (added_uid);
+		return fail ("create-recurring", error);
+	}
+
+	g_object_unref (event);
+	g_print ("added-recurring=%s\n", recurring_uid ? recurring_uid : "");
+	g_free (recurring_uid);
 
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error)) {
 		g_free (added_uid);
