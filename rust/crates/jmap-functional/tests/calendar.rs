@@ -134,6 +134,21 @@ const RECURRING_EDITED_SUMMARY: &str = "Weekly standup (demo)";
 /// the order a set is held in on both sides.
 const RECURRING_EDITED_KEYWORDS: [&str; 2] = ["cancelled", "offsite"];
 
+/// And when that one occurrence reminds — the `VALARM` inside the detached
+/// component in `tests/functional/cal-client.c`, which has to reach the server as
+/// an `alerts` patch in that instance's override. The series carries no reminder,
+/// so this one is the whole of the difference between them, and it is the deepest
+/// thing this leg asks EDS's cache to keep: a child component of the child
+/// component the instance itself is.
+///
+/// Keyed by the alarm's RFC 9074 §6 `UID`, because that is what the entry is named
+/// by: an alarm EDS handed back without it would arrive under a positional key
+/// this mapping invented, which is the same reminder saved under a name nobody
+/// chose. The offset is negative and stated as text at both ends, since a reminder
+/// an hour *after* the meeting is the failure a lost sign looks like.
+const RECURRING_EDITED_ALERT_KEY: &str = "k1";
+const RECURRING_EDITED_ALARM_TRIGGER: &str = "-PT1H";
+
 /// And "not that one" a second time, reached the way a user reaches it. The
 /// `EXDATE` above is written into the component the client creates, so it holds
 /// the *mapping* to account and says nothing about EDS: Evolution's "Delete
@@ -433,6 +448,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         occurrence_tags, RECURRING_EDITED_KEYWORDS,
         "EDS did not keep the tags on the occurrence the client edited\n{report}"
     );
+    // And the reminder on that same instance, kept in the same per-component way
+    // one nesting level further down: an empty string here is a cache that handed
+    // the alarm back on the series, or dropped it, and either way the next save
+    // tells the server the user cleared a reminder they had just set.
+    assert_eq!(
+        seen.get("edited-occurrence-alarm-trigger"),
+        Some(&RECURRING_EDITED_ALARM_TRIGGER),
+        "EDS did not keep the reminder on the occurrence the client edited\n{report}"
+    );
     // And what EDS made of the removal, in the same cache and for the same
     // reason: the master it kept has to carry an `EXDATE` for every occurrence
     // that no longer happens — the one the client wrote into the event and the
@@ -728,16 +752,27 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
                 ),
                 (
                     RECURRING_EDITED.to_owned(),
-                    // The tags beside the title, because the component states
-                    // both on that one instance and the override is what carries
-                    // either: a patch holding only the title is the user's filing
-                    // of that occurrence lost between EDS and the server.
+                    // The tags and the reminder beside the title, because the
+                    // component states all three on that one instance and the
+                    // override is what carries any of them: a patch holding only
+                    // the title is the user's filing of that occurrence, or the
+                    // reminder they set on it, lost between EDS and the server.
                     serde_json::json!({
                         "title": RECURRING_EDITED_SUMMARY,
                         "keywords": RECURRING_EDITED_KEYWORDS
                             .iter()
                             .map(|tag| ((*tag).to_owned(), serde_json::json!(true)))
                             .collect::<serde_json::Map<_, _>>(),
+                        "alerts": {
+                            RECURRING_EDITED_ALERT_KEY: {
+                                "@type": "Alert",
+                                "action": "display",
+                                "trigger": {
+                                    "@type": "OffsetTrigger",
+                                    "offset": RECURRING_EDITED_ALARM_TRIGGER,
+                                },
+                            },
+                        },
                     }),
                 ),
                 (

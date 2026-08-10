@@ -1151,6 +1151,76 @@ fn libical_keeps_the_tags_of_one_occurrence_apart_from_the_series() {
     );
 }
 
+/// The reminders of one occurrence, on the component that stands for it.
+///
+/// The same claim as the tags above, one nesting level deeper: an override may
+/// restate `alerts` (`jmap_ical::OVERRIDE_PROPERTIES`) and the only place the
+/// reminders of one occurrence are stated is that instance's own `VALARM`s — which
+/// are a child component *of a child component* once the two `VEVENT`s are
+/// marshalled into one `VCALENDAR`. So the claim rests on libical keeping each
+/// instance's alarms with the instance, rather than hoisting them onto the master
+/// or merging the two sets. It does, keys and signs intact — which is what makes
+/// the difference between the two the user's edit rather than an artefact of the
+/// trip through EDS's cache.
+#[test]
+fn libical_keeps_the_reminder_of_one_occurrence_apart_from_the_series() {
+    let master = instance(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\r\nDTSTART:20260810T070000Z\r\n\
+         RRULE:FREQ=DAILY\r\nBEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\n\
+         DESCRIPTION:Standup\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\nEND:VEVENT\r\n",
+    );
+    let occurrence = instance(
+        "BEGIN:VEVENT\r\nUID:K1\r\nRECURRENCE-ID:20260812T070000Z\r\n\
+         DTSTART:20260812T070000Z\r\nSUMMARY:Standup\r\nBEGIN:VALARM\r\nUID:k1\r\n\
+         ACTION:DISPLAY\r\nDESCRIPTION:Standup\r\nTRIGGER:-PT1H\r\nEND:VALARM\r\n\
+         END:VEVENT\r\n",
+    );
+    let list = instance_list(&[master, occurrence]);
+    // SAFETY: `list` holds two live components, freed below.
+    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    unsafe {
+        glib_sys::g_slist_free(list);
+        for component in [master, occurrence] {
+            g_object_unref(component.cast());
+        }
+    }
+    let object = saved.icalendar;
+
+    let event = jmap_ical::ical_to_event(&object).expect("parse");
+    let series = event
+        .alerts
+        .unwrap_or_else(|| panic!("the series' reminder did not come back:\n{object}"));
+    assert_eq!(
+        series.keys().collect::<Vec<_>>(),
+        ["k1"],
+        "the key the series' entry rides on was not kept:\n{object}"
+    );
+    assert_eq!(
+        series["k1"]["trigger"]["offset"].as_str(),
+        Some("-PT15M"),
+        "the series' own reminder is not what it was written as:\n{object}"
+    );
+
+    let overrides = event.recurrence_overrides.unwrap_or_default();
+    assert_eq!(overrides.len(), 1, "one occurrence differs:\n{object}");
+    let patch = overrides
+        .get("2026-08-12T07:00:00")
+        .unwrap_or_else(|| panic!("the occurrence is not the one that was written:\n{object}"));
+    let alerts = patch
+        .get("alerts")
+        .unwrap_or_else(|| panic!("the occurrence's own reminder did not come back:\n{object}"));
+    assert_eq!(
+        alerts["k1"]["trigger"]["offset"].as_str(),
+        Some("-PT1H"),
+        "the reminder on the occurrence is not the one written there:\n{object}"
+    );
+    assert_eq!(
+        patch.as_object().map(|patch| patch.len()),
+        Some(1),
+        "the marshalling introduced a difference nobody wrote:\n{object}"
+    );
+}
+
 /// Whether an event blocks time, through the parser that actually reads it.
 ///
 /// `jmap-ical` reads a missing `TRANSP` as *nothing said* rather than as RFC 5545

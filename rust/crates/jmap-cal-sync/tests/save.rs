@@ -2281,6 +2281,148 @@ fn a_reminder_the_component_could_not_show_leaves_the_whole_set_alone() {
 }
 
 #[test]
+fn setting_a_reminder_on_one_occurrence_reaches_the_server_as_an_override() {
+    // One occurrence of a reminded series reminded differently: EDS keeps the
+    // master and adds a VEVENT carrying its RECURRENCE-ID, and the VALARMs inside
+    // that component are the reminders that occurrence now has — replacing the
+    // series' set for that instance rather than adding to it, which is what a
+    // PatchObject naming `alerts` means.
+    let fixture = Fixture::start();
+    let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
+    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Everything the series states, restated but for the reminder — an instance is
+    // compared against the series property by property, so a line left off here
+    // would be an edit to that property and not to the reminder. The alarm keeps
+    // the server's own key on its RFC 9074 UID: an hour earlier is the same
+    // reminder moved, not a second one.
+    let instance = format!(
+        "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
+         DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
+         STATUS:CONFIRMED\r\nBEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\n\
+         DESCRIPTION:Standup\r\nTRIGGER:-PT1H\r\nEND:VALARM\r\nEND:VEVENT\r\n"
+    );
+    let edited = icalendar.replace("END:VCALENDAR", &format!("{instance}END:VCALENDAR"));
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let mut moved = quarter_of_an_hour_before();
+    moved["trigger"]["offset"] = json!("-PT1H");
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-22T09:00:00".to_owned(),
+                json!({"alerts": {"k1": moved}})
+            )]
+            .into()
+        )
+    );
+    assert_eq!(
+        stored.alerts,
+        Some([("k1".to_owned(), quarter_of_an_hour_before())].into()),
+        "the series keeps the reminder it had"
+    );
+}
+
+#[test]
+fn a_reminder_one_occurrence_could_not_show_leaves_the_overrides_alone() {
+    // The `a_reminder_the_component_could_not_show_leaves_the_whole_set_alone`
+    // rule one level down. This instance's set holds a reminder the user has
+    // already dismissed, which no VALARM says, so the occurrence could only be
+    // placed by a bare RDATE — and `recurrenceOverrides` goes back replaced whole,
+    // so sending what was drawn would un-dismiss that reminder along with deleting
+    // the whole override.
+    let fixture = Fixture::start();
+    let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
+    let mut dismissed = quarter_of_an_hour_before();
+    dismissed["acknowledged"] = json!("2026-01-22T08:46:00Z");
+    let overrides = json!({"2026-01-22T09:00:00": {"alerts": {"k2": dismissed}}});
+    fixture.patch(
+        &id,
+        json!({
+            "recurrenceRules": [{"frequency": "weekly"}],
+            "recurrenceOverrides": overrides,
+        }),
+    );
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RDATE:20260122T090000Z"),
+        "the occurrence was drawn as more than a bare date\n{icalendar}"
+    );
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(serde_json::from_value(overrides).unwrap()),
+        "an override shown in part must not be written back"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
+        "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn an_occurrence_of_an_event_that_takes_the_default_reminders_keeps_its_own() {
+    // `an_event_that_takes_the_default_reminders_keeps_them` one level down, and
+    // the reason `alerts` is the one restated property whose coverage the *series*
+    // decides: RFC 8984 §4.5.1's `useDefaultAlerts` is not a property an override
+    // may restate, so it is the series' answer for every instance, and an
+    // occurrence's own reminders are ignored exactly as the series' are. Nothing is
+    // drawn for them, so a save must leave the property alone rather than replace
+    // it with what was drawn.
+    let fixture = Fixture::start();
+    let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
+    // The override renames the occurrence *and* states reminders for it, so the
+    // instance is drawn — and what the user then edits is the title on that
+    // component, which is what makes `recurrenceOverrides` go back replaced whole.
+    // With the reminders called covered, that replacement is what would delete
+    // them.
+    let overrides = json!({
+        "2026-01-22T09:00:00": {
+            "title": "Standup (demo)",
+            "alerts": {"k1": quarter_of_an_hour_before()},
+        },
+    });
+    fixture.patch(
+        &id,
+        json!({
+            "useDefaultAlerts": true,
+            "recurrenceRules": [{"frequency": "weekly"}],
+            "recurrenceOverrides": overrides,
+        }),
+    );
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        !icalendar.contains("VALARM"),
+        "an occurrence was drawn with reminders nothing reads\n{icalendar}"
+    );
+    assert!(icalendar.contains("SUMMARY:Standup (demo)"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup (demo)", "SUMMARY:Standup (demo, short)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    // Nothing about the override reaches the server — including the rename the
+    // user just made, which is the cost of the property going back whole or not at
+    // all: one entry that cannot be stated holds the rest of them still.
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(serde_json::from_value(overrides).unwrap()),
+        "a property nothing reads must not be written"
+    );
+}
+
+#[test]
 fn an_event_that_takes_the_default_reminders_keeps_them() {
     // RFC 8984 §4.5.1: with `useDefaultAlerts` true it is the user's own default
     // reminders that fire and the `alerts` property is ignored, so there is

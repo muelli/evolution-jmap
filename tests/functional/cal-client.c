@@ -181,6 +181,23 @@
  * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_RECURRING_EDITED_CATEGORIES "cancelled,offsite"
 
+/* And when that one occurrence reminds, which is the same "Reminder" control set
+ * for an instance rather than for the series: a VALARM inside the detached
+ * component, and an `alerts` patch under that instance's start in
+ * `recurrenceOverrides`. A child component of a child component once EDS
+ * marshals the two VEVENTs into one object, which is the whole reason for
+ * measuring it here — the series carries no reminder at all, so this one is the
+ * difference between them, and an occurrence whose alarm the cache dropped reads
+ * back as one the user just cleared.
+ *
+ * The RFC 9074 §6 UID is written out because it is what the `alerts` entry is
+ * keyed by: an alarm that came back without it would be re-keyed, which is the
+ * same reminder arriving at the server under a name nobody asked for. The same
+ * literals are asserted from both ends; see `RECURRING_EDITED_ALERT` in
+ * `rust/crates/jmap-functional/tests/calendar.rs`. */
+#define TEST_RECURRING_EDITED_ALARM_UID "k1"
+#define TEST_RECURRING_EDITED_ALARM_TRIGGER "-PT1H"
+
 /* And the occurrence deleted the way a user deletes one, rather than by writing
  * the EXDATE above into the component before it is created. "Delete this
  * occurrence" is e_cal_client_remove_object_sync with a RECURRENCE-ID and
@@ -780,10 +797,18 @@ main (int argc,
 		"DTEND:%s\r\n"
 		"SUMMARY:%s\r\n"
 		"CATEGORIES:%s\r\n"
+		"BEGIN:VALARM\r\n"
+		"UID:%s\r\n"
+		"ACTION:DISPLAY\r\n"
+		"DESCRIPTION:%s\r\n"
+		"TRIGGER:%s\r\n"
+		"END:VALARM\r\n"
 		"END:VEVENT\r\n",
 		recurring_uid, TEST_RECURRING_EDITED_RECURRENCE_ID,
 		TEST_RECURRING_EDITED_DTSTART, TEST_RECURRING_EDITED_DTEND,
-		edited_summary, TEST_RECURRING_EDITED_CATEGORIES);
+		edited_summary, TEST_RECURRING_EDITED_CATEGORIES,
+		TEST_RECURRING_EDITED_ALARM_UID, edited_summary,
+		TEST_RECURRING_EDITED_ALARM_TRIGGER);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 
@@ -851,6 +876,15 @@ main (int argc,
 	categories = joined_values (read_back_event, I_CAL_CATEGORIES_PROPERTY);
 	g_print ("edited-occurrence-categories=%s\n", categories);
 	g_free (categories);
+	/* And when it reminds, read as text for the reason the series' own trigger
+	 * is: the sign is the whole of a reminder before the event, and a struct
+	 * whose zero value is a good "no offset" could not tell one that was lost
+	 * from one that was kept. The alarm is a component inside a component
+	 * inside the object EDS hands back, so this is the deepest thing the cache
+	 * is asked to have kept. */
+	trigger = first_alarm_trigger (read_back_event);
+	g_print ("edited-occurrence-alarm-trigger=%s\n", trigger);
+	g_free (trigger);
 	g_object_unref (read_back_event);
 
 	/* And "Delete this occurrence" on a fourth one, which is a removal only

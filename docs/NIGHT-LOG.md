@@ -16519,3 +16519,120 @@ default reminder is a *relative* display one, but its "Customise" page can ask f
 a sound, a program or a mail, which this mapping drops; and whether the editor
 preserves the RFC 9074 `UID` on an alarm the user edits, which decides whether the
 re-keying above ever happens in practice.
+
+## 2026-08-10 (hundred-and-sixty-fourth session)
+
+**The reminders of one occurrence now cross:** `alerts` joins
+`OVERRIDE_PROPERTIES` (eleven), so a `VALARM` on a detached instance is read as an
+RFC 8984 §4.3.4 `alerts` patch under that occurrence's start, and a patch that
+names it is drawn there. The sibling of the previous session's `keywords`, one
+nesting level deeper — the reminder is a child component of the child component the
+instance itself is — and it closes the limitation the last two entries recorded as
+"a thing this mapping could carry and does not yet".
+
+**`useDefaultAlerts` is why `maps_recurrence_override` now takes the series.** The
+signature is `maps_recurrence_override(series, id, patch)`, and the event is read
+for exactly one thing: RFC 8984 §4.5.1's flag is *not* a property an override may
+restate, so it is the series' answer for every instance — an occurrence whose
+`alerts` nothing reads has no reminder to draw and none a save may write, down to
+the null. Without that, the failure is quiet and real: the drawing suppresses the
+alarms, so an override naming `alerts` reads back without them, and the *next* edit
+to any occurrence replaces `recurrenceOverrides` whole and deletes the reminder the
+user set. The alternative considered and rejected was leaving the predicate as
+`(id, patch)` and asking a second one beside it in `jmap-cal-sync`: that is caller
+policy, and the crate's discipline is a single point the drawing and the coverage
+decision agree through. The eighteen existing call sites in `jmap-ical`'s tests go
+through a local `maps_override` helper that supplies a series which sets no flag —
+the shape all but one of them is about.
+
+**The instance now inherits `extra`, not just the mapped properties.** That is what
+carries the flag into `modified_instance`, so `uses_default_alerts` answers the same
+for the series and for its occurrences; before it, an event whose reminders nothing
+reads was drawn with none on the master and *with* them on every detached instance —
+reminders that never fire, and, read back, an occurrence the user had apparently
+just set one on. It is also the honest reading of §4.3.4: an instance holds every
+property its override does not restate, and `extra` is exactly the unmapped ones.
+The synthetic instance is only ever drawn, never serialised, so nothing else sees it.
+
+**Replaced whole, and the empty map refused**, both for the reasons the series'
+`alerts` gave: a `VALARM` has no interior for a PatchObject to reach into, so an
+override naming one reminder is an occurrence with that reminder and no other; and
+an empty map is written exactly as a removal is, so it would come back as the null
+— a different patch. `drawn_alert` is what the arm asks, key included, so an
+occurrence's dismissed (RFC 9074 §6.1 `ACKNOWLEDGED`), absolute-trigger, or
+mail-sending reminder makes the whole override uncovered rather than half-written.
+Where the override is refused it is still *drawn* as far as it goes: the occurrence
+keeps its title and the reminders it inherited, and reads back stating only what it
+really differs by. `locations` remains the one restated-property hold-out, for its
+own reason — shown in part and patched into.
+
+**Measured, not assumed, twice.** `jmap-backend-cal`'s
+`libical_keeps_the_reminder_of_one_occurrence_apart_from_the_series` drives a master
+and a detached instance, each with its own `VALARM` under the same key at different
+offsets, through `marshal::icalendar_from_instances`: libical keeps each alarm with
+its own component — no hoisting onto the master, no merging — with the RFC 9074
+`UID` and the sign intact, and introduces no other difference between the two
+components. And the functional leg writes a `VALARM` into the occurrence
+`tests/functional/cal-client.c` detaches, reports the first alarm's trigger out of
+EDS's own cache as *text* (`edited-occurrence-alarm-trigger`), and `calendar.rs`
+asserts both that and the `alerts` the mock ends up holding, under the client's own
+key, beside the title and tags that were already there.
+
+Mutations: seven on `jmap-ical`, each killed by a different test — the arm without
+its `useDefaultAlerts` guard (killed only by the *save* test, and only after that
+test was rewritten to edit the occurrence's own title: an edit that changes no
+override returns early from `diff_overrides` and exercises nothing), the arm
+accepting any object rather than one `drawn_alert` would draw, an instance that does
+not inherit the flag, the empty map accepted, the restated reminders ignored in
+favour of the inherited ones, the read direction never stating them, and `alerts`
+back out of `OVERRIDE_PROPERTIES`. Two more on the functional client: no `VALARM`
+on the occurrence at all, and one carrying only the `X-EVOLUTION-ALARM-UID`
+Evolution's editor writes — which is worth recording as a measurement rather than
+just a killer, since it says what happens in the real editor's shape: the reminder
+still arrives, under the invented positional key `a1`, with the rest of the override
+intact.
+
+Tests: red first — compile-red in `jmap-ical` (the three-argument predicate did not
+exist) and behaviour-red in `jmap-cal-sync/tests/save.rs`, where an occurrence's
+reminder edit was sent as the empty patch `{}`. Two of the three new save tests
+passed on their first run for the *coarse* reason that `alerts` was refused outright,
+and both are now mutation-killers for the new arm. Counts: `cargo test --locked` 769,
+up 7 from 762; `jmap-backend-cal` 36 in `marshal.rs`, up one; `ctest` 14/14
+including all four functional legs against real EDS, after a full `ninja`.
+
+Not done, deliberately: `useDefaultAlerts` as something a save can clear, the
+`email` action, the absolute trigger, and a reminder restated per occurrence of a
+*split* series.
+
+Verified locally: `cargo test --locked` 769 green, `cargo test -p jmap-backend-cal
+--locked` green, `ctest` 14/14 after a full `ninja`, `cargo fmt --check`, and `cargo
+clippy --all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal` and `jmap-functional`. `ci/checks.sh` again stops at its first
+step: `reuse` is not on this VM and neither `pipx` nor `uvx` is installed. Exposure
+is nil — **no file was added**, only edits to files that already carry SPDX headers
+— and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI tier;
+M7 still **needs human verification in real Evolution**; `docs/MILESTONES.md` does
+not exist yet, so the M8 tag many sessions have asked for is still unwritten; F15
+(the 10 MiB body cap `ureq` imposes by default) is still open; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the once-seen
+`jmap-mail` `tests/transport.rs` hang is still unexplained. Still open from before:
+nothing asserts whether a split series' two writes arrive as one
+`CalendarEvent/set` or two; the *reading* direction of a per-instance zone through
+real EDS is untested; calcard silently drops an unreadable
+`BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`; whether Evolution's
+appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the user edited is
+untested; whether it writes a `TRANSP` it was not asked to is untested; nothing says
+whether Evolution's editor lets a user set categories on a single occurrence at all;
+and whether its "Reminder" control's Customise page can ask for a sound, a program
+or a mail (which this mapping drops) is still unverified in the real editor. New
+from this session: nothing says whether Evolution's editor offers a *per-occurrence*
+reminder at all — the mapping, libical and EDS all carry one now, and the leg above
+writes the component by hand, so which menu (if any) reaches it is unverified; and
+`useDefaultAlerts` now silences an occurrence's own reminders as well as the series',
+which is right by the RFC but means a user of a defaults-driven server cannot set a
+one-off reminder on a single occurrence through this backend at all.

@@ -214,16 +214,17 @@ pub const MAPPED_PROPERTIES: [&str; 15] = [
 /// override's PatchObject would have to reach `locations/<key>/name` inside an
 /// entry the instance does not have.
 ///
-/// `alerts` is absent for neither of those reasons but a plainer one: an
-/// instance's `VALARM`s *are* drawn whole on its own component, so a reminder for
-/// one occurrence alone is a thing this mapping could carry and does not yet. An
-/// override naming it is therefore refused rather than half-written, and a
-/// reminder the user changes on one occurrence is not saved — the same standing
-/// limitation `locations` has.
+/// `alerts` is here for the same reason as `keywords`, one component down: an
+/// instance's `VALARM`s are drawn whole on its own component, so the reminders one
+/// occurrence has are stated where that occurrence is. It is also the only
+/// restated property whose coverage the *series* decides — RFC 8984 §4.5.1's
+/// `useDefaultAlerts` is not itself restatable, so it holds for every instance,
+/// and an occurrence whose reminders nothing reads has none to write; see
+/// [`maps_recurrence_override`], which is asked of the event for that one reason.
 ///
 /// `showWithoutTime` is absent, one step further out — see
 /// [`shows_without_time`], which is decided once for the whole document.
-pub const OVERRIDE_PROPERTIES: [&str; 10] = [
+pub const OVERRIDE_PROPERTIES: [&str; 11] = [
     "title",
     "description",
     "start",
@@ -234,6 +235,7 @@ pub const OVERRIDE_PROPERTIES: [&str; 10] = [
     "priority",
     "privacy",
     "keywords",
+    "alerts",
 ];
 
 /// Whether the places an event happens at survive the trip through iCalendar
@@ -688,8 +690,14 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
 /// The third, an instance that happens *differently*, is a `VEVENT` of its own
 /// carrying a `RECURRENCE-ID`, and it can restate only the properties
 /// [`OVERRIDE_PROPERTIES`] lists; a patch touching anything else — a
-/// participant, a location, an alert — is a patch this mapping shows in part
-/// and must not write back.
+/// participant, a location — is a patch this mapping shows in part and must not
+/// write back.
+///
+/// The `series` is checked too, for one property: `alerts` is drawn only where RFC
+/// 8984 §4.5.1's `useDefaultAlerts` is not set, and the flag is not something an
+/// override may restate, so it is the series that decides whether an occurrence's
+/// own reminders reach the document at all. See [`maps_alerts`], which asks the
+/// same question of the series' own set.
 ///
 /// The `id` is checked as well as the patch. It is the instance's own start as a
 /// LocalDateTime, and one no `EXDATE` can spell is an override that would vanish
@@ -703,7 +711,7 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
 /// still *drawn* as far as it can be — see [`event_to_ical`], which places an
 /// override it cannot describe with a bare `RDATE` rather than hiding the
 /// occurrence.
-pub fn maps_recurrence_override(id: &str, patch: &Value) -> bool {
+pub fn maps_recurrence_override(series: &CalendarEvent, id: &str, patch: &Value) -> bool {
     let Some(fields) = patch.as_object() else {
         return false;
     };
@@ -715,7 +723,7 @@ pub fn maps_recurrence_override(id: &str, patch: &Value) -> bool {
     }
     fields
         .iter()
-        .all(|(name, value)| maps_override_field(name, value))
+        .all(|(name, value)| maps_override_field(series, name, value))
 }
 
 /// Whether one field of an override's PatchObject reaches the component and
@@ -726,7 +734,7 @@ pub fn maps_recurrence_override(id: &str, patch: &Value) -> bool {
 /// round-trips wherever an absent property does. An *empty* string is neither:
 /// the writer drops it like an absent value, so it would come back as a
 /// removal, which is a different patch.
-fn maps_override_field(name: &str, value: &Value) -> bool {
+fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> bool {
     match name {
         "excluded" => value.is_boolean(),
         _ if !OVERRIDE_PROPERTIES.contains(&name) => false,
@@ -764,6 +772,27 @@ fn maps_override_field(name: &str, value: &Value) -> bool {
                 || value.as_object().is_some_and(|tags| {
                     !tags.is_empty() && tags.iter().all(|(tag, set)| drawn_tag(tag, set))
                 })
+        }
+        // The set one component down, and the one property the *series* has a say
+        // in: with RFC 8984 §4.5.1's `useDefaultAlerts` set, nothing reads the
+        // property for the series or for any instance of it, so no `VALARM` is
+        // drawn on either component and there is nothing a save could usefully
+        // write — down to the null, which would be an edit to what nothing reads.
+        // Otherwise the instance's `VALARM`s are drawn whole, so a reminder the
+        // component cannot show is one the next save deletes from that occurrence:
+        // asked of the same [`drawn_alert`] the series' own set is asked of, key
+        // included, since a replaced map states its entries under their keys. The
+        // empty map is refused for the reason the empty set of tags is — it is
+        // written the same way as a removal and would come back as that null.
+        "alerts" => {
+            !uses_default_alerts(series)
+                && (value.is_null()
+                    || value.as_object().is_some_and(|alerts| {
+                        !alerts.is_empty()
+                            && alerts
+                                .iter()
+                                .all(|(key, alert)| drawn_alert(key, alert, None).is_some())
+                    }))
         }
         // A start is required by RFC 8984, so a null says nothing, and the
         // value has to be one a DTSTART can carry.
@@ -1040,18 +1069,25 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         // both are drawn on the instance's own component, would read back as the
         // user having emptied them there. The same for the reminders, which are
         // `VALARM`s of the instance's own component: an occurrence drawn without
-        // them is one nobody is reminded of. `locations` and `alerts` are
-        // inherited and no more — an override may not name a place or a reminder
-        // ([`OVERRIDE_PROPERTIES`]) — where `keywords` is restated below.
+        // them is one nobody is reminded of. `locations` is inherited and no more —
+        // an override may not name a place ([`OVERRIDE_PROPERTIES`]) — where
+        // `keywords` and `alerts` are restated below.
         locations: event.locations.clone(),
         keywords: event.keywords.clone(),
         alerts: event.alerts.clone(),
+        // The properties this mapping does not model, inherited for the same
+        // reason and needed for one of them: RFC 8984 §4.5.1's `useDefaultAlerts`
+        // is read from here (see [`uses_default_alerts`]), and an instance that
+        // arrived without it would be drawn with alarms the series beside it is
+        // drawn without — reminders that never fire, and, read back, an occurrence
+        // the user apparently set them on.
+        extra: event.extra.clone(),
         ..CalendarEvent::default()
     };
 
     let mut modified = false;
     for (name, value) in fields {
-        if !maps_override_field(name, value) {
+        if !maps_override_field(event, name, value) {
             continue;
         }
         // The one restatable property that is not text. Checked above, so a null
@@ -1071,6 +1107,21 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
             instance.keywords = value.as_object().map(|tags| {
                 tags.iter()
                     .map(|(tag, set)| (tag.clone(), set.clone()))
+                    .collect()
+            });
+            modified = true;
+            continue;
+        }
+        // The set that is drawn as components rather than as a line, replacing what
+        // it inherited for the same reason: an override naming one reminder is an
+        // occurrence with that reminder alone. Checked above, so a null leaves the
+        // occurrence unreminded, every entry is one a `VALARM` states whole, and
+        // the series does not hold the flag that would make all of them unread.
+        if name == "alerts" {
+            instance.alerts = value.as_object().map(|alerts| {
+                alerts
+                    .iter()
+                    .map(|(key, alert)| (key.clone(), alert.clone()))
                     .collect()
             });
             modified = true;
@@ -1657,6 +1708,23 @@ fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) ->
                 // Serialising a set this crate's own reader built cannot fail: it
                 // holds strings and `true`.
                 Some(tags) => serde_json::to_value(tags).unwrap_or(Value::Null),
+                None => Value::Null,
+            },
+        );
+    }
+    // And the map that is a set of components, compared the same way and whole for
+    // the same reason: an instance carrying no `VALARM` where the series does is an
+    // occurrence the user is no longer reminded of, which is the `null` a
+    // PatchObject removes a property with. Where the series draws none — because
+    // RFC 8984 §4.5.1 says nothing reads them — neither does the instance, so the
+    // two agree and nothing is stated here at all.
+    if series.alerts != instance.alerts {
+        patch.insert(
+            "alerts".to_owned(),
+            match &instance.alerts {
+                // Serialising a map this crate's own reader built cannot fail: it
+                // holds two objects of strings.
+                Some(alerts) => serde_json::to_value(alerts).unwrap_or(Value::Null),
                 None => Value::Null,
             },
         );
