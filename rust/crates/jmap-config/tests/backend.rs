@@ -42,8 +42,10 @@ use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::source::SourceError;
 use jmap_backend_core::subclass::register_static;
 use jmap_collection_sync::Parts;
-use jmap_config::account::BACKEND_NAME;
-use jmap_config::backend::{JmapConfigServiceBackend, JmapConfigServiceBackendClass};
+use jmap_collection_sync::child_source::Connection;
+use jmap_config::account::{Account, BACKEND_NAME, apply, read};
+use jmap_config::backend::{JmapConfigServiceBackend, JmapConfigServiceBackendClass, is_complete};
+use jmap_config::complete::{Incomplete, check};
 use jmap_config::mail::MAIL_BACKEND_NAME;
 
 /// The class Evolution would dispatch through, kept referenced for the test's
@@ -159,6 +161,48 @@ impl Collection {
         // SAFETY: a live source.
         unsafe { server_of(self.0) }.map(|server| server.origin)
     }
+
+    /// Writes `account` onto the collection — what the widgets do to it while
+    /// the user is typing, and what `check_complete` is then asked about.
+    fn edited(self, account: &Account) -> Self {
+        // SAFETY: a live source.
+        unsafe { apply(self.0, account) };
+        self
+    }
+
+    /// What `check_complete` answers about the account the source now says.
+    fn complete(&self) -> bool {
+        // SAFETY: a live source.
+        unsafe { is_complete(self.0) }
+    }
+
+    /// The reason behind that answer, which the vfunc itself has nowhere to
+    /// put: the account read back and checked, which is what `is_complete` is.
+    fn refusal(&self) -> Result<(), Incomplete> {
+        // SAFETY: a live source.
+        check(&unsafe { read(self.0) })
+    }
+}
+
+/// A finished account, as in `tests/complete.rs`: the one the manual test
+/// recipe describes, and the state the entries are in when *Next* should go
+/// sensitive.
+fn finished() -> Account {
+    Account {
+        identity: "vera@example.com".to_owned(),
+        connection: Connection {
+            host: "jmap.example.com".to_owned(),
+            port: Some(8443),
+            user: Some("vera".to_owned()),
+            auth_method: None,
+            secure: true,
+        },
+        parts: Parts {
+            mail: true,
+            contacts: true,
+            calendars: true,
+        },
+    }
 }
 
 impl Drop for Collection {
@@ -272,4 +316,87 @@ fn the_collection_offered_names_nobody_and_nowhere_yet() {
     assert_eq!(collection.identity(), None);
     assert_eq!(collection.user(), None);
     assert_eq!(collection.server(), Err(SourceError::MissingHost));
+}
+
+#[test]
+fn check_complete_displaces_the_inherited_one() {
+    // Evolution's own answers TRUE: a backend whose account is finished as soon
+    // as a provider is picked, which is right for a POP3 account with nothing to
+    // fill in and wrong for one that needs an address and a server. Left
+    // inherited it is not a missing feature that shows up anywhere — it is an
+    // assistant whose *Next* is sensitive over an empty account, and an account
+    // committed with no host that then fails in the registry.
+    let class = Class::get();
+    let ours = class
+        .vfuncs()
+        .check_complete
+        .expect("class_init installed no check_complete");
+    let inherited = parent_class()
+        .check_complete
+        .expect("Evolution installs its own check_complete");
+    assert!(
+        !std::ptr::fn_addr_eq(ours, inherited),
+        "check_complete is still Evolution's, which accepts anything"
+    );
+}
+
+#[test]
+fn the_account_the_dialog_starts_from_is_not_one_it_may_commit() {
+    // `new_collection`'s own account, which names nobody and nowhere: the
+    // assistant opens on it, and it is exactly the account that must not be
+    // committed. The refusal names the identity and not the server, because the
+    // identity is the page the user is on.
+    let collection = Class::get().new_collection();
+    assert!(!collection.complete());
+    assert_eq!(collection.refusal(), Err(Incomplete::MissingIdentity));
+}
+
+#[test]
+fn a_finished_account_is_one_the_setup_may_commit() {
+    let collection = Class::get().new_collection().edited(&finished());
+    assert_eq!(collection.refusal(), Ok(()));
+    assert!(collection.complete());
+    // And it is the same account on the way out: the registry's reader gets the
+    // server the check accepted, rather than a second reading of the source.
+    assert_eq!(
+        collection.server().as_deref(),
+        Ok("https://jmap.example.com:8443")
+    );
+}
+
+#[test]
+fn plaintext_to_a_server_that_is_not_this_machine_is_refused() {
+    // The project's TLS rule (M3), reached through the vfunc's own path rather
+    // than through `check` alone: the entries write `[Security] Method=none`
+    // onto the collection source, and what `check_complete` is asked about is
+    // that source.
+    let mut account = finished();
+    account.connection.secure = false;
+    let collection = Class::get().new_collection().edited(&account);
+    assert!(!collection.complete());
+    assert_eq!(
+        collection.refusal(),
+        Err(Incomplete::Server(SourceError::InsecureTransport(
+            "jmap.example.com".to_owned()
+        )))
+    );
+}
+
+#[test]
+fn plaintext_to_this_machine_is_still_the_mock_server() {
+    let mut account = finished();
+    account.connection.host = "localhost".to_owned();
+    account.connection.secure = false;
+    let collection = Class::get().new_collection().edited(&account);
+    assert!(collection.complete());
+}
+
+#[test]
+fn a_backend_with_no_collection_source_commits_nothing() {
+    // What the vfunc has to answer when `new_collection` failed: FALSE, which
+    // greys *Next* out rather than committing an account nothing can read back.
+    // Silently, because the failure was reported where it happened — a critical
+    // per keystroke would bury it in copies of itself.
+    // SAFETY: NULL is the one non-source this is documented to take.
+    assert!(!unsafe { is_complete(ptr::null_mut()) });
 }

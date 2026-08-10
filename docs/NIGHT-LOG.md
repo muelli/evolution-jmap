@@ -11067,3 +11067,88 @@ both halves of its answer exist (`account::read` and `complete::check`).
 Overriding it is `class_init` work of the kind `backend.rs` already does for
 `new_collection`, so it can be compiled and its trampoline tested here; what it
 cannot show is the greyed-out *Next* button, which stays human verification.
+
+## 2026-08-10 (hundred-and-tenth session)
+
+**The `check_complete` vfunc.** Six tests, red first (they did not compile:
+there was no `is_complete`), in `rust/crates/jmap-config/tests/backend.rs`; the
+slot and its two functions in `src/backend.rs`. It is the first vfunc since
+`new_collection` and the one both halves of whose answer already existed —
+`account::read` for the account the collection source says, `complete::check`
+for whether that account may be committed — so what landed is the plumbing and
+one composition, not a new decision.
+
+**What the inherited slot does, read rather than remembered.** The test says
+Evolution's own `check_complete` accepts anything, and that claim was checked
+against the installed `libevolution-mail.so` instead of asserted from memory:
+the parent class's slot points at `endbr64; mov eax,1; ret`. Unconditional
+TRUE. Left inherited it is not a missing feature anyone sees — it is an
+assistant whose *Next* is sensitive over an account with no address and no
+server, committed and then failing in `evolution-source-registry`, which is the
+failure `complete`'s module comment exists to argue against.
+
+**Which source the vfunc asks about, and the note that has to survive to
+`insert_widgets`.** The collection, through
+`e_mail_config_service_backend_get_collection`. evolution-ews asks its
+`CamelEwsSettings` instead, because that is what its entries are bound to; both
+are defensible and this crate has picked the collection everywhere — it is what
+`account::apply` writes, what `account::read` reads, and the one description of
+an account the collection backend reads back in another process. The
+consequence is a constraint on a vfunc that does not exist yet: `insert_widgets`
+must bind its entries to that same source, or this one is answering questions
+about a source nobody is editing. It is written down in `backend.rs` next to the
+vfunc rather than left to be rediscovered.
+
+**A refusal that is silent, twice, for two different reasons.** A NULL
+collection answers FALSE and logs nothing: the only way to get one is a
+`new_collection` that failed, which already logged a critical where the failure
+happened, and a second copy per keystroke would bury the original. An account
+that is merely unfinished also logs nothing, because `Incomplete`'s text is
+written for the person who typed the answer and this vfunc has nowhere to put it
+— it returns a boolean. The status label that will carry it is `insert_widgets`'
+to add. Adding a debug-level log helper to `jmap-backend-core` was considered
+and dropped: it would have been a second crate's surface, untested, for a line
+nobody is currently reading.
+
+**What this makes worse before it makes it better, said plainly.** With
+`check_complete` installed and neither `setup_defaults` nor `insert_widgets`
+written, a JMAP account in the assistant would have *Next* greyed out and no way
+to un-grey it: nothing fills in an address, and no address is exactly what this
+refuses. That is not a regression — no module loads this class, so nothing
+reaches the dialog at all — and it is the right order, since the alternative is
+a setup that commits accounts it knows are broken. `backend.rs` says so in its
+own words under "The state this leaves the dialog in".
+
+**What this is not.** Still no module, no `e_module_load`, no
+`module-jmap-configuration.so`, no widget, and no account created through
+Evolution's UI — M7's actual acceptance, which this VM cannot do. The vfunc body
+itself is not tested either: driving it needs a live `EMailConfigServiceBackend`,
+and the detached instance the `new_collection` test uses would reach
+`e_mail_config_service_backend_get_collection`'s `E_IS_...` assertion — a
+critical in a green run, and a path the class docs already call undefined
+behaviour. What is tested is `is_complete`, over real `ESource`s: the account
+`new_collection` offers is refused (for the identity, which is the page the user
+is on), a finished account is accepted and reads back through the registry's own
+reader as `https://jmap.example.com:8443`, plaintext to a remote server is
+refused and plaintext to localhost is not, and a NULL collection commits
+nothing. M7 carries no completion tag and this needs human verification in real
+Evolution.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM); no new files this time, so no new SPDX headers
+either. `cargo fmt --check`, `cargo test --locked` (491 tests on the default
+members, unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are
+clean, as are `clippy`/`test` over the EDS crates — 826 tests, `jmap-config`'s
+70 (was 64) included. The one ignored test is a pre-existing `ignore` doctest in
+`jmap-backend-core`'s `instance::Slot`. `RUSTDOCFLAGS=-D warnings cargo doc`
+clean for the crate. Pre-existing and untouched: `example-module` does not build
+on this VM, which is why the workspace-wide runs exclude it.
+
+No milestone tag.
+
+Next: `commit_changes`, the last vfunc whose decision is already written — the
+account `account::read` gives, written back with `account::apply` and fanned out
+to the three sources `mail::apply` writes. Like this one it is plumbing over
+tested parts, and like this one what a test here can drive is the composition
+rather than the vfunc Evolution dispatches; the registry call it has to make to
+turn the scratch collection into a real account is the part to look at closely.
