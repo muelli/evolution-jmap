@@ -1104,6 +1104,181 @@ fn an_instance_moved_to_another_time_keeps_the_recurrence_id_it_replaces() {
 }
 
 #[test]
+fn an_instance_moved_to_another_zone_carries_it_on_its_own_start() {
+    // An occurrence can move across the clock as well as along it, and RFC 8984
+    // §4.4.3 lets an override patch `timeZone` like any other property. In
+    // iCalendar a zone belongs to the property that carries it, so the
+    // instance's own DTSTART states it — while the RECURRENCE-ID keeps the
+    // series' zone, because it names the occurrence the *rules* generated and
+    // the rules run on the series' clock (RFC 5545 §3.8.4.4).
+    let patch = json!({"start": "2026-01-29T09:00:00", "timeZone": "America/New_York"});
+    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    let ics = event_to_ical(&event);
+
+    // The series is untouched by where one of its instances went.
+    assert_eq!(
+        line(&ics, "DTSTART"),
+        "DTSTART;TZID=Europe/Berlin:20260115T130000"
+    );
+    let instance = vevent(&ics, 1);
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260129T130000"
+    );
+    assert_eq!(
+        line(instance, "DTSTART"),
+        "DTSTART;TZID=America/New_York:20260129T090000"
+    );
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn an_instance_in_utc_carries_the_z_the_series_does_not() {
+    // The same move into the one zone iCalendar spells without a TZID at all.
+    let event = recurring_with(json!({"2026-01-29T13:00:00": {"timeZone": "Etc/UTC"}}));
+    let ics = event_to_ical(&event);
+
+    let instance = vevent(&ics, 1);
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260129T130000"
+    );
+    assert_eq!(line(instance, "DTSTART"), "DTSTART:20260129T130000Z");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn an_instance_that_drops_its_zone_floats_rather_than_inheriting_the_series() {
+    // A null removes a property, and an instance with no zone is a floating
+    // one: a DTSTART with no TZID and no `Z`, which is exactly what RFC 5545
+    // §3.3.5 form 1 says. The series' zone does not reach across to it, so the
+    // two ends agree without either inventing a zone.
+    let patch = json!({"timeZone": null});
+    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    let ics = event_to_ical(&event);
+
+    let instance = vevent(&ics, 1);
+    assert_eq!(line(instance, "DTSTART"), "DTSTART:20260129T130000");
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260129T130000"
+    );
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn a_zone_an_instance_cannot_name_is_flagged_rather_than_written_back() {
+    // The same rule the series' own zone follows, one level down: a `TZID` is
+    // an iCalendar identifier and only sometimes an RFC 8984 §1.4.9 name, and
+    // `recurrenceOverrides` is replaced whole — so an entry carrying a value
+    // JSCalendar cannot hold would risk the server rejecting the save, and with
+    // it every other edit in it.
+    for zone in [
+        json!(LIBICAL_TZID),
+        json!("W. Europe Standard Time"),
+        json!(""),
+        json!(42),
+    ] {
+        let patch = json!({"timeZone": zone});
+        assert!(
+            !maps_recurrence_override("2026-01-29T13:00:00", &patch),
+            "{patch}"
+        );
+
+        // Nothing left to draw, so the occurrence is placed by a bare RDATE at
+        // the series' zone rather than moved to a zone we could not name.
+        let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+        let ics = event_to_ical(&event);
+        assert_eq!(vevents(&ics), 1, "{ics}");
+        assert_eq!(
+            line(&ics, "RDATE"),
+            "RDATE;TZID=Europe/Berlin:20260129T130000"
+        );
+    }
+}
+
+#[test]
+fn an_all_day_event_whose_instance_takes_a_zone_stays_a_date_time() {
+    // The same trade as an instance that took a time: RFC 5545 §3.2.19 says a
+    // DATE value carries no TZID, so writing the event as a date would drop the
+    // zone the instance moved into. It is written as the timed event it half is.
+    let event = CalendarEvent {
+        id: Some("E12".into()),
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_overrides: Some(
+            [(
+                "2026-01-29T00:00:00".to_owned(),
+                json!({"timeZone": "America/New_York"}),
+            )]
+            .into(),
+        ),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
+    let instance = vevent(&ics, 1);
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID:20260129T000000"
+    );
+    assert_eq!(
+        line(instance, "DTSTART"),
+        "DTSTART;TZID=America/New_York:20260129T000000"
+    );
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
+}
+
+#[test]
+fn a_detached_instance_in_another_zone_is_read_as_a_zone_of_its_own() {
+    // The reading direction with the identifiers Evolution really hands over:
+    // libical's own for the series, translated off the VTIMEZONE beside it, and
+    // a second zone on the instance that moved. Reading only the start would
+    // resolve 09:00 New York against Berlin and move the occurrence six hours.
+    let ics = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{}\
+         BEGIN:VEVENT\r\nUID:E13\r\n\
+         DTSTART;TZID={LIBICAL_TZID}:20260115T130000\r\n\
+         DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\n\
+         BEGIN:VEVENT\r\nUID:E13\r\n\
+         RECURRENCE-ID;TZID={LIBICAL_TZID}:20260129T130000\r\n\
+         DTSTART;TZID=America/New_York:20260129T090000\r\n\
+         DURATION:PT1H\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        vtimezone(LIBICAL_TZID, "Europe/Berlin")
+    );
+
+    let event = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(
+        event.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-29T13:00:00".to_owned(),
+                json!({"start": "2026-01-29T09:00:00", "timeZone": "America/New_York"}),
+            )]
+            .into()
+        )
+    );
+}
+
+#[test]
 fn an_instance_that_drops_a_property_reads_back_as_removing_it() {
     // A PatchObject removes a property with a null, and the component says the
     // same thing by not carrying the line at all. Round-tripping that is what
