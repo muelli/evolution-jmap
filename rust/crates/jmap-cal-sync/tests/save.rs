@@ -667,6 +667,156 @@ fn a_save_that_changes_nothing_sends_no_patch() {
     );
 }
 
+/// The `TZID` Evolution puts on every zoned component it saves: libical names
+/// its builtin zones with a solidus-prefixed identifier of its own, and the
+/// appointment editor sets the start with the zone object, so this is what
+/// comes back even for a component we handed out spelling the zone plainly.
+const LIBICAL_TZID: &str = "/freeassociation.sourceforge.net/Europe/Berlin";
+
+/// The `VTIMEZONE` libical writes beside it, trimmed to the two lines that
+/// matter here; `X-LIC-LOCATION` is its record of which IANA zone this is.
+///
+/// **The envelope the backend builds today does not carry it.**
+/// `marshal::icalendar_from_instances` puts the instances EDS handed the save
+/// into a fresh `VCALENDAR` and nothing else, so what reaches this crate from
+/// real Evolution is the `TZID` with nothing to translate it — the case
+/// [`a_zone_the_document_could_not_name_leaves_the_servers_alone`] pins. The
+/// tests that supply it are the mapping's half of the answer, and the other
+/// half is putting the referenced zones in the envelope.
+const LIBICAL_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
+TZID:/freeassociation.sourceforge.net/Europe/Berlin\r\n\
+X-LIC-LOCATION:Europe/Berlin\r\n\
+BEGIN:STANDARD\r\nTZNAME:CET\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
+DTSTART:19701025T030000\r\nEND:STANDARD\r\n\
+END:VTIMEZONE\r\n";
+
+/// Respelling a zone is not changing it. Every save of a zoned appointment
+/// arrives with libical's own identifier in place of the name we wrote, and
+/// reading that as an edit would put a string into `timeZone` that RFC 8984
+/// §1.4.9 only admits beside a `timeZones` definition — a value a server is
+/// entitled to reject, taking the user's real edits down with it.
+#[test]
+fn the_zone_evolution_respells_is_not_read_as_a_zone_change() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"timeZone": "Europe/Berlin"}));
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("TZID=Europe/Berlin", &format!("TZID={LIBICAL_TZID}"))
+        .replace("BEGIN:VEVENT", &format!("{LIBICAL_VTIMEZONE}BEGIN:VEVENT"))
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (daily)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (daily)"));
+    assert_eq!(
+        stored.time_zone.as_deref(),
+        Some("Europe/Berlin"),
+        "the zone was respelled, not changed"
+    );
+    assert_eq!(stored.start.as_deref(), Some("2026-01-15T09:00:00"));
+}
+
+/// The same respelling on the other side of a real move: the zone the user
+/// picked has to reach the server as the name JSCalendar spells it with.
+#[test]
+fn a_move_to_another_zone_arrives_under_its_iana_name() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"timeZone": "Europe/Berlin"}));
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace(
+            "TZID=Europe/Berlin",
+            "TZID=/freeassociation.sourceforge.net/America/New_York",
+        )
+        .replace(
+            "BEGIN:VEVENT",
+            "BEGIN:VTIMEZONE\r\n\
+             TZID:/freeassociation.sourceforge.net/America/New_York\r\n\
+             X-LIC-LOCATION:America/New_York\r\n\
+             BEGIN:STANDARD\r\nTZNAME:EST\r\nTZOFFSETFROM:-0400\r\nTZOFFSETTO:-0500\r\n\
+             DTSTART:19701101T020000\r\nEND:STANDARD\r\n\
+             END:VTIMEZONE\r\nBEGIN:VEVENT",
+        );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.time_zone.as_deref(), Some("America/New_York"));
+}
+
+/// A zone nothing in the document explains: a Windows name from Exchange, and
+/// libical's own identifier with no `VTIMEZONE` beside it to translate it —
+/// which is what the envelope the backend builds today hands over, so this is
+/// the shape a save from real Evolution arrives in.
+///
+/// Neither is a value JSCalendar can carry, so neither is sent; the server
+/// keeps the zone it had, which is the zone the component was showing. What
+/// this costs is on the record: a zone the user really did change is not seen
+/// either, and only the envelope carrying the `VTIMEZONE` fixes that.
+#[test]
+fn a_zone_the_document_could_not_name_leaves_the_servers_alone() {
+    for tzid in ["W. Europe Standard Time", LIBICAL_TZID] {
+        let fixture = Fixture::start();
+        let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+        fixture.patch(&id, json!({"timeZone": "Europe/Berlin"}));
+        let sync = fixture.sync();
+
+        let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+        let edited = icalendar
+            .replace("TZID=Europe/Berlin", &format!("TZID={tzid}"))
+            .replace("SUMMARY:Standup", "SUMMARY:Standup (daily)");
+        sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+        let stored = fixture.event(&id);
+        assert_eq!(
+            stored.title.as_deref(),
+            Some("Standup (daily)"),
+            "the edit the user made must still arrive, {tzid}"
+        );
+        assert_eq!(stored.time_zone.as_deref(), Some("Europe/Berlin"), "{tzid}");
+    }
+}
+
+/// The same value on a create, where there is no server zone to keep. The
+/// appointment is filed floating rather than not at all: a wall-clock time
+/// with no zone shows correctly for the user who typed it, and an event the
+/// server refused shows nothing.
+#[test]
+fn a_new_events_unnameable_zone_is_not_sent() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let icalendar = NEW_EVENT.replace("TZID=Europe/Berlin", "TZID=W. Europe Standard Time");
+
+    let saved = sync.save_component(&icalendar, None).unwrap();
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(stored.title.as_deref(), Some("Planning"));
+    assert_eq!(stored.start.as_deref(), Some("2026-01-15T13:00:00"));
+    assert_eq!(stored.time_zone, None);
+}
+
+/// And a create carrying libical's spelling, which is what Evolution actually
+/// hands the backend for a brand-new zoned appointment.
+#[test]
+fn a_new_events_zone_arrives_under_its_iana_name() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let icalendar = NEW_EVENT
+        .replace("TZID=Europe/Berlin", &format!("TZID={LIBICAL_TZID}"))
+        .replace("BEGIN:VEVENT", &format!("{LIBICAL_VTIMEZONE}BEGIN:VEVENT"));
+
+    let saved = sync.save_component(&icalendar, None).unwrap();
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(stored.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(stored.start.as_deref(), Some("2026-01-15T13:00:00"));
+}
+
 #[test]
 fn saving_over_an_unknown_identifier_is_not_found() {
     let fixture = Fixture::start();
