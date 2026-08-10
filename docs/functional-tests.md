@@ -181,7 +181,18 @@ line for line, and this test is what found it.
   `EXDATE` — never as a removal — and "this and future occurrences" as a
   truncated master **plus a second event** under a UID EDS invents, which is the
   only one of the three that reaches the backend as two writes. Each is checked
-  at both ends: what EDS kept in its own cache, and what the server was told.
+  at both ends: what EDS kept in its own cache, and what the server was told;
+- and the two events in named zones, which are the only cases here whose
+  components are built through the libical *setters* rather than from text. That
+  is the point of them: what a setter writes for a builtin zone is libical's own
+  identifier — `/freeassociation.sourceforge.net/Europe/Berlin` — which no JMAP
+  server resolves, so the zone reaches the server only if the envelope the
+  backend builds also carries the `VTIMEZONE` defining it. No test below real EDS
+  can say whether it does, because they all supply the identifier by hand. One is
+  a plain appointment; the other is a **series in one zone with a single
+  occurrence moved into another**, which is the case where two zones have to
+  travel in one object and where the `RECURRENCE-ID` stays on the series' clock
+  (RFC 5545 §3.8.4.4) while the instance's own `DTSTART` does not.
 
 The read path is left alone for the same reason as the address book's.
 

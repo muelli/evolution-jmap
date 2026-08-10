@@ -117,6 +117,41 @@ const SPLIT_DTSTART: &str = "20260212T130000Z";
 /// another that was never cancelled at all.
 const RECURRING_EXDATES: [&str; 2] = ["20260129T130000Z", "20260205T130000Z"];
 
+/// And the sixth event, which is the one question every case above leaves
+/// open: a series in one named zone with a single occurrence moved into
+/// another. RFC 5545 §3.2.19 puts a zone on the *property*, so a detached
+/// instance states its own `TZID` and need not share the series'; RFC 8984
+/// §4.4.3 says the same thing by letting a `recurrenceOverrides` patch carry
+/// `timeZone`. The mapping learned both last, and its own tests supply the
+/// identifiers by hand — so nothing yet says that a second zone, named by one
+/// instance of a component Evolution actually hands over, is defined in the
+/// envelope the backend builds and translated on the way out.
+///
+/// The move is five hours and a different clock, not a nudge: an override that
+/// arrived as a bare `start` — the bug that had shipped — puts the occurrence
+/// at 08:00 *Berlin* instead of 08:00 New York, and every other client reading
+/// the account shows it there.
+const ZONED_RECURRING_SUMMARY: &str = "Berlin standup";
+const ZONED_RECURRING_START: &str = "2026-03-05T10:00:00";
+const ZONED_RECURRING_DURATION: &str = "PT1H";
+
+/// The occurrence that moved: keyed on its start as the *rules* generate it,
+/// which is the series' clock, and carrying the start and the zone it was moved
+/// to. Both halves of the patch are asserted together, because either alone
+/// passes for the other going wrong.
+const ZONED_MOVED_INSTANCE: &str = "2026-03-12T10:00:00";
+const ZONED_MOVED_START: &str = "2026-03-12T08:00:00";
+const ZONED_MOVED_TIME_ZONE: &str = "America/New_York";
+
+/// And what EDS itself kept of that instance, which is the other end of the
+/// same claim: a `DTSTART` still on the moved clock. The value is exact; the
+/// `TZID` is only required to *name* the zone, because how libical spells an
+/// identifier for a builtin zone is libical's business and has changed between
+/// releases — `/freeassociation.sourceforge.net/America/New_York` and a plain
+/// `America/New_York` both end the same way, and a series' zone silently
+/// applied to the instance ends in `Europe/Berlin`.
+const ZONED_MOVED_DTSTART: &str = "20260312T080000";
+
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
 /// mock's ephemeral port filled in. Kept as a literal here rather than read
 /// from `docs/` so that a change to the documented recipe fails this test
@@ -180,6 +215,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             RECURRING_EDITED_SUMMARY,
             RECURRING_SPLIT_SUMMARY,
             ZONED_SUMMARY,
+            ZONED_RECURRING_SUMMARY,
         ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -233,7 +269,13 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "a fresh cache against an empty calendar should hold nothing\n{report}"
     );
 
-    for key in ["added", "added-all-day", "added-zoned", "added-recurring"] {
+    for key in [
+        "added",
+        "added-all-day",
+        "added-zoned",
+        "added-recurring",
+        "added-zoned-recurring",
+    ] {
         let added = seen
             .get(key)
             .unwrap_or_else(|| panic!("the client reported no {key} event\n{report}"));
@@ -306,13 +348,34 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
          it starts\n{report}"
     );
 
-    // Six objects for five events: `ECalCache` keys on (uid, rid), so the
-    // detached instance is a row of its own beside the series it belongs to,
-    // and the split added a fifth event. Five would mean the split's new event
-    // never landed in the cache; four, that the edit did not either.
+    // And what EDS made of the occurrence the client moved into another zone,
+    // read back from the same cache and for the same reason as the two above:
+    // whatever the server holds at this moment, a component set that lost the
+    // instance's own zone would have the *next* save write it back on the
+    // series' clock.
+    assert_eq!(
+        seen.get("zoned-occurrence-dtstart"),
+        Some(&ZONED_MOVED_DTSTART),
+        "EDS did not keep the occurrence at the wall-clock time it was moved \
+         to\n{report}"
+    );
+    let moved_tzid = seen.get("zoned-occurrence-tzid").unwrap_or_else(|| {
+        panic!("the client reported no zone for the moved occurrence\n{report}")
+    });
+    assert!(
+        moved_tzid.ends_with(ZONED_MOVED_TIME_ZONE),
+        "EDS kept the moved occurrence on {moved_tzid:?} rather than on the zone \
+         it was moved to, so its wall-clock start now names another instant\n{report}"
+    );
+
+    // Eight objects for six events: `ECalCache` keys on (uid, rid), so each of
+    // the two detached instances is a row of its own beside the series it
+    // belongs to, and the split added a fifth event. Seven would mean the
+    // moved occurrence never landed in the cache; five, that the split's new
+    // event did not either.
     assert_eq!(
         seen.get("events-after"),
-        Some(&"6"),
+        Some(&"8"),
         "the added events are not all in the calendar they were added to\n{report}"
     );
 
@@ -338,8 +401,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .collect();
     assert_eq!(
         events.len(),
-        5,
-        "the server holds {} events, not five",
+        6,
+        "the server holds {} events, not six",
         events.len()
     );
 
@@ -496,5 +559,57 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         split.recurrence_overrides, None,
         "the event the split made carries exceptions from before it starts: \
          {split:?}"
+    );
+
+    // And the zoned series, whose one override is the only place in this file
+    // where two named zones meet. The series' own zone is asserted first
+    // because the override's key is a wall-clock time *on it*: a series that
+    // arrived floating or in UTC would make `2026-03-12T10:00:00` name a
+    // different instant, and the override would then be attached to an
+    // occurrence the rules never generated.
+    let zoned_recurring = by_title(ZONED_RECURRING_SUMMARY);
+    assert_eq!(
+        zoned_recurring.time_zone.as_deref(),
+        Some(ZONED_TIME_ZONE),
+        "the zone the series was created in did not reach the server: \
+         {zoned_recurring:?}"
+    );
+    assert_eq!(
+        zoned_recurring.start.as_deref(),
+        Some(ZONED_RECURRING_START),
+        "the zoned series does not start at the wall-clock time it was created \
+         at: {zoned_recurring:?}"
+    );
+    assert_eq!(
+        zoned_recurring.duration.as_deref(),
+        Some(ZONED_RECURRING_DURATION),
+        "the zoned series has the wrong length: {zoned_recurring:?}"
+    );
+    let zoned_rules = zoned_recurring
+        .recurrence_rules
+        .as_ref()
+        .unwrap_or_else(|| panic!("the zoned series has no rule: {zoned_recurring:?}"));
+    assert_eq!(zoned_rules[0].frequency, "weekly", "{zoned_recurring:?}");
+    assert_eq!(zoned_rules[0].count, Some(3), "{zoned_recurring:?}");
+    // The whole point of the event: the moved occurrence, carrying both the
+    // wall-clock start the user put it at and the clock that start is on. A
+    // patch of `{"start": …}` alone — which is what the mapping sent before it
+    // learned `timeZone` — is a five-hour error the server cannot see and no
+    // other client can correct.
+    assert_eq!(
+        zoned_recurring.recurrence_overrides,
+        Some(
+            [(
+                ZONED_MOVED_INSTANCE.to_owned(),
+                serde_json::json!({
+                    "start": ZONED_MOVED_START,
+                    "timeZone": ZONED_MOVED_TIME_ZONE,
+                }),
+            )]
+            .into()
+        ),
+        "the occurrence the user moved into another zone did not reach the \
+         server on that zone, so every other client shows it five hours from \
+         where it was put: {zoned_recurring:?}"
     );
 }
