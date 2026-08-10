@@ -107,7 +107,7 @@ impl CalendarEvent {
 }
 
 /// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly —
-/// `byDay` & friends ride in `extra`.
+/// `byMonthDay` & friends ride in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RecurrenceRule {
@@ -121,8 +121,41 @@ pub struct RecurrenceRule {
     pub count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
+    /// The days of the week the rule repeats on — iCalendar's `BYDAY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_day: Option<Vec<NDay>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// JSCalendar NDay (RFC 8984 §4.3.3): one weekday a `byDay` names, and
+/// optionally which occurrence of it within the recurrence period.
+///
+/// `day` is the two-letter lowercase weekday (`mo` … `su`) both formats spell
+/// the same way but for case; `nthOfPeriod` is the ordinal iCalendar writes in
+/// front of it, negative for the nth-last (`-1FR`, the last Friday of the
+/// month).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NDay {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub day_type: Option<String>,
+    #[serde(default)]
+    pub day: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nth_of_period: Option<i32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl NDay {
+    pub fn new(day: &str) -> Self {
+        Self {
+            day_type: Some("NDay".to_owned()),
+            day: day.to_owned(),
+            ..Self::default()
+        }
+    }
 }
 
 impl RecurrenceRule {

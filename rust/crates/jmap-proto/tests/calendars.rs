@@ -6,7 +6,7 @@
 
 #![cfg(feature = "calendars")]
 
-use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
+use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -36,6 +36,7 @@ fn calendar_event_roundtrip() {
     assert_eq!(event.duration.as_deref(), Some("PT1H"));
     let rules = event.recurrence_rules.as_ref().unwrap();
     assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].by_day.as_deref(), Some(&[NDay::new("th")][..]));
     // An override's patch stays JSON: "this instance is off" and "this instance
     // was edited" are both PatchObjects, and only the caller knows which of
     // them it can represent.
@@ -62,5 +63,17 @@ fn recurrence_rule_roundtrip() {
     assert_eq!(rule.frequency, "monthly");
     assert_eq!(rule.interval, Some(2));
     assert_eq!(rule.count, Some(10));
-    assert!(rule.extra.contains_key("byDay"));
+    // `byDay` is modeled rather than parked in `extra`: an `RRULE` spells it,
+    // so the mapping has to be able to see it — and to hand it back unchanged,
+    // `@type` and all, when a save replaces the property whole.
+    let days = rule.by_day.as_deref().expect("byDay");
+    assert_eq!(
+        days,
+        [NDay {
+            nth_of_period: Some(2),
+            ..NDay::new("we")
+        }]
+    );
+    assert_eq!(days[0].day_type.as_deref(), Some("NDay"));
+    assert!(rule.extra.is_empty());
 }

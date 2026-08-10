@@ -75,8 +75,16 @@
  * master component and adds an EXDATE to it. RFC 5545 §3.8.5.1 is the only way
  * iCalendar says "not that one", and JSCalendar says it with an entry in
  * `recurrenceOverrides` — so an EXDATE the backend drops is an appointment
- * every other client reading the account still sees. */
-#define TEST_RECURRING_RRULE "FREQ=WEEKLY;COUNT=6"
+ * every other client reading the account still sees.
+ *
+ * The rule names the day it repeats on, which is what the appointment editor's
+ * recurrence page writes for anything but "every day": JSCalendar says it with
+ * a `byDay` of NDay objects (RFC 8984 §4.3.3) and the mapping's own tests
+ * supply that spelling by hand, so only real EDS says whether the rule libical
+ * hands back still carries it. TH because TEST_DTSTART is a Thursday: the
+ * occurrences, and so every exclusion, detached instance and split below, are
+ * exactly the ones the rule generated without it. */
+#define TEST_RECURRING_RRULE "FREQ=WEEKLY;COUNT=6;BYDAY=TH"
 #define TEST_RECURRING_EXDATE "20260129T130000Z"
 
 /* And the occurrence the user renames instead of deleting, which is "Edit this
