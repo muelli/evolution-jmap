@@ -28,10 +28,13 @@
 //! difference" is not the whole question:
 //!
 //! - **`recurrenceRules` is one property, not a merge point.** A rule with
-//!   `byDay` cannot be spelled as an `RRULE` this crate emits, so patching
+//!   `byMonthDay` cannot be spelled as an `RRULE` this crate emits, so patching
 //!   the array at all would narrow the user's recurrence behind their back.
 //!   If any rule the server holds fails [`maps_recurrence_rule`], the
-//!   property is left alone entirely.
+//!   property is left alone entirely — as does one the *save* brings that
+//!   cannot be sent, which is the same check the series' `timeZone` gets
+//!   below: the property goes out replaced whole, so a part the server is
+//!   entitled to reject would cost every other edit in the save.
 //! - **`recurrenceOverrides` is the same story one level down.** An
 //!   `EXDATE`, an `RDATE` and a `RECURRENCE-ID` component between them say that
 //!   an instance is off, that it happens, and that it happens with another
@@ -117,20 +120,23 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     patch
 }
 
-/// The recurrence, replaced whole or not at all — and not at all whenever the
-/// server holds a rule the `RRULE` could not carry.
+/// The recurrence, replaced whole or not at all — and not at all whenever
+/// either side holds a rule the `RRULE` could not carry: the server's, which
+/// would be narrowed by the drawing, or the save's, which would be sent as a
+/// rule the server may refuse.
 fn diff_recurrence(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
     baseline: &CalendarEvent,
     edited: &CalendarEvent,
 ) {
-    if current
-        .recurrence_rules
-        .iter()
-        .flatten()
-        .any(|rule| !maps_recurrence_rule(rule))
-    {
+    if [current, edited].iter().any(|event| {
+        event
+            .recurrence_rules
+            .iter()
+            .flatten()
+            .any(|rule| !maps_recurrence_rule(rule))
+    }) {
         return;
     }
     if baseline.recurrence_rules == edited.recurrence_rules {

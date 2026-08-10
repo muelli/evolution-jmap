@@ -11,7 +11,7 @@ use jmap_ical::{
     ICalError, event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule,
     names_time_zone,
 };
-use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
+use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
 
 fn fixture_event() -> CalendarEvent {
@@ -890,13 +890,177 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
 
 #[test]
 fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
-    // byDay & friends ride in `extra` and do not survive the trip through
+    // byMonthDay & friends ride in `extra` and do not survive the trip through
     // iCalendar, so the save path must not patch recurrenceRules for them.
-    let mut rule = RecurrenceRule::new("weekly");
-    rule.extra
-        .insert("byDay".to_owned(), json!([{"day": "mo"}]));
+    let mut rule = RecurrenceRule::new("monthly");
+    rule.extra.insert("byMonthDay".to_owned(), json!([15]));
     assert!(!maps_recurrence_rule(&rule));
     assert!(maps_recurrence_rule(&RecurrenceRule::new("weekly")));
+}
+
+#[test]
+fn a_weekly_rule_names_the_days_it_repeats_on() {
+    // Without BYDAY a weekly meeting lands on whatever day the series happens
+    // to start, which is the wrong day for every Monday-and-Thursday standup
+    // created anywhere but on a Monday.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_day: Some(vec![NDay::new("mo"), NDay::new("th")]),
+            count: Some(6),
+            ..RecurrenceRule::new("weekly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=WEEKLY;COUNT=6;BYDAY=MO,TH"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(
+        rules[0].by_day.as_deref(),
+        Some(&[NDay::new("mo"), NDay::new("th")][..])
+    );
+    // Which is what tells the save path it may write the property back.
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn a_monthly_rule_names_which_of_those_days_it_means() {
+    // RFC 5545 §3.3.10's ordinal, and RFC 8984 §4.3.3's `nthOfPeriod`: the
+    // second Wednesday and the last Friday of the month, not every one of them.
+    let days = vec![
+        NDay {
+            nth_of_period: Some(2),
+            ..NDay::new("we")
+        },
+        NDay {
+            nth_of_period: Some(-1),
+            ..NDay::new("fr")
+        },
+    ];
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_day: Some(days.clone()),
+            ..RecurrenceRule::new("monthly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=MONTHLY;BYDAY=2WE,-1FR");
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].by_day.as_deref(), Some(&days[..]));
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn reads_the_days_off_a_rule_written_by_hand() {
+    // The ordinal RFC 5545 §3.3.10 lets an emitter write with a leading plus,
+    // and the uppercase weekday every one of them writes.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=YEARLY;BYDAY=+3TU\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let rules = ical_to_event(ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+    assert_eq!(
+        rules[0].by_day.as_deref(),
+        Some(
+            &[NDay {
+                nth_of_period: Some(3),
+                ..NDay::new("tu")
+            }][..]
+        )
+    );
+}
+
+#[test]
+fn an_ordinal_weekday_is_refused_where_the_recurrence_has_no_period_to_count_in() {
+    // RFC 5545 §3.3.10: BYDAY MUST NOT carry a numeric value unless FREQ is
+    // MONTHLY or YEARLY. Writing `BYDAY=2MO` beside FREQ=WEEKLY is a line
+    // libical is entitled to refuse, and refusing one costs the whole
+    // component; dropping only the ordinal would repeat the event every Monday
+    // instead of every second one. So the days are left off — the same
+    // narrowing an unmodeled rule part gets — and the save path is told the
+    // rule was seen in part.
+    for frequency in ["weekly", "daily", "hourly"] {
+        let rule = RecurrenceRule {
+            by_day: Some(vec![NDay {
+                nth_of_period: Some(2),
+                ..NDay::new("mo")
+            }]),
+            ..RecurrenceRule::new(frequency)
+        };
+        assert!(!maps_recurrence_rule(&rule), "{frequency}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert_eq!(
+            line(&ics, "RRULE:"),
+            format!("RRULE:FREQ={}", frequency.to_ascii_uppercase()),
+        );
+    }
+}
+
+#[test]
+fn a_day_no_weekday_names_is_flagged_rather_than_written() {
+    // `day` is a closed vocabulary in both formats (RFC 8984 §4.3.3, RFC 5545
+    // §3.3.10), so a value outside it is dropped rather than passed through in
+    // the other format's clothes — and, as everywhere else in this mapping,
+    // what was shown in part is not written back.
+    for days in [
+        vec![NDay::new("monday")],
+        vec![NDay::new("")],
+        vec![NDay::new("mo,tu")],
+        // Zero is no occurrence of a weekday; RFC 8984 §4.3.3 forbids it and
+        // RFC 5545's ordwk starts at 1.
+        vec![NDay {
+            nth_of_period: Some(0),
+            ..NDay::new("mo")
+        }],
+        // An NDay carrying more than this mapping reads is as unseen as a rule
+        // that does.
+        vec![NDay {
+            extra: [("weekOfMonth".to_owned(), json!(2))].into(),
+            ..NDay::new("mo")
+        }],
+        // No day at all is not a set of days a BYDAY can name.
+        vec![],
+    ] {
+        let rule = RecurrenceRule {
+            by_day: Some(days.clone()),
+            ..RecurrenceRule::new("monthly")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{days:?}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=MONTHLY",
+            "{days:?}"
+        );
+    }
 }
 
 /// A recurring event in one zone, with `overrides` naming single instances.

@@ -181,7 +181,11 @@ line for line, and this test is what found it.
   `EXDATE` — never as a removal — and "this and future occurrences" as a
   truncated master **plus a second event** under a UID EDS invents, which is the
   only one of the three that reaches the backend as two writes. Each is checked
-  at both ends: what EDS kept in its own cache, and what the server was told;
+  at both ends: what EDS kept in its own cache, and what the server was told.
+  That series names the day it repeats on — `BYDAY=TH`, what the recurrence page
+  writes for anything but "every day" — so both ends also say whether the
+  `byDay` of RFC 8984 §4.3.3 survives the trip, including through the split,
+  which rewrites the rule;
 - and the two events in named zones, which are the only cases here whose
   components are built through the libical *setters* rather than from text. That
   is the point of them: what a setter writes for a builtin zone is libical's own

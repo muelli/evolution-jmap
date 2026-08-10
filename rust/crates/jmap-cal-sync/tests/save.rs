@@ -10,6 +10,7 @@
 mod common;
 
 use common::Fixture;
+use jmap_proto::calendars::NDay;
 use serde_json::json;
 
 /// The component Evolution hands to `save_component_sync` for a brand new
@@ -350,35 +351,95 @@ fn a_recurrence_the_mapping_can_carry_is_patched() {
 fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // `byDay` has no place in the RecurrenceRule this crate models, so the
+    // `byMonthDay` has no place in the RecurrenceRule this crate models, so the
     // RRULE the user edited is a narrower rule than the one on the server.
     fixture.patch(
         &id,
         json!({"recurrenceRules": [{
             "@type": "RecurrenceRule",
-            "frequency": "weekly",
-            "byDay": [{"@type": "NDay", "day": "mo"}, {"@type": "NDay", "day": "th"}],
+            "frequency": "monthly",
+            "byMonthDay": [15],
         }]}),
     );
     let sync = fixture.sync();
 
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
-    let edited = icalendar.replace("RRULE:FREQ=WEEKLY", "RRULE:FREQ=WEEKLY;COUNT=4");
+    let edited = icalendar.replace("RRULE:FREQ=MONTHLY", "RRULE:FREQ=MONTHLY;COUNT=4");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let rules = fixture.event(&id).recurrence_rules.unwrap();
     assert_eq!(rules.len(), 1);
     assert_eq!(
-        rules[0].extra.get("byDay"),
-        Some(&json!([
-            {"@type": "NDay", "day": "mo"},
-            {"@type": "NDay", "day": "th"},
-        ])),
+        rules[0].extra.get("byMonthDay"),
+        Some(&json!([15])),
         "a rule part the RRULE could not carry was dropped"
     );
     assert_eq!(
         rules[0].count, None,
         "narrowing a rule we cannot fully see is worse than ignoring the edit"
+    );
+}
+
+#[test]
+fn the_days_a_weekly_rule_repeats_on_reach_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "weekly",
+            "byDay": [{"@type": "NDay", "day": "mo"}],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=WEEKLY;BYDAY=MO"),
+        "{icalendar}"
+    );
+    // Adding the Thursday, which is what the appointment editor's recurrence
+    // page does to the RRULE.
+    let edited = icalendar.replace("BYDAY=MO", "BYDAY=MO,TH");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(
+        rules[0].by_day.as_deref(),
+        Some(&[NDay::new("mo"), NDay::new("th")][..])
+    );
+}
+
+#[test]
+fn a_days_ordinal_the_rrule_should_not_carry_is_not_sent() {
+    // `FREQ=WEEKLY;BYDAY=2MO` is a rule RFC 5545 §3.3.10 does not admit — an
+    // ordinal needs a month or a year to count within. calcard hands it back
+    // rather than judging it, so the check is on the way out, like the series'
+    // own `timeZone`: `recurrenceRules` goes to the server replaced whole, and
+    // one part it is entitled to reject would cost every other edit in the save.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "weekly"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("RRULE:FREQ=WEEKLY", "RRULE:FREQ=WEEKLY;BYDAY=2MO")
+        .replace("SUMMARY:Standup", "SUMMARY:Daily standup");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.recurrence_rules.unwrap()[0].by_day, None);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Daily standup"),
+        "the edit the save could carry still has to land"
     );
 }
 
