@@ -41,6 +41,14 @@
 //! goes out of its way never to do. A source with no `[Authentication]` names no
 //! host anyway, so there is nothing a binding could usefully carry to it.
 //!
+//! The exception is [`crate::mail_child`], and it is one because the premise
+//! fails there: this account's *own* mail account and mail transport are sources
+//! nothing else writes a server onto — the setup UI can reach only the receiving
+//! one — so a group created on them is created in a source of this account's,
+//! for want of anywhere else it could come from. They are also bound
+//! differently, `[Security]` in particular, which is why they are a module and
+//! not a flag.
+//!
 //! ## `[Security]` is bound as the boolean, not as the string
 //!
 //! `ESourceSecurity` carries `method` — "tls" or "none" — and the derived
@@ -60,6 +68,8 @@ use eds_sys::{
 };
 use glib_sys::{GFALSE, gpointer};
 use gobject_sys::G_BINDING_SYNC_CREATE;
+
+use crate::mail_child::{follow_server, mail_service_of};
 
 /// The properties bound, per `ESource` extension: everything a
 /// [`Connection`](jmap_collection_sync::child_source::Connection) is, and
@@ -108,6 +118,16 @@ pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
     unsafe {
         e_source_authentication_get_type();
         e_source_security_get_type();
+    }
+
+    // The two children of this account that are bound by another set of rules,
+    // and the only ones a group is created on — see `crate::mail_child`.
+    // SAFETY: a valid source by this function's contract, only read from.
+    if unsafe { mail_service_of(child) }.is_some() {
+        // SAFETY: valid sources by this function's contract, which is
+        // `follow_server`'s too.
+        unsafe { follow_server(collection, child) };
+        return;
     }
 
     for (name, properties) in BOUND {

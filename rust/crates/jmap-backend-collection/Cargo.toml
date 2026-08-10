@@ -29,3 +29,9 @@ gobject-sys = { workspace = true }
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
 evolution-jmap-proto = { workspace = true }
+# What the mail sources this backend writes on are read by. A dev-dependency
+# and deliberately not a dependency, for the reason `jmap-config` gives for the
+# same line: what the library writes is `ESource` groups, and the provider is
+# needed only for the `CamelJmapSettings` GType an `ESourceCamel` subtype is
+# generated from — the one object that can be asked the question a store asks.
+jmap-mail = { workspace = true }
