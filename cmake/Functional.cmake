@@ -94,15 +94,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	pkg_check_modules(CAMEL_CLIENT REQUIRED camel-1.2>=${REQUIRE_EVOLUTION_VERSION})
 	pkg_check_modules(LIBEDATASERVER REQUIRED libedataserver-1.2>=${REQUIRE_EVOLUTION_VERSION})
 
-	add_executable(functional-mail-client tests/functional/mail-client.c)
-	target_include_directories(functional-mail-client PRIVATE
-		${CAMEL_CLIENT_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
-	target_compile_options(functional-mail-client PRIVATE
-		${CAMEL_CLIENT_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
-	target_link_libraries(functional-mail-client PRIVATE
-		${CAMEL_CLIENT_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
-	target_link_directories(functional-mail-client PRIVATE
-		${CAMEL_CLIENT_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+	# The sending half is a program of its own rather than a mode of the
+	# receiving one: it opens no store, and what it walks — account to
+	# identity to transport, through two uids — has nothing in common with
+	# opening a folder. Same libraries, because it is the same kind of
+	# process: a libcamel consumer that is also the provider's host.
+	foreach(_client mail transport)
+		add_executable(functional-${_client}-client tests/functional/${_client}-client.c)
+		target_include_directories(functional-${_client}-client PRIVATE
+			${CAMEL_CLIENT_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
+		target_compile_options(functional-${_client}-client PRIVATE
+			${CAMEL_CLIENT_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
+		target_link_libraries(functional-${_client}-client PRIVATE
+			${CAMEL_CLIENT_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
+		target_link_directories(functional-${_client}-client PRIVATE
+			${CAMEL_CLIENT_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+	endforeach()
 
 	# The Rust side builds the scratch EDS installation, runs the client on
 	# a private bus and holds both ends to what they should have said. Each
@@ -157,5 +164,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_CLIENT=$<TARGET_FILE:functional-mail-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
+	# The send half, which stages the same module and the same `.urls` file
+	# under the same two variable names: it is one provider, and a test that
+	# was given a module of its own could pass against a build the receiving
+	# leg never saw.
+	add_test(
+		NAME functional-transport
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test transport
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-transport PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_TRANSPORT_CLIENT=$<TARGET_FILE:functional-transport-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 endif()

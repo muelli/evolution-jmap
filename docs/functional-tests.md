@@ -52,11 +52,13 @@ error naming the missing one. That is deliberate: see below.
 
 1. starts a mock JMAP server in-process, on an ephemeral port, and seeds it
    with what the test needs — one address book or one calendar flagged as the
-   account default, or a few mailboxes with some mail in them;
+   account default, or a few mailboxes with some mail in them, or the mailbox
+   roles and the sending identity a submission needs;
 2. builds a throwaway EDS installation in a directory under the crate's
    target tmpdir: a scratch `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
-   `XDG_CACHE_HOME`, a `.source` keyfile naming the mock's port, and a module
-   directory holding the one module under test, named by
+   `XDG_CACHE_HOME`, the `.source` keyfiles that describe the account and name
+   the mock's port — one of them, or three where a send is involved — and a
+   module directory holding the one module under test, named by
    `EDS_ADDRESS_BOOK_MODULES`, `EDS_CALENDAR_MODULES` or
    `EDS_CAMEL_PROVIDER_DIR`;
 3. runs the client program on a **private session bus** from
@@ -211,9 +213,63 @@ hands folders or message uids over is the provider's business, and a test that
 compared it as given would be asserting an order nobody promised — which it did
 once, before this was written down.
 
-Sending is not covered. A transport is a second `CamelService` configured from
-a second source, and the thing most worth testing about it is that it kept a
-server of its own; that is the next leg rather than this one.
+Sending is not covered here. It is the next section.
+
+## What the transport test asserts
+
+`rust/crates/jmap-functional/tests/transport.rs`, against
+`tests/functional/transport-client.c`: the send half, which is a second
+`CamelService` built from a second `ESource` out of the same provider's
+`object_types` table.
+
+It is a leg of its own rather than three more assertions on the mail one because
+of how the transport is *found*. Camel knows nothing about `ESource`, so nothing
+in Camel joins a transport to the account it sends for; what joins them is two
+hops of uid indirection through a third source:
+
+```
+[Mail Account]     IdentityUid=…    ->  the identity source
+[Mail Submission]  TransportUid=…   ->  the transport source
+```
+
+Evolution walks that chain out of `libedataserver` accessors, and the client
+program is handed only the *account* uid and walks the same one. Every link is a
+string in a file, and a broken link is the quietest failure this provider has —
+`docs/manual-test-mail-provider.md` says it plainly: the account receives mail
+perfectly and fails only when the user presses Send.
+
+- **the chain resolves**: the identity uid off the account, the address off the
+  identity, the transport uid off the identity's submission extension, and
+  `protocol=jmap` off the *transport's* `BackendName` and not the account's;
+- **the transport connected**, which is `object_types[CAMEL_PROVIDER_TRANSPORT]`
+  — a different entry of the same registered struct than the store comes out of.
+  A provider that left it `G_TYPE_INVALID` loads, receives mail, and fails only
+  here;
+- **the message went out through the account's identity**: the mock recorded one
+  submission, and its `identityId` is the identity seeded for the address the
+  *identity source* named, resolved over the wire by `Identity/get`;
+- **the envelope is the two `CamelAddress` lists**, not the headers. The
+  envelope is what a message is delivered by, and Evolution fills it in from the
+  account and the composer's recipient fields;
+- **the sent copy is in Sent, and is no longer a draft.** It was staged in
+  Drafts and filed across by the server's own `onSuccessUpdateEmail`, so seeing
+  it in Sent is evidence the submission was *accepted* and not merely posted;
+- **`out_sent_message_saved` is TRUE.** Camel's one out-parameter besides the
+  error, and not decoration: Evolution appends a copy of its own when it is told
+  FALSE, so a wrong answer is either two of every sent message or none of them;
+- **the requests, and their order**: `Identity/get`, `Mailbox/get`,
+  `Email/import`, and `EmailSubmission/set` last. The blob upload before the
+  import is a plain HTTP PUT rather than a method call, so it is not in that
+  list — the import naming a blob is what says it happened.
+
+A second test makes the recipe's mistake on purpose: the same three files with
+the transport's `[Authentication]` group deleted. The chain still resolves — this
+is a source that was found and that names no server — and the send fails at the
+*connect*, with `the account does not name a JMAP server`, having made not one
+request. Nothing was imported, so there is no draft left behind for a send that
+never happened. That is the difference between a mistake a user fixes by adding
+a line to a keyfile and one they fix by also deleting a message they did not
+write.
 
 ## Debugging a failure
 
