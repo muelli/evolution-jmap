@@ -969,6 +969,132 @@ fn an_edited_instance_is_drawn_at_the_series_priority() {
     );
 }
 
+#[test]
+fn who_may_see_an_event_is_the_class_of_the_component() {
+    // RFC 8984 §4.4.3's `privacy` and RFC 5545 §3.8.1.3's `CLASS` are the same
+    // three-value scale of how much of the event may be shared, in the same
+    // order, so each value crosses to the other format's spelling of itself.
+    for (jscalendar, ical) in [
+        ("public", "PUBLIC"),
+        ("private", "PRIVATE"),
+        ("secret", "CONFIDENTIAL"),
+    ] {
+        let event = CalendarEvent {
+            privacy: Some(jscalendar.to_owned()),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert_eq!(line(&ics, "CLASS:"), format!("CLASS:{ical}"));
+        assert_eq!(
+            ical_to_event(&ics).expect("parse").privacy.as_deref(),
+            Some(jscalendar),
+            "the classification survives the round trip"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_privacy_is_dropped_rather_than_passed_through() {
+    // Both vocabularies are extensible — RFC 5545 §3.8.1.3 admits an x-name and
+    // RFC 8984 §4.4.3 a registered or vendor value — and neither says how a value
+    // in one maps to a value in the other. So an unknown one is dropped, the rule
+    // STATUS and TRANSP follow: passing it through in the other format's clothes
+    // would state a classification nobody wrote.
+    for privacy in ["deniable", "x-eyes-only", "CONFIDENTIAL"] {
+        let event = CalendarEvent {
+            privacy: Some(privacy.to_owned()),
+            ..CalendarEvent::default()
+        };
+        assert!(without(&event_to_ical(&event), "CLASS"), "{privacy}");
+    }
+
+    // And in the other direction, where the value came off a content line: a
+    // classification this mapping cannot name is read as nothing said, not passed
+    // on for the server to reject. `secret` among them: it is JSCalendar's
+    // spelling of a value iCalendar spells CONFIDENTIAL, so on a `CLASS` line it
+    // is an x-name-shaped value and not that classification.
+    for value in ["X-EYES-ONLY", "secret", "", "PUBLIC,PRIVATE"] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+UID:E1\r\nDTSTART:20260115T130000Z\r\nCLASS:{value}\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        assert_eq!(ical_to_event(&ics).expect("parse").privacy, None, "{value}");
+    }
+
+    // Case, on the other hand, is not a difference: RFC 5545 §3.1 makes an
+    // enumerated property value case-insensitive, so a client that wrote the
+    // classification in lower case wrote the classification.
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+UID:E1\r\nDTSTART:20260115T130000Z\r\nCLASS:confidential\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+    assert_eq!(
+        ical_to_event(ics).expect("parse").privacy.as_deref(),
+        Some("secret")
+    );
+}
+
+#[test]
+fn an_event_that_says_nothing_about_privacy_carries_no_class() {
+    let ics = event_to_ical(&fixture_event());
+
+    assert!(without(&ics, "CLASS"), "{ics}");
+    // `None` rather than `Some("public")`, even though RFC 8984 §4.4.3 defaults
+    // to public and RFC 5545 §3.8.1.3 defaults `CLASS` to PUBLIC, which is the
+    // same state: the save path reads an edit off a difference from what was
+    // shown, so answering with the default would have a save state it where the
+    // server said nothing.
+    //
+    // Which is exactly why a `privacy` the server *did* state as public is
+    // written out as `CLASS:PUBLIC` rather than left off — see
+    // [`who_may_see_an_event_is_the_class_of_the_component`], where public is in
+    // the table. Evolution's appointment editor sets `CLASS` on every save
+    // (Options ▸ Classification, defaulting to public), so a baseline rendered
+    // without the line would differ from what EDS hands back on *every* save of
+    // such an event, not once.
+    assert_eq!(ical_to_event(&ics).expect("parse").privacy, None);
+}
+
+#[test]
+fn an_edited_instance_may_show_a_privacy_of_its_own() {
+    // RFC 8984 §4.3.4 lets an override restate the property and iCalendar spells
+    // it on the instance's own component, so the one occurrence of a series the
+    // user marked private is a difference this mapping carries whole.
+    let patch = json!({"privacy": "private"});
+    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    event.privacy = Some("public".to_owned());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(line(&ics, "CLASS:"), "CLASS:PUBLIC");
+    assert_eq!(line(vevent(&ics, 1), "CLASS:"), "CLASS:PRIVATE");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+}
+
+#[test]
+fn an_edited_instance_is_drawn_at_the_series_privacy() {
+    // The inheritance of RFC 8984 §4.3.4, and the reason it has to be drawn: the
+    // instance's own component is the only place its classification is stated, so
+    // one written without the line reads back as an occurrence the user just made
+    // public — a patch removing the property the series holds.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
+    event.privacy = Some("secret".to_owned());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(line(vevent(&ics, 1), "CLASS:"), "CLASS:CONFIDENTIAL");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides,
+        "the instance inherited the series' classification, so nothing differs"
+    );
+}
+
 /// An event happening at one place, keyed the way a server keys it.
 fn placed(key: &str, location: Value) -> CalendarEvent {
     CalendarEvent {
@@ -3603,6 +3729,7 @@ fn an_override_the_mapping_cannot_draw_is_still_placed_at_the_parents_title() {
         json!({"freeBusyStatus": "maybe"}),
         json!({"priority": 10}),
         json!({"priority": "1"}),
+        json!({"privacy": "deniable"}),
         json!({"start": "2026-02-30T13:00:00"}),
     ] {
         assert!(
@@ -4012,7 +4139,11 @@ fn an_override_whose_instant_cannot_be_written_is_flagged() {
         json!({"freeBusyStatus": "free"}),
         json!({"priority": 0}),
         json!({"priority": 9}),
-        json!({"status": null, "duration": null, "freeBusyStatus": null, "priority": null}),
+        json!({"privacy": "secret"}),
+        json!({
+            "status": null, "duration": null, "freeBusyStatus": null,
+            "priority": null, "privacy": null,
+        }),
     ] {
         assert!(
             maps_recurrence_override("2026-01-29T13:00:00", &patch),

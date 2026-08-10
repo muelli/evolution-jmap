@@ -73,6 +73,14 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
     let before = sync.load_component(id.as_str()).unwrap().revision;
     fixture.patch(&id, json!({"priority": 1}));
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
+
+    // And who may see it, which reaches it as CLASS — the one on this list where a
+    // stale revision is a confidentiality problem and not just a stale display: an
+    // event the server has since made private would keep being shown, and offered
+    // for editing, as the public one Evolution cached.
+    let before = sync.load_component(id.as_str()).unwrap().revision;
+    fixture.patch(&id, json!({"privacy": "private"}));
+    assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 }
 
 #[test]

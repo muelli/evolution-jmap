@@ -52,6 +52,16 @@ const FREE_BUSY_STATUS: &str = "free";
 /// than the 0 both formats treat as no value at all.
 const PRIORITY: &str = "1";
 
+/// And who may see it — the `CLASS` in `tests/functional/cal-client.c`, which has
+/// to reach the server as a JSCalendar `privacy` (RFC 8984 §4.4.3). The one mapped
+/// property whose iCalendar value libical holds as an enum rather than as text, so
+/// this is the leg that says a property EDS's cache can only keep by *recognising*
+/// it survives the trip. CONFIDENTIAL because it is the value whose two spellings
+/// differ, so the pair below also says the translation happened rather than a
+/// string being copied.
+const CLASS: &str = "CONFIDENTIAL";
+const PRIVACY: &str = "secret";
+
 /// The length of that event, which the client states as a `DTEND` — the way
 /// Evolution's editor does — an hour and a half after the start. Nothing but
 /// this test says the two forms end up alike on the server.
@@ -361,6 +371,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(&PRIORITY),
         "the event EDS handed back lost its priority\n{report}"
     );
+    // And who may see it. An empty string here is a component EDS handed back with
+    // no CLASS on it, which reads as the PUBLIC both formats default to — so an
+    // event the user hid would come back visible, and the next save would write
+    // that over the server's own classification.
+    assert_eq!(
+        seen.get("read-back-class"),
+        Some(&CLASS),
+        "the event EDS handed back lost its classification\n{report}"
+    );
     // What EDS made of the edit, read back through the client rather than off
     // the server: `ECalMetaBackend` holds a series and its detached instances
     // as one object, so a component set that lost the override here would have
@@ -549,6 +568,13 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             .as_deref(),
         Some(PRIORITY),
         "the priority the client wrote did not reach the server: {event:?}"
+    );
+    // And the classification, as the server holds it: the JSCalendar spelling of
+    // the value, not the iCalendar one the component carried.
+    assert_eq!(
+        event.privacy.as_deref(),
+        Some(PRIVACY),
+        "the classification the client wrote did not reach the server: {event:?}"
     );
 
     // The all-day one, and the property that is the whole point of it: without

@@ -6,7 +6,7 @@
 //! The mapped set is the one the calendar backend needs to be useful — UID,
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
 //! the event is shown without a time), DURATION, STATUS, TRANSP, PRIORITY,
-//! LOCATION, CATEGORIES, RRULE, and the instances an EXDATE, an RDATE or a
+//! CLASS, LOCATION, CATEGORIES, RRULE, and the instances an EXDATE, an RDATE or a
 //! `RECURRENCE-ID` component names one at a time — and no more. Everything
 //! else on an event (participants, alarms, links, …) is *dropped*,
 //! which is only safe because saving goes back to the server as a PatchObject
@@ -125,6 +125,31 @@ const FREE_BUSY_STATUSES: [(&str, &str); 2] = [("free", "TRANSPARENT"), ("busy",
 /// for the same thing.
 const PRIORITIES: std::ops::RangeInclusive<i64> = 0..=9;
 
+/// JSCalendar `privacy` values (RFC 8984 §4.4.3) and their iCalendar `CLASS`
+/// spelling (RFC 5545 §3.8.1.3) — how much of the event may be shared with other
+/// calendar users, which is Evolution's Options ▸ Classification.
+///
+/// The same three-step scale in both formats, in the same order: everything may
+/// be shared, only the time may be, nothing may — so each value crosses to the
+/// other format's spelling of itself. Neither vocabulary is *closed* (RFC 5545
+/// admits an x-name or an iana-token, RFC 8984 a registered or vendor value) and
+/// neither says how a value in one becomes a value in the other, so a value
+/// outside this table is dropped rather than passed through in the other format's
+/// clothes.
+///
+/// The two also agree about what a *missing* value means: both default to public.
+/// That does not make public something to leave off — see [`PRIVACIES`]'s reader
+/// [`read_privacy`] and the writer in [`vevent_of`], where an event the server
+/// states as public is written `CLASS:PUBLIC` and read straight back. Evolution's
+/// appointment editor sets `CLASS` on *every* save from its Classification menu,
+/// so a baseline rendered without the line would differ from what EDS hands back
+/// on every save of such an event rather than once.
+const PRIVACIES: [(&str, &str); 3] = [
+    ("public", "PUBLIC"),
+    ("private", "PRIVATE"),
+    ("secret", "CONFIDENTIAL"),
+];
+
 /// The JSCalendar properties this mapping covers, and therefore the only ones
 /// a save may name in a `CalendarEvent/set` update patch.
 ///
@@ -135,7 +160,7 @@ const PRIORITIES: std::ops::RangeInclusive<i64> = 0..=9;
 /// `locations` is also the one property named *into* rather than replaced: a
 /// save patches `locations/<key>/name`, so the rest of the entry stays. See
 /// [`X_JMAP_KEY`].
-pub const MAPPED_PROPERTIES: [&str; 13] = [
+pub const MAPPED_PROPERTIES: [&str; 14] = [
     "title",
     "description",
     "start",
@@ -145,6 +170,7 @@ pub const MAPPED_PROPERTIES: [&str; 13] = [
     "status",
     "freeBusyStatus",
     "priority",
+    "privacy",
     "locations",
     "keywords",
     "recurrenceRules",
@@ -162,7 +188,7 @@ pub const MAPPED_PROPERTIES: [&str; 13] = [
 ///
 /// `showWithoutTime` is absent, one step further out — see
 /// [`shows_without_time`], which is decided once for the whole document.
-pub const OVERRIDE_PROPERTIES: [&str; 8] = [
+pub const OVERRIDE_PROPERTIES: [&str; 9] = [
     "title",
     "description",
     "start",
@@ -171,6 +197,7 @@ pub const OVERRIDE_PROPERTIES: [&str; 8] = [
     "status",
     "freeBusyStatus",
     "priority",
+    "privacy",
 ];
 
 /// Whether the places an event happens at survive the trip through iCalendar
@@ -416,6 +443,13 @@ fn maps_override_field(name: &str, value: &Value) -> bool {
         // string or as a fraction, neither of which reaches a content line as the
         // integer that would come back.
         "priority" => value.is_null() || value.as_i64().is_some_and(known_priority),
+        // And back to a string, one vocabulary over: a `CLASS` this mapping cannot
+        // write leaves the instance as visible as the series is, which is what the
+        // override said it is *not* — and this is the one property where that
+        // matters beyond tidiness, since the instance the user hid would be drawn
+        // at the series' classification. A null is the instance set back to the
+        // default, which the component says by carrying no line.
+        "privacy" => value.is_null() || value.as_str().is_some_and(known_privacy),
         // A start is required by RFC 8984, so a null says nothing, and the
         // value has to be one a DTSTART can carry.
         "start" => value.as_str().and_then(to_ical_date_time).is_some(),
@@ -604,6 +638,13 @@ fn vevent_of(
         vevent = vevent.with(Property::raw("PRIORITY", &priority.to_string()));
     }
 
+    // How much of the event may be shared. Written out even for public, which is
+    // the default both formats share — see [`PRIVACIES`] for why that is not the
+    // `TRANSP` case.
+    if let Some(privacy) = event.privacy.as_deref().and_then(ical_privacy) {
+        vevent = vevent.with(Property::raw("CLASS", privacy));
+    }
+
     // One place of possibly several, by name, with the key it came from riding
     // alongside so a save can patch that entry rather than replace the property.
     // See [`maps_locations`] for what the drawing leaves out.
@@ -669,6 +710,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         status: event.status.clone(),
         free_busy_status: event.free_busy_status.clone(),
         priority: event.priority,
+        privacy: event.privacy.clone(),
         // Inherited, not patchable: RFC 8984 §4.3.4 has an instance hold every
         // property its override does not restate, and an override may name
         // neither a place nor a tag ([`OVERRIDE_PROPERTIES`]). Leaving them off
@@ -701,6 +743,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
             "duration" => instance.duration = text,
             "status" => instance.status = text,
             "freeBusyStatus" => instance.free_busy_status = text,
+            "privacy" => instance.privacy = text,
             "start" => instance.start = text,
             "timeZone" => instance.time_zone = text,
             // `excluded: false`, which says only that the instance happens —
@@ -797,6 +840,37 @@ fn ical_transparency(free_busy_status: &str) -> Option<&'static str> {
 
 fn known_transparency(free_busy_status: &str) -> bool {
     ical_transparency(free_busy_status).is_some()
+}
+
+/// The iCalendar `CLASS` for a JSCalendar `privacy`, or `None` for one outside
+/// the three-value scale the two share — see [`PRIVACIES`].
+fn ical_privacy(privacy: &str) -> Option<&'static str> {
+    PRIVACIES
+        .iter()
+        .find(|(jscalendar, _)| jscalendar.eq_ignore_ascii_case(privacy))
+        .map(|(_, ical)| *ical)
+}
+
+fn known_privacy(privacy: &str) -> bool {
+    ical_privacy(privacy).is_some()
+}
+
+/// The JSCalendar `privacy` a `CLASS` states, or `None` where the component
+/// states none this mapping can name — which is read as nothing said, like every
+/// other unreadable value, rather than passed on for the server to reject.
+///
+/// Case is ignored, as it is for `STATUS` and `TRANSP`: RFC 5545 §3.1 makes an
+/// enumerated property value case-insensitive, so `CLASS:confidential` is the
+/// same classification as `CLASS:CONFIDENTIAL`. What it is *not* is a match for
+/// JSCalendar's own spelling of a different value — the two vocabularies overlap
+/// nowhere, so `CLASS:secret` is an x-name-shaped value this mapping has no
+/// business reading as RFC 8984's `secret`.
+fn read_privacy(vevent: &Component) -> Option<String> {
+    let privacy = vevent.text("CLASS")?;
+    PRIVACIES
+        .iter()
+        .find(|(_, ical)| ical.eq_ignore_ascii_case(&privacy))
+        .map(|(jscalendar, _)| (*jscalendar).to_owned())
 }
 
 /// Whether an importance is one both formats admit — see [`PRIORITIES`].
@@ -976,6 +1050,7 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         }),
         free_busy_status: read_transparency(vevent),
         priority: read_priority(vevent),
+        privacy: read_privacy(vevent),
         locations: read_locations(vevent),
         keywords: read_keywords(vevent),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
@@ -1208,6 +1283,7 @@ fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) ->
             &series.free_busy_status,
             &instance.free_busy_status,
         ),
+        ("privacy", &series.privacy, &instance.privacy),
     ] {
         if was != now {
             patch.insert(
