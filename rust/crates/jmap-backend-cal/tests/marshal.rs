@@ -1090,6 +1090,67 @@ fn libical_splits_the_categories_this_mapping_writes_and_keeps_every_tag() {
     );
 }
 
+/// The same property, on the component that stands for one occurrence.
+///
+/// An override may restate the tags (`jmap_ical::OVERRIDE_PROPERTIES`), and the
+/// only place the set for one occurrence is stated is that instance's own
+/// `CATEGORIES` — so the claim rests entirely on libical keeping the two
+/// components' sets apart through the marshalling. It does: each keeps its own,
+/// split per value as above, and neither acquires the other's. Which is what
+/// makes the difference between them the user's edit rather than an artefact of
+/// the trip through EDS's cache.
+#[test]
+fn libical_keeps_the_tags_of_one_occurrence_apart_from_the_series() {
+    let master = instance(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\r\nDTSTART:20260810T070000Z\r\n\
+         RRULE:FREQ=DAILY\r\nCATEGORIES:offsite\r\nEND:VEVENT\r\n",
+    );
+    let occurrence = instance(
+        "BEGIN:VEVENT\r\nUID:K1\r\nRECURRENCE-ID:20260812T070000Z\r\n\
+         DTSTART:20260812T070000Z\r\nSUMMARY:Standup\r\n\
+         CATEGORIES:cancelled,offsite\r\nEND:VEVENT\r\n",
+    );
+    let list = instance_list(&[master, occurrence]);
+    // SAFETY: `list` holds two live components, freed below.
+    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    unsafe {
+        glib_sys::g_slist_free(list);
+        for component in [master, occurrence] {
+            g_object_unref(component.cast());
+        }
+    }
+    let object = saved.icalendar;
+
+    let event = jmap_ical::ical_to_event(&object).expect("parse");
+    assert_eq!(
+        event
+            .keywords
+            .map(|tags| tags.keys().cloned().collect::<Vec<_>>()),
+        Some(vec!["offsite".to_owned()]),
+        "the series' own set is not what it was written as:\n{object}"
+    );
+
+    let overrides = event.recurrence_overrides.unwrap_or_default();
+    assert_eq!(overrides.len(), 1, "one occurrence differs:\n{object}");
+    let patch = overrides
+        .get("2026-08-12T07:00:00")
+        .unwrap_or_else(|| panic!("the occurrence is not the one that was written:\n{object}"));
+    let tags = patch
+        .get("keywords")
+        .and_then(|tags| tags.as_object())
+        .unwrap_or_else(|| panic!("the occurrence's own tags did not come back:\n{object}"));
+    assert_eq!(
+        tags.keys().cloned().collect::<Vec<_>>(),
+        vec!["cancelled".to_owned(), "offsite".to_owned()],
+        "a tag was lost between the instance and libical's answer:\n{object}"
+    );
+    assert_eq!(
+        patch.as_object().map(|patch| patch.len()),
+        Some(1),
+        "the marshalling introduced a difference nobody wrote:\n{object}"
+    );
+}
+
 /// Whether an event blocks time, through the parser that actually reads it.
 ///
 /// `jmap-ical` reads a missing `TRANSP` as *nothing said* rather than as RFC 5545

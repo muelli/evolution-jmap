@@ -1477,9 +1477,10 @@ fn an_event_whose_every_tag_is_undrawable_carries_no_categories() {
 #[test]
 fn an_edited_instance_is_drawn_with_the_series_tags() {
     // RFC 8984 §4.3.4: an instance holds every property its override does not
-    // restate, and an override may not restate the tags (see
-    // OVERRIDE_PROPERTIES). A component that left them off would show one
-    // occurrence of a tagged series as untagged.
+    // restate, and this override restates something else. A component that left
+    // the tags off would show one occurrence of a tagged series as untagged —
+    // and, now that an override *may* restate them (see OVERRIDE_PROPERTIES),
+    // would read back as the user having unfiled that one occurrence.
     let mut event = tagged([("offsite", json!(true))]);
     event.recurrence_rules = Some(vec![RecurrenceRule {
         frequency: "weekly".to_owned(),
@@ -1499,12 +1500,136 @@ fn an_edited_instance_is_drawn_with_the_series_tags() {
         content_line(vevent(&ics, 1), "CATEGORIES"),
         "CATEGORIES:offsite"
     );
-    // And the instance is not read back as one whose tags differ: there is no
-    // patch that could say so.
+    // And the instance is not read back as one whose tags differ: it carries the
+    // set it inherited, so the override says about them exactly what it said.
     assert_eq!(
         ical_to_event(&ics).expect("parse").recurrence_overrides,
         event.recurrence_overrides
     );
+}
+
+#[test]
+fn an_edited_instance_may_show_tags_of_its_own() {
+    // RFC 8984 §4.3.4 lets an override restate the property and iCalendar spells
+    // it on the instance's own component, so the one occurrence of a series the
+    // user filed differently is a difference this mapping carries whole.
+    //
+    // The set is *replaced* rather than added to: RFC 8984 §4.3.4 applies an
+    // override as a PatchObject, so `keywords` naming one tag says the instance
+    // carries that tag and no other — the series' own set is not merged in. Which
+    // is why the patch below restates `offsite` to keep it.
+    let patch = json!({"keywords": {"cancelled": true, "offsite": true}});
+    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    event.keywords = Some([("offsite".to_owned(), json!(true))].into());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(content_line(&ics, "CATEGORIES"), "CATEGORIES:offsite");
+    assert_eq!(
+        content_line(vevent(&ics, 1), "CATEGORIES"),
+        "CATEGORIES:cancelled,offsite"
+    );
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+}
+
+#[test]
+fn an_instance_that_drops_its_tags_reads_back_as_removing_them() {
+    // A PatchObject removes a property with a null and the component says the
+    // same thing by carrying no `CATEGORIES` at all — so the one occurrence the
+    // user unfiled comes back unfiled, rather than at the series' tags, and a
+    // save does not refile it.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"keywords": null}}));
+    event.keywords = Some([("offsite".to_owned(), json!(true))].into());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert!(without(vevent(&ics, 1), "CATEGORIES"), "{ics}");
+    assert_eq!(
+        content_line(&ics, "CATEGORIES"),
+        "CATEGORIES:offsite",
+        "the series keeps its own"
+    );
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+    assert!(maps_recurrence_override(
+        "2026-01-29T13:00:00",
+        &json!({"keywords": null})
+    ));
+}
+
+#[test]
+fn the_tags_on_an_instances_own_component_are_the_tags_it_was_refiled_with() {
+    // The direction a save arrives in, written the way another client — or
+    // libical's own re-rendering — leaves it: the instance's set spread over
+    // several `CATEGORIES` lines, which is one set, and the series' own left
+    // where it was. Nothing here is what this crate emits, which is the point;
+    // the tags on that component are the user's answer for that occurrence.
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+UID:E1\r\nDTSTART;TZID=Europe/Berlin:20260115T130000\r\nRRULE:FREQ=WEEKLY\r\n\
+CATEGORIES:offsite\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\n\
+UID:E1\r\nRECURRENCE-ID;TZID=Europe/Berlin:20260129T130000\r\n\
+DTSTART;TZID=Europe/Berlin:20260129T130000\r\n\
+CATEGORIES:cancelled\r\nCATEGORIES:offsite\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+
+    assert_eq!(
+        event.keywords,
+        Some([("offsite".to_owned(), json!(true))].into())
+    );
+    assert_eq!(
+        event.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-29T13:00:00".to_owned(),
+                json!({"keywords": {"cancelled": true, "offsite": true}}),
+            )]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn a_tag_an_instance_cannot_show_leaves_the_override_flagged() {
+    // One level down from [`a_tag_the_component_cannot_show_is_flagged_rather_than_drawn`],
+    // and for the same reason: an instance's `CATEGORIES` is drawn whole, so a
+    // tag left off it is a tag the next save deletes from that occurrence. An
+    // empty set is refused too — no line at all is what a *removal* reads back
+    // as, which is a different patch from the empty set that asks for one.
+    for keywords in [
+        json!({}),
+        json!({"": true}),
+        json!({"offsite": false}),
+        json!({"offsite": true, "": true}),
+        json!({"off\rsite": true}),
+        json!("offsite"),
+        json!(["offsite"]),
+    ] {
+        let patch = json!({"keywords": keywords});
+        assert!(
+            !maps_recurrence_override("2026-01-29T13:00:00", &patch),
+            "{patch}"
+        );
+
+        // And still placed as far as it goes: the occurrence gets a bare RDATE at
+        // the series' tags rather than vanishing from the calendar.
+        let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+        event.keywords = Some([("offsite".to_owned(), json!(true))].into());
+        let ics = event_to_ical(&event);
+        assert_eq!(vevents(&ics), 1, "{ics}");
+        assert_eq!(
+            line(&ics, "RDATE"),
+            "RDATE;TZID=Europe/Berlin:20260129T130000"
+        );
+    }
 }
 
 #[test]
@@ -3730,6 +3855,7 @@ fn an_override_the_mapping_cannot_draw_is_still_placed_at_the_parents_title() {
         json!({"priority": 10}),
         json!({"priority": "1"}),
         json!({"privacy": "deniable"}),
+        json!({"keywords": {"offsite": 1}}),
         json!({"start": "2026-02-30T13:00:00"}),
     ] {
         assert!(
@@ -4140,9 +4266,10 @@ fn an_override_whose_instant_cannot_be_written_is_flagged() {
         json!({"priority": 0}),
         json!({"priority": 9}),
         json!({"privacy": "secret"}),
+        json!({"keywords": {"offsite": true}}),
         json!({
             "status": null, "duration": null, "freeBusyStatus": null,
-            "priority": null, "privacy": null,
+            "priority": null, "privacy": null, "keywords": null,
         }),
     ] {
         assert!(

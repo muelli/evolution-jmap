@@ -115,6 +115,15 @@ const RECURRING_EXCLUDED: &str = "2026-01-29T13:00:00";
 const RECURRING_EDITED: &str = "2026-01-22T13:00:00";
 const RECURRING_EDITED_SUMMARY: &str = "Weekly standup (demo)";
 
+/// And the tags that one occurrence carries — the `CATEGORIES` on the detached
+/// component in `tests/functional/cal-client.c`, which has to reach the server as
+/// a `keywords` patch in that instance's override (RFC 8984 §4.3.4). The series
+/// carries none, so this set is the whole of the difference between them; an
+/// instance whose tags EDS's cache dropped reads back as one the user just
+/// unfiled, and the save after it would tell the server so. Sorted, since that is
+/// the order a set is held in on both sides.
+const RECURRING_EDITED_KEYWORDS: [&str; 2] = ["cancelled", "offsite"];
+
 /// And "not that one" a second time, reached the way a user reaches it. The
 /// `EXDATE` above is written into the component the client creates, so it holds
 /// the *mapping* to account and says nothing about EDS: Evolution's "Delete
@@ -388,6 +397,22 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         seen.get("edited-occurrence-summary"),
         Some(&RECURRING_EDITED_SUMMARY),
         "EDS did not keep the occurrence the client edited\n{report}"
+    );
+    // And the tags on that same instance, which the cache has to keep *per
+    // component*: the set stated there is the only statement of what that one
+    // occurrence is filed under, so a cache holding the series' tags in its place
+    // would read back as the user having refiled the day they renamed. Sorted,
+    // for the reason the series' own tags are.
+    let mut occurrence_tags: Vec<&str> = seen
+        .get("edited-occurrence-categories")
+        .unwrap_or_else(|| panic!("the client reported no tags on the occurrence\n{report}"))
+        .split(',')
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    occurrence_tags.sort_unstable();
+    assert_eq!(
+        occurrence_tags, RECURRING_EDITED_KEYWORDS,
+        "EDS did not keep the tags on the occurrence the client edited\n{report}"
     );
     // And what EDS made of the removal, in the same cache and for the same
     // reason: the master it kept has to carry an `EXDATE` for every occurrence
@@ -665,7 +690,17 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
                 ),
                 (
                     RECURRING_EDITED.to_owned(),
-                    serde_json::json!({"title": RECURRING_EDITED_SUMMARY}),
+                    // The tags beside the title, because the component states
+                    // both on that one instance and the override is what carries
+                    // either: a patch holding only the title is the user's filing
+                    // of that occurrence lost between EDS and the server.
+                    serde_json::json!({
+                        "title": RECURRING_EDITED_SUMMARY,
+                        "keywords": RECURRING_EDITED_KEYWORDS
+                            .iter()
+                            .map(|tag| ((*tag).to_owned(), serde_json::json!(true)))
+                            .collect::<serde_json::Map<_, _>>(),
+                    }),
                 ),
                 (
                     RECURRING_REMOVED.to_owned(),
