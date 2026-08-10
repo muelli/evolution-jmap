@@ -14275,3 +14275,105 @@ README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
 `tests/transport.rs` hang is still unexplained. Still open from before: nothing
 asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
 two.
+
+## 2026-08-10 (hundred-and-forty-fifth session)
+
+A per-instance `timeZone` now has a spelling, which was the first of the two
+items last session left named. An occurrence the user moved into another zone
+travels in both directions instead of arriving at the right wall-clock time on
+the wrong clock.
+
+**The bug, exactly.** `jmap-ical`'s `OVERRIDE_PROPERTIES` deliberately left
+`timeZone` out, on the reasoning that "every date-time in the document is written
+in the series' zone". That reasoning is wrong about iCalendar: a zone belongs to
+the *property* that carries it (RFC 5545 §3.2.19), so a detached `VEVENT`'s own
+`DTSTART` states its own `TZID`, and RFC 8984 §4.4.3 puts no `timeZone` on the
+list of properties a `recurrenceOverrides` patch may not touch. So both ends were
+wrong and wrong in the way that moves an appointment:
+
+- *reading* — `instance_patch` compared title, description, duration, status and
+  start, and not the zone. An occurrence Evolution moved to `TZID=America/New_York
+  :20260129T090000` in a Berlin series reached the server as `{"start":
+  "2026-01-29T09:00:00"}` alone, which the server resolves in the series' zone:
+  the occurrence lands six hours from where the user put it, and no other client
+  can tell.
+- *writing* — `modified_instance` copied the series' zone onto every instance and
+  `event_to_ical` handed `vevent_of` one zone for the whole document, so an
+  override the server holds with a `timeZone` was drawn at the series' zone. Same
+  wall clock, wrong instant, this time in the user's own calendar view.
+
+**What it takes.** `timeZone` joins `OVERRIDE_PROPERTIES`; `maps_override_field`
+admits a null (the floating instance — a `DTSTART` with no `TZID`, which is RFC
+5545 form 1 and round-trips) and any value `names_time_zone` accepts, so
+libical's `/freeassociation…` identifier and a Windows zone name are refused
+here exactly as they are for the series' own zone. `vevent_of`'s zone parameter
+became `series_zone` and is now used **only** for `RECURRENCE-ID`, while
+`DTSTART` takes the event's own: the two really are in two different zones for a
+moved instance, because a `RECURRENCE-ID` names the occurrence the *rules*
+generated and the rules run on the series' clock (RFC 5545 §3.8.4.4 — a value in
+another zone points at an instant the series never generated, and the edit
+attaches to nothing).
+
+`instance_shows_without_time` gained `instance.time_zone.is_none()`, the
+condition the series has had all along. Without it, admitting `timeZone` to the
+override vocabulary would have made `maps_recurrence_override` promise something
+false: an all-day event is written with DATE values, a DATE value takes no
+`TZID` (§3.2.19), so an override's zone would have been silently dropped by the
+rendering while the property was declared safe to write back. Now such an event
+is written as the timed event it half is — the same trade an override that took
+a *time* already forces, and pinned by a test.
+
+**`patch::diff` checks the overrides the save brings, not only the ones the
+server holds.** `diff_overrides` gated on `current` alone; `recurrenceOverrides`
+goes out replaced whole, so an entry holding a `timeZone` that is an iCalendar
+identifier rather than an RFC 8984 §1.4.9 name would have been sent and could
+cost the whole `CalendarEvent/set` — every other edit in the save with it. This
+is the same "checked on its way out" rule the series' `timeZone` already had,
+applied one level down; before this change no *edited* override could hold an
+unsendable value, so the gate was not reachable, and with `timeZone` in the
+vocabulary it is.
+
+Eight tests, red first: six in `jmap-ical/tests/event.rs` (a zone on the moved
+instance with the `RECURRENCE-ID` staying in the series' zone; `Etc/UTC` as the
+`Z` form; a null as a floating instance; the four unnameable values flagged and
+placed by a bare `RDATE` instead; an all-day event whose instance takes a zone
+staying a date-time; and the reading direction from a hand-written document
+carrying libical's identifier translated off its `VTIMEZONE` beside a plain name
+on the instance) and two in `jmap-cal-sync/tests/save.rs` against the mock (a
+moved occurrence arriving as `{"start", "timeZone"}` under its IANA name, and an
+unnameable one leaving `recurrenceOverrides` alone while the title edit in the
+same save still lands).
+
+Verified locally: `cargo test --locked` 571 (up 8), `cargo test -p
+jmap-backend-cal --locked` 81, `ctest` 14/14 including `rust-test-eds` and all
+four functional legs against real EDS, `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal`/`jmap-functional`. `reuse lint` and `cargo deny` not run
+(neither is on this VM); no files were added, so no new SPDX headers were needed,
+and no dependency changed.
+
+No milestone tag. What this session did **not** verify, and the next thing to do
+in this area: no functional leg drives a per-instance zone through real EDS. The
+chain is covered a level at a time — the backend's envelope already defines the
+zones *every* property of *every* instance names (`referenced_tzids`, last
+session), the mapping is tested above, and the mock sees the patch — but nothing
+here says that EDS hands a detached instance's own `TZID` back unchanged the way
+the functional leg says it does for the master's. Extending
+`tests/functional/cal-client.c`'s edited-occurrence case, or adding a seventh
+event beside it, is the honest way to close that.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, now for an instance's
+zone as well as the series', relying on libical resolving an IANA name out of its
+builtin table (which Evolution does, and only names `names_time_zone` admits are
+ever written, but a stricter reader need not); the calcard directive's two
+emitters are still ours by choice, waiting on the fold off-by-one being fixed
+upstream or a maintainer decision that 76-octet lines are acceptable; M9 has no
+CI job (needs `evolution-data-server` + `dbus-daemon` in the CI image, a
+maintainer decision) and no GUI tier (needs a display this VM lacks); M7 still
+**needs human verification in real Evolution**; `docs/MILESTONES.md` does not
+exist yet, so the M8 tag the last seventeen sessions asked for is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two.

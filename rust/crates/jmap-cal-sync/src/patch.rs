@@ -35,11 +35,13 @@
 //! - **`recurrenceOverrides` is the same story one level down.** An
 //!   `EXDATE`, an `RDATE` and a `RECURRENCE-ID` component between them say that
 //!   an instance is off, that it happens, and that it happens with another
-//!   title, start, length, description or status — but not that it happens in
-//!   another place or with another guest list. An override the component could
+//!   title, start, zone, length, description or status — but not that it happens
+//!   in another place or with another guest list. An override the component could
 //!   only place with a bare `RDATE` would come back as the empty patch,
 //!   deleting what it could not draw, so if any override the server holds fails
-//!   [`maps_recurrence_override`], the property is left alone entirely.
+//!   [`maps_recurrence_override`], the property is left alone entirely — as it
+//!   is when an override the *save* brings holds a value that cannot be sent,
+//!   which is the same check the series' `timeZone` gets below.
 //! - **`start` is required by RFC 8984.** A component whose `DTSTART` the
 //!   mapping cannot read yields no start, and `"start": null` is not a legal
 //!   way to say so, so the server's start stands.
@@ -160,12 +162,21 @@ fn diff_overrides(
     baseline: &CalendarEvent,
     edited: &CalendarEvent,
 ) {
-    if current
-        .recurrence_overrides
-        .iter()
-        .flatten()
-        .any(|(id, override_patch)| !maps_recurrence_override(id, override_patch))
-    {
+    // The overrides the *server* holds, checked as above: one it could only draw
+    // in part must not be replaced by the drawing.
+    //
+    // And the overrides the *save* brings, checked the same way for the same
+    // reason the series' own `timeZone` is checked on its way out: an instance
+    // states its zone with a `TZID`, which RFC 8984 §1.4.9 only sometimes admits
+    // as a name, and this property goes out replaced whole — so one entry the
+    // server is entitled to reject would cost every edit in the save.
+    if [current, edited].iter().any(|event| {
+        event
+            .recurrence_overrides
+            .iter()
+            .flatten()
+            .any(|(id, override_patch)| !maps_recurrence_override(id, override_patch))
+    }) {
         return;
     }
     if baseline.recurrence_overrides == edited.recurrence_overrides {
