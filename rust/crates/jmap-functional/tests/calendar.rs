@@ -42,6 +42,16 @@ const ALL_DAY_DURATION: &str = "P1D";
 const RECURRING_SUMMARY: &str = "Weekly standup";
 const RECURRING_EXCLUDED: &str = "2026-01-29T13:00:00";
 
+/// And the other half of "not that one": an occurrence the user renamed
+/// rather than deleted, which is what "Edit this occurrence" does. EDS hands
+/// the backend a second `VEVENT` with the same `UID` and a `RECURRENCE-ID`
+/// naming the instance it replaces (RFC 5545 §3.8.4.4); JSCalendar says the
+/// same thing with a patch under that instant in `recurrenceOverrides`
+/// (RFC 8984 §4.3.4). Nothing below this file says the two ends agree about
+/// it through real EDS — the mapping's own tests stop at the component.
+const RECURRING_EDITED: &str = "2026-01-22T13:00:00";
+const RECURRING_EDITED_SUMMARY: &str = "Weekly standup (demo)";
+
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
 /// mock's ephemeral port filled in. Kept as a literal here rather than read
 /// from `docs/` so that a change to the documented recipe fails this test
@@ -102,6 +112,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             SUMMARY,
             ALL_DAY_SUMMARY,
             RECURRING_SUMMARY,
+            RECURRING_EDITED_SUMMARY,
         ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -171,10 +182,23 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(&SUMMARY),
         "the event EDS handed back is not the one that went in\n{report}"
     );
+    // What EDS made of the edit, read back through the client rather than off
+    // the server: `ECalMetaBackend` holds a series and its detached instances
+    // as one object, so a component set that lost the override here would have
+    // the *next* save undo it, whatever the server holds at this moment.
+    assert_eq!(
+        seen.get("edited-occurrence-summary"),
+        Some(&RECURRING_EDITED_SUMMARY),
+        "EDS did not keep the occurrence the client edited\n{report}"
+    );
+    // Four objects for three events: `ECalCache` keys on (uid, rid), so the
+    // detached instance is a row of its own beside the series it belongs to.
+    // Three would mean the edit never landed in the cache; five would mean a
+    // second event was created where an occurrence should have been replaced.
     assert_eq!(
         seen.get("events-after"),
-        Some(&"3"),
-        "the added events are not both in the calendar they were added to\n{report}"
+        Some(&"4"),
+        "the added events are not all in the calendar they were added to\n{report}"
     );
 
     // And the other end: what the server was actually asked to do. The read
@@ -269,16 +293,27 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .unwrap_or_else(|| panic!("the recurring event has no rule: {recurring:?}"));
     assert_eq!(rules[0].frequency, "weekly", "{recurring:?}");
     assert_eq!(rules[0].count, Some(6), "{recurring:?}");
+    // Both exceptions in one map, because they share it: an override written
+    // for the edited instance that dropped the excluded one — or the other way
+    // round — is a deletion or a rename undone, and asserting them separately
+    // would not notice.
     assert_eq!(
         recurring.recurrence_overrides,
         Some(
-            [(
-                RECURRING_EXCLUDED.to_owned(),
-                serde_json::json!({"excluded": true}),
-            )]
+            [
+                (
+                    RECURRING_EXCLUDED.to_owned(),
+                    serde_json::json!({"excluded": true}),
+                ),
+                (
+                    RECURRING_EDITED.to_owned(),
+                    serde_json::json!({"title": RECURRING_EDITED_SUMMARY}),
+                ),
+            ]
             .into()
         ),
-        "the deleted occurrence did not reach the server as an excluded \
-         override, so every other client still shows it: {recurring:?}"
+        "the deleted and the edited occurrence did not both reach the server as \
+         overrides, so every other client shows a cancelled appointment or the \
+         series' own title on the day the user changed: {recurring:?}"
     );
 }
