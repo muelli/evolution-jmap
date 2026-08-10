@@ -9,6 +9,7 @@
 
 use jmap_ical::{
     ICalError, event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule,
+    names_time_zone,
 };
 use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
 use serde_json::{Value, json};
@@ -1684,6 +1685,135 @@ fn a_calendar_without_an_event_is_an_error() {
     // given something it cannot store.
     assert_eq!(ical_to_event(ics), Err(ICalError::NoEvent));
     assert_eq!(ical_to_event("nonsense"), Err(ICalError::NotACalendar));
+}
+
+/// The `TZID` libical hands out for a builtin zone, checked on this machine
+/// against libical 3.x:
+///
+/// ```c
+/// icaltimezone_get_tzid(icaltimezone_get_builtin_timezone("Europe/Berlin"))
+/// // => "/freeassociation.sourceforge.net/Europe/Berlin"
+/// ```
+///
+/// Every zoned component Evolution saves carries it, because the editor sets
+/// the start with the zone object and libical writes that zone's own id.
+const LIBICAL_TZID: &str = "/freeassociation.sourceforge.net/Europe/Berlin";
+
+fn zoned(tzid: &str, vtimezone: &str) -> String {
+    format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{vtimezone}\
+         BEGIN:VEVENT\r\nUID:E9\r\nDTSTART;TZID={tzid}:20260115T130000\r\n\
+         DURATION:PT1H\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+}
+
+fn vtimezone(tzid: &str, location: &str) -> String {
+    format!(
+        "BEGIN:VTIMEZONE\r\nTZID:{tzid}\r\nX-LIC-LOCATION:{location}\r\n\
+         BEGIN:STANDARD\r\nTZNAME:CET\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
+         DTSTART:19701025T030000\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\n"
+    )
+}
+
+#[test]
+fn a_tzid_that_names_no_zone_is_read_off_the_vtimezone_it_points_at() {
+    let ics = zoned(LIBICAL_TZID, &vtimezone(LIBICAL_TZID, "Europe/Berlin"));
+
+    let event = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(
+        event.time_zone.as_deref(),
+        Some("Europe/Berlin"),
+        "a solidus-prefixed TZID is RFC 5545 §3.2.19's non-standard identifier, \
+         not an RFC 8984 §1.4.9 TimeZoneId; the VTIMEZONE says which zone it is"
+    );
+}
+
+#[test]
+fn a_tzid_that_names_a_zone_is_taken_at_its_word() {
+    // The VTIMEZONE disagrees with the TZID. The TZID is already a name
+    // JSCalendar can carry, so there is nothing to look up and no reason to
+    // let a stray X-LIC-LOCATION move the event to another continent.
+    let ics = zoned(
+        "Europe/Berlin",
+        &vtimezone("Europe/Berlin", "America/New_York"),
+    );
+
+    let event = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+}
+
+#[test]
+fn a_tzid_nothing_explains_is_left_as_it_came() {
+    // No VTIMEZONE at all, and one whose location is no more a zone name than
+    // the TZID was. Neither yields a zone, and the value is passed on
+    // unchanged rather than dropped: the save path has to be able to tell
+    // "the component named a zone this mapping cannot" from "the component
+    // named none", which is a floating event and a real thing to save.
+    for vtimezone in [
+        String::new(),
+        vtimezone("W. Europe Standard Time", "W. Europe Standard Time"),
+    ] {
+        let ics = zoned("W. Europe Standard Time", &vtimezone);
+
+        let event = ical_to_event(&ics).expect("parse");
+
+        assert_eq!(
+            event.time_zone.as_deref(),
+            Some("W. Europe Standard Time"),
+            "{ics}"
+        );
+    }
+}
+
+#[test]
+fn a_zone_a_vtimezone_named_is_written_back_as_itself() {
+    let ics = zoned(LIBICAL_TZID, &vtimezone(LIBICAL_TZID, "Europe/Berlin"));
+    let event = ical_to_event(&ics).expect("parse");
+
+    // The one spelling this crate writes, and the one the round trip is
+    // measured against, so a save of an untouched component patches nothing.
+    let back = event_to_ical(&event);
+    assert_eq!(
+        line(&back, "DTSTART"),
+        "DTSTART;TZID=Europe/Berlin:20260115T130000"
+    );
+    assert_eq!(
+        ical_to_event(&back).expect("parse").time_zone.as_deref(),
+        Some("Europe/Berlin")
+    );
+}
+
+#[test]
+fn a_time_zone_is_a_name_or_it_is_not_one() {
+    for value in [
+        "Europe/Berlin",
+        "America/Argentina/Buenos_Aires",
+        "Etc/GMT+5",
+        "Etc/UTC",
+        "UTC",
+    ] {
+        assert!(names_time_zone(value), "{value} is an IANA zone name");
+    }
+    for value in [
+        "",
+        // RFC 8984 §1.4.9's other form: legal only alongside a `timeZones`
+        // definition, which this mapping does not carry.
+        LIBICAL_TZID,
+        "/citadel.org/20250101_1/Europe/Berlin",
+        // Windows zone names, which arrive from Exchange and Outlook.
+        "W. Europe Standard Time",
+        // A host name is not a zone, whichever end the solidus is on.
+        "freeassociation.sourceforge.net/Europe/Berlin",
+        "Europe/",
+        "Europe//Berlin",
+        // Anything a content line could be broken with.
+        "Europe/Berlin\r\nSUMMARY:Gone",
+        "Europe/Berlin;X=1",
+    ] {
+        assert!(!names_time_zone(value), "{value:?} is no zone name");
+    }
 }
 
 #[test]

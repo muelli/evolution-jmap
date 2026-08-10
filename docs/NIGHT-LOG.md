@@ -14087,3 +14087,87 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so th
 M8 tag the last fourteen sessions asked for is still unwritten; the manual-test
 recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-forty-third session)
+
+A `TZID` is not a JSCalendar time zone, and this tree had been treating it as
+one. iCalendar refers to a zone by an identifier the document may define
+itself; RFC 8984 §1.4.9 wants the IANA name, and admits a solidus-prefixed
+identifier only alongside a `timeZones` definition this mapping does not carry.
+What was read off `DTSTART;TZID=` went into `timeZone` verbatim in both
+directions of the save path.
+
+**This is not hypothetical, and the measurement is the point.** Checked on this
+VM against libical 3.x:
+
+```c
+icaltimezone_get_tzid(icaltimezone_get_builtin_timezone("Europe/Berlin"))
+// => "/freeassociation.sourceforge.net/Europe/Berlin"
+```
+
+Evolution's appointment editor sets the start with the zone *object*, so every
+zoned component a save hands back carries that identifier — including one this
+crate wrote spelling the zone plainly as `Europe/Berlin`. So every save of a
+zoned appointment, whatever the user actually edited, put a dangling identifier
+into `timeZone`. A server entitled to reject it rejects the whole
+`CalendarEvent/set`, which loses the user's real edits; one that stores it hands
+every other client a zone it cannot resolve.
+
+**One check, and the two places a zone leaves.** `names_time_zone` is the RFC
+8984 §1.4.9 shape — non-empty segments of letters, digits, `_`, `-` and `+`
+separated by `/`, so `Europe/Berlin`, `Etc/GMT+5` and a bare `UTC` pass while
+the solidus form (an empty first segment) and `W. Europe Standard Time` do not.
+It is a shape check, deliberately: membership of the zone database is the
+server's to enforce, and it can refuse a zone without the save failing. An edit
+whose zone fails it leaves `timeZone` alone — the same "seen in part, so not
+written back" rule the recurrence properties follow — so the server keeps the
+zone the component was showing anyway. A create drops it, because there is no
+server value to keep and a floating wall-clock time shows correctly for the user
+who typed it, while an event the server refused shows nothing.
+
+**And the translation, where the document supplies one.** RFC 5545 §3.6.5 says
+the zone a `TZID` refers to is defined by a `VTIMEZONE` in the same object, and
+libical writes `X-LIC-LOCATION:Europe/Berlin` on the ones it builds. So a `TZID`
+that names no zone is looked up there, and one that already names a zone is
+taken at its word rather than let a stray `X-LIC-LOCATION` move the event to
+another continent. A value neither route names is passed on **unchanged**, not
+dropped: the save path has to tell "a zone this mapping cannot name" from "no
+zone at all", and the latter is a floating event, which is a real thing to save.
+
+**What this does not yet reach, found while checking whether it would.**
+`marshal::icalendar_from_instances` builds the envelope handed to
+`CalSync::save_component` out of a fresh `VCALENDAR` and the instances EDS gave
+it — and nothing else. No `VTIMEZONE`. So from real Evolution the lookup above
+never fires: the identifier arrives with nothing to translate it, and lands in
+the "leave the server's zone alone" case. That is safe and it is the case the
+tests pin, but it means **a zone change made in Evolution's editor still does
+not reach the server** — it is refused rather than sent wrong. Fixing that is
+putting the referenced zones in the envelope, which needs
+`i_cal_timezone_get_builtin_timezone_from_tzid` and `i_cal_timezone_get_component`
+added to `eds-sys`'s allowlist (only `i_cal_component_.*` is there today) and a
+functional leg through real EDS to prove it. That is the next item in this area,
+and it is also a conformance fix in its own right: the envelope as built is not
+a legal iCalendar object.
+
+Nine tests red first — the five save-path ones and four on the mapping — plus
+one table pinning which strings are names and which are not, which is the one
+that guards against the check drifting into refusing zones that must cross.
+
+Verified locally: `cargo test --locked` 563 (up 10), `ctest` 14/14 including
+`rust-test-eds` and all four functional legs against real EDS, `cargo fmt
+--check`, and `cargo clippy --all-targets --locked -- -D warnings` clean for the
+default set and for `jmap-backend-cal`/`jmap-functional`. `reuse lint` and
+`cargo deny` not run (neither is on this VM); no files were added, so no new SPDX
+headers were needed, and no dependency changed.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so the
+M8 tag the last fifteen sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained. Still open
+from before: a per-instance `timeZone` has no spelling, and nothing asserts
+whether a split series' two writes arrive as one `CalendarEvent/set` or two.
