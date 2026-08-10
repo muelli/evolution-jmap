@@ -38,6 +38,14 @@
  * with a length at all. */
 #define TEST_DTEND "20260115T143000Z"
 
+/* And where it happens. The place is the second thing a user types into the
+ * appointment editor, and on the server it is not a string but an entry in a
+ * JSCalendar `locations` map — so this is the leg that says a LOCATION written
+ * by a libecal consumer arrives there as a place rather than being dropped.
+ * The same literal is asserted from both ends; see `LOCATION` in
+ * `rust/crates/jmap-functional/tests/calendar.rs`. */
+#define TEST_LOCATION "Room 42"
+
 /* And an all-day event, written the way Evolution writes one: DATE values
  * rather than DATE-TIMEs, on both ends. RFC 5545 §3.6.1's other form of an
  * event, and the only thing in iCalendar that says "this is a day, not a time
@@ -462,8 +470,9 @@ main (int argc,
 		"DTSTART:%s\r\n"
 		"DTEND:%s\r\n"
 		"SUMMARY:%s\r\n"
+		"LOCATION:%s\r\n"
 		"END:VEVENT\r\n",
-		TEST_DTSTART, TEST_DTEND, summary);
+		TEST_DTSTART, TEST_DTEND, summary, TEST_LOCATION);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 
@@ -498,6 +507,10 @@ main (int argc,
 	}
 
 	g_print ("read-back-summary=%s\n", i_cal_component_get_summary (read_back_event));
+	/* The place, out of the same cached component: it reaches the server as a
+	 * `locations` entry and has to come back on the LOCATION line, or the user
+	 * sees the appointment lose its room the moment EDS re-reads it. */
+	g_print ("read-back-location=%s\n", i_cal_component_get_location (read_back_event));
 	g_object_unref (read_back_event);
 
 	/* The all-day one, through the same path. Written second so that a

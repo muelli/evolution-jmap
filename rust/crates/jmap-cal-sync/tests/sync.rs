@@ -46,10 +46,20 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
 
     // A property the iCalendar mapping drops: EDS cannot see it change, so
     // re-downloading every event because of it would be pure churn.
-    fixture.patch(&id, json!({"locations": {"l1": {"name": "Room 3"}}}));
+    fixture.patch(&id, json!({"keywords": {"offsite": true}}));
     assert_eq!(sync.load_component(id.as_str()).unwrap().revision, before);
 
     fixture.patch(&id, json!({"title": "Standup (short)"}));
+    assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
+
+    // And one the mapping draws — the place the event happens at, which reaches
+    // the component as its LOCATION — has to move the revision, or Evolution
+    // keeps showing the room the meeting was moved out of.
+    let before = sync.load_component(id.as_str()).unwrap().revision;
+    fixture.patch(
+        &id,
+        json!({"locations": {"l1": {"@type": "Location", "name": "Room 3"}}}),
+    );
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 }
 
