@@ -11152,3 +11152,87 @@ to the three sources `mail::apply` writes. Like this one it is plumbing over
 tested parts, and like this one what a test here can drive is the composition
 rather than the vfunc Evolution dispatches; the registry call it has to make to
 turn the scratch collection into a real account is the part to look at closely.
+
+## 2026-08-10 (hundred-and-eleventh session)
+
+**The `commit_changes` vfunc.** Five tests, red first (they did not compile:
+there was no `commit`), in `rust/crates/jmap-config/tests/backend.rs`; the slot,
+the vfunc and `commit` in `src/backend.rs`, plus one visibility change —
+`mail::apply_server` is now `pub`, because it turns out to be the whole of what a
+`commit_changes` is in a position to write.
+
+**What the vfunc actually has to do, which is much less than expected.** The
+plan carried over from the last session was "the account `account::read` gives,
+written back with `account::apply` and fanned out to the three sources
+`mail::apply` writes". Reading Evolution 3.52's own code rather than working from
+that plan cut it down to one line of writing. `e_mail_config_assistant_commit`
+queues the collection and the three mail sources itself and calls
+`e_source_registry_create_sources` — so the vfunc creates nothing and saves
+nothing. `EMailConfigSummaryPage`'s own `commit_changes` sets all three sources'
+`Parent`, the account's `identity-uid` and the identity's `transport-uid`, which
+is the same wiring `mail::apply` does. The assistant writes the service name into
+each scratch source before any backend sees it — that is how the candidate was
+picked. The identity page writes the address. What is left over, and what nobody
+else can write because JMAP asks for a server once on the *account* rather than
+on the mail page, is `[Authentication]` and `[Security]` on the mail source. That
+is `apply_server`, and that is the vfunc.
+
+So `mail::apply` is *not* called from the vfunc, and stays the account's writer:
+the vfunc is handed one backend holding one scratch source, not three.
+
+**One backend per page, and the empty collection that has to be refused.**
+Evolution instantiates this class once for the *Receiving Email* page and once
+for *Sending Email*, and `constructed` calls `new_collection` on each — so the
+sending instance holds a scratch collection of its own that no widget fills in
+and that the assistant never queues. A commit that simply copied would put an
+empty host onto the transport source, and an empty host is not an unwritten one:
+it reads back as an account that names a server. So `commit` writes only for a
+collection `is_complete` accepts — the same question `check_complete` answers,
+true of the receiving instance (that is what let *Next* be pressed) and false of
+the sending one. Silent in both directions, for the reasons already written down
+under `check_complete`.
+
+**The gap this leaves, which is real and is the next item.** On the assistant's
+path the transport source therefore ends up with the service name `jmap` and no
+server, and JMAP submission needs one. Nothing in the dialog can fix it: the
+sending page is hidden for a store-and-transport provider (`e-mail-config-
+assistant.c` hides it when `CAMEL_PROVIDER_IS_STORE_AND_TRANSPORT`), and the
+backend that is its candidate cannot see the account. The place that can is the
+collection backend in `evolution-source-registry`: it is handed the account and
+can walk `e_collection_backend_list_mail_sources()` for the children parented to
+it. That is M6-side work and the next increment; writing a host this backend does
+not know would have been the alternative and is not one. It is written down in
+`backend.rs` under "The gap this leaves, said plainly" rather than left in this
+log alone.
+
+**What this is not.** Still no module, no `e_module_load`, no
+`module-jmap-configuration.so`, no widget, and no account created through
+Evolution's UI — M7's actual acceptance, which this VM cannot do. The vfunc body
+is not tested either, for the same reason as `check_complete`'s: driving it needs
+a live `EMailConfigServiceBackend`, and the detached instance would reach
+`e_mail_config_service_backend_get_collection`'s `E_IS_...` assertion. What is
+tested is `commit`, over real `ESource`s: a finished account's server lands on a
+blank mail source and reads back through the registry's own `server_of` as
+`https://jmap.example.com:8443` — the same string the collection itself reads
+back as — with the user beside it; the account `new_collection` offers writes
+nothing at all, groups included, so the source still answers `MissingHost` rather
+than naming an empty server; the mock server's plaintext account arrives as
+`http://localhost:8443`; and neither a NULL collection nor a NULL source writes
+anything. M7 carries no completion tag and this needs human verification in real
+Evolution.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny` (neither
+binary is on this VM); no new files this time, so no new SPDX headers either.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean, as
+are `clippy`/`test` over the EDS crates — 831 tests, `jmap-config`'s 75 (was 70)
+included. `RUSTDOCFLAGS=-D warnings cargo doc` clean for the crate.
+Pre-existing and untouched: `example-module` does not build on this VM, which is
+why the workspace-wide runs exclude it.
+
+No milestone tag.
+
+Next: the transport source's server, in `jmap-backend-collection`. `populate`
+has the account source and can reach the mail children the setup parented to it,
+which is the one place both halves are in scope; `prepare_mail`'s module comment
+already argues why the *vfunc* cannot do it, so the note belongs beside it.

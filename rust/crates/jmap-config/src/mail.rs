@@ -277,6 +277,17 @@ pub unsafe fn apply(collection: *mut ESource, sources: &MailSources, account: &A
 /// Writes where a mail service reaches its server, on the source that service
 /// is configured from.
 ///
+/// Public because it is also the whole of what a `commit_changes` can write.
+/// [`apply`] above is the shape a *commit of the account* has — three sources at
+/// once, from the one place all three are in reach — but the vfunc Evolution
+/// dispatches is handed one backend holding one scratch source, and the account
+/// beside it. So [`crate::backend::commit`] calls this, once, on whichever of
+/// the two service sources its own backend is the candidate for; everything else
+/// [`apply`] writes is either Evolution's own (the parent, the two uid links,
+/// the identity's address) or already on the source when the vfunc is reached
+/// (the service name, which `e_mail_config_assistant` puts there when it mints
+/// the scratch source).
+///
 /// Nothing here is a *Camel* group, which is the surprise and the reason this is
 /// four ordinary `ESource` extensions rather than a dependency on `jmap-mail`:
 /// host, port, user, authentication mechanism and security method are the five
@@ -313,7 +324,7 @@ pub unsafe fn apply(collection: *mut ESource, sources: &MailSources, account: &A
 ///
 /// `source` must be a valid `ESource` — one of the two service sources the setup
 /// is committing. Nothing here outlives the call.
-unsafe fn apply_server(source: *mut ESource, connection: &Connection) {
+pub unsafe fn apply_server(source: *mut ESource, connection: &Connection) {
     // Outliving every call that borrows them, as in `apply` above.
     let host = cstring_lossy(&connection.host);
     let user = connection.user.as_deref().map(cstring_lossy);
