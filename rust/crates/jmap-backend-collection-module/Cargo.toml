@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "jmap-backend-collection-module"
+description = "module-jmap-backend.so: the collection backend's module entry points"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "jmap_backend_collection_module"
+# cdylib and nothing else, which is the point of the crate: `e_module_load` is
+# a fixed name every module in this repository has to export, and a symbol that
+# exists only in a shared object can never collide with another module's copy
+# in a static link. See src/lib.rs.
+crate-type = ["cdylib"]
+
+[dependencies]
+jmap-backend-collection = { workspace = true }
+gobject-sys = { workspace = true }

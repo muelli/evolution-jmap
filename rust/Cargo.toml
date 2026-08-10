@@ -5,7 +5,8 @@
 resolver = "2"
 members = ["crates/*"]
 # example-module, eds-sys, evo-sys, jmap-backend-core, jmap-backend-book,
-# jmap-backend-cal, jmap-mail, jmap-backend-collection and jmap-config need
+# jmap-backend-cal, jmap-mail, jmap-backend-collection, jmap-config and the
+# four `*-module` cdylib crates that hold their C entry points need
 # Evolution/EDS/Camel
 # development headers (pkg-config probes in eds-sys's and evo-sys's build.rs);
 # keep them out of the default set so `cargo test` works on machines without
@@ -53,7 +54,10 @@ evolution-jmap-cal-sync = { path = "crates/jmap-cal-sync" }
 evolution-jmap-mail-sync = { path = "crates/jmap-mail-sync" }
 evolution-jmap-collection-sync = { path = "crates/jmap-collection-sync" }
 jmap-backend-core = { path = "crates/jmap-backend-core" }
+jmap-backend-book = { path = "crates/jmap-backend-book" }
+jmap-backend-cal = { path = "crates/jmap-backend-cal" }
 jmap-backend-collection = { path = "crates/jmap-backend-collection" }
+jmap-config = { path = "crates/jmap-config" }
 jmap-mail = { path = "crates/jmap-mail" }
 
 # Reproducibility: deterministic codegen, no incremental state, no debug paths.

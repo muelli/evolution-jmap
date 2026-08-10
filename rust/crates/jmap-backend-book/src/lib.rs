@@ -27,7 +27,8 @@
 //! the connection the instance holds.
 //!
 //! On top of that sit the two pieces EDS actually reaches first: [`module`],
-//! the `e_module_load` symbol resolved out of the built shared object, and
+//! the body of the `e_module_load` symbol EDS resolves out of the built shared
+//! object (the symbol itself is in the `jmap-backend-book-module` cdylib), and
 //! [`factory`], the `EBookBackendFactory` it registers — the thing that maps
 //! `BackendName=jmap` in a `.source` file onto a backend instance.
 //!

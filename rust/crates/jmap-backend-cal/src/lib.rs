@@ -26,7 +26,8 @@
 //!   through.
 //!
 //! On top of that sit the two pieces EDS actually reaches first: [`module`], the
-//! `e_module_load` symbol resolved out of the built shared object, and
+//! body of the `e_module_load` symbol EDS resolves out of the built shared object
+//! (the symbol itself is in the `jmap-backend-cal-module` cdylib), and
 //! [`factory`], the `ECalBackendFactory` it registers — the thing that maps
 //! `BackendName=jmap` in a `.source` file onto a backend instance. The
 //! calendar's factory declares one field the address book's has no counterpart

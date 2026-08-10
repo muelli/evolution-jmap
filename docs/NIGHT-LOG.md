@@ -11920,3 +11920,93 @@ still **needs human verification in real Evolution** (`insert_widgets` remains
 unwritten, so an account arrives on the server settings page filled in and
 cannot be corrected there), the four manual-test recipes are unlinked from the
 README, and `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-nineteenth session)
+
+**The `e_module_load` collision, which the previous session found and ranked
+first because it is the only thing here that makes a CI check red rather than
+merely incomplete.** Fixed, with a red test that turned out to describe a worse
+bug than the link error did.
+
+**The link error was the mild symptom.** `CARGO_INCREMENTAL=0 cargo test -p
+jmap-config` — CMake's setting for the `rust-test-eds` ctest — failed with
+`duplicate symbol: e_module_load` between `jmap-config`'s and
+`jmap-backend-collection`'s rlibs. A plain `cargo test` linked fine, and *that*
+is the bad case: a `#[unsafe(no_mangle)]` function is not a Rust function that
+also has a C name, it **is** the C symbol, so the Rust path
+`jmap_config::module::e_module_load` compiles to a call to the symbol
+`e_module_load` — and with one definition kept and one dropped, both crates'
+paths reached the survivor. The new
+`jmap-config/tests/entry_points.rs` calls each crate's entry point through a
+`GTypeModule` stand-in of its own and asks the type system which types appeared.
+Red first, and not with a link error:
+
+    the setup module's entry point did not register
+    "EMailConfigServiceBackendJmap" against it
+      left: 0x0
+     right: 0x75f7e80024a0
+
+— i.e. `jmap_config`'s entry point had registered the *collection* backend's
+types. That is the failure `--allow-multiple-definition` would have made
+permanent and silent, which is why it was rejected out of hand along with
+`#[cfg(not(test))]` (integration tests link the dependency's non-test rlib, so
+it does nothing) and a cargo feature (features unify across a workspace build,
+so `rust-test-eds`, which passes both `-p` flags, would re-enable it).
+
+**The fix: the C symbol belongs to the shared object, not to the library.** Four
+new crates — `jmap-backend-book-module`, `jmap-backend-cal-module`,
+`jmap-backend-collection-module`, `jmap-config-module` — each `crate-type =
+["cdylib"]` and nothing else, each holding the two `#[unsafe(no_mangle)]`
+definitions and delegating to `module::load`/`module::unload` in the rlib beside
+it. The four libraries are now `rlib` only and export ordinary mangled names.
+Two cdylibs are never linked together because nothing links a cdylib, so the
+class of bug is gone rather than the one instance of it.
+
+Applied to all four and not only to the colliding pair: all four define the same
+symbol pair, so any future test that links two of them would have hit the same
+thing. `jmap-mail`'s `camel_provider_module_init` was deliberately left where it
+is — it is the only definition of that name in the workspace, so there is
+nothing to collide with and no red test to drive a change.
+
+**The "cdylib and rlib cannot drift" property the old manifests claimed is kept
+and strengthened.** It used to rest on both crate types being built from one
+source file; it now rests on the cdylib having no behaviour to drift with — two
+calls, no `guard` (the bodies are guarded where they are written, and wrapping
+twice would mean two places to get the panic boundary wrong). The tests call the
+bodies directly, which is what they did before under a different name.
+
+**Verified end to end, not just compiled.** `cmake -S . -B build-verify -G
+Ninja && cmake --build build-verify && ctest` — 7/7 pass, including
+`rust-test-eds` (the previously red one) and the five `install-*` staged-install
+checks, which are what actually prove the change: `add_cargo_cdylib`'s `SYMBOLS`
+argument re-checks `e_module_load`/`e_module_unload` on each installed `.so`
+after the rename from `libjmap_backend_book.so` to
+`libjmap_backend_book_module.so` and friends. `nm -D` on the four debug cdylibs
+shows both symbols as `T` in each.
+
+`cargo fmt --check`, `cargo test --locked` (491 on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as are clippy and test over the EDS crates — 881 tests, was 880, the one new one
+being `entry_points`. `RUSTDOCFLAGS=-D warnings cargo doc` is clean for the four
+new crates and for `jmap-config`/`jmap-backend-collection`. Not verified locally,
+as in every session: `reuse lint` and `cargo deny` (neither binary is on this
+VM); every new file carries an SPDX `GPL-3.0-or-later` header. Pre-existing and
+untouched: `example-module` does not build on this VM, and `jmap-mail`,
+`jmap-backend-book` and `jmap-backend-cal` carry `rustdoc::private_intra_doc_links`.
+
+No milestone tag.
+
+Next, unchanged from the previous session apart from the item now struck off:
+(1) the `bind()` call in the other four entry points — `jmap-backend-book`,
+`-cal`, `-collection`, `jmap-config`. Note that the natural home for it has just
+moved: these are now `*-module` cdylib crates with no tests of their own, so
+either the binding goes in `module::load` (testable where the existing
+`tests/factory.rs` stand-ins already are, and the honest place, since `load` is
+what runs) or those crates need test harnesses. (2) `po/` with `POTFILES.in` and
+`LINGUAS`, the lint the standing directive asks for, and an install rule putting
+a compiled `.mo` under `LANGUAGE_SUPPORT_DIRECTORY`; while there, the top-level
+`GETTEXT_PACKAGE` is still the skeleton's `example-module` while our domain is
+`evolution-jmap`, which should be a decision rather than an oversight.
+Unchanged: M7 still **needs human verification in real Evolution**
+(`insert_widgets` remains unwritten), the four manual-test recipes are unlinked
+from the README, and `jmap-mail`'s rustdoc is dirty.

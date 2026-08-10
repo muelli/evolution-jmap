@@ -62,9 +62,10 @@
 //!   behind it becomes testable, which is the same order the four modules above
 //!   were written in.
 //!
-//! - [`module`] is the shared object the rest of it arrives in: `e_module_load`
+//! - [`module`] is how the rest of it arrives: the bodies of `e_module_load`
 //!   and `e_module_unload`, the two symbols Evolution's shell resolves out of
-//!   `module-jmap-configuration.so`, and the dynamic registration of
+//!   `module-jmap-configuration.so` (the symbols themselves are in the
+//!   `jmap-config-module` cdylib), and the dynamic registration of
 //!   [`backend`]'s class against the `GTypeModule` it is handed. There is no
 //!   factory and nothing to register the class *with* — Evolution's account
 //!   editor finds a mail config backend by walking the children of `EExtension`,

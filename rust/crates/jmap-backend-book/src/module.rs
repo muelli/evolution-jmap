@@ -13,6 +13,16 @@
 //! Both entry points are guarded. Nothing here should be able to panic, but a
 //! panic that unwound out of `e_module_load` would abort a process that is
 //! also serving every other address book the user has.
+//!
+//! ## The C symbols are not here
+//!
+//! [`load`] and [`unload`] are the bodies; the `#[unsafe(no_mangle)]`
+//! definitions of `e_module_load` and `e_module_unload` that call them live in
+//! the companion `jmap-backend-book-module` crate, which is built as a
+//! `cdylib` and nothing else. See that crate for why — briefly, every module in
+//! this repository exports the same pair of symbols, a `no_mangle` function
+//! *is* its C symbol, and two of these rlibs in one link therefore collapse
+//! into one entry point that answers for both.
 
 use gobject_sys::GTypeModule;
 use jmap_backend_core::subclass::register_dynamic;
@@ -34,10 +44,9 @@ use crate::factory::{JmapBookFactory, remember_backend_type};
 ///
 /// # Safety
 ///
-/// `type_module` must be the `GTypeModule *` EDS passed to this symbol; it has
-/// to stay alive for the duration of the call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
+/// `type_module` must be the `GTypeModule *` EDS passed to `e_module_load`; it
+/// has to stay alive for the duration of the call.
+pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
         // SAFETY: the module is EDS's, by this function's contract.
         unsafe {
@@ -52,10 +61,9 @@ pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
 /// There is nothing to undo: GLib unregisters the types the module registered
 /// on its own, and this crate keeps no other process-wide state — the backend
 /// type remembered for the factory is re-registered, and re-recorded, by the
-/// next [`e_module_load`].
+/// next [`load`].
 ///
 /// # Safety
 ///
-/// As [`e_module_load`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn e_module_unload(_type_module: *mut GTypeModule) {}
+/// As [`load`].
+pub unsafe extern "C" fn unload(_type_module: *mut GTypeModule) {}
