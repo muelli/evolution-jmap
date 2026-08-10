@@ -51,6 +51,12 @@
 //!   each case and reading it back, because a setup that accepts what the
 //!   registry rejects has written an account that fails everywhere except in
 //!   the dialog it was typed into.
+//! - [`backend`] is the GObject the four above are reached through: the
+//!   `EMailConfigServiceBackend` subclass Evolution's *Receiving Email* page
+//!   instantiates for the JMAP provider. It carries the name the page finds
+//!   this backend by and the account a new one starts as, and nothing else —
+//!   each further vfunc lands there as the decision behind it becomes
+//!   testable, which is the same order the four modules above were written in.
 //!
 //! ## Why an rlib with no module in it yet
 //!
@@ -62,28 +68,39 @@
 //! writes, and an `ESource` can be built and read back in a plain test with no
 //! display, no session bus and no running Evolution.
 //!
-//! So those come first and are tested, and the `EMailConfigServiceBackend`
-//! subclass that calls them comes after. The roadmap's rule about this
+//! So those came first and are tested, and the `EMailConfigServiceBackend`
+//! subclass that calls them comes after — [`backend`], which is a class and
+//! not yet a module. The roadmap's rule about this
 //! milestone is the reason for the order: GUI code cannot be verified on the
 //! machine this is developed on, so the smaller the part of M7 that is GUI, the
 //! more of M7 is actually *checked* rather than merely compiled.
 //!
 //! ## What is not here yet
 //!
-//! **The module**: no `EMailConfigServiceBackend` subclass calls any of this
-//! yet, so what is verified here is the functions, not a thing Evolution does.
-//! That is also the reason the two writers above are as complete as they are —
-//! an account this crate commits is one a store can open and a transport can
-//! send through, with no step left for the caller to remember — and the reason
-//! [`complete`] is a function rather than a vfunc: everything the subclass will
-//! have to *decide* is decided here, so what is left for it is the widgets and
-//! the plumbing, which is the part no test on this machine could cover anyway.
+//! **The module**: there is a subclass now, but nothing registers it —
+//! `e_module_load` and the `module-jmap-configuration.so` it lives in are still
+//! to come, so what is verified here is a class and its functions, not a thing
+//! Evolution does. That is also the reason the two writers above are as
+//! complete as they are — an account this crate commits is one a store can open
+//! and a transport can send through, with no step left for the caller to
+//! remember — and the reason [`complete`] is a function rather than a vfunc:
+//! everything the subclass has to *decide* is decided here, so what is left for
+//! it is the widgets and the plumbing, which is the part no test on this
+//! machine could cover anyway.
+//!
+//! **The vfuncs that need more than an `ESource`**: `insert_widgets` and
+//! `setup_defaults` need the `EMailConfigServicePage` this extension extends,
+//! and `check_complete` and `commit_changes` need the account read back *out*
+//! of the collection source the widgets have been editing — the inverse of
+//! [`account::apply`], which does not exist yet. [`backend`] says so slot by
+//! slot.
 //!
 //! Like the backends, this crate needs the installed EDS headers and so stays
 //! out of the workspace's `default-members`; CMake runs its tests via the
 //! `rust-test-eds` target.
 
 pub mod account;
+pub mod backend;
 pub mod complete;
 pub mod defaults;
 pub mod mail;

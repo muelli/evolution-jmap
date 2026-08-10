@@ -71,6 +71,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     let mut clang_args = Vec::new();
+    let mut link_paths: Vec<String> = Vec::new();
     for pkg in ["evolution-shell-3.0", "evolution-mail-3.0"] {
         let lib = pkg_config::Config::new()
             .atleast_version(MIN_EVO)
@@ -90,7 +91,28 @@ fn main() {
         // come out with the directory in their `RUNPATH`, checked with
         // `readelf -d`. Emitting a second copy from `lib.link_paths` here was
         // tried and only duplicated the entry.
+        //
+        // That forwarding stops at this package, though: Cargo scopes
+        // `rustc-link-arg` to the crate whose build script emitted it, while
+        // the `-l` flags it also emits are passed on to everything that links
+        // this crate. A dependent therefore links fine and comes out with no
+        // `RUNPATH` at all, which is a binary that cannot start. So the
+        // directories are published as build-script metadata — reachable to a
+        // dependent as `DEP_EVOLUTION_SHELL_LIBDIRS`, by way of this crate's
+        // `links` key — and `jmap-config`'s own `build.rs` turns them back into
+        // an rpath for the binaries it produces.
+        for path in &lib.link_paths {
+            let path = path.display().to_string();
+            if !link_paths.contains(&path) {
+                link_paths.push(path);
+            }
+        }
     }
+
+    // A colon-separated list, as every other library path in the loader's world
+    // is; a directory with a colon in its name would break it, and would break
+    // `LD_LIBRARY_PATH` and `-Wl,-rpath` in exactly the same way.
+    println!("cargo:libdirs={}", link_paths.join(":"));
 
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
