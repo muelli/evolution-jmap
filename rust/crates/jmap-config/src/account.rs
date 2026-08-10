@@ -85,16 +85,21 @@ use std::ptr;
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceBackend, ESourceCollection, ESourceSecurity,
-    e_source_authentication_get_type, e_source_authentication_set_host,
+    e_source_authentication_get_host, e_source_authentication_get_method,
+    e_source_authentication_get_port, e_source_authentication_get_type,
+    e_source_authentication_get_user, e_source_authentication_set_host,
     e_source_authentication_set_method, e_source_authentication_set_port,
     e_source_authentication_set_user, e_source_backend_set_backend_name,
+    e_source_collection_get_calendar_enabled, e_source_collection_get_contacts_enabled,
+    e_source_collection_get_identity, e_source_collection_get_mail_enabled,
     e_source_collection_get_type, e_source_collection_set_calendar_enabled,
     e_source_collection_set_contacts_enabled, e_source_collection_set_identity,
-    e_source_collection_set_mail_enabled, e_source_get_extension, e_source_security_get_type,
-    e_source_security_set_method,
+    e_source_collection_set_mail_enabled, e_source_get_extension, e_source_has_extension,
+    e_source_security_get_secure, e_source_security_get_type, e_source_security_set_method,
 };
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::marshal::read_string;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 
@@ -206,6 +211,132 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
         let security: *mut ESourceSecurity =
             e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
         e_source_security_set_method(security, security_method.as_ptr());
+    }
+}
+
+/// The account `source` currently says — the inverse of [`apply`].
+///
+/// What the widgets are filled from and what
+/// [`check`](crate::complete::check) is asked about: `EMailConfigServiceBackend`
+/// hands its vfuncs a collection source, and every question after
+/// `new_collection` is a question about the account that source holds.
+///
+/// Total, and deliberately so. [`server_of`] answers a `Result` because a
+/// backend about to open a connection has no use for an account without a host;
+/// this is asked on every keystroke of a dialog the user is still filling in,
+/// where "no host yet" is the ordinary state and not a failure. So the account
+/// comes back as it stands and [`check`](crate::complete::check) — which exists
+/// for exactly this — says whether it may be committed.
+///
+/// # What an absent group means
+///
+/// Nothing here creates an extension: this is handed the user's own account
+/// file, and `e_source_get_extension` would add the group. Each is tested for,
+/// and the answer for an absent one is the one
+/// [the collection backend's reader][collection_source] gives, not a second
+/// opinion:
+///
+/// - no `[Collection]` is [`Parts::ALL`], via [`Parts::from_collection`];
+/// - no `[Security]` is TLS, because `ESourceSecurity:secure` reads FALSE when
+///   there is no group to read and a dialog that offered to commit *that* back
+///   would switch TLS off on a hand-written account;
+/// - no `[Authentication]` is the empty host and no user, which is what an empty
+///   group would have said.
+///
+/// The one field where a string is turned into something else is the host: the
+/// keyfile's absent-or-non-empty `NULL` becomes the empty string an unfilled
+/// entry holds, which is [`check`](crate::complete::check)'s translation read
+/// backwards.
+///
+/// # Where this differs from the registry's reader, on purpose
+///
+/// [`parts_of`] folds the source's own `Enabled` flag in, because a disabled
+/// account has no parts to populate. This does not: `enabled` is not a field of
+/// [`Account`], [`apply`] writes all three switches every time, and an account
+/// the user has hidden would otherwise come back with three cleared check boxes
+/// and be committed that way — "hide this for now" turned into losing which
+/// parts the account offered. `tests/account.rs` pins both answers side by side.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` — the collection source the setup is
+/// editing. It is only read from, and nothing outlives the call.
+///
+/// [collection_source]: ../../jmap_backend_collection/collection_source/index.html
+/// [`parts_of`]: ../../jmap_backend_collection/collection_source/fn.parts_of.html
+/// [`server_of`]: ../../jmap_backend_collection/collection_source/fn.server_of.html
+pub unsafe fn read(source: *mut ESource) -> Account {
+    // As in `apply`, and for the same reason: an extension GType nothing has
+    // referenced yet is one `e_source_has_extension` cannot find either.
+    // SAFETY: no arguments, and the type system initialises itself.
+    unsafe {
+        e_source_collection_get_type();
+        e_source_authentication_get_type();
+        e_source_security_get_type();
+    }
+
+    // SAFETY: a valid source by this function's contract, and header constants;
+    // where an extension is present, the getter returns the source's own, which
+    // it owns and which outlives the call. Every string getter returns NULL or
+    // a NUL-terminated string owned by the extension.
+    let (identity, parts) = unsafe {
+        if e_source_has_extension(source, E_SOURCE_EXTENSION_COLLECTION.as_ptr()) == GFALSE {
+            (None, None)
+        } else {
+            let collection: *mut ESourceCollection =
+                e_source_get_extension(source, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
+            (
+                read_string(e_source_collection_get_identity(collection)),
+                Some(Parts {
+                    mail: e_source_collection_get_mail_enabled(collection) != GFALSE,
+                    contacts: e_source_collection_get_contacts_enabled(collection) != GFALSE,
+                    calendars: e_source_collection_get_calendar_enabled(collection) != GFALSE,
+                }),
+            )
+        }
+    };
+
+    // SAFETY: as above.
+    let secure = unsafe {
+        if e_source_has_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()) == GFALSE {
+            true
+        } else {
+            let security: *mut ESourceSecurity =
+                e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
+            e_source_security_get_secure(security) != GFALSE
+        }
+    };
+
+    // SAFETY: as above.
+    let (host, port, user, auth_method) = unsafe {
+        if e_source_has_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) == GFALSE {
+            (None, 0, None, None)
+        } else {
+            let auth: *mut ESourceAuthentication =
+                e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+            (
+                read_string(e_source_authentication_get_host(auth)),
+                e_source_authentication_get_port(auth),
+                read_string(e_source_authentication_get_user(auth)),
+                read_string(e_source_authentication_get_method(auth)),
+            )
+        }
+    };
+
+    Account {
+        identity: identity.unwrap_or_default(),
+        connection: Connection {
+            host: host.unwrap_or_default(),
+            // Zero is how the keyfile spells "not set", the same way `apply`
+            // writes it.
+            port: (port != 0).then_some(port),
+            user,
+            auth_method,
+            secure,
+        },
+        // `true` rather than the source's own flag: see the note above on the
+        // one place this and the registry's reader disagree by design.
+        parts: Parts::from_collection(true, parts),
     }
 }
 
