@@ -7,10 +7,12 @@ untested, and it is the layer a user meets first: EDS deciding *when* to call
 those vfuncs, and what it makes of what they said.
 
 These tests cover that layer. They start a real `evolution-source-registry`
-and a real `evolution-addressbook-factory` or `evolution-calendar-factory`,
-hand them a real build of this repository's modules, and drive the result
-through EDS's ordinary client API — the same calls Evolution makes. The server
-on the other side is the in-repo mock, so no account anywhere is involved.
+and a real host for the module under test — `evolution-addressbook-factory`,
+`evolution-calendar-factory`, or, for the Camel mail provider, the client
+program itself — hand it a real build of this repository's modules, and drive
+the result through EDS's ordinary client API: the same calls Evolution makes.
+The server on the other side is the in-repo mock, so no account anywhere is
+involved.
 
 This is M9 layer 1 of `docs/ROADMAP.md`. The GUI tier is a separate thing and
 is not here.
@@ -49,13 +51,14 @@ error naming the missing one. That is deliberate: see below.
 `rust/crates/jmap-functional` is the harness. For each test it:
 
 1. starts a mock JMAP server in-process, on an ephemeral port, and seeds it
-   with what the test needs — one address book, or one calendar, flagged as
-   the account default;
+   with what the test needs — one address book or one calendar flagged as the
+   account default, or a few mailboxes with some mail in them;
 2. builds a throwaway EDS installation in a directory under the crate's
    target tmpdir: a scratch `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
    `XDG_CACHE_HOME`, a `.source` keyfile naming the mock's port, and a module
-   directory holding the one backend under test, named by
-   `EDS_ADDRESS_BOOK_MODULES` or `EDS_CALENDAR_MODULES`;
+   directory holding the one module under test, named by
+   `EDS_ADDRESS_BOOK_MODULES`, `EDS_CALENDAR_MODULES` or
+   `EDS_CAMEL_PROVIDER_DIR`;
 3. runs the client program on a **private session bus** from
    `dbus-run-session`, with that environment and nothing inherited. The
    daemons D-Bus activates are this test's daemons, started with this test's
@@ -64,10 +67,11 @@ error naming the missing one. That is deliberate: see below.
    and what the backend asked the server for.
 
 The client programs live in `tests/functional/`. They are C, and they are
-ordinary libebook/libecal consumers — that is the surface under test, and no
-crate in this repository binds it (`eds-sys` carries what the backends
-*implement*). Binding a second FFI surface only to call it from a test would
-put a layer of our own making between EDS and the thing being tested.
+ordinary libebook/libecal/libcamel consumers — that is the surface under
+test, and no crate in this repository binds it (`eds-sys` carries what the
+backends *implement*). Binding a second FFI surface only to call it from a
+test would put a layer of our own making between EDS and the thing being
+tested.
 
 Each client prints `key=value` lines and exits non-zero the moment a call
 fails. It holds no opinion about what is correct; the Rust side has all of
@@ -167,6 +171,50 @@ line for line, and this test is what found it.
 
 The read path is left alone for the same reason as the address book's.
 
+## What the mail test asserts
+
+`rust/crates/jmap-functional/tests/mail.rs`, against
+`tests/functional/mail-client.c`, and it is not a third mirror of the other
+two — the loading story is different, and that difference is most of why it is
+worth having.
+
+An address book or calendar backend is dlopened by a factory daemon EDS ships,
+found by being a file in a directory that daemon scans. A Camel provider is
+dlopened by the **mail client's own process**, and only when something asks for
+a protocol that a `.urls` file in Camel's provider directory claims. So the
+client program here is not a consumer talking to a daemon that hosts the module
+— it *is* the host. Nothing links the provider in; it is a file in a directory,
+found the way Camel finds one, which is a mechanism `jmap-mail`'s own tests
+cannot exercise because they link it.
+
+- **`protocol=jmap` and the store connected.** Between them these say that the
+  keyfile's `BackendName`, the one line in `libcameljmap.urls` and the string
+  `camel_provider_module_init` registers all agree. They live in three files,
+  and when they do not agree every later step fails with *No provider available
+  for protocol* — a message about the connect that is really about a typo. The
+  `.urls` file is staged from the source tree rather than written by the test,
+  so this is the installed file being checked and not a copy of it;
+- **the folder tree is the mock's three mailboxes**, from a single
+  `Mailbox/get`;
+- **the inbox is the mailbox with the JMAP `inbox` role**, which is what Camel
+  asks the store for and what lets Evolution treat it as the account's inbox
+  rather than as a folder that happens to be called one;
+- **the summaries are the seeded messages** — `Email/query` and `Email/get`,
+  through Camel's own summary machinery;
+- **every message body downloads**, which is a different request again: a blob
+  download is a plain HTTP GET rather than a method call, and a provider that
+  lists mail it cannot open is a common enough failure to be worth fetching all
+  of them.
+
+Every list the client reports is sorted before it is printed. The order Camel
+hands folders or message uids over is the provider's business, and a test that
+compared it as given would be asserting an order nobody promised — which it did
+once, before this was written down.
+
+Sending is not covered. A transport is a second `CamelService` configured from
+a second source, and the thing most worth testing about it is that it kept a
+server of its own; that is the next leg rather than this one.
+
 ## Debugging a failure
 
 The failure message carries the client's whole stdout and stderr, including
@@ -184,7 +232,8 @@ environment in `rust/crates/jmap-functional/src/lib.rs` and run the test with
 
 ## Related
 
-- `docs/manual-test-book-backend.md` and `docs/manual-test-cal-backend.md` —
-  the same paths by hand, in a real Evolution, with a real Contacts or
-  Calendar view to look at. These tests do not replace them: they check the
-  machinery, those check that a person can use it.
+- `docs/manual-test-book-backend.md`, `docs/manual-test-cal-backend.md` and
+  `docs/manual-test-mail-provider.md` — the same paths by hand, in a real
+  Evolution, with a real Contacts, Calendar or mail view to look at. These
+  tests do not replace them: they check the machinery, those check that a
+  person can use it.
