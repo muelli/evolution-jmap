@@ -25,9 +25,10 @@ use std::ffi::CStr;
 use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceBackend,
-    ESourceSecurity, e_source_backend_get_backend_name, e_source_collection_get_identity,
-    e_source_get_extension, e_source_has_extension, e_source_security_get_secure,
+    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
+    ESource, ESourceBackend, ESourceSecurity, e_source_backend_get_backend_name,
+    e_source_collection_get_identity, e_source_get_extension, e_source_has_extension, e_source_new,
+    e_source_security_get_secure,
 };
 use evo_sys::{
     EMailConfigServiceBackend, EMailConfigServiceBackendClass,
@@ -44,7 +45,9 @@ use jmap_backend_core::subclass::register_static;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, BACKEND_NAME, apply, read};
-use jmap_config::backend::{JmapConfigServiceBackend, JmapConfigServiceBackendClass, is_complete};
+use jmap_config::backend::{
+    JmapConfigServiceBackend, JmapConfigServiceBackendClass, commit, is_complete,
+};
 use jmap_config::complete::{Incomplete, check};
 use jmap_config::mail::MAIL_BACKEND_NAME;
 
@@ -209,6 +212,58 @@ impl Drop for Collection {
     fn drop(&mut self) {
         // SAFETY: `new_collection` is `(transfer full)`, so this owns the one
         // reference Evolution would have owned.
+        unsafe { g_object_unref(self.0.cast()) };
+    }
+}
+
+/// The scratch mail source a backend holds beside its collection — what
+/// `e_mail_config_service_backend_get_source` hands back, and the one source a
+/// `commit_changes` is in a position to write.
+///
+/// Blank is the state that matters, because it is the state Evolution creates
+/// it in: `e_mail_config_assistant` mints one `ESource` per provider, writes
+/// `[Mail Account] BackendName` (or `[Mail Transport] BackendName`) into it and
+/// nothing else. Everything below that name is somebody's to fill in, and for
+/// JMAP nobody but this crate can — the server is on the account, not on a page
+/// the user typed a mail server into.
+struct MailSource(*mut ESource);
+
+impl MailSource {
+    fn blank() -> Self {
+        let mut error = ptr::null_mut();
+        // SAFETY: no related object, no file, and a `GError` out-parameter are
+        // the documented arguments — the same call `new_collection` makes.
+        let source = unsafe { e_source_new(ptr::null_mut(), ptr::null_mut(), &mut error) };
+        assert!(!source.is_null(), "e_source_new failed");
+        Self(source)
+    }
+
+    /// Asked rather than read through, as in `tests/mail.rs`:
+    /// `e_source_get_extension` *creates* what it cannot find, so a reader that
+    /// went straight through it would turn "the commit wrote nothing" into "the
+    /// commit wrote nothing in a group it added".
+    fn has_extension(&self, name: &CStr) -> bool {
+        // SAFETY: a live source and a NUL-terminated header constant.
+        unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
+    }
+
+    /// The server this mail source now reaches, through the same reader the
+    /// account itself is read with — `[Authentication]` plus `[Security]` are
+    /// one pair of groups whichever kind of source they are on.
+    fn server(&self) -> Result<String, SourceError> {
+        // SAFETY: a live source.
+        unsafe { server_of(self.0) }.map(|server| server.origin)
+    }
+
+    fn user(&self) -> Option<String> {
+        // SAFETY: a live source.
+        unsafe { user_of(self.0) }
+    }
+}
+
+impl Drop for MailSource {
+    fn drop(&mut self) {
+        // SAFETY: this holds the only reference.
         unsafe { g_object_unref(self.0.cast()) };
     }
 }
@@ -389,6 +444,105 @@ fn plaintext_to_this_machine_is_still_the_mock_server() {
     account.connection.secure = false;
     let collection = Class::get().new_collection().edited(&account);
     assert!(collection.complete());
+}
+
+#[test]
+fn commit_changes_displaces_the_inherited_one() {
+    // Evolution's own does nothing, which is right for every provider whose
+    // server the user typed into this very page: those entries are bound
+    // straight through `CamelSettings` onto the mail source's own
+    // `[Authentication]` and `[Security]`, so by commit time it is already
+    // written. JMAP's is not — the server is asked for once, on the account, and
+    // the mail source is a second file that has to be told. Left inherited it is
+    // a committed account whose inbox names a provider and no host.
+    let class = Class::get();
+    let ours = class
+        .vfuncs()
+        .commit_changes
+        .expect("class_init installed no commit_changes");
+    let inherited = parent_class()
+        .commit_changes
+        .expect("Evolution installs its own commit_changes");
+    assert!(
+        !std::ptr::fn_addr_eq(ours, inherited),
+        "commit_changes is still Evolution's, which writes nothing"
+    );
+}
+
+#[test]
+fn a_commit_gives_the_mail_source_the_server_the_account_names() {
+    let collection = Class::get().new_collection().edited(&finished());
+    let source = MailSource::blank();
+
+    // SAFETY: two live sources — the backend's collection and its own scratch
+    // mail source, which is what the vfunc is handed.
+    assert!(unsafe { commit(collection.0, source.0) });
+
+    // Read back with the registry's own reader rather than field by field: what
+    // has to be true is that the mail source now answers the same question the
+    // account does, in the same words. A host that agreed and a port that did
+    // not would be a store connecting somewhere the account never named.
+    assert_eq!(
+        source.server().as_deref(),
+        Ok("https://jmap.example.com:8443")
+    );
+    assert_eq!(source.server(), collection.server());
+    // And the user, which is load-bearing beyond consistency: EDS decides
+    // whether a child shares its collection's password by comparing the two
+    // `[Authentication] Host` strings, and a mail source with its own user is a
+    // second libsecret entry for one account.
+    assert_eq!(source.user().as_deref(), Some("vera"));
+}
+
+#[test]
+fn a_commit_writes_nothing_an_unfinished_account_could_not_say() {
+    // The account `new_collection` offers, which names nobody and nowhere. It is
+    // reachable here for a reason that is not a mistake: Evolution instantiates
+    // this backend once per page, and the *Sending* page's instance gets a
+    // scratch collection of its own that no widget ever fills in. Writing that
+    // one's emptiness onto a transport source would replace nothing with a host
+    // of "", which reads back as configured.
+    let collection = Class::get().new_collection();
+    let source = MailSource::blank();
+
+    // SAFETY: two live sources, as above.
+    assert!(!unsafe { commit(collection.0, source.0) });
+
+    // Not "wrote an empty host" — wrote nothing at all, groups included.
+    assert!(!source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION));
+    assert!(!source.has_extension(E_SOURCE_EXTENSION_SECURITY));
+    assert_eq!(source.server(), Err(SourceError::MissingHost));
+}
+
+#[test]
+fn plaintext_to_this_machine_reaches_the_mail_source_too() {
+    // The mock server's account, committed: the one case where the setup writes
+    // a mail source that is not TLS, and it has to arrive as `http://` rather
+    // than as the security method's own default.
+    let mut account = finished();
+    account.connection.host = "localhost".to_owned();
+    account.connection.secure = false;
+    let collection = Class::get().new_collection().edited(&account);
+    let source = MailSource::blank();
+
+    // SAFETY: two live sources, as above.
+    assert!(unsafe { commit(collection.0, source.0) });
+    assert_eq!(source.server().as_deref(), Ok("http://localhost:8443"));
+}
+
+#[test]
+fn a_commit_without_both_of_its_sources_writes_nothing() {
+    // NULL collection: `new_collection` failed, and there is no account to copy.
+    // NULL source: Evolution has not given this backend a scratch source, which
+    // is the state a backend is in before it is a candidate for any page.
+    let collection = Class::get().new_collection().edited(&finished());
+    let source = MailSource::blank();
+
+    // SAFETY: NULL and a live source, which is one of the two documented cases.
+    assert!(!unsafe { commit(ptr::null_mut(), source.0) });
+    assert!(!source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION));
+    // SAFETY: a live source and NULL, which is the other.
+    assert!(!unsafe { commit(collection.0, ptr::null_mut()) });
 }
 
 #[test]
