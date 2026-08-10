@@ -1,0 +1,10 @@
+[Data Source]
+DisplayName=JMAP mock identity
+Enabled=true
+
+[Mail Identity]
+Name=JMAP mock user
+Address=alice@example.com
+
+[Mail Submission]
+TransportUid=jmap-mock-standalone-transport
