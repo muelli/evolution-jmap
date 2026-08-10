@@ -25,6 +25,8 @@
 
 #include <libebook/libebook.h>
 
+#include "connection-status.h"
+
 /* The contact this test writes. The Rust side looks for exactly this name
  * in the mock's store, so the two spellings have to agree; it is passed in
  * rather than hardcoded on both sides. */
@@ -83,18 +85,21 @@ main (int argc,
 	 * the factory matching the keyfile's BackendName. A failure here is
 	 * usually one of those two steps, not the backend's logic.
 	 *
-	 * (guint32) -1 is EDS's "do not wait for connected": the alternative
-	 * is a wait on ESource:connection-status reaching CONNECTED, which
-	 * against this backend never arrives and costs the whole timeout —
-	 * see docs/NIGHT-LOG.md, it is an open question and not something
-	 * this test should sit through. Nothing below needs the wait; the
-	 * open is synchronous, so everything it established is already true
-	 * on the far side by the time this call returns. */
+	 * (guint32) -1 is EDS's "do not wait for connected". The wait is not
+	 * skipped because the status does not matter — it is asserted, just
+	 * below — but because asking for it here cannot work in a program
+	 * with no main loop, whatever the backend does: see
+	 * connection-status.c. The open itself is synchronous, so everything
+	 * it established is already true on the far side by the time this
+	 * call returns. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
 	if (!client)
 		return fail ("connect", error);
 
 	book = E_BOOK_CLIENT (client);
+
+	/* EDS's own verdict on the connect, waited for properly. */
+	functional_report_connection_status (source, 10);
 
 	/* Read the properties back over the bus rather than trusting the
 	 * client's cached copy. EClient updates those from D-Bus property
