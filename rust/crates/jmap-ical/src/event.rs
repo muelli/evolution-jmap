@@ -6,13 +6,14 @@
 //! The mapped set is the one the calendar backend needs to be useful — UID,
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
 //! the event is shown without a time), DURATION, STATUS, TRANSP, PRIORITY,
-//! CLASS, LOCATION, CATEGORIES, RRULE, and the instances an EXDATE, an RDATE or a
-//! `RECURRENCE-ID` component names one at a time — and no more. Everything
-//! else on an event (participants, alarms, links, …) is *dropped*,
+//! CLASS, LOCATION, CATEGORIES, RRULE, the `VALARM`s that remind the user of the
+//! event, and the instances an EXDATE, an RDATE or a `RECURRENCE-ID` component
+//! names one at a time — and no more. Everything else on an event
+//! (participants, links, …) is *dropped*,
 //! which is only safe because saving goes back to the server as a PatchObject
 //! naming the mapped properties: a property we never mapped is a property we
 //! never overwrite. See [`MAPPED_PROPERTIES`], [`maps_locations`],
-//! [`maps_keywords`], [`maps_recurrence_rule`] and
+//! [`maps_keywords`], [`maps_alerts`], [`maps_recurrence_rule`] and
 //! [`maps_recurrence_override`], which are that knowledge in machine-readable
 //! form.
 //!
@@ -67,6 +68,25 @@ const X_JMAP_KEY: &str = "X-JMAP-KEY";
 /// Evolution's appointment editor just typed, and no entry exists server-side
 /// for it to name.
 const INVENTED_KEY: &str = "l1";
+
+/// The stem of the `alerts` key invented for a `VALARM` that names no id of its
+/// own — a reminder Evolution's editor has just added, which carries an
+/// `X-EVOLUTION-ALARM-UID` and no RFC 9074 `UID`. Numbered from 1 in the order
+/// the component holds them; see [`read_alerts`] for why positional keys are
+/// what keeps a save from rewriting the property every time.
+const INVENTED_ALERT_KEY: &str = "a";
+
+/// The one `Alert.action` (RFC 8984 §4.5.2) this mapping carries, and its
+/// iCalendar `ACTION` spelling (RFC 5545 §3.8.6.1).
+///
+/// RFC 8984 admits `email` beside it, and RFC 5545 admits `AUDIO` and the
+/// deprecated `PROCEDURE`. Neither crosses: an `ACTION:EMAIL` alarm is required
+/// to carry a `SUMMARY` and an `ATTENDEE` (§3.6.6) that a JSCalendar Alert has
+/// nothing to fill in from, and a sound or a program is a reminder RFC 8984 has
+/// no `action` for at all. So an alert this mapping cannot spell is left off the
+/// document and [`maps_alerts`] refuses the property, and an alarm it cannot
+/// read is dropped like every other unreadable value.
+const DISPLAY_ALERT: (&str, &str) = ("display", "DISPLAY");
 
 /// The `PRODID` of every calendar this crate emits.
 const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
@@ -153,14 +173,14 @@ const PRIVACIES: [(&str, &str); 3] = [
 /// The JSCalendar properties this mapping covers, and therefore the only ones
 /// a save may name in a `CalendarEvent/set` update patch.
 ///
-/// Three are covered *conditionally* — see [`maps_locations`],
+/// Four are covered *conditionally* — see [`maps_locations`], [`maps_alerts`],
 /// [`maps_recurrence_rule`] and [`maps_recurrence_override`], which say when a
 /// save may name them.
 ///
 /// `locations` is also the one property named *into* rather than replaced: a
 /// save patches `locations/<key>/name`, so the rest of the entry stays. See
 /// [`X_JMAP_KEY`].
-pub const MAPPED_PROPERTIES: [&str; 14] = [
+pub const MAPPED_PROPERTIES: [&str; 15] = [
     "title",
     "description",
     "start",
@@ -173,6 +193,7 @@ pub const MAPPED_PROPERTIES: [&str; 14] = [
     "privacy",
     "locations",
     "keywords",
+    "alerts",
     "recurrenceRules",
     "recurrenceOverrides",
 ];
@@ -192,6 +213,13 @@ pub const MAPPED_PROPERTIES: [&str; 14] = [
 /// reason: it is shown in part and patched into (see [`maps_locations`]), and an
 /// override's PatchObject would have to reach `locations/<key>/name` inside an
 /// entry the instance does not have.
+///
+/// `alerts` is absent for neither of those reasons but a plainer one: an
+/// instance's `VALARM`s *are* drawn whole on its own component, so a reminder for
+/// one occurrence alone is a thing this mapping could carry and does not yet. An
+/// override naming it is therefore refused rather than half-written, and a
+/// reminder the user changes on one occurrence is not saved — the same standing
+/// limitation `locations` has.
 ///
 /// `showWithoutTime` is absent, one step further out — see
 /// [`shows_without_time`], which is decided once for the whole document.
@@ -315,6 +343,272 @@ fn drawn_tags(event: &CalendarEvent) -> Vec<&str> {
         .filter(|(tag, set)| drawn_tag(tag, set))
         .map(|(tag, _)| tag.as_str())
         .collect()
+}
+
+/// Whether the reminders an event carries survive the trip through iCalendar,
+/// and so whether a save may name `alerts`.
+///
+/// This is the first mapped property drawn as a *child component* rather than as
+/// a content line: RFC 8984 §4.5.2's Alerts become the `VALARM`s of RFC 5545
+/// §3.6.6. Like `keywords` and unlike `locations` the property goes back
+/// **replaced whole** — a `VALARM` has no key of its own for a PatchObject to
+/// reach into beyond the RFC 9074 §6 `UID` the entry's key rides on — so, exactly
+/// as there, an alert this mapping leaves off the document is an alert the next
+/// save deletes. What [`drawn_alert`] refuses, this refuses:
+///
+/// - **An `action` other than `display`.** An `ACTION:EMAIL` alarm must carry a
+///   `SUMMARY` and an `ATTENDEE` (RFC 5545 §3.6.6) that a JSCalendar Alert does
+///   not hold — see [`DISPLAY_ALERT`].
+/// - **A trigger that is not an offset** — RFC 8984 §4.5.4's AbsoluteTrigger, or
+///   an offset that is no signed duration ([`stated_offset`]), or a `relativeTo`
+///   outside the two §4.5.3 admits.
+/// - **Anything else on the alert or its trigger**, most importantly RFC 9074
+///   §6.1's `acknowledged`: a reminder the user has already dismissed, which the
+///   `VALARM` this writes cannot say, and which a property replaced whole would
+///   therefore un-dismiss.
+/// - **A key no `UID` can carry back**, since the key is what a replaced map
+///   states its entries under; see [`names_map_entry`].
+///
+/// Taken as the whole event rather than the map, unlike [`maps_keywords`],
+/// because a second property decides this one: RFC 8984 §4.5.1's
+/// `useDefaultAlerts` says the `alerts` property is *ignored* and the user's own
+/// default reminders fire instead. Drawing them would show reminders that never
+/// go off, and patching the property would edit what nothing reads — so such an
+/// event is drawn without alarms and the property is never written. What it would
+/// take to honour a reminder the user adds to such an event is a save that clears
+/// `useDefaultAlerts` in the same patch, which this mapping does not do.
+///
+/// An event with no alerts at all passes: there is nothing to lose, and a
+/// `VALARM` the user just added is a reminder to create.
+pub fn maps_alerts(event: &CalendarEvent) -> bool {
+    !uses_default_alerts(event)
+        && event
+            .alerts
+            .iter()
+            .flatten()
+            .all(|(key, alert)| drawn_alert(key, alert, None).is_some())
+}
+
+/// Whether the event says its reminders are the user's own defaults rather than
+/// the ones it carries — RFC 8984 §4.5.1, read out of [`CalendarEvent::extra`]
+/// because the property is not modeled: nothing here writes it, and the only
+/// question asked of it is whether it is `true`.
+fn uses_default_alerts(event: &CalendarEvent) -> bool {
+    event.extra.get("useDefaultAlerts") == Some(&Value::Bool(true))
+}
+
+/// One entry of `alerts` as the `VALARM` that states it, or `None` for a reminder
+/// this mapping cannot put on the document. The single point [`maps_alerts`] and
+/// [`drawn_alarms`] agree through, so an alert cannot be called covered and then
+/// left off.
+///
+/// `summary` is the event's own title, which is the only text a DISPLAY alarm has
+/// to show: RFC 5545 §3.6.6 requires a `DESCRIPTION` on one and RFC 8984 gives an
+/// Alert no message of its own. An event with no title writes no `DESCRIPTION`
+/// either — there is nothing to put there, and the reminder still fires — so the
+/// text puts no condition on whether the alert is covered, and [`maps_alerts`]
+/// asks without it.
+fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Component> {
+    let alert = alert.as_object()?;
+    if !names_map_entry(key) {
+        return None;
+    }
+    // Every member of the object has to be one of the three drawn, because the
+    // property goes back replaced whole: what is not on the document is what the
+    // next save removes.
+    if !alert
+        .keys()
+        .all(|member| matches!(member.as_str(), "@type" | "trigger" | "action"))
+    {
+        return None;
+    }
+    if !is_type(alert.get("@type"), "Alert") {
+        return None;
+    }
+    let (jscalendar, ical) = DISPLAY_ALERT;
+    if !alert
+        .get("action")
+        .is_none_or(|action| action.as_str().is_some_and(|action| action == jscalendar))
+    {
+        return None;
+    }
+
+    let (offset, related) = drawn_trigger(alert.get("trigger")?)?;
+    let mut valarm = Component::new("VALARM")
+        // RFC 9074 §6 gives a VALARM a UID, which is where the key of the entry
+        // rides so that a save states the reminder the server holds under the
+        // name the server gave it.
+        .with(Property::new("UID", key))
+        .with(Property::raw("ACTION", ical))
+        .with(Property::raw("TRIGGER", &offset).with_params("RELATED", related));
+    if let Some(summary) = summary.filter(|summary| !summary.is_empty()) {
+        valarm = valarm.with(Property::new("DESCRIPTION", summary));
+    }
+    Some(valarm)
+}
+
+/// When one alert fires, as the value of a `TRIGGER` and the `RELATED` parameter
+/// it needs — none for the start, which both formats default to.
+///
+/// Only RFC 8984 §4.5.3's OffsetTrigger. §4.5.4's AbsoluteTrigger states a
+/// `when` as a UTCDateTime, which iCalendar spells as a `TRIGGER;VALUE=DATE-TIME`
+/// and this mapping does not write in either direction yet; it is refused rather
+/// than approximated, since an offset guessed from an instant would move the
+/// reminder as soon as the event moved.
+fn drawn_trigger(trigger: &Value) -> Option<(String, Vec<&'static str>)> {
+    let trigger = trigger.as_object()?;
+    if !trigger
+        .keys()
+        .all(|member| matches!(member.as_str(), "@type" | "offset" | "relativeTo"))
+    {
+        return None;
+    }
+    if !is_type(trigger.get("@type"), "OffsetTrigger") {
+        return None;
+    }
+    let offset = stated_offset(trigger.get("offset")?.as_str()?)?;
+    // The default said out loud is still the default, so `start` adds no
+    // parameter; a value outside the two is a reminder this mapping would have to
+    // guess the moment of, which is how a reminder ends up firing at the wrong
+    // time.
+    let related = match trigger.get("relativeTo") {
+        None => Vec::new(),
+        Some(value) => match value.as_str()? {
+            "start" => Vec::new(),
+            "end" => vec!["END"],
+            _ => return None,
+        },
+    };
+    Some((offset, related))
+}
+
+/// Whether an `@type` member is absent — RFC 8984 §1.4.1 makes it optional where
+/// the type is implied by the property — or names the type it should.
+fn is_type(value: Option<&Value>, name: &str) -> bool {
+    value.is_none_or(|value| value.as_str() == Some(name))
+}
+
+/// The `VALARM`s to draw beside an event, one per reminder the document can
+/// carry, in the order the map holds them — which is sorted, so a re-rendering is
+/// stable; the save path diffs against a re-rendering of what the server holds.
+fn drawn_alarms(event: &CalendarEvent) -> Vec<Component> {
+    if uses_default_alerts(event) {
+        return Vec::new();
+    }
+    event
+        .alerts
+        .iter()
+        .flatten()
+        .filter_map(|(key, alert)| drawn_alert(key, alert, event.title.as_deref()))
+        .collect()
+}
+
+/// A stated offset as a JSCalendar SignedDuration (RFC 8984 §1.4.7), or `None`
+/// when the value states no offset a reminder can have.
+///
+/// The signed sibling of [`stated_duration`], and the same trade: the two formats
+/// spell a duration identically, so a value that is one is handed over as
+/// written. What differs is the sign — RFC 5545 §3.8.6.3's `TRIGGER` is a
+/// *negative* duration for the usual case of a reminder *before* the event, which
+/// RFC 8984 §1.4.6's Duration has no room for and §1.4.7's SignedDuration is
+/// there for.
+fn stated_offset(value: &str) -> Option<String> {
+    match value.strip_prefix('-') {
+        Some(magnitude) => stated_duration(magnitude).map(|duration| format!("-{duration}")),
+        None => stated_duration(value),
+    }
+}
+
+/// The reminders the component carries, as a JSCalendar `alerts` map.
+///
+/// Keyed by each `VALARM`'s RFC 9074 §6 `UID` where it has one this mapping would
+/// draw back — that is the key the entry had server-side, so a round trip is the
+/// identity. Evolution's appointment editor writes an `X-EVOLUTION-ALARM-UID`
+/// instead, so a reminder the user has just added arrives with no key at all; the
+/// ones invented for those are positional (`a1`, `a2`, …), skipping any a `UID`
+/// already claimed so that two reminders cannot collapse into one entry.
+///
+/// Positional is what makes them *stable*, which is what a save needs: reading
+/// the same component twice yields the same map, so an editor that strips the
+/// `UID` costs one re-keying of the property and not one per save. Two `VALARM`s
+/// naming the *same* `UID` do collapse — a map has one entry per key, and RFC 9074
+/// §6 asks for the id to be unique — which loses a reminder no `alerts` map could
+/// have held either.
+///
+/// `None` rather than an empty map for a component with no readable alarm, for the
+/// reason [`read_locations`] gives: the save path reads an edit off a difference
+/// from what was shown, and an empty map would claim the event reminds nobody
+/// where the component made no claim at all.
+fn read_alerts(vevent: &Component) -> Option<BTreeMap<String, Value>> {
+    let mut alerts: BTreeMap<String, Value> = BTreeMap::new();
+    let mut nameless: Vec<Value> = Vec::new();
+    for valarm in vevent
+        .children
+        .iter()
+        .filter(|child| child.name == "VALARM")
+    {
+        let Some(alert) = read_alert(valarm) else {
+            continue;
+        };
+        match valarm.text("UID").filter(|uid| names_map_entry(uid)) {
+            Some(uid) => {
+                alerts.insert(uid, alert);
+            }
+            None => nameless.push(alert),
+        }
+    }
+    let mut n = 0;
+    for alert in nameless {
+        let key = loop {
+            n += 1;
+            let key = format!("{INVENTED_ALERT_KEY}{n}");
+            if !alerts.contains_key(&key) {
+                break key;
+            }
+        };
+        alerts.insert(key, alert);
+    }
+    (!alerts.is_empty()).then_some(alerts)
+}
+
+/// One `VALARM` as a JSCalendar Alert, or `None` for an alarm this mapping has
+/// nothing to read it as — a sound, a program, a mail, or a trigger that is not
+/// an offset. Dropped rather than guessed at, like every other unreadable value:
+/// an alarm Evolution wrote as a sound is a reminder RFC 8984 has no `action`
+/// for, so there is nothing to send even in principle.
+///
+/// The `action` and the trigger's `@type` are written out rather than left to
+/// their defaults, and the `relativeTo` of a reminder before the start is left
+/// off: both directions have to agree about which, or a save would read its own
+/// rendering as an edit. What decides is [`drawn_alert`], which reads back exactly
+/// this shape.
+fn read_alert(valarm: &Component) -> Option<Value> {
+    let (jscalendar, ical) = DISPLAY_ALERT;
+    if !valarm.text("ACTION")?.eq_ignore_ascii_case(ical) {
+        return None;
+    }
+    let property = valarm.property("TRIGGER")?;
+    let offset = stated_offset(&property.raw_value())?;
+    let mut trigger = Map::from_iter([
+        ("@type".to_owned(), json!("OffsetTrigger")),
+        ("offset".to_owned(), json!(offset)),
+    ]);
+    // RFC 5545 §3.2.14 defaults `RELATED` to the start, and so does RFC 8984
+    // §4.5.3's `relativeTo`, so only the end is stated. A value that is neither
+    // is an alarm firing at a moment this mapping cannot name.
+    match property.param("RELATED") {
+        None => {}
+        Some(related) if related.eq_ignore_ascii_case("START") => {}
+        Some(related) if related.eq_ignore_ascii_case("END") => {
+            trigger.insert("relativeTo".to_owned(), json!("end"));
+        }
+        Some(_) => return None,
+    }
+    Some(json!({
+        "@type": "Alert",
+        "trigger": Value::Object(trigger),
+        "action": jscalendar,
+    }))
 }
 
 /// Whether a recurrence rule survives the trip through iCalendar.
@@ -681,6 +975,14 @@ fn vevent_of(
         vevent = vevent.with(Property::list("CATEGORIES", tags));
     }
 
+    // The reminders, each a component of its own rather than a line — so they
+    // land after every property of the event whatever order they were added in,
+    // which is what RFC 5545 §3.6's `eventc` grammar wants. See [`maps_alerts`]
+    // for what is left out.
+    for valarm in drawn_alarms(event) {
+        vevent = vevent.with_child(valarm);
+    }
+
     vevent
 }
 
@@ -736,10 +1038,14 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         // override does not restate. Leaving them off would draw an occurrence of
         // a meeting as happening nowhere and belonging to nothing — and, since
         // both are drawn on the instance's own component, would read back as the
-        // user having emptied them there. `locations` is inherited and nothing
-        // else: an override may not name a place ([`OVERRIDE_PROPERTIES`]).
+        // user having emptied them there. The same for the reminders, which are
+        // `VALARM`s of the instance's own component: an occurrence drawn without
+        // them is one nobody is reminded of. `locations` and `alerts` are
+        // inherited and no more — an override may not name a place or a reminder
+        // ([`OVERRIDE_PROPERTIES`]) — where `keywords` is restated below.
         locations: event.locations.clone(),
         keywords: event.keywords.clone(),
+        alerts: event.alerts.clone(),
         ..CalendarEvent::default()
     };
 
@@ -1089,6 +1395,7 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         privacy: read_privacy(vevent),
         locations: read_locations(vevent),
         keywords: read_keywords(vevent),
+        alerts: read_alerts(vevent),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
         recurrence_overrides: None,
         extra: Default::default(),

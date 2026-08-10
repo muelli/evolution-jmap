@@ -4,10 +4,10 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps fourteen properties and
+//! lossy view of a JSCalendar event. The mapping keeps fifteen properties and
 //! drops everything else, so a save that sent the parsed event back whole
-//! would silently delete what it could not represent — participants, alerts,
-//! links — none of which the user ever saw, let alone asked to remove.
+//! would silently delete what it could not represent — participants, links —
+//! neither of which the user ever saw, let alone asked to remove.
 //!
 //! The lossiness also recurs *inside* the properties that are mapped, and
 //! this module answers that with one move: it does not compare the edited
@@ -23,7 +23,7 @@
 //! - and a `status` outside the closed vocabulary is not cleared by a save
 //!   that never touched it.
 //!
-//! Five properties need more than the baseline, because for them "no
+//! Six properties need more than the baseline, because for them "no
 //! difference" is not the whole question:
 //!
 //! - **`locations` is a map of places and the component has one line.** So the
@@ -33,6 +33,12 @@
 //! - **`keywords` is a set, and a set shown in part is not editable.** The
 //!   property goes back replaced whole, which is only safe if every tag the
 //!   server holds reached the `CATEGORIES` line — see [`diff_keywords`].
+//! - **`alerts` is a map replaced whole, and a second property decides
+//!   whether anything reads it.** A `VALARM` cannot say that the user already
+//!   dismissed the reminder, or that it fires at an absolute instant, or that
+//!   it sends mail; and RFC 8984 §4.5.1's `useDefaultAlerts` says the property
+//!   is ignored altogether. Either way the reminders were not shown, so they
+//!   are not written — see [`diff_alerts`].
 //! - **`recurrenceRules` is one property, not a merge point.** A rule with
 //!   `rscale` cannot be spelled as an `RRULE` this crate emits, so patching
 //!   the array at all would narrow the user's recurrence behind their back.
@@ -46,7 +52,8 @@
 //!   an instance is off, that it happens, and that it happens with another
 //!   title, start, zone, length, description, status, transparency,
 //!   importance, classification or set of tags — but not that it happens in
-//!   another place or with another guest list. An override the component could only place with a bare
+//!   another place, with another reminder, or with another guest list. An
+//!   override the component could only place with a bare
 //!   `RDATE` would come back as the empty patch, deleting what it could not
 //!   draw, so if any override the server holds fails
 //!   [`maps_recurrence_override`], the property is left alone entirely — as it
@@ -63,8 +70,8 @@
 use std::collections::BTreeMap;
 
 use jmap_ical::{
-    event_to_ical, ical_to_event, maps_keywords, maps_locations, maps_recurrence_override,
-    maps_recurrence_rule, names_time_zone,
+    event_to_ical, ical_to_event, maps_alerts, maps_keywords, maps_locations,
+    maps_recurrence_override, maps_recurrence_rule, names_time_zone,
 };
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value};
@@ -159,6 +166,7 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
 
     diff_locations(&mut patch, current, &baseline, edited);
     diff_keywords(&mut patch, current, &baseline, edited);
+    diff_alerts(&mut patch, current, &baseline, edited);
     diff_recurrence(&mut patch, current, &baseline, edited);
     diff_overrides(&mut patch, current, &baseline, edited);
     patch
@@ -292,6 +300,51 @@ fn diff_keywords(
             // Serialising a set this crate's own reader built cannot fail: it
             // holds strings and `true`.
             Some(tags) => serde_json::to_value(tags).unwrap_or(Value::Null),
+            None => Value::Null,
+        },
+    );
+}
+
+/// The reminders the event carries — replaced whole, like [`diff_keywords`] and
+/// unlike [`diff_locations`].
+///
+/// A `VALARM` states an RFC 8984 Alert's whole content that this mapping carries
+/// (its action and when it fires), so there is nothing inside an entry to
+/// preserve and no key to patch into: the baseline says which reminders were
+/// shown, and the difference from it is the set the user now wants. Clearing them
+/// is `"alerts": null`, which is how a PatchObject asks for RFC 8984 §4.5.2's
+/// default of no reminders.
+///
+/// [`maps_alerts`] is asked of the event the **server** holds, and it is asked
+/// about more than the map: an alert the `VALARM` could not show — one the user
+/// has already dismissed, one that fires at an absolute instant, one that sends
+/// mail — was never drawn, so replacing the property would delete it, and an
+/// event whose `useDefaultAlerts` says the property is ignored has nothing worth
+/// writing there at all. The *edited* side needs no such check: every alert on it
+/// was read off a `VALARM` this crate would draw again, key included.
+///
+/// This is the series' reminders only. `alerts` is not a property an override may
+/// restate ([`jmap_ical::OVERRIDE_PROPERTIES`]), so a reminder changed on one
+/// occurrence of a recurring event is not saved — the standing limitation
+/// `locations` has.
+fn diff_alerts(
+    patch: &mut Map<String, Value>,
+    current: &CalendarEvent,
+    baseline: &CalendarEvent,
+    edited: &CalendarEvent,
+) {
+    if !maps_alerts(current) {
+        return;
+    }
+    if baseline.alerts == edited.alerts {
+        return;
+    }
+    patch.insert(
+        "alerts".to_owned(),
+        match &edited.alerts {
+            // Serialising a map this crate's own reader built cannot fail: it
+            // holds two objects of strings.
+            Some(alerts) => serde_json::to_value(alerts).unwrap_or(Value::Null),
             None => Value::Null,
         },
     );

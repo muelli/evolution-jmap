@@ -68,6 +68,17 @@ fn calendar_event_roundtrip() {
     let keywords = event.keywords.as_ref().expect("keywords");
     assert_eq!(keywords.keys().collect::<Vec<_>>(), ["offsite", "planning"]);
     assert!(keywords.values().all(|set| set == &Value::Bool(true)));
+    // `alerts` is modeled but left as JSON, for the reason `locations` is: an
+    // Alert holds a trigger that is one of two object types and an
+    // `acknowledged` timestamp a `VALARM` this mapping writes cannot carry, and
+    // the save path has to see them in order to refuse to replace the property.
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.keys().collect::<Vec<_>>(), ["a1", "a2"]);
+    assert_eq!(
+        alerts["a1"]["trigger"],
+        serde_json::json!({"@type": "OffsetTrigger", "offset": "-PT15M"})
+    );
+    assert_eq!(alerts["a2"]["acknowledged"], "2026-01-15T11:01:00Z");
     // Unmodeled JSCalendar properties (participants, sequence) survive.
     assert!(event.extra.contains_key("participants"));
     assert!(event.extra.contains_key("sequence"));

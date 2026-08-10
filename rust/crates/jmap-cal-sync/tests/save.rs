@@ -188,14 +188,15 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     // Properties no component we produce can carry. (`locations` was the
     // exemplar here until the place an event happens at became mapped,
-    // `keywords` until the tags did, `freeBusyStatus` until the transparency did
-    // and `priority` until the importance did; the guest list and the reminders
-    // are still nowhere on a component.)
+    // `keywords` until the tags did, `freeBusyStatus` until the transparency
+    // did, `priority` until the importance did and `useDefaultAlerts` until the
+    // reminders did; the guest list and the scheduling revision are still
+    // nowhere on a component.)
     fixture.patch(
         &id,
         json!({
             "participants": {"p1": {"@type": "Participant", "email": "vera@example.com"}},
-            "useDefaultAlerts": true,
+            "sequence": 3,
         }),
     );
     let sync = fixture.sync();
@@ -207,8 +208,8 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let stored = fixture.event(&id);
     assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
     assert_eq!(
-        stored.extra.get("useDefaultAlerts"),
-        Some(&json!(true)),
+        stored.extra.get("sequence"),
+        Some(&json!(3)),
         "an unmapped property was overwritten"
     );
     assert!(stored.extra.contains_key("participants"));
@@ -2120,6 +2121,197 @@ fn a_tag_holding_a_comma_survives_the_save_as_one_tag() {
             ]
             .into()
         )
+    );
+}
+
+/// An event reminded the way a server reminds, and the component Evolution is
+/// shown for it.
+fn reminded(fixture: &Fixture, alerts: serde_json::Value) -> (jmap_proto::Id, String) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"alerts": alerts}));
+    let icalendar = fixture
+        .sync()
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar;
+    (id, icalendar)
+}
+
+/// The reminder a server states: a message a quarter of an hour before the
+/// appointment.
+fn quarter_of_an_hour_before() -> serde_json::Value {
+    json!({
+        "@type": "Alert",
+        "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+        "action": "display",
+    })
+}
+
+/// The `VALARM` Evolution's own editor writes for such a reminder: no RFC 9074
+/// `UID`, an `X-EVOLUTION-ALARM-UID` of its own, and the summary repeated as the
+/// text to display.
+const EVOLUTION_VALARM: &str = "BEGIN:VALARM\r\n\
+X-EVOLUTION-ALARM-UID:20260115T090000Z-4711\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Standup\r\n\
+TRIGGER;VALUE=DURATION;RELATED=START:-PT15M\r\n\
+END:VALARM\r\n";
+
+#[test]
+fn setting_a_reminder_reaches_the_server_as_an_alert() {
+    // What Evolution's "Reminder" control writes: a VALARM inside the VEVENT,
+    // which is the first mapped property that is a component rather than a line.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    let edited = icalendar.replace("END:VEVENT", &format!("{EVOLUTION_VALARM}END:VEVENT"));
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).alerts,
+        // Keyed by the one this mapping invents: the component named no id the
+        // `alerts` map could use.
+        Some([("a1".to_owned(), quarter_of_an_hour_before())].into())
+    );
+}
+
+#[test]
+fn moving_a_reminder_sends_the_whole_set_under_the_servers_own_key() {
+    // Unlike a place, an alert is not patched into: the whole map goes back. What
+    // must survive that is the key the server chose, which rides on the VALARM's
+    // RFC 9074 UID — a save under a different key would leave the user with the
+    // same reminder twice.
+    let fixture = Fixture::start();
+    let (id, icalendar) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
+    assert!(icalendar.contains("\r\nUID:k1\r\n"), "{icalendar}");
+    assert!(icalendar.contains("\r\nTRIGGER:-PT15M\r\n"), "{icalendar}");
+
+    let edited = icalendar.replace("TRIGGER:-PT15M", "TRIGGER:-PT1H");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let mut moved = quarter_of_an_hour_before();
+    moved["trigger"]["offset"] = json!("-PT1H");
+    assert_eq!(
+        fixture.event(&id).alerts,
+        Some([("k1".to_owned(), moved)].into())
+    );
+}
+
+#[test]
+fn a_reminder_that_did_not_change_is_not_sent_at_all() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(
+        stored.alerts,
+        Some([("k1".to_owned(), quarter_of_an_hour_before())].into())
+    );
+}
+
+#[test]
+fn clearing_the_reminder_removes_the_property() {
+    // A PatchObject removes a property to say "back to the default", and RFC 8984
+    // §4.5.2's default is no alerts at all — an empty map would be a different
+    // thing to store.
+    let fixture = Fixture::start();
+    let (id, icalendar) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
+
+    let opened = icalendar.find("BEGIN:VALARM").expect("a VALARM");
+    let closed = icalendar.find("END:VALARM\r\n").expect("a VALARM") + "END:VALARM\r\n".len();
+    let edited = format!("{}{}", &icalendar[..opened], &icalendar[closed..]);
+    assert!(!edited.contains("VALARM"), "{edited}");
+
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).alerts, None);
+}
+
+#[test]
+fn a_reminder_the_component_could_not_show_leaves_the_whole_set_alone() {
+    // RFC 9074 §6.1's ACKNOWLEDGED says the user has already dismissed this
+    // reminder, and the VALARM this mapping writes does not carry it — so the
+    // alert was never drawn, and a set replaced whole would un-dismiss it along
+    // with deleting what the user never saw.
+    let fixture = Fixture::start();
+    let mut dismissed = quarter_of_an_hour_before();
+    dismissed["acknowledged"] = json!("2026-01-15T08:46:00Z");
+    let alerts = json!({"k1": quarter_of_an_hour_before(), "k2": dismissed});
+    let (id, icalendar) = reminded(&fixture, alerts.clone());
+    assert_eq!(
+        icalendar.matches("BEGIN:VALARM").count(),
+        1,
+        "the dismissed reminder was drawn\n{icalendar}"
+    );
+
+    let edited = icalendar
+        .replace("TRIGGER:-PT15M", "TRIGGER:-PT1H")
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.alerts,
+        Some(serde_json::from_value(alerts).unwrap()),
+        "a property shown in part must not be written back"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
+        "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn an_event_that_takes_the_default_reminders_keeps_them() {
+    // RFC 8984 §4.5.1: with `useDefaultAlerts` true it is the user's own default
+    // reminders that fire and the `alerts` property is ignored, so there is
+    // nothing to show and nothing a save could usefully write. Honouring a
+    // reminder added here would take a save that cleared the flag too, which this
+    // mapping does not do.
+    let fixture = Fixture::start();
+    let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
+    fixture.patch(&id, json!({"useDefaultAlerts": true}));
+    let sync = fixture.sync();
+    // Re-read after the flag was set: the reminder was drawn before it, and is
+    // not now.
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(!icalendar.contains("VALARM"), "{icalendar}");
+
+    let edited = icalendar
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (short)")
+        .replace("END:VEVENT", &format!("{EVOLUTION_VALARM}END:VEVENT"));
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.alerts,
+        Some([("k1".to_owned(), quarter_of_an_hour_before())].into()),
+        "a property nothing reads must not be written"
+    );
+    assert_eq!(stored.extra.get("useDefaultAlerts"), Some(&json!(true)));
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
+        "the edit the user made must still arrive"
     );
 }
 

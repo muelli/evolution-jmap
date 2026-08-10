@@ -16366,3 +16366,156 @@ property rather than probed one property at a time. New from this session:
 nothing says whether Evolution's editor lets a user set categories on a *single
 occurrence* at all — the mapping and EDS both carry it now, but the leg above
 writes the component by hand, so which menu (if any) reaches it is unverified.
+
+## 2026-08-10 (hundred-and-sixty-third session)
+
+**The reminders an event carries now cross:** JSCalendar `alerts` (RFC 8984
+§4.5.2) ↔ iCalendar `VALARM` (RFC 5545 §3.6.6), both directions. The fifteenth
+mapped property, and the first that is a **child component** rather than a
+content line — so `vevent_of` gained children, `read_vevent` reads
+`vevent.children`, and everything below `jmap-ical` had to be asked whether it
+keeps a component nested inside the one it was handed. It does; see the
+measurement below.
+
+**Only the display reminder with an offset trigger**, deliberately, and each
+refusal is a documented one rather than an omission. RFC 8984 admits `email`
+beside `display` and RFC 5545 admits `AUDIO` and the deprecated `PROCEDURE`;
+neither crosses, because an `ACTION:EMAIL` alarm is *required* to carry a
+`SUMMARY` and an `ATTENDEE` (§3.6.6) that an Alert holds nothing to fill in from,
+and a sound or a program is a reminder RFC 8984 has no `action` for at all. The
+absolute trigger of §4.5.4 is refused the same way: an offset guessed from an
+instant would move the reminder the moment the event moved. So `maps_alerts` says
+"not covered" for any of them and the property is never patched, while
+`read_alert` drops an alarm it cannot read — which is the established policy for
+an unreadable value, and here it is also the only honest one, since an audio
+alarm Evolution wrote has *nothing* to be sent as. Where that policy bites: a
+user who sets a sound reminder and a message reminder on one event sends the
+message one alone. Refusing the whole patch would only lose the edit that *can*
+be saved.
+
+**`acknowledged` is why the member list is closed.** RFC 9074 §6.1's
+`ACKNOWLEDGED` says the user has already dismissed or snoozed this reminder, and
+the `VALARM` this mapping writes does not carry it. Since `alerts` goes back
+**replaced whole** — like `keywords`, unlike `locations`, because a `VALARM` has
+no interior for a PatchObject to reach into — a set replaced from what was drawn
+would silently *un-dismiss* it. So `drawn_alert` accepts an alert whose members
+are exactly `@type`, `trigger` and `action` and a trigger whose members are
+exactly `@type`, `offset` and `relativeTo`, and anything else on either object
+makes the whole property unwritable. That is the strictest of the mapped
+properties, and the reason is that this is the first one whose *undrawn* content
+is state a user set rather than data a server holds.
+
+**The key rides on the alarm's `UID`**, which is RFC 9074 §6 — a property RFC
+5545 never gave a `VALARM`, and the one the JSCalendar↔iCalendar conversion uses
+for exactly this. An entry the server keyed `k1` is drawn `UID:k1` and read back
+under `k1`, so a save states the reminder the server holds rather than a renamed
+copy of it. Evolution's editor writes an `X-EVOLUTION-ALARM-UID` and no `UID`, so
+a reminder the user has just added arrives with no key at all; those get
+positional ones (`a1`, `a2`, …), skipping any a real `UID` already claimed so two
+reminders cannot collapse into one entry. Positional is what makes them
+*stable* — reading the same component twice yields the same map — so an editor
+that strips the `UID` costs one re-keying of the property and not one per save.
+
+**`useDefaultAlerts` is why `maps_alerts` takes the event and not the map.** RFC
+8984 §4.5.1: with it true, the `alerts` property is *ignored* and the user's own
+default reminders fire instead. Drawing them would show reminders that never go
+off, and patching the property would edit what nothing reads — so such an event is
+drawn with no `VALARM` and the property is never written. The flag is read out of
+`extra` rather than modeled, because nothing here writes it and the only question
+asked is whether it is `true`. What it would take to honour a reminder added to
+such an event is a save that cleared the flag in the same patch, which this
+mapping does not do. This also **moved two exemplars**: `useDefaultAlerts` was the
+"property no component can carry" stand-in in `jmap-cal-sync`'s
+`editing_an_event_leaves_unmapped_properties_alone` and
+`the_revision_tracks_the_mapped_content_and_nothing_else`, and it is no longer
+inert — it decides whether the alarms are drawn. Both now use `sequence`;
+`participants` is what is left beside it.
+
+**`DESCRIPTION` is the event's own summary.** RFC 5545 §3.6.6 requires a DISPLAY
+alarm to say what to display and RFC 8984 gives an Alert no message of its own, so
+the title is the only text available. An event with no title writes no
+`DESCRIPTION` at all — nothing to put there, and the reminder still fires — which
+keeps the text out of the covered/not-covered decision entirely, and means this
+increment introduces no user-visible string of its own to mark for translation.
+
+**An override still may not restate a reminder**, and here the reason is *not*
+structural: an instance's `VALARM`s are drawn whole on its own component, exactly
+as its `CATEGORIES` are, so a reminder for one occurrence is something this
+mapping could carry. It simply is not carried yet, so `alerts` stays out of
+`OVERRIDE_PROPERTIES` (still ten), an override naming it is refused rather than
+half-written, and a reminder changed on one occurrence is not saved — the standing
+`locations` limitation, for a different reason. What *is* done is the inheritance:
+`modified_instance` clones the series' `alerts`, or a detached occurrence would be
+drawn as one nobody is reminded of, and — since both are read off the instance's
+own component — would read back as the user having deleted the reminder there.
+
+**The libical question, measured rather than assumed.**
+`jmap-backend-cal`'s `libical_keeps_the_reminder_this_mapping_writes` drives
+`BEGIN:VALARM UID:k1 ACTION:DISPLAY DESCRIPTION:S TRIGGER;RELATED=END:-PT15M` in
+through `e_cal_component_new_from_string` and reads the result with
+`jmap_ical::ical_to_event`. Everything survives: the nested component, the RFC
+9074 `UID`, the `RELATED=END` parameter and — the one this really watches — the
+**sign** on the trigger, since a reminder a quarter of an hour *before* the event
+coming back as one a quarter of an hour after it is a silent misfire. libical also
+adds an `X-EVOLUTION-ALARM-UID` of its own beside our `UID`, and a `DTSTAMP` to
+the event; both are ignored, and the first is what Evolution keys alarms on.
+
+**And the functional leg, mutation-checked in both directions.**
+`tests/functional/cal-client.c` now writes a `VALARM` into the event it creates
+through `e_cal_client_create_object_sync` and reports the first alarm's trigger
+out of EDS's own cache (`read-back-alarm-trigger`), read as *text* rather than
+through `i_cal_property_get_trigger`, whose zero value is a perfectly good "no
+offset" and would hide a lost property. `calendar.rs` asserts that and the alert
+the mock ends up holding, under the client's own key. Two mutations, each killing
+a different half: reading no `VALARM` at all empties EDS's cache line, and
+ignoring the alarm's `UID` re-keys the alert the server holds from `k1` to `a1`.
+
+Tests: red first — compile-red in `jmap-proto` and `jmap-ical` (the field did not
+exist), then three behaviour-red in `jmap-cal-sync/tests/save.rs` against the
+mock. Six mutations on the parts that passed on their first run, each killed by a
+different test: an open member list on the alert, an unchecked key, alarms drawn
+for a `useDefaultAlerts` event, `RELATED=END` dropped on the way back, a fixed
+invented key instead of a positional one, and `diff_alerts` without its
+`maps_alerts` guard. Counts: `cargo test --locked` 762, up 16 from 746;
+`jmap-backend-cal` 35 in `marshal.rs`, up one; `ctest` 14/14 including all four
+functional legs against real EDS, after a full `ninja`.
+
+Not done, deliberately: the `email` action and the absolute trigger, a reminder
+restated per occurrence, and `useDefaultAlerts` as something a save can clear.
+
+Verified locally: `cargo test --locked` 762 green, `cargo test -p
+jmap-backend-cal --locked` green, `ctest` 14/14 after a full `ninja`, `cargo fmt
+--check`, and `cargo clippy --all-targets --locked -- -D warnings` clean for the
+default set and for `jmap-backend-cal` and `jmap-functional`. `ci/checks.sh`
+again stops at its first step: `reuse` is not on this VM and neither `pipx` nor
+`uvx` is installed. Exposure is nil — **no file was added**, only edits to files
+that already carry SPDX headers — and `Cargo.lock` is untouched, so `cargo
+deny`'s answer is the one it gave on the last green run.
+
+Disk: 3.1G free of 58G, with `rust/target` at 22G and `~/audit-ffi` at 14G;
+`CARGO_INCREMENTAL=0` throughout. **The maintainer decision is still wanted**: a
+periodic `cargo clean` in the night-shift driver, a bigger disk, or a shared
+target directory.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two; the *reading* direction of a
+per-instance zone through real EDS is untested; calcard silently drops an
+unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`;
+whether Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the
+user edited is untested; whether it writes a `TRANSP` it was not asked to is
+untested; and nothing says whether Evolution's editor lets a user set categories
+on a single occurrence at all. New from this session: whether Evolution's own
+"Reminder" control writes the `ACTION:DISPLAY` + relative-`TRIGGER` shape this
+mapping reads — the leg above writes the `VALARM` by hand, and the editor's
+default reminder is a *relative* display one, but its "Customise" page can ask for
+a sound, a program or a mail, which this mapping drops; and whether the editor
+preserves the RFC 9074 `UID` on an alarm the user edits, which decides whether the
+re-keying above ever happens in practice.
