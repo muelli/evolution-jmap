@@ -13249,3 +13249,84 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so th
 M8 tag the last four sessions asked for is still unwritten; the manual-test
 recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-third session)
+
+The calendar mapping read `DURATION` and nothing else, and `DURATION` is not
+what Evolution writes. The appointment editor calls
+`e_cal_component_set_dtend`, and RFC 5545 §3.6.1 makes `DTEND` and `DURATION`
+mutually exclusive, so an event a user created said how long it was only
+through its end — and that end was dropped on the floor. What reached the
+server was an event with no duration, which is `P0D` by RFC 8984 §4.2.2: every
+appointment made in Evolution was shared with the rest of the world as a
+zero-length blip at its start time. `jmap-ical` now measures the difference
+when there is no `DURATION` to read.
+
+**Red first, and red on the path that matters.** Two unit tests failed for the
+right reason (`an_events_length_may_arrive_as_a_dtend_instead_of_a_duration`,
+`a_length_read_from_a_dtend_is_written_back_as_a_duration`), and the save-path
+test through `jmap-mockd`
+(`a_new_event_that_states_its_end_rather_than_its_length_still_has_one`) was
+checked red by disabling the new branch and re-running rather than by
+assertion. Then the end that no unit test can reach: `tests/functional/
+cal-client.c` now writes `DTEND` where it wrote `DURATION`, the shape Evolution
+actually produces, and `functional-cal` asserts the mock holds `PT1H30M` — real
+`evolution-calendar-factory`, real `libecalbackendjmap.so`, real
+`e_cal_client_create_object_sync`. Mutating the expectation to `PT2H` fails it
+with the stored event printed, so the assertion is live and not a tautology.
+
+**The arithmetic, and what it deliberately does not know.** The difference is
+taken on the wall clock: each end is turned into seconds by Hinnant's
+`days_from_civil` and subtracted. That is also how JSCalendar reads the answer
+back — its `P1D` is a nominal day, the same time on the next day, not 24 exact
+hours — so whole days are emitted as days (`P1D`, `P2DT1H`) rather than as
+hours, and the value survives a daylight saving change the way the user's
+calendar does. The two agree for as long as both ends are in one zone, which is
+the only shape Evolution writes; a `DTEND` in a *different* zone than the
+`DTSTART` comes out short or long by the offset between them, and that is
+written into the doc comment rather than hidden. The alternative — dropping the
+length of an event that plainly states it — is the bug this fixes.
+
+Three refusals, each tested: a `DTEND` before the start, one equal to it (the
+`P0D` default anyway), and one that cannot be read or names no instant that
+exists — the range check the last session added guards this path too, so
+`DTEND:20260230T130000` yields no duration rather than a negative one. And when
+a malformed component carries both `DURATION` and `DTEND`, `DURATION` wins: it
+maps to the JSCalendar property with no arithmetic at all.
+
+`DTEND` is now the one property this crate reads and never writes; a length
+always goes back out as `DURATION`, which round-trips exactly and which libical
+reads. One consequence worth knowing before it is noticed as a bug: a server
+that spells a duration `PT90M` and an Evolution that re-saves the event as
+`DTEND` will disagree on spelling, so the save patches `duration` to the
+equivalent `PT1H30M`. Same length, one needless write; normalising it would
+mean parsing ISO 8601 durations, which is a bigger increment than this one.
+
+Next, and now more visible than before: `showWithoutTime` is still unmodeled.
+An all-day event from Evolution (`DTSTART;VALUE=DATE` + `DTEND;VALUE=DATE`)
+now at least gets its `P1D`, but its start still reads as midnight and the
+server is never told it is an all-day event, so it comes back to every other
+client as a midnight appointment. That is the obvious next increment in this
+area: `showWithoutTime` on `CalendarEvent`, `VALUE=DATE` on the way out when
+the start is midnight, the duration is whole days and there is no zone to lose,
+and the flag in the patch diff so switching an event to timed reaches the
+server.
+
+Verified locally: `cargo test --locked` 504 (was 499: +5 red-first), the
+EDS-header crates green via the `rust-test-eds` set (`-p eds-sys -p evo-sys
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
+-p jmap-backend-collection -p jmap-config`), `ctest` 14/14 including the four
+functional tests, `cargo fmt --check`, and `cargo clippy --all-targets --locked
+-- -D warnings` clean for both crate sets. `reuse lint` and `cargo deny` not run
+(neither is on this VM); no files were added, so no new SPDX headers were
+needed, and no dependency changed.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last five sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.

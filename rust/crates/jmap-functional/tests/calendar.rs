@@ -20,6 +20,11 @@ use jmap_functional::{Session, observations, required_path};
 const SUMMARY: &str = "Sprint planning";
 const START: &str = "2026-01-15T13:00:00";
 
+/// The length of that event, which the client states as a `DTEND` — the way
+/// Evolution's editor does — an hour and a half after the start. Nothing but
+/// this test says the two forms end up alike on the server.
+const DURATION: &str = "PT1H30M";
+
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
 /// mock's ephemeral port filled in. Kept as a literal here rather than read
 /// from `docs/` so that a change to the documented recipe fails this test
@@ -178,6 +183,12 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         event.start.as_deref(),
         Some(START),
         "the event on the server starts at the wrong time: {event:?}"
+    );
+    assert_eq!(
+        event.duration.as_deref(),
+        Some(DURATION),
+        "the event on the server has the wrong length, so EDS's DTEND did not \
+         survive the trip: {event:?}"
     );
     assert!(
         event
