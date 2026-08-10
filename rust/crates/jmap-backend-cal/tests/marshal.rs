@@ -1397,6 +1397,40 @@ fn libical_stamps_a_dtstamp_of_its_own_and_keeps_the_timestamps_written() {
     }
 }
 
+/// The guest list, through the parser that hands it to Evolution.
+///
+/// `jmap-ical` draws RFC 8984 §4.4.6's `participants` as `ATTENDEE` lines and
+/// the owner among them as an `ORGANIZER`, and never reads any of them back, so
+/// no value the save path uses rests on libical here either. What does rest on
+/// it is what the user is *shown*: these lines exist to be read, and a parameter
+/// libical dropped or a value it mangled would be a guest list Evolution shows
+/// wrongly — an attendee with no name, or one whose reply went missing.
+///
+/// It keeps both lines with every parameter this mapping writes, in the order
+/// they were written.
+#[test]
+fn libical_keeps_the_guest_list_it_was_handed() {
+    for line in [
+        "ATTENDEE;CN=Bob Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:\
+         mailto:bob@example.com",
+        "ATTENDEE;CN=Room 1;CUTYPE=ROOM;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:\
+         mailto:room-1@example.com",
+        "ORGANIZER;CN=Alice Example:mailto:alice@example.com",
+    ] {
+        let (property, _) = line.split_once(';').expect("a parameterised line");
+        assert_eq!(reparsed(property, line), vec![line.to_owned()]);
+    }
+    // And it invents neither: an event the server gave no participants for is
+    // shown as one nobody was invited to, which is what it is.
+    for property in ["ATTENDEE", "ORGANIZER"] {
+        assert_eq!(
+            reparsed(property, "DESCRIPTION:the quarter"),
+            Vec::<String>::new(),
+            "libical filled in an {property} of its own"
+        );
+    }
+}
+
 /// The `LOCATION` lines of a `VEVENT` after libical has parsed and re-rendered
 /// it, unfolded.
 fn reparsed_lines(lines: &str) -> Vec<String> {

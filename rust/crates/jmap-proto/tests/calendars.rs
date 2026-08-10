@@ -79,8 +79,23 @@ fn calendar_event_roundtrip() {
         serde_json::json!({"@type": "OffsetTrigger", "offset": "-PT15M"})
     );
     assert_eq!(alerts["a2"]["acknowledged"], "2026-01-15T11:01:00Z");
-    // Unmodeled JSCalendar properties (participants, sequence) survive.
-    assert!(event.extra.contains_key("participants"));
+    // `participants` is modeled but left as JSON, for the reason `locations` is
+    // and then some: a Participant holds a `sendTo` map, a set of `roles`, a
+    // `kind`, delegations and a scheduling agent, of which iCalendar spells the
+    // part it shares on the parameters of an `ATTENDEE` line. The mapping draws
+    // the guest list and never reads it back, so the shape matters only in that
+    // it survives untouched.
+    let participants = event.participants.as_ref().expect("participants");
+    assert_eq!(
+        participants.get("p1"),
+        Some(&serde_json::json!({
+            "@type": "Participant",
+            "name": "Vera",
+            "sendTo": {"imip": "mailto:vera@example.com"},
+            "roles": {"attendee": true},
+        }))
+    );
+    // An unmodeled JSCalendar property (sequence) survives.
     assert!(event.extra.contains_key("sequence"));
 }
 

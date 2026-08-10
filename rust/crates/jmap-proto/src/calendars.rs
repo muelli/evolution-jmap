@@ -158,6 +158,22 @@ pub struct CalendarEvent {
     /// to replace the property.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alerts: Option<BTreeMap<String, Value>>,
+    /// Who is invited to the event (RFC 8984 §4.4.6), keyed by an id of whoever
+    /// wrote them — the guest list, and the organizer with them: RFC 8984 gives
+    /// the organizer no property of its own, it is the participant holding the
+    /// `owner` role.
+    ///
+    /// Left as JSON, for the reason [`Self::locations`] is and then some: a
+    /// Participant holds a `sendTo` map of addressing methods, a set of `roles`,
+    /// a `kind`, a `participationStatus`, `delegatedTo`/`delegatedFrom`,
+    /// `memberOf`, a scheduling agent and more — iCalendar spells the part of
+    /// that it shares on the parameters of an `ATTENDEE` line. The mapping draws
+    /// the guest list and never reads it back, so nothing here has to model the
+    /// rest; holding it as values keeps one server's unusual participant from
+    /// failing a `CalendarEvent/get` and taking every event in the calendar with
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participants: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_rules: Option<Vec<RecurrenceRule>>,
     /// The instances named one at a time rather than by a rule (RFC 8984

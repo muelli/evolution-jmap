@@ -9,7 +9,7 @@
 //! CLASS, LOCATION, CATEGORIES, RRULE, the `VALARM`s that remind the user of the
 //! event, and the instances an EXDATE, an RDATE or a `RECURRENCE-ID` component
 //! names one at a time — and no more. Everything else on an event
-//! (participants, links, …) is *dropped*,
+//! (links, virtual locations, …) is *dropped*,
 //! which is only safe because saving goes back to the server as a PatchObject
 //! naming the mapped properties: a property we never mapped is a property we
 //! never overwrite. See [`MAPPED_PROPERTIES`], [`maps_locations`],
@@ -36,6 +36,13 @@
 //! be this side proposing a value — and, since libical stamps a `DTSTAMP` of its
 //! own onto every component that arrives without one, the value proposed would
 //! be the local clock.
+//!
+//! `ORGANIZER` and `ATTENDEE` are written and never read for a heavier reason:
+//! who is invited, and what each of them replied, is *scheduling* state. Moving
+//! it means an iTIP REQUEST or REPLY going out to those people (RFC 5546), which
+//! this backend does not send — so the guest list RFC 8984 §4.4.6 states in
+//! `participants` is drawn for the user to read, and a save can never name the
+//! property. See [`drawn_participants`].
 //!
 //! A time zone crosses under two different kinds of name: iCalendar refers to
 //! one by a `TZID`, which is an identifier the document itself may define, and
@@ -176,6 +183,58 @@ const PRIVACIES: [(&str, &str); 3] = [
     ("public", "PUBLIC"),
     ("private", "PRIVATE"),
     ("secret", "CONFIDENTIAL"),
+];
+
+/// The RFC 8984 §4.4.6 `sendTo` method whose URI is what iCalendar puts on an
+/// `ATTENDEE`: iMIP (RFC 6047) is scheduling by mail, and its address is the
+/// `mailto:` an RFC 5545 §3.3.3 CAL-ADDRESS is in practice. A participant
+/// reachable only some other way — a web form, a phone number — has no line to
+/// go on, so it is left off.
+const IMIP: &str = "imip";
+
+/// The role that makes a participant the event's organizer. RFC 8984 §4.4.6 has
+/// no `organizer` property: the owner of the event is a participant like any
+/// other, holding this role, where RFC 5545 §3.8.4.3 states it on a line of its
+/// own.
+const OWNER_ROLE: &str = "owner";
+
+/// What a participant has replied: RFC 8984 §4.4.6's `participationStatus` and
+/// RFC 5545 §3.2.12's `PARTSTAT`, which for a `VEVENT` admit the same five
+/// answers under the same names. A value outside them is dropped rather than
+/// passed through in the other format's clothes.
+const PARTICIPATION_STATUSES: [(&str, &str); 5] = [
+    ("needs-action", "NEEDS-ACTION"),
+    ("accepted", "ACCEPTED"),
+    ("declined", "DECLINED"),
+    ("tentative", "TENTATIVE"),
+    ("delegated", "DELEGATED"),
+];
+
+/// The parts a participant plays that iCalendar has a `ROLE` for (RFC 8984
+/// §4.4.6, RFC 5545 §3.2.16), **in precedence order**: RFC 8984's `roles` is a
+/// set and a `ROLE` parameter is one value, so a guest who is both an attendee
+/// and an optional one is written as the optional one — the narrower statement
+/// is the one the user needs, and `attendee` is iCalendar's default anyway.
+///
+/// `owner` is not here: it is the [`ORGANIZER`](OWNER_ROLE) line rather than a
+/// role on the guest list.
+const PARTICIPANT_ROLES: [(&str, &str); 4] = [
+    ("chair", "CHAIR"),
+    ("informational", "NON-PARTICIPANT"),
+    ("optional", "OPT-PARTICIPANT"),
+    ("attendee", "REQ-PARTICIPANT"),
+];
+
+/// What sort of participant it is: RFC 8984 §4.4.6's `kind` and RFC 5545
+/// §3.2.3's `CUTYPE`. The two vocabularies say the same four things and differ
+/// in one word — a JSCalendar `location` is iCalendar's `ROOM`. iCalendar's
+/// `UNKNOWN` is not written: an event that says nothing about a participant's
+/// kind gets no parameter, which is the same state.
+const PARTICIPANT_KINDS: [(&str, &str); 4] = [
+    ("individual", "INDIVIDUAL"),
+    ("group", "GROUP"),
+    ("resource", "RESOURCE"),
+    ("location", "ROOM"),
 ];
 
 /// The JSCalendar properties this mapping covers, and therefore the only ones
@@ -511,6 +570,136 @@ fn drawn_alarms(event: &CalendarEvent) -> Vec<Component> {
         .flatten()
         .filter_map(|(key, alert)| drawn_alert(key, alert, event.title.as_deref()))
         .collect()
+}
+
+/// The guest list, as the lines a `VEVENT` states it on: an `ORGANIZER` for the
+/// participant that owns the event, and an `ATTENDEE` for everyone attending it.
+///
+/// In the map's own order, so a document is stable across renderings. Only the
+/// *first* owner gets an `ORGANIZER`: RFC 8984 §4.4.6 admits several — the role
+/// is a set member like any other — where RFC 5545 §3.6.1 admits one line, and
+/// showing the first is better than showing an event nobody called.
+///
+/// A participant whose only role this mapping can spell is `owner` gets the
+/// `ORGANIZER` line alone: it called the meeting without coming to it, and an
+/// `ATTENDEE` would say it is on the guest list. One that holds another role
+/// besides — the usual shape of a meeting somebody called and comes to — gets
+/// both, because iCalendar states the organizer beside the guest list rather
+/// than instead of it.
+fn drawn_participants(event: &CalendarEvent) -> Vec<Property> {
+    let mut lines = Vec::new();
+    let mut organizer_drawn = false;
+    for participant in event.participants.iter().flatten().map(|(_, value)| value) {
+        let Some(address) = calendar_address(participant) else {
+            continue;
+        };
+        let owns = holds_role(participant, OWNER_ROLE);
+        let role = spelled(&PARTICIPANT_ROLES, participant.get("roles"));
+        if owns && !organizer_drawn {
+            organizer_drawn = true;
+            lines.push(
+                Property::raw("ORGANIZER", address)
+                    .with_params("CN", participant_name(participant)),
+            );
+        }
+        if owns && role.is_none() {
+            continue;
+        }
+        lines.push(
+            Property::raw("ATTENDEE", address)
+                .with_params("CN", participant_name(participant))
+                .with_params(
+                    "CUTYPE",
+                    spelled(&PARTICIPANT_KINDS, participant.get("kind")),
+                )
+                .with_params("ROLE", role)
+                .with_params(
+                    "PARTSTAT",
+                    spelled(
+                        &PARTICIPATION_STATUSES,
+                        participant.get("participationStatus"),
+                    ),
+                )
+                .with_params("RSVP", expects_reply(participant).then_some("TRUE")),
+        );
+    }
+    lines
+}
+
+/// The address to reach one participant at, or `None` for one no `ATTENDEE`
+/// line can name.
+///
+/// A CAL-ADDRESS is a URI (RFC 5545 §3.3.3), so a value that is not one is left
+/// off rather than written: there is nothing to invent in its place, and a line
+/// libical refuses costs every other field of the event with it. That is only
+/// safe because the guest list is written and never read back — see
+/// [`read_vevent`], where `participants` stays `None`.
+fn calendar_address(participant: &Value) -> Option<&str> {
+    participant
+        .get("sendTo")?
+        .get(IMIP)?
+        .as_str()
+        .filter(|address| names_a_uri(address))
+}
+
+/// Whether a value is a URI this mapping will put on a content line: RFC 3986
+/// §3.1's scheme, a `:`, and something after it.
+///
+/// Whitespace is refused along with the rest — no URI holds any — which is also
+/// what keeps a CR or an LF out of a value that skips [`syntax::escape`]. That
+/// is belt and braces: `syntax::fold_into` drops both on the way out, for
+/// exactly this reason.
+fn names_a_uri(value: &str) -> bool {
+    let Some((scheme, rest)) = value.split_once(':') else {
+        return false;
+    };
+    !rest.is_empty()
+        && !value.chars().any(char::is_whitespace)
+        && scheme.starts_with(|first: char| first.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|part| part.is_ascii_alphanumeric() || matches!(part, '+' | '-' | '.'))
+}
+
+/// The `name` of one participant, or `None` where it has none to put in a `CN`.
+fn participant_name(participant: &Value) -> Option<&str> {
+    participant
+        .get("name")?
+        .as_str()
+        .filter(|name| !name.is_empty())
+}
+
+/// Whether a participant states this RFC 8984 §4.4.6 role. The values of a set
+/// are `true` (RFC 8984 §1.4.3); anything else says nothing was set.
+fn holds_role(participant: &Value, role: &str) -> bool {
+    participant
+        .get("roles")
+        .and_then(|roles| roles.get(role))
+        .is_some_and(|held| held == &Value::Bool(true))
+}
+
+/// Whether a reply is expected of a participant — RFC 8984 §4.4.6's
+/// `expectReply`, which is RFC 5545 §3.2.17's `RSVP`. Both default to false, so
+/// only a stated `true` is written.
+fn expects_reply(participant: &Value) -> bool {
+    participant.get("expectReply") == Some(&Value::Bool(true))
+}
+
+/// The iCalendar spelling one of this mapping's tables gives a JSCalendar value,
+/// or `None` for a value it does not know.
+///
+/// Two shapes of value reach here: a string, which is looked up as itself, and a
+/// Set, whose *first* member the table names wins — which is what makes
+/// [`PARTICIPANT_ROLES`] an order and not just a list.
+fn spelled(table: &[(&str, &'static str)], value: Option<&Value>) -> Option<&'static str> {
+    let stated = |name: &str| match value? {
+        Value::String(value) => value.eq_ignore_ascii_case(name).then_some(()),
+        set => (set.get(name) == Some(&Value::Bool(true))).then_some(()),
+    };
+    table
+        .iter()
+        .find(|(jscalendar, _)| stated(jscalendar).is_some())
+        .map(|(_, ical)| *ical)
 }
 
 /// A stated offset as a JSCalendar SignedDuration (RFC 8984 §1.4.7), or `None`
@@ -1031,6 +1220,15 @@ fn vevent_of(
         vevent = vevent.with(Property::list("CATEGORIES", tags));
     }
 
+    // Who called the meeting and who is invited to it. Written for the user to
+    // read and never read back: changing the guest list, or what somebody
+    // replied, is scheduling — an iTIP REQUEST or REPLY (RFC 5546) this backend
+    // does not send — so `participants` is absent from [`MAPPED_PROPERTIES`] and
+    // no save can name it. See [`drawn_participants`].
+    for line in drawn_participants(event) {
+        vevent = vevent.with(line);
+    }
+
     // The reminders, each a component of its own rather than a line — so they
     // land after every property of the event whatever order they were added in,
     // which is what RFC 5545 §3.6's `eventc` grammar wants. See [`maps_alerts`]
@@ -1108,6 +1306,10 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         locations: event.locations.clone(),
         keywords: event.keywords.clone(),
         alerts: event.alerts.clone(),
+        // Inherited for the same reason, and not restatable: RFC 8984 §4.4.6's
+        // `participants` is not in [`OVERRIDE_PROPERTIES`], and an occurrence
+        // drawn without them is a meeting nobody was invited to.
+        participants: event.participants.clone(),
         // The properties this mapping does not model, inherited for the same
         // reason and needed for one of them: RFC 8984 §4.5.1's `useDefaultAlerts`
         // is read from here (see [`uses_default_alerts`]), and an instance that
@@ -1487,6 +1689,15 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         locations: read_locations(vevent),
         keywords: read_keywords(vevent),
         alerts: read_alerts(vevent),
+        // Drawn onto the document and never read back off it, like the two
+        // timestamps above and for a heavier reason: who is invited, and what
+        // each of them replied, is scheduling state. Changing it means an iTIP
+        // REQUEST or REPLY going out to those people (RFC 5546), which this
+        // backend does not send — so a save that patched `participants` would
+        // rewrite the server's guest list while nobody was told. Reading nothing
+        // here is what keeps that impossible: the property is not in
+        // `MAPPED_PROPERTIES`, so no save can name it.
+        participants: None,
         recurrence_rules: (!rules.is_empty()).then_some(rules),
         recurrence_overrides: None,
         extra: Default::default(),
