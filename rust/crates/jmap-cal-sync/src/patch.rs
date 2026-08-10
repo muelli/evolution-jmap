@@ -28,7 +28,7 @@
 //! difference" is not the whole question:
 //!
 //! - **`recurrenceRules` is one property, not a merge point.** A rule with
-//!   `byMonthDay` cannot be spelled as an `RRULE` this crate emits, so patching
+//!   `bySetPosition` cannot be spelled as an `RRULE` this crate emits, so patching
 //!   the array at all would narrow the user's recurrence behind their back.
 //!   If any rule the server holds fails [`maps_recurrence_rule`], the
 //!   property is left alone entirely — as does one the *save* brings that
