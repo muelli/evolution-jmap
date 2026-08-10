@@ -21,3 +21,6 @@ glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 gio-sys = { workspace = true }
 
+[dev-dependencies]
+libc = "0.2.189"
+

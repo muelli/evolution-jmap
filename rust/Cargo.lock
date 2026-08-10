@@ -437,6 +437,7 @@ dependencies = [
  "gio-sys",
  "glib-sys",
  "gobject-sys",
+ "libc",
 ]
 
 [[package]]
