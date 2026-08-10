@@ -818,6 +818,103 @@ fn a_new_events_zone_arrives_under_its_iana_name() {
     assert_eq!(stored.start.as_deref(), Some("2026-01-15T13:00:00"));
 }
 
+/// One occurrence moved into another zone, which is what Evolution's appointment
+/// editor writes when the user opens a single day of a series and changes its
+/// time zone: a detached component whose own `DTSTART` carries a `TZID` the
+/// series' does not. The zone has to reach the server inside the override, or the
+/// wall-clock time the user typed is resolved against the series' zone and the
+/// occurrence lands hours away.
+#[test]
+fn moving_one_occurrence_to_another_zone_arrives_under_its_iana_name() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    let sync = fixture.sync();
+
+    let icalendar = sync
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar
+        // The definition the zone the instance moves to needs, once, ahead of
+        // the series: two copies would be two zones under one TZID.
+        .replacen(
+            "BEGIN:VEVENT",
+            &format!("{LIBICAL_VTIMEZONE}BEGIN:VEVENT"),
+            1,
+        );
+    // The series is in UTC; the instance goes to Berlin, spelled the way libical
+    // spells its builtin zones. What the instance restates unchanged — the title
+    // and the status — is not an edit, so only the zone and the start arrive.
+    let edited = with_instance(
+        &icalendar,
+        &format!(
+            "BEGIN:VEVENT\r\n\
+             UID:{id}\r\n\
+             RECURRENCE-ID:20260116T090000Z\r\n\
+             DTSTART;TZID={LIBICAL_TZID}:20260116T100000\r\n\
+             DURATION:PT1H\r\n\
+             STATUS:CONFIRMED\r\n\
+             SUMMARY:Standup\r\n\
+             END:VEVENT\r\n"
+        ),
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).recurrence_overrides,
+        Some(
+            [(
+                "2026-01-16T09:00:00".to_owned(),
+                json!({"start": "2026-01-16T10:00:00", "timeZone": "Europe/Berlin"}),
+            )]
+            .into()
+        ),
+    );
+}
+
+/// And the zone no document explains, one level down from
+/// [`a_zone_the_document_could_not_name_leaves_the_servers_alone`]:
+/// `recurrenceOverrides` is replaced whole, so an entry holding a value RFC 8984
+/// §1.4.9 does not admit cannot be sent at all — the server would be entitled to
+/// reject the whole `CalendarEvent/set` and take the user's other edits with it.
+/// The property is left alone and the rest of the save still arrives.
+#[test]
+fn an_occurrences_unnameable_zone_leaves_the_overrides_alone() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    let sync = fixture.sync();
+
+    let icalendar = sync
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (daily)");
+    let edited = with_instance(
+        &icalendar,
+        &format!(
+            "BEGIN:VEVENT\r\n\
+             UID:{id}\r\n\
+             RECURRENCE-ID:20260116T090000Z\r\n\
+             DTSTART;TZID=W. Europe Standard Time:20260116T100000\r\n\
+             DURATION:PT1H\r\n\
+             STATUS:CONFIRMED\r\n\
+             SUMMARY:Standup (daily)\r\n\
+             END:VEVENT\r\n"
+        ),
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides, None,
+        "an override we cannot spell is not sent in place of the ones the server holds"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (daily)"),
+        "the edit the user made must still arrive"
+    );
+}
+
 #[test]
 fn saving_over_an_unknown_identifier_is_not_found() {
     let fixture = Fixture::start();

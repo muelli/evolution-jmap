@@ -102,11 +102,21 @@ pub const MAPPED_PROPERTIES: [&str; 9] = [
 /// keys — besides `excluded` — a `recurrenceOverrides` PatchObject may hold for
 /// [`maps_recurrence_override`] to call it covered.
 ///
-/// `timeZone` is deliberately absent: every date-time in the document is
-/// written in the series' zone, so an instance in another one has no spelling
-/// here. So is `showWithoutTime`, one step further out — see
+/// `timeZone` is here because iCalendar states a zone per property rather than
+/// per document: the instance's own `DTSTART` carries its own `TZID`, so an
+/// occurrence the user moved into another zone has a spelling of its own, and
+/// one with no `TZID` at all is the floating instance a null asks for.
+///
+/// `showWithoutTime` is absent, one step further out — see
 /// [`shows_without_time`], which is decided once for the whole document.
-pub const OVERRIDE_PROPERTIES: [&str; 5] = ["title", "description", "start", "duration", "status"];
+pub const OVERRIDE_PROPERTIES: [&str; 6] = [
+    "title",
+    "description",
+    "start",
+    "timeZone",
+    "duration",
+    "status",
+];
 
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
@@ -178,6 +188,12 @@ fn maps_override_field(name: &str, value: &Value) -> bool {
         // A start is required by RFC 8984, so a null says nothing, and the
         // value has to be one a DTSTART can carry.
         "start" => value.as_str().and_then(to_ical_date_time).is_some(),
+        // A null is the floating instance, which a `DTSTART` with no `TZID`
+        // says. A value has to be a name JSCalendar admits: the `TZID` this
+        // reads back from is an iCalendar identifier (see [`names_time_zone`]),
+        // and `recurrenceOverrides` goes back to the server replaced whole, so
+        // one entry the server rejects costs every edit in the save.
+        "timeZone" => value.is_null() || value.as_str().is_some_and(names_time_zone),
         // The only place an instance's own length is stated is its component's
         // DURATION, and one this mapping will not write there (see
         // [`vevent_of`]) leaves the instance at the series' length — which is
@@ -266,10 +282,19 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
 /// The recurrence itself is *not* here. A series states its rules and its named
 /// instances; an instance edited on its own states neither, because it is one
 /// occurrence and RFC 5545 §3.8.4.4 already says which.
+///
+/// The two date-times this writes are in **two different zones** whenever an
+/// instance moved into one of its own. `DTSTART` is in the event's own zone,
+/// which for an instance is what its override said; `RECURRENCE-ID` is in
+/// `series_zone`, because it names the occurrence the recurrence rules generated
+/// and those run on the series' clock (RFC 5545 §3.8.4.4 — the value has to
+/// match the series' `DTSTART`, or it points at an instant the series never
+/// generated and the edit attaches to nothing). For the series itself the two
+/// are the same zone.
 fn vevent_of(
     event: &CalendarEvent,
     as_a_date: bool,
-    zone: Option<&str>,
+    series_zone: Option<&str>,
     recurrence_id: Option<&str>,
 ) -> Component {
     let mut vevent = Component::new("VEVENT");
@@ -296,7 +321,7 @@ fn vevent_of(
             RECURRENCE_ID,
             std::slice::from_ref(&recurrence_id.to_owned()),
             as_a_date,
-            zone,
+            series_zone,
         ));
     }
 
@@ -314,7 +339,7 @@ fn vevent_of(
             "DTSTART",
             std::slice::from_ref(&start),
             as_a_date,
-            zone,
+            event.time_zone.as_deref(),
         ));
     }
 
@@ -396,6 +421,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
             "duration" => instance.duration = text,
             "status" => instance.status = text,
             "start" => instance.start = text,
+            "timeZone" => instance.time_zone = text,
             // `excluded: false`, which says only that the instance happens —
             // and it happening is what an override with no other content
             // already means.
@@ -772,6 +798,11 @@ fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) ->
     for (name, was, now) in [
         ("title", &series.title, &instance.title),
         ("description", &series.description, &instance.description),
+        // A zone belongs to the property that carries it, so this is a real
+        // difference and not an inheritance: a component whose `DTSTART` has no
+        // `TZID` floats however the series is written, which is the `null` a
+        // PatchObject removes a property with.
+        ("timeZone", &series.time_zone, &instance.time_zone),
         ("duration", &series.duration, &instance.duration),
         ("status", &series.status, &instance.status),
     ] {
@@ -1026,8 +1057,9 @@ fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
 /// An id no property could carry is dropped rather than written, so it puts no
 /// condition on the form. An id that *is* written has to land on a day, and an
 /// instance with a component of its own has to meet the same conditions the
-/// series does: a start at midnight and a length in whole days, since RFC 5545
-/// §3.6.1 lets nothing else stand beside a DATE-valued `DTSTART`.
+/// series does: a start at midnight, a length in whole days and no zone of its
+/// own, since RFC 5545 §3.6.1 lets nothing else stand beside a DATE-valued
+/// `DTSTART` and §3.2.19 gives such a value no `TZID` to carry a zone on.
 fn instance_shows_without_time(event: &CalendarEvent, id: &str, patch: &Value) -> bool {
     let Some(rendered) = to_ical_date_time(id) else {
         return true;
@@ -1038,11 +1070,12 @@ fn instance_shows_without_time(event: &CalendarEvent, id: &str, patch: &Value) -
     let Some(instance) = modified_instance(event, id, patch) else {
         return true;
     };
-    instance
-        .start
-        .as_deref()
-        .and_then(to_ical_date_time)
-        .is_none_or(|start| at_midnight(&start))
+    instance.time_zone.is_none()
+        && instance
+            .start
+            .as_deref()
+            .and_then(to_ical_date_time)
+            .is_none_or(|start| at_midnight(&start))
         && instance
             .duration
             .as_deref()
