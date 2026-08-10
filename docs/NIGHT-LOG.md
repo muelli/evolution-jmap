@@ -13609,3 +13609,75 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last eight sessions asked for is still unwritten; the
 manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
 dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-seventh session)
+
+The level the last session was missing: an edited occurrence driven through
+real EDS. The mapping had tests for a detached instance at the component level
+and `jmap-cal-sync` had them against `jmap-mockd`, but nothing said EDS would
+ever *hand* the backend such a component — `ECalMetaBackend` decides what a
+`E_CAL_OBJ_MOD_THIS` modify turns into, and that decision is exactly what no
+test in this tree had ever exercised. So `tests/functional/cal-client.c` now
+renames the second occurrence of the weekly series it already creates, with
+`e_cal_client_modify_object_sync (…, E_CAL_OBJ_MOD_THIS, …)`, and
+`calendar.rs` holds both ends to it: EDS kept the instance, and the server was
+told about it.
+
+**Red first, and this one went red three ways.** The `argc` check first (the
+client refused the new argument), then the read-back, then the server. Two
+assertions were added: `edited-occurrence-summary` off the client, and the
+`recurrenceOverrides` map grown from one entry to two — asserted as one map
+rather than two lookups, because an override written for the edited instance
+that dropped the excluded one is a deletion undone and two separate
+assertions would not see it.
+
+**Neither assertion is vacuous, checked by mutation.** Making
+`marshal::icalendar_from_instances` drop the non-master instances again fails
+the run; so does making `jmap-ical`'s `modified_instances` render nothing. And
+because the client-side assertions fire before the server-side ones, the
+server assertion was checked on its own by temporarily relaxing them: with
+marshal mutated, the mock holds `{"2026-01-29T13:00:00": {"excluded": true}}`
+and the assertion names it. Both layers are live.
+
+**Two things EDS does that the test now records.** `e_cal_client_get_object_sync`
+with a UID and no RECURRENCE-ID answers with the *master alone* — not a
+`VCALENDAR` holding the series and its exceptions, which is what the first
+draft of this test assumed and why it failed against a cache that in fact held
+the instance. The pair (UID, RECURRENCE-ID) is how `ECalCache` keys a detached
+instance, so asking for that pair is the only question that distinguishes an
+instance EDS kept from one it dropped. Second, and for the same reason,
+`get_object_list "#t"` now returns **four** objects for three events: the
+detached instance is a row of its own beside the series. The count assertion
+moved from 3 to 4 with that written down — three would mean the edit never
+landed, five would mean an occurrence became a second event.
+
+The read-back also checks the component it got back actually carries a
+`RECURRENCE-ID`, because an instance EDS expanded out of the `RRULE` would
+carry the series' own summary and, if the backend had dropped the override,
+could make this pass on a component that replaces nothing.
+
+Verified locally: `cargo test --locked` 541 (unchanged — this increment adds no
+Rust unit test; its coverage is a functional one), the EDS-header crates green
+via the `rust-test-eds` set, `ctest` 14/14 including all four functional legs,
+`cargo fmt --check`, and `cargo clippy --all-targets --locked -- -D warnings`
+clean for the default set and for the EDS set plus `jmap-functional`. `reuse
+lint` and `cargo deny` not run (neither is on this VM); no files were added, so
+no new SPDX headers were needed, and no dependency changed.
+
+Next in this area: no functional test yet deletes an occurrence through
+`E_CAL_OBJ_MOD_THIS` on `remove_object` — the `EXDATE` case is created
+directly rather than reached the way a user reaches it, so EDS's own
+translation of "Delete this occurrence" is still untested here. Then an `RDATE`
+of `VALUE=PERIOD` is read as its start and written back as a plain date-time; a
+per-instance `timeZone` has no spelling; and `DTEND` is still the only way
+Evolution states a length while `DURATION` is the only way we write one.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last nine sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
