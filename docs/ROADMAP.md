@@ -142,6 +142,27 @@ migration; a behaviour difference calcard introduces is a finding, not a
 nuisance. Rationale: outsource parsing liability; our code should carry
 only the JMAP/EDS integration it exists for.
 
+### Mark UI strings translatable (2026-08-09)
+Every user-facing string — account-setup labels and tooltips (M7),
+Camel/EDS error and status text the user can see, folder/source display
+names we originate — must be wrapped for translation via gettext the
+moment it is introduced, not retrofitted later. Retrofitting means
+hunting every literal after the fact and missing some; marking at
+introduction is nearly free.
+- C code: `_( )` / `N_( )` with the project's `GETTEXT_PACKAGE` (already
+  set in the top-level `CMakeLists.txt`); `bindtextdomain` wired in each
+  module's init. Rust code emitting user-visible text: `gettextrs` (or an
+  FFI call to `g_dgettext`) against the same domain.
+- Set up `po/` with a `POTFILES.in` listing every source that holds
+  translatable strings, and a `LINGUAS`; a CI check (or the `reuse`-style
+  lint) that flags a source added to a UI crate but absent from
+  `POTFILES.in`. Do NOT translate protocol constants, JMAP property
+  names, log/trace text, or developer-facing errors — only what an
+  Evolution user reads.
+- Not a blocker for landing a UI milestone, but a string shipped
+  unmarked is a bug to be filed, not ignored. Applies from M6/M7 onward,
+  where the first user-visible strings appear.
+
 ### Recurring security re-audit (2026-08-08)
 The first FFI audit (`docs/AUDIT-FFI.md`, branch `audit/ffi`) found F1–F10;
 F1–F4 are fixed on master with regression tests that run in CI, so those
