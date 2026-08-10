@@ -21,8 +21,10 @@
 //! `ECalMetaBackend` stores and hands back to a save.
 //!
 //! The one property read but never written is `DTEND`: it is how Evolution
-//! states an event's length, so [`read_duration`] measures it, while the
-//! length always goes back out as the `DURATION` the two formats share.
+//! states an event's length, so [`read_duration`] measures it, while the length
+//! goes back out as the `DURATION` the two formats share. Both directions pass
+//! through [`stated_duration`], because the two formats spell an ISO 8601
+//! duration identically but do not admit the same set of them.
 //!
 //! An all-day event has no property of its own in iCalendar; it is a `DTSTART`
 //! written as a date rather than a date-time, which puts JSCalendar's
@@ -164,7 +166,12 @@ fn maps_override_field(name: &str, value: &Value) -> bool {
         // A start is required by RFC 8984, so a null says nothing, and the
         // value has to be one a DTSTART can carry.
         "start" => value.as_str().and_then(to_ical_date_time).is_some(),
-        // title, description, duration.
+        // The only place an instance's own length is stated is its component's
+        // DURATION, and one this mapping will not write there (see
+        // [`vevent_of`]) leaves the instance at the series' length — which is
+        // what the override said it was *not*.
+        "duration" => value.is_null() || value.as_str().and_then(stated_duration).is_some(),
+        // title, description.
         _ => value.is_null() || value.as_str().is_some_and(|text| !text.is_empty()),
     }
 }
@@ -299,9 +306,13 @@ fn vevent_of(
         ));
     }
 
-    if let Some(duration) = event.duration.as_deref().filter(|value| !value.is_empty()) {
-        // ISO 8601 durations, spelled identically on both sides.
-        vevent = vevent.with(Property::raw("DURATION", duration));
+    // Only a value that really is a length: the two formats spell an ISO 8601
+    // duration identically, but not the same set of them, and a `DURATION` line
+    // libical refuses costs the whole component — every field of the event, not
+    // just its length. See [`stated_duration`], which is also what reads the
+    // property back.
+    if let Some(duration) = event.duration.as_deref().and_then(stated_duration) {
+        vevent = vevent.with(Property::raw("DURATION", &duration));
     }
 
     if let Some(status) = event.status.as_deref().and_then(ical_status) {
@@ -717,22 +728,36 @@ fn read_duration(vevent: &Component) -> Option<String> {
     to_duration(end - start)
 }
 
-/// A `DURATION` value as a JSCalendar Duration, or `None` when it states no
-/// length an event can have.
+/// A stated length as a JSCalendar Duration, or `None` when the value states no
+/// length an event can have. The one check both directions use.
 ///
 /// The two formats spell a length identically, so a value that *is* one is
 /// handed over as written rather than re-rendered. But they do not spell the
 /// same *set* of lengths: RFC 5545 §3.3.6 admits a sign, and a `DURATION:-PT1H`
 /// — an event lasting minus an hour — has nothing to map onto in RFC 8984
-/// §1.4.6. Passing it through put a value the server rejects into the save
-/// patch, which fails the whole `CalendarEvent/set` and takes the user's real
-/// edits down with it. So the value is checked here, and one that does not pass
-/// is treated as absent like every other unreadable value: the caller falls
-/// through to `DTEND`, and an event ends up without a length rather than with
-/// one nobody can use.
+/// §1.4.6, while RFC 5545 has no room for a value that is not a duration at all.
+/// A value that does not pass is treated as absent, like every other unreadable
+/// one, and what that costs differs by direction:
+///
+/// - **Reading**, [`read_duration`] falls through to `DTEND`, so an event ends
+///   up without a length rather than with one nobody can use. Passing it on put
+///   a value the server rejects into the save patch, which fails the whole
+///   `CalendarEvent/set` and takes the user's real edits down with it.
+/// - **Writing**, [`vevent_of`] leaves the property out. libical refusing a
+///   content line costs the whole component, so an unwritable length would cost
+///   the appointment — every field of it, not just how long it lasts.
+/// - **Inside an override**, [`maps_override_field`] refuses it, which tells the
+///   save path that this instance was seen in part and its
+///   `recurrenceOverrides` must not be written back. The only place an
+///   instance's own length is stated is its component's `DURATION`, so a length
+///   that cannot go there comes back as the series', which is what the override
+///   said it was *not*.
 ///
 /// A leading `+` is the same length said RFC 5545's way, and is dropped rather
-/// than handed to a format with nowhere to put it.
+/// than handed to a format with nowhere to put it. That is the one value this
+/// returns changed rather than verbatim, so an override stating it is still
+/// covered: the length that comes back means the same thing, which is what
+/// [`maps_override_field`] asks of a field.
 ///
 /// The grammar accepted is deliberately a little looser than RFC 5545's, which
 /// nests its units (an hour may be followed only by minutes, a week stands

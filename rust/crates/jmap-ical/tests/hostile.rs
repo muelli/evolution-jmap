@@ -43,6 +43,12 @@ fn line_names(ics: &str) -> Vec<String> {
 
 /// `duration` is kept verbatim because an ISO 8601 duration is punctuation all
 /// the way down. That is exactly what makes a CRLF in it an injection.
+///
+/// It is now stopped one step ahead of the strip that first answered it: a value
+/// carrying a line break is not a length, so the property is never written at
+/// all (see the mapping's `stated_duration`) rather than written with the break
+/// removed. The strip itself stays under test through the frequency and the
+/// `TZID` below, which have no such check in front of them.
 #[test]
 fn a_crlf_in_the_duration_cannot_add_a_property() {
     let ics = event_to_ical(&CalendarEvent {
@@ -57,8 +63,7 @@ fn a_crlf_in_the_duration_cannot_add_a_property() {
     assert_eq!(
         line_names(&ics),
         [
-            "BEGIN", "VERSION", "PRODID", "BEGIN", "UID", "SUMMARY", "DTSTART", "DURATION", "END",
-            "END"
+            "BEGIN", "VERSION", "PRODID", "BEGIN", "UID", "SUMMARY", "DTSTART", "END", "END"
         ]
     );
 }
@@ -100,18 +105,29 @@ fn a_crlf_in_the_time_zone_cannot_add_a_property() {
 }
 
 /// A lone LF and a lone CR are the same attack: libical's unfolder splits on
-/// either, so neither may survive into a content line.
+/// either, so neither may survive into a content line. Both raw values carry it
+/// here, so the assertion covers the duration — refused as a length — and the
+/// frequency, which is stripped, in one document.
 #[test]
 fn a_bare_lf_or_cr_is_stripped_as_well() {
-    for duration in ["PT1H\nSUMMARY:x", "PT1H\rSUMMARY:x", "PT1H\n\rSUMMARY:x"] {
+    for injected in ["\nSUMMARY:x", "\rSUMMARY:x", "\n\rSUMMARY:x"] {
         let ics = event_to_ical(&CalendarEvent {
-            duration: Some(duration.to_owned()),
+            duration: Some(format!("PT1H{injected}")),
+            recurrence_rules: Some(vec![RecurrenceRule {
+                frequency: format!("daily{injected}"),
+                ..RecurrenceRule::default()
+            }]),
             ..event()
         });
         assert_eq!(
             ics.matches("\r\nSUMMARY").count(),
             1,
-            "{duration:?} produced a second SUMMARY:\n{ics}"
+            "{injected:?} produced a second SUMMARY:\n{ics}"
+        );
+        assert_eq!(
+            ics.matches("\r\nRRULE").count(),
+            1,
+            "{injected:?} split the RRULE:\n{ics}"
         );
     }
 }
