@@ -13,7 +13,25 @@
 //! `RRULE` carry their own punctuation, so [`Property::raw`] keeps them
 //! verbatim while [`Property::new`] escapes.
 //!
+//! **Content lines are [`calcard`](https://github.com/stalwartlabs/calcard)'s
+//! to read**, the text layer of Stalwart's CalDAV/CardDAV stack: unfolding,
+//! unescaping, parameter quoting, the case rules, and the typed values —
+//! `DTSTART` is parsed as a date-time and `RRULE` as a rule rather than left as
+//! text to be picked apart later. That is the side hostile input arrives on,
+//! and it is not a liability worth carrying ourselves.
+//!
+//! **Structure is still checked here**, by [`check_structure`], and
+//! **writing is still ours**, by [`Component::to_ics`] — see [`fold_into`] and
+//! [`quote_param`] for why.
+//!
 //! [RFC 5545]: https://www.rfc-editor.org/rfc/rfc5545
+
+use calcard::common::{IanaString, PartialDateTime};
+use calcard::icalendar::{
+    ICalendarComponent, ICalendarEntry, ICalendarParameterValue, ICalendarValue,
+    ICalendarValueType, Uri,
+};
+use calcard::{Entry, Parser};
 
 use crate::error::ICalError;
 
@@ -22,8 +40,9 @@ const FOLD_AT: usize = 75;
 
 /// How deeply components may nest, `VCALENDAR` counted.
 ///
-/// The parse loop below is iterative, so the *parse* is not what needs a limit;
-/// the tree it returns is what does. A [`Component`] owns a `Vec<Component>`,
+/// calcard's own tree is flat — a `Vec` of components addressed by index — so
+/// the *parse* is not what needs a limit; the tree built from it is what does. A
+/// [`Component`] owns a `Vec<Component>`,
 /// so the drop glue recurses once per level, and so does
 /// [`write_into`](Component::write_into). A document nested a hundred thousand
 /// deep therefore aborts the process — "thread has overflowed its stack" — on a
@@ -38,24 +57,33 @@ pub const MAX_DEPTH: usize = 32;
 
 /// One iCalendar content line.
 ///
-/// The value is kept in its on-the-wire form so that structured values can be
-/// split on their real separators before unescaping; use [`Property::text`],
-/// [`Property::texts`] or [`Property::raw_value`] to read it.
+/// The values are held decoded — unescaped and unfolded — because that is what
+/// the mapping wants; the escaping is applied on the way out, by
+/// [`Component::to_ics`], and only to the TEXT-typed ones. A `,`-separated
+/// value list such as `CATEGORIES` keeps its parts separate, so that a comma
+/// *inside* a value cannot be mistaken for the separator: use
+/// [`Property::text`], [`Property::texts`] or [`Property::raw_value`] to read
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
     /// Upper-cased property name.
     pub name: String,
     params: Vec<(String, Vec<String>)>,
-    value: String,
+    /// The `,`-separated values of the property; a plain property has one.
+    values: Vec<String>,
+    /// Whether the values are TEXT, and so have to be escaped when written.
+    /// A parsed property is TEXT exactly when calcard read it as text.
+    text: bool,
 }
 
 impl Property {
-    /// A property with a single TEXT value, escaped on the way in.
+    /// A property with a single TEXT value, escaped on the way out.
     pub fn new(name: &str, value: &str) -> Self {
         Self {
             name: name.to_ascii_uppercase(),
             params: Vec::new(),
-            value: escape(value),
+            values: vec![value.to_owned()],
+            text: true,
         }
     }
 
@@ -65,7 +93,8 @@ impl Property {
         Self {
             name: name.to_ascii_uppercase(),
             params: Vec::new(),
-            value: value.to_owned(),
+            values: vec![value.to_owned()],
+            text: false,
         }
     }
 
@@ -92,23 +121,27 @@ impl Property {
         self
     }
 
-    /// The value as text, with escapes resolved.
+    /// The value as text, with escapes resolved. A value list reads back as its
+    /// parts rejoined on `,`, which is how it looked on the wire.
     pub fn text(&self) -> String {
-        unescape(&self.value)
+        self.values.join(",")
     }
 
-    /// The value split on unescaped `,`, each part unescaped: a TEXT list
-    /// such as `CATEGORIES`.
+    /// The value split into its `,`-separated parts: a TEXT list such as
+    /// `CATEGORIES`.
     pub fn texts(&self) -> Vec<String> {
-        split_unescaped(&self.value, ',')
-            .iter()
-            .map(|part| unescape(part))
-            .collect()
+        self.values.clone()
     }
 
-    /// The value exactly as it appears on the wire.
-    pub fn raw_value(&self) -> &str {
-        &self.value
+    /// The value in its iCalendar spelling, escapes resolved.
+    ///
+    /// For the typed values — `DTSTART`, `DURATION`, `RRULE` — that is the
+    /// on-the-wire form, since none of them contains anything escapable; the
+    /// mapping reads those as text. A parsed one is *re-rendered* from what
+    /// calcard understood rather than sliced out of the input, so an `RRULE`'s
+    /// parts may come back in a different order than they were written in.
+    pub fn raw_value(&self) -> String {
+        self.values.join(",")
     }
 
     /// The first value of the named parameter.
@@ -136,7 +169,11 @@ impl Property {
             line.push_str(&quoted.join(","));
         }
         line.push(':');
-        line.push_str(&self.value);
+        let values: Vec<String> = match self.text {
+            true => self.values.iter().map(|value| escape(value)).collect(),
+            false => self.values.clone(),
+        };
+        line.push_str(&values.join(","));
         line
     }
 }
@@ -226,76 +263,239 @@ impl Component {
 }
 
 /// Parse a complete `VCALENDAR` object.
+///
+/// A content line calcard cannot read is *skipped*, not fatal: that is the
+/// policy the semantic mapping already states for a value it cannot map, and a
+/// calendar that refuses to open over one bad line loses every event in it.
+/// What is still fatal is a document that is not a calendar, one that is
+/// truncated, and one nested deeper than [`MAX_DEPTH`].
 pub fn parse(text: &str) -> Result<Component, ICalError> {
-    let lines = unfold(text);
-    let mut lines = lines.iter().map(String::as_str);
+    check_structure(text)?;
 
-    let first = lines.next().ok_or(ICalError::NotACalendar)?;
-    if !begins(first).is_some_and(|name| name == "VCALENDAR") {
+    let mut parser = Parser::new(text);
+    let calendar = match parser.entry() {
+        Entry::ICalendar(calendar) => calendar,
+        _ => return Err(ICalError::NotACalendar),
+    };
+    // A second object in the same string is not something this layer is allowed
+    // to drop silently: it would lose whole events.
+    match parser.entry() {
+        Entry::Eof => {}
+        Entry::InvalidLine(line) => return Err(ICalError::Trailing(line)),
+        _ => return Err(ICalError::Trailing("BEGIN:VCALENDAR".to_owned())),
+    }
+
+    let components = &calendar.components;
+    let root = components.first().ok_or(ICalError::NotACalendar)?;
+    if !root
+        .component_type
+        .as_str()
+        .eq_ignore_ascii_case("VCALENDAR")
+    {
         return Err(ICalError::NotACalendar);
     }
+    check_depth(components)?;
 
-    // The innermost open component is the last entry; the first is the
-    // VCALENDAR, and popping it ends the object.
-    let mut open = vec![Component::new("VCALENDAR")];
-    while let Some(line) = lines.next() {
-        if let Some(name) = begins(line) {
-            if open.len() >= MAX_DEPTH {
-                return Err(ICalError::TooDeep(name));
-            }
-            open.push(Component::new(&name));
+    Ok(from_component(components, 0))
+}
+
+/// Whether the document opens and closes its components properly.
+///
+/// This check is ours rather than calcard's for a reason worth writing down:
+/// calcard 0.3.9's lenient mode — the only mode that works — reads a truncated
+/// document as a whole one, and its strict mode cannot be used at all, because
+/// it returns `InvalidLine("BEGIN")` for every nested component and so rejects
+/// every real calendar. Handing the mapping a truncated event would mean the
+/// next save writing the fragment back over the whole one, so the `BEGIN`/`END`
+/// pairing is checked here before calcard is asked for the content.
+///
+/// Only the two keywords are looked at, and only up to the first `:`; a
+/// parameter on a `BEGIN` line is not legal iCalendar, and one carrying a
+/// quoted `:` yields a component name that matches no `END` — refusing the
+/// document, which is the safe direction.
+fn check_structure(text: &str) -> Result<(), ICalError> {
+    let mut open: Vec<String> = Vec::new();
+    for line in unfold(text.strip_prefix('\u{feff}').unwrap_or(text)) {
+        let Some((keyword, name)) = line.split_once(':') else {
+            continue;
+        };
+        // Parameters are not legal on BEGIN/END, but a line that carries one
+        // must not be read as the bare keyword either.
+        let name = name.trim().to_ascii_uppercase();
+        if name.is_empty() {
             continue;
         }
-        if let Some(name) = ends(line) {
-            let finished = open.pop().expect("a component is open");
-            if finished.name != name {
-                return Err(ICalError::Mismatched {
-                    expected: finished.name,
-                    found: name,
-                });
-            }
-            match open.last_mut() {
-                Some(parent) => parent.children.push(finished),
-                // The calendar itself just closed: nothing may follow it.
-                None => {
-                    return match lines.next() {
-                        Some(trailing) => Err(ICalError::Trailing(trailing.to_owned())),
-                        None => Ok(finished),
-                    };
+        if keyword.eq_ignore_ascii_case("BEGIN") {
+            open.push(name);
+        } else if keyword.eq_ignore_ascii_case("END") {
+            match open.pop() {
+                Some(expected) if expected == name => {}
+                // An END that closes nothing is a stray line, which calcard
+                // skips; one that closes the wrong component is a document
+                // whose structure cannot be trusted.
+                Some(expected) => {
+                    return Err(ICalError::Mismatched {
+                        expected,
+                        found: name,
+                    });
                 }
+                None => {}
             }
-            continue;
         }
-        let property = parse_line(line)?;
-        open.last_mut()
-            .expect("a component is open")
-            .properties
-            .push(property);
     }
-
-    Err(ICalError::Unterminated(
-        open.pop().expect("a component is open").name,
-    ))
+    match open.pop() {
+        Some(name) => Err(ICalError::Unterminated(name)),
+        None => Ok(()),
+    }
 }
 
-/// The component name of a `BEGIN:` line.
-fn begins(line: &str) -> Option<String> {
-    component_name(line, "BEGIN:")
+/// Refuse a document nested past [`MAX_DEPTH`].
+///
+/// calcard's own tree is flat — a `Vec` of components addressed by index — so
+/// the parse survives any depth; it is [`from_component`]'s recursion, and the
+/// drop glue of the [`Component`] tree it builds, that would run off the end of
+/// the stack. So the depth is measured here, iteratively, before anything
+/// recurses over it.
+fn check_depth(components: &[ICalendarComponent]) -> Result<(), ICalError> {
+    let mut pending = vec![(0usize, 1usize)];
+    while let Some((index, depth)) = pending.pop() {
+        let Some(component) = components.get(index) else {
+            continue;
+        };
+        if depth > MAX_DEPTH {
+            return Err(ICalError::TooDeep(
+                component.component_type.as_str().to_ascii_uppercase(),
+            ));
+        }
+        for child in &component.component_ids {
+            pending.push((*child as usize, depth + 1));
+        }
+    }
+    Ok(())
 }
 
-/// The component name of an `END:` line.
-fn ends(line: &str) -> Option<String> {
-    component_name(line, "END:")
+/// Build our component tree from calcard's flat one. Bounded by
+/// [`check_depth`], which has already run.
+fn from_component(components: &[ICalendarComponent], index: usize) -> Component {
+    let component = &components[index];
+    Component {
+        name: component.component_type.as_str().to_ascii_uppercase(),
+        properties: component.entries.iter().map(from_entry).collect(),
+        children: component
+            .component_ids
+            .iter()
+            .filter(|child| (**child as usize) < components.len())
+            .map(|child| from_component(components, *child as usize))
+            .collect(),
+    }
 }
 
-fn component_name(line: &str, keyword: &str) -> Option<String> {
-    let head = line.get(..keyword.len())?;
-    head.eq_ignore_ascii_case(keyword)
-        .then(|| line[keyword.len()..].trim().to_ascii_uppercase())
-        .filter(|name| !name.is_empty())
+fn from_entry(entry: &ICalendarEntry) -> Property {
+    let values: Vec<(String, bool)> = entry.values.iter().filter_map(value_text).collect();
+    Property {
+        name: entry.name.as_str().to_ascii_uppercase(),
+        params: entry
+            .params
+            .iter()
+            .map(|param| {
+                (
+                    param.name.as_str().to_ascii_uppercase(),
+                    vec![param_text(&param.value)],
+                )
+            })
+            .collect(),
+        // A property is TEXT only if every value calcard produced was; the
+        // typed ones are rendered in their iCalendar spelling, where a `;` or a
+        // `,` is structure and escaping it would corrupt the value.
+        text: !values.is_empty() && values.iter().all(|(_, text)| *text),
+        values: values.into_iter().map(|(value, _)| value).collect(),
+    }
+}
+
+/// A value as the mapping reads it, and whether it is TEXT, or `None` for one
+/// there is no text for.
+///
+/// The mapped property set — UID, SUMMARY, DESCRIPTION, DTSTART, DURATION,
+/// STATUS and RRULE — is covered; a value calcard read as binary (an inline
+/// `ATTACH`) has no text spelling short of re-encoding it, and dropping it
+/// loses nothing, because the iCalendar it came from is EDS's copy and stays as
+/// it is.
+fn value_text(value: &ICalendarValue) -> Option<(String, bool)> {
+    let typed = |value: String| Some((value, false));
+    match value {
+        ICalendarValue::Text(text) => Some((text.clone(), true)),
+        ICalendarValue::PartialDateTime(stamp) => typed(date_time_text(stamp)),
+        ICalendarValue::Duration(duration) => typed(duration.to_string()),
+        ICalendarValue::RecurrenceRule(rule) => typed(rule.to_string()),
+        ICalendarValue::Period(period) => typed(period.to_string()),
+        ICalendarValue::Uri(Uri::Location(uri)) => typed(uri.clone()),
+        ICalendarValue::Integer(number) => typed(number.to_string()),
+        ICalendarValue::Float(number) => typed(number.to_string()),
+        ICalendarValue::Boolean(true) => typed("TRUE".to_owned()),
+        ICalendarValue::Boolean(false) => typed("FALSE".to_owned()),
+        ICalendarValue::CalendarScale(scale) => typed(scale.as_str().to_owned()),
+        ICalendarValue::Method(method) => typed(method.as_str().to_owned()),
+        ICalendarValue::Classification(class) => typed(class.as_str().to_owned()),
+        ICalendarValue::Status(status) => typed(status.as_str().to_owned()),
+        ICalendarValue::Transparency(transparency) => typed(transparency.as_str().to_owned()),
+        ICalendarValue::Action(action) => typed(action.as_str().to_owned()),
+        ICalendarValue::BusyType(kind) => typed(kind.as_str().to_owned()),
+        ICalendarValue::ParticipantType(kind) => typed(kind.as_str().to_owned()),
+        ICalendarValue::ResourceType(kind) => typed(kind.as_str().to_owned()),
+        ICalendarValue::Proximity(proximity) => typed(proximity.as_str().to_owned()),
+        // An inline binary value, and a URI calcard read as a data: payload.
+        ICalendarValue::Binary(_) | ICalendarValue::Uri(Uri::Data(_)) => None,
+    }
+}
+
+/// A date-time in its iCalendar spelling: `20260115T130000`, with a `Z` when it
+/// was written as a UTC instant, and no time at all for a `VALUE=DATE`.
+fn date_time_text(stamp: &PartialDateTime) -> String {
+    let kind = match stamp.hour.is_some() {
+        true => ICalendarValueType::DateTime,
+        false => ICalendarValueType::Date,
+    };
+    let mut out = String::new();
+    // Writing into a String cannot fail.
+    let _ = stamp.format_as_ical(&mut out, &kind);
+    out
+}
+
+/// A parameter value as the mapping reads it. Everything this crate writes is
+/// text; the typed forms appear on a parsed object, where the mapping compares
+/// them against known spellings.
+fn param_text(value: &ICalendarParameterValue) -> String {
+    match value {
+        ICalendarParameterValue::Text(text) => text.clone(),
+        ICalendarParameterValue::Integer(number) => number.to_string(),
+        ICalendarParameterValue::Bool(true) => "TRUE".to_owned(),
+        ICalendarParameterValue::Bool(false) => "FALSE".to_owned(),
+        ICalendarParameterValue::Uri(Uri::Location(uri)) => uri.clone(),
+        ICalendarParameterValue::Cutype(kind) => kind.as_str().to_owned(),
+        ICalendarParameterValue::Fbtype(kind) => kind.as_str().to_owned(),
+        ICalendarParameterValue::Partstat(status) => status.as_str().to_owned(),
+        ICalendarParameterValue::Related(related) => related.as_str().to_owned(),
+        ICalendarParameterValue::Reltype(kind) => kind.as_str().to_owned(),
+        ICalendarParameterValue::Role(role) => role.as_str().to_owned(),
+        ICalendarParameterValue::ScheduleAgent(agent) => agent.as_str().to_owned(),
+        ICalendarParameterValue::ScheduleForceSend(send) => send.as_str().to_owned(),
+        ICalendarParameterValue::Value(kind) => kind.as_str().to_owned(),
+        ICalendarParameterValue::Display(display) => display.as_str().to_owned(),
+        ICalendarParameterValue::Feature(feature) => feature.as_str().to_owned(),
+        ICalendarParameterValue::Duration(duration) => duration.to_string(),
+        ICalendarParameterValue::Linkrel(relation) => relation.as_str().to_owned(),
+        // A binary payload, and a parameter written without a value.
+        ICalendarParameterValue::Uri(Uri::Data(_)) | ICalendarParameterValue::Null => String::new(),
+    }
 }
 
 /// Undo line folding and drop blank lines, yielding logical content lines.
+///
+/// This exists for [`check_structure`] alone — the content of a line is
+/// calcard's business, and it unfolds again on its own. A `BEGIN` or `END`
+/// keyword is not something anyone folds, but the check has to see every
+/// *other* line as one line, or a folded value's continuation could be read as
+/// a keyword of its own.
 fn unfold(text: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for raw in text.replace("\r\n", "\n").split('\n') {
@@ -312,40 +512,6 @@ fn unfold(text: &str) -> Vec<String> {
         }
     }
     lines
-}
-
-fn parse_line(line: &str) -> Result<Property, ICalError> {
-    let colon = find_unquoted(line, ':').ok_or_else(|| ICalError::Malformed(line.to_owned()))?;
-    let (head, value) = line.split_at(colon);
-    let value = &value[1..];
-
-    let mut tokens = split_unquoted(head, ';').into_iter();
-    let name = tokens.next().unwrap_or_default();
-    if name.is_empty() {
-        return Err(ICalError::Malformed(line.to_owned()));
-    }
-
-    let mut params: Vec<(String, Vec<String>)> = Vec::new();
-    for token in tokens {
-        // RFC 5545 §3.2 has no bare parameter values, unlike vCard 2.1: a
-        // token without `=` is a broken line, not a TYPE shorthand.
-        let (key, values) = token
-            .split_once('=')
-            .ok_or_else(|| ICalError::Malformed(line.to_owned()))?;
-        params.push((
-            key.to_ascii_uppercase(),
-            split_unquoted(values, ',')
-                .iter()
-                .map(|value| unquote_param(value))
-                .collect(),
-        ));
-    }
-
-    Ok(Property {
-        name: name.to_ascii_uppercase(),
-        params,
-        value: value.to_owned(),
-    })
 }
 
 /// Append a content line, folded to [`FOLD_AT`] octets. Folds land on
@@ -396,83 +562,6 @@ fn escape(value: &str) -> String {
         }
     }
     out
-}
-
-fn unescape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut characters = value.chars();
-    while let Some(character) = characters.next() {
-        if character != '\\' {
-            out.push(character);
-            continue;
-        }
-        match characters.next() {
-            Some('n' | 'N') => out.push('\n'),
-            // An unknown escape stands for the character itself; that keeps
-            // `\;`, `\,`, `\\` right and never loses data on the odd input.
-            Some(escaped) => out.push(escaped),
-            None => out.push('\\'),
-        }
-    }
-    out
-}
-
-/// Split on a separator that is not preceded by a backslash.
-fn split_unescaped(value: &str, separator: char) -> Vec<String> {
-    let mut parts = vec![String::new()];
-    let mut escaped = false;
-    for character in value.chars() {
-        let current = parts.last_mut().expect("non-empty");
-        if escaped {
-            current.push(character);
-            escaped = false;
-        } else if character == '\\' {
-            current.push(character);
-            escaped = true;
-        } else if character == separator {
-            parts.push(String::new());
-        } else {
-            current.push(character);
-        }
-    }
-    parts
-}
-
-/// Split on a separator that is not inside a double-quoted parameter value.
-fn split_unquoted(value: &str, separator: char) -> Vec<String> {
-    let mut parts = vec![String::new()];
-    let mut quoted = false;
-    for character in value.chars() {
-        if character == '"' {
-            quoted = !quoted;
-        }
-        if character == separator && !quoted {
-            parts.push(String::new());
-        } else {
-            parts.last_mut().expect("non-empty").push(character);
-        }
-    }
-    parts
-}
-
-fn find_unquoted(value: &str, separator: char) -> Option<usize> {
-    let mut quoted = false;
-    for (index, character) in value.char_indices() {
-        if character == '"' {
-            quoted = !quoted;
-        } else if character == separator && !quoted {
-            return Some(index);
-        }
-    }
-    None
-}
-
-fn unquote_param(value: &str) -> String {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or(value)
-        .to_owned()
 }
 
 fn quote_param(value: &str) -> String {

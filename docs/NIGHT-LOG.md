@@ -13085,3 +13085,104 @@ CI image, a maintainer decision) and no GUI tier (needs a display this VM lacks)
 M7 still **needs human verification in real Evolution**; the manual-test recipes
 are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the once-seen
 `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-first session)
+
+The calcard directive, calendar side: `jmap-ical`'s syntax module now reads
+content lines with [`calcard`](https://github.com/stalwartlabs/calcard) 0.3.9
+and still emits by hand, mirroring what the previous session did to
+`jmap-vcard`. Gone from this repository: `parse_line`, `unescape`,
+`split_unescaped`, `split_unquoted`, `find_unquoted` and `unquote_param` — the
+receiving side of RFC 5545 §3.1/§3.2, escapes and quoted parameters included.
+What arrives instead is *typed*: `DTSTART` comes back as a date-time, `DURATION`
+as a duration and `RRULE` as a rule, so `Property` holds its values decoded
+(`Vec<String>`, one per `,`-separated part) with the typed ones rendered in
+their iCalendar spelling, and `event.rs` reads them exactly as before.
+
+**Red first, two of them, and both are about not losing a whole calendar.**
+A UTF-8 byte order mark in front of `BEGIN:VCALENDAR` — what Windows exporters
+write, and what an imported `.ics` keeps — made the hand-rolled parser answer
+`NotACalendar`, so every event in the file was gone over three invisible bytes.
+And a single unreadable content line failed the *whole* parse, which contradicts
+the policy `event.rs` states in its own header: a property that cannot be read
+is treated as absent, because an event that loses a field beats a calendar that
+refuses to open. Both are one line of test each and now hold one layer down.
+`ICalError::Malformed` is therefore retired — nothing can construct it.
+
+**Three things calcard cannot do here, and what each one cost.**
+
+1. `Parser::strict()`, which the vCard side relies on, is **unusable for
+   iCalendar in 0.3.9**: `icalendar()` returns `Entry::InvalidLine("BEGIN")`
+   after handling a nested `BEGIN:` when strict, so it rejects every calendar
+   that has a `VEVENT` in it — i.e. all of them. Reproduced against the
+   fixtures; `src/icalendar/parser.rs` lines 104-108 are the unconditional
+   `return`. Upstream issue material (not filed — an outward-facing action for
+   the maintainer). Consequence: lenient mode is the only mode, and it reads a
+   *truncated* document as a whole one, and lets an `END:VTODO` close a
+   `VEVENT`. Handing the mapping half an event means the next save writing the
+   fragment back over the whole one, so `check_structure` — `BEGIN`/`END`
+   pairing over the unfolded lines, and nothing else — stays ours and runs
+   before calcard is asked for the content. That is the one piece of the old
+   lexer deliberately kept, and `unfold` with it.
+2. The depth cap (audit finding F4) had to move rather than go: calcard's tree
+   is *flat*, a `Vec` addressed by index, so its parse survives 100 000 levels
+   where ours would have overflowed the stack — but the `Component` tree we
+   build from it still recurses, in `from_component` and in the drop glue. So
+   `check_depth` measures the flat graph iteratively before anything recurses
+   over it, and the three F4 regression tests pass unchanged.
+3. RFC 6868 (`^n`, `^^`, `^'` in parameter values) is decoded by neither
+   implementation. No gain, no loss; written down so nobody re-checks.
+
+**One behaviour difference, examined rather than absorbed.** calcard completes
+a DATE-TIME that is missing its seconds: `20260115T1300` reads as 13:00:00,
+where the old lexer refused anything that was not 8 or 15/16 characters. The
+missing field can only be zero, so the event does not move, and that is the
+better answer — `a_dtstart_missing_its_seconds_is_completed_rather_than_dropped`
+now asserts it. But the boundary is laxer than libical's and is written into
+that test: `2026011` reads as 2026-01-01, so a *date* that lost a digit moves
+the event two weeks. Nothing here can produce that — the iCalendar this mapping
+reads comes from EDS, whose libical would have refused the value first, and the
+server sends JSON — but it is a real divergence and is on the record rather than
+left to be discovered. Also noted while measuring, and *pre-existing*: neither
+implementation range-checks the components, so a `DTSTART:20261315T250000`
+reaches the server as `2026-13-15T25:00:00` for it to reject. Unchanged by this
+work; a candidate for a later increment.
+
+**The emitter stays ours** for the reasons the vCard session measured — the fold
+off-by-one, the `\r` escape, the quote inside a quoted parameter — plus one that
+is iCalendar's alone: `Property::raw` exists precisely so that `DURATION`, an
+`RRULE`'s `FREQ` and a `TZID` parameter are *not* escaped, and `fold_into`'s CR
+and LF strip is what keeps those unescaped, server-chosen strings from ending a
+content line early (findings F2 and F4). All eight `hostile.rs` tests pass
+untouched.
+
+Verified locally: `cargo test --locked` 496 (was 493: +2 red-first, +1 the
+date-time boundary), the EDS-header crates green via the `rust-test-eds` set
+(`-p eds-sys -p evo-sys -p jmap-backend-core -p jmap-backend-book
+-p jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config`),
+`ctest -L functional` 4/4 — `functional-cal` drives an event through
+`e-cal-client` and real EDS into the mock against the rebuilt module, which is
+the authentic check for this change — `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean for both crate sets. `reuse lint`
+and `cargo deny` not run (neither is on this VM); no files were added, so no new
+SPDX headers were needed, and no crate entered `Cargo.lock` — calcard and its
+dependencies were already there for `jmap-vcard`, hand-checked against
+`deny.toml` last session.
+
+Housekeeping: `/` had filled to 100% mid-session and stopped a build with "No
+space left on device". `rust/target/debug/incremental` (3.5G), `target/tmp` and
+`target/doc` were deleted, leaving ~3G free. Worth watching — 55G of 58G is in
+use and the debug target alone is 30G.
+
+No milestone tag yet: the directive's two emitters are still ours by choice, and
+that is the remaining question — the fold off-by-one wants an upstream fix or a
+maintainer decision that 76-octet lines are acceptable (RFC 2426/5545 say
+SHOULD, and every real reader unfolds regardless). With both text layers now
+reading through calcard, that judgement is all that stands between here and
+`CALCARD COMPLETE`. Unchanged blockers: M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last three sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.

@@ -151,7 +151,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
     let rules: Vec<RecurrenceRule> = vevent
         .all("RRULE")
         .into_iter()
-        .filter_map(|property| rrule_to_rule(property.raw_value()))
+        .filter_map(|property| rrule_to_rule(&property.raw_value()))
         .collect();
 
     Ok(CalendarEvent {
@@ -167,7 +167,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
         time_zone,
         duration: vevent
             .property("DURATION")
-            .map(|property| property.raw_value().to_owned())
+            .map(Property::raw_value)
             .filter(|value| !value.is_empty()),
         status: vevent.text("STATUS").and_then(|status| {
             STATUSES
@@ -186,7 +186,7 @@ fn read_start(vevent: &Component) -> (Option<String>, Option<String>) {
         return (None, None);
     };
     let value = property.raw_value();
-    let Some(start) = to_local_date_time(value) else {
+    let Some(start) = to_local_date_time(&value) else {
         return (None, None);
     };
     let zone = match value.ends_with('Z') {
