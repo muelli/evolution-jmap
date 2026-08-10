@@ -1349,6 +1349,54 @@ fn libical_neither_invents_a_classification_nor_respells_one() {
     }
 }
 
+/// When an event was made and last changed, through the parser that actually
+/// reads them.
+///
+/// `jmap-ical` draws RFC 8984's `created` and `updated` as `CREATED`, `DTSTAMP`
+/// and `LAST-MODIFIED` and never reads any of the three back, so no value the
+/// save path uses rests on libical here. What does is one claim `jmap-ical`
+/// cannot check for itself: that a component written **without** a `DTSTAMP` —
+/// which is what an event whose server states no `updated` gets, RFC 5545 §3.6.1
+/// requiring the property notwithstanding — is read rather than refused.
+///
+/// It is, and libical closes the gap itself: it stamps a `DTSTAMP` from the
+/// clock, so what EDS hands a save always carries one. That is the measurement
+/// worth having, because it says exactly what such a line *is* — libical's
+/// moment, not the server's — and it is why reading `updated` back off a
+/// component would be reading the local clock. It invents neither of the other
+/// two, and it re-renders all three verbatim when they are written.
+#[test]
+fn libical_stamps_a_dtstamp_of_its_own_and_keeps_the_timestamps_written() {
+    let invented = reparsed("DTSTAMP", "DESCRIPTION:the quarter");
+    let [stamp] = invented.as_slice() else {
+        panic!("expected exactly one invented DTSTAMP, got {invented:?}");
+    };
+    assert!(
+        stamp.starts_with("DTSTAMP:")
+            && stamp.ends_with('Z')
+            && stamp.len() == "DTSTAMP:".len() + 16,
+        "{stamp} is not a UTC date-time"
+    );
+    for property in ["CREATED", "LAST-MODIFIED"] {
+        assert_eq!(
+            reparsed(property, "DESCRIPTION:the quarter"),
+            Vec::<String>::new(),
+            "libical filled in a {property} of its own"
+        );
+    }
+    // And what it does with the ones this mapping writes: hands them back
+    // verbatim, UTC designator included — the invented stamp is a default, not
+    // an overwrite.
+    for line in [
+        "CREATED:20260102T093000Z",
+        "DTSTAMP:20260115T174501Z",
+        "LAST-MODIFIED:20260115T174501Z",
+    ] {
+        let (property, _) = line.split_once(':').expect("a content line");
+        assert_eq!(reparsed(property, line), vec![line.to_owned()]);
+    }
+}
+
 /// The `LOCATION` lines of a `VEVENT` after libical has parsed and re-rendered
 /// it, unfolded.
 fn reparsed_lines(lines: &str) -> Vec<String> {
