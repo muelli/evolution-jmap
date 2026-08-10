@@ -126,17 +126,17 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
-/// Only `frequency`, `interval`, `count`, `until`, `byDay` and `byMonthDay` are
-/// modeled; `bySetPosition` and the rest of RFC 8984 §4.3.3 ride in
-/// [`RecurrenceRule::extra`] and would be lost. A caller that patches
+/// Only `frequency`, `interval`, `count`, `until`, `byDay`, `byMonthDay` and
+/// `byMonth` are modeled; `bySetPosition` and the rest of RFC 8984 §4.3.3 ride
+/// in [`RecurrenceRule::extra`] and would be lost. A caller that patches
 /// `recurrenceRules` for a rule this returns `false` for narrows the user's
 /// recurrence behind their back.
 ///
 /// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
 /// never patches over a recurrence the user was not shown — as does one whose
-/// days of the week or of the month the `RRULE` cannot carry, which
-/// [`by_day_part`] and [`by_month_day_part`] decide and [`rule_to_rrule`] then
-/// leaves off.
+/// days of the week, days of the month or months of the year the `RRULE` cannot
+/// carry, which [`by_day_part`], [`by_month_day_part`] and [`by_month_part`]
+/// decide and [`rule_to_rrule`] then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
         && writable(rule)
@@ -148,6 +148,10 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
             .by_month_day
             .as_ref()
             .is_none_or(|_| by_month_day_part(rule).is_some())
+        && rule
+            .by_month
+            .as_ref()
+            .is_none_or(|_| by_month_part(rule).is_some())
 }
 
 /// Whether a recurrence override survives the trip through iCalendar.
@@ -1261,6 +1265,7 @@ fn rule_to_rrule(
     // own cache compares equal to itself.
     parts.extend(by_day_part(rule));
     parts.extend(by_month_day_part(rule));
+    parts.extend(by_month_part(rule));
     Some(parts.join(";"))
 }
 
@@ -1351,6 +1356,51 @@ fn month_day_token(day: i32) -> Option<String> {
     }
 }
 
+/// The `BYMONTH` part of a rule's `RRULE`, or `None` when the rule names no
+/// months of the year — and, as with [`by_day_part`], when it names ones this
+/// mapping will not write.
+///
+/// It is all the months or none of them, for the same reason: a `BYMONTH`
+/// holding a subset is a different recurrence, not a narrower view of one.
+///
+/// There is no frequency gate. RFC 5545 §3.3.10 defines `BYMONTH` at every
+/// frequency — limiting the occurrences a shorter period expands to, rather than
+/// expanding them — unlike `BYMONTHDAY`, which a week has no room for.
+fn by_month_part(rule: &RecurrenceRule) -> Option<String> {
+    let months = rule.by_month.as_ref()?;
+    // `BYMONTH=` names no month and is not a rule part any reader can use.
+    if months.is_empty() {
+        return None;
+    }
+    let tokens: Option<Vec<&str>> = months.iter().map(|month| month_token(month)).collect();
+    Some(format!("BYMONTH={}", tokens?.join(",")))
+}
+
+/// One month of the year as an `RRULE` writes it, or `None` for a value no
+/// `BYMONTH` this mapping is willing to write can carry.
+///
+/// The value that comes back is the caller's own string, because the only
+/// spelling accepted is the one iCalendar writes back unchanged: RFC 5545's
+/// `monthnum` also admits a leading zero (`03`), which both libical and calcard
+/// re-render as `3` — a rule written that way would return spelled differently
+/// and read as an edit the user never made.
+///
+/// A leap month — RFC 8984 §4.3.3's `5L`, the reason `byMonth` holds strings at
+/// all — is refused rather than written: iCalendar can only name one under
+/// RFC 7529's `RSCALE`, and this mapping does not model an event's calendar
+/// system, so `BYMONTH=5L` beside a Gregorian series would name a month that
+/// series does not have.
+///
+/// Every other refusal is a month no year has, and libical answers those two
+/// ways — dropping the whole `RRULE`, or keeping a rule that can never occur.
+/// `jmap-backend-cal/tests/marshal.rs` records which is which.
+fn month_token(month: &str) -> Option<&str> {
+    match month.parse::<u32>() {
+        Ok(number @ 1..=12) if month == number.to_string() => Some(month),
+        _ => None,
+    }
+}
+
 /// The reverse. Parts outside the modeled set are dropped rather than parked
 /// in `extra`: a `BYSETPOS=-1` copied verbatim into JSCalendar would be
 /// rejected by the server, whose `bySetPosition` is an array of numbers.
@@ -1369,6 +1419,12 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             "BYMONTHDAY" => {
                 rule.by_month_day = Some(value.split(',').map(to_month_day).collect());
             }
+            // Each token verbatim: JSCalendar holds a month as the string
+            // iCalendar spells it with, so one this mapping will not write back —
+            // a thirteenth month, a leap month — is carried as itself and refused
+            // by [`month_token`] on the way out, which is what
+            // [`maps_recurrence_rule`] then reads.
+            "BYMONTH" => rule.by_month = Some(value.split(',').map(str::to_owned).collect()),
             _ => {}
         }
     }
