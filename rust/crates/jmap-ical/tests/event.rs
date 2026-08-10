@@ -1238,6 +1238,132 @@ fn a_detached_instance_wins_over_an_rdate_for_the_same_instant() {
     );
 }
 
+/// A weekly hour-long series whose `RDATE` names one extra instance the given
+/// way — a bare date-time, or either spelling of RFC 5545 §3.3.9's period.
+fn series_with_rdate(value: &str) -> String {
+    format!(
+        concat!(
+            "BEGIN:VCALENDAR\r\n",
+            "VERSION:2.0\r\n",
+            "BEGIN:VEVENT\r\n",
+            "UID:E18\r\n",
+            "DTSTART:20260115T130000Z\r\n",
+            "DURATION:PT1H\r\n",
+            "SUMMARY:Standup\r\n",
+            "RRULE:FREQ=WEEKLY\r\n",
+            "RDATE;VALUE=PERIOD:{value}\r\n",
+            "END:VEVENT\r\n",
+            "END:VCALENDAR\r\n",
+        ),
+        // `concat!` hides the placeholder from format_args!'s capture.
+        value = value,
+    )
+}
+
+#[test]
+fn an_rdate_period_gives_its_instance_the_length_the_period_states() {
+    // RFC 5545 §3.8.5.2 lets an RDATE state a period rather than an instant,
+    // which is how iCalendar says "this extra occurrence runs longer than the
+    // rest". Reading only its start showed the two-hour slot as the series'
+    // hour — the occurrence was there, at the wrong length.
+    for value in ["20260205T130000Z/PT2H", "20260205T130000Z/20260205T150000Z"] {
+        let event = ical_to_event(&series_with_rdate(value)).expect("parse");
+
+        assert_eq!(event.duration.as_deref(), Some("PT1H"), "{value}");
+        assert_eq!(
+            event.recurrence_overrides,
+            Some(
+                [(
+                    "2026-02-05T13:00:00".to_owned(),
+                    json!({"duration": "PT2H"})
+                )]
+                .into()
+            ),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn an_rdate_period_as_long_as_the_series_patches_nothing() {
+    // The period restates the length the occurrence would have had, so there is
+    // nothing to override: the same empty patch a bare RDATE produces.
+    for value in ["20260205T130000Z/PT1H", "20260205T130000Z/20260205T140000Z"] {
+        assert_eq!(
+            ical_to_event(&series_with_rdate(value))
+                .expect("parse")
+                .recurrence_overrides,
+            Some([("2026-02-05T13:00:00".to_owned(), json!({}))].into()),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn an_rdate_period_naming_no_usable_length_leaves_the_instance_with_none() {
+    // A period ending before it starts, and one whose duration is negative:
+    // neither states a length an occurrence can have. The instance still
+    // happens — that is what the RDATE said — but its length is removed rather
+    // than silently inherited from the series, which is the answer a detached
+    // VEVENT carrying neither DURATION nor DTEND already gives.
+    for value in [
+        "20260205T130000Z/20260205T120000Z",
+        "20260205T130000Z/-PT1H",
+    ] {
+        assert_eq!(
+            ical_to_event(&series_with_rdate(value))
+                .expect("parse")
+                .recurrence_overrides,
+            Some([("2026-02-05T13:00:00".to_owned(), json!({"duration": null}))].into()),
+            "{value}"
+        );
+    }
+
+    // A duration written as zero is the same zero length said the other way,
+    // and it is passed through as written rather than recognised: PT0S, P0D and
+    // PT0H0M0S all spell it, and telling them apart means parsing a value this
+    // mapping otherwise hands over untouched. RFC 8984 §4.2.2 reads the result
+    // as the zero length the null above leaves behind, so the two differ on
+    // paper and not in the calendar.
+    assert_eq!(
+        ical_to_event(&series_with_rdate("20260205T130000Z/PT0S"))
+            .expect("parse")
+            .recurrence_overrides,
+        Some(
+            [(
+                "2026-02-05T13:00:00".to_owned(),
+                json!({"duration": "PT0S"})
+            )]
+            .into()
+        ),
+    );
+}
+
+#[test]
+fn an_instance_an_rdate_period_lengthened_is_written_back_at_that_length() {
+    // The length has to survive the way out as well, or the next save hands the
+    // server back the occurrence at the series' hour. A patch that says
+    // something is written as a VEVENT of its own — the RDATE's job was only to
+    // place the instance — so the length is stated by that component's DURATION.
+    let event = ical_to_event(&series_with_rdate("20260205T130000Z/PT2H")).expect("parse");
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert!(without(vevent(&ics, 0), "RDATE"), "{ics}");
+    let instance = vevent(&ics, 1);
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID:20260205T130000Z"
+    );
+    assert_eq!(line(instance, "DTSTART"), "DTSTART:20260205T130000Z");
+    assert_eq!(line(instance, "DURATION"), "DURATION:PT2H");
+
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+}
+
 #[test]
 fn an_override_whose_instant_cannot_be_written_is_flagged() {
     // No EXDATE can name it, so a save that replaced recurrenceOverrides would
