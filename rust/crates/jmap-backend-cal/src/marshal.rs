@@ -19,11 +19,15 @@ use std::ffi::CStr;
 use std::ptr;
 
 use eds_sys::{
-    ECalComponent, I_CAL_RECURRENCEID_PROPERTY, I_CAL_VEVENT_COMPONENT, ICalComponent,
-    e_cal_component_get_icalcomponent, e_cal_meta_backend_info_new, i_cal_component_as_ical_string,
-    i_cal_component_clone, i_cal_component_get_first_component, i_cal_component_get_first_property,
-    i_cal_component_get_uid, i_cal_component_isa, i_cal_component_new_from_string,
-    i_cal_component_new_vcalendar, i_cal_component_take_component,
+    ECalComponent, I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY, I_CAL_TZID_PARAMETER,
+    I_CAL_TZID_PROPERTY, I_CAL_VEVENT_COMPONENT, ICalComponent, e_cal_component_get_icalcomponent,
+    e_cal_meta_backend_info_new, i_cal_component_as_ical_string, i_cal_component_clone,
+    i_cal_component_get_first_component, i_cal_component_get_first_property,
+    i_cal_component_get_next_property, i_cal_component_get_uid, i_cal_component_isa,
+    i_cal_component_new_from_string, i_cal_component_new_vcalendar, i_cal_component_take_component,
+    i_cal_parameter_get_tzid, i_cal_property_get_first_parameter, i_cal_property_set_tzid,
+    i_cal_timezone_get_builtin_timezone, i_cal_timezone_get_builtin_timezone_from_tzid,
+    i_cal_timezone_get_component,
 };
 use glib_sys::{GSList, g_free, g_slist_prepend, gchar};
 use gobject_sys::g_object_unref;
@@ -183,6 +187,16 @@ pub unsafe fn component_uid(component: *mut ICalComponent) -> Option<String> {
 /// the master would read the component as a series whose instance was edited
 /// back to the parent's title, and patch that over the server's copy.
 ///
+/// The zones those instances refer to go in ahead of them, because a `TZID`
+/// alone is not a zone: RFC 5545 §3.2.19 says it names a `VTIMEZONE` in the same
+/// object, and what Evolution's editor writes is libical's own
+/// `/freeassociation.sourceforge.net/Europe/Berlin`, which nothing outside
+/// libical resolves. An envelope built out of the instances and nothing else —
+/// which this used to be — is therefore not a calendar object, and worse than
+/// malformed: the mapping cannot name the zone, so `patch::diff` leaves
+/// `timeZone` alone and the zone the user chose never reaches the server. See
+/// [`take_referenced_time_zones`].
+///
 /// A set of instances with no master at all is refused instead — there is
 /// nothing honest to send, and a visible failure beats rewriting a series to
 /// look like one moved day.
@@ -194,8 +208,10 @@ pub unsafe fn component_uid(component: *mut ICalComponent) -> Option<String> {
 pub unsafe fn icalendar_from_instances(instances: *const GSList) -> Option<SavedComponent> {
     // SAFETY: the caller guarantees the list's shape; the components are
     // borrowed from the ECalComponents that own them.
-    let master = unsafe { find_master(instances) }?;
-    // SAFETY: `master` is a valid component for as long as the list is.
+    let components = unsafe { instance_components(instances) };
+    // SAFETY: each is a valid component for as long as the list is.
+    let master = unsafe { find_master(&components) }?;
+    // SAFETY: `master` is one of those.
     let uid = unsafe { component_uid(master) };
 
     // SAFETY: a fresh envelope, and clones of the instances to put in it —
@@ -205,10 +221,11 @@ pub unsafe fn icalendar_from_instances(instances: *const GSList) -> Option<Saved
         if calendar.is_null() {
             return None;
         }
+        take_referenced_time_zones(calendar, &components);
         i_cal_component_take_component(calendar, i_cal_component_clone(master));
-        for instance in instance_components(instances) {
-            if !ptr::eq(instance, master) {
-                i_cal_component_take_component(calendar, i_cal_component_clone(instance));
+        for instance in &components {
+            if !ptr::eq(*instance, master) {
+                i_cal_component_take_component(calendar, i_cal_component_clone(*instance));
             }
         }
         let rendered = ical_from_component(calendar);
@@ -276,16 +293,16 @@ unsafe fn instance_components(instances: *const GSList) -> Vec<*mut ICalComponen
     components
 }
 
-/// The first instance in `instances` that carries no `RECURRENCE-ID`, borrowed
-/// from the `ECalComponent` that owns it.
+/// The first of `components` that carries no `RECURRENCE-ID`, borrowed from the
+/// `ECalComponent` that owns it.
 ///
 /// # Safety
 ///
-/// As [`icalendar_from_instances`].
-unsafe fn find_master(instances: *const GSList) -> Option<*mut ICalComponent> {
-    // SAFETY: the caller guarantees a valid list of ECalComponent.
+/// Each of `components` must be a valid `ICalComponent`.
+unsafe fn find_master(components: &[*mut ICalComponent]) -> Option<*mut ICalComponent> {
+    // SAFETY: the caller guarantees valid components.
     unsafe {
-        instance_components(instances).into_iter().find(|inner| {
+        components.iter().copied().find(|inner| {
             let recurrence_id =
                 i_cal_component_get_first_property(*inner, I_CAL_RECURRENCEID_PROPERTY);
             if recurrence_id.is_null() {
@@ -296,6 +313,130 @@ unsafe fn find_master(instances: *const GSList) -> Option<*mut ICalComponent> {
             false
         })
     }
+}
+
+/// Puts a `VTIMEZONE` into `calendar` for every zone `components` refer to and
+/// libical can resolve.
+///
+/// The definition is libical's own, copied out of its builtin zone — the same
+/// text Evolution writes when it saves a zoned appointment to a file — and it is
+/// renamed to the identifier the properties use, so that the envelope defines
+/// the zone it refers to rather than a different spelling of the same city. Its
+/// `X-LIC-LOCATION` is what [`jmap_cal_sync`](jmap_cal_sync) translates
+/// libical's identifier into a JSCalendar `TimeZoneId` by.
+///
+/// Two identifiers this deliberately leaves undefined:
+/// - one no zone database knows, such as Windows' `W. Europe Standard Time`,
+///   because the only honest alternatives are guessing a city or failing the
+///   save, and the mapping already refuses a zone it cannot name — which keeps
+///   the server's own value rather than overwriting it with a guess;
+/// - `UTC`, which libical resolves and has no component for. It is the absence
+///   of transition rules, not a zone with any, and there is nothing to copy.
+///
+/// # Safety
+///
+/// `calendar` must be a valid `ICalComponent` this caller owns, and each of
+/// `components` a valid `ICalComponent`.
+unsafe fn take_referenced_time_zones(
+    calendar: *mut ICalComponent,
+    components: &[*mut ICalComponent],
+) {
+    // SAFETY: the caller guarantees the components.
+    for tzid in unsafe { referenced_tzids(components) } {
+        let name = cstring_lossy(&tzid);
+        // SAFETY: `name` is valid for the calls, which copy what they keep.
+        // Both lookups hand back a builtin zone the library owns — transfer
+        // none, so neither is unreffed here.
+        unsafe {
+            let zone = i_cal_timezone_get_builtin_timezone_from_tzid(name.as_ptr());
+            let zone = if zone.is_null() {
+                i_cal_timezone_get_builtin_timezone(name.as_ptr())
+            } else {
+                zone
+            };
+            if zone.is_null() {
+                continue;
+            }
+            // This reference *is* ours (transfer full), whatever the native
+            // component behind it belongs to, so the clone is what goes in the
+            // envelope and this is dropped.
+            let definition = i_cal_timezone_get_component(zone);
+            if definition.is_null() {
+                continue;
+            }
+            let copy = i_cal_component_clone(definition);
+            component_unref(definition);
+            if copy.is_null() {
+                continue;
+            }
+            // A definition under another name defines another zone, so a copy
+            // that cannot be renamed is not put in at all.
+            if rename_time_zone(copy, name.as_ptr()) {
+                i_cal_component_take_component(calendar, copy);
+            } else {
+                component_unref(copy);
+            }
+        }
+    }
+}
+
+/// Sets the `TZID` of the `VTIMEZONE` `definition`, or false if it has none —
+/// which no `VTIMEZONE` libical builds is, and an unnamed one defines nothing.
+///
+/// # Safety
+///
+/// `definition` must be a valid `ICalComponent` and `tzid` a valid
+/// NUL-terminated string.
+unsafe fn rename_time_zone(definition: *mut ICalComponent, tzid: *const gchar) -> bool {
+    // SAFETY: the caller guarantees both; the property reference is ours to
+    // drop, and `set_tzid` copies the string.
+    unsafe {
+        let property = i_cal_component_get_first_property(definition, I_CAL_TZID_PROPERTY);
+        if property.is_null() {
+            return false;
+        }
+        i_cal_property_set_tzid(property, tzid);
+        g_object_unref(property.cast());
+        true
+    }
+}
+
+/// Every zone `components` name, in the order first seen and without repeats: a
+/// second copy of one `VTIMEZONE` would be a duplicate `TZID` in one object.
+///
+/// Every property of every instance is asked, rather than each instance's
+/// `DTSTART`: a detached occurrence states the instant it replaces in the zone of
+/// the series and may itself have been moved into another, and an `EXDATE` or an
+/// `RDATE` carries a zone of its own too.
+///
+/// # Safety
+///
+/// Each of `components` must be a valid `ICalComponent`.
+unsafe fn referenced_tzids(components: &[*mut ICalComponent]) -> Vec<String> {
+    let mut tzids: Vec<String> = Vec::new();
+    for component in components {
+        // SAFETY: the caller guarantees a valid component; each property and
+        // parameter reference the iteration hands back is ours to drop.
+        unsafe {
+            let mut property = i_cal_component_get_first_property(*component, I_CAL_ANY_PROPERTY);
+            while !property.is_null() {
+                let parameter = i_cal_property_get_first_parameter(property, I_CAL_TZID_PARAMETER);
+                if !parameter.is_null() {
+                    let tzid = i_cal_parameter_get_tzid(parameter);
+                    if !tzid.is_null() {
+                        let tzid = CStr::from_ptr(tzid).to_string_lossy().into_owned();
+                        if !tzid.is_empty() && !tzids.contains(&tzid) {
+                            tzids.push(tzid);
+                        }
+                    }
+                    g_object_unref(parameter.cast());
+                }
+                g_object_unref(property.cast());
+                property = i_cal_component_get_next_property(*component, I_CAL_ANY_PROPERTY);
+            }
+        }
+    }
+    tzids
 }
 
 /// Reads an owned `gchar *` and frees it.

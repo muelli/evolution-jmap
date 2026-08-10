@@ -34,7 +34,28 @@ const ALL_DAY_SUMMARY: &str = "Team offsite";
 const ALL_DAY_START: &str = "2026-02-01T00:00:00";
 const ALL_DAY_DURATION: &str = "P1D";
 
-/// The third event: a weekly one with a single occurrence deleted, which EDS
+/// The third event: one in a named zone, built by the client through the
+/// libical setters the way Evolution's editor builds it — so the `TZID` that
+/// reaches the backend is libical's own
+/// `/freeassociation.sourceforge.net/Europe/Berlin`, which is not an RFC 8984
+/// §1.4.9 `TimeZoneId` and which nothing outside libical resolves.
+///
+/// This is the leg no test below real EDS can stand in for. The mapping can
+/// translate that identifier only from the `VTIMEZONE` beside it, and whether
+/// one travels with the component is `marshal::icalendar_from_instances`'s
+/// business — so the mapping's own tests, which supply the identifier and the
+/// definition by hand, cannot say whether a zone the user picked in Evolution
+/// ever reaches the server. A `time_zone` of `None` here is exactly the bug
+/// that had shipped: the appointment on the server floats, and every other
+/// client shows it at the wrong hour.
+///
+/// The start is the wall-clock time in that zone, which is what JSCalendar's
+/// `start` means beside a `timeZone` (RFC 8984 §4.1.1) — not the UTC instant.
+const ZONED_SUMMARY: &str = "Berlin review";
+const ZONED_START: &str = "2026-01-15T16:00:00";
+const ZONED_TIME_ZONE: &str = "Europe/Berlin";
+
+/// The fourth event: a weekly one with a single occurrence deleted, which EDS
 /// hands to the backend as an `EXDATE` on the master component. On the server
 /// that has to be an entry in `recurrenceOverrides` saying the instance is
 /// `excluded` — the only thing JSCalendar has for it. An `EXDATE` the mapping
@@ -158,6 +179,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             RECURRING_SUMMARY,
             RECURRING_EDITED_SUMMARY,
             RECURRING_SPLIT_SUMMARY,
+            ZONED_SUMMARY,
         ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -211,7 +233,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "a fresh cache against an empty calendar should hold nothing\n{report}"
     );
 
-    for key in ["added", "added-all-day", "added-recurring"] {
+    for key in ["added", "added-all-day", "added-zoned", "added-recurring"] {
         let added = seen
             .get(key)
             .unwrap_or_else(|| panic!("the client reported no {key} event\n{report}"));
@@ -284,13 +306,13 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
          it starts\n{report}"
     );
 
-    // Five objects for four events: `ECalCache` keys on (uid, rid), so the
+    // Six objects for five events: `ECalCache` keys on (uid, rid), so the
     // detached instance is a row of its own beside the series it belongs to,
-    // and the split added a fourth event. Four would mean the split's new event
-    // never landed in the cache; three, that the edit did not either.
+    // and the split added a fifth event. Five would mean the split's new event
+    // never landed in the cache; four, that the edit did not either.
     assert_eq!(
         seen.get("events-after"),
-        Some(&"5"),
+        Some(&"6"),
         "the added events are not all in the calendar they were added to\n{report}"
     );
 
@@ -316,8 +338,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .collect();
     assert_eq!(
         events.len(),
-        4,
-        "the server holds {} events, not four",
+        5,
+        "the server holds {} events, not five",
         events.len()
     );
 
@@ -374,6 +396,33 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     assert_eq!(
         all_day.time_zone, None,
         "a day has no zone (RFC 8984 §4.1.5): {all_day:?}"
+    );
+
+    // And the zoned one, which is the only assertion in this file that depends
+    // on what the backend puts in the envelope *besides* the components EDS
+    // handed it: the `TZID` on this event is libical's own, so without the
+    // `VTIMEZONE` defining it the mapping has no name for the zone and sends
+    // none. Start and zone are asserted together because either alone passes
+    // for the other going wrong — a wall-clock start with no zone is an
+    // appointment an hour or two off for everybody, and a zone on a start that
+    // was silently converted to UTC is the same error stated twice.
+    let zoned = by_title(ZONED_SUMMARY);
+    assert_eq!(
+        zoned.time_zone.as_deref(),
+        Some(ZONED_TIME_ZONE),
+        "the zone the event was created in did not reach the server, so the \
+         envelope carried no definition for libical's identifier: {zoned:?}"
+    );
+    assert_eq!(
+        zoned.start.as_deref(),
+        Some(ZONED_START),
+        "the zoned event does not start at the wall-clock time it was created \
+         at: {zoned:?}"
+    );
+    assert_eq!(
+        zoned.duration.as_deref(),
+        Some(DURATION),
+        "the zoned event has the wrong length: {zoned:?}"
     );
 
     // And the recurring one, whose EXDATE has to have become an override. The

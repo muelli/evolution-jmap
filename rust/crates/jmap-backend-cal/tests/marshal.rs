@@ -301,3 +301,198 @@ fn a_save_with_no_instances_at_all_is_refused() {
         assert!(marshal::icalendar_from_instances(ptr::null()).is_none());
     }
 }
+
+/// libical's own identifier for a builtin zone. Evolution's appointment editor
+/// sets a start with the zone *object*, and the `TZID` libical then writes is
+/// this — a form RFC 5545 §3.2.19 allows only because the `VTIMEZONE` that
+/// defines it is meant to travel in the same object. Nothing outside libical
+/// resolves it, and it is not an RFC 8984 §1.4.9 `TimeZoneId` either, so an
+/// envelope that names it and defines nothing says "some zone" and no more.
+const LIBICAL_TZID: &str = "/freeassociation.sourceforge.net/Europe/Berlin";
+
+/// One instance in the zone `tzid` names, at a wall-clock time.
+fn zoned(tzid: &str) -> String {
+    format!(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\r\n\
+         DTSTART;TZID={tzid}:20260810T090000\r\nEND:VEVENT\r\n"
+    )
+}
+
+/// How many `VTIMEZONE`s the envelope defines.
+fn definitions(icalendar: &str) -> usize {
+    icalendar.matches("BEGIN:VTIMEZONE").count()
+}
+
+/// The zone an event is in has to reach the server, and the only thing that can
+/// carry it is the definition libical holds: the identifier on the `DTSTART` is
+/// libical's own, so an envelope without the `VTIMEZONE` beside it hands the
+/// mapping a zone it cannot name — and `patch::diff` then leaves `timeZone`
+/// alone, which is a zone change the user made and nobody else ever sees.
+///
+/// The last assertion is the one that matters; the two before it say *how* the
+/// zone got there, so that a failure names the missing half rather than only
+/// the symptom.
+#[test]
+fn a_zoned_instance_brings_the_definition_of_its_zone() {
+    let component = instance(&zoned(LIBICAL_TZID));
+    let list = instance_list(&[component]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        assert_eq!(
+            definitions(&saved.icalendar),
+            1,
+            "the zone the event is in is not defined in the envelope: {}",
+            saved.icalendar
+        );
+        assert!(
+            saved.icalendar.contains(&format!("TZID:{LIBICAL_TZID}")),
+            "the definition is not of the zone the event names: {}",
+            saved.icalendar
+        );
+        assert_eq!(
+            jmap_ical::ical_to_event(&saved.icalendar)
+                .expect("the envelope is a calendar object")
+                .time_zone
+                .as_deref(),
+            Some("Europe/Berlin"),
+            "the mapping still cannot name the zone: {}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+}
+
+/// A zone already spelled the way JSCalendar wants it needs no translating, but
+/// it does need defining — and under the identifier the event's properties use,
+/// not libical's, or the envelope refers to one zone and defines another.
+#[test]
+fn a_zone_named_plainly_is_defined_under_the_name_the_event_uses() {
+    let component = instance(&zoned("Europe/Zurich"));
+    let list = instance_list(&[component]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        assert_eq!(definitions(&saved.icalendar), 1, "{}", saved.icalendar);
+        assert!(
+            saved.icalendar.contains("TZID:Europe/Zurich"),
+            "the definition does not carry the event's own identifier: {}",
+            saved.icalendar
+        );
+        assert!(
+            !saved.icalendar.contains("TZID:/"),
+            "the envelope defines libical's identifier instead of the event's: {}",
+            saved.icalendar
+        );
+        assert_eq!(
+            jmap_ical::ical_to_event(&saved.icalendar)
+                .expect("the envelope is a calendar object")
+                .time_zone
+                .as_deref(),
+            Some("Europe/Zurich"),
+            "{}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+}
+
+/// Every instance is asked which zone it means, and every property of it — a
+/// detached occurrence states the instant it replaces in the zone of the series,
+/// and may have been moved into another. One definition per zone, however many
+/// properties refer to it: a second copy of the same `VTIMEZONE` is a duplicate
+/// `TZID` in one object, which is not a calendar object any more.
+#[test]
+fn every_instance_and_every_property_is_asked_which_zone_it_means() {
+    let master = format!(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\r\n\
+         DTSTART;TZID={LIBICAL_TZID}:20260810T090000\r\n\
+         RRULE:FREQ=DAILY\r\nEND:VEVENT\r\n"
+    );
+    let moved = format!(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\\, moved\r\n\
+         RECURRENCE-ID;TZID={LIBICAL_TZID}:20260812T090000\r\n\
+         DTSTART;TZID=Europe/Zurich:20260812T100000\r\nEND:VEVENT\r\n"
+    );
+    let components = [instance(&moved), instance(&master)];
+    let list = instance_list(&components);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        assert_eq!(
+            definitions(&saved.icalendar),
+            2,
+            "not one definition per zone: {}",
+            saved.icalendar
+        );
+        assert!(
+            saved.icalendar.contains(&format!("TZID:{LIBICAL_TZID}")),
+            "{}",
+            saved.icalendar
+        );
+        assert!(
+            saved.icalendar.contains("TZID:Europe/Zurich"),
+            "the zone the occurrence was moved into is undefined: {}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        for component in components {
+            g_object_unref(component.cast());
+        }
+    }
+}
+
+/// A `TZID` no zone database knows — Windows' own spelling is the one that
+/// reaches EDS from an Exchange invitation — is left undefined rather than
+/// guessed at. The event still goes, and the mapping refuses the zone
+/// downstream, which leaves the server's own value standing.
+#[test]
+fn a_zone_no_database_knows_is_left_undefined() {
+    let component = instance(&zoned("W. Europe Standard Time"));
+    let list = instance_list(&[component]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        assert_eq!(
+            definitions(&saved.icalendar),
+            0,
+            "a zone was invented for an identifier nothing resolves: {}",
+            saved.icalendar
+        );
+        assert!(
+            saved.icalendar.contains("SUMMARY:Standup"),
+            "the event itself did not survive: {}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+}
+
+/// UTC is the zone libical resolves and has no `VTIMEZONE` for — it is not a
+/// zone with rules, it is the absence of them. Asking it for a definition
+/// returns NULL, and NULL is not something to put in an envelope.
+#[test]
+fn utc_is_a_zone_with_nothing_to_define() {
+    let component = instance(&zoned("UTC"));
+    let list = instance_list(&[component]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        assert_eq!(definitions(&saved.icalendar), 0, "{}", saved.icalendar);
+        assert!(
+            saved.icalendar.contains("SUMMARY:Standup"),
+            "the event itself did not survive: {}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+}
