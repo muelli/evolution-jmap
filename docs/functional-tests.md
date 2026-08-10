@@ -7,10 +7,10 @@ untested, and it is the layer a user meets first: EDS deciding *when* to call
 those vfuncs, and what it makes of what they said.
 
 These tests cover that layer. They start a real `evolution-source-registry`
-and a real `evolution-addressbook-factory`, hand them a real build of this
-repository's modules, and drive the result through EDS's ordinary client API
-— the same calls Evolution makes. The server on the other side is the in-repo
-mock, so no account anywhere is involved.
+and a real `evolution-addressbook-factory` or `evolution-calendar-factory`,
+hand them a real build of this repository's modules, and drive the result
+through EDS's ordinary client API — the same calls Evolution makes. The server
+on the other side is the in-repo mock, so no account anywhere is involved.
 
 This is M9 layer 1 of `docs/ROADMAP.md`. The GUI tier is a separate thing and
 is not here.
@@ -35,10 +35,10 @@ of whoever runs them.
 ## What you need installed
 
 - The EDS **runtime**, not just the development headers every other target
-  here builds against: `evolution-source-registry` and
-  `evolution-addressbook-factory`. On Debian and Ubuntu that is the
-  `evolution-data-server` package; the `-dev` packages do not carry the
-  daemons.
+  here builds against: `evolution-source-registry`,
+  `evolution-addressbook-factory` and `evolution-calendar-factory`. On Debian
+  and Ubuntu that is the `evolution-data-server` package; the `-dev` packages
+  do not carry the daemons.
 - `dbus-run-session`, from `dbus-daemon`.
 
 Configuring with `-DENABLE_FUNCTIONAL_TESTS=ON` without these is a configure
@@ -49,13 +49,13 @@ error naming the missing one. That is deliberate: see below.
 `rust/crates/jmap-functional` is the harness. For each test it:
 
 1. starts a mock JMAP server in-process, on an ephemeral port, and seeds it
-   with what the test needs — for the address book test, one address book
-   flagged as the account default;
+   with what the test needs — one address book, or one calendar, flagged as
+   the account default;
 2. builds a throwaway EDS installation in a directory under the crate's
    target tmpdir: a scratch `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
    `XDG_CACHE_HOME`, a `.source` keyfile naming the mock's port, and a module
    directory holding the one backend under test, named by
-   `EDS_ADDRESS_BOOK_MODULES`;
+   `EDS_ADDRESS_BOOK_MODULES` or `EDS_CALENDAR_MODULES`;
 3. runs the client program on a **private session bus** from
    `dbus-run-session`, with that environment and nothing inherited. The
    daemons D-Bus activates are this test's daemons, started with this test's
@@ -115,6 +115,28 @@ refresh rather than running it, so whether a `ContactCard/query` has happened
 by the time the test looks is a race; the write is synchronous. A test that
 asserted it would be a flake waiting for a slow machine.
 
+## What the calendar test asserts
+
+`rust/crates/jmap-functional/tests/calendar.rs`, against
+`tests/functional/cal-client.c`, is the same test one collection over, and it
+was written because the two backends are mirrors of each other — which is
+exactly the shape in which one of them carries a bug the other's tests would
+have caught. It did: `jmap-backend-cal` had the address book's writable bug,
+line for line, and this test is what found it.
+
+- the factory found and loaded `libecalbackendjmap.so` and matched it to
+  `BackendName=jmap`;
+- **the opened calendar is writable**, for the reason above. Note that this
+  assertion is a broad net: `e_cal_client_connect_sync` succeeds even when the
+  backend's `connect_sync` failed, so a calendar the backend could not open at
+  all also lands here rather than at the connect;
+- an event added through `e_cal_client_create_object_sync` reaches the server:
+  the mock recorded a `CalendarEvent/set`, and the event in its store has the
+  summary, the start time and the calendar it was given;
+- the same event reads back out of EDS with its summary intact.
+
+The read path is left alone for the same reason as the address book's.
+
 ## Debugging a failure
 
 The failure message carries the client's whole stdout and stderr, including
@@ -132,6 +154,7 @@ environment in `rust/crates/jmap-functional/src/lib.rs` and run the test with
 
 ## Related
 
-- `docs/manual-test-book-backend.md` — the same path by hand, in a real
-  Evolution, with a real Contacts view to look at. These tests do not replace
-  it: they check the machinery, it checks that a person can use it.
+- `docs/manual-test-book-backend.md` and `docs/manual-test-cal-backend.md` —
+  the same paths by hand, in a real Evolution, with a real Contacts or
+  Calendar view to look at. These tests do not replace them: they check the
+  machinery, those check that a person can use it.
