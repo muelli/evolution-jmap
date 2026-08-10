@@ -18,6 +18,7 @@
  *   usage: functional-cal-client <source-uid> <summary> <all-day-summary>
  *                               <recurring-summary> <edited-occurrence-summary>
  *                               <split-summary> <zoned-summary>
+ *                               <zoned-recurring-summary>
  */
 
 #include <libecal/libecal.h>
@@ -130,6 +131,43 @@
 #define TEST_RECURRING_SPLIT_DTSTART "20260212T130000Z"
 #define TEST_RECURRING_SPLIT_DTEND "20260212T143000Z"
 
+/* And the one thing every case above leaves unsaid: a series in one named zone
+ * with a single occurrence moved into another — the user who drags the week's
+ * standup into the hours they are travelling. Every zoned case so far has one
+ * zone for the whole event, so nothing has yet asked whether a *second* zone,
+ * named by one detached instance, survives the trip through EDS.
+ *
+ * It is its own series rather than a sixth exception to the weekly one above,
+ * because that one is in UTC and by now carries three exceptions and a split;
+ * a zone question answered on top of all that would not say which of the two
+ * broke it.
+ *
+ * Both zones are taken from libical's builtin table and set as zone *objects*,
+ * for the reason TEST_ZONED_LOCATION gives: what reaches the backend is then
+ * libical's own identifier rather than a string written here. The RECURRENCE-ID
+ * is the exception that proves it — i_cal_component_set_recurrenceid writes a
+ * floating value with no TZID on it, so the parameter is put on by hand, out of
+ * the zone object rather than out of a literal. ECalComponent does the same
+ * thing for Evolution (e_cal_component_set_recurid), which is why the component
+ * a real editor saves has it and one built through the plain libical setters
+ * does not. */
+#define TEST_ZONED_RECURRING_RRULE "FREQ=WEEKLY;COUNT=3"
+#define TEST_ZONED_RECURRING_DTSTART "20260305T100000"
+#define TEST_ZONED_RECURRING_DTEND "20260305T110000"
+
+/* The second occurrence, named on the series' own clock. RFC 5545 §3.8.4.4: a
+ * RECURRENCE-ID names the instance the recurrence rules generated, and the rules
+ * run in the series' zone — so this stays in Berlin even though the instance it
+ * points at is being moved to New York. The instance's own start is the moved
+ * one, and the two are five hours and a different clock apart, which is what
+ * makes a mapping that carried the wall-clock time without the zone visible
+ * rather than a rounding error. Its length is the series', so that what differs
+ * about this occurrence is the zone and the start and nothing else. */
+#define TEST_ZONED_MOVED_LOCATION "America/New_York"
+#define TEST_ZONED_MOVED_RECURRENCE_ID "20260312T100000"
+#define TEST_ZONED_MOVED_DTSTART "20260312T080000"
+#define TEST_ZONED_MOVED_DTEND "20260312T090000"
+
 static int
 fail (const gchar *step,
       GError *error)
@@ -223,6 +261,54 @@ rrule_value (ICalComponent *component)
 	return value ? value : g_strdup ("");
 }
 
+/* The two halves of a component's DTSTART: the value as text, and the TZID
+ * naming the clock it is on (RFC 5545 §3.2.19) or an empty string for a
+ * floating one.
+ *
+ * Read off the property rather than through i_cal_component_get_dtstart,
+ * because that resolves the identifier against the enclosing VCALENDAR's
+ * VTIMEZONEs and hands back a time carrying a zone *object* — which would
+ * report what libical could look up rather than what EDS kept. Both are
+ * returned together because either alone passes for the other going wrong: a
+ * wall-clock start with no zone and a start silently converted into the
+ * series' zone are the same appointment at the wrong hour, stated differently.
+ *
+ * The TZID is reported verbatim, prefix and all, because it is libical's to
+ * spell — this test asks which zone it names, not how libical writes it. */
+static void
+dtstart_parts (ICalComponent *component,
+	       gchar **value,
+	       gchar **tzid)
+{
+	ICalProperty *property;
+	ICalParameter *parameter;
+
+	*value = NULL;
+	*tzid = NULL;
+
+	property = i_cal_component_get_first_property (component, I_CAL_DTSTART_PROPERTY);
+	if (!property) {
+		*value = g_strdup ("");
+		*tzid = g_strdup ("");
+		return;
+	}
+
+	*value = i_cal_property_get_value_as_string (property);
+
+	parameter = i_cal_property_get_first_parameter (property, I_CAL_TZID_PARAMETER);
+	if (parameter) {
+		*tzid = g_strdup (i_cal_parameter_get_tzid (parameter));
+		g_object_unref (parameter);
+	}
+
+	g_object_unref (property);
+
+	if (!*value)
+		*value = g_strdup ("");
+	if (!*tzid)
+		*tzid = g_strdup ("");
+}
+
 /* The one component in a list that is a series of its own with this SUMMARY:
  * the event EDS made out of an occurrence. Matched on the summary because the
  * UID is EDS's invention and then the server's, so nothing on this side knows
@@ -262,16 +348,20 @@ main (int argc,
 	ICalComponent *read_back = NULL;
 	ICalComponent *read_back_event;
 	ICalComponent *split_event;
+	ICalProperty *property;
 	ICalTime *dtstart;
 	ICalTime *zoned_time;
 	ICalTimezone *zone;
+	ICalTimezone *moved_zone;
 	gchar *icalendar;
 	gchar *exdates;
 	gchar *rrule;
+	gchar *tzid;
 	gchar *added_uid = NULL;
 	gchar *all_day_uid = NULL;
 	gchar *recurring_uid = NULL;
 	gchar *zoned_uid = NULL;
+	gchar *zoned_recurring_uid = NULL;
 	const gchar *source_uid;
 	const gchar *summary;
 	const gchar *all_day_summary;
@@ -279,11 +369,13 @@ main (int argc,
 	const gchar *edited_summary;
 	const gchar *split_summary;
 	const gchar *zoned_summary;
+	const gchar *zoned_recurring_summary;
 
-	if (argc != 8) {
+	if (argc != 9) {
 		g_printerr ("usage: %s <source-uid> <summary> <all-day-summary> "
 			    "<recurring-summary> <edited-occurrence-summary> "
-			    "<split-summary> <zoned-summary>\n", argv[0]);
+			    "<split-summary> <zoned-summary> "
+			    "<zoned-recurring-summary>\n", argv[0]);
 		return 2;
 	}
 
@@ -294,6 +386,7 @@ main (int argc,
 	edited_summary = argv[5];
 	split_summary = argv[6];
 	zoned_summary = argv[7];
+	zoned_recurring_summary = argv[8];
 
 	/* Activates evolution-source-registry on the session bus, which reads
 	 * the scratch sources directory the harness wrote. */
@@ -675,6 +768,134 @@ main (int argc,
 
 	g_print ("series-rrule=%s\n", rrule);
 	g_free (rrule);
+
+	/* And the last event: a series in a named zone with one occurrence moved
+	 * into another — see TEST_ZONED_RECURRING_RRULE for why it is a series of
+	 * its own rather than a sixth exception to the one above. Built through
+	 * the setters, like the one-off zoned event, and for the same reason. */
+	zone = i_cal_timezone_get_builtin_timezone (TEST_ZONED_LOCATION);
+	moved_zone = i_cal_timezone_get_builtin_timezone (TEST_ZONED_MOVED_LOCATION);
+
+	if (!moved_zone) {
+		g_printerr ("build: libical has no builtin zone for %s\n",
+			    TEST_ZONED_MOVED_LOCATION);
+		g_free (added_uid);
+		return 1;
+	}
+
+	event = i_cal_component_new_vevent ();
+	i_cal_component_set_uid (event, "jmap-functional-zoned-recurring-event");
+	i_cal_component_set_summary (event, zoned_recurring_summary);
+
+	zoned_time = i_cal_time_new_from_string (TEST_ZONED_RECURRING_DTSTART);
+	i_cal_time_set_timezone (zoned_time, zone);
+	i_cal_component_set_dtstart (event, zoned_time);
+	g_object_unref (zoned_time);
+
+	zoned_time = i_cal_time_new_from_string (TEST_ZONED_RECURRING_DTEND);
+	i_cal_time_set_timezone (zoned_time, zone);
+	i_cal_component_set_dtend (event, zoned_time);
+	g_object_unref (zoned_time);
+
+	/* The rule from text, unlike everything else on this component: a RRULE
+	 * carries no zone, so writing it out is not the shortcut that hardcoding
+	 * an identifier would be. */
+	property = i_cal_property_new_from_string ("RRULE:" TEST_ZONED_RECURRING_RRULE);
+
+	if (!property) {
+		g_printerr ("build: libical would not parse the zoned series' rule\n");
+		g_object_unref (event);
+		g_free (added_uid);
+		return 1;
+	}
+
+	i_cal_component_take_property (event, property);
+
+	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
+					      &zoned_recurring_uid, NULL, &error)) {
+		g_object_unref (event);
+		g_free (added_uid);
+		return fail ("create-zoned-recurring", error);
+	}
+
+	g_object_unref (event);
+	g_print ("added-zoned-recurring=%s\n",
+		 zoned_recurring_uid ? zoned_recurring_uid : "");
+
+	/* And the move itself: "Edit this occurrence" a second time, changing the
+	 * clock rather than the title. The RECURRENCE-ID stays on the series'
+	 * zone because that is the instance the rules generated; the DTSTART and
+	 * DTEND are on the zone the user moved it to. */
+	event = i_cal_component_new_vevent ();
+	i_cal_component_set_uid (event, zoned_recurring_uid);
+	i_cal_component_set_summary (event, zoned_recurring_summary);
+
+	zoned_time = i_cal_time_new_from_string (TEST_ZONED_MOVED_RECURRENCE_ID);
+	i_cal_time_set_timezone (zoned_time, zone);
+	property = i_cal_property_new_recurrenceid (zoned_time);
+	i_cal_property_take_parameter (
+		property, i_cal_parameter_new_tzid (i_cal_timezone_get_tzid (zone)));
+	i_cal_component_take_property (event, property);
+	g_object_unref (zoned_time);
+
+	zoned_time = i_cal_time_new_from_string (TEST_ZONED_MOVED_DTSTART);
+	i_cal_time_set_timezone (zoned_time, moved_zone);
+	i_cal_component_set_dtstart (event, zoned_time);
+	g_object_unref (zoned_time);
+
+	zoned_time = i_cal_time_new_from_string (TEST_ZONED_MOVED_DTEND);
+	i_cal_time_set_timezone (zoned_time, moved_zone);
+	i_cal_component_set_dtend (event, zoned_time);
+	g_object_unref (zoned_time);
+
+	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_THIS,
+					      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
+		g_object_unref (event);
+		g_free (zoned_recurring_uid);
+		g_free (added_uid);
+		return fail ("modify-zoned-occurrence", error);
+	}
+
+	g_object_unref (event);
+
+	/* What EDS kept of it, asked for by the pair again. The RECURRENCE-ID is
+	 * spelled without a Z: it is a wall-clock time on the series' zone, and
+	 * that is the string ECalCache keys the detached instance on. */
+	if (!e_cal_client_get_object_sync (cal, zoned_recurring_uid,
+					   TEST_ZONED_MOVED_RECURRENCE_ID,
+					   &read_back, NULL, &error)) {
+		g_free (zoned_recurring_uid);
+		g_free (added_uid);
+		return fail ("read-back-zoned-occurrence", error);
+	}
+
+	g_free (zoned_recurring_uid);
+
+	read_back_event = first_vevent (read_back);
+	g_object_unref (read_back);
+
+	if (!read_back_event) {
+		g_printerr ("read-back-zoned-occurrence: EDS returned an object with no "
+			    "VEVENT in it\n");
+		g_free (added_uid);
+		return 1;
+	}
+
+	if (!is_detached_instance (read_back_event)) {
+		g_printerr ("read-back-zoned-occurrence: EDS answered with a component "
+			    "that replaces no occurrence\n");
+		g_object_unref (read_back_event);
+		g_free (added_uid);
+		return 1;
+	}
+
+	dtstart_parts (read_back_event, &icalendar, &tzid);
+	g_object_unref (read_back_event);
+
+	g_print ("zoned-occurrence-dtstart=%s\n", icalendar);
+	g_print ("zoned-occurrence-tzid=%s\n", tzid);
+	g_free (icalendar);
+	g_free (tzid);
 
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error)) {
 		g_free (added_uid);

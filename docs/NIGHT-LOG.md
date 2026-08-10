@@ -14377,3 +14377,99 @@ unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
 rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
 unexplained. Still open from before: nothing asserts whether a split series' two
 writes arrive as one `CalendarEvent/set` or two.
+
+## 2026-08-10 (hundred-and-forty-sixth session)
+
+The thing last session named as the honest way to close its own gap: a
+per-instance time zone now travels through **real EDS**, not only through the
+mapping's own tests and the mock. `tests/functional/cal-client.c` grew a sixth
+event and `jmap-functional`'s calendar leg the assertions for it.
+
+**What was untested, exactly.** The chain was covered a level at a time and
+nowhere end to end. `jmap-backend-cal`'s `referenced_tzids` collects every zone
+*every property of every instance* names, so the envelope defines them;
+`jmap-ical`'s `instance_patch` reads a moved occurrence's zone and
+`modified_instance` writes it back; `jmap-cal-sync`'s save tests watch the patch
+arrive at the mock. But every one of those supplies the identifier by hand. What
+Evolution actually hands the backend is libical's own
+`/freeassociation.sourceforge.net/America/New_York`, produced by the *setters*,
+and no test in the tree had ever asked EDS to carry a second such identifier —
+one named by a detached instance rather than by the series.
+
+**The sixth event.** A weekly series (`COUNT=3`) in `Europe/Berlin` starting
+2026-03-05T10:00, with its second occurrence moved to `America/New_York` at
+08:00 — five hours and a different clock, so that an override arriving as a bare
+`start` puts the appointment at 08:00 *Berlin* and is a visible error rather than
+a rounding one. A series of its own rather than a sixth exception to the existing
+weekly one, which is in UTC and by now carries three exceptions and a split: a
+zone question answered on top of all that would not have said which of the two
+broke.
+
+Both zones are set as zone *objects*, like the existing one-off zoned event and
+for the same reason — the identifier must be libical's, not a string this test
+wrote. The `RECURRENCE-ID` is the exception, and a finding worth recording:
+**`i_cal_component_set_recurrenceid` writes a floating value with no `TZID` on
+it** (verified with a standalone libical-glib program before the test was
+written), unlike `set_dtstart`. Evolution does not hit this because
+`ECalComponent` puts the parameter on itself (`e_cal_component_set_recurid`), so
+the component a real editor saves has it. The test therefore builds the property
+with `i_cal_property_new_recurrenceid` and takes a `TZID` parameter out of
+`i_cal_timezone_get_tzid (zone)` — still no literal identifier anywhere.
+
+**Red first, and it took the round trip to show it.** With
+`("timeZone", &series.time_zone, &instance.time_zone)` deleted from
+`instance_patch`'s comparison list — last session's fix, temporarily reverted —
+the leg fails at the *client-side* observation, before it ever looks at the
+mock: EDS's own cache hands the moved occurrence back as
+`DTSTART;TZID=Europe/Berlin:20260312T080000`, five hours from where it was put,
+because `ECalMetaBackend` re-reads what the save round-tripped. Restored, green.
+
+New observations from the client: `added-zoned-recurring`,
+`zoned-occurrence-dtstart` and `zoned-occurrence-tzid`, the last two read off the
+`DTSTART` *property* rather than through `i_cal_component_get_dtstart`, which
+would resolve the identifier against the enclosing `VCALENDAR` and report what
+libical could look up rather than what EDS kept. The value is asserted exactly;
+the `TZID` only has to *end with* `America/New_York`, because how libical spells
+a builtin zone's identifier is libical's business and has changed between
+releases — while the failure mode this guards against ends in `Europe/Berlin`.
+`events-after` went 6 → 8 (two series and two detached instances now) and the
+mock's store 5 → 6 events, both asserted. On the server the new event is checked
+for its own zone, start, length and rule, and for a `recurrenceOverrides` holding
+exactly `{"2026-03-12T10:00:00": {"start": "2026-03-12T08:00:00", "timeZone":
+"America/New_York"}}` — the key on the series' clock, the patch on the
+instance's.
+
+`docs/functional-tests.md` gained the bullet for both zoned events; the one-off
+one had never been documented there either.
+
+Verified locally: `cargo test --locked` 571 (unchanged — the new assertions are
+all inside the one existing functional test), `cargo test -p jmap-backend-cal
+--locked` 81, `ctest` 14/14 including all four functional legs against real EDS,
+`cargo fmt --check`, and `cargo clippy --all-targets --locked -- -D warnings`
+clean for the default set and for `jmap-backend-cal`/`jmap-functional`. The C
+client compiles without warnings. `reuse lint` and `cargo deny` not run (neither
+is on this VM); no files were added, so no new SPDX headers were needed, and no
+dependency changed.
+
+No milestone tag. What this session did **not** verify: the *reading* direction
+of a per-instance zone through real EDS — this leg writes one and reads back what
+EDS cached, but nothing drives a server-held event whose override carries a
+`timeZone` down into EDS and asks what the calendar shows. The functional legs
+deliberately leave the read path alone (`ECalMetaBackend` schedules its refresh,
+so asserting on it is a race), so closing that needs a different shape of test
+than adding an event here.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, for an instance's zone
+as well as the series', relying on libical resolving an IANA name out of its
+builtin table; the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag the last eighteen sessions
+asked for is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is still unexplained. Still open from before: nothing
+asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
+two.
