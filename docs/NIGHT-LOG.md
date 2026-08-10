@@ -10909,3 +10909,88 @@ Next: the subclass itself — `class_init` filling in `backend_name` with the
 Camel protocol name and the vfuncs delegating to `jmap-config`'s three
 functions, and the `e_module_load` that registers it into Evolution's module
 directory. That is the part this VM can compile and cannot verify.
+
+## 2026-08-10 (hundred-and-eighth session)
+
+**The class Evolution talks to: `EMailConfigServiceBackendJmap`.** Six tests,
+red first, in `rust/crates/jmap-config/tests/backend.rs`; the subclass in
+`src/backend.rs`; `evo-sys` added as a dependency of `jmap-config`. The class
+carries two things and no more — the `backend_name` the *Receiving Email* page
+finds it by, and a `new_collection` that answers the account a new JMAP setup
+starts as.
+
+**Why only two.** `backend_name` is not a vfunc but it is what makes the backend
+exist at all: the page `strcmp`s it against each Camel provider's protocol, and
+NULL — which is what the abstract parent leaves there — is a JMAP entry that
+never appears in the account type list. `new_collection` is the other one whose
+decision was already made and tested: Evolution's own answers NULL, which is
+right for POP3 and, for a provider that fans out to contacts and calendars, an
+account committed as a lone mail source with nothing behind it. The remaining
+four slots are left inherited *and said so in the crate docs*:
+`insert_widgets` and `setup_defaults` need the `EMailConfigServicePage` this
+extension extends, and `check_complete`/`commit_changes` need the account read
+back out of the collection source — the inverse of `account::apply`, which this
+crate does not have yet and which is the next increment.
+
+**`get_selectable` is left alone deliberately, not forgotten.** Its inherited
+implementation answers "yes, unless this provider is both a store and a
+transport, in which case only on the receiving page" — and `jmap-mail`'s
+provider registers both types, so the inherited answer is already right.
+An unconditional override would offer JMAP a second time in the *Sending Email*
+combo as an account type the user can pick and then not configure.
+
+**The one real decision: what `new_collection` writes.** evolution-ews writes a
+single property here (the collection backend name) and leaves the rest to
+`setup_defaults`. This writes the whole of `defaults::from_identity("")` — the
+same account with the one field that needs an address left empty — because the
+fields `setup_defaults` would fill are not neutral when absent.
+`[Collection] MailEnabled` and its two siblings read *false* when unwritten, so
+a collection carrying only a backend name reads back, through the registry's own
+`parts_of`, as a JMAP account with mail, contacts and calendars all switched
+off: not what the dialog shows, and a difference that would only ever surface as
+an account with no children. Two of the six tests go red if that write is
+dropped, which is how it was checked rather than argued.
+
+**A linking bug the first run found, and its fix.** `jmap-config`'s test binary
+linked and then would not start: `libevolution-mail.so.0: cannot open shared
+object file`. Evolution's libraries live in `/usr/lib/evolution`, and the
+`-Wl,-R` its `.pc` files carry for exactly that reason reaches only the package
+whose build script emitted it — Cargo passes a build script's `-l`/`-L` on to
+every crate downstream but scopes `rustc-link-arg` to that package. Last
+session's note that the rpath "comes out in the test binary's RUNPATH" was true
+of `evo-sys`'s own tests and of nothing else. So `evo-sys` now publishes its
+link directories as `cargo:libdirs`, which Cargo hands to dependents of a crate
+with a `links` key as `DEP_EVOLUTION_SHELL_LIBDIRS`, and `jmap-config` has a
+small `build.rs` that turns them back into `-Wl,-rpath`. Checked with
+`readelf -d` on the new test binary, not assumed. The same mechanism is what the
+installed `module-jmap-configuration.so` will need.
+
+**One assertion corrected against the installed EDS rather than against
+intent.** The empty identity `new_collection` writes reads back as *absent*, not
+as an empty string: EDS's setters strip what they are given and store nothing
+for what is empty afterwards. That is the reading that matters — it is also what
+the registry finds in a keyfile with no `Identity=` line — and the test says so
+with the reason.
+
+**What this is not.** A registered class is not a module and not a working
+setup: nothing calls `e_module_load`, no `module-jmap-configuration.so` is
+built or installed, no widget exists, and no account has been created through
+Evolution's UI, which is M7's actual acceptance and not something this VM can
+do. M7 carries no completion tag, and this needs human verification in real
+Evolution when there is something to verify.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM). Three new files, all with SPDX headers.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as are `clippy`/`test` over the EDS crates — 813 tests, `jmap-config`'s 57
+(was 51) included. `RUSTDOCFLAGS=-D warnings cargo doc` clean for the crate.
+Pre-existing and untouched: `example-module` does not build on this VM, which is
+why the workspace-wide runs exclude it.
+
+No milestone tag.
+
+Next: `account::read`, the inverse of `account::apply` — the account read back
+out of the collection source the widgets edit. It is ordinary Rust over an
+`ESource`, so it can be tested here, and it is what both `check_complete` and
+`commit_changes` are waiting on.
