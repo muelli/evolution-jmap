@@ -471,6 +471,66 @@ fn the_months_a_yearly_rule_repeats_in_reach_the_server() {
 }
 
 #[test]
+fn the_days_of_the_year_a_rule_repeats_on_reach_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "New Year", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "yearly",
+            "byYearDay": [1],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=YEARLY;BYYEARDAY=1"),
+        "{icalendar}"
+    );
+    // Adding the last day of the year, which is the negative form RFC 8984
+    // §4.3.3 counts back from 31 December with.
+    let edited = icalendar.replace("BYYEARDAY=1", "BYYEARDAY=1,-1");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_year_day.as_deref(), Some(&[1, -1][..]));
+}
+
+#[test]
+fn a_day_of_the_year_the_rrule_should_not_carry_is_not_sent() {
+    // `FREQ=MONTHLY;BYYEARDAY=100` is a rule RFC 5545 §3.3.10 does not admit — a
+    // month is not a period a day of the year sits inside — and neither calcard
+    // nor libical judges it, so the check is on the way out: `recurrenceRules` goes
+    // to the server replaced whole, and one part it is entitled to reject would
+    // cost every other edit in the save.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "monthly"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("RRULE:FREQ=MONTHLY", "RRULE:FREQ=MONTHLY;BYYEARDAY=100")
+        .replace("SUMMARY:Rent", "SUMMARY:Rent, due");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.recurrence_rules.unwrap()[0].by_year_day, None);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Rent, due"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
 fn a_leap_month_is_not_sent() {
     // A month iCalendar can only name under RFC 7529's `RSCALE` (RFC 8984
     // §4.3.3's `5L`). calcard carries the token rather than judging it, so the

@@ -14796,3 +14796,106 @@ asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
 two; the *reading* direction of a per-instance zone through real EDS is untested;
 calcard silently drops or wraps an unreadable `BYDAY`/`BYMONTHDAY` token below
 this crate, which only an upstream fix reaches.
+
+## 2026-08-10 (hundred-and-fiftieth session)
+
+A series can now name the days of the year it repeats on. `byYearDay` — RFC 8984
+§4.3.3's array of signed numbers, iCalendar's `BYYEARDAY` — is modeled rather
+than parked in `RecurrenceRule::extra`, so it crosses in both directions, and
+libical was asked what it makes of every spelling this mapping refuses.
+
+**A number, unlike `byMonth`.** Last session's month had to be held as a string
+because RFC 7529 admits a leap month (`5L`); a day of the year has no such
+spelling, so `by_year_day` is `Option<Vec<i32>>` like `byMonthDay`. That single
+type choice removes the whole class of round-trip hazard `month_token` exists to
+guard: the only spelling an `i32` can be written back as is the canonical one, so
+a rule cannot come out of EDS's cache respelled and read as an edit the user
+never made. libical does re-spell `BYYEARDAY=010` to `10` and `+100` to `100`
+(both measured), but neither is a shape this mapping can emit.
+
+**Two refusals, and libical agrees with neither boundary.** The probe in
+`jmap-backend-cal/tests/marshal.rs` — where libical is linked in — found the
+answers do not line up with RFC 5545 §3.3.10 at all:
+- `BYYEARDAY=0`, `=999` and `BYYEARDAY=100,XX` cost the **entire** `RRULE`, the
+  same expensive failure a day of the month out of range has: the event would
+  reach EDS's cache as a single appointment with the user's series gone.
+- `BYYEARDAY=367` and `=-367` libical keeps **verbatim**, where `999` costs the
+  rule. So `year_day_token`'s range check is not "what the parser will accept" —
+  it is that no year has a 367th day, so the rule would sit in the cache as a
+  series that can never occur. The boundary libical enforces internally is
+  somewhere above 366 and below 999; where exactly is not a promise worth
+  depending on, which is the argument for checking the RFC's range here.
+- The frequency gate libical does not enforce **at all**: it keeps
+  `BYYEARDAY=100` beside `FREQ=MONTHLY`, `WEEKLY` and `DAILY`, all three of which
+  §3.3.10 marks N/A. So the reason `by_year_day_part` leaves the part off there is
+  not that the parser objects; it is that a month is not a period a day of the
+  year sits inside, and every other reader of the rule — a CalDAV server, another
+  client — is free to make of it what it likes.
+
+**The gate names what the RFC excludes, not what it allows.** `holds_a_year`
+refuses `DAILY`/`WEEKLY`/`MONTHLY` rather than allowing `YEARLY` alone, because
+§3.3.10's table also defines `BYYEARDAY` beside `HOURLY`, `MINUTELY` and
+`SECONDLY` — limiting the occurrences those expand to ("the ninth hour of every
+hundredth day of the year") rather than expanding them. Allowing only `YEARLY`
+would have been the easy reading and would have silently dropped a legitimate
+rule; that asymmetry is now a test of its own.
+
+**Order, again, measured rather than assumed.** `BYYEARDAY` is written between
+`BYMONTHDAY` and `BYMONTH`, which is where libical's `recurmap` table puts it,
+and the round-trip list in `marshal.rs` now carries a rule with all four modeled
+parts at once so the claim is checked against the parser EDS uses rather than
+inferred from source reading.
+
+Ten tests, red first: one in `jmap-proto/tests/calendars.rs` against a new
+fixture (`[1, -1]` modeled, `extra` empty), six in `jmap-ical/tests/event.rs`
+(the days out and back; all four `by*` parts in libical's order; a hand-written
+`+1,-366` arriving canonical; the part refused at the three frequencies the RFC
+excludes; the part carried at the three shorter ones and at `YEARLY`; five shapes
+of impossible day flagged and left off the `RRULE`; and one refused through the
+parser), one in `jmap-backend-cal/tests/marshal.rs` (the three libical answers
+above), and two in `jmap-cal-sync/tests/save.rs` against the mock (1 January
+becoming 1 January and 31 December on the server; `FREQ=MONTHLY;BYYEARDAY=100`
+leaving `recurrenceRules` alone while the title edit in the same save still
+lands). The two mock-level tests were red only by assertion, so both were
+mutation-checked: dropping `holds_a_year` makes the save one fail with
+`Some([100])` reaching the server, and widening `year_day_token`'s range to ±999
+makes both `jmap-ical` refusal tests fail. The `marshal.rs` test was written red
+with the wrong expectation (that a 367th day would cost the rule, as `999` does)
+and corrected to what libical actually said — which is the second bullet above.
+
+Verified locally: `cargo test --locked` 607 (up 10), `cargo test -p
+jmap-backend-cal --locked` 85 (up 1), `ctest` 14/14 including all four functional
+legs against real EDS, `cargo fmt --check`, and `cargo clippy --all-targets
+--locked -- -D warnings` clean for the default set and for `jmap-backend-cal`.
+`reuse lint` and `cargo deny` not run (neither is on this VM); the one file added
+is a JSON fixture, covered by `REUSE.toml`'s `rust/crates/*/tests/fixtures/**`
+annotation rather than a header; no dependency changed.
+
+No milestone tag. What this session did **not** do: no functional leg through
+real EDS for a yearly series — the libical round-trip test is what stands in for
+it, as it did for `byMonthDay` and `byMonth`, and it answers the question a
+functional leg would (does the spelling survive the parser EDS uses).
+`bySetPosition`, `byWeekNo`, `byHour`/`byMinute`/`bySecond`, `weekStart`, `rscale`
+and `skip` are still unmodeled, and a rule holding one is still drawn narrowed and
+never written back — which is safe. `byWeekNo` is the obvious next one and is
+*not* a copy of this: its meaning depends on `weekStart`/`WKST`, which is
+unmodeled, so a server sending `firstDayOfWeek` puts it in `extra` and the rule is
+already refused whole; carrying `byWeekNo` without `weekStart` would show weeks
+counted from the wrong day.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, for an instance's zone
+as well as the series', relying on libical resolving an IANA name out of its
+builtin table; the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag the last twenty-two
+sessions asked for is still unwritten; the manual-test recipes are unlinked from
+the README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is still unexplained. Still open from before: nothing
+asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
+two; the *reading* direction of a per-instance zone through real EDS is untested;
+calcard silently drops or wraps an unreadable `BYDAY`/`BYMONTHDAY` token below
+this crate, which only an upstream fix reaches.
