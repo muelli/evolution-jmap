@@ -63,6 +63,13 @@ pub struct CalendarEvent {
     /// ISO 8601 duration, e.g. `PT1H`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<String>,
+    /// Whether the event is shown without a time — an all-day event (RFC 8984
+    /// §4.1.5). `None` and `Some(false)` mean the same thing to a server, which
+    /// defaults the property to false; the mapping uses `None` for "nothing was
+    /// said", so that a save can tell an event that was never all-day from one
+    /// the user just made timed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_without_time: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

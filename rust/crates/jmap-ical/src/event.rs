@@ -4,17 +4,23 @@
 //! JSCalendar [`CalendarEvent`] ↔ iCalendar `VEVENT`.
 //!
 //! The mapped set is the one the calendar backend needs to be useful — UID,
-//! SUMMARY, DESCRIPTION, DTSTART (with its time zone), DURATION, STATUS and
-//! RRULE — and no more. Everything else on an event (participants, alarms,
-//! locations, links, …) is *dropped*, which is only safe because saving goes
-//! back to the server as a PatchObject naming the mapped properties: a
-//! property we never mapped is a property we never overwrite. See
-//! [`MAPPED_PROPERTIES`] and [`maps_recurrence_rule`], which are that
-//! knowledge in machine-readable form.
+//! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
+//! the event is shown without a time), DURATION, STATUS and RRULE — and no
+//! more. Everything else on an event (participants, alarms, locations, links,
+//! …) is *dropped*, which is only safe because saving goes back to the server
+//! as a PatchObject naming the mapped properties: a property we never mapped is
+//! a property we never overwrite. See [`MAPPED_PROPERTIES`] and
+//! [`maps_recurrence_rule`], which are that knowledge in machine-readable form.
 //!
 //! The one property read but never written is `DTEND`: it is how Evolution
 //! states an event's length, so [`read_duration`] measures it, while the
 //! length always goes back out as the `DURATION` the two formats share.
+//!
+//! An all-day event has no property of its own in iCalendar; it is a `DTSTART`
+//! written as a date rather than a date-time, which puts JSCalendar's
+//! `showWithoutTime` in the value type of three properties at once. See
+//! [`shows_without_time`] for the conditions that has to meet and what happens
+//! when it cannot.
 //!
 //! Nothing here fails on unrecognised input. A property whose value the
 //! mapping cannot read is treated as absent, because an event that loses a
@@ -47,12 +53,13 @@ const STATUSES: [(&str, &str); 3] = [
 
 /// The JSCalendar properties this mapping covers, and therefore the only ones
 /// a save may name in a `CalendarEvent/set` update patch.
-pub const MAPPED_PROPERTIES: [&str; 6] = [
+pub const MAPPED_PROPERTIES: [&str; 7] = [
     "title",
     "description",
     "start",
     "timeZone",
     "duration",
+    "showWithoutTime",
     "status",
 ];
 
@@ -117,19 +124,30 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
         }
     }
 
-    if let Some(start) = event.start.as_deref().and_then(to_ical_date_time) {
-        let zone = event.time_zone.as_deref();
-        vevent = vevent.with(match zone {
+    let start = event.start.as_deref().and_then(to_ical_date_time);
+    // Whether this event goes out as a date rather than a date-time, which is
+    // the whole of `showWithoutTime` on this side. Decided once: `DTSTART`,
+    // `DURATION` and an `RRULE`'s `UNTIL` all have to agree about it.
+    let as_a_date = start
+        .as_deref()
+        .is_some_and(|start| shows_without_time(event, start));
+
+    if let Some(start) = &start {
+        vevent = vevent.with(match (as_a_date, event.time_zone.as_deref()) {
+            // A DATE value, RFC 5545 §3.6.1's other form of an event. The
+            // parameter is required: DTSTART is a DATE-TIME by default, and
+            // libical refuses the whole component over a value that is not one.
+            (true, _) => Property::raw("DTSTART", &start[..8]).with_param("VALUE", "DATE"),
             // Form 2, a UTC instant. Form 3 with TZID=Etc/UTC would be legal
             // but obliges us to ship a VTIMEZONE for it.
-            Some(zone) if is_utc(zone) => Property::raw("DTSTART", &format!("{start}Z")),
+            (false, Some(zone)) if is_utc(zone) => Property::raw("DTSTART", &format!("{start}Z")),
             // Form 3. libical resolves an IANA name from its built-in zone
             // table, so no VTIMEZONE is emitted; a zone it does not know falls
             // back to floating on its side, which is the same guess we would
             // have to make.
-            Some(zone) => Property::raw("DTSTART", &start).with_param("TZID", zone),
+            (false, Some(zone)) => Property::raw("DTSTART", start).with_param("TZID", zone),
             // Form 1, floating. Inventing UTC here would move the event.
-            None => Property::raw("DTSTART", &start),
+            (false, None) => Property::raw("DTSTART", start),
         });
     }
 
@@ -147,7 +165,7 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     }
 
     for rule in event.recurrence_rules.iter().flatten() {
-        if let Some(value) = rule_to_rrule(rule, event.time_zone.as_deref()) {
+        if let Some(value) = rule_to_rrule(rule, event.time_zone.as_deref(), as_a_date) {
             vevent = vevent.with(Property::raw("RRULE", &value));
         }
     }
@@ -170,7 +188,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
     let vevent = calendar.child("VEVENT").ok_or(ICalError::NoEvent)?;
 
     let text = |name: &str| vevent.text(name).filter(|value| !value.is_empty());
-    let (start, time_zone) = read_start(vevent);
+    let (start, time_zone, show_without_time) = read_start(vevent);
 
     let rules: Vec<RecurrenceRule> = vevent
         .all("RRULE")
@@ -190,6 +208,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
         start,
         time_zone,
         duration: read_duration(vevent),
+        show_without_time,
         status: vevent.text("STATUS").and_then(|status| {
             STATUSES
                 .iter()
@@ -201,15 +220,34 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
     })
 }
 
-/// The event's start as a JSCalendar LocalDateTime and its time zone.
-fn read_start(vevent: &Component) -> (Option<String>, Option<String>) {
+/// The event's start as a JSCalendar LocalDateTime, its time zone, and whether
+/// it is shown without a time — three answers because all three are read off
+/// the one `DTSTART`, and a date-only one changes the other two.
+///
+/// A `VALUE=DATE` start is how iCalendar spells an all-day event, so it becomes
+/// `showWithoutTime`; the start itself is still read as midnight, because that
+/// is what the day begins at and dropping it would leave the event with no time
+/// at all. Any `TZID` on such a property is ignored — RFC 5545 §3.2.19 says it
+/// does not apply to a DATE value — which also keeps the pair symmetric with
+/// [`shows_without_time`], the only shape the writer emits.
+///
+/// A timed start yields `None` rather than `Some(false)`: the RFC 8984 default
+/// is false anyway, and the save path reads an edit off a difference from this,
+/// so answering `false` where the server said nothing would invent one.
+fn read_start(vevent: &Component) -> (Option<String>, Option<String>, Option<bool>) {
     let Some(property) = vevent.property("DTSTART") else {
-        return (None, None);
+        return (None, None, None);
     };
     let value = property.raw_value();
     let Some(start) = to_local_date_time(&value) else {
-        return (None, None);
+        return (None, None, None);
     };
+    // calcard renders a DATE value with no `T` in it, whatever the parameters
+    // said, so the value is what decides — a `VALUE=DATE` this mapping did not
+    // write and a bare `20260115` mean the same thing to a reader.
+    if !value.contains(['T', 't']) {
+        return (Some(start), None, Some(true));
+    }
     let zone = match value.ends_with('Z') {
         true => Some(UTC.to_owned()),
         false => property
@@ -217,7 +255,7 @@ fn read_start(vevent: &Component) -> (Option<String>, Option<String>) {
             .filter(|zone| !zone.is_empty())
             .map(str::to_owned),
     };
-    (Some(start), zone)
+    (Some(start), zone, None)
 }
 
 /// How long the event lasts, as a JSCalendar Duration.
@@ -309,6 +347,61 @@ fn to_duration(seconds: i64) -> Option<String> {
         }
     }
     Some(duration)
+}
+
+/// Whether this event can be written the way iCalendar writes an all-day one:
+/// a `DTSTART` of `VALUE=DATE`, with no time anywhere on the component.
+///
+/// `showWithoutTime` asks for it, but cannot on its own get it. RFC 8984 §4.1.5
+/// says an event shown without a time starts at midnight and lasts whole days;
+/// a server is free to send otherwise, and RFC 5545 has no way to write the
+/// result — a DATE value has no time to hold 09:00, takes no `TZID`
+/// (§3.2.19), and stands only beside a duration of whole days (§3.6.1) and an
+/// `UNTIL` that is itself a DATE (§3.3.10). So each of those is a condition
+/// here, and an event failing any of them is written as the timed event it
+/// half is: wrong about its day-ness, right about when it happens, and — since
+/// the save path diffs against this same rendering — not read back as the user
+/// having cleared the flag.
+///
+/// `start` is the already-rendered `DTSTART` value, `YYYYMMDDTHHMMSS`.
+fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
+    event.show_without_time == Some(true)
+        && event.time_zone.is_none()
+        && at_midnight(start)
+        && event
+            .duration
+            .as_deref()
+            .filter(|duration| !duration.is_empty())
+            .is_none_or(whole_days)
+        && event
+            .recurrence_rules
+            .iter()
+            .flatten()
+            .filter(|rule| writable(rule))
+            .all(|rule| {
+                rule.until
+                    .as_deref()
+                    .and_then(to_ical_date_time)
+                    .is_none_or(|until| at_midnight(&until))
+            })
+}
+
+/// Whether a rendered `YYYYMMDDTHHMMSS` names the top of its day.
+fn at_midnight(value: &str) -> bool {
+    value.ends_with("T000000")
+}
+
+/// Whether an ISO 8601 duration is a whole number of days — RFC 5545's
+/// `dur-day`/`dur-week`, the only lengths that may stand beside a DATE start.
+///
+/// Anything after the designator's `T` is a time component, so its absence is
+/// the whole test; a negative duration (a leading `-`) is not a length an event
+/// can have and fails here with the rest.
+fn whole_days(duration: &str) -> bool {
+    let Some(parts) = duration.strip_prefix(['P', 'p']) else {
+        return false;
+    };
+    !parts.is_empty() && !parts.contains(['T', 't'])
 }
 
 fn is_utc(zone: &str) -> bool {
@@ -409,7 +502,11 @@ fn days_in_month(year: u32, month: u32) -> u32 {
 /// `RRULE` holds — showing a weekly event on the wrong days beats showing none
 /// — and [`maps_recurrence_rule`] is how the save path knows not to write that
 /// narrowing back.
-fn rule_to_rrule(rule: &RecurrenceRule, time_zone: Option<&str>) -> Option<String> {
+fn rule_to_rrule(
+    rule: &RecurrenceRule,
+    time_zone: Option<&str>,
+    as_a_date: bool,
+) -> Option<String> {
     if !writable(rule) {
         return None;
     }
@@ -423,16 +520,25 @@ fn rule_to_rrule(rule: &RecurrenceRule, time_zone: Option<&str>) -> Option<Strin
     }
     if let Some(until) = rule.until.as_deref().and_then(to_ical_date_time) {
         // JSCalendar's `until` is a local time in the event's own zone, so it
-        // is spelled the way DTSTART is. RFC 5545 §3.3.10 asks for a UTC
-        // instant when DTSTART carries a TZID; converting one would need a
-        // zone database, which this crate deliberately does not depend on, so
-        // a zoned event's UNTIL stays local. It round-trips, and libical reads
-        // it in the event's zone.
-        let suffix = match time_zone {
-            Some(zone) if is_utc(zone) => "Z",
-            _ => "",
-        };
-        parts.push(format!("UNTIL={until}{suffix}"));
+        // is spelled the way DTSTART is — which RFC 5545 §3.3.10 also requires
+        // of its value *type*, hence the date-only form for an event written as
+        // a date. The time dropped there is midnight, because
+        // [`shows_without_time`] does not choose that form otherwise.
+        //
+        // §3.3.10 asks for a UTC instant when DTSTART carries a TZID;
+        // converting one would need a zone database, which this crate
+        // deliberately does not depend on, so a zoned event's UNTIL stays
+        // local. It round-trips, and libical reads it in the event's zone.
+        parts.push(match as_a_date {
+            true => format!("UNTIL={}", &until[..8]),
+            false => {
+                let suffix = match time_zone {
+                    Some(zone) if is_utc(zone) => "Z",
+                    _ => "",
+                };
+                format!("UNTIL={until}{suffix}")
+            }
+        });
     }
     Some(parts.join(";"))
 }

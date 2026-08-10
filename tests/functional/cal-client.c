@@ -15,7 +15,7 @@
  * `key=value` line per observation, and exits non-zero the moment a call
  * fails.
  *
- *   usage: functional-cal-client <source-uid> <summary>
+ *   usage: functional-cal-client <source-uid> <summary> <all-day-summary>
  */
 
 #include <libecal/libecal.h>
@@ -34,6 +34,14 @@
  * the backend has to understand for a user-created event to reach the server
  * with a length at all. */
 #define TEST_DTEND "20260115T143000Z"
+
+/* And an all-day event, written the way Evolution writes one: DATE values
+ * rather than DATE-TIMEs, on both ends. RFC 5545 §3.6.1's other form of an
+ * event, and the only thing in iCalendar that says "this is a day, not a time
+ * of day" — so it is what the backend has to recognise for the server to be
+ * told, in JSCalendar's showWithoutTime, that the user made a day of it. */
+#define TEST_ALL_DAY_DTSTART "20260201"
+#define TEST_ALL_DAY_DTEND "20260202"
 
 static int
 fail (const gchar *step,
@@ -74,16 +82,19 @@ main (int argc,
 	ICalComponent *read_back_event;
 	gchar *icalendar;
 	gchar *added_uid = NULL;
+	gchar *all_day_uid = NULL;
 	const gchar *source_uid;
 	const gchar *summary;
+	const gchar *all_day_summary;
 
-	if (argc != 3) {
-		g_printerr ("usage: %s <source-uid> <summary>\n", argv[0]);
+	if (argc != 4) {
+		g_printerr ("usage: %s <source-uid> <summary> <all-day-summary>\n", argv[0]);
 		return 2;
 	}
 
 	source_uid = argv[1];
 	summary = argv[2];
+	all_day_summary = argv[3];
 
 	/* Activates evolution-source-registry on the session bus, which reads
 	 * the scratch sources directory the harness wrote. */
@@ -188,6 +199,36 @@ main (int argc,
 
 	g_print ("read-back-summary=%s\n", i_cal_component_get_summary (read_back_event));
 	g_object_unref (read_back_event);
+
+	/* The all-day one, through the same path. Written second so that a
+	 * failure here cannot be mistaken for the timed event's. */
+	icalendar = g_strdup_printf (
+		"BEGIN:VEVENT\r\n"
+		"UID:jmap-functional-all-day-event\r\n"
+		"DTSTART;VALUE=DATE:%s\r\n"
+		"DTEND;VALUE=DATE:%s\r\n"
+		"SUMMARY:%s\r\n"
+		"END:VEVENT\r\n",
+		TEST_ALL_DAY_DTSTART, TEST_ALL_DAY_DTEND, all_day_summary);
+	event = i_cal_component_new_from_string (icalendar);
+	g_free (icalendar);
+
+	if (!event) {
+		g_printerr ("build: libical would not parse the all-day event\n");
+		g_free (added_uid);
+		return 1;
+	}
+
+	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
+					      &all_day_uid, NULL, &error)) {
+		g_object_unref (event);
+		g_free (added_uid);
+		return fail ("create-all-day", error);
+	}
+
+	g_object_unref (event);
+	g_print ("added-all-day=%s\n", all_day_uid ? all_day_uid : "");
+	g_free (all_day_uid);
 
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error)) {
 		g_free (added_uid);

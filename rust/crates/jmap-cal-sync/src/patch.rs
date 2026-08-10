@@ -4,7 +4,7 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps seven properties and
+//! lossy view of a JSCalendar event. The mapping keeps eight properties and
 //! drops everything else, so a save that sent the parsed event back whole
 //! would silently delete what it could not represent — locations,
 //! participants, alerts, links — none of which the user ever saw, let alone
@@ -67,6 +67,23 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
         if was != now {
             set(&mut patch, property, now.as_deref());
         }
+    }
+
+    // `showWithoutTime` is a flag rather than a string, and the baseline is
+    // what makes it safe to diff at all: the component says "all day" only as a
+    // DATE-valued DTSTART, and there are events — one starting at 09:00, one
+    // carrying a zone — the mapping has to render as timed even though the
+    // server called them all-day. Rendering the server's own event the same way
+    // loses the flag on both sides, so the two agree and nothing is patched;
+    // only a component that really did change its mind reaches the server.
+    if baseline.show_without_time != edited.show_without_time {
+        patch.insert(
+            "showWithoutTime".to_owned(),
+            // Null rather than `false`: the RFC 8984 default is false, and
+            // removing the property is how a PatchObject says "back to the
+            // default".
+            edited.show_without_time.map_or(Value::Null, Value::Bool),
+        );
     }
 
     diff_recurrence(&mut patch, current, &baseline, edited);
