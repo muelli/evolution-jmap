@@ -11236,3 +11236,87 @@ Next: the transport source's server, in `jmap-backend-collection`. `populate`
 has the account source and can reach the mail children the setup parented to it,
 which is the one place both halves are in scope; `prepare_mail`'s module comment
 already argues why the *vfunc* cannot do it, so the note belongs beside it.
+
+## 2026-08-10 (hundred-and-twelfth session)
+
+**The transport's server, and the mail sources' security method.** A new module
+`rust/crates/jmap-backend-collection/src/mail_child.rs` with thirteen tests, red
+first (they did not compile: there was no `mail_child`), in
+`tests/mail_child.rs`; three lines in `child_added.rs` to reach it, and one test
+in `jmap-config`'s `tests/mail.rs` holding the two crates' spelling of the
+security method against each other, as that file already does for
+`MAIL_BACKEND_NAME`.
+
+**The gap the last session wrote down, closed where it said it would be.** The
+transport that Evolution's assistant mints carries the service name `jmap` and no
+`[Authentication]` group at all — the *Sending Email* page is hidden for a
+store-and-transport provider, so the setup backend that is its candidate is never
+shown the account. The collection backend is the one place holding both halves:
+it is handed the account source, and `child_added` fires for every source
+parented to the collection, the three mail sources included. So the group is
+created there, on a source this account owns, and the account's host, port and
+user are *bound* into it rather than copied — the same reasoning `child_added`
+already gives for every other child, plus one that is specific to mail: EDS
+decides whether a mail source shares its collection's password by comparing the
+two `[Authentication] Host` strings, so a stale host is a second password prompt
+as well as a wrong server.
+
+**A bug found on the way, and it is the reason this is a module rather than a
+flag.** `child_added` binds `[Security] secure` onto every child, and
+`e_source_security_set_secure()` writes EDS's own word `"tls"`. On a *mail*
+source that same key is additionally bound by `ESourceCamel` to
+`CamelNetworkSettings:security-method` through
+`e_binding_transform_enum_nick_to_value`, which reads it as a
+`CamelNetworkSecurityMethod` **enum nick** — and `"tls"` is not one. The
+transform returns FALSE, the binding sets nothing, and the settings object keeps
+the property's default, `STARTTLS_ON_STANDARD_PORT`. So the existing binding was
+overwriting the `ssl-on-alternate-port` that `jmap_config::mail::apply_server`
+had just committed, with a string that silently means "whatever Camel defaults
+to". The mail children now bind `secure` to *`method`* through a transform of
+this module's, which writes Camel's nick; `tests/mail_child.rs` pins EDS's
+`"tls"` spelling as the thing being worked around, so the workaround disappears
+loudly if EDS ever stops needing it.
+
+**What the tests assert, and where they assert it.** At the far end, which is
+what makes them worth having: two of them read the transport back through
+`jmap_mail::server::ServerConfig::from_settings` on the very `CamelSettings`
+object `e_source_camel_configure_service` would hand a `CamelJmapTransport` —
+`https://jmap.example.com:8443` for the account, and `http://localhost:8080` plus
+`CAMEL_NETWORK_SECURITY_METHOD_NONE` for a plaintext one. That needed
+`jmap-mail` as a dev-dependency of `jmap-backend-collection`, for the same reason
+and with the same note as `jmap-config` already has it. Checked by mutation:
+spelling the constant `"tls"` fails
+`the_transport_sends_through_the_server_the_provider_would_connect_to`, so the
+assertion bites rather than comparing a constant with itself — the string
+assertions were rewritten as literals for the same reason. The rest: the
+identity is left without a server, an `smtp` transport parented to this account
+is left alone, an account with no `[Security]` reaches its mail sources as TLS
+(what `collection_source` reads absence as) without a group appearing in the
+user's own file, an account naming no server writes nothing, and the account's
+`[Authentication] Method` — a credentials provider there, a SASL mechanism here —
+is bound nowhere.
+
+**What this is not.** Not verified in a running `evolution-source-registry`: that
+`child_added` is dispatched for mail sources at all is EDS's own behaviour, which
+`child_added.rs` documents from `collection_backend_child_added` and which this
+VM cannot exercise — there is no registry on this bus. What is tested is the
+function EDS would call, over real `ESource`s. M6 and M7 both still need human
+verification in real Evolution and neither carries a completion tag.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny` (neither
+binary is on this VM); the two new files carry SPDX `GPL-3.0-or-later` headers.
+`cargo fmt --check`, `cargo test --locked` (491 tests on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean, as
+are `clippy`/`test` over the EDS crates — 845 tests, was 831. The one ignored
+test is the pre-existing `ignore` doctest in `jmap-backend-core`'s
+`instance::Slot`. `RUSTDOCFLAGS=-D warnings cargo doc` clean for both touched
+crates. Pre-existing and untouched: `example-module` does not build on this VM.
+
+No milestone tag.
+
+Next: `docs/manual-test-collection-backend.md` is written for an account with
+`MailEnabled=false` and so says nothing about either mail source; now that a
+`.source` file gains a server it was not written with, the recipe is worth
+extending with a mail account whose transport can be read back out of the
+registry's own directory after a populate — that is the one place this session's
+binding becomes observable without a GUI.

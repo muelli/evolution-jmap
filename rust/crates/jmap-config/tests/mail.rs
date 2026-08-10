@@ -49,6 +49,7 @@ use eds_sys::{
 use glib_sys::GFALSE;
 use gobject_sys::{g_object_unref, g_type_create_instance};
 use jmap_backend_collection::factory::JmapCollectionFactory;
+use jmap_backend_collection::mail_child;
 use jmap_backend_collection::resource_id::resource_id_of;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::source::SourceError;
@@ -56,7 +57,9 @@ use jmap_backend_core::subclass::register_static;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, apply as apply_account};
-use jmap_config::mail::{MAIL_BACKEND_NAME, MailSources, apply};
+use jmap_config::mail::{
+    MAIL_BACKEND_NAME, MAIL_SECURITY_METHOD_NONE, MAIL_SECURITY_METHOD_TLS, MailSources, apply,
+};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
 
@@ -676,6 +679,29 @@ fn the_setup_writes_the_services_the_registry_side_vfunc_would_write() {
     assert_eq!(
         committed.identity.transport_uid(),
         committed.transport.uid()
+    );
+}
+
+/// One account, two writers of `[Security] Method`, and one spelling — or the
+/// account changes shape depending on which of them ran last.
+///
+/// This setup writes the method when the account is committed; the collection
+/// backend binds it onto the same two sources from the account, in
+/// `evolution-source-registry`, every time `child_added` fires for one of them.
+/// Neither can be dropped — the first runs before any registry has seen the
+/// account, the second is what keeps a mail source following an account the user
+/// edits later — so the constants have to agree. A disagreement would not fail
+/// anything visibly: both spellings are strings EDS stores, and only Camel's
+/// nick lookup at the far end can tell them apart.
+#[test]
+fn the_setup_and_the_collection_backend_spell_the_security_method_alike() {
+    assert_eq!(
+        MAIL_SECURITY_METHOD_TLS,
+        mail_child::MAIL_SECURITY_METHOD_TLS
+    );
+    assert_eq!(
+        MAIL_SECURITY_METHOD_NONE,
+        mail_child::MAIL_SECURITY_METHOD_NONE
     );
 }
 

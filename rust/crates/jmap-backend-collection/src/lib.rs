@@ -31,6 +31,14 @@
 //!   a binding at the vfunc EDS calls for every source that appears under the
 //!   collection — the same thing evolution-ews does, over the properties a JMAP
 //!   child's connection is made of.
+//! - [`mail_child`] is the one child that following does not fit: this
+//!   account's mail account and mail transport, which are sources of this
+//!   account that this backend neither creates nor caches and that nothing else
+//!   writes a server onto — Evolution hides the sending page for a
+//!   store-and-transport provider, so the setup UI is never asked where the
+//!   account submits through. So the group is created here, from the account, and
+//!   `[Security]` is written as the `CamelNetworkSecurityMethod` nick the mail
+//!   side reads rather than as the word EDS's own boolean writes.
 //! - [`removal`] is the other thing a populate does with a fan-out, and the one
 //!   that destroys rather than creates: the children this collection has and no
 //!   longer warrants, read back off their sources and removed. The decision is
@@ -110,6 +118,7 @@ pub mod child_source;
 pub mod collection_source;
 pub mod factory;
 pub mod fan_out;
+pub mod mail_child;
 pub mod module;
 pub mod populate;
 pub mod prepare_mail;
