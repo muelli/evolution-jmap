@@ -14,6 +14,7 @@ publish = false
 name = "jmap_vcard"
 
 [dependencies]
+calcard = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 serde_json = { workspace = true }
 

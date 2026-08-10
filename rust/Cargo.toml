@@ -44,6 +44,10 @@ base64 = "0.22"
 tiny_http = "0.12"
 pkg-config = "0.3"
 bindgen = "0.72"
+# The iCalendar/vCard text layer, from Stalwart's CalDAV/CardDAV stack.
+# default-features = false leaves out the JSCalendar/JSContact halves: the
+# JMAP side of the mapping is ours and is already tested against the mock.
+calcard = { version = "0.3.9", default-features = false }
 glib-sys = "0.22"
 gobject-sys = "0.22"
 gio-sys = "0.22"

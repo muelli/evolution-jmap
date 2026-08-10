@@ -92,6 +92,65 @@ fn unescapes_text_values_but_splits_components_first() {
 }
 
 #[test]
+fn decodes_quoted_printable_values() {
+    // `ENCODING=QUOTED-PRINTABLE` is vCard 2.1, but exporters — and the .vcf
+    // files users import into Evolution — still emit it, and EVCard decodes
+    // it, so a card that reaches us through one has to be read the same way.
+    // Handing the encoded text through as a value would put `V=C3=A9ra` in
+    // the address book and send it back to the server on the next save.
+    let properties = syntax::parse(concat!(
+        "BEGIN:VCARD\r\n",
+        "FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:V=C3=A9ra\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    assert_eq!(named(&properties, "FN").text(), "Véra");
+}
+
+#[test]
+fn reads_a_card_evolution_wrote() {
+    // Modelled on `e_vcard_to_string (EVC_FORMAT_VCARD_30)`: the parser reads
+    // in strict mode, so anything EVCard emits and this rejected would be a
+    // contact the backend refuses to save. The properties that matter here are
+    // the ones this crate does *not* map — a base64 photo, EDS's own
+    // `X-EVOLUTION-*` lines, an empty value, a grouped line — because those
+    // are what a strict reader trips over.
+    let properties = syntax::parse(concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:pas-id-6890F1C000000000\r\n",
+        "REV:2026-08-10T21:14:07Z\r\n",
+        "FN:Vera Oldenburg\r\n",
+        "N:Oldenburg;Vera;;;\r\n",
+        "X-EVOLUTION-FILE-AS:Oldenburg\\, Vera\r\n",
+        "NOTE:\r\n",
+        "EMAIL;TYPE=WORK,PREF:vera@example.com\r\n",
+        "item1.TEL;TYPE=CELL:+49 30 123456\r\n",
+        "item1.X-ABLabel:mobil\r\n",
+        "PHOTO;ENCODING=b;TYPE=PNG:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAA\r\n",
+        " ADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("a card Evolution wrote is a card this reads");
+
+    assert_eq!(named(&properties, "FN").text(), "Vera Oldenburg");
+    assert_eq!(
+        named(&properties, "N").components(),
+        ["Oldenburg", "Vera", "", "", ""]
+    );
+    let email = named(&properties, "EMAIL");
+    assert_eq!(email.text(), "vera@example.com");
+    assert!(email.has_type("WORK") && email.has_type("PREF"));
+    let tel = named(&properties, "TEL");
+    assert_eq!(tel.text(), "+49 30 123456");
+    assert_eq!(tel.group.as_deref(), Some("item1"));
+    // The photo is not mapped, but it is not allowed to swallow the card.
+    assert_eq!(named(&properties, "NOTE").text(), "");
+    assert!(properties.iter().any(|p| p.name == "PHOTO"));
+}
+
+#[test]
 fn writes_crlf_terminated_lines_wrapped_in_begin_and_end() {
     let text = syntax::write(&[Property::new("FN", "Vera")]);
     assert_eq!(text, "BEGIN:VCARD\r\nFN:Vera\r\nEND:VCARD\r\n");

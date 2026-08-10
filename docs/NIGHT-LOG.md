@@ -12994,3 +12994,94 @@ Unchanged: M7 still **needs human verification in real Evolution**, the
 manual-test recipes are unlinked from the README, `jmap-mail`'s rustdoc is
 dirty, and the once-seen `jmap-mail` `tests/transport.rs` hang is still
 unexplained.
+
+## 2026-08-10 (hundred-and-thirtieth session)
+
+The calcard directive, reading half: `jmap-vcard`'s syntax module now *parses*
+with [`calcard`](https://github.com/stalwartlabs/calcard) 0.3.9 and still emits
+by hand. Gone from this repository: `unfold`, `parse_line`, `unescape`,
+`split_unescaped`, `split_unquoted`, `find_unquoted` and `unquote_param` — the
+whole receiving side of RFC 2425/2426, which is also the side hostile input
+arrives on. `Property` keeps its shape and `contact.rs` is untouched; what
+changed underneath is that a property now holds its values *decoded*
+(`Vec<String>`) instead of in escaped on-the-wire form, so `text()` joins the
+components on `;` and `components()` hands the vector out.
+
+**Red first, and the red test is the reason to do it at all.**
+`ENCODING=QUOTED-PRINTABLE` is vCard 2.1, but exporters still write it and the
+.vcf files users import carry it; the hand-rolled lexer handed `V=C3=A9ra`
+through as a value, which would put that text in the address book and send it
+back to the server on the next save. calcard decodes it, honouring `CHARSET`.
+That is one line of test and a capability we were never going to hand-roll.
+
+**The emitter stays ours, deliberately, and here is what it costs to give it
+up.** calcard's vCard writer targets 4.0 output, and three of its choices are
+wrong for the only reader we have:
+
+1. It folds one octet late. The `:` between the parameters and the value is
+   written without being counted, so the first line of every folded property is
+   76 octets against RFC 2426 §2.6's 75. Reproduced standalone, outside this
+   repository, with a single `NOTE` of 200 `x`: `76 NOTE:xxx…`. Worth an
+   upstream issue (not filed — that is an outward-facing action for the
+   maintainer to take), and it is exactly what
+   `folds_long_lines_without_splitting_characters` was written to catch.
+2. It escapes a CR in a text value as `\r`, which vCard 3.0 does not define
+   (RFC 2426 §5 has only `\n`). `EVCard` resolves an unknown escape to the
+   character itself, so a `\r` would arrive in the address book as a literal
+   `r` — the value corrupted rather than re-encoded.
+3. It escapes a `"` inside a quoted parameter value as `\"`, which is RFC 6868
+   territory and correct for a 4.0 peer. A 3.0 reader has no escape inside the
+   quotes at all: it reads the `"` as the end of the value, and a server-chosen
+   `emails` map key of `x";FN="Mallory` gets to open a parameter of its own.
+   That is finding F1's class of bug walking back in, so the strip in
+   `quote_param`/`fold_into` stays where the audit put it.
+
+So the split is: calcard owns the *syntax* we read, this crate owns the
+*policy* a vCard 3.0 consumer needs when we write. Both halves are stated in
+`syntax.rs`'s own doc comments rather than only here.
+
+**Strict mode, and how that was checked against the real thing.** The parser
+runs `Parser::new(..).strict()`, so a truncated card is an error rather than
+half a contact the next save would write back over the whole one. That makes
+"anything EVCard emits, this reads" a property worth a permanent test, so
+`reads_a_card_evolution_wrote` parses a card shaped like
+`e_vcard_to_string (EVC_FORMAT_VCARD_30)` output — a folded base64 `PHOTO`, an
+`X-EVOLUTION-FILE-AS`, an empty `NOTE`, a grouped `item1.TEL` beside an
+`item1.X-ABLabel` — and asserts the mapped properties still come out. The
+authentic check is `ctest -R functional-book`, which drives a contact through
+`e-book-client` and real EDS into the mock and passed against the rebuilt
+module.
+
+Dependency notes: `calcard` with `default-features = false`, which leaves out
+its JSCalendar/JSContact halves — the JMAP side of this mapping is ours and is
+already tested against the mock — and with it `jmap-tools`, `uuid`, `serde` and
+`serde_json`. The 40 crates that entered `Cargo.lock` were checked by hand
+against `rust/deny.toml`'s allow list (`cargo-deny` is not on this VM): all
+MIT/Apache-2.0 dual licences bar `phf`/`slab` (MIT), `zerocopy`
+(BSD-2-Clause OR …), `r-efi` (… OR LGPL-2.1-or-later) and the
+`wasip2`/`wit-bindgen` Apache-with-LLVM-exception, every one of them already
+allowed.
+
+Verified locally: `cargo test` 493 (was 491: +1 QUOTED-PRINTABLE and +1
+EVCard-shaped card, so `syntax.rs` went 11→13),
+the EDS-header crates green via the `rust-test-eds` set
+(`-p eds-sys -p evo-sys -p jmap-backend-core -p jmap-backend-book
+-p jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config`),
+`ctest -L functional` 4/4, `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean. `reuse lint` not run (not on this
+VM); no files were added, so no new SPDX headers were needed. The
+`example-module` link failure under `cargo test --workspace` is the one an
+earlier session already recorded — that crate has no dependency but
+`pkg-config` and is untouched here.
+
+No milestone tag: the directive is half carried out. What is left, in order:
+(1) `jmap-ical`'s lexer — the same exercise on the calendar side, where
+calcard's iCalendar *writer* may well be usable since libical is a more
+forgiving reader than EVCard; (2) the two emitters, once the fold off-by-one is
+fixed upstream (or once the maintainer decides 76-octet lines are acceptable —
+RFC 2426 says SHOULD, and every real reader unfolds regardless). Unchanged
+blockers: M9 has no CI job (needs `evolution-data-server` + `dbus-daemon` in the
+CI image, a maintainer decision) and no GUI tier (needs a display this VM lacks);
+M7 still **needs human verification in real Evolution**; the manual-test recipes
+are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the once-seen
+`jmap-mail` `tests/transport.rs` hang is still unexplained.
