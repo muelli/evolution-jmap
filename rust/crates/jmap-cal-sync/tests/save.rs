@@ -563,6 +563,86 @@ fn a_leap_month_is_not_sent() {
 }
 
 #[test]
+fn the_day_a_rules_weeks_start_on_reaches_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint review", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "weekly",
+            "interval": 2,
+            "byDay": [{"@type": "NDay", "day": "tu"}],
+            "firstDayOfWeek": "su",
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;WKST=SU"),
+        "{icalendar}"
+    );
+    // Counting the weeks from Saturday instead, which is what the appointment
+    // editor's recurrence page writes when the calendar's week start changes.
+    let edited = icalendar.replace("WKST=SU", "WKST=SA");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].first_day_of_week.as_deref(), Some("sa"));
+}
+
+#[test]
+fn a_day_no_week_starts_on_is_not_sent() {
+    // A `firstDayOfWeek` outside RFC 8984 §4.3.3's closed vocabulary is one no
+    // `WKST` can say, and libical refuses a component carrying `WKST=XX` outright
+    // — so the rule is shown without it, and a save must not write the property
+    // back: `recurrenceRules` goes to the server replaced whole, so the day would
+    // be dropped from the server's own rule by a save that never touched the
+    // recurrence.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "weekly",
+            "firstDayOfWeek": "xx",
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=WEEKLY\r\n"),
+        "the day is left off the rule the user is shown: {icalendar}"
+    );
+    // So an edit to the recurrence is an edit to a rule the user was shown in
+    // part, and is dropped whole rather than sent as the narrower rule it is.
+    let edited = icalendar
+        .replace("RRULE:FREQ=WEEKLY", "RRULE:FREQ=WEEKLY;COUNT=4")
+        .replace("SUMMARY:Standup", "SUMMARY:Daily standup");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let rules = stored.recurrence_rules.unwrap();
+    assert_eq!(
+        rules[0].first_day_of_week.as_deref(),
+        Some("xx"),
+        "the day the server holds is left alone rather than cleared"
+    );
+    assert_eq!(
+        rules[0].count, None,
+        "narrowing a rule we cannot fully see is worse than ignoring the edit"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Daily standup"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
 fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
     // `FREQ=WEEKLY;BYMONTHDAY=15` is a rule RFC 5545 §3.3.10 does not admit, and
     // calcard hands it back rather than judging it — so, as with an ordinal

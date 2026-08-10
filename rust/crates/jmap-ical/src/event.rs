@@ -127,17 +127,17 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
 /// Only `frequency`, `interval`, `count`, `until`, `byDay`, `byMonthDay`,
-/// `byYearDay` and `byMonth` are modeled; `bySetPosition` and the rest of
-/// RFC 8984 §4.3.3 ride in [`RecurrenceRule::extra`] and would be lost. A caller
-/// that patches `recurrenceRules` for a rule this returns `false` for narrows
-/// the user's recurrence behind their back.
+/// `byYearDay`, `byMonth` and `firstDayOfWeek` are modeled; `bySetPosition` and
+/// the rest of RFC 8984 §4.3.3 ride in [`RecurrenceRule::extra`] and would be
+/// lost. A caller that patches `recurrenceRules` for a rule this returns `false`
+/// for narrows the user's recurrence behind their back.
 ///
 /// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
 /// never patches over a recurrence the user was not shown — as does one whose
-/// days of the week, days of the month, days of the year or months of the year
-/// the `RRULE` cannot carry, which [`by_day_part`], [`by_month_day_part`],
-/// [`by_year_day_part`] and [`by_month_part`] decide and [`rule_to_rrule`] then
-/// leaves off.
+/// days of the week, days of the month, days of the year, months of the year or
+/// day the week starts on the `RRULE` cannot carry, which [`by_day_part`],
+/// [`by_month_day_part`], [`by_year_day_part`], [`by_month_part`] and
+/// [`weekday_token`] decide and [`rule_to_rrule`] then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
         && writable(rule)
@@ -157,6 +157,13 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
             .by_month
             .as_ref()
             .is_none_or(|_| by_month_part(rule).is_some())
+        // Asked of the value rather than of the part, because this is the one
+        // part whose absence from the `RRULE` is not a refusal: the default day
+        // is left off deliberately — see [`first_day_of_week_part`].
+        && rule
+            .first_day_of_week
+            .as_deref()
+            .is_none_or(|day| weekday_token(day).is_some())
 }
 
 /// Whether a recurrence override survives the trip through iCalendar.
@@ -1272,6 +1279,7 @@ fn rule_to_rrule(
     parts.extend(by_month_day_part(rule));
     parts.extend(by_year_day_part(rule));
     parts.extend(by_month_part(rule));
+    parts.extend(first_day_of_week_part(rule));
     Some(parts.join(";"))
 }
 
@@ -1450,6 +1458,49 @@ fn month_token(month: &str) -> Option<&str> {
     }
 }
 
+/// The `WKST` part of a rule's `RRULE`, or `None` when the rule names no first
+/// day of the week — **and when it names Monday**, which is the one part this
+/// mapping leaves off a rule it is perfectly able to write.
+///
+/// Monday is RFC 5545 §3.3.10's default, and libical drops `WKST=MO` from a rule
+/// it reads (measured in `jmap-backend-cal/tests/marshal.rs`). A rule written with
+/// it would therefore come back out of EDS's cache without it, and the save path
+/// would read that as the user removing `firstDayOfWeek` — the same reason
+/// `INTERVAL=1` is left off. So an absent `WKST` is not a refusal here, and
+/// [`maps_recurrence_rule`] asks [`weekday_token`] about the value instead of
+/// asking this function.
+///
+/// The cost of that: a save which patches `recurrenceRules` for some *other*
+/// reason drops an explicit `firstDayOfWeek: "mo"` the server held. That is the
+/// value the property defaults to, so the rule still names the same dates.
+///
+/// There is no frequency gate. §3.3.10 says only where the part is
+/// *significant* — a fortnightly series' weeks, a `BYWEEKNO` — which is a reader's
+/// business, and libical keeps the day beside every frequency.
+fn first_day_of_week_part(rule: &RecurrenceRule) -> Option<String> {
+    let day = weekday_token(rule.first_day_of_week.as_deref()?)?;
+    (day != "MO").then(|| format!("WKST={day}"))
+}
+
+/// One weekday as an `RRULE` writes it — `SU` — or `None` for a value no `WKST`
+/// can carry.
+///
+/// Only RFC 8984 §4.3.3's own lowercase spelling is accepted, for the reason
+/// [`month_token`] accepts only `3` and not `03`: a value in another case is one
+/// this mapping would hand back respelled, and a rule that comes back spelled
+/// differently reads as an edit the user never made. Anything else is a day no
+/// week starts on, and `WKST=XX` costs libical the whole `RRULE` — every field of
+/// the event, not just its recurrence.
+fn weekday_token(day: &str) -> Option<&'static str> {
+    if !day.bytes().all(|byte| byte.is_ascii_lowercase()) {
+        return None;
+    }
+    WEEKDAYS
+        .iter()
+        .copied()
+        .find(|weekday| weekday.eq_ignore_ascii_case(day))
+}
+
 /// The reverse. Parts outside the modeled set are dropped rather than parked
 /// in `extra`: a `BYSETPOS=-1` copied verbatim into JSCalendar would be
 /// rejected by the server, whose `bySetPosition` is an array of numbers.
@@ -1479,6 +1530,15 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             // by [`month_token`] on the way out, which is what
             // [`maps_recurrence_rule`] then reads.
             "BYMONTH" => rule.by_month = Some(value.split(',').map(str::to_owned).collect()),
+            // RFC 5545's `weekday` is upper case where RFC 8984 §4.3.3's is
+            // lower, and iCalendar is case-insensitive besides, so the day is
+            // lowered rather than matched: a token that is no weekday at all
+            // arrives as itself, is refused by [`weekday_token`] on the way out
+            // and so flagged by [`maps_recurrence_rule`]. In practice the parser
+            // drops such a token before this sees it (`WKST=XX` arrives as no
+            // `WKST` at all), which is a narrowing below this crate — the same
+            // one an unreadable `BYDAY` token gets.
+            "WKST" => rule.first_day_of_week = Some(value.to_ascii_lowercase()),
             _ => {}
         }
     }

@@ -126,3 +126,19 @@ fn recurrence_rule_months_roundtrip() {
     );
     assert!(rule.extra.is_empty());
 }
+
+#[test]
+fn recurrence_rule_first_day_of_week_roundtrip() {
+    // `firstDayOfWeek` is iCalendar's `WKST` — the day a week is counted from,
+    // which RFC 5545 §3.3.10 says decides where a fortnightly series' second week
+    // begins. "Every other Tuesday, weeks starting on Sunday" is a different set
+    // of dates from the same rule counted from Monday, so the day has to be
+    // modeled rather than parked in `extra`.
+    let value = fixture("calendars/recurrence_rule_first_day_of_week.json");
+    assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
+
+    let rule: RecurrenceRule = serde_json::from_value(value).unwrap();
+    assert_eq!(rule.frequency, "weekly");
+    assert_eq!(rule.first_day_of_week.as_deref(), Some("su"));
+    assert!(rule.extra.is_empty());
+}

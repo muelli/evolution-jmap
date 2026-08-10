@@ -1569,6 +1569,207 @@ fn a_month_a_hand_written_rule_invents_is_not_written_back() {
     }
 }
 
+#[test]
+fn a_weekly_rule_names_the_day_its_weeks_start_on() {
+    // "Every other Tuesday, weeks counted from Sunday" — RFC 8984 §4.3.3's
+    // `firstDayOfWeek`, iCalendar's `WKST`. It is not decoration: RFC 5545
+    // §3.3.10 says the day the week starts on decides where the second week of a
+    // fortnightly series begins, so the same `BYDAY` counted from Monday and from
+    // Sunday produces different dates.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            interval: Some(2),
+            by_day: Some(vec![NDay::new("tu")]),
+            first_day_of_week: Some("su".to_owned()),
+            ..RecurrenceRule::new("weekly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;WKST=SU"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].first_day_of_week.as_deref(), Some("su"));
+    // Which is what tells the save path it may write the property back.
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn the_day_the_week_starts_on_is_written_last() {
+    // Every modeled part at once, in the order libical and calcard both write
+    // them — `WKST` after `BYMONTH`, last of all — so that a rule read back out
+    // of EDS's own cache compares equal to the one that went in.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_day: Some(vec![NDay::new("we")]),
+            by_month_day: Some(vec![15]),
+            by_year_day: Some(vec![100]),
+            by_month: Some(vec!["3".to_owned()]),
+            first_day_of_week: Some("su".to_owned()),
+            ..RecurrenceRule::new("yearly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYMONTH=3;WKST=SU"
+    );
+}
+
+#[test]
+fn a_week_starting_on_monday_is_left_off_the_rule() {
+    // `WKST=MO` is RFC 5545 §3.3.10's default, and libical drops it from a rule
+    // it reads — `jmap-backend-cal/tests/marshal.rs` measures that. So writing it
+    // would come back out of EDS's cache missing and read as an edit the user
+    // never made; the default is left off instead, exactly as `INTERVAL=1` is.
+    //
+    // The rule still maps: the day is not *refused*, it is the one value
+    // iCalendar says by saying nothing.
+    let rule = RecurrenceRule {
+        first_day_of_week: Some("mo".to_owned()),
+        ..RecurrenceRule::new("weekly")
+    };
+    assert!(maps_recurrence_rule(&rule));
+
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![rule]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=WEEKLY");
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].first_day_of_week, None);
+}
+
+#[test]
+fn the_day_the_week_starts_on_is_carried_at_any_frequency() {
+    // RFC 5545 §3.3.10 does not exclude `WKST` at any frequency — it says only
+    // where the part is *significant*, which is a reader's business rather than a
+    // writer's — and libical keeps it beside every one. So there is no frequency
+    // gate: the day the server named is carried as it came.
+    for frequency in ["daily", "weekly", "monthly", "yearly"] {
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![RecurrenceRule {
+                first_day_of_week: Some("su".to_owned()),
+                ..RecurrenceRule::new(frequency)
+            }]),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert!(line(&ics, "RRULE:").ends_with(";WKST=SU"), "{frequency}");
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .unwrap();
+        assert_eq!(
+            rules[0].first_day_of_week.as_deref(),
+            Some("su"),
+            "{frequency}"
+        );
+        assert!(maps_recurrence_rule(&rules[0]), "{frequency}");
+    }
+}
+
+#[test]
+fn every_day_of_the_week_can_start_one() {
+    // The whole closed vocabulary RFC 8984 §4.3.3 shares with `NDay`'s `day`, in
+    // both directions. Monday is absent because it is the default and is left off
+    // — see the test above.
+    for (day, token) in [
+        ("tu", "TU"),
+        ("we", "WE"),
+        ("th", "TH"),
+        ("fr", "FR"),
+        ("sa", "SA"),
+        ("su", "SU"),
+    ] {
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![RecurrenceRule {
+                first_day_of_week: Some(day.to_owned()),
+                ..RecurrenceRule::new("weekly")
+            }]),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert_eq!(
+            line(&ics, "RRULE:"),
+            format!("RRULE:FREQ=WEEKLY;WKST={token}")
+        );
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .unwrap();
+        assert_eq!(rules[0].first_day_of_week.as_deref(), Some(day), "{day}");
+    }
+}
+
+#[test]
+fn reads_the_day_the_week_starts_on_off_a_rule_written_by_hand() {
+    // RFC 5545's `weekday` is upper case where JSCalendar's is lower, and
+    // iCalendar parameter values are case-insensitive besides. The day comes back
+    // as the two letters RFC 8984 §4.3.3 spells it with, whatever case the
+    // component used.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=WEEKLY;WKST=sa\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].first_day_of_week.as_deref(), Some("sa"));
+    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=WEEKLY;WKST=SA"
+    );
+}
+
+#[test]
+fn a_day_no_week_starts_on_is_flagged_rather_than_written() {
+    // Outside the closed vocabulary there is nothing a `WKST` can say, and the
+    // cost of guessing is the whole `RRULE`: libical refuses a component carrying
+    // `WKST=XX` outright — measured in `jmap-backend-cal/tests/marshal.rs` — so
+    // the event would reach EDS's cache as a single appointment with the user's
+    // series gone. The part is left off and the save path told the rule was seen
+    // in part.
+    //
+    // `MO` is refused for the subtler reason `BYMONTH=03` is: RFC 8984 §4.3.3
+    // spells the day in lower case, so a value in any other case is one this
+    // mapping would hand back respelled — and a rule that comes back spelled
+    // differently reads as an edit the user never made. The parser can only
+    // produce the canonical spelling, so nothing legitimate is lost.
+    for day in ["xx", "", "monday", "MO", "SU", "1", "mo,tu"] {
+        let rule = RecurrenceRule {
+            first_day_of_week: Some(day.to_owned()),
+            ..RecurrenceRule::new("weekly")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{day}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=WEEKLY",
+            "{day}"
+        );
+    }
+}
+
 /// A recurring event in one zone, with `overrides` naming single instances.
 fn recurring_with(overrides: Value) -> CalendarEvent {
     CalendarEvent {
