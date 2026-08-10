@@ -94,12 +94,14 @@
 //!
 //! **The vfuncs that need more than an `ESource`**: `insert_widgets` and
 //! `setup_defaults` need the `EMailConfigServicePage` this extension extends,
-//! and so are still out of reach here. `check_complete` was not, and is now
-//! installed — it is [`account::read`] and [`complete::check`] over the
-//! collection source, and what a test here can drive is that composition rather
-//! than the vfunc Evolution dispatches. `commit_changes` is the same shape and
-//! is next. [`backend`] says so slot by slot, including what it means for the
-//! dialog that a setup can now refuse an account it has no widget to fix.
+//! and so are still out of reach here. The other three were not and are
+//! installed — `check_complete` is [`account::read`] and [`complete::check`]
+//! over the collection source, and `commit_changes` is that same reader followed
+//! by [`mail::apply_server`] onto the one scratch mail source a backend holds.
+//! What a test here can drive is those compositions rather than the vfuncs
+//! Evolution dispatches. [`backend`] says so slot by slot, including what it
+//! means for the dialog that a setup can now refuse an account it has no widget
+//! to fix, and which source a commit still leaves without a server.
 //!
 //! Like the backends, this crate needs the installed EDS headers and so stays
 //! out of the workspace's `default-members`; CMake runs its tests via the

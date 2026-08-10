@@ -32,6 +32,10 @@
 //!   `return TRUE` (read off the installed library, not assumed), which is an
 //!   assistant whose *Next* is sensitive over an account with no address and no
 //!   server.
+//! - **`commit_changes`** — see `commit_changes` below. Evolution's own does
+//!   nothing, which is right for every provider whose server was typed on this
+//!   page and wrong for one whose server is on the account: it leaves the mail
+//!   source naming a protocol and no host.
 //! - **`get_selectable`** is left alone on purpose. Its default answers "yes,
 //!   unless this provider is both a store and a transport, in which case only
 //!   on the receiving page" — and the JMAP provider *is* both
@@ -45,32 +49,30 @@
 //!
 //! ## What is not here yet
 //!
-//! `insert_widgets`, `setup_defaults` and `commit_changes`.
+//! `insert_widgets` and `setup_defaults`, which are the two that need the
+//! `EMailConfigServicePage` this extension extends — for the entries themselves,
+//! and for the email address the user typed on the page before, which is
+//! [`defaults::from_identity`](crate::defaults::from_identity)'s one input. Reaching
+//! either means binding more of Evolution's headers than [`evo-sys`] currently
+//! generates, GTK among them.
 //!
-//! The first two need the `EMailConfigServicePage` this extension extends —
-//! for the entries themselves, and for the email address the user typed on the
-//! page before, which is [`defaults::from_identity`](crate::defaults::from_identity)'s
-//! one input — and reaching either means binding more of Evolution's headers
-//! than [`evo-sys`] currently generates, GTK among them.
-//!
-//! `commit_changes` does not: what it needs out of the collection source is
-//! [`account::read`](crate::account::read), and what it then writes is
-//! [`crate::mail`]'s three sources. What is left of it is the vfunc plumbing,
-//! and it is the next increment.
+//! The three that are installed are exactly the three whose answer is a function
+//! of an `ESource` — which is why they could be written, and tested, first.
 //!
 //! ## The state this leaves the dialog in, said plainly
 //!
-//! `check_complete` now refuses an account with no address, and nothing yet
-//! *fills in* an address: `setup_defaults` would put the one from the identity
-//! page there and `insert_widgets` would give the user somewhere to type it, and
+//! `check_complete` refuses an account with no address, and nothing yet *fills
+//! in* an address: `setup_defaults` would put the one from the identity page
+//! there and `insert_widgets` would give the user somewhere to type it, and
 //! neither exists. So a JMAP account in the assistant today would have its
-//! *Next* greyed out with no way to un-grey it.
+//! *Next* greyed out with no way to un-grey it, and `commit_changes` would
+//! therefore never be reached with an account it would write.
 //!
 //! That is the honest state and not a regression — no module loads this class,
 //! so nothing reaches the dialog at all — and it is the right order to build in:
 //! the alternative is the inherited `return TRUE`, which is an assistant that
 //! cheerfully commits an account with no address and no server, failing later in
-//! another process. The three slots above are what finish it.
+//! another process. The two slots above are what finish it.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
@@ -81,7 +83,8 @@ use std::ptr;
 use eds_sys::{ESource, e_source_new};
 use evo_sys::{
     EMailConfigServiceBackend, EMailConfigServiceBackendClass,
-    e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_type,
+    e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_source,
+    e_mail_config_service_backend_get_type,
 };
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean};
 use jmap_backend_core::marshal::read_string;
@@ -91,7 +94,7 @@ use jmap_backend_core::trampoline::{guard, log_critical};
 use crate::account::{apply, read};
 use crate::complete::check;
 use crate::defaults::from_identity;
-use crate::mail::MAIL_BACKEND_NAME;
+use crate::mail::{MAIL_BACKEND_NAME, apply_server};
 
 /// The JMAP account setup backend.
 #[repr(C)]
@@ -157,6 +160,7 @@ unsafe impl ObjectSubclass for JmapConfigServiceBackend {
         class.backend_name = MAIL_BACKEND_NAME.as_ptr();
         class.new_collection = Some(new_collection);
         class.check_complete = Some(check_complete);
+        class.commit_changes = Some(commit_changes);
     }
 }
 
@@ -314,6 +318,115 @@ pub unsafe fn is_complete(collection: *mut ESource) -> bool {
 
     // SAFETY: non-NULL and a valid source by this function's contract.
     check(&unsafe { read(collection) }).is_ok()
+}
+
+/// What Evolution calls once *Next* has been pressed for the last time: write
+/// the account on screen into the scratch sources, which the assistant then
+/// hands to `e_source_registry_create_sources` as one batch.
+///
+/// The vfunc creates nothing and saves nothing. Everything it touches is a
+/// scratch `ESource` that is already queued for creation, so what it is for is
+/// the fields nobody else fills in.
+///
+/// ## Which those are, for JMAP, and why they are so few
+///
+/// For every provider whose server the user typed on *this* page — IMAP, SMTP,
+/// POP3 — there is nothing to do at all, and Evolution's own implementation
+/// accordingly does nothing: the entries were bound through `CamelSettings` onto
+/// the mail source's own `[Authentication]` and `[Security]` as they were typed
+/// into. JMAP asks for a server once, on the account, because one JMAP session
+/// carries the mail, the contacts and the calendars; so the mail source is a
+/// second file that nothing has told, and telling it is this vfunc's whole job.
+///
+/// What is *not* here, because it is already written by the time this runs:
+///
+/// - **The service name.** `e_mail_config_assistant` mints one scratch source
+///   per provider and writes the protocol into it before any backend sees it —
+///   that is how [`new_collection`]'s candidate was picked in the first place.
+/// - **The parent and the two uid links.** `EMailConfigSummaryPage`'s own
+///   `commit_changes` sets all three sources' `Parent` to the collection's uid,
+///   the account's `identity-uid` and the identity's `transport-uid`. It runs
+///   after this one, from the assistant's page loop, and it is the same wiring
+///   [`crate::mail::apply`] does — which is why that one is the *account's*
+///   writer and this is not a call to it.
+/// - **The identity's address**, which is `EMailConfigIdentityPage`'s.
+///
+/// ## One backend per page, and the emptiness that has to be refused
+///
+/// Evolution instantiates this class once for the *Receiving Email* page and
+/// once for *Sending Email*, and `constructed` calls [`new_collection`] on each
+/// — so the sending instance holds a scratch collection of its own that no
+/// widget will ever fill in and that the assistant will never queue. Reached
+/// with that one, a commit that simply copied would write an empty host onto the
+/// transport source, and an empty host is not the same as an unwritten one: it
+/// reads back as an account that names a server.
+///
+/// So the copy happens only for a collection that is an account the setup would
+/// commit — [`is_complete`], the same question [`check_complete`] answers, which
+/// is true of the receiving instance's collection (that is what let *Next* be
+/// pressed) and false of the sending instance's. Silent either way: a refusal
+/// here is either that second instance, which is not a fault, or an account
+/// `check_complete` already refused to let the user leave the page with.
+///
+/// ## The gap this leaves, said plainly
+///
+/// On the assistant's path the transport source therefore ends up with the
+/// service name `jmap` and no server, and JMAP submission needs one. Nothing
+/// else in the dialog is in a position to write it: the sending page is hidden
+/// for a store-and-transport provider, and the backend that is its candidate
+/// cannot see the account. The place that can is the collection backend, in
+/// `evolution-source-registry`, which is handed the account and can walk
+/// `e_collection_backend_list_mail_sources()` for the children that hang off it
+/// — and that is the next increment, not something to fake here by writing a
+/// host this backend does not know.
+unsafe extern "C" fn commit_changes(backend: *mut EMailConfigServiceBackend) {
+    guard("commit_changes", (), || {
+        // SAFETY: a live backend of this class, which is what Evolution
+        // dispatches through this slot. Both come back `(transfer none)` — the
+        // backend's own references, which outlive this call.
+        let (collection, source) = unsafe {
+            (
+                e_mail_config_service_backend_get_collection(backend),
+                e_mail_config_service_backend_get_source(backend),
+            )
+        };
+        // SAFETY: each is NULL or one of the backend's live sources, which is
+        // exactly what `commit` documents it takes.
+        unsafe { commit(collection, source) };
+    });
+}
+
+/// Copies the server the account names onto the one mail source a backend
+/// holds — the writing half of the `commit_changes` vfunc, and the half that can
+/// be tested.
+///
+/// Answers whether it wrote, which is what the tests ask it; the vfunc has
+/// nowhere to put the answer and drops it.
+///
+/// Nothing happens without both sources, and nothing happens for an account that
+/// is not finished — see the `commit_changes` vfunc above for why the second is
+/// a normal outcome rather than a failure, and why neither is logged.
+///
+/// # Safety
+///
+/// `collection` and `source` must each be NULL or a valid `ESource`. The first
+/// is only read from, the second is written to, and nothing here outlives the
+/// call.
+pub unsafe fn commit(collection: *mut ESource, source: *mut ESource) -> bool {
+    if collection.is_null() || source.is_null() {
+        return false;
+    }
+
+    // SAFETY: non-NULL and a valid source by this function's contract.
+    let account = unsafe { read(collection) };
+    if check(&account).is_err() {
+        return false;
+    }
+
+    // SAFETY: non-NULL and a valid source by this function's contract; the
+    // connection outlives the call, which is all `apply_server` borrows.
+    unsafe { apply_server(source, &account.connection) };
+    true
 }
 
 /// The message a failed EDS call left behind, consuming the `GError`.
