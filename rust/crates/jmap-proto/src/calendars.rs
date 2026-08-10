@@ -106,7 +106,7 @@ impl CalendarEvent {
     }
 }
 
-/// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly — `byMinute`
+/// JSCalendar RecurrenceRule (RFC 8984 §4.3.3), modeled shallowly — `rscale`
 /// & friends ride in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -121,16 +121,24 @@ pub struct RecurrenceRule {
     pub count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
+    /// The seconds of the minute it repeats at — iCalendar's `BYSECOND`. 0 to
+    /// 60, the sixtieth being the leap second RFC 5545 §3.3.10's `seconds`
+    /// admits and UTC occasionally inserts.
+    ///
+    /// The first of the three parts that name a *time of day* rather than a
+    /// date, which RFC 5545 §3.3.10 says MUST NOT stand beside a `DTSTART` of
+    /// value type DATE — so an all-day event whose rule carries any of them is
+    /// drawn as a timed event instead.
+    ///
+    /// All three are unsigned, unlike the day and week parts below: RFC 8984
+    /// §4.3.3 has them as `UnsignedInt[]`, and RFC 5545 §3.3.10 gives no way to
+    /// count a time backwards from the end of the period holding it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_second: Option<Vec<u32>>,
+    /// The minutes of the hour it repeats at — iCalendar's `BYMINUTE`. 0 to 59.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_minute: Option<Vec<u32>>,
     /// The hours of the day it repeats at — iCalendar's `BYHOUR`. 0 to 23.
-    ///
-    /// Unsigned, unlike the day and week parts below: RFC 8984 §4.3.3 has
-    /// `byHour` as `UnsignedInt[]` and RFC 5545 §3.3.10's `hour` gives no way to
-    /// count an hour backwards from the end of the day.
-    ///
-    /// It is also the first part here that names a *time* rather than a date,
-    /// which RFC 5545 §3.3.10 says MUST NOT stand beside a `DTSTART` of value
-    /// type DATE — so an all-day event carrying one is drawn as a timed event
-    /// instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_hour: Option<Vec<u32>>,
     /// The days of the week the rule repeats on — iCalendar's `BYDAY`.

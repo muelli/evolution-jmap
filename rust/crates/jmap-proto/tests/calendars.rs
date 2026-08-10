@@ -141,6 +141,26 @@ fn recurrence_rule_hours_roundtrip() {
 }
 
 #[test]
+fn recurrence_rule_minutes_and_seconds_roundtrip() {
+    // `byMinute` and `bySecond` are iCalendar's `BYMINUTE` and `BYSECOND` — "on
+    // the hour and the half hour, on the second". Unsigned like `byHour`, and
+    // with the same absence of a backwards count; the ranges differ, RFC 5545
+    // §3.3.10's `minutes` being 0 to 59 and its `seconds` 0 to 60, the sixtieth
+    // second being the leap second UTC occasionally inserts.
+    //
+    // With these two the rule is modeled to the bottom of RFC 8984 §4.3.3 but
+    // for `rscale` and `skip`, which name a non-Gregorian calendar.
+    let value = fixture("calendars/recurrence_rule_minutes_and_seconds.json");
+    assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
+
+    let rule: RecurrenceRule = serde_json::from_value(value).unwrap();
+    assert_eq!(rule.frequency, "hourly");
+    assert_eq!(rule.by_minute.as_deref(), Some(&[0, 30][..]));
+    assert_eq!(rule.by_second.as_deref(), Some(&[0][..]));
+    assert!(rule.extra.is_empty());
+}
+
+#[test]
 fn recurrence_rule_set_position_roundtrip() {
     // `bySetPosition` is iCalendar's `BYSETPOS` — "the last Friday of the
     // month". It is the one part of RFC 8984 §4.3.3 that names no date of its

@@ -15486,3 +15486,132 @@ as one `CalendarEvent/set` or two; the *reading* direction of a per-instance zon
 through real EDS is untested; calcard silently drops or wraps an unreadable
 `BYDAY`/`BYMONTHDAY`/`WKST` token below this crate, which only an upstream fix
 reaches.
+
+## 2026-08-10 (hundred-and-fifty-sixth session)
+
+`byMinute` and `bySecond` modeled and mapped to `BYMINUTE`/`BYSECOND` — the ninth
+and tenth recurrence parts to come out of `extra`, and the last two `BYxxx`
+properties RFC 8984 §4.3.3 has. `RecurrenceRule` is now modeled to the bottom of
+§4.3.3 but for `rscale` and `skip`.
+
+**Taken together rather than one per session**, which the last session predicted
+would be possible and is: they share a shape (`UnsignedInt[]`, no backwards
+count), a position (ahead of the days, finest unit outwards), a refusal (all the
+values or none), and — most of the reason to do them at once — the all-day gate,
+which now asks about all three times of day in one place instead of growing a
+third clause.
+
+**The measurement first, as for every part since the sixth.** A throwaway probe
+test in `jmap-backend-cal/tests/marshal.rs` printed libical's answer to twenty
+`RRULE`s, and every answer matched the prediction the last session left behind,
+so nothing in the design had to move:
+
+- **Order**: `BYSECOND`, `BYMINUTE`, `BYHOUR`, then the dates. libical reorders
+  anything else, so `named_by_parts` writes exactly that.
+- **The ranges differ by one, and only for the seconds.** §3.3.10's `seconds` is
+  0 to 60 — the sixtieth being the leap second UTC occasionally inserts — while
+  `minutes` stops at 59. libical enforces precisely that: `BYSECOND=60` survives,
+  `BYSECOND=61` and `BYMINUTE=60` cost the **whole** `RRULE`, the event reaching
+  EDS's cache as a single appointment with the user's series gone. So the mapping
+  carries two ranges rather than treating the three parts as one, and a test pins
+  the boundary in both directions at both layers.
+- **The empty part is worse still**: `BYMINUTE=` comes back `BYMINUTE=0`, moving
+  every occurrence, exactly as `BYHOUR=` does. Refused, like the hours.
+- **`BYSETPOS` may select out of either**, and the spellings (`09`, `+9`) come
+  back canonical, which cannot bite a mapping holding numbers.
+
+**Three functions became one.** `hour_token` plus `by_hour_part`'s body would
+have been triplicated, so both collapsed into `time_of_day_part(name, values,
+largest)`, with `by_second_part`/`by_minute_part`/`by_hour_part` as one-line
+callers carrying the per-part documentation. `to_hour` became `to_time_of_day` on
+the way in. The `u32::MAX` sentinel the last session had to invent for the hours
+is what makes this collapse safe: all three parts admit zero as a real value, so
+none of them can use `to_month_day`'s "unreadable becomes 0" trick, and one
+sentinel serves all three.
+
+**A limitation the tests had to be honest about.** The obvious red test for "a
+value a hand-written rule invents" was `BYSECOND=XX`, and it fails — not because
+the mapping is wrong but because the parser *below* this crate drops an
+unreadable token entirely: `BYSECOND=XX` arrives as no `BYSECOND` at all. That is
+the calcard narrowing already on record for `BYDAY`, `BYMONTHDAY` and `WKST`,
+reached here by a third property. The test was rewritten to use numbers out of
+range (`BYMINUTE=30,60;BYSECOND=15,61`), which calcard does hand through, and the
+comment says why so the next reader does not "fix" it back. It also makes the
+sentinel's role plain: it exists so an unreadable token *cannot* be mistaken for
+a legal value, not because the mapping ever gets to see one.
+
+**The exemplar moved again.** `byMinute` was what four comments, one module doc
+and two tests used for "a rule part the `RRULE` cannot carry"; it is now carried,
+so they use `rscale` — genuinely unmodeled, and (unlike `byMinute` ever was) a
+part with a real iCalendar spelling of its own, RFC 7529's `RSCALE`, that neither
+this crate nor libical reads. A rule counted in another calendar drawn as a
+Gregorian one repeats on the wrong days entirely, which is a better illustration
+of why the save path must leave such a property alone than a lost time of day
+was.
+
+Tests: red first in `jmap-ical` — seven tests compile-red on the new fields, then
+behaviour-red (7 failing), then green — and the two claims that are not "a field
+exists" were mutation-checked: moving `by_second_part` to the end of
+`named_by_parts` kills the write-order test, and narrowing the all-day gate back
+to `by_hour_part` kills the minutes-drawn-as-timed test. The three
+`jmap-cal-sync/tests/save.rs` tests against the mock were written after that
+layer was green, so they are confirmations rather than red-first drivers; one was
+mutation-checked all the same (dropping the `by_minute` clause from
+`maps_recurrence_rule` makes the sixtieth minute reach the server). Counts: seven
+in `jmap-ical` (round-trip, the all-ten-parts write order, a hand-written rule
+with `BYSETPOS` selecting from both, the leap second written beside the sixtieth
+minute refused, that refusal reached through the parser, and both all-day
+directions), three in `jmap-cal-sync` against the mock (both parts reaching the
+server, the range boundary end to end, and minutes the server holds surviving a
+save that only added a `COUNT`), one fixture round-trip in `jmap-proto`, and one
+in `marshal.rs` against real libical, with the existing all-day-contradiction
+measurement widened to name a minute and a second beside the hour.
+
+Verified locally: `cargo test --locked` 673 (up 10 from 663), `cargo test -p
+jmap-backend-cal --locked` clean, `ctest` 14/14 including all four functional
+legs against real EDS, `cargo fmt --check`, and `cargo clippy --all-targets
+--locked -- -D warnings` clean for the default set and for `jmap-backend-cal`.
+`ci/checks.sh` stops at its first step for the same reason as the last several
+sessions: `reuse` is not on this VM and neither `pipx`, `uvx`, `python3 -m venv`
+nor `python3 -m pip` can install it without sudo (all four tried again). Exposure
+is again small — the one file added is a JSON fixture, covered by `REUSE.toml`'s
+`rust/crates/*/tests/fixtures/**` annotation rather than a header — and no
+dependency changed, so `cargo deny`'s answer is the one it gave on the last green
+run.
+
+Disk: still the live blocker. 3.2G free of 58G at the end of this session, with
+`rust/target` at 22G and `~/audit-ffi` holding 14G more; `target/tmp` and
+`target/debug/incremental` were deleted again at the start and `CARGO_INCREMENTAL=0`
+used throughout, which is the only reason this session could link. **A maintainer
+decision is still wanted**: a periodic `cargo clean` in the night-shift driver, a
+bigger disk, or a shared target directory.
+
+No milestone tag. What this did **not** do: no functional leg through real EDS
+for "every half hour, on the second" — the libical round-trip stands in for it,
+as it has for the eight parts before, and it answers the question a functional leg
+would (does the spelling survive the parser EDS actually uses). The recurrence
+rule is now out of easy next steps: `rscale` and `skip` are what remain of
+§4.3.3, and neither is a copy of anything here — `RSCALE` needs RFC 7529 support
+libical does not have, so the honest treatment is to keep drawing such a rule
+narrowed and never writing it back, which is what happens today. A rule holding
+one is safe; the next recurrence work is therefore *not* another part but
+whatever the maintainer ranks above it.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, for an instance's zone
+as well as the series', relying on libical resolving an IANA name out of its
+builtin table; the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open and still the right thing to settle when the libsoup transport lands;
+the manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
+dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+Still open from before: nothing asserts whether a split series' two writes arrive
+as one `CalendarEvent/set` or two; the *reading* direction of a per-instance zone
+through real EDS is untested; calcard silently drops an unreadable
+`BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below this crate, which only an
+upstream fix reaches.
