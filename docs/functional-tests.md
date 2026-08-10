@@ -169,7 +169,19 @@ line for line, and this test is what found it.
 - an event added through `e_cal_client_create_object_sync` reaches the server:
   the mock recorded a `CalendarEvent/set`, and the event in its store has the
   summary, the start time and the calendar it was given;
-- the same event reads back out of EDS with its summary intact.
+- the same event reads back out of EDS with its summary intact;
+- an all-day event — `VALUE=DATE` on both ends — reaches the server as
+  JSCalendar's `showWithoutTime`, a day long and with no zone, rather than as a
+  midnight appointment;
+- and all three things Evolution's "this occurrence / this and future
+  occurrences / all occurrences" menu does to a weekly series, because
+  `ECalMetaBackend` translates each of them itself and hands the backend
+  something different every time: "Edit this occurrence" arrives as a detached
+  instance, "Delete this occurrence" as a *save* of the master carrying one more
+  `EXDATE` — never as a removal — and "this and future occurrences" as a
+  truncated master **plus a second event** under a UID EDS invents, which is the
+  only one of the three that reaches the backend as two writes. Each is checked
+  at both ends: what EDS kept in its own cache, and what the server was told.
 
 The read path is left alone for the same reason as the address book's.
 
