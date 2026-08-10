@@ -46,7 +46,7 @@ use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, BACKEND_NAME, apply, read};
 use jmap_config::backend::{
-    JmapConfigServiceBackend, JmapConfigServiceBackendClass, commit, is_complete,
+    JmapConfigServiceBackend, JmapConfigServiceBackendClass, commit, is_complete, setup,
 };
 use jmap_config::complete::{Incomplete, check};
 use jmap_config::mail::MAIL_BACKEND_NAME;
@@ -171,6 +171,26 @@ impl Collection {
         // SAFETY: a live source.
         unsafe { apply(self.0, account) };
         self
+    }
+
+    /// What the user then types into the server entry by hand, over whatever
+    /// the defaults offered — the one field a JMAP setup has any reason to
+    /// correct, since the address's domain is only where the *well-known* URL
+    /// is and a server may be somewhere else.
+    fn with_server(self, host: &str) -> Self {
+        // SAFETY: a live source, read and written back.
+        let mut account = unsafe { read(self.0) };
+        account.connection.host = host.to_owned();
+        // SAFETY: as above.
+        unsafe { apply(self.0, &account) };
+        self
+    }
+
+    /// What `setup_defaults` does to this collection, given the address the
+    /// identity page holds — the half of the vfunc that does not need the page.
+    fn setup(&self, address: &str) -> bool {
+        // SAFETY: a live source.
+        unsafe { setup(self.0, address) }
     }
 
     /// What `check_complete` answers about the account the source now says.
@@ -371,6 +391,155 @@ fn the_collection_offered_names_nobody_and_nowhere_yet() {
     assert_eq!(collection.identity(), None);
     assert_eq!(collection.user(), None);
     assert_eq!(collection.server(), Err(SourceError::MissingHost));
+}
+
+#[test]
+fn setup_defaults_displaces_the_inherited_one() {
+    // Evolution's own is an empty function — read off the installed library
+    // rather than assumed: the slot holds a two-instruction stub that returns
+    // immediately, which is the right default for a provider that can say
+    // nothing about an account until the user has typed a server in. Left
+    // inherited it is not an error anywhere: it is a server settings page that
+    // opens blank over an address the assistant already knows, with a *Next*
+    // our `check_complete` then greys out and nothing on screen saying which
+    // field it is waiting for.
+    let class = Class::get();
+    let ours = class
+        .vfuncs()
+        .setup_defaults
+        .expect("class_init installed no setup_defaults");
+    let inherited = parent_class()
+        .setup_defaults
+        .expect("Evolution installs its own setup_defaults");
+    assert!(
+        !std::ptr::fn_addr_eq(ours, inherited),
+        "setup_defaults is still Evolution's, which fills nothing in"
+    );
+}
+
+#[test]
+fn the_defaults_are_the_account_the_address_names() {
+    // The whole of what a JMAP setup can say before it has connected: the
+    // address is who the account is, its domain is where RFC 8620's
+    // autodiscovery asks, and the address doubles as the offered login name.
+    // Read back through the registry's own reader, because the value of the
+    // default is precisely that the origin the collection backend ends up with
+    // is the one the address named.
+    let collection = Class::get().new_collection();
+    assert!(collection.setup("vera@example.com"));
+
+    assert_eq!(collection.identity().as_deref(), Some("vera@example.com"));
+    assert_eq!(collection.user().as_deref(), Some("vera@example.com"));
+    assert_eq!(collection.server().as_deref(), Ok("https://example.com"));
+    // And the account is one the setup may commit, which is the point of
+    // offering it: the page opens with its *Next* already sensitive for the
+    // ordinary case, rather than greyed out over an address the user has
+    // already given.
+    assert!(collection.complete());
+}
+
+#[test]
+fn the_defaults_leave_the_answers_the_address_does_not_give() {
+    // `new_collection` already wrote the three parts and the TLS switch, and
+    // the address says nothing about either. So this narrows the account to the
+    // address rather than replacing it: a user who unticked *Calendars* on the
+    // page and then went back to correct a typo in the address must not find it
+    // ticked again.
+    let account = Account {
+        // The address is still the one the assistant started with, so the
+        // defaults have something to say; what the user has changed is a box
+        // that has nothing to do with it.
+        identity: String::new(),
+        parts: Parts {
+            mail: true,
+            contacts: true,
+            calendars: false,
+        },
+        ..finished()
+    };
+    let collection = Class::get().new_collection().edited(&account);
+    assert!(collection.setup("vera@example.com"));
+
+    assert_eq!(
+        collection.parts(),
+        Parts {
+            mail: true,
+            contacts: true,
+            calendars: false,
+        }
+    );
+    assert!(collection.secure());
+}
+
+#[test]
+fn an_address_that_is_not_one_yet_offers_no_server() {
+    // The identity page can be left with anything in it. What comes of that is
+    // the account `from_identity` describes — the address as typed, no server —
+    // and a refusal that names the address, which is the field to go back to.
+    let collection = Class::get().new_collection();
+    assert!(collection.setup("vera"));
+
+    assert_eq!(collection.identity().as_deref(), Some("vera"));
+    assert_eq!(collection.server(), Err(SourceError::MissingHost));
+    assert!(!collection.complete());
+    assert_eq!(
+        collection.refusal(),
+        Err(Incomplete::InvalidIdentity("vera".to_owned()))
+    );
+}
+
+#[test]
+fn a_second_visit_to_the_page_keeps_the_server_the_user_typed() {
+    // Evolution prepares the receiving page every time the assistant reaches
+    // it, so this vfunc runs again whenever the user steps back and forward.
+    // The defaults are what the *address* implies, and if the address has not
+    // changed then everything they would say is already said — so a user who
+    // corrected the server by hand keeps their correction, instead of watching
+    // the entry revert because they went back to look at the previous page.
+    let collection = Class::get()
+        .new_collection()
+        .with_server("jmap.example.com");
+    assert!(collection.setup("vera@example.com"));
+    assert_eq!(
+        collection.server().as_deref(),
+        Ok("https://example.com"),
+        "the first pass has no earlier answer to keep: the address is new"
+    );
+
+    let collection = collection.with_server("jmap.example.com");
+    assert!(
+        !collection.setup("vera@example.com"),
+        "the same address a second time is nothing further to say"
+    );
+    assert_eq!(
+        collection.server().as_deref(),
+        Ok("https://jmap.example.com")
+    );
+}
+
+#[test]
+fn a_corrected_address_is_derived_from_again() {
+    // The other side of it. The server the user typed was for the old address;
+    // once the address changes, the domain it named is not where this account's
+    // server is any more, and leaving it would aim the setup at a domain the
+    // user has just stopped naming.
+    let collection = Class::get().new_collection();
+    assert!(collection.setup("vera@example.com"));
+    let collection = collection.with_server("jmap.example.com");
+
+    assert!(collection.setup("vera@example.net"));
+    assert_eq!(collection.identity().as_deref(), Some("vera@example.net"));
+    assert_eq!(collection.user().as_deref(), Some("vera@example.net"));
+    assert_eq!(collection.server().as_deref(), Ok("https://example.net"));
+}
+
+#[test]
+fn a_backend_with_no_collection_source_has_no_defaults_to_write() {
+    // The same NULL `new_collection` failed with, reached by the same vfuncs;
+    // and silent for the same reason — the failure was logged where it
+    // happened, and this one runs on every visit to the page.
+    // SAFETY: NULL is what this function documents it takes.
+    assert!(!unsafe { setup(ptr::null_mut(), "vera@example.com") });
 }
 
 #[test]

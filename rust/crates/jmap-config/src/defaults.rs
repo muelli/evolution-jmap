@@ -3,12 +3,17 @@
 
 //! The account a setup starts from.
 //!
-//! `EMailConfigServiceBackend` has a `setup_defaults` vfunc, called once when
-//! the user picks a backend on the assistant's *Receiving Email* page:
-//! everything the page shows before it shows anything the user typed into it.
-//! [`from_identity`] is that decision — ordinary Rust over the one answer the
-//! assistant already has by then, which is the address from its identity page,
-//! and so testable here, unlike the entries it will fill.
+//! `EMailConfigServiceBackend` has a `setup_defaults` vfunc, which Evolution
+//! calls on the way to the assistant's *Receiving Email* page: everything the
+//! page shows before it shows anything the user typed into it. [`from_identity`]
+//! is that decision — ordinary Rust over the one answer the assistant already
+//! has by then, which is the address from its identity page, and so testable
+//! here, unlike the entries it fills.
+//!
+//! What the vfunc does with it is [`backend::setup`](crate::backend::setup),
+//! which is not simply this applied: only the fields *below* are ones the
+//! address determines, and a page the user may return to must not have the rest
+//! of their answers written over. It says so at length.
 //!
 //! ## Why the domain is the server, and why that is not a guess
 //!
