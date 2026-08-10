@@ -12906,3 +12906,91 @@ test tag, by hand. (3) Unchanged maintainer decisions: `evolution-data-server`
 **needs human verification in real Evolution**, the manual-test recipes are
 unlinked from the README, `jmap-mail`'s rustdoc is dirty, and the once-seen
 `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-twenty-ninth session)
+
+M9 layer 1's send half: the Camel *transport*, reached from the account the way
+Evolution reaches it. `tests/functional/transport-client.c` and
+`rust/crates/jmap-functional/tests/transport.rs`, registered as
+`functional-transport`.
+
+**Why it is a leg and not three more assertions on the mail one.** Camel knows
+nothing about `ESource`, so nothing in Camel joins a transport to the account it
+sends for. What joins them is two hops of uid indirection through a *third*
+source: `[Mail Account] IdentityUid` names an identity, and that identity's
+`[Mail Submission] TransportUid` names the transport. Evolution walks that chain
+out of `libedataserver` accessors; the client program is handed only the account
+uid and walks the same one, so `transport-uid=jmap-functional-transport` is the
+assertion the whole leg exists for. Every link is a string in a file that no
+compiler and no unit test can hold to the file it names, and a broken link is
+the quietest failure this provider has — the recipe already says so: the account
+receives mail perfectly and fails only when the user presses Send.
+
+The transport also comes out of a different entry of the same registered
+provider struct than the store does, `object_types[CAMEL_PROVIDER_TRANSPORT]`. A
+provider that left it `G_TYPE_INVALID` loads, receives mail, and fails only
+here.
+
+Beyond the chain: one submission, through the identity the mock seeded for the
+address the *identity source* named (resolved over the wire by `Identity/get`);
+the envelope built from the two `CamelAddress` lists rather than from the
+headers; the sent copy in Sent and no longer `$draft`, which is the server's own
+`onSuccessUpdateEmail` and therefore evidence the submission was *accepted* and
+not merely posted; `out_sent_message_saved` TRUE, which is one copy in Sent
+rather than two; the uploaded bytes carrying the subject and the body Camel's own
+emitter wrote; and `EmailSubmission/set` last of the method calls, the blob
+upload before the import being a plain HTTP PUT and so absent from that list.
+
+**The subject and body are arguments, not constants.** The client builds the
+message from `argv`, so what the test asserts and what goes on the wire are one
+string. mail.rs can afford constants on both sides because the mock is what
+holds the message there; here the client is where it originates, and a constant
+in each file would be two that can drift.
+
+**A second test makes the recipe's mistake on purpose**: the same three files
+with the transport's `[Authentication]` group deleted. The chain still resolves
+— this is a source that was found and that names no server — and the send fails
+at the *connect* with `the account does not name a JMAP server`, having made not
+one request, so nothing is imported and no draft is left behind for a send that
+never happened. That is a permanent test rather than a note, because the thing
+it catches is a line missing from a keyfile and the only other thing that would
+catch it is a reader.
+
+**Red first, then three mutations.** Red: both tests on
+`JMAP_FUNCTIONAL_TRANSPORT_CLIENT` unset. Then, each reverted after: (1) a typo
+in `TransportUid` → both tests fail on the uid, with the client's own *no
+transport source with UID* beside it, so the walk is really the keyfile's and
+not the client agreeing with itself; (2) seed the mock's identity for a
+different address → `send: this account cannot send mail as alice@example.com`,
+so `Identity/get` is really consulted and the refusal really happens before the
+upload; (3) seed the Sent mailbox with no role → `sent-copy-saved=0`, which is
+`OutgoingMailboxes` reached through the whole stack and the out-parameter having
+teeth.
+
+The two client programs are now built by a `foreach` over their names — same
+libraries, same kind of process, and the send half opens no store so it shares
+no code with the receiving half beyond that.
+
+Verified locally: `ctest` 14/14 with `-DENABLE_FUNCTIONAL_TESTS=ON`,
+`cargo fmt --check`, `cargo test --locked` (491, unchanged — `jmap-functional`
+is out of `default-members`), `cargo clippy --all-targets --locked -- -D
+warnings` clean and the same for `-p jmap-functional`, and
+`transport-client.c` compiled standalone under `-Wall -Wextra` clean since the
+project does not pass those. `reuse lint` and `cargo deny` not run (neither
+binary is on this VM); both new files carry SPDX `GPL-3.0-or-later` headers,
+`docs/functional-tests.md` is covered by `REUSE.toml`'s `docs/**` annotation,
+and nothing was added to `po/POTFILES.in` because the policy there excludes
+tests and neither new file holds a user-visible string.
+
+No milestone tag. M9 layer 1 now covers both halves of mail, but it still has
+**no CI job** — that needs `evolution-data-server` + `dbus-daemon` in the CI
+image, a maintainer decision — and tier 2, the GUI smoke test, needs a display
+this VM does not have. Both are the same blockers as the last three sessions.
+
+Next, in order: (1) the M8 test tag, by hand. (2) Unchanged maintainer
+decisions: `evolution-data-server` + `dbus-daemon` in the CI image, gettext in
+the CI image, and whether `GETTEXT_PACKAGE` should stop saying `example-module`.
+Unchanged: M7 still **needs human verification in real Evolution**, the
+manual-test recipes are unlinked from the README, `jmap-mail`'s rustdoc is
+dirty, and the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained.
