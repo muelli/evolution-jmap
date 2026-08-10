@@ -27,6 +27,7 @@ use eds_sys::{
     CamelProviderURLFlags, camel_provider_register,
 };
 use gobject_sys::G_TYPE_INVALID;
+use jmap_backend_core::i18n::DOMAIN;
 
 use crate::store::store_type;
 use crate::transport::transport_type;
@@ -143,10 +144,13 @@ pub fn register() -> &'static CamelProvider {
             url_equal: None,
             // Not NULL, which in this struct means "a provider in the EDS
             // source tree, translated with EDS's catalogue". These strings are
-            // ours. There is no catalogue installed under this domain yet, and
-            // gettext falls back to the untranslated string when there is
-            // none, which is the honest outcome.
-            translation_domain: c"evolution-jmap".as_ptr(),
+            // ours, so the domain is ours — the same constant the module's
+            // entry point binds, because Camel looking a name up in a domain
+            // nothing bound would search the host process's idea of where
+            // catalogues live. There is no catalogue installed under this
+            // domain yet, and gettext falls back to the untranslated string
+            // when there is none, which is the honest outcome.
+            translation_domain: DOMAIN.as_ptr(),
             priv_: ptr::null_mut(),
         });
 
