@@ -13757,3 +13757,94 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last ten sessions asked for is still unwritten; the manual-test
 recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-ninth session)
+
+The third thing that menu offers, and the one the last three sessions kept
+naming: "Edit this and future occurrences", `E_CAL_OBJ_MOD_THIS_AND_FUTURE`.
+`tests/functional/cal-client.c` now asks EDS for it on the fifth occurrence of
+the weekly series it already builds, and `calendar.rs` holds both ends to what
+came of it.
+
+**What EDS does with it, read out of `e-cal-meta-backend.c` first and then
+confirmed by the test.** It is not an exception to the series at all: EDS
+*splits the series in two*. `e_cal_util_split_at_instance_ex` clones the
+component, `e_cal_util_remove_instances_ex` truncates the master's rule to stop
+before the named instance, the clone gets a UID from `e_util_generate_uid` and
+is handed to the backend as an ordinary **create**. So this is the only one of
+the three menu items that reaches the backend as two writes, and the only one
+whose result is a second event rather than an entry in `recurrenceOverrides`.
+`COUNT=6` came back as `COUNT=4` on the old series and `COUNT=2` on the new one
+— EDS counts the occurrences before the split rather than converting to an
+`UNTIL`, when the rule was stated as a count.
+
+**Which settles the open question about `RANGE=THISANDFUTURE`.** `jmap-ical`'s
+`read_overrides` skips a `RECURRENCE-ID` carrying that parameter, logged three
+sessions ago as deliberate-but-unverified: `recurrenceOverrides` has no single
+entry for "every instance from here on", so reading it as one would move one day
+and silently drop the change to the rest. This test says the parameter never
+arrives from EDS in the first place — Evolution's request is resolved into plain
+components before the backend sees anything — so the skip costs nothing on the
+path a user actually takes. It is still the right answer for a *document* that
+carries one (an imported `.ics`, a `PUT` from elsewhere), and that is now the
+only case it covers.
+
+**Green on the first run, so every new assertion was checked by mutation.** No
+production code changed; this increment is coverage, and coverage that passes
+immediately has to earn its place.
+- Disabling the modify call in the client: `series-rrule` comes back
+  `FREQ=WEEKLY;COUNT=6` against the expected `COUNT=4`, and no series titled
+  the split's summary is in the calendar at all.
+- With the client-side assertions then relaxed as well, the server-side ones
+  fail on their own: the mock holds three events against the four it should.
+- And a production mutation — `jmap-ical` dropping `COUNT` on read — fails the
+  *client-side* rule assertion with `FREQ=WEEKLY;UNTIL=20260212T125959Z`. That
+  is worth writing down for its own sake: EDS's cached master is the component
+  our mapping handed back, so the rule EDS truncates is the rule that survived
+  the JSCalendar round trip. With `COUNT` lost, the series on the server recurs
+  forever, and EDS then cuts it with an `UNTIL` instead. The client-side
+  assertion is therefore not merely a check on EDS; it is a check on the round
+  trip, and it fires before the server-side one for that reason.
+- With that mutation and the client-side assertions relaxed, the server-side
+  `count` assertion fails on its own too.
+
+**Four assertions on the client side rather than one.** The truncated rule, the
+new series' `DTSTART`, its rule, and that it carries no `EXDATE`. Either half of
+a split passes for a split that went wrong in the other: a truncated master with
+no new event is the fortnight the user renamed and lost, and a new event beside
+an untruncated master is every one of those days twice, under two titles. The
+absent `EXDATE` is its own assertion because both cancellations are before the
+split, so an exclusion here is one EDS or the mapping moved onto days where the
+user never cancelled anything. `events-after` went 4 → 5: `ECalCache` keys on
+(uid, rid), so the four events plus the one detached instance are five rows.
+
+`docs/functional-tests.md` listed only the first event the calendar test writes;
+its "what the calendar test asserts" section now names the all-day case and all
+three menu items, which four sessions of recurrence work had left out.
+
+Verified locally: `cargo test --locked` 541 (unchanged — this increment's
+coverage is a functional test, not a Rust unit one), the EDS-header crates green
+via the `rust-test-eds` set, `ctest` 14/14 including all four functional legs,
+`cargo fmt --check`, and `cargo clippy --all-targets --locked -- -D warnings`
+clean for the default set and for the EDS set plus `jmap-functional`. `reuse
+lint` and `cargo deny` not run (neither is on this VM); no files were added, so
+no new SPDX headers were needed, and no dependency changed.
+
+Next in this area: the three menu items are now all covered, so the remaining
+recurrence gaps are the mapping's own — an `RDATE` of `VALUE=PERIOD` is read as
+its start and written back as a plain date-time; a per-instance `timeZone` has
+no spelling; and `DTEND` is still the only way Evolution states a length while
+`DURATION` is the only way we write one. Worth considering before those: nothing
+asserts what the *second* write of a split looks like on the wire — whether the
+truncated master and the new event arrive as one `CalendarEvent/set` or two, and
+whether a failure of the second leaves the first committed.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last eleven sessions asked for is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
+dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.

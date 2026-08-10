@@ -63,6 +63,32 @@ const RECURRING_EDITED_SUMMARY: &str = "Weekly standup (demo)";
 /// one and a mix-up cannot pass.
 const RECURRING_REMOVED: &str = "2026-02-05T13:00:00";
 
+/// And the third thing that menu offers, "Edit this and future occurrences",
+/// which is not an exception to the series at all: `ECalMetaBackend` answers it
+/// by **splitting the series in two** — the master's rule is truncated to stop
+/// before the named instance, and that instance onwards becomes a *second
+/// event* under a UID EDS invents, handed to the backend as a create. So it is
+/// the only one of the three that reaches the backend as two writes, and the
+/// only one where the mapping's job is an ordinary event rather than an
+/// override. `RANGE=THISANDFUTURE` never appears — EDS has resolved it into
+/// plain components before the backend sees anything, which is what makes
+/// `jmap-ical` skipping that parameter on read the harmless choice it was
+/// assumed to be.
+///
+/// The fifth occurrence, after all three exceptions the series carries by then.
+const RECURRING_SPLIT: &str = "2026-02-12T13:00:00";
+const RECURRING_SPLIT_SUMMARY: &str = "Weekly standup (new plan)";
+
+/// What the split leaves behind, as EDS spells the two rules back in its own
+/// cache. `COUNT=6` becomes four occurrences before the split and two from it
+/// on: a truncated rule the backend's save undid would leave the old series
+/// still recurring over the days the new event now owns — the same appointment
+/// twice, under two titles — and a new series that kept `COUNT=6` would run six
+/// weeks past where the user cut it.
+const SERIES_RRULE: &str = "FREQ=WEEKLY;COUNT=4";
+const SPLIT_RRULE: &str = "FREQ=WEEKLY;COUNT=2";
+const SPLIT_DTSTART: &str = "20260212T130000Z";
+
 /// The same two exclusions as EDS spells them back in its own cache: the one
 /// the client wrote with the event and the one it removed afterwards, both in
 /// the series' UTC. Named rather than counted, because two exclusions of which
@@ -131,6 +157,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             ALL_DAY_SUMMARY,
             RECURRING_SUMMARY,
             RECURRING_EDITED_SUMMARY,
+            RECURRING_SPLIT_SUMMARY,
         ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -228,13 +255,42 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
          cancelled\n{report}"
     );
 
-    // Four objects for three events: `ECalCache` keys on (uid, rid), so the
-    // detached instance is a row of its own beside the series it belongs to.
-    // Three would mean the edit never landed in the cache; five would mean a
-    // second event was created where an occurrence should have been replaced.
+    // And what EDS made of the split, in the same cache and for the same reason.
+    // Both halves are asserted, because either one on its own passes for a
+    // split that went wrong in the other: a truncated master with no new event
+    // is a fortnight of the series the user renamed and lost, and a new event
+    // beside an untruncated master is every one of those days twice.
+    assert_eq!(
+        seen.get("series-rrule"),
+        Some(&SERIES_RRULE),
+        "EDS's cache does not hold the series truncated at the split\n{report}"
+    );
+    assert_eq!(
+        seen.get("split-dtstart"),
+        Some(&SPLIT_DTSTART),
+        "the series EDS split off does not start at the occurrence the split \
+         was asked for\n{report}"
+    );
+    assert_eq!(
+        seen.get("split-rrule"),
+        Some(&SPLIT_RRULE),
+        "the series EDS split off does not recur over what is left of the \
+         original\n{report}"
+    );
+    assert_eq!(
+        seen.get("split-exdates"),
+        Some(&""),
+        "the series EDS split off carries exclusions belonging to days before \
+         it starts\n{report}"
+    );
+
+    // Five objects for four events: `ECalCache` keys on (uid, rid), so the
+    // detached instance is a row of its own beside the series it belongs to,
+    // and the split added a fourth event. Four would mean the split's new event
+    // never landed in the cache; three, that the edit did not either.
     assert_eq!(
         seen.get("events-after"),
-        Some(&"4"),
+        Some(&"5"),
         "the added events are not all in the calendar they were added to\n{report}"
     );
 
@@ -260,8 +316,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .collect();
     assert_eq!(
         events.len(),
-        3,
-        "the server holds {} events, not three",
+        4,
+        "the server holds {} events, not four",
         events.len()
     );
 
@@ -329,7 +385,12 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .as_ref()
         .unwrap_or_else(|| panic!("the recurring event has no rule: {recurring:?}"));
     assert_eq!(rules[0].frequency, "weekly", "{recurring:?}");
-    assert_eq!(rules[0].count, Some(6), "{recurring:?}");
+    // Four rather than the six it was created with: the split truncated it, and
+    // the count is the only thing on the server that says where the old series
+    // now ends. Six here is the old series still recurring over the fortnight
+    // the new one owns, which every other client reading the account would show
+    // as two appointments a week apart under two titles.
+    assert_eq!(rules[0].count, Some(4), "{recurring:?}");
     // All three exceptions in one map, because they share it: an override
     // written for one of them that dropped another is a deletion or a rename
     // undone, and asserting them one at a time would not notice.
@@ -355,5 +416,36 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "the deleted and the edited occurrences did not all reach the server as \
          overrides, so every other client shows a cancelled appointment or the \
          series' own title on a day the user changed: {recurring:?}"
+    );
+
+    // And the event the split made, which is an ordinary event on this side —
+    // the whole point of what EDS did with `THIS_AND_FUTURE`. Its rule and its
+    // start are what say the series was cut where the user asked; the absent
+    // overrides are what say the two cancellations stayed with the half of the
+    // series they belong to, rather than being copied onto days after the split
+    // where the user never cancelled anything.
+    let split = by_title(RECURRING_SPLIT_SUMMARY);
+    assert_eq!(
+        split.start.as_deref(),
+        Some(RECURRING_SPLIT),
+        "the event the split made does not start at the occurrence it was cut \
+         at: {split:?}"
+    );
+    assert_eq!(
+        split.duration.as_deref(),
+        Some(DURATION),
+        "the event the split made is not as long as the occurrences it \
+         replaces: {split:?}"
+    );
+    let split_rules = split
+        .recurrence_rules
+        .as_ref()
+        .unwrap_or_else(|| panic!("the event the split made has no rule: {split:?}"));
+    assert_eq!(split_rules[0].frequency, "weekly", "{split:?}");
+    assert_eq!(split_rules[0].count, Some(2), "{split:?}");
+    assert_eq!(
+        split.recurrence_overrides, None,
+        "the event the split made carries exceptions from before it starts: \
+         {split:?}"
     );
 }
