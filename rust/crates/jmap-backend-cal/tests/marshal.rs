@@ -12,7 +12,8 @@ use std::ptr;
 
 use eds_sys::{
     ECalComponent, ECalMetaBackendInfo, I_CAL_VCALENDAR_COMPONENT, e_cal_component_new_from_string,
-    e_cal_meta_backend_info_free, i_cal_component_isa,
+    e_cal_meta_backend_info_free, i_cal_component_get_timezone, i_cal_component_isa,
+    i_cal_component_new_from_string,
 };
 use glib_sys::{GSList, g_slist_length, g_slist_nth_data};
 use gobject_sys::g_object_unref;
@@ -30,6 +31,23 @@ const OBJECT: &str = "BEGIN:VCALENDAR\r\n\
                       DTSTART;TZID=Europe/Zurich:20260810T090000\r\n\
                       END:VEVENT\r\n\
                       END:VCALENDAR\r\n";
+
+/// The same, for an event that names no zone at all — a UTC instant, which is
+/// the form `jmap-ical` writes there. Used where the test is about the
+/// marshalling and nothing else: an object that refers to a zone is handed on
+/// with the *definition* of it (see
+/// [`an_object_handed_to_eds_defines_the_zone_it_refers_to`]), so it is no
+/// longer the text it went in as, and asserting it were would be asserting the
+/// bug.
+const UNZONED_OBJECT: &str = "BEGIN:VCALENDAR\r\n\
+                              VERSION:2.0\r\n\
+                              PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+                              BEGIN:VEVENT\r\n\
+                              UID:K1\r\n\
+                              SUMMARY:Standup\r\n\
+                              DTSTART:20260810T070000Z\r\n\
+                              END:VEVENT\r\n\
+                              END:VCALENDAR\r\n";
 
 fn info(uid: &str, revision: &str, icalendar: &str) -> ComponentInfo {
     ComponentInfo {
@@ -87,7 +105,10 @@ const OVERRIDE: &str = "BEGIN:VEVENT\r\nUID:K1\r\nRECURRENCE-ID:20260812T070000Z
 
 #[test]
 fn an_info_list_carries_one_node_per_event_in_order() {
-    let infos = [info("K1", "r1", OBJECT), info("K2", "r2", OBJECT)];
+    let infos = [
+        info("K1", "r1", UNZONED_OBJECT),
+        info("K2", "r2", UNZONED_OBJECT),
+    ];
     let list = marshal::info_list(&infos);
 
     unsafe {
@@ -97,7 +118,7 @@ fn an_info_list_carries_one_node_per_event_in_order() {
             (
                 "K1".to_owned(),
                 Some("r1".to_owned()),
-                Some(OBJECT.to_owned()),
+                Some(UNZONED_OBJECT.to_owned()),
                 None
             )
         );
@@ -494,6 +515,197 @@ fn utc_is_a_zone_with_nothing_to_define() {
 
         glib_sys::g_slist_free(list);
         g_object_unref(component.cast());
+    }
+}
+
+/// The object `jmap-ical` renders, around `vevents`.
+fn object(vevents: &str) -> String {
+    format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         {vevents}END:VCALENDAR\r\n"
+    )
+}
+
+/// Whether a reader handed `icalendar` and nothing else can resolve `tzid` out
+/// of it, which is what a definition is *for*. Every other assertion here counts
+/// lines; this one asks libical the question EDS, Evolution and any other client
+/// of the cache will ask.
+///
+/// `i_cal_component_get_timezone` searches the object's own `VTIMEZONE`s and
+/// does not fall back to the builtin table, which is why it can tell a defined
+/// zone from a merely named one.
+fn resolves(icalendar: &str, tzid: &str) -> bool {
+    let text = std::ffi::CString::new(icalendar).unwrap();
+    let name = std::ffi::CString::new(tzid).unwrap();
+    // SAFETY: both strings are NUL-terminated and valid for the calls. The
+    // component is a fresh allocation and the zone is transfer full, so both are
+    // dropped here.
+    unsafe {
+        let component = i_cal_component_new_from_string(text.as_ptr());
+        assert!(!component.is_null(), "not a calendar object: {icalendar}");
+        let zone = i_cal_component_get_timezone(component, name.as_ptr());
+        let found = !zone.is_null();
+        if found {
+            g_object_unref(zone.cast());
+        }
+        g_object_unref(component.cast());
+        found
+    }
+}
+
+/// The object EDS caches for an event has to *define* the zone it refers to, and
+/// this is the other half of the fix
+/// [`a_zoned_instance_brings_the_definition_of_its_zone`] made on the way in.
+///
+/// `jmap-ical` writes `DTSTART;TZID=Europe/Zurich` and nothing beside it,
+/// leaning on libical resolving an IANA name out of its builtin table. RFC 5545
+/// §3.2.19 says the parameter names a `VTIMEZONE` in the same object, so what
+/// went out was not a calendar object: it happened to work because the reader on
+/// the other side was libical. Anything else — a stricter parser, an event
+/// exported to a file, an invitation forwarded on — reads an event at a wall
+/// clock time in no particular zone.
+#[test]
+fn an_object_handed_to_eds_defines_the_zone_it_refers_to() {
+    let infos = [info("K1", "r1", &object(&zoned("Europe/Zurich")))];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        let object = nth_info(list, 0).2.expect("an object");
+        // Asked first, and deliberately: it is the claim. The three below say
+        // *how* it was met, so that a failure names the missing half.
+        assert!(
+            resolves(&object, "Europe/Zurich"),
+            "a reader cannot resolve the zone out of the object: {object}"
+        );
+        assert_eq!(
+            definitions(&object),
+            1,
+            "the zone the event is in is not defined in the object: {object}"
+        );
+        assert!(
+            !object.contains("freeassociation"),
+            "the definition is under libical's identifier, not the event's: {object}"
+        );
+        assert!(
+            object.contains("DTSTART;TZID=Europe/Zurich:20260810T090000"),
+            "the event itself did not survive: {object}"
+        );
+        glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+/// And the same for the component `load_component_sync` hands back, which is the
+/// path EDS takes for an event whose info carried no object.
+#[test]
+fn a_component_handed_back_defines_the_zone_it_refers_to() {
+    let component = marshal::component_from_ical(&object(&zoned("Europe/Zurich")));
+    assert!(!component.is_null());
+
+    unsafe {
+        let rendered = marshal::ical_from_component(component).expect("a rendering");
+        marshal::component_unref(component);
+        assert_eq!(definitions(&rendered), 1, "{rendered}");
+        assert!(
+            resolves(&rendered, "Europe/Zurich"),
+            "a reader cannot resolve the zone out of the component: {rendered}"
+        );
+    }
+}
+
+/// An object that names no zone is handed on **as it stands**, byte for byte.
+///
+/// Defining a zone means rebuilding the object through libical, which respells
+/// what it was given; there is nothing to define here, so nothing is rebuilt.
+/// Keeping the rendering `jmap-ical` produced is what makes the save path's
+/// comparison a comparison of the *event* rather than of two spellings of it.
+#[test]
+fn an_object_that_names_no_zone_is_handed_over_as_it_stands() {
+    let infos = [info("K1", "r1", UNZONED_OBJECT)];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        assert_eq!(nth_info(list, 0).2.as_deref(), Some(UNZONED_OBJECT));
+        glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+/// A zone no database knows is left undefined on the way out for the same reason
+/// as on the way in: the alternatives are guessing a city or refusing to show the
+/// event, and a wall-clock time with an unresolvable zone is what the server
+/// said. The event still reaches Evolution.
+#[test]
+fn a_zone_no_database_knows_is_left_undefined_on_the_way_out() {
+    let text = object(&zoned("W. Europe Standard Time"));
+    let infos = [info("K1", "r1", &text)];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        let object = nth_info(list, 0).2.expect("an object");
+        assert_eq!(
+            definitions(&object),
+            0,
+            "a zone was invented for an identifier nothing resolves: {object}"
+        );
+        assert_eq!(object, text, "the object was rebuilt for nothing");
+        glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+/// One definition per zone, however many events and properties name it: a second
+/// copy of one `VTIMEZONE` is a duplicate `TZID` in one object. A series and its
+/// detached occurrence are the pair that arrives this way.
+#[test]
+fn one_zone_named_by_two_events_is_defined_once() {
+    let text = object(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\r\n\
+         DTSTART;TZID=Europe/Zurich:20260810T090000\r\nRRULE:FREQ=DAILY\r\nEND:VEVENT\r\n\
+         BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\\, moved\r\n\
+         RECURRENCE-ID;TZID=Europe/Zurich:20260812T090000\r\n\
+         DTSTART;TZID=Europe/Zurich:20260812T100000\r\nEND:VEVENT\r\n",
+    );
+    let infos = [info("K1", "r1", &text)];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        let object = nth_info(list, 0).2.expect("an object");
+        assert_eq!(
+            definitions(&object),
+            1,
+            "not one definition per zone: {object}"
+        );
+        assert!(
+            resolves(&object, "Europe/Zurich"),
+            "a reader cannot resolve the zone out of the object: {object}"
+        );
+        glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+/// A zone the object already defines is left alone. `jmap-ical` defines none
+/// today, so this is the guard that keeps that from becoming a duplicate `TZID`
+/// the day it does — and the day EDS hands one of these objects back through
+/// this path.
+#[test]
+fn a_zone_the_object_already_defines_is_not_defined_twice() {
+    let text = object(&format!(
+        "BEGIN:VTIMEZONE\r\nTZID:Europe/Zurich\r\nBEGIN:STANDARD\r\n\
+         DTSTART:19701025T030000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
+         END:STANDARD\r\nEND:VTIMEZONE\r\n{}",
+        zoned("Europe/Zurich")
+    ));
+    let infos = [info("K1", "r1", &text)];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        let object = nth_info(list, 0).2.expect("an object");
+        assert_eq!(
+            definitions(&object),
+            1,
+            "the zone was defined twice: {object}"
+        );
+        assert_eq!(object, text, "the object was rebuilt for nothing");
+        glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
     }
 }
 
