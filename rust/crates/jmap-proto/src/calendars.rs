@@ -128,6 +128,15 @@ pub struct RecurrenceRule {
     /// counting from the start of the month, -1 to -31 from its end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_month_day: Option<Vec<i32>>,
+    /// The months of the year it repeats in — iCalendar's `BYMONTH`.
+    ///
+    /// A string rather than a number, as RFC 8984 §4.3.3 has it: the month
+    /// number, optionally followed by `L` for a leap month in a non-Gregorian
+    /// calendar (`5L`). Kept verbatim so a value this mapping cannot spell as an
+    /// `RRULE` is visible as itself rather than as a number it would have to
+    /// invent a spelling for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_month: Option<Vec<String>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

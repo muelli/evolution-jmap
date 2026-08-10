@@ -500,17 +500,23 @@ fn utc_is_a_zone_with_nothing_to_define() {
 /// The recurrence parts `jmap-ical` writes, run through the parser that
 /// actually reads them.
 ///
-/// `jmap-ical` emits `BYDAY` before `BYMONTHDAY` because that is the order
-/// libical writes them in, and a rule that comes back out of EDS's own cache
-/// spelled differently than it went in compares unequal to itself — which the
-/// save path reads as an edit. Nothing in `jmap-ical` can check that claim:
-/// calcard is what parses there. This is where libical is available to be asked.
+/// `jmap-ical` emits `BYDAY` before `BYMONTHDAY` before `BYMONTH` because that
+/// is the order libical writes them in, and a rule that comes back out of EDS's
+/// own cache spelled differently than it went in compares unequal to itself —
+/// which the save path reads as an edit. Nothing in `jmap-ical` can check that
+/// claim: calcard is what parses there. This is where libical is available to be
+/// asked.
 #[test]
 fn libical_keeps_the_recurrence_parts_this_mapping_writes() {
     for rrule in [
         "FREQ=MONTHLY;COUNT=6;BYDAY=WE;BYMONTHDAY=15,-1",
         "FREQ=MONTHLY;BYMONTHDAY=-1",
         "FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=1,15",
+        "FREQ=YEARLY;COUNT=4;BYMONTH=3,9",
+        "FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYMONTH=3",
+        // RFC 5545 §3.3.10 defines BYMONTH at every frequency, so a weekly rule
+        // may carry one and `jmap-ical` does not gate it as it gates BYMONTHDAY.
+        "FREQ=WEEKLY;BYDAY=MO;BYMONTH=12",
     ] {
         assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule));
     }
@@ -526,6 +532,41 @@ fn a_day_of_the_month_no_month_has_would_cost_libical_the_whole_rule() {
     for rrule in ["FREQ=MONTHLY;BYMONTHDAY=32", "FREQ=MONTHLY;BYMONTHDAY=0"] {
         assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
     }
+}
+
+/// The same question for the months of the year, whose answers are three
+/// different shapes — which together are why `jmap-ical`'s `month_token` accepts
+/// only the canonical decimal spelling of a month 1 to 12, and measured here
+/// rather than assumed.
+#[test]
+fn libical_answers_for_a_month_this_mapping_refuses() {
+    // Some values cost the whole `RRULE`, as a day of the month out of range
+    // does: an event written that way would reach EDS's cache as a single
+    // appointment with the user's series gone.
+    for rrule in [
+        "FREQ=YEARLY;BYMONTH=0",
+        "FREQ=YEARLY;BYMONTH=-1",
+        "FREQ=YEARLY;BYMONTH=99",
+        "FREQ=YEARLY;BYMONTH=3,XX",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
+    }
+    // A thirteenth month and a leap month, though, libical keeps verbatim — so
+    // the reason to refuse them is not that the parser objects. It is that a
+    // Gregorian series has neither, so the rule would sit in the cache as one
+    // that never occurs; `5L` names a month at all only under RFC 7529's
+    // `RSCALE`, which nothing here writes and whose support in libical is a build
+    // option in the first place.
+    for rrule in ["FREQ=YEARLY;BYMONTH=13", "FREQ=YEARLY;BYMONTH=5L"] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // And the third shape: a spelling that is kept but *changed*. RFC 5545's
+    // `monthnum` admits the leading zero, and a rule written `03` comes back `3`
+    // — a difference the save path reads as an edit the user never made.
+    assert_eq!(
+        reparsed_rrule("FREQ=YEARLY;BYMONTH=03").as_deref(),
+        Some("FREQ=YEARLY;BYMONTH=3"),
+    );
 }
 
 /// The `RRULE` value libical hands back after reading a component carrying
