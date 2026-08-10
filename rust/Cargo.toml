@@ -12,6 +12,12 @@ members = ["crates/*"]
 # keep them out of the default set so `cargo test` works on machines without
 # them. CI builds `--workspace`, and CMake runs their tests via the
 # rust-test-eds target.
+#
+# jmap-functional is out for a different reason: it needs no headers, but its
+# tests drive the EDS *runtime* — evolution-source-registry and
+# evolution-addressbook-factory on a private D-Bus session — and are handed
+# paths by CTest. Running them is `ctest -L functional` against a build
+# configured with -DENABLE_FUNCTIONAL_TESTS=ON; see docs/functional-tests.md.
 default-members = [
     "crates/jmap-proto",
     "crates/jmap-client",

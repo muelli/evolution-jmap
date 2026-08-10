@@ -487,6 +487,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmap-functional"
+version = "0.1.0"
+dependencies = [
+ "evolution-jmap-mock",
+ "evolution-jmap-proto",
+]
+
+[[package]]
 name = "jmap-mail"
 version = "0.1.0"
 dependencies = [

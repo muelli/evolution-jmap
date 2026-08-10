@@ -41,8 +41,8 @@ use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use eds_sys::{
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBookMetaBackend, EBookMetaBackendClass,
     EConflictResolution, EContact, ENamedParameters, ESourceAuthenticationResult,
-    GTlsCertificateFlags, e_backend_get_source, e_book_meta_backend_get_type,
-    e_book_meta_backend_set_connected_writable, e_client_error_create,
+    GTlsCertificateFlags, e_backend_get_source, e_book_backend_set_writable,
+    e_book_meta_backend_get_type, e_client_error_create,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar, guint32};
@@ -237,11 +237,20 @@ unsafe extern "C" fn connect_sync(
             };
 
             backend.store_connection(sync);
-            // Without this the address book is read-only in the UI: it is how
-            // `EBookMetaBackend` decides whether a connected backend accepts
-            // writes. JMAP has no per-book "may I write" flag, so the answer
-            // is the same as the account's.
-            e_book_meta_backend_set_connected_writable(meta_backend, GTRUE);
+            // Without this the address book is read-only: every write comes
+            // back as "Permission denied" and Evolution greys the book out.
+            // JMAP has no per-book "may I write" flag, so the answer is the
+            // same as the account's.
+            //
+            // This is `e_book_backend_set_writable` and not the meta
+            // backend's `set_connected_writable`, which reads like the one to
+            // call and is not: the moment this vfunc returns TRUE, EDS's
+            // `ebmb_update_connection_values` *overwrites* connected-writable
+            // with `e_book_backend_get_writable()` — so the meta backend's
+            // setter is undone by the very call that was about to read it,
+            // and the flag EDS keeps for opening the book offline is set from
+            // this one too. What the vfunc's own documentation asks for.
+            e_book_backend_set_writable(meta_backend.cast(), GTRUE);
             GTRUE
         })
     }
