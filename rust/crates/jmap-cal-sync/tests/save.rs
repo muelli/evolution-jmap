@@ -183,6 +183,47 @@ fn an_all_day_event_the_component_could_not_say_is_all_day_keeps_its_flag() {
 }
 
 #[test]
+fn a_save_leaves_the_servers_own_timestamps_alone() {
+    // `created` and `updated` (RFC 8984 §4.1.7, §4.1.8) are the server's record
+    // of the event. They are drawn onto the component — as CREATED, and as the
+    // DTSTAMP and LAST-MODIFIED RFC 5545 §3.8.7.2 makes the same instant — and
+    // never read back off it, which is what this pins: an editor rewrites all
+    // three from its own clock on every save, so a save that read them would
+    // report the *client's* moment as when the server last changed the event.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({"created": "2026-01-02T09:30:00Z", "updated": "2026-01-15T17:45:01Z"}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("CREATED:20260102T093000Z"),
+        "{icalendar}"
+    );
+    assert!(
+        icalendar.contains("DTSTAMP:20260115T174501Z"),
+        "{icalendar}"
+    );
+    let edited = icalendar
+        .replace("CREATED:20260102T093000Z", "CREATED:20260210T080000Z")
+        .replace("DTSTAMP:20260115T174501Z", "DTSTAMP:20260210T080000Z")
+        .replace(
+            "LAST-MODIFIED:20260115T174501Z",
+            "LAST-MODIFIED:20260210T080000Z",
+        )
+        .replace("SUMMARY:Planning", "SUMMARY:Planning (moved)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Planning (moved)"));
+    assert_eq!(stored.created.as_deref(), Some("2026-01-02T09:30:00Z"));
+    assert_eq!(stored.updated.as_deref(), Some("2026-01-15T17:45:01Z"));
+}
+
+#[test]
 fn editing_an_event_leaves_unmapped_properties_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");

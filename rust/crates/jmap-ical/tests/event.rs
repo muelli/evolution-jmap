@@ -1095,6 +1095,105 @@ fn an_edited_instance_is_drawn_at_the_series_privacy() {
     );
 }
 
+/// An event carrying the two timestamps a server keeps for it.
+fn stamped(created: &str, updated: &str) -> CalendarEvent {
+    CalendarEvent {
+        created: Some(created.to_owned()),
+        updated: Some(updated.to_owned()),
+        ..CalendarEvent::default()
+    }
+}
+
+#[test]
+fn when_an_event_was_made_and_last_changed_are_stamped_on_the_component() {
+    // RFC 8984 §4.1.7's `created` and §4.1.8's `updated` are UTCDateTimes, and
+    // RFC 5545 §3.8.7 spells the same two instants as CREATED and LAST-MODIFIED,
+    // both UTC-only. DTSTAMP carries the second of them as well: §3.8.7.2 makes
+    // it REQUIRED on a VEVENT and declares it equivalent to LAST-MODIFIED in a
+    // calendar with no METHOD, which is every calendar this crate emits.
+    let ics = event_to_ical(&stamped("2026-01-02T09:30:00Z", "2026-01-15T17:45:01Z"));
+
+    assert_eq!(line(&ics, "CREATED:"), "CREATED:20260102T093000Z");
+    assert_eq!(line(&ics, "DTSTAMP:"), "DTSTAMP:20260115T174501Z");
+    assert_eq!(
+        line(&ics, "LAST-MODIFIED:"),
+        "LAST-MODIFIED:20260115T174501Z"
+    );
+}
+
+#[test]
+fn a_timestamp_that_is_not_an_instant_in_utc_is_left_off_rather_than_mangled() {
+    // The same rule every other unreadable value gets: treated as absent. A
+    // timestamp is only ever written, so nothing downstream loses an edit by it
+    // — but a CREATED libical refuses costs the whole component, and every field
+    // of the event with it.
+    for value in [
+        // A LocalDateTime: it names no instant without a zone beside it, and
+        // there is nowhere on these properties to put one.
+        "2026-01-15T17:45:01",
+        // An offset, which RFC 8984 §1.4.5 does not admit and RFC 5545 §3.3.5
+        // has no form for either.
+        "2026-01-15T17:45:01+01:00",
+        // A month that does not exist.
+        "2026-13-15T17:45:01Z",
+        // A fraction of a second, which neither format's DATE-TIME carries.
+        "2026-01-15T17:45:01.5Z",
+        "yesterday",
+        "",
+    ] {
+        let ics = event_to_ical(&stamped(value, value));
+        for name in ["CREATED", "DTSTAMP", "LAST-MODIFIED"] {
+            assert!(without(&ics, name), "{value}: {ics}");
+        }
+    }
+}
+
+#[test]
+fn an_event_that_says_nothing_about_its_timestamps_carries_none() {
+    // Deliberately, even though RFC 5545 §3.6.1 makes DTSTAMP REQUIRED: the only
+    // value that could be invented for it is "now", and a rendering that changes
+    // between two runs is exactly what the save path cannot have — it reads an
+    // edit off a difference from a re-rendering of what the server holds. So a
+    // server that states no timestamp gets a component without one, and libical
+    // reads such a component perfectly well.
+    let ics = event_to_ical(&fixture_event());
+
+    for name in ["CREATED", "DTSTAMP", "LAST-MODIFIED"] {
+        assert!(without(&ics, name), "{ics}");
+    }
+}
+
+#[test]
+fn an_edited_instance_carries_the_timestamps_of_the_series() {
+    // The inheritance of RFC 8984 §4.3.4 again: an override may not restate
+    // either timestamp, so the instance's own component states the series'.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
+    event.created = Some("2026-01-02T09:30:00Z".to_owned());
+    event.updated = Some("2026-01-15T17:45:01Z".to_owned());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    let instance = vevent(&ics, 1);
+    assert_eq!(line(instance, "CREATED:"), "CREATED:20260102T093000Z");
+    assert_eq!(line(instance, "DTSTAMP:"), "DTSTAMP:20260115T174501Z");
+}
+
+#[test]
+fn the_timestamps_are_written_and_never_read_back() {
+    // The mirror of DTEND, which is read and never written. Both instants belong
+    // to the server: it stamps `created` when the event first arrives and
+    // `updated` whenever anything about it changes. A client that read them off a
+    // component would be proposing a value for them — on a create, a guess at
+    // when the server first saw the event; on a save, a claim about when the
+    // server last changed it. So they are drawn for whoever reads the document
+    // and nothing more, and neither appears in `MAPPED_PROPERTIES`.
+    let ics = event_to_ical(&stamped("2026-01-02T09:30:00Z", "2026-01-15T17:45:01Z"));
+    let event = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(event.created, None);
+    assert_eq!(event.updated, None);
+}
+
 /// An event happening at one place, keyed the way a server keys it.
 fn placed(key: &str, location: Value) -> CalendarEvent {
     CalendarEvent {

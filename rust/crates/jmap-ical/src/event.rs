@@ -29,6 +29,14 @@
 //! through [`stated_duration`], because the two formats spell an ISO 8601
 //! duration identically but do not admit the same set of them.
 //!
+//! Its mirror is `CREATED`, `DTSTAMP` and `LAST-MODIFIED`, which are written and
+//! never read: RFC 8984 §4.1.7's `created` and §4.1.8's `updated` are the
+//! *server's* record of the event, so they are drawn for whoever reads the
+//! document and never appear in [`MAPPED_PROPERTIES`]. Reading them back would
+//! be this side proposing a value — and, since libical stamps a `DTSTAMP` of its
+//! own onto every component that arrives without one, the value proposed would
+//! be the local clock.
+//!
 //! A time zone crosses under two different kinds of name: iCalendar refers to
 //! one by a `TZID`, which is an identifier the document itself may define, and
 //! JSCalendar wants the zone's IANA name. [`names_time_zone`] says which is
@@ -934,6 +942,25 @@ fn vevent_of(
         ));
     }
 
+    // When the event was made and when it last changed. Written for whoever
+    // reads the document and never read back — see [`to_utc_date_time`], and
+    // `CalendarEvent::created`, which says whose the two instants are. DTSTAMP
+    // carries `updated` as well because RFC 5545 §3.8.7.2 makes it REQUIRED on a
+    // `VEVENT` and equivalent to `LAST-MODIFIED` in a calendar with no `METHOD`,
+    // which is every calendar this crate emits; an event the server states no
+    // `updated` for still gets no line, since the only value to invent would be
+    // "now" and a rendering that changes between two runs is what the save path
+    // cannot have.
+    for (name, value) in [
+        ("CREATED", &event.created),
+        ("DTSTAMP", &event.updated),
+        ("LAST-MODIFIED", &event.updated),
+    ] {
+        if let Some(stamp) = value.as_deref().and_then(to_utc_date_time) {
+            vevent = vevent.with(Property::raw(name, &stamp));
+        }
+    }
+
     for (name, value) in [
         ("SUMMARY", &event.title),
         ("DESCRIPTION", &event.description),
@@ -1053,6 +1080,12 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
     let mut instance = CalendarEvent {
         id: event.id.clone(),
         uid: event.uid.clone(),
+        // Inherited like everything else RFC 8984 §4.3.4 does not let an override
+        // restate — and neither timestamp is restatable: they are the server's
+        // record of the event, not of one of its occurrences. RFC 5545 asks for
+        // the `DTSTAMP` on the instance's own component all the same.
+        created: event.created.clone(),
+        updated: event.updated.clone(),
         title: event.title.clone(),
         description: event.description.clone(),
         start: Some(id.to_owned()),
@@ -1429,6 +1462,13 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         calendar_ids: None,
         event_type: Some("Event".to_owned()),
         uid: text(X_JMAP_UID),
+        // Written onto the document and never read back off it: both instants
+        // are the server's record of the event, so a value read here would be
+        // this side proposing one — a guess, on a create, at when the server
+        // first saw the event, and a claim, on a save, about when it last
+        // changed it. The mirror of `DTEND`, which is read and never written.
+        created: None,
+        updated: None,
         title: text("SUMMARY"),
         description: text("DESCRIPTION"),
         start,
@@ -2037,6 +2077,21 @@ fn whole_days(duration: &str) -> bool {
 
 fn is_utc(zone: &str) -> bool {
     zone.eq_ignore_ascii_case(UTC) || zone.eq_ignore_ascii_case("UTC")
+}
+
+/// `2026-01-15T13:00:00Z` → `20260115T130000Z`, or `None` for a value that names
+/// no instant.
+///
+/// The UTC-only sibling of [`to_ical_date_time`]: RFC 8984 §1.4.5's UTCDateTime
+/// and the UTC form of RFC 5545 §3.3.5's DATE-TIME are the same instant written
+/// two ways, and the `Z` is what makes each of them one — so a value without it
+/// is a local time, which these properties have no zone to resolve against and
+/// are refused rather than guessed at. A sub-second fraction, which neither
+/// format's DATE-TIME carries, falls out of [`strip`]'s digit count and is
+/// refused the same way.
+fn to_utc_date_time(value: &str) -> Option<String> {
+    let local = value.strip_suffix(['Z', 'z'])?;
+    to_ical_date_time(local).map(|stamp| format!("{stamp}Z"))
 }
 
 /// `2026-01-15T13:00:00` → `20260115T130000`.
