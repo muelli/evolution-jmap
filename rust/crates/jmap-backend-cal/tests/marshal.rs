@@ -1036,9 +1036,83 @@ fn libical_keeps_the_location_key_this_mapping_writes() {
     );
 }
 
+/// The tags an event carries, through the parser that actually reads them.
+///
+/// `jmap-ical` writes the whole `keywords` set as **one** `CATEGORIES` line of
+/// `,`-separated TEXT values, and the save path replaces the property from what
+/// comes back — so a tag libical dropped or re-spelled would be a tag the next
+/// save deletes.
+///
+/// It does neither, but it does **not hand the line back as it was written**: it
+/// splits every value onto a `CATEGORIES` line of its own, escaping intact. That
+/// is why `jmap_ical::ical_to_event` reads *every* occurrence of the property
+/// rather than the first — a component EDS hands back holds one line per tag, not
+/// the line we wrote, so reading the first alone would see a set of one and the
+/// save would delete the rest. This test is that case being reachable rather than
+/// hypothetical, measured rather than assumed.
+#[test]
+fn libical_splits_the_categories_this_mapping_writes_and_keeps_every_tag() {
+    assert_eq!(
+        reparsed("CATEGORIES", "CATEGORIES:offsite,planning"),
+        vec![
+            "CATEGORIES:offsite".to_owned(),
+            "CATEGORIES:planning".to_owned()
+        ]
+    );
+    // TEXT escaping (RFC 5545 §3.3.11) inside one value, which is what keeps a
+    // tag holding a comma from becoming two tags — including across the split.
+    assert_eq!(
+        reparsed(
+            "CATEGORIES",
+            "CATEGORIES:Berlin\\, offsite\\; 2026,planning"
+        ),
+        vec![
+            "CATEGORIES:Berlin\\, offsite\\; 2026".to_owned(),
+            "CATEGORIES:planning".to_owned()
+        ]
+    );
+
+    // And the consequence, which is the part that matters: the set the mapping
+    // wrote comes back whole, so a save diffs it against a baseline that agrees
+    // and sends nothing.
+    let object = reparsed_object("CATEGORIES:Berlin\\, offsite\\; 2026,planning");
+    let read_back = jmap_ical::ical_to_event(&object).expect("parse");
+    assert_eq!(
+        read_back
+            .keywords
+            .as_ref()
+            .map(|tags| tags.keys().cloned().collect::<Vec<_>>()),
+        Some(vec![
+            "Berlin, offsite; 2026".to_owned(),
+            "planning".to_owned()
+        ]),
+        "a tag was lost between what this crate wrote and what libical handed back:\n{object}"
+    );
+}
+
 /// The `LOCATION` lines of a `VEVENT` after libical has parsed and re-rendered
 /// it, unfolded.
 fn reparsed_lines(lines: &str) -> Vec<String> {
+    reparsed("LOCATION", lines)
+}
+
+/// The lines of one property of a `VEVENT` after libical has parsed and
+/// re-rendered it, unfolded.
+fn reparsed(property: &str, lines: &str) -> Vec<String> {
+    reparsed_object(lines)
+        .replace("\r\n ", "")
+        .replace("\r\n\t", "")
+        .replace("\n ", "")
+        .replace("\n\t", "")
+        .lines()
+        .filter(|line| line.starts_with(property))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A `VEVENT` carrying `lines`, through libical and back out as the whole
+/// `VCALENDAR` object a save is handed.
+fn reparsed_object(lines: &str) -> String {
     let vevent = format!(
         "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:S\r\nDTSTART:20260810T070000Z\r\n\
          {lines}\r\nEND:VEVENT\r\n"
@@ -1051,14 +1125,5 @@ fn reparsed_lines(lines: &str) -> Vec<String> {
         glib_sys::g_slist_free(list);
         g_object_unref(component.cast());
     }
-    saved
-        .icalendar
-        .replace("\r\n ", "")
-        .replace("\r\n\t", "")
-        .replace("\n ", "")
-        .replace("\n\t", "")
-        .lines()
-        .filter(|line| line.starts_with("LOCATION"))
-        .map(str::to_owned)
-        .collect()
+    saved.icalendar
 }

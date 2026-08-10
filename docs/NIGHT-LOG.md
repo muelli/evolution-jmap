@@ -15730,3 +15730,116 @@ unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`. New
 from this session: whether Evolution's appointment editor keeps an `X-JMAP-KEY`
 on a `LOCATION` the user edited is untested — it needs a real Evolution session,
 and the save path is built not to care either way.
+
+## 2026-08-10 (hundred-and-fifty-eighth session)
+
+The **tags an event carries** are now mapped: JSCalendar `keywords` ↔ iCalendar
+`CATEGORIES`, both directions, which is what Evolution's "Categories…" button
+writes. The eleventh mapped property, and the first that is a *set* — which
+turned out to be the easy shape and the one with the real surprise in it.
+
+**Easier than `locations`, and why.** RFC 5545 §3.8.1.2's `CATEGORIES` is a list
+of TEXT values and an RFC 8984 §4.2.9 keyword is a bare string, so the whole set
+fits on the component: nothing is shown in part, nothing has to be patched in
+situ, and `diff_keywords` replaces the property whole. That is the opposite of
+last session's `locations`, where a `LOCATION` line could only ever show one
+name of one place. Clearing the field sends `"keywords": null` — RFC 8620 §5.3's
+way of asking for the RFC 8984 default of no tags, which an empty map would not
+be.
+
+**libical does not hand back the line we wrote.** The finding of the session,
+measured in `jmap-backend-cal/tests/marshal.rs` against real libical: a
+multi-valued `CATEGORIES:offsite,planning` comes back **split into one
+`CATEGORIES` property per value**, escaping intact (`Berlin\, offsite\; 2026`
+survives the split as one value). So the reader takes *every* occurrence of the
+property and flattens them into one set — which had been written as the
+"another client's component looks like this" case and is in fact the *only*
+shape EDS ever hands back. Reading the first line alone would have sent a set of
+one, and the save after it would have deleted every other tag the user had.
+That is a bug this mapping never shipped only because the probe was written
+before the code was trusted.
+
+**What `maps_keywords` refuses.** One predicate, `drawn_tag`, is the single point
+the gate and the writer agree through, so a tag cannot be called covered and then
+left off the line. It refuses a value that is not `true` (RFC 8984 §1.4.3 has
+every member of a Set be `true`; anything else is a tag the server says is *not*
+set), an empty tag (an empty part of a value list reads back as nothing, so the
+tag would vanish between the drawing and the save), and a tag holding a carriage
+return (`syntax::fold_into` drops it — a security property, not tidiness — so the
+tag would come back renamed). A line feed is deliberately *not* refused: it has
+an escape and round-trips. An event whose every tag is undrawable gets no
+`CATEGORIES` line at all rather than an empty one, which would state a tag whose
+name is the empty string.
+
+**Held as JSON, not as `bool`.** `CalendarEvent.keywords` is
+`Option<BTreeMap<String, Value>>`, unlike `Email.keywords` next door, and the
+reason is what the type is for: a whole `CalendarEvent/get` response
+deserializes into it at once, so a server answering `{"offsite": 1}` for one
+event would fail the response and take every event in the calendar with it. Held
+as values the odd entry is visible as itself, `maps_keywords` refuses to write
+the property back, and the calendar still opens — the trade this crate makes
+everywhere else.
+
+**Verified through real EDS.** `tests/functional/cal-client.c` writes
+`CATEGORIES:offsite,planning` on the event it creates and reports every
+`CATEGORIES` value EDS's own cache hands back, joined; the leg asserts that
+*and* the two-member `keywords` set the mock received. Mutation-checked:
+expecting `planningg` fails the leg with `read-back-categories=offsite,planning`
+in the output. `exdate_values` became `joined_values(component, kind)` to serve
+both properties. The `maps_keywords` guard in `diff_keywords` was
+mutation-checked too — short-circuiting it fails
+`a_tag_the_component_could_not_show_leaves_the_whole_set_alone`.
+
+**Two exemplars moved.** `keywords` was the "property no component can carry"
+example in `jmap-cal-sync/tests/save.rs` and the "property the mapping drops"
+example in `tests/sync.rs`; both now use `freeBusyStatus` and `priority`, and the
+revision test gained the opposite assertion — a tag added on the server *must*
+move the revision, or Evolution never shows it. `participants`, `priority` and
+`freeBusyStatus` are the remaining unmapped exemplars.
+
+Tests: red first at every layer — 17 compile-red in `jmap-ical` (the field did
+not exist), 4 behaviour-red in `jmap-cal-sync/tests/save.rs` against the mock,
+1 behaviour-red in the moved exemplar, and the marshal probe red on its first run
+with libical's actual answer. Two of the six new save tests passed before the
+diff existed and are regression guards rather than drivers, which the mutation
+check above is the answer to. Counts: `cargo test --locked` 705, up 15 from 690;
+`jmap-backend-cal` 30 in `marshal.rs`, up one; `ctest` 14/14 including all four
+functional legs against real EDS.
+
+Not done, deliberately: an **override** may still not restate its tags. RFC 8984
+§4.3.4 lets one and iCalendar spells it on the instance's own component, but
+`OVERRIDE_PROPERTIES` stays as it was — an instance is *drawn* with the series'
+tags (inherited, per §4.3.4) and a patch naming `keywords` still flags the whole
+property as unwritable. The functional leg uses two tags without commas in them;
+the escaping across libical's split is pinned by the marshal probe against the
+same library EDS uses, but not by the end-to-end leg.
+
+Verified locally: `cargo test --locked` 705 green, `cargo test -p
+jmap-backend-cal --locked` green, `ctest` 14/14, `cargo fmt --check`, and `cargo
+clippy --all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal` and `jmap-functional`. `ci/checks.sh` again stops at its first
+step: `reuse` is not on this VM and neither `pipx` nor `uvx` is installed.
+Exposure is nil — **no file was added**, only edits to files that already carry
+SPDX headers — and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one
+it gave on the last green run.
+
+Disk: 2.5G free of 58G, with `rust/target` at 23G and `~/audit-ffi` at 14G.
+`target/tmp` and `target/debug/incremental` deleted again at the start,
+`CARGO_INCREMENTAL=0` throughout. **The maintainer decision is still wanted**,
+and getting more urgent: a periodic `cargo clean` in the night-shift driver, a
+bigger disk, or a shared target directory.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two; the *reading* direction of a
+per-instance zone through real EDS is untested; calcard silently drops an
+unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`;
+whether Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the
+user edited is untested.

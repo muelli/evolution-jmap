@@ -87,6 +87,25 @@ impl Property {
         }
     }
 
+    /// A property holding a `,`-separated list of TEXT values — `CATEGORIES`,
+    /// `RESOURCES` — each escaped on the way out, so a comma inside one value
+    /// cannot be read back as the separator between two.
+    pub fn list<I, S>(name: &str, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self {
+            name: name.to_ascii_uppercase(),
+            params: Vec::new(),
+            values: values
+                .into_iter()
+                .map(|value| value.as_ref().to_owned())
+                .collect(),
+            text: true,
+        }
+    }
+
     /// A property whose value is not TEXT — `DTSTART`, `DURATION`, `RRULE`,
     /// `TRIGGER` — kept verbatim, because its separators are structure.
     pub fn raw(name: &str, value: &str) -> Self {

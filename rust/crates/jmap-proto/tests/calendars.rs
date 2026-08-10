@@ -61,6 +61,13 @@ fn calendar_event_roundtrip() {
             "coordinates": "geo:52.520008,13.404954",
         }))
     );
+    // `keywords` is an RFC 8984 §1.4.3 Set — the keys are the tags and every
+    // value is `true`. The values are held as JSON rather than as `bool` so that
+    // one server answering something else for one event cannot fail the whole
+    // `CalendarEvent/get` response and take the calendar with it.
+    let keywords = event.keywords.as_ref().expect("keywords");
+    assert_eq!(keywords.keys().collect::<Vec<_>>(), ["offsite", "planning"]);
+    assert!(keywords.values().all(|set| set == &Value::Bool(true)));
     // Unmodeled JSCalendar properties (participants, sequence) survive.
     assert!(event.extra.contains_key("participants"));
     assert!(event.extra.contains_key("sequence"));

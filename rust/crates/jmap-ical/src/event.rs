@@ -5,15 +5,15 @@
 //!
 //! The mapped set is the one the calendar backend needs to be useful — UID,
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
-//! the event is shown without a time), DURATION, STATUS, LOCATION, RRULE, and
-//! the instances an EXDATE, an RDATE or a `RECURRENCE-ID` component names one at
-//! a time — and no more. Everything else on an event (participants, alarms,
-//! links, keywords, …) is *dropped*, which is only safe because saving goes
-//! back to the server as a PatchObject naming the mapped properties: a property
-//! we never mapped is a property we never overwrite. See [`MAPPED_PROPERTIES`],
-//! [`maps_locations`], [`maps_recurrence_rule`] and
-//! [`maps_recurrence_override`], which are that knowledge in machine-readable
-//! form.
+//! the event is shown without a time), DURATION, STATUS, LOCATION, CATEGORIES,
+//! RRULE, and the instances an EXDATE, an RDATE or a `RECURRENCE-ID` component
+//! names one at a time — and no more. Everything else on an event
+//! (participants, alarms, links, priority, …) is *dropped*, which is only safe
+//! because saving goes back to the server as a PatchObject naming the mapped
+//! properties: a property we never mapped is a property we never overwrite. See
+//! [`MAPPED_PROPERTIES`], [`maps_locations`], [`maps_keywords`],
+//! [`maps_recurrence_rule`] and [`maps_recurrence_override`], which are that
+//! knowledge in machine-readable form.
 //!
 //! A `VCALENDAR` here therefore holds more than one `VEVENT` whenever an
 //! instance of a recurring event was edited on its own: the series first, then
@@ -109,7 +109,7 @@ const STATUSES: [(&str, &str); 3] = [
 /// `locations` is also the one property named *into* rather than replaced: a
 /// save patches `locations/<key>/name`, so the rest of the entry stays. See
 /// [`X_JMAP_KEY`].
-pub const MAPPED_PROPERTIES: [&str; 10] = [
+pub const MAPPED_PROPERTIES: [&str; 11] = [
     "title",
     "description",
     "start",
@@ -118,6 +118,7 @@ pub const MAPPED_PROPERTIES: [&str; 10] = [
     "showWithoutTime",
     "status",
     "locations",
+    "keywords",
     "recurrenceRules",
     "recurrenceOverrides",
 ];
@@ -201,6 +202,54 @@ fn place_name(location: &Value) -> Option<&str> {
         .get("name")?
         .as_str()
         .filter(|name| !name.is_empty())
+}
+
+/// Whether the tags an event carries survive the trip through iCalendar, and so
+/// whether a save may name `keywords`.
+///
+/// This is the first mapped property that is a *set* rather than a scalar or a
+/// map read in part, and it is the easy case: RFC 5545 §3.8.1.2's `CATEGORIES`
+/// is a list of TEXT values and an RFC 8984 §4.2.9 keyword is a bare string, so
+/// every tag fits on the line and the property goes back replaced whole — no
+/// patching into it, as `locations` needs.
+///
+/// What is refused is a tag [`drawn_tags`] leaves off, because the property being
+/// replaced whole is exactly what makes an undrawn tag a *deleted* tag:
+///
+/// - **A value that is not `true`.** RFC 8984 §1.4.3 has every value of a Set be
+///   `true`; drawing anything else would say the tag is set where the server said
+///   it is not.
+/// - **An empty tag.** An empty part of a value list reads back as nothing at
+///   all, so the tag would vanish between the drawing and the save.
+/// - **A tag holding a carriage return.** It is dropped on its way onto a content
+///   line — see `syntax::fold_into`, where that is a security property and not
+///   tidiness — so the tag would come back spelled differently and a save would
+///   rename it. A line feed is not this case: it has an escape and survives.
+///
+/// An event with no tags at all passes: there is nothing to lose, and a
+/// `CATEGORIES` the user just typed is a set to write.
+pub fn maps_keywords(keywords: &BTreeMap<String, Value>) -> bool {
+    keywords.iter().all(|(tag, set)| drawn_tag(tag, set))
+}
+
+/// Whether one entry of `keywords` goes on the `CATEGORIES` line. The single
+/// point [`maps_keywords`] and [`drawn_tags`] agree through, so a tag cannot be
+/// called covered and then left off.
+fn drawn_tag(tag: &str, set: &Value) -> bool {
+    set == &Value::Bool(true) && !tag.is_empty() && !tag.contains('\r')
+}
+
+/// The tags to write on the `CATEGORIES` line, in the order the set holds them —
+/// which is sorted, so a document is stable across renderings; the save path
+/// diffs against a re-rendering of what the server holds.
+fn drawn_tags(event: &CalendarEvent) -> Vec<&str> {
+    event
+        .keywords
+        .iter()
+        .flatten()
+        .filter(|(tag, set)| drawn_tag(tag, set))
+        .map(|(tag, _)| tag.as_str())
+        .collect()
 }
 
 /// Whether a recurrence rule survives the trip through iCalendar.
@@ -503,6 +552,14 @@ fn vevent_of(
         vevent = vevent.with(Property::new("LOCATION", name).with_param(X_JMAP_KEY, key));
     }
 
+    // The whole set, on one line. An event whose every tag is one this mapping
+    // cannot show gets no line at all rather than an empty one, which would state
+    // a tag that is the empty string. See [`maps_keywords`].
+    let tags = drawn_tags(event);
+    if !tags.is_empty() {
+        vevent = vevent.with(Property::list("CATEGORIES", tags));
+    }
+
     vevent
 }
 
@@ -552,10 +609,12 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         show_without_time: event.show_without_time,
         status: event.status.clone(),
         // Inherited, not patchable: RFC 8984 §4.3.4 has an instance hold every
-        // property its override does not restate, and an override may not name a
-        // place ([`OVERRIDE_PROPERTIES`]). Leaving it off would draw an
-        // occurrence of a meeting as happening nowhere.
+        // property its override does not restate, and an override may name
+        // neither a place nor a tag ([`OVERRIDE_PROPERTIES`]). Leaving them off
+        // would draw an occurrence of a meeting as happening nowhere and
+        // belonging to nothing.
         locations: event.locations.clone(),
+        keywords: event.keywords.clone(),
         ..CalendarEvent::default()
     };
 
@@ -800,6 +859,7 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
                 .map(|(jscalendar, _)| (*jscalendar).to_owned())
         }),
         locations: read_locations(vevent),
+        keywords: read_keywords(vevent),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
         recurrence_overrides: None,
         extra: Default::default(),
@@ -836,6 +896,32 @@ fn read_locations(vevent: &Component) -> Option<BTreeMap<String, Value>> {
         .filter(|key| names_map_entry(key))
         .unwrap_or(INVENTED_KEY);
     Some([(key.to_owned(), json!({"@type": "Location", "name": name}))].into())
+}
+
+/// The tags the component carries, as a JSCalendar `keywords` Set.
+///
+/// Every `CATEGORIES` property is read, not just the first: RFC 5545 §3.8.1.2
+/// admits the property more than once in a `VEVENT`, and each holds a `,`-
+/// separated list. A set is what both sides mean, so a tag named twice — across
+/// the lines or within one — is one member, and the map collapses it.
+///
+/// An empty value is dropped rather than carried as the empty tag: `CATEGORIES:`
+/// and `CATEGORIES:a,,b` state nothing between their separators, which is not the
+/// same as stating a tag whose name is nothing.
+///
+/// `None` rather than an empty map for a component with no tags, for the reason
+/// [`read_locations`] gives: the save path reads an edit off a difference from
+/// what was shown, and an empty set would claim the event is untagged where the
+/// component made no claim at all.
+fn read_keywords(vevent: &Component) -> Option<BTreeMap<String, Value>> {
+    let tags: BTreeMap<String, Value> = vevent
+        .all("CATEGORIES")
+        .into_iter()
+        .flat_map(Property::texts)
+        .filter(|tag| !tag.is_empty())
+        .map(|tag| (tag, Value::Bool(true)))
+        .collect();
+    (!tags.is_empty()).then_some(tags)
 }
 
 /// Whether a value is an RFC 8984 §1.4.4 `Id`: 1 to 255 octets of letters,
