@@ -43,8 +43,14 @@
 //! - **`start` is required by RFC 8984.** A component whose `DTSTART` the
 //!   mapping cannot read yields no start, and `"start": null` is not a legal
 //!   way to say so, so the server's start stands.
+//!
+//! And one property is checked on its way *out* rather than against the
+//! baseline: a `TZID` is an iCalendar identifier, which RFC 8984 §1.4.9 only
+//! sometimes admits as a time zone. See [`names_time_zone`] and [`diff`].
 
-use jmap_ical::{event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule};
+use jmap_ical::{
+    event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule, names_time_zone,
+};
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value};
 
@@ -65,10 +71,20 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     if edited.start.is_some() && edited.start != baseline.start {
         set(&mut patch, "start", edited.start.as_deref());
     }
+    // `timeZone` is the one property whose *new* value may be unsendable. A
+    // component states its zone with a `TZID`, which is an iCalendar identifier
+    // and not the RFC 8984 §1.4.9 name JSCalendar wants; where the document
+    // gave no way to translate it, the zone is left alone rather than sent as
+    // it came or cleared. It is the same "seen in part, so not written back"
+    // rule the recurrence properties follow, applied to one value.
+    if edited.time_zone.as_deref().is_none_or(names_time_zone)
+        && baseline.time_zone != edited.time_zone
+    {
+        set(&mut patch, "timeZone", edited.time_zone.as_deref());
+    }
     for (property, was, now) in [
         ("title", &baseline.title, &edited.title),
         ("description", &baseline.description, &edited.description),
-        ("timeZone", &baseline.time_zone, &edited.time_zone),
         ("duration", &baseline.duration, &edited.duration),
         ("status", &baseline.status, &edited.status),
     ] {

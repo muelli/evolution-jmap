@@ -26,6 +26,12 @@
 //! through [`stated_duration`], because the two formats spell an ISO 8601
 //! duration identically but do not admit the same set of them.
 //!
+//! A time zone crosses under two different kinds of name: iCalendar refers to
+//! one by a `TZID`, which is an identifier the document itself may define, and
+//! JSCalendar wants the zone's IANA name. [`names_time_zone`] says which is
+//! which and [`zone_names`] does the translating, off the `VTIMEZONE` the
+//! document is required to carry.
+//!
 //! An all-day event has no property of its own in iCalendar; it is a `DTSTART`
 //! written as a date rather than a date-time, which puts JSCalendar's
 //! `showWithoutTime` in the value type of three properties at once. See
@@ -54,6 +60,12 @@ const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
 
 /// The JSCalendar spelling of `Etc/UTC`, the one the client and the mock use.
 const UTC: &str = "Etc/UTC";
+
+/// libical's record, on the `VTIMEZONE` it builds, of which IANA zone that
+/// component describes. It is not standard, but it is universal in this
+/// neighbourhood: libical writes it for every builtin zone, and libical is
+/// what puts the components Evolution saves together in the first place.
+const X_LIC_LOCATION: &str = "X-LIC-LOCATION";
 
 /// The property that ties an edited instance to the series it belongs to: the
 /// start of the occurrence it stands in for (RFC 5545 §3.8.4.4), which is
@@ -497,16 +509,92 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
         .or_else(|| vevents.first())
         .ok_or(ICalError::NoEvent)?;
 
-    let mut event = read_vevent(series);
-    event.recurrence_overrides = read_overrides(series, &vevents, &event);
+    let zones = zone_names(&calendar);
+    let mut event = read_vevent(series, &zones);
+    event.recurrence_overrides = read_overrides(series, &vevents, &event, &zones);
     Ok(event)
+}
+
+/// Whether a value is a time zone JSCalendar can carry — an RFC 8984 §1.4.9
+/// `TimeZoneId`.
+///
+/// That type is a name in the IANA Time Zone Database, or a custom identifier
+/// beginning with a solidus **that the same object defines in its `timeZones`
+/// property**. This mapping does not carry `timeZones`, so the second form has
+/// nowhere to be defined and is refused: a dangling identifier is an event a
+/// server may reject outright, and rejecting a `CalendarEvent/set` costs the
+/// user every edit in it, not just the zone.
+///
+/// Which matters because a solidus-prefixed identifier is exactly what arrives.
+/// libical names its builtin zones `/freeassociation.sourceforge.net/<zone>`
+/// and Evolution's appointment editor sets the start with the zone object, so
+/// every zoned component a save hands back carries one — even one this crate
+/// wrote spelling the zone plainly. [`zone_names`] is how it gets translated.
+///
+/// What is checked is the *shape* of a name, not membership of the database:
+/// non-empty segments of letters, digits, `_`, `-` and `+` separated by `/`.
+/// That admits `Europe/Berlin`, `America/Argentina/Buenos_Aires`, `Etc/GMT+5`
+/// and the bare `UTC`, and refuses the solidus form (an empty first segment),
+/// a Windows zone name like `W. Europe Standard Time`, and anything carrying a
+/// character a content line could be broken with. Checking membership would
+/// mean shipping a zone database this crate has no other use for; refusing a
+/// zone the database does not have is the server's job, and it can do it
+/// without the whole save failing.
+pub fn names_time_zone(value: &str) -> bool {
+    value.split('/').all(|segment| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'+'))
+    })
+}
+
+/// The zone each `VTIMEZONE` in the document says it describes, by the `TZID`
+/// that refers to it.
+///
+/// Only components that answer the question are listed: a `TZID` that already
+/// [`names_time_zone`] needs no translating, and an `X-LIC-LOCATION` that names
+/// no zone either is no better than what it would replace.
+fn zone_names(calendar: &Component) -> BTreeMap<String, String> {
+    calendar
+        .children
+        .iter()
+        .filter(|child| child.name == "VTIMEZONE")
+        .filter_map(|vtimezone| {
+            let tzid = vtimezone.text("TZID")?;
+            let location = vtimezone.text(X_LIC_LOCATION)?;
+            (!names_time_zone(&tzid) && names_time_zone(&location)).then_some((tzid, location))
+        })
+        .collect()
+}
+
+/// The zone a `TZID` refers to, as a JSCalendar `TimeZoneId` where the document
+/// gives one.
+///
+/// A value that is already a name is taken at its word — the `VTIMEZONE` beside
+/// it is then a description of a zone we already know the name of, and letting a
+/// stray `X-LIC-LOCATION` overrule it could move the event to another continent.
+/// Otherwise the document's own `VTIMEZONE` is asked, which is where RFC 5545
+/// §3.6.5 says the zone a `TZID` refers to is defined.
+///
+/// A value neither route names is handed back **unchanged**, not dropped. The
+/// save path has to be able to tell a zone this mapping cannot name from no
+/// zone at all: the latter is a floating event, which is a real thing to save,
+/// and reading the former as it would leave the server's zone cleared by an
+/// edit that never touched it. Refusing to send it is that path's decision to
+/// make, and it needs the value to make it — see `jmap_cal_sync::patch`.
+fn zone_of(tzid: &str, zones: &BTreeMap<String, String>) -> String {
+    match names_time_zone(tzid) {
+        true => tzid.to_owned(),
+        false => zones.get(tzid).cloned().unwrap_or_else(|| tzid.to_owned()),
+    }
 }
 
 /// One `VEVENT` as an event, recurrence rules included and named instances not:
 /// those are the document's, not the component's.
-fn read_vevent(vevent: &Component) -> CalendarEvent {
+fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> CalendarEvent {
     let text = |name: &str| vevent.text(name).filter(|value| !value.is_empty());
-    let (start, time_zone, show_without_time) = read_start(vevent);
+    let (start, time_zone, show_without_time) = read_start(vevent, zones);
 
     let rules: Vec<RecurrenceRule> = vevent
         .all("RRULE")
@@ -553,7 +641,10 @@ fn read_vevent(vevent: &Component) -> CalendarEvent {
 /// A timed start yields `None` rather than `Some(false)`: the RFC 8984 default
 /// is false anyway, and the save path reads an edit off a difference from this,
 /// so answering `false` where the server said nothing would invent one.
-fn read_start(vevent: &Component) -> (Option<String>, Option<String>, Option<bool>) {
+fn read_start(
+    vevent: &Component,
+    zones: &BTreeMap<String, String>,
+) -> (Option<String>, Option<String>, Option<bool>) {
     let Some(property) = vevent.property("DTSTART") else {
         return (None, None, None);
     };
@@ -572,7 +663,7 @@ fn read_start(vevent: &Component) -> (Option<String>, Option<String>, Option<boo
         false => property
             .param("TZID")
             .filter(|zone| !zone.is_empty())
-            .map(str::to_owned),
+            .map(|zone| zone_of(zone, zones)),
     };
     (Some(start), zone, None)
 }
@@ -613,6 +704,7 @@ fn read_overrides(
     series: &Component,
     vevents: &[&Component],
     event: &CalendarEvent,
+    zones: &BTreeMap<String, String>,
 ) -> Option<BTreeMap<String, Value>> {
     let mut overrides: BTreeMap<String, Value> = BTreeMap::new();
     let values = |name: &str| series.all(name).into_iter().flat_map(Property::texts);
@@ -656,7 +748,7 @@ fn read_overrides(
         let Some(id) = to_local_date_time(&property.raw_value()) else {
             continue;
         };
-        let patch = instance_patch(event, &read_vevent(vevent), &id);
+        let patch = instance_patch(event, &read_vevent(vevent, zones), &id);
         overrides.insert(id, patch);
     }
 
