@@ -19,6 +19,16 @@
 //! protocol crate that reinterpreted values would be able to lose them — so
 //! this is the layer that gets to interpret one.
 
+/// The years a JMAP date can name, in either direction.
+///
+/// RFC 8620 §1.4 makes a `UTCDate` an RFC 3339 `date-time`, whose `date-fullyear`
+/// is four digits, and the `Date` a `sentAt` carries is the same production at an
+/// offset. So this is the grammar's own range — and, because it bounds the year
+/// before any arithmetic is done with it, it is also what keeps
+/// [`days_from_civil`] inside `i64`. There is no year zero: `0000` is four digits
+/// and not a year of the proleptic Gregorian calendar as RFC 3339 counts them.
+const YEARS: std::ops::RangeInclusive<i64> = 1..=9_999;
+
 /// Seconds since 1970-01-01T00:00:00Z, or `None` if `text` is not a date.
 ///
 /// `None` rather than an error on purpose. A message with an unreadable date is
@@ -32,7 +42,17 @@ pub(crate) fn epoch_seconds(text: &str) -> Option<i64> {
     let (year, month, day) = split3(date, '-')?;
     let (year, month, day): (i64, u32, u32) =
         (year.parse().ok()?, month.parse().ok()?, day.parse().ok()?);
-    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+    // The year is checked before it is used, not only for being a year: the
+    // server picks this text, `i64` parses nineteen digits of it, and
+    // `days_from_civil` multiplies the era by 146 097 and the result by 86 400 —
+    // so a year the grammar does not allow is also one the arithmetic below
+    // overflows on. [`YEARS`] is exactly the range [`civil_from_days`] will
+    // write back, which is RFC 3339 §5.6's four-digit year.
+    if !YEARS.contains(&year)
+        || !(1..=12).contains(&month)
+        || day < 1
+        || day > days_in_month(year, month)
+    {
         return None;
     }
 
@@ -121,13 +141,12 @@ fn civil_from_days(days: i64) -> Option<(i64, u32, u32)> {
     };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
 
-    // The grammar's whole range, and no year zero: 0000 is four digits and not
-    // a year of the proleptic Gregorian calendar as RFC 3339 counts them.
-    (1..=9_999).contains(&year).then_some((
-        year,
-        u32::try_from(month).ok()?,
-        u32::try_from(day).ok()?,
-    ))
+    // The grammar's whole range — [`YEARS`], which is also the range
+    // [`epoch_seconds`] admits, so that what this writes is exactly what that
+    // reads back.
+    YEARS
+        .contains(&year)
+        .then_some((year, u32::try_from(month).ok()?, u32::try_from(day).ok()?))
 }
 
 /// Splits `text` into exactly three fields on `separator`.
@@ -360,6 +379,31 @@ mod tests {
         ] {
             assert_eq!(epoch_seconds(text), None, "{text:?} is not a date");
         }
+    }
+
+    /// The year is a four-digit field, so the range this reads is the range
+    /// [`utc_date`] writes — and nothing outside it reaches the arithmetic.
+    ///
+    /// Which is the point: the server picks the text, `i64::from_str` accepts
+    /// nineteen digits of it, and `days_from_civil` multiplies what comes out by
+    /// 146 097 and then by 86 400. Both overflow long before the parse does, so
+    /// the bound is what keeps a date the grammar never allowed from being an
+    /// arithmetic overflow instead of a refusal. See
+    /// `docs/AUDIT-FFI-20260810.md`, F11.
+    #[test]
+    fn a_year_outside_the_four_digit_grammar_is_not_a_date() {
+        for text in [
+            "0000-01-01T00:00:00Z",
+            "10000-01-01T00:00:00Z",
+            "300000000000-01-01T00:00:00Z",
+            "30000000000000000-01-01T00:00:00Z",
+            "9223372036854775807-01-01T00:00:00Z",
+        ] {
+            assert_eq!(epoch_seconds(text), None, "{text:?} is not a date");
+        }
+        // And the two ends that are.
+        assert!(epoch_seconds("0001-01-01T00:00:00Z").is_some());
+        assert!(epoch_seconds("9999-12-31T23:59:59Z").is_some());
     }
 
     #[test]
