@@ -1,53 +1,70 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Main CI. The pure-Rust jobs (fmt/clippy/deny/test/repro) need no
-# Evolution headers — the workspace's default-members exclude the
-# example-module crate — so they run on the stock runner with cargo caching.
-# The full build (CMake + example module + --workspace) runs in the shared
-# CI image (see ci-image.yml), digest-pinned so GitHub and GitLab build in
-# a byte-identical environment. Bump the digest after image rebuilds.
+# CI, tuned to stay inside the private-repo Actions-minutes allowance
+# while the autonomous night shift pushes frequently:
+#
+#   * One consolidated `checks` job on GitHub-hosted runners (minutes are
+#     billed per job, rounded up per minute — five small jobs cost far
+#     more than one). This is the always-on signal; it runs even when the
+#     self-hosted VM is asleep.
+#   * The heavy jobs (`build-full`, `reproducible`) run on the self-hosted
+#     GCP runner, which costs ZERO GitHub minutes. The VM already carries
+#     the Evolution 3.52 headers, so no container pull is needed.
+#   * concurrency cancels superseded runs (a burst of night-shift commits
+#     only fully builds the newest), and path filters skip docs/log/infra
+#     -only commits (the agent's diary updates no longer trigger builds).
+#
+# Self-hosted note: the runner shares the VM with the night-shift agent.
+# That is fine for this solo private repo; if the repo ever takes
+# untrusted PRs, move the heavy jobs back to hosted or a separate VM
+# (a malicious workflow on a self-hosted runner can read the agent's
+# credentials).
 
 name: CI
 
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "infra/**"
+      - "LICENSES/**"
+      - "REUSE.toml"
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "infra/**"
+      - "LICENSES/**"
+      - "REUSE.toml"
+  workflow_dispatch:
+
+# Collapse bursts: a newer push to the same ref cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  # The build-full container is pulled from this repo's (private) ghcr
-  # package with the job token.
-  packages: read
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  fmt:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: cargo fmt --check
-        working-directory: rust
-
-  clippy:
+  # fmt + clippy + test + deny + reuse in one hosted job. Sequential, so
+  # the first failure stops the rest — the night shift fixes iteratively
+  # anyway, and one billed job beats five.
+  checks:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: lints
+          shared-key: checks
           workspaces: rust
-      - run: cargo clippy --all-targets --locked -- -D warnings
-        working-directory: rust
-
-  deny:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
@@ -57,50 +74,36 @@ jobs:
           path: ~/.cargo/advisory-db
           key: advisory-db-${{ github.run_id }}
           restore-keys: advisory-db-
-      - run: cargo deny check
+      - name: rustfmt
+        run: cargo fmt --check
+        working-directory: rust
+      - name: REUSE lint
+        run: pipx run reuse lint
+      - name: clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: rust
+      - name: tests
+        run: cargo test --locked
+        working-directory: rust
+      - name: cargo-deny (licenses, advisories, bans)
+        run: cargo deny check
         working-directory: rust
 
-  test:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test
-          workspaces: rust
-      - run: cargo test --locked
-        working-directory: rust
-
-  # Full build including the Evolution example module and the CMake glue.
+  # Full build (Evolution example module + CMake glue) on the self-hosted
+  # runner — the VM has the EDS 3.52 dev headers, so it builds natively
+  # with no container pull. Zero GitHub minutes.
   build-full:
-    runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/muelli/evolution-jmap/ci@sha256:e479fc1333c4b38ccf1afb47427d8e7e2d1fe307822347d743bc0a04fb5c126b
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    runs-on: [self-hosted, gcp]
     steps:
       - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: build
-          workspaces: rust
-      - name: Disk before build
-        run: df -h / | tail -1
-      # The checkout is owned by a different uid than the container user;
-      # without this, git inside CMake refuses to report the commit
-      # timestamp that seeds SOURCE_DATE_EPOCH.
+      - name: Put the runner user's cargo on PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Trust the workspace checkout
         run: git config --global --add safe.directory "$(pwd)"
-      # One build only: CMake's rust-build ALL target compiles the whole
-      # workspace (with reproducibility flags) into build/cargo-target.
-      # Building it a second time via a bare cargo invocation doubled the
-      # disk footprint and starved bindgen/libclang of I/O.
       - name: Configure and build with CMake (runs cargo tests via CTest)
         run: |
           cmake -S . -B build -G Ninja
           cmake --build build
-          df -h / | tail -1
           ctest --test-dir build --output-on-failure
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -112,10 +115,9 @@ jobs:
           if-no-files-found: error
 
   # Two clean builds in different absolute paths must produce bit-identical
-  # binaries. Deliberately cacheless: caches could mask (or cause)
-  # irreproducibility.
+  # binaries. Cacheless by design; on the self-hosted runner, so free.
   reproducible:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, gcp]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -123,6 +125,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: build-b/src
+      - name: Put the runner user's cargo on PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Build twice in distinct paths
         run: |
           export SOURCE_DATE_EPOCH=$(git -C build-a/src log -1 --format=%ct)
@@ -141,14 +145,10 @@ jobs:
           a=$(sha256sum build-a/src/rust/target/release/jmap-mockd | cut -d' ' -f1)
           b=$(sha256sum build-b/src/rust/target/release/jmap-mockd | cut -d' ' -f1)
           test "$a" = "$b"
-
-  reuse:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: fsfe/reuse-action@v5
+      - name: Clean up the extra checkouts (self-hosted disk is persistent)
+        if: always()
+        run: rm -rf build-a build-b
 
   # Planned (next round): a workflow_dispatch-gated `integration` job that
-  # starts a digest-pinned Stalwart container (full JMAP mail + contacts +
-  # calendars support) and runs the same test suite against it via
+  # runs the suite against a digest-pinned Stalwart container via
   # `cargo test --features live-server`.
