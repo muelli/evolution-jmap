@@ -19,6 +19,13 @@
 //! tested, in plain Rust over an `ESource`, in [`jmap-config`]; this crate is
 //! how they will be reached.
 //!
+//! One accessor of the page that class extends comes with it —
+//! `e_mail_config_service_page_get_email_address`, the address typed on the
+//! assistant's identity page, which is the entire input to the account a JMAP
+//! setup starts from. The page itself is an opaque handle (`EVO_HANDLES`), like
+//! the GTK classes below and for the same reason: it is a widget nothing here
+//! subclasses, allocates or reads a field of.
+//!
 //! Every GLib, EDS and Camel type these headers mention is re-exported from
 //! [`eds-sys`] rather than regenerated, so an `ESource *` on this side of the
 //! ABI is the same Rust type as an `ESource *` on that one. `build.rs` says
