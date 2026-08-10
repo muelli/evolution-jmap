@@ -52,9 +52,23 @@
 //! `insert_widgets` and `setup_defaults`, which are the two that need the
 //! `EMailConfigServicePage` this extension extends — for the entries themselves,
 //! and for the email address the user typed on the page before, which is
-//! [`defaults::from_identity`](crate::defaults::from_identity)'s one input. Reaching
-//! either means binding more of Evolution's headers than [`evo-sys`] currently
-//! generates, GTK among them.
+//! [`defaults::from_identity`](crate::defaults::from_identity)'s one input.
+//!
+//! Half of what that took is now there: [`evo-sys`] generates the GTK calls a
+//! page of labels and entries is built out of (its `ALLOWED_GTK_FUNCTIONS`), and
+//! `e_mail_config_service_backend_get_page` was already bound. Still missing is
+//! the page's own accessor — `e_mail_config_service_page_get_email_address`,
+//! from a header `evo-sys` does not read yet — which is where
+//! `setup_defaults`'s one input comes from, and it is a header away rather than
+//! an ecosystem away.
+//!
+//! The reason neither vfunc is written yet is not the bindings, though: it is
+//! that a widget cannot be built on the machine this is developed on. GTK 3
+//! refuses to construct one without a display connection, so an
+//! `insert_widgets` body would be code no test here runs — which is the
+//! opposite of the order the rest of this crate was built in, and the roadmap's
+//! rule about this milestone. It is work for a session that can drive a real
+//! Evolution, or for M9's Xvfb tier.
 //!
 //! The three that are installed are exactly the three whose answer is a function
 //! of an `ESource` — which is why they could be written, and tested, first.

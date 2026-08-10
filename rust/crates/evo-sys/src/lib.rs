@@ -24,6 +24,24 @@
 //! ABI is the same Rust type as an `ESource *` on that one. `build.rs` says
 //! what that blocklist is and why GTK is the exception.
 //!
+//! ## The GTK surface
+//!
+//! One vfunc of that class — `insert_widgets` — is handed a `GtkBox` and is
+//! expected to put widgets in it, so a short list of GTK calls is generated
+//! here too: a grid, a mnemonic label and an entry, and the handful of calls
+//! that arrange them. `build.rs`'s `ALLOWED_GTK_FUNCTIONS` is that list, named
+//! one function at a time rather than by prefix, and it is meant to grow a line
+//! at a time with the code that calls it.
+//!
+//! GTK's *types* are still not generated: each class is an opaque zero-sized
+//! handle (`GTK_HANDLES`), distinct per class so that the pointer casts GTK's C
+//! API asks for have to be written down, and carrying no layout for anything
+//! here to get wrong. What holds that together is `tests/gtk.rs`, which asks the
+//! running GTK whether the classes are what this crate calls them and whether
+//! they are related the way those casts assume. What no test here can do is
+//! *use* them: GTK 3 will not construct a widget without a display connection,
+//! so the page these calls build is only exercisable under M9's Xvfb tier.
+//!
 //! Like [`eds-sys`], this crate is kept out of the workspace's
 //! `default-members`: it needs Evolution's development headers, and `cargo
 //! test` on a machine without them must still work. CMake runs its tests via
