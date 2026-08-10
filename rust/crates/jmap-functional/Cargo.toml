@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "jmap-functional"
+description = "Headless functional tests: real EDS daemons against the mock JMAP server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+evolution-jmap-mock = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-proto = { workspace = true }

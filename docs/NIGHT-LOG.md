@@ -12540,3 +12540,122 @@ it. (4) Unchanged maintainer decisions: gettext in the CI image, and whether
 `GETTEXT_PACKAGE` should stop saying `example-module`. Unchanged: M7 still
 **needs human verification in real Evolution**, the four manual-test recipes are
 unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-twenty-fifth session)
+
+**M9 layer 1 starts, and the first thing it did was find a bug that made the
+address book read-only.** The previous session ranked this third, behind a
+test tag only a human can push and a CI job that compares two `.deb`s; it is
+first here because it is the one item on that list this VM can actually
+execute, and because the roadmap is explicit that layer 1 is the priority of
+M9. The increment is the harness, one test through it, and the defect it
+found.
+
+**The defect: `e_book_meta_backend_set_connected_writable` is not the call.**
+`connect_sync` ended with it, with a comment saying it is "how
+`EBookMetaBackend` decides whether a connected backend accepts writes". It
+reads like the right call and it is not. The moment the vfunc returns TRUE,
+EDS runs `ebmb_update_connection_values`, whose last line is
+
+    e_book_meta_backend_set_connected_writable (meta_backend,
+        e_book_backend_get_writable (E_BOOK_BACKEND (meta_backend)));
+
+— it *overwrites* connected-writable with the backend's writable flag, which
+nothing had set, so FALSE. Our setter was undone by the very call that was
+about to read it. The vfunc's own documentation says so plainly ("The
+descendant should also call `e_book_backend_set_writable()` after successful
+connect"); the fix is that one call, and it also sets the flag EDS persists
+for opening the book offline. Read against
+`evolution-data-server-3.52.3/src/addressbook/libedata-book/e-book-meta-backend.c`
+lines 303–346 and 3560–3590, not guessed.
+
+The user-visible shape of this: an address book that connects, syncs, and is
+greyed out in Evolution, where every write comes back as "Cannot add contact:
+Permission denied". Nothing in 491 unit tests could see it — they call the
+vfunc bodies, and the vfunc body was doing something. Only EDS's opinion of
+what it did was wrong, and until tonight nothing asked EDS for its opinion.
+**`jmap-backend-cal` has the identical bug** (`e-cal-meta-backend.c:358` is
+line-for-line the same), left alone deliberately: fixing it without the
+calendar half of the harness would be an unverified fix, and that is the next
+session's first item, red test included.
+
+**The harness.** `rust/crates/jmap-functional` builds a throwaway EDS
+installation per test — scratch XDG directories, a `.source` keyfile carrying
+the mock's ephemeral port, and a module directory holding the one backend
+under test named by `EDS_ADDRESS_BOOK_MODULES` — then runs a client program
+on a private bus from `dbus-run-session`. Private because the alternative is
+reaching the developer's own already-running factory, started with the wrong
+environment; scratch cache because `EBookMetaBackend` connects during the open
+only when it has never connected before, so a reused cache would race the
+connect against a background refresh. Nothing is installed, nothing needs
+`sudo`, and every daemon dies with the bus.
+
+The client is C (`tests/functional/book-client.c`). That surface — libebook,
+the *client* API — is one no crate here binds, `eds-sys` being what the
+backends implement; binding a second FFI surface only to call it from a test
+would put a layer of our own between EDS and the thing under test. It prints
+`key=value` and holds no opinion; every judgement is in
+`tests/address-book.rs`, which checks both ends: what EDS handed the client,
+and what the mock was asked for.
+
+**Gated behind `-DENABLE_FUNCTIONAL_TESTS=ON`, and loud when on.** The CI
+image has the EDS headers and neither daemon. A test registered
+unconditionally would fail every CI run — or, the tempting fix and the worse
+one, be written to skip itself when the runtime is missing and report green
+on a machine where it never ran. With the option off the tests do not exist;
+with it on, a missing `evolution-source-registry` or `dbus-run-session` is a
+configure error. There is no arrangement in which they quietly pass. The cost
+is stated in `docs/functional-tests.md`: **CI does not run these today**, so
+a regression in this layer stays green until someone runs them here. Closing
+that needs `evolution-data-server` and `dbus-daemon` in `Containerfile.ci`
+and a `workflow_dispatch` job — a maintainer decision, since it grows the
+image every job pulls. (This VM did not have the runtime either; `apt install
+evolution-data-server` was the only environment change made.)
+
+**Red first, and three mutations to prove the green means something.**
+The first run failed on `readonly=1` with the client's whole output in the
+message. Then: revert the fix → red on `readonly`, 0.22 s; stage the calendar
+module instead of the book's → red on "the client failed before it opened the
+book", with EDS's "Backend factory ... cannot be found" in the report; seed
+the mock's address book as non-default so the backend cannot find the
+account's default → red again. Three mutations, three distinct messages, so
+the assertion is not a tautology over a fixture the test also wrote.
+
+**An open question, deliberately not chased tonight.** `ESource:connection-
+status` never reaches `CONNECTED` on the client side — it stops at
+`CONNECTING` — so `e_book_client_connect_sync` with a wait burns the entire
+timeout (30 s, measured) before returning a client that then works fine. EDS
+sets the status itself in `ebmb_ensure_connected_sync` right after our vfunc
+returns, so the backend is not obviously at fault, and I could not explain the
+propagation failure inside the time this increment had. It is not
+hypothetical: Evolution opens books with a wait, so if this is ours it is a
+30-second stall on opening a JMAP address book. The test sidesteps it with
+EDS's documented "do not wait" value and one explicit
+`e_client_retrieve_properties_sync`, which is better than waiting anyway —
+reading `e_client_is_readonly` off the client's cache in a program with no
+main loop was a race that could have hidden the very bug this was written for.
+**Next session should chase this before adding the calendar test.**
+
+Verified locally: `ctest` 11/11 with the option on and 10/10 with it off (CI's
+path — the default is unchanged and the new test does not exist there),
+`cargo fmt --check`, `cargo test --locked` (491, unchanged — `jmap-functional`
+is out of `default-members`, like the header-needing crates but for a
+different reason: it needs the EDS *runtime* and paths only CTest knows),
+`cargo clippy --all-targets --locked -- -D warnings` clean, and the same for
+`-p jmap-functional -p jmap-backend-book`. `reuse lint` and `cargo deny` not
+run (neither binary is on this VM); all five new files carry SPDX
+`GPL-3.0-or-later` headers and `docs/functional-tests.md` is covered by
+`REUSE.toml`'s `docs/**` annotation.
+
+No milestone tag. M9 layer 1 is one backend of three and has no CI job; M8 is
+still one human test tag away.
+
+Next, in order: (1) the `connection-status` question above. (2) The calendar's
+identical writable bug, with the calendar half of the harness as its red test.
+(3) The mail provider through Camel, which is layer 1's third leg and a
+different host process again. (4) The M8 test tag, by hand. (5) Unchanged
+maintainer decisions: `evolution-data-server` + `dbus-daemon` in the CI image
+(now with a concrete reason), gettext in the CI image, and whether
+`GETTEXT_PACKAGE` should stop saying `example-module`. Unchanged: M7 still
+**needs human verification in real Evolution**, the manual-test recipes are
+unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
