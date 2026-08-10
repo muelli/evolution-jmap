@@ -11786,3 +11786,137 @@ biting with the first label it adds (`bindtextdomain` in the module's init, and 
 `po/POTFILES.in` that has this crate in it). The other still-open items are
 unchanged: the four manual-test recipes are unlinked from the README, and
 `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-eighteenth session)
+
+**The standing directive on translatable strings, from the bottom up: a gettext
+domain that is bound before anything looks a string up in it.** The directive
+has been open since 2026-08-09 and says a string shipped unmarked is a bug to be
+filed; nothing was marked yet because there was nowhere for a marked string to
+be looked *up*. This session put that in.
+
+**Two commits, because the first was already written.** The working tree at the
+start of this session held an uncommitted, finished `i18n` module in
+`jmap-backend-core` — `build.rs`, `src/i18n.rs`, `tests/i18n.rs`,
+`tests/catalogue.rs`, and the `Cargo.toml`/`lib.rs` edits — evidently the last
+session's work, cut off before it could commit. It was verified here rather than
+taken on trust: `cargo fmt --check`, `clippy`, and the suite are clean, and
+`tests/catalogue.rs` reported `catalogue lookup exercised under locale
+en_US.UTF-8`, i.e. it took the branch that actually compiles a `.mo`, files it
+at `<dir>/<lang>/LC_MESSAGES/evolution-jmap.mo` and reads a German string back
+through the binding, not the degenerate branch it falls back to on a machine
+with no non-C locale. Committed as it stood.
+
+**The increment: `camel_provider_module_init` binds the domain.** The provider
+carries a `translation_domain` and Camel calls `dgettext` with it when it
+displays the provider's name and description — the JMAP entry in the account
+assistant's list of account types. That lookup happens in Evolution's or
+`evolution-source-registry`'s process, neither of which has heard of this
+project, and it is Camel's call with no hook in it. So the binding has to be
+made by the one piece of our code guaranteed to have run by then, which is the
+entry point Camel dlopened the module for. `provider.rs` now names the domain
+through `i18n::DOMAIN` instead of repeating the literal: the binding is only
+worth making for the strings that are looked up in it, and nothing but the new
+test connects the two — Camel reads the provider field, glibc holds the binding.
+
+**`i18n::binding`, and why the tests start from a wrong directory.** `bind` and
+`bind_to` answer with the binding they just made, which is no use to a test that
+wants to know whether *someone else* bound it — asking by binding would make the
+answer yes either way. `bindtextdomain` with a NULL directory is the read-only
+form. Both new tests (`jmap-backend-core/tests/binding.rs`,
+`jmap-mail/tests/textdomain.rs`) first bind the domain to
+`/nonexistent/jmap-decoy-locale`. Without the decoy neither would be worth
+running: on an uninstalled build `LOCALE_DIR` *is* gettext's compiled-in
+`/usr/share/locale`, so a process that had never bound anything reports it too
+and the test would pass against a module that did nothing. Each is alone in its
+file because the binding, and `bind`'s `OnceLock`, are process-global — a
+sibling test reaching the entry point first would spend the `OnceLock` and leave
+the decoy in place. Red first in both cases; the jmap-mail one failed with
+`left: "/nonexistent/jmap-decoy-locale"`, which is the failure the decoy exists
+to produce.
+
+**CMake now passes the directory `build.rs` was written to receive.** Until this
+session nothing set `EVOLUTION_JMAP_LOCALEDIR`, so the whole "the directory is a
+build-time input" argument in `build.rs` was aspirational. `CARGO_ENV` in
+`cmake/Rust.cmake` now carries `EVOLUTION_JMAP_LOCALEDIR=${LANGUAGE_SUPPORT_DIRECTORY}`
+(`${CMAKE_INSTALL_PREFIX}/share/locale`, already defined at the top level).
+Checked, not assumed: configuring with `-DCMAKE_INSTALL_PREFIX=/opt/staged`
+puts `EVOLUTION_JMAP_LOCALEDIR=/opt/staged/share/locale` into
+`CMakeFiles/rust-build.dir/build.make`, and building the crate with that
+variable set puts the string in the rlib (`strings | grep -c` → 2) while
+building without it puts it there zero times — so `rerun-if-env-changed` tracks
+it in both directions. The test invocations deliberately do *not* get it: a test
+binary is installed nowhere, and the fallback is the same `/usr/share/locale`
+gettext would have used anyway.
+
+**Blocker found, not caused, not fixed: `ctest`'s `rust-test-eds` cannot link.**
+`cmake/Rust.cmake` runs that test with `CARGO_INCREMENTAL=0`, and under that
+setting `jmap-config`'s test binaries fail to link:
+
+    rust-lld: error: duplicate symbol: e_module_load
+      >>> crates/jmap-config/src/module.rs:60          in libjmap_config.rlib
+      >>> crates/jmap-backend-collection/src/module.rs:45 in libjmap_backend_collection.rlib
+
+`jmap-config` dev-depends on `jmap-backend-collection`, both build `rlib` beside
+`cdylib` so the tests can call the entry points, and both must export the C
+symbol `e_module_load` because that is the name `EModule` resolves. With
+incremental codegen on (the default, and what a plain `cargo test` uses) the
+symbol lands in a codegen unit nothing pulls out of the archive and the link
+succeeds; with `-Ccodegen-units=16` it shares an object with something the test
+does reference, and the collision is real. Reproduce with:
+
+    CARGO_INCREMENTAL=0 cargo test --locked -p jmap-config
+
+Verified pre-existing rather than introduced here: the same command fails
+identically in a worktree at `4184350`, this session's base, ten `duplicate
+symbol` lines. It dates from `91372bc`, which gave `jmap-config` its
+`e_module_load` while the crate already dev-depended on the collection backend.
+Not fixed this session — it is a second item, and the roadmap says not to start
+one. It is also not obviously a one-liner: the candidate fixes (drop the
+dev-dependency and get whatever the tests want from it another way; put the C
+entry points behind `#[cfg(not(test))]` and lose the "rlib and cdylib cannot
+drift" property the two crates document; `--allow-multiple-definition`) trade
+against each other and want a decision rather than a reflex.
+
+**Housekeeping: 34 GB of stale `target/` sat on a 58 GB disk** and the first full
+run of this session died on `No space left on device` mid-link, which is worth
+recording because the resulting `rustc-LLVM ERROR`/`Bus error` output looks
+nothing like a full disk. `target/debug` and `target/doc` were removed and
+rebuilt from scratch; 31 GB free afterwards. It was during that cold rebuild
+that the duplicate-symbol failure surfaced, which is presumably why no earlier
+session saw it — a warm incremental tree hides it.
+
+Not verified locally, as in every session: `reuse lint` and `cargo deny`
+(neither binary is on this VM); both new test files carry an SPDX
+`GPL-3.0-or-later` header, and `cmake/Rust.cmake` already had one.
+`cargo fmt --check`, `cargo test --locked` (491 on the default members,
+unchanged) and `cargo clippy --all-targets --locked -- -D warnings` are clean,
+as are `clippy`/`test` over the EDS crates — 880 tests, was 873: four from
+`tests/i18n.rs`, one from `tests/catalogue.rs`, one from the new
+`jmap-backend-core/tests/binding.rs`, one from the new
+`jmap-mail/tests/textdomain.rs`. The one ignored test is the pre-existing
+`ignore` doctest in `jmap-backend-core`'s `instance::Slot`. Pre-existing and
+untouched: `example-module` does not build on this VM, and `jmap-mail`'s rustdoc
+carries 25 `rustdoc::private_intra_doc_links`.
+
+No milestone tag. The translatable-strings directive is started, not carried
+out: one domain is bound from one of five module entry points, and no string
+anywhere is marked yet.
+
+Next, in the order they would be taken: (1) the `e_module_load` collision above,
+because it is the only thing here that makes a CI check red rather than merely
+incomplete. (2) The same `bind()` call in the other four entry points —
+`jmap-backend-book`, `-cal`, `-collection`, `jmap-config` — each of which needs
+a `GTypeModule` stand-in in its test, the pattern `jmap-config/tests/module.rs`
+and `jmap-backend-cal/tests/factory.rs` already have. (3) `po/` with
+`POTFILES.in` and `LINGUAS`, plus the lint the directive asks for, and an install
+rule putting a compiled `.mo` under `LANGUAGE_SUPPORT_DIRECTORY` — nothing
+installs a catalogue yet, so every lookup still falls back to English by design.
+Note while there: the top-level `GETTEXT_PACKAGE` is still the skeleton's
+`example-module`, while our domain is `evolution-jmap`; the C example module and
+the Rust modules do not share a catalogue and probably should not, but it should
+be a decision rather than an oversight. Unchanged from previous sessions: M7
+still **needs human verification in real Evolution** (`insert_widgets` remains
+unwritten, so an account arrives on the server settings page filled in and
+cannot be corrected there), the four manual-test recipes are unlinked from the
+README, and `jmap-mail`'s rustdoc is dirty.
