@@ -13681,3 +13681,79 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last nine sessions asked for is still unwritten; the manual-test
 recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-eighth session)
+
+The gap the last session named: nothing in this tree ever asked EDS to delete
+an occurrence. The `EXDATE` the calendar functional test already covers is
+written into the component *before* it is created, so it holds the mapping to
+account and says nothing about Evolution — "Delete this occurrence" is
+`e_cal_client_remove_object_sync` with a `RECURRENCE-ID` and
+`E_CAL_OBJ_MOD_THIS`, and what `ECalMetaBackend` makes of that is the step
+under test. So `tests/functional/cal-client.c` now removes the fourth
+occurrence of the weekly series that way, and `calendar.rs` holds both ends to
+it.
+
+**What EDS does with it, now written down.** The removal never reaches the
+backend's removal vfunc at all: `ECalMetaBackend` answers a `MOD_THIS` removal
+by adding an `EXDATE` to the master and *saving* it, so from the backend's side
+"delete this occurrence" and "edit this occurrence" are the same call with
+different components. That is why the created-with-an-`EXDATE` case could not
+stand in for this one — it exercises the same mapping but not EDS's decision to
+route a removal through the save path, and a backend that got the routing wrong
+would fail only here.
+
+**Green on the first run, so both assertions were checked by mutation.** No
+production code changed; this increment is coverage, and coverage that passes
+immediately has to earn its place. Disabling the removal call in the client
+fails `recurring-exdates` with `["20260129T130000Z"]` against the expected
+pair; with that assertion then relaxed as well, the server-side one fails on
+its own, naming the two overrides the mock holds against the three it should.
+Both layers are live and neither is standing in for the other.
+
+**Two assertions rather than one, for the reason the edited occurrence has
+two.** The client-side one reads the master back out of EDS's cache and reports
+every `EXDATE` on it, because `ECalMetaBackend` diffs the *next* save against
+what it cached: an exclusion that reached the server but not the cache would be
+undone by the following write, whatever the mock holds at this instant. The
+server-side one grew from two overrides to three, asserted as one map for the
+reason already recorded — an override written for one exception that dropped
+another is a cancellation undone, and three separate lookups would not see it.
+The removal is done *after* the edit deliberately, so the series already
+carries an exception of each kind when it happens; a save that rebuilt
+`recurrenceOverrides` from scratch would flatten exactly that state.
+
+`exdate_values()` asks each property for its value as text rather than as a
+time, which folds the two shapes libical may hold a list in — one property
+carrying `a,b`, or two properties carrying one each — into the same string, so
+what the client reports depends on which instants are excluded and not on how
+they were spelled. The Rust side sorts before comparing: the order libical
+hands two exclusions back is not what this test is about.
+
+Verified locally: `cargo test --locked` 541 (unchanged — this increment's
+coverage is a functional test, not a Rust unit one), the EDS-header crates
+green via the `rust-test-eds` set, `ctest` 14/14 including all four functional
+legs, `cargo fmt --check`, and `cargo clippy --all-targets --locked -- -D
+warnings` clean for the default set and for the EDS set plus `jmap-functional`.
+`reuse lint` and `cargo deny` not run (neither is on this VM); no files were
+added, so no new SPDX headers were needed, and no dependency changed.
+
+Next in this area: `E_CAL_OBJ_MOD_THISANDFUTURE` is the third thing that menu
+offers and is still untouched at every level — the mapping skips a
+`RANGE=THISANDFUTURE` `RECURRENCE-ID` on read (deliberately, logged three
+sessions ago) and nothing says what EDS hands the backend when a user picks it,
+which is worth finding out before deciding whether skipping is still the right
+answer. Then an `RDATE` of `VALUE=PERIOD` is read as its start and written back
+as a plain date-time; a per-instance `timeZone` has no spelling; and `DTEND` is
+still the only way Evolution states a length while `DURATION` is the only way we
+write one.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last ten sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
