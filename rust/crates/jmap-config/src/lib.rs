@@ -57,9 +57,10 @@
 //! - [`backend`] is the GObject the four above are reached through: the
 //!   `EMailConfigServiceBackend` subclass Evolution's *Receiving Email* page
 //!   instantiates for the JMAP provider. It carries the name the page finds
-//!   this backend by and the account a new one starts as, and nothing else —
-//!   each further vfunc lands there as the decision behind it becomes
-//!   testable, which is the same order the four modules above were written in.
+//!   this backend by, the account a new one starts as, and whether the one on
+//!   screen may be committed — each further vfunc lands there as the decision
+//!   behind it becomes testable, which is the same order the four modules above
+//!   were written in.
 //!
 //! ## Why an rlib with no module in it yet
 //!
@@ -93,11 +94,12 @@
 //!
 //! **The vfuncs that need more than an `ESource`**: `insert_widgets` and
 //! `setup_defaults` need the `EMailConfigServicePage` this extension extends,
-//! and so are still out of reach here. `check_complete` and `commit_changes`
-//! are not: what they needed was the account read back *out* of the collection
-//! source the widgets have been editing, and [`account::read`] is that. What is
-//! left of them is the vfunc plumbing, which is the part no test on this
-//! machine covers. [`backend`] says so slot by slot.
+//! and so are still out of reach here. `check_complete` was not, and is now
+//! installed — it is [`account::read`] and [`complete::check`] over the
+//! collection source, and what a test here can drive is that composition rather
+//! than the vfunc Evolution dispatches. `commit_changes` is the same shape and
+//! is next. [`backend`] says so slot by slot, including what it means for the
+//! dialog that a setup can now refuse an account it has no widget to fix.
 //!
 //! Like the backends, this crate needs the installed EDS headers and so stays
 //! out of the workspace's `default-members`; CMake runs its tests via the

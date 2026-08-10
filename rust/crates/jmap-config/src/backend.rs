@@ -28,6 +28,10 @@
 //!   appears in the account type list.
 //! - **`new_collection`** — see `new_collection` below. Evolution's own answers
 //!   NULL, which is right for POP3 and wrong for anything that fans out.
+//! - **`check_complete`** — see `check_complete` below. Evolution's own is
+//!   `return TRUE` (read off the installed library, not assumed), which is an
+//!   assistant whose *Next* is sensitive over an account with no address and no
+//!   server.
 //! - **`get_selectable`** is left alone on purpose. Its default answers "yes,
 //!   unless this provider is both a store and a transport, in which case only
 //!   on the receiving page" — and the JMAP provider *is* both
@@ -41,22 +45,32 @@
 //!
 //! ## What is not here yet
 //!
-//! `insert_widgets`, `setup_defaults`, `check_complete` and `commit_changes`.
+//! `insert_widgets`, `setup_defaults` and `commit_changes`.
+//!
 //! The first two need the `EMailConfigServicePage` this extension extends —
 //! for the entries themselves, and for the email address the user typed on the
 //! page before, which is [`defaults::from_identity`](crate::defaults::from_identity)'s
 //! one input — and reaching either means binding more of Evolution's headers
 //! than [`evo-sys`] currently generates, GTK among them.
 //!
-//! The second two no longer wait on a decision: what they need out of the
-//! collection source the widgets have been editing is
-//! [`account::read`](crate::account::read), which exists and is tested, and
-//! what `check_complete` has to decide about the account it answers is
-//! [`complete::check`](crate::complete::check). What is left for those two
-//! slots is the vfunc plumbing itself — overriding a class slot, and
-//! `commit_changes` also writing the three mail sources
-//! ([`crate::mail`]) it is handed. All four are the next increments, and none
-//! of them is claimed here.
+//! `commit_changes` does not: what it needs out of the collection source is
+//! [`account::read`](crate::account::read), and what it then writes is
+//! [`crate::mail`]'s three sources. What is left of it is the vfunc plumbing,
+//! and it is the next increment.
+//!
+//! ## The state this leaves the dialog in, said plainly
+//!
+//! `check_complete` now refuses an account with no address, and nothing yet
+//! *fills in* an address: `setup_defaults` would put the one from the identity
+//! page there and `insert_widgets` would give the user somewhere to type it, and
+//! neither exists. So a JMAP account in the assistant today would have its
+//! *Next* greyed out with no way to un-grey it.
+//!
+//! That is the honest state and not a regression — no module loads this class,
+//! so nothing reaches the dialog at all — and it is the right order to build in:
+//! the alternative is the inherited `return TRUE`, which is an assistant that
+//! cheerfully commits an account with no address and no server, failing later in
+//! another process. The three slots above are what finish it.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
@@ -67,14 +81,15 @@ use std::ptr;
 use eds_sys::{ESource, e_source_new};
 use evo_sys::{
     EMailConfigServiceBackend, EMailConfigServiceBackendClass,
-    e_mail_config_service_backend_get_type,
+    e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_type,
 };
-use glib_sys::{GError, GType, g_error_free};
+use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
 
-use crate::account::apply;
+use crate::account::{apply, read};
+use crate::complete::check;
 use crate::defaults::from_identity;
 use crate::mail::MAIL_BACKEND_NAME;
 
@@ -141,6 +156,7 @@ unsafe impl ObjectSubclass for JmapConfigServiceBackend {
         // never frees this.
         class.backend_name = MAIL_BACKEND_NAME.as_ptr();
         class.new_collection = Some(new_collection);
+        class.check_complete = Some(check_complete);
     }
 }
 
@@ -215,6 +231,89 @@ unsafe extern "C" fn new_collection(backend: *mut EMailConfigServiceBackend) -> 
         unsafe { apply(source, &from_identity("")) };
         source
     })
+}
+
+/// What Evolution asks before it lets the assistant move on, and again on every
+/// keystroke: is this account finished?
+///
+/// The answer decides whether *Next* (or *Apply*, on the account editor) is
+/// sensitive. It is asked often and it is asked while the user is still typing,
+/// so it must be cheap and it must never reach the network —
+/// [`complete`](crate::complete) says the same of the decision it makes.
+///
+/// ## Which source it is a question about
+///
+/// The *collection*, not the mail source: for a groupware provider the account
+/// is the collection [`new_collection`] answered, and the three mail sources are
+/// written from it at commit time ([`crate::mail`]). So this reads the account
+/// the collection currently says, which is the account a commit would write.
+///
+/// evolution-ews asks its `CamelEwsSettings` instead, because that is what its
+/// entries are bound to. Both are defensible and this crate has picked the
+/// collection throughout: it is what [`apply`](crate::account::apply) writes,
+/// what [`read`](crate::account::read) reads, and the one description of an
+/// account that the collection backend then reads back in another process.
+/// `insert_widgets` will have to bind the entries to that same source, and the
+/// note is here because a widget bound to anything else would leave this vfunc
+/// answering questions about a source nobody was editing.
+///
+/// ## Failure
+///
+/// FALSE — the assistant stays where it is, which is the safe direction: a
+/// `check_complete` that answered TRUE on a panic would let a half-read account
+/// be committed.
+unsafe extern "C" fn check_complete(backend: *mut EMailConfigServiceBackend) -> gboolean {
+    guard("check_complete", GFALSE, || {
+        // SAFETY: a live backend of this class, which is what Evolution
+        // dispatches through this slot. The collection comes back
+        // `(transfer none)` — the backend's own reference, which outlives this
+        // call — and is only read from.
+        let collection = unsafe { e_mail_config_service_backend_get_collection(backend) };
+        // SAFETY: NULL or the backend's live collection source, which is
+        // exactly what `is_complete` documents it takes.
+        if unsafe { is_complete(collection) } {
+            GTRUE
+        } else {
+            GFALSE
+        }
+    })
+}
+
+/// Whether the account `collection` says is one the setup may commit — the
+/// deciding half of the `check_complete` vfunc, and the half that can be tested.
+///
+/// [`read`] and then [`check`], which is the whole of it. The two exist
+/// separately because the account in a dialog being typed into is usually not an
+/// account yet: the reader is total and says what the source holds, and the
+/// check is what has an opinion about it.
+///
+/// ## A NULL collection is FALSE, and says nothing about it
+///
+/// There is one way to get here without a collection: `new_collection`
+/// failed. It logs a critical when it does, which is where the failure happened
+/// and the only place it can be explained; repeating it here would be the same
+/// message once per keystroke, burying the original in copies of itself. So this
+/// is silent, and answers the refusal that keeps an unreadable account from
+/// being committed.
+///
+/// The refusal of a *legitimately* unfinished account is silent for a different
+/// reason: [`Incomplete`](crate::complete::Incomplete) is written to be read by
+/// the person who typed the answer, in the entry they typed it into, and this
+/// vfunc has no entry to put it in — it answers a boolean. The place for it is
+/// the status label `insert_widgets` will add, and until that exists the reason
+/// is produced and dropped rather than logged where nobody is looking for it.
+///
+/// # Safety
+///
+/// `collection` must be NULL or a valid `ESource`. It is only read from and
+/// nothing here outlives the call.
+pub unsafe fn is_complete(collection: *mut ESource) -> bool {
+    if collection.is_null() {
+        return false;
+    }
+
+    // SAFETY: non-NULL and a valid source by this function's contract.
+    check(&unsafe { read(collection) }).is_ok()
 }
 
 /// The message a failed EDS call left behind, consuming the `GError`.
