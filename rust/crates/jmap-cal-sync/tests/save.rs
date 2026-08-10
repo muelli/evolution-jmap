@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The write side. The theme throughout is that saving a component must not
-//! destroy what the component could not carry: the mapping keeps seven
+//! destroy what the component could not carry: the mapping keeps eight
 //! properties of a JSCalendar event and drops the rest, so a save that
 //! replaced properties wholesale would delete data the user never touched and
 //! cannot even see.
@@ -86,6 +86,98 @@ fn a_new_event_that_states_its_end_rather_than_its_length_still_has_one() {
     assert!(
         saved.icalendar.contains("\r\nDURATION:PT1H30M\r\n"),
         "{saved:?}"
+    );
+}
+
+#[test]
+fn a_new_all_day_event_reaches_the_server_as_one() {
+    // What Evolution writes for an all-day appointment: DTSTART and DTEND as
+    // DATE values. Without showWithoutTime the server — and every other client
+    // reading from it — was told about a midnight appointment instead.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT
+        .replace(
+            "DTSTART;TZID=Europe/Berlin:20260115T130000",
+            "DTSTART;VALUE=DATE:20260115",
+        )
+        .replace("DURATION:PT90M", "DTEND;VALUE=DATE:20260116");
+
+    let saved = fixture.sync().save_component(&icalendar, None).unwrap();
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(stored.show_without_time, Some(true));
+    assert_eq!(stored.start.as_deref(), Some("2026-01-15T00:00:00"));
+    assert_eq!(stored.duration.as_deref(), Some("P1D"));
+    // RFC 5545 §3.2.19 and RFC 8984 §4.1.5 agree that a day has no zone.
+    assert_eq!(stored.time_zone, None);
+    // And EDS gets the same event back, still without a time.
+    assert!(
+        saved
+            .icalendar
+            .contains("\r\nDTSTART;VALUE=DATE:20260115\r\n"),
+        "{saved:?}"
+    );
+}
+
+#[test]
+fn giving_an_all_day_event_a_time_clears_the_flag_on_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Retreat", "2026-01-15T00:00:00");
+    // A day has no zone (RFC 8984 §4.1.5), and `CalendarEvent::simple` seeds
+    // one, so it goes as part of making this event all-day.
+    fixture.patch(
+        &id,
+        json!({"showWithoutTime": true, "duration": "P1D", "timeZone": null}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("DTSTART;VALUE=DATE:20260115"),
+        "{icalendar}"
+    );
+    let edited = icalendar
+        .replace("DTSTART;VALUE=DATE:20260115", "DTSTART:20260115T090000")
+        .replace("DURATION:P1D", "DURATION:PT2H");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.show_without_time, None,
+        "the day the user turned into an appointment is still a day on the server"
+    );
+    assert_eq!(stored.start.as_deref(), Some("2026-01-15T09:00:00"));
+    assert_eq!(stored.duration.as_deref(), Some("PT2H"));
+}
+
+#[test]
+fn an_all_day_event_the_component_could_not_say_is_all_day_keeps_its_flag() {
+    // A server may set showWithoutTime on an event no DATE value can hold — one
+    // that starts at 09:00, or, as here, one carrying a zone. The component
+    // shows it as timed, which loses the flag; the save must not read that loss
+    // back as the user having cleared it.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Retreat", "2026-01-15T00:00:00");
+    fixture.patch(
+        &id,
+        json!({"showWithoutTime": true, "duration": "P1D", "timeZone": "Europe/Berlin"}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("DTSTART;TZID=Europe/Berlin:20260115T000000"),
+        "{icalendar}"
+    );
+    let edited = icalendar.replace("SUMMARY:Retreat", "SUMMARY:Retreat (offsite)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Retreat (offsite)"));
+    assert_eq!(
+        stored.show_without_time,
+        Some(true),
+        "a flag the component never showed cannot have been unset by the user"
     );
 }
 
