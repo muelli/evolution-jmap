@@ -13330,3 +13330,87 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last five sessions asked for is still unwritten; the manual-test
 recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-fourth session)
+
+All-day events were a lie in both directions. Evolution writes one as
+`DTSTART;VALUE=DATE` — iCalendar has no other way to say "a day, not a time of
+day" — and the mapping read that as midnight and said nothing else, so what
+reached the server was a midnight appointment. Every other client reading the
+account then drew it as one. Coming back, an event the server marked
+`showWithoutTime` was rendered with a time on it, so Evolution showed the same
+midnight appointment. `showWithoutTime` is now modeled: on `CalendarEvent`, in
+`jmap-ical` both ways, and in the save path's patch.
+
+**Red first, at three levels.** Six unit tests in `jmap-ical` (the DATE read,
+the DATE write and its round trip, the four shapes that refuse the DATE form,
+the length-less case, and the two `UNTIL` ones) and three save-path tests
+through `jmap-mockd` — four of the nine failed on assertions immediately, and
+the five that passed vacuously were each checked live afterwards by mutating
+the code they guard: dropping the midnight/zone guard, the whole-days guard,
+the `UNTIL`-midnight guard, and diffing against `current` instead of
+`baseline` each fail exactly one named test. Then the end no unit test reaches:
+`tests/functional/cal-client.c` now writes a second event, `VALUE=DATE` on
+both ends, and `functional-cal` asserts the mock holds `showWithoutTime: true`,
+`2026-02-01T00:00:00`, `P1D` and no zone — real `evolution-calendar-factory`,
+real `libecalbackendjmap.so`, real `e_cal_client_create_object_sync`. Making
+the reader answer `None` for a date-only start fails it with the stored event
+printed, so that assertion is live too.
+
+**The flag lives in a value type, which is why writing it has conditions.**
+RFC 8984 §4.1.5 asks that an event shown without a time start at midnight and
+last whole days, but a server may send otherwise, and RFC 5545 then has nothing
+to write: a DATE value has no time to hold 09:00, takes no `TZID` (§3.2.19),
+stands only beside a duration of whole days (§3.6.1), and — the one that is
+easy to miss — obliges an `RRULE`'s `UNTIL` to be a DATE as well (§3.3.10). So
+`shows_without_time` checks all four, and an event failing any of them is
+written as the timed event it half is: wrong about its day-ness, right about
+when it happens. That is deliberately the safer loss, and it costs nothing on
+the way back, because `patch::diff` compares against **the server's own event
+put through the same rendering**. A flag the component could never show is a
+flag both sides lose, so the two agree and nothing is patched — the mechanism
+that already protected `timeZone` and `recurrenceRules` covers this for free,
+and there is a test that fails if the diff is taken against the server's event
+instead.
+
+Decisions worth naming. The read answers `Some(true)` or `None`, never
+`Some(false)`: the RFC 8984 default is false anyway, and since an edit is read
+off a difference from the baseline, answering `false` where the server said
+nothing would invent one. Clearing it patches `null` rather than `false`, which
+is how a PatchObject says "back to the default". A `TZID` on a date-only
+`DTSTART` is ignored rather than kept, per §3.2.19, which also keeps the reader
+symmetric with the only shape the writer emits. And an all-day event with no
+length is still written as a DATE: RFC 5545 §3.6.1 makes that one day where RFC
+8984 would call it zero, and a day is what the user meant — the reverse, a
+midnight appointment of no duration, is not something a calendar can draw. The
+length does not come back from that rendering, so the day RFC 5545 implies is
+never read back as a length the user typed.
+
+Verified locally: `cargo test --locked` 513 (was 504: +9 red-first), the
+EDS-header crates green via the `rust-test-eds` set (`-p eds-sys -p evo-sys
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
+-p jmap-backend-collection -p jmap-config`), `ctest` 14/14 including the four
+functional tests, `cargo fmt --check`, and `cargo clippy --all-targets --locked
+-- -D warnings` clean for both crate sets. `reuse lint` and `cargo deny` not run
+(neither is on this VM); no files were added, so no new SPDX headers were
+needed, and no dependency changed.
+
+Next in this area, in the order they matter: `DTEND` is still the only way
+Evolution states a length and `DURATION` the only way we write one, so an
+all-day event re-saved from Evolution patches `duration` to the equivalent
+spelling — same length, one needless write, and normalising it needs an ISO
+8601 duration parser. `showWithoutTime` is now mapped but `VALUE=DATE` on
+`UNTIL` is the only place the date-ness reaches a *second* property; RDATE and
+EXDATE are unmapped, so a recurrence with exceptions still loses them. And
+nothing yet tests an all-day *recurring* event end to end through EDS, only in
+unit tests.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last six sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.

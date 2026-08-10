@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! JSCalendar `CalendarEvent` ↔ iCalendar `VEVENT`, the minimal property set
-//! the calendar backend needs: UID, SUMMARY, DESCRIPTION, DTSTART (+timeZone),
-//! DURATION, STATUS, RRULE.
+//! the calendar backend needs: UID, SUMMARY, DESCRIPTION, DTSTART (+timeZone,
+//! or as a date for showWithoutTime), DURATION, STATUS, RRULE.
 
 use jmap_ical::{ICalError, event_to_ical, ical_to_event, maps_recurrence_rule};
 use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
@@ -254,21 +254,147 @@ fn a_dtend_that_is_not_after_the_start_leaves_the_event_without_a_length() {
 }
 
 #[test]
-fn a_date_only_dtstart_is_read_as_midnight() {
-    // Evolution writes VALUE=DATE for an all-day event. showWithoutTime is not
-    // modeled yet, but dropping the start entirely would leave an event with
-    // no time at all.
+fn a_date_only_dtstart_is_read_as_an_all_day_event_starting_at_midnight() {
+    // Evolution writes VALUE=DATE for an all-day event. The start is read as
+    // midnight, because dropping it would leave an event with no time at all,
+    // and the day-ness is carried separately in showWithoutTime — without it
+    // the server, and every other client reading from it, sees a midnight
+    // appointment.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
         "VERSION:2.0\r\n",
         "BEGIN:VEVENT\r\n",
         "UID:E7\r\n",
         "DTSTART;VALUE=DATE:20260115\r\n",
+        "DTEND;VALUE=DATE:20260116\r\n",
         "END:VEVENT\r\n",
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
     assert_eq!(event.start.as_deref(), Some("2026-01-15T00:00:00"));
+    assert_eq!(event.show_without_time, Some(true));
+    assert_eq!(event.duration.as_deref(), Some("P1D"));
+    // RFC 5545 §3.2.19: a TZID does not apply to a DATE value, and RFC 8984
+    // wants no zone on an event shown without a time.
+    assert_eq!(event.time_zone, None);
+}
+
+#[test]
+fn a_timed_dtstart_says_nothing_about_showing_without_time() {
+    // Not `Some(false)`: a timed event is the RFC 8984 default, and the save
+    // path reads "no difference from the baseline" off this, so answering
+    // `false` where the server said nothing would be an edit that never
+    // happened.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E7\r\n",
+        "DTSTART:20260115T130000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(event.show_without_time, None);
+}
+
+#[test]
+fn an_all_day_event_is_written_as_a_date_and_survives_the_trip_back() {
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P2D".to_owned()),
+        show_without_time: Some(true),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+
+    // The parameter is not decoration: without it DTSTART's value type is
+    // DATE-TIME by default and `20260115` is not one, so libical would refuse
+    // the component and Evolution would show no event at all.
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
+    // A whole number of days is the only length RFC 5545 §3.6.1 allows next to
+    // a DATE start, and it is what this event has.
+    assert_eq!(line(&ics, "DURATION"), "DURATION:P2D");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.start, event.start);
+    assert_eq!(read_back.duration, event.duration);
+    assert_eq!(read_back.show_without_time, Some(true));
+}
+
+#[test]
+fn an_all_day_event_the_date_form_cannot_hold_stays_a_date_time() {
+    // RFC 8984 §4.1.5 asks that an event shown without a time start at
+    // midnight and last whole days, but a server is free to send otherwise,
+    // and a zone cannot ride on a DATE value at all. In each of these the DATE
+    // form would silently move or shorten the event, or drop its zone, so the
+    // usual DATE-TIME is written instead: the event shows as a timed one,
+    // which is wrong about its day-ness but right about when it is. The save
+    // path compares against this same rendering, so it does not read the lost
+    // flag back as the user having cleared it.
+    for (why, start, duration, zone) in [
+        (
+            "a start that is not midnight",
+            "2026-01-15T09:00:00",
+            None,
+            None,
+        ),
+        (
+            "a length with a time component",
+            "2026-01-15T00:00:00",
+            Some("P1DT2H"),
+            None,
+        ),
+        (
+            "a length shorter than a day",
+            "2026-01-15T00:00:00",
+            Some("PT90M"),
+            None,
+        ),
+        (
+            "a zone the DATE form would drop",
+            "2026-01-15T00:00:00",
+            Some("P1D"),
+            Some("Europe/Berlin"),
+        ),
+    ] {
+        let event = CalendarEvent {
+            start: Some(start.to_owned()),
+            duration: duration.map(str::to_owned),
+            time_zone: zone.map(str::to_owned),
+            show_without_time: Some(true),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert!(line(&ics, "DTSTART").contains("20260115T"), "{why}: {ics}");
+        assert!(without(&ics, "DTSTART;VALUE=DATE"), "{why}: {ics}");
+
+        let read_back = ical_to_event(&ics).expect("parse");
+        assert_eq!(read_back.show_without_time, None, "{why}: {ics}");
+        assert_eq!(read_back.start.as_deref(), Some(start), "{why}: {ics}");
+    }
+}
+
+#[test]
+fn an_all_day_event_with_no_length_is_still_written_as_a_date() {
+    // No DURATION and no DTEND next to a DATE start is one day by RFC 5545
+    // §3.6.1, where RFC 8984 would call it zero-length. A day is what an event
+    // shown without a time means, and the reverse — a midnight appointment of
+    // no duration — is not something a calendar can draw.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        show_without_time: Some(true),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
+    assert!(without(&ics, "DURATION"), "{ics}");
+
+    // And the trip back says nothing about the length, so the save path does
+    // not read the day RFC 5545 implies as a length the user typed.
+    let read_back = ical_to_event(&ics).expect("parse");
+    assert_eq!(read_back.duration, None);
+    assert_eq!(read_back.show_without_time, Some(true));
 }
 
 #[test]
@@ -500,6 +626,54 @@ fn until_is_a_date_time_in_the_events_own_zone() {
         .recurrence_rules
         .unwrap();
     assert_eq!(rules[0].until.as_deref(), Some("2026-12-31T09:00:00"));
+}
+
+#[test]
+fn an_all_day_events_until_is_a_date_like_its_start() {
+    // RFC 5545 §3.3.10: UNTIL's value type has to match DTSTART's, so an event
+    // written as a DATE cannot carry a DATE-TIME end to its recurrence. The
+    // time dropped here is midnight, which is the only time an event shown
+    // without one has.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule {
+            until: Some("2026-12-31T00:00:00".to_owned()),
+            ..RecurrenceRule::new("weekly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=WEEKLY;UNTIL=20261231");
+
+    let read_back = ical_to_event(&ics).expect("parse");
+    let rules = read_back.recurrence_rules.expect("a rule came back");
+    assert_eq!(rules[0].until.as_deref(), Some("2026-12-31T00:00:00"));
+}
+
+#[test]
+fn an_all_day_event_whose_recurrence_ends_at_a_time_stays_a_date_time() {
+    // The other half of the rule above: an UNTIL at 09:00 cannot become a DATE
+    // without moving the day the recurrence stops, and it cannot stay a
+    // DATE-TIME beside a DATE start either. So the event keeps its DATE-TIME
+    // form, showing as timed rather than lying about when it ends.
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rules: Some(vec![RecurrenceRule {
+            until: Some("2026-12-31T09:00:00".to_owned()),
+            ..RecurrenceRule::new("weekly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=WEEKLY;UNTIL=20261231T090000"
+    );
 }
 
 #[test]

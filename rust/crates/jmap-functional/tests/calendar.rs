@@ -25,6 +25,15 @@ const START: &str = "2026-01-15T13:00:00";
 /// this test says the two forms end up alike on the server.
 const DURATION: &str = "PT1H30M";
 
+/// The second event the client writes: an all-day one, `VALUE=DATE` on both
+/// ends, which is the only way iCalendar says "a day rather than a time of
+/// day". On the server it has to arrive as JSCalendar's `showWithoutTime`,
+/// starting at the top of the day and lasting one — otherwise every other
+/// client reading the account sees a midnight appointment.
+const ALL_DAY_SUMMARY: &str = "Team offsite";
+const ALL_DAY_START: &str = "2026-02-01T00:00:00";
+const ALL_DAY_DURATION: &str = "P1D";
+
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
 /// mock's ephemeral port filled in. Kept as a literal here rather than read
 /// from `docs/` so that a change to the documented recipe fails this test
@@ -78,7 +87,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     session.write_source("jmap-functional", &keyfile(port));
     session.stage_calendar_backend(&module);
 
-    let output = session.run(&client, &["jmap-functional", SUMMARY]);
+    let output = session.run(&client, &["jmap-functional", SUMMARY, ALL_DAY_SUMMARY]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
@@ -130,13 +139,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "a fresh cache against an empty calendar should hold nothing\n{report}"
     );
 
-    let added = seen
-        .get("added")
-        .unwrap_or_else(|| panic!("the client reported no added event\n{report}"));
-    assert!(
-        !added.is_empty(),
-        "EDS added an event with no UID\n{report}"
-    );
+    for key in ["added", "added-all-day"] {
+        let added = seen
+            .get(key)
+            .unwrap_or_else(|| panic!("the client reported no {key} event\n{report}"));
+        assert!(
+            !added.is_empty(),
+            "EDS added an event with no UID ({key})\n{report}"
+        );
+    }
 
     // Read back through EDS: what the meta backend kept of the write.
     assert_eq!(
@@ -146,8 +157,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     );
     assert_eq!(
         seen.get("events-after"),
-        Some(&"1"),
-        "the added event is not in the calendar it was added to\n{report}"
+        Some(&"2"),
+        "the added events are not both in the calendar they were added to\n{report}"
     );
 
     // And the other end: what the server was actually asked to do. The read
@@ -165,20 +176,30 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     let account = state
         .account(&account_id)
         .expect("the mock's default account");
-    let events: Vec<_> = account.calendar_events.iter().collect();
+    let events: Vec<_> = account
+        .calendar_events
+        .iter()
+        .map(|(_, event)| event)
+        .collect();
     assert_eq!(
         events.len(),
-        1,
-        "the server holds {} events, not one",
+        2,
+        "the server holds {} events, not two",
         events.len()
     );
 
-    let (_, event) = events[0];
-    assert_eq!(
-        event.title.as_deref(),
-        Some(SUMMARY),
-        "the event on the server has the wrong title: {event:?}"
-    );
+    // Looked up by title rather than by position: the store is keyed on
+    // server-assigned ids, and which of the two comes first says nothing.
+    let by_title = |title: &str| {
+        events
+            .iter()
+            .find(|event| event.title.as_deref() == Some(title))
+            .unwrap_or_else(|| {
+                panic!("no event titled {title:?} reached the server, only {events:?}")
+            })
+    };
+
+    let event = by_title(SUMMARY);
     assert_eq!(
         event.start.as_deref(),
         Some(START),
@@ -196,5 +217,29 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
             .as_ref()
             .is_some_and(|calendars| calendars.values().any(|included| *included)),
         "the event on the server is in no calendar: {event:?}"
+    );
+
+    // The all-day one, and the property that is the whole point of it: without
+    // `showWithoutTime` the server holds a midnight appointment, which is what
+    // every other client would then show.
+    let all_day = by_title(ALL_DAY_SUMMARY);
+    assert_eq!(
+        all_day.show_without_time,
+        Some(true),
+        "the all-day event reached the server as a timed one: {all_day:?}"
+    );
+    assert_eq!(
+        all_day.start.as_deref(),
+        Some(ALL_DAY_START),
+        "the all-day event starts on the wrong day: {all_day:?}"
+    );
+    assert_eq!(
+        all_day.duration.as_deref(),
+        Some(ALL_DAY_DURATION),
+        "the all-day event is not a day long: {all_day:?}"
+    );
+    assert_eq!(
+        all_day.time_zone, None,
+        "a day has no zone (RFC 8984 §4.1.5): {all_day:?}"
     );
 }
