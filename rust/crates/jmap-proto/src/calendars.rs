@@ -82,6 +82,20 @@ pub struct CalendarEvent {
     /// would have it state the value where the server never did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub free_busy_status: Option<String>,
+    /// How important the event is — RFC 8984 §4.4.1's `priority`, the same
+    /// integer iCalendar's `PRIORITY` (RFC 5545 §3.8.1.9) carries: 0 undefined,
+    /// 1 highest, 9 lowest.
+    ///
+    /// `None` is "nothing was said" rather than the RFC's default of 0, for the
+    /// reason [`Self::show_without_time`] gives.
+    ///
+    /// Signed and wider than the range, though the RFC admits only 0 to 9,
+    /// because a whole `CalendarEvent/get` response is deserialized into this
+    /// type at once: a server answering `-1` for one event must not fail the
+    /// response and take every event in the calendar down with it. The mapping
+    /// refuses to write a value outside the range instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
     /// The places the event happens at (RFC 8984 §4.2.5), keyed by an id of
     /// whoever wrote them.
     ///
