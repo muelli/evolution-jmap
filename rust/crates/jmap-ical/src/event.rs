@@ -576,6 +576,13 @@ fn read_start(vevent: &Component) -> (Option<String>, Option<String>, Option<boo
 /// what was shown, so an empty map would be a claim that there are no overrides
 /// where the document made no claim at all.
 ///
+/// An `RDATE` of `VALUE=PERIOD` (RFC 5545 §3.8.5.2) states the instance's own
+/// length as well as its start, which is iCalendar's way of saying "this extra
+/// occurrence runs longer than the rest"; it becomes a `duration` patch, or an
+/// empty one where the period is as long as the series already is. See
+/// [`period_length`]. An `EXDATE` gets no such treatment: RFC 5545 §3.8.5.1
+/// admits no period there, and an instance that does not happen has no length.
+///
 /// `EXDATE` is read after `RDATE` deliberately. A component naming one instant
 /// in both properties contradicts itself, and taking it as excluded is the
 /// reading that cannot invent an appointment; RFC 5545 §3.8.5.1 also has an
@@ -597,17 +604,31 @@ fn read_overrides(
     event: &CalendarEvent,
 ) -> Option<BTreeMap<String, Value>> {
     let mut overrides: BTreeMap<String, Value> = BTreeMap::new();
-    for (name, patch) in [
-        ("RDATE", Value::Object(Default::default())),
-        ("EXDATE", json!({"excluded": true})),
-    ] {
-        let dates = series
-            .all(name)
-            .into_iter()
-            .flat_map(Property::texts)
-            .filter_map(|value| to_local_date_time(&value));
-        for date in dates {
-            overrides.insert(date, patch.clone());
+    let values = |name: &str| series.all(name).into_iter().flat_map(Property::texts);
+    for value in values("RDATE") {
+        // A period is the only RDATE value with a `/` in it, and calcard renders
+        // both its spellings that way, so the separator is what decides.
+        let (start, length) = match value.split_once('/') {
+            Some((start, end)) => (start, Some(period_length(start, end))),
+            None => (value.as_str(), None),
+        };
+        let Some(date) = to_local_date_time(start) else {
+            continue;
+        };
+        // Only a length that *differs* from the series' is an override, the
+        // same rule [`instance_patch`] applies to a detached component; a
+        // period restating the series' length says nothing new. An unreadable
+        // one patches a `null`, which removes the duration rather than letting
+        // the instance inherit a length the document did not give it.
+        let patch = match length.filter(|length| *length != event.duration) {
+            Some(length) => json!({ "duration": length }),
+            None => Value::Object(Default::default()),
+        };
+        overrides.insert(date, patch);
+    }
+    for value in values("EXDATE") {
+        if let Some(date) = to_local_date_time(&value) {
+            overrides.insert(date, json!({"excluded": true}));
         }
     }
 
@@ -694,6 +715,32 @@ fn read_duration(vevent: &Component) -> Option<String> {
     let start = instant(&vevent.property("DTSTART")?.raw_value())?;
     let end = instant(&vevent.property("DTEND")?.raw_value())?;
     to_duration(end - start)
+}
+
+/// How long a period lasts, as a JSCalendar Duration, given its two halves.
+///
+/// RFC 5545 §3.3.9 spells a period either way — `19960403T020000Z/PT3H` or
+/// `19960403T020000Z/19960403T050000Z` — and the two halves of this mapping
+/// answer them exactly as [`read_duration`] answers `DURATION` and `DTEND`: a
+/// stated duration is passed through, because both formats spell an ISO 8601
+/// duration identically, and a stated end is measured on the wall clock.
+///
+/// `None` is "this period states no length an occurrence could have": a period
+/// that ends at or before it starts, and a duration written negative — RFC 5545
+/// §3.3.9 requires the end to be after the start, and RFC 8984 §1.4.6 has no
+/// negative duration to map one onto. The negative case falls out of the second
+/// branch for free: `-PT1H` is not a `P`, and it is not a date-time either.
+///
+/// A duration stated as zero is *not* caught, because catching it would mean
+/// parsing the value rather than passing it through — `PT0S`, `P0D` and
+/// `PT0H0M0S` all spell it. It comes back as written, which RFC 8984 §4.2.2
+/// reads as the same zero length the `None` answer leaves behind; the two
+/// spellings differ on paper and not in the calendar.
+fn period_length(start: &str, end: &str) -> Option<String> {
+    if end.starts_with(['P', 'p']) {
+        return Some(end.to_owned());
+    }
+    to_duration(instant(end)? - instant(start)?)
 }
 
 /// A `DTSTART`/`DTEND` value as seconds from 1970-01-01T00:00:00 on its own

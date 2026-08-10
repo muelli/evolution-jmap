@@ -13848,3 +13848,79 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last eleven sessions asked for is still unwritten; the
 manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
 dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-fortieth session)
+
+The first of the three mapping gaps the last session left named: an `RDATE`
+that states a **period** rather than an instant. RFC 5545 §3.8.5.2 allows
+`RDATE;VALUE=PERIOD:20260205T130000Z/PT2H`, which is how iCalendar says "this
+extra occurrence runs longer than the rest of the series". `read_overrides`
+read only the part before the `/`, so the occurrence appeared — at the series'
+length. A two-hour slot the document plainly described was shown, and saved
+back, as the series' hour.
+
+**What it maps onto.** `recurrenceOverrides` already has the vocabulary: the
+entry's patch carries a `duration`. So a period becomes a `duration` patch, and
+the rule for *when* is the one `instance_patch` already applies to a detached
+`VEVENT` — only a length that differs from the series' is an override, so a
+period restating the series' own length is the empty patch a bare `RDATE`
+produces. That symmetry matters beyond tidiness: the write side puts an
+override that says something into a `VEVENT` of its own, so the length leaves
+as that component's `DURATION` and comes back through `instance_patch`. The
+round trip is closed by two different code paths agreeing on the same rule.
+
+**Both spellings of a period, answered the way `DTEND` and `DURATION` already
+are.** `period_length` passes a stated duration through — the two formats spell
+an ISO 8601 duration identically, which is exactly why `read_duration` passes
+`DURATION` through — and measures a stated end on the wall clock via the
+existing `instant`/`to_duration`. A period that ends at or before it starts
+yields no length, and so does a negative duration, which falls out for free:
+`-PT1H` is not a `P` and is not a date-time either, so it takes the measuring
+branch and fails there. "No length" patches a `null` rather than nothing at
+all — the instance keeps its length *removed* instead of quietly inheriting one
+the document never gave it, which is the answer a detached `VEVENT` carrying
+neither `DURATION` nor `DTEND` already gets.
+
+**One divergence, tested rather than hidden.** A duration written as zero
+(`.../PT0S`) is passed through as written, where a zero-length *range*
+(`.../20260205T130000Z`) becomes the `null`. Catching it would mean parsing the
+value instead of passing it through — `PT0S`, `P0D` and `PT0H0M0S` all spell
+zero — and RFC 8984 §4.2.2 reads both answers as the same zero length, so the
+two differ on paper and not in the calendar. There is an assertion pinning the
+`PT0S` case so the divergence is on the record and cannot drift silently.
+
+Four tests, three of them red first: the length arriving from either spelling,
+the unreadable ones, and the write-back. The fourth — a period as long as the
+series patching nothing — passed on the day it was written and guards the
+comparison against the series' duration; without that filter it fails. The
+`EXDATE` half of the loop was split out rather than folded into the new shape:
+RFC 5545 §3.8.5.1 admits no period there, and an instance that does not happen
+has no length to state. Its position after the `RDATE` loop is unchanged, which
+is what keeps a document naming one instant both ways reading as excluded.
+
+Verified locally: `cargo test --locked` 545 (up 4), the EDS-header crates green
+via `ctest -R rust-test-eds`, the full `ctest` 14/14 including all four
+functional legs against real EDS, `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean. `reuse lint` and `cargo deny` not
+run (neither is on this VM); no files were added, so no new SPDX headers were
+needed, and no dependency changed.
+
+Next in this area: a per-instance `timeZone` still has no spelling, and
+`DTEND` is still the only way Evolution states a length while `DURATION` is the
+only way we write one. Also still open from last session: nothing asserts
+whether a split series' two writes arrive as one `CalendarEvent/set` or two,
+and what a failure of the second leaves behind. Noticed while here and *not*
+fixed, because it is a separate function on a separate path: `read_duration`
+passes a negative `DURATION` straight through to the server, where RFC 8984
+§1.4.6 has no negative duration — the new code refuses one, the old one does
+not.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last twelve sessions asked for is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
+dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
