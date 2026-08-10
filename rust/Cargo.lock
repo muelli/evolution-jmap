@@ -396,6 +396,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmap-backend-book-module"
+version = "0.1.0"
+dependencies = [
+ "gobject-sys",
+ "jmap-backend-book",
+]
+
+[[package]]
 name = "jmap-backend-cal"
 version = "0.1.0"
 dependencies = [
@@ -412,6 +420,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmap-backend-cal-module"
+version = "0.1.0"
+dependencies = [
+ "gobject-sys",
+ "jmap-backend-cal",
+]
+
+[[package]]
 name = "jmap-backend-collection"
 version = "0.1.0"
 dependencies = [
@@ -425,6 +441,14 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-core",
  "jmap-mail",
+]
+
+[[package]]
+name = "jmap-backend-collection-module"
+version = "0.1.0"
+dependencies = [
+ "gobject-sys",
+ "jmap-backend-collection",
 ]
 
 [[package]]
@@ -452,6 +476,14 @@ dependencies = [
  "jmap-backend-collection",
  "jmap-backend-core",
  "jmap-mail",
+]
+
+[[package]]
+name = "jmap-config-module"
+version = "0.1.0"
+dependencies = [
+ "gobject-sys",
+ "jmap-config",
 ]
 
 [[package]]

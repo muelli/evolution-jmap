@@ -43,7 +43,7 @@ use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::backend::JmapConfigServiceBackend;
 use jmap_config::mail::MAIL_BACKEND_NAME;
-use jmap_config::module::{e_module_load, e_module_unload};
+use jmap_config::module::{load, unload};
 
 /// A `GTypeModule` standing in for the `EModule` Evolution would load us as.
 #[repr(C)]
@@ -80,13 +80,13 @@ unsafe impl ObjectSubclass for TestModule {
 unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
     // SAFETY: GLib passes the module being loaded, which is what the entry
     // point wants.
-    unsafe { e_module_load(module) };
+    unsafe { load(module) };
     GTRUE
 }
 
 unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     // SAFETY: as `module_load`.
-    unsafe { e_module_unload(module) };
+    unsafe { unload(module) };
 }
 
 /// The one module in the process, used, unused, and used again.

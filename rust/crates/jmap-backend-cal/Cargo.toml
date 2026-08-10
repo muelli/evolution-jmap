@@ -12,10 +12,12 @@ publish = false
 
 [lib]
 name = "jmap_backend_cal"
-# cdylib is what EDS dlopens (installed as libecalbackendjmap.so); rlib is
-# what the integration tests link against, and building both keeps the two
-# from drifting apart.
-crate-type = ["cdylib", "rlib"]
+# rlib only. What EDS dlopens (installed as libecalbackendjmap.so) is the
+# companion `jmap-backend-cal-module` crate, which is a cdylib holding nothing
+# but the two `#[unsafe(no_mangle)]` entry points and delegating both to
+# `module::load`/`module::unload` here. See that crate for why the C symbols
+# cannot live in an rlib.
+crate-type = ["rlib"]
 
 [dependencies]
 eds-sys = { workspace = true }

@@ -12,10 +12,13 @@ publish = false
 
 [lib]
 name = "jmap_backend_book"
-# cdylib is what EDS dlopens (installed as libebookbackendjmap.so); rlib is
-# what the integration tests link against, and building both keeps the two
-# from drifting apart.
-crate-type = ["cdylib", "rlib"]
+# rlib only. What EDS dlopens (installed as libebookbackendjmap.so) is the
+# companion `jmap-backend-book-module` crate, which is a cdylib holding
+# nothing but the two `#[unsafe(no_mangle)]` entry points and delegating both
+# to `module::load`/`module::unload` here. The two cannot drift — the cdylib
+# has no behaviour of its own to drift with — and the tests link this rlib and
+# call the bodies directly.
+crate-type = ["rlib"]
 
 [dependencies]
 eds-sys = { workspace = true }

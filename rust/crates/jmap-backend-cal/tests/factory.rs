@@ -35,7 +35,7 @@ use gobject_sys::{
 };
 use jmap_backend_cal::backend::JmapCalBackend;
 use jmap_backend_cal::factory::JmapCalFactory;
-use jmap_backend_cal::module::{e_module_load, e_module_unload};
+use jmap_backend_cal::module::{load, unload};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
 /// A `GTypeModule` standing in for the `EModule` EDS would load us as.
@@ -73,13 +73,13 @@ unsafe impl ObjectSubclass for TestModule {
 unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
     // SAFETY: GLib passes the module being loaded, which is what the entry
     // point wants.
-    unsafe { e_module_load(module) };
+    unsafe { load(module) };
     GTRUE
 }
 
 unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
     // SAFETY: as `module_load`.
-    unsafe { e_module_unload(module) };
+    unsafe { unload(module) };
 }
 
 /// The one module in the process, used, unused, and used again.

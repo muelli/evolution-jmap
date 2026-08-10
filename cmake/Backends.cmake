@@ -20,8 +20,14 @@ endif(FORCE_INSTALL_PREFIX)
 # backend directory and then looks for EBookBackendFactory subclasses among
 # the types that appeared, so the directory is what has to be right; the
 # libebookbackend<name>.so spelling is the convention every in-tree EDS
-# backend follows, and not the libjmap_backend_book.so cargo builds.
-add_cargo_cdylib(jmap_backend_book
+# backend follows, and not the libjmap_backend_book_module.so cargo builds.
+#
+# The cargo crate named here is the `-module` companion, not the backend
+# library: the two `e_module_load`/`e_module_unload` symbols below live only in
+# that cdylib, because every module in this repository has to export the same
+# pair and two rlibs that defined them collided in a static link. See
+# rust/crates/jmap-backend-collection-module/src/lib.rs.
+add_cargo_cdylib(jmap_backend_book_module
 	OUTPUT_NAME libebookbackendjmap.so
 	DESTINATION ${EDS_BOOK_BACKEND_DIR}
 	COMPONENT book-backend
@@ -42,9 +48,10 @@ endif(FORCE_INSTALL_PREFIX)
 
 # The JMAP calendar backend. Same story as the address book one directory over,
 # down to the naming convention: libecalbackend<name>.so is what every in-tree
-# EDS calendar backend is called, and not the libjmap_backend_cal.so cargo
-# builds.
-add_cargo_cdylib(jmap_backend_cal
+# EDS calendar backend is called, and not the libjmap_backend_cal_module.so
+# cargo builds — and, as above, the crate is the `-module` companion that holds
+# the entry points.
+add_cargo_cdylib(jmap_backend_cal_module
 	OUTPUT_NAME libecalbackendjmap.so
 	DESTINATION ${EDS_CAL_BACKEND_DIR}
 	COMPONENT cal-backend
@@ -97,7 +104,7 @@ endif(FORCE_INSTALL_PREFIX)
 # regardless of what it is called. Following the convention is for the human
 # reading the directory, and the `-backend` suffix distinguishes this from M7's
 # module-jmap-configuration.so, which is Evolution's module directory over.
-add_cargo_cdylib(jmap_backend_collection
+add_cargo_cdylib(jmap_backend_collection_module
 	OUTPUT_NAME module-jmap-backend.so
 	DESTINATION ${EDS_REGISTRY_MODULE_DIR}
 	COMPONENT collection-backend
@@ -116,7 +123,7 @@ add_cargo_cdylib(jmap_backend_collection
 # different directory loaded by a different process; the two would otherwise be
 # one name apart in a directory listing and impossible to tell apart in a bug
 # report.
-add_cargo_cdylib(jmap_config
+add_cargo_cdylib(jmap_config_module
 	OUTPUT_NAME module-jmap-configuration.so
 	DESTINATION ${EVOLUTION_MODULE_DIR}
 	COMPONENT config-module

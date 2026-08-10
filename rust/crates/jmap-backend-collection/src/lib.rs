@@ -83,9 +83,11 @@
 //!   two fields say which `BackendName` this is and which type to build. Both
 //!   have working defaults underneath them, so an unwritten factory is an account
 //!   that belongs to somebody else or one that fans out to nothing.
-//! - [`module`] is the pair of symbols the registry dlopens the built
+//! - [`module`] is the pair of entry points the registry dlopens the built
 //!   `module-jmap-backend.so` for, and the only code in this crate the registry
-//!   calls by name.
+//!   calls by name. The C symbols `e_module_load`/`e_module_unload` themselves
+//!   live in the `jmap-backend-collection-module` cdylib, which is that shared
+//!   object; the module says why.
 //!
 //! `dup_resource_id` came first because [`populate`] cannot be written without
 //! it — EDS loads the cached children and asks their resource ids *before* it

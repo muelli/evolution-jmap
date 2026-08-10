@@ -12,10 +12,13 @@ publish = false
 
 [lib]
 name = "jmap_config"
-# cdylib is what Evolution dlopens (installed as module-jmap-configuration.so);
-# rlib is what the integration tests link against, and building both keeps the
-# two from drifting apart.
-crate-type = ["cdylib", "rlib"]
+# rlib only. What Evolution dlopens (installed as
+# module-jmap-configuration.so) is the companion `jmap-config-module` crate,
+# which is a cdylib holding nothing but the two `#[unsafe(no_mangle)]` entry
+# points and delegating both to `module::load`/`module::unload` here. The
+# dev-dependency on `jmap-backend-collection` below is what forced the split:
+# both rlibs used to define `e_module_load`, and in one link they became one.
+crate-type = ["rlib"]
 
 [dependencies]
 eds-sys = { workspace = true }
