@@ -643,6 +643,121 @@ fn a_day_no_week_starts_on_is_not_sent() {
 }
 
 #[test]
+fn the_weeks_of_the_year_a_rule_repeats_in_reach_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Payroll", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "yearly",
+            "byWeekNo": [1],
+            "firstDayOfWeek": "su",
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=YEARLY;BYWEEKNO=1;WKST=SU"),
+        "{icalendar}"
+    );
+    // Adding the last week of the year, which is the negative form RFC 8984
+    // §4.3.3 counts back from the end of the year with.
+    let edited = icalendar.replace("BYWEEKNO=1;", "BYWEEKNO=1,-1;");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_week_no.as_deref(), Some(&[1, -1][..]));
+    assert_eq!(
+        rules[0].first_day_of_week.as_deref(),
+        Some("su"),
+        "the day the weeks are counted from goes with them"
+    );
+}
+
+#[test]
+fn a_week_of_the_year_the_rrule_should_not_carry_is_not_sent() {
+    // `FREQ=MONTHLY;BYWEEKNO=20` is a rule RFC 5545 §3.3.10 does not admit — it
+    // admits `BYWEEKNO` beside `YEARLY` and nothing else — and neither calcard nor
+    // libical judges it, so the check is on the way out: `recurrenceRules` goes to
+    // the server replaced whole, and one part it is entitled to reject would cost
+    // every other edit in the save.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "monthly"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = icalendar
+        .replace("RRULE:FREQ=MONTHLY", "RRULE:FREQ=MONTHLY;BYWEEKNO=20")
+        .replace("SUMMARY:Rent", "SUMMARY:Rent, due");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.recurrence_rules.unwrap()[0].by_week_no, None);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Rent, due"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
+fn a_week_no_year_has_is_not_cleared_from_the_servers_rule() {
+    // A `byWeekNo` outside RFC 5545's `ordwk` is one no `BYWEEKNO` this mapping
+    // will write can carry — 54 is a week no year has — so the rule is shown
+    // without it, and a save must not write the property back: `recurrenceRules`
+    // goes to the server replaced whole, so the week would be dropped from the
+    // server's own rule by a save that only narrowed it.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Stocktake", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [{
+            "@type": "RecurrenceRule",
+            "frequency": "yearly",
+            "byWeekNo": [54],
+        }]}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RRULE:FREQ=YEARLY\r\n"),
+        "the week is left off the rule the user is shown: {icalendar}"
+    );
+    // So an edit to the recurrence is an edit to a rule the user was shown in
+    // part, and is dropped whole rather than sent as the narrower rule it is.
+    let edited = icalendar
+        .replace("RRULE:FREQ=YEARLY", "RRULE:FREQ=YEARLY;COUNT=4")
+        .replace("SUMMARY:Stocktake", "SUMMARY:Annual stocktake");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let rules = stored.recurrence_rules.unwrap();
+    assert_eq!(
+        rules[0].by_week_no.as_deref(),
+        Some(&[54][..]),
+        "the week the server holds is left alone rather than cleared"
+    );
+    assert_eq!(
+        rules[0].count, None,
+        "narrowing a rule we cannot fully see is worse than ignoring the edit"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Annual stocktake"),
+        "the edit the save could carry still has to land"
+    );
+}
+
+#[test]
 fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
     // `FREQ=WEEKLY;BYMONTHDAY=15` is a rule RFC 5545 §3.3.10 does not admit, and
     // calcard hands it back rather than judging it — so, as with an ordinal

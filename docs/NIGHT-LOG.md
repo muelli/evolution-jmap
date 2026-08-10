@@ -15009,3 +15009,117 @@ asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
 two; the *reading* direction of a per-instance zone through real EDS is untested;
 calcard silently drops or wraps an unreadable `BYDAY`/`BYMONTHDAY`/`WKST` token
 below this crate, which only an upstream fix reaches.
+
+## 2026-08-10 (hundred-and-fifty-second session)
+
+A rule can now name the weeks of the year it repeats in. `byWeekNo` — RFC 8984
+§4.3.3's array of week numbers, iCalendar's `BYWEEKNO` — is modeled rather than
+parked in `RecurrenceRule::extra`, and it is the part the previous session
+deliberately left for its own night because its meaning depends on
+`firstDayOfWeek`.
+
+**Why it had to wait for `WKST`.** RFC 5545 §3.3.10 numbers a year's weeks by
+ISO 8601, counted from the day `WKST` names, so "week 1" counted from Sunday and
+from Monday can hold different days. Until last session `firstDayOfWeek` was
+unmodeled: a server sending it put it in `extra`, the rule failed
+`maps_recurrence_rule` whole, and carrying `byWeekNo` alone would have drawn
+weeks counted from a day the server never named. That is no longer true, so the
+part crosses in both directions.
+
+**The frequency gate is the narrowest of any part here, and it is stated the
+other way round.** `by_year_day_part`'s gate names the three frequencies RFC 5545
+excludes (`DAILY`/`WEEKLY`/`MONTHLY`) because `BYYEARDAY` is legal beside
+`HOURLY` and its two smaller siblings. §3.3.10 gives `BYWEEKNO` no such latitude:
+it MUST NOT be specified when `FREQ` is anything *other than* `YEARLY`. So
+`by_week_no_part` names the one frequency that is allowed, and the part is left
+off — with the rule flagged unmappable — at the other six.
+
+**The range refusal is ours alone, and that is measured.** libical keeps
+`BYWEEKNO=54` and `-54` verbatim where `999` costs it the whole `RRULE`, and it
+keeps `BYWEEKNO=20` beside every frequency the RFC forbids it next to — so
+nothing below this mapping would catch a week no year has, and `week_no_token`'s
+1..=53 / -53..=-1 is the only thing standing between the user and a series that
+never occurs. `0` and a token that is no number at all *do* cost the whole rule,
+which is the expensive failure: the event would reach EDS's cache as a single
+appointment with the user's series gone.
+
+**A fold bug in the measurement, found by the sixth part.** Both
+`jmap-ical/tests/event.rs`'s `line` helper and `jmap-backend-cal`'s
+`reparsed_rrule` read *physical* lines. A rule naming all six modeled parts is
+the first `RRULE` this crate emits that passes 75 octets, so it is the first one
+RFC 5545 §3.1 folds — and the ordering assertion compared half a rule against a
+whole one and failed loudly. Both helpers now unfold first (`content_line`,
+new, beside `line`). Nothing was previously masked: no rule reached 76 octets
+before tonight. It would have been, the moment one did.
+
+The position claim was then checked rather than assumed: fed
+`BYWEEKNO=20;BYYEARDAY=100;BYMONTH=3`, libical hands back
+`BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3` — it reorders, so the identity assertion in
+`libical_keeps_the_recurrence_parts_this_mapping_writes` really does prove
+`BYWEEKNO` belongs between the days of the year and the months, before `WKST`.
+
+Ten tests, red first: one in `jmap-proto/tests/calendars.rs` against a new
+fixture (`byWeekNo` modeled beside `firstDayOfWeek`, `extra` empty), six in
+`jmap-ical/tests/event.rs` (the weeks out and back beside `WKST=SU`; all six
+modeled parts at once, folded, and the whole rule equal to itself on the way
+back; a hand-written `+1,-53` arriving canonical; the part refused at all six
+frequencies but `YEARLY`; five shapes of impossible week flagged and left off;
+the same reached through the parser), one in `jmap-backend-cal/tests/marshal.rs`
+(the four libical answers above), and two in `jmap-cal-sync/tests/save.rs`
+against the mock (the last week of the year added on the server with its `WKST`
+intact; a rule the server holds with `byWeekNo: [54]` keeping its week while a
+`COUNT=4` added in the same save is dropped and the title edit lands).
+
+The two mock-level tests were red only by assertion, so both were
+mutation-checked, along with the frequency gate and the range: dropping the
+`BYWEEKNO` read arm loses the first; dropping the new `maps_recurrence_rule`
+clause loses both; removing the `YEARLY` gate loses the "should not carry" test;
+widening `week_no_token` to ±99 loses the "not cleared" test. All four bite.
+
+One process slip worth recording: a mutation loop restored `event.rs` with
+`git checkout <path>`, which reverted the session's *uncommitted* work in that
+file rather than just the mutation. The edits were re-applied from context and
+the suite reverified; the remaining mutations used a file copy. Restore from a
+backup, not from the index, while the work is uncommitted.
+
+This landed on top of the second FFI re-audit, which reached master mid-session
+(`a155c02`); the work rebased onto it cleanly and every check below was re-run
+after the rebase, not before it.
+
+Verified locally: `cargo test --locked` 631 (up 10 from the 621 the re-audit
+left), `cargo test -p jmap-backend-cal --locked` 24 in `marshal` (up 1), `ctest`
+14/14 including all four functional legs against real EDS, `cargo fmt --check`,
+and `cargo clippy --all-targets --locked -- -D warnings` clean for the default
+set and for `jmap-backend-cal`. `ci/checks.sh` stops at its first step: `reuse` is not on
+this VM and neither `pipx`, `uvx`, nor `python3 -m venv` can install it without
+sudo, so the licence check and `cargo deny` were not run. The one file added is
+a JSON fixture, covered by `REUSE.toml`'s `rust/crates/*/tests/fixtures/**`
+annotation rather than a header; no dependency changed.
+
+No milestone tag. What this session did **not** do: no functional leg through
+real EDS for a series in the first and last week of the year — the libical
+round-trip test is what stands in for it, as it did for `byMonthDay`, `byMonth`,
+`byYearDay` and `firstDayOfWeek`, and it answers the question a functional leg
+would (does the spelling survive the parser EDS uses). `bySetPosition`,
+`byHour`/`byMinute`/`bySecond`, `rscale` and `skip` are still unmodeled, and a
+rule holding one is still drawn narrowed and never written back — which is safe.
+`bySetPosition` is the obvious next one and is not a copy of this: it selects
+from the set the other parts expand to, so it is meaningless without them and
+libical's answer for it has not been measured.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, for an instance's zone
+as well as the series', relying on libical resolving an IANA name out of its
+builtin table; the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag the last twenty-four
+sessions asked for is still unwritten; the manual-test recipes are unlinked from
+the README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is still unexplained. Still open from before: nothing
+asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
+two; the *reading* direction of a per-instance zone through real EDS is untested;
+calcard silently drops or wraps an unreadable `BYDAY`/`BYMONTHDAY`/`WKST` token
+below this crate, which only an upstream fix reaches.

@@ -127,17 +127,19 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
 /// Only `frequency`, `interval`, `count`, `until`, `byDay`, `byMonthDay`,
-/// `byYearDay`, `byMonth` and `firstDayOfWeek` are modeled; `bySetPosition` and
-/// the rest of RFC 8984 §4.3.3 ride in [`RecurrenceRule::extra`] and would be
-/// lost. A caller that patches `recurrenceRules` for a rule this returns `false`
-/// for narrows the user's recurrence behind their back.
+/// `byYearDay`, `byWeekNo`, `byMonth` and `firstDayOfWeek` are modeled;
+/// `bySetPosition` and the rest of RFC 8984 §4.3.3 ride in
+/// [`RecurrenceRule::extra`] and would be lost. A caller that patches
+/// `recurrenceRules` for a rule this returns `false` for narrows the user's
+/// recurrence behind their back.
 ///
 /// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
 /// never patches over a recurrence the user was not shown — as does one whose
-/// days of the week, days of the month, days of the year, months of the year or
-/// day the week starts on the `RRULE` cannot carry, which [`by_day_part`],
-/// [`by_month_day_part`], [`by_year_day_part`], [`by_month_part`] and
-/// [`weekday_token`] decide and [`rule_to_rrule`] then leaves off.
+/// days of the week, days of the month, days of the year, weeks of the year,
+/// months of the year or day the week starts on the `RRULE` cannot carry, which
+/// [`by_day_part`], [`by_month_day_part`], [`by_year_day_part`],
+/// [`by_week_no_part`], [`by_month_part`] and [`weekday_token`] decide and
+/// [`rule_to_rrule`] then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
         && writable(rule)
@@ -153,6 +155,10 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
             .by_year_day
             .as_ref()
             .is_none_or(|_| by_year_day_part(rule).is_some())
+        && rule
+            .by_week_no
+            .as_ref()
+            .is_none_or(|_| by_week_no_part(rule).is_some())
         && rule
             .by_month
             .as_ref()
@@ -1278,6 +1284,7 @@ fn rule_to_rrule(
     parts.extend(by_day_part(rule));
     parts.extend(by_month_day_part(rule));
     parts.extend(by_year_day_part(rule));
+    parts.extend(by_week_no_part(rule));
     parts.extend(by_month_part(rule));
     parts.extend(first_day_of_week_part(rule));
     Some(parts.join(";"))
@@ -1413,6 +1420,47 @@ fn year_day_token(day: i32) -> Option<String> {
     }
 }
 
+/// The `BYWEEKNO` part of a rule's `RRULE`, or `None` when the rule names no
+/// weeks of the year — and, as with [`by_day_part`], when it names ones this
+/// mapping will not write.
+///
+/// It is all the weeks or none of them, for the same reason: a `BYWEEKNO`
+/// holding a subset is a different recurrence, not a narrower view of one.
+///
+/// The frequency gate is the narrowest of any part here, and names the one
+/// frequency that is *allowed* rather than the ones that are not: RFC 5545
+/// §3.3.10 says `BYWEEKNO` MUST NOT be specified when `FREQ` is anything other
+/// than `YEARLY` — not even beside `HOURLY`, where [`by_year_day_part`] is
+/// defined. A content line libical refuses costs the whole component.
+///
+/// Which days each week holds is decided by the rule's `firstDayOfWeek`, which
+/// [`first_day_of_week_part`] carries; §3.3.10 numbers the weeks by ISO 8601
+/// from that day. Carrying this part while that one was unmodeled would have
+/// shown weeks counted from a day the server never named.
+fn by_week_no_part(rule: &RecurrenceRule) -> Option<String> {
+    let weeks = rule.by_week_no.as_ref()?;
+    // `BYWEEKNO=` names no week, and a content line libical refuses costs the
+    // whole component — every field of the event, not just its recurrence.
+    if weeks.is_empty() || !"yearly".eq_ignore_ascii_case(&rule.frequency) {
+        return None;
+    }
+    let tokens: Option<Vec<String>> = weeks.iter().copied().map(week_no_token).collect();
+    Some(format!("BYWEEKNO={}", tokens?.join(",")))
+}
+
+/// One week of the year as an `RRULE` writes it — `20`, `-1` — or `None` for a
+/// value no `BYWEEKNO` can carry.
+fn week_no_token(week: i32) -> Option<String> {
+    match week {
+        // RFC 5545's `ordwk` is 1 to 53 — 53 for the week a long year has and a
+        // short one does not — which RFC 8984 §4.3.3 counts backwards from the
+        // end of the year as well. Zero is no week of any year, and neither
+        // format admits it.
+        -53..=-1 | 1..=53 => Some(week.to_string()),
+        _ => None,
+    }
+}
+
 /// The `BYMONTH` part of a rule's `RRULE`, or `None` when the rule names no
 /// months of the year — and, as with [`by_day_part`], when it names ones this
 /// mapping will not write.
@@ -1523,6 +1571,11 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             // [`to_month_day`], whose spelling `yeardaynum` shares.
             "BYYEARDAY" => {
                 rule.by_year_day = Some(value.split(',').map(to_month_day).collect());
+            }
+            // Likewise: `weeknum` is spelled as `monthdaynum` is, and a token
+            // [`to_month_day`] cannot read becomes the zero no week can be.
+            "BYWEEKNO" => {
+                rule.by_week_no = Some(value.split(',').map(to_month_day).collect());
             }
             // Each token verbatim: JSCalendar holds a month as the string
             // iCalendar spells it with, so one this mapping will not write back —
