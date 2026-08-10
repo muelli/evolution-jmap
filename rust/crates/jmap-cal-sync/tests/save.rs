@@ -68,6 +68,28 @@ fn a_new_events_icalendar_uid_becomes_the_jscalendar_uid() {
 }
 
 #[test]
+fn a_new_event_that_states_its_end_rather_than_its_length_still_has_one() {
+    // What Evolution's appointment editor actually writes: DTEND, never
+    // DURATION. An event saved from it used to reach the server with no
+    // duration at all — RFC 8984's P0D — so the meeting the user scheduled for
+    // an hour and a half was shared as a zero-length one.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace("DURATION:PT90M", "DTEND;TZID=Europe/Berlin:20260115T143000");
+
+    let saved = fixture.sync().save_component(&icalendar, None).unwrap();
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(stored.start.as_deref(), Some("2026-01-15T13:00:00"));
+    assert_eq!(stored.duration.as_deref(), Some("PT1H30M"));
+    // And what EDS is handed back says the same, in the one spelling this
+    // mapping writes.
+    assert!(
+        saved.icalendar.contains("\r\nDURATION:PT1H30M\r\n"),
+        "{saved:?}"
+    );
+}
+
+#[test]
 fn editing_an_event_leaves_unmapped_properties_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
