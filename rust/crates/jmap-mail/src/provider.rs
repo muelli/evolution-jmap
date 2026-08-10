@@ -27,7 +27,7 @@ use eds_sys::{
     CamelProviderURLFlags, camel_provider_register,
 };
 use gobject_sys::G_TYPE_INVALID;
-use jmap_backend_core::i18n::DOMAIN;
+use jmap_backend_core::i18n::{DOMAIN, N_};
 
 use crate::store::store_type;
 use crate::transport::transport_type;
@@ -39,6 +39,30 @@ use crate::transport::transport_type;
 /// `.source` file names. `tests/provider.rs` checks the file against this
 /// constant so the two cannot drift.
 pub const PROTOCOL: &CStr = c"jmap";
+
+/// What the account type is called in the list Evolution offers.
+///
+/// Marked with [`N_`] rather than looked up, because the lookup is not ours to
+/// make: Camel calls `dgettext` on this string with the provider's
+/// `translation_domain` — [`DOMAIN`], bound by this module's entry point —
+/// every time it displays it. Translating it here instead would freeze it into
+/// whatever locale was current when the module happened to be dlopened.
+///
+/// A protocol name is not something a language translates, and it is in the
+/// catalogue anyway: a translator whose script is not Latin can only
+/// transliterate it if it is there to transliterate, and a msgid nobody changes
+/// costs a translator one glance.
+// TRANSLATORS: the name of an account type, in the list of account types
+// Evolution offers when adding an account. A protocol name — leave it as it is
+// unless your language writes it in another script.
+const NAME: &CStr = N_(c"JMAP");
+
+/// The one-line description shown beneath [`NAME`] in that same list.
+///
+/// Translated by Camel, for the reason given there.
+// TRANSLATORS: the one-line description of the "JMAP" account type, shown
+// beneath its name in the list of account types.
+const DESCRIPTION: &CStr = N_(c"For reading and storing mail on JMAP servers.");
 
 /// What Evolution may offer a JMAP account as.
 ///
@@ -117,8 +141,8 @@ pub fn register() -> &'static CamelProvider {
 
         let provider = Box::new(CamelProvider {
             protocol: PROTOCOL.as_ptr(),
-            name: c"JMAP".as_ptr(),
-            description: c"For reading and storing mail on JMAP servers.".as_ptr(),
+            name: NAME.as_ptr(),
+            description: DESCRIPTION.as_ptr(),
             // Exactly "mail": evolution-mail filters the provider list by this
             // string, so anything else is a provider that loads and is never
             // offered.

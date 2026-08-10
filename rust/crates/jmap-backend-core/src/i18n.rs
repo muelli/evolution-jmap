@@ -152,6 +152,31 @@ pub fn binding() -> CString {
     unsafe { CStr::from_ptr(bound) }.to_owned()
 }
 
+/// Marks `msgid` for extraction and hands it straight back, untranslated.
+///
+/// gettext's `N_()`: the string has to reach a translator, but *this* is not
+/// where it is looked up. Two situations need that, and both are ordinary here:
+///
+/// - **Somebody else does the lookup.** A `CamelProvider`'s name and
+///   description are `'static` C strings that Camel itself passes to `dgettext`
+///   with the provider's [`DOMAIN`] when it displays them. Calling [`translate`]
+///   on them would be wrong twice over — the module is loaded long before the
+///   user's language matters to that string, and the result would be a
+///   translation into whatever locale happened to be current at load time,
+///   frozen for the life of the process.
+/// - **The string is a constant.** [`translate`] returns an owned `String` and
+///   cannot appear in a `const`; this is a `const fn`, so a marked message can
+///   be a constant and be translated at the point of use.
+///
+/// It compiles to nothing. Its whole job is to be a word `xgettext --keyword`
+/// can be told to look for, which is also why it is spelled in capitals against
+/// Rust's naming convention: `N_` is the spelling every gettext-using project,
+/// every extraction tool's defaults, and every translator's habit already know.
+#[allow(non_snake_case)]
+pub const fn N_(msgid: &CStr) -> &CStr {
+    msgid
+}
+
 /// The translation of `msgid` for the user's language, or `msgid` itself.
 ///
 /// "Or `msgid` itself" is the normal case rather than the failure case, and
