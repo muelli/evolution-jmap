@@ -386,9 +386,8 @@ fn restoring_a_deleted_occurrence_removes_the_override() {
 fn an_instance_edited_on_its_own_survives_an_edit_to_another_instance() {
     let fixture = Fixture::start();
     let id = seed_daily(&fixture);
-    // An override that changes the instance has no iCalendar spelling in a
-    // single VEVENT, so the component the user edited is a narrower view of the
-    // overrides than the server holds.
+    // An override that changes the instance is a VEVENT of its own in the
+    // component, so deleting a *different* occurrence has to leave it standing.
     fixture.patch(
         &id,
         json!({"recurrenceOverrides": {
@@ -404,14 +403,95 @@ fn an_instance_edited_on_its_own_survives_an_edit_to_another_instance() {
     assert_eq!(
         fixture.event(&id).recurrence_overrides,
         Some(
+            [
+                ("2026-01-16T09:00:00".to_owned(), json!({"excluded": true})),
+                (
+                    "2026-01-20T09:00:00".to_owned(),
+                    json!({"title": "Standup with the board"}),
+                )
+            ]
+            .into()
+        ),
+    );
+}
+
+/// The component with `vevent` appended inside its envelope, which is what
+/// editing one occurrence in Evolution amounts to: a second instance of the
+/// same uid, carrying the `RECURRENCE-ID` of the day it replaces.
+fn with_instance(icalendar: &str, vevent: &str) -> String {
+    icalendar.replace("END:VCALENDAR\r\n", &format!("{vevent}END:VCALENDAR\r\n"))
+}
+
+#[test]
+fn editing_one_occurrence_reaches_the_server_as_a_patched_override() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    // A detached instance is a whole component, not a patch: Evolution clones
+    // the series and edits that, so what it restates unchanged — here the
+    // status, and the length it states as a DTEND — is not an edit, and only
+    // the moved start and the new title reach the server.
+    let edited = with_instance(
+        &icalendar,
+        &format!(
+            "BEGIN:VEVENT\r\n\
+             UID:{id}\r\n\
+             RECURRENCE-ID:20260116T090000Z\r\n\
+             DTSTART:20260116T100000Z\r\n\
+             DTEND:20260116T110000Z\r\n\
+             STATUS:CONFIRMED\r\n\
+             SUMMARY:Standup with the board\r\n\
+             END:VEVENT\r\n"
+        ),
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).recurrence_overrides,
+        Some(
             [(
-                "2026-01-20T09:00:00".to_owned(),
-                json!({"title": "Standup with the board"}),
+                "2026-01-16T09:00:00".to_owned(),
+                json!({
+                    "start": "2026-01-16T10:00:00",
+                    "title": "Standup with the board",
+                }),
             )]
             .into()
         ),
-        "narrowing overrides we cannot fully see is worse than ignoring the edit"
     );
+    // The series is what it was: one daily rule, and the title the other
+    // occurrences still carry.
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup"));
+    assert_eq!(stored.recurrence_rules.unwrap()[0].frequency, "daily");
+}
+
+#[test]
+fn undoing_an_edit_to_one_occurrence_removes_the_override() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    fixture.patch(
+        &id,
+        json!({"recurrenceOverrides": {
+            "2026-01-20T09:00:00": {"title": "Standup with the board"},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RECURRENCE-ID:20260120T090000Z"),
+        "{icalendar}"
+    );
+    // Deleting the detached instance is how Evolution says "this occurrence is
+    // like the others again".
+    let detached = icalendar.rfind("BEGIN:VEVENT").expect("two instances");
+    let series = format!("{}END:VCALENDAR\r\n", &icalendar[..detached]);
+    sync.save_component(&series, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.event(&id).recurrence_overrides, None);
 }
 
 #[test]

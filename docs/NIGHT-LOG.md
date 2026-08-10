@@ -13516,3 +13516,96 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last seven sessions asked for is still unwritten; the manual-test
 recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-sixth session)
+
+Editing one occurrence of a recurring event was the half of "not that one" the
+last session left. Deleting an occurrence now reaches the server; *changing*
+one did not — Evolution writes it as a second `VEVENT` with the same `UID` and
+a `RECURRENCE-ID` naming the day it replaces (RFC 5545 §3.8.4.4), and both ends
+of this project threw that component away. `marshal::icalendar_from_instances`
+put only the master in the envelope it handed the mapping, and `jmap-ical` read
+only the first `VEVENT` and wrote only one. So the user's "Sprint review on the
+29th" never left the machine, and the server's own edited instance came back
+from `load_component_sync` as an ordinary occurrence at the series' title.
+
+**Both directions, because either alone is worse than neither.** Rendering an
+override as a component without reading one back would make the *next* save
+delete it: the save path diffs the edited component against a re-rendering of
+what the server holds, so an override the writer draws and the reader cannot
+see is a difference, and `recurrenceOverrides` would be patched down to what
+the reader found. The same for marshal: once the mapping draws an edited
+instance, a save that dropped the detached components before parsing them says
+"that day is like every other" and means it. The three changes are one change.
+
+**Red first, and the vacuous ones mutated.** Fifteen new tests in `jmap-ical`
+(the component and its round trip, an instance moved to another time, one that
+drops a property with a `null`, one both edited and excluded, five patches the
+drawing cannot take, a half-known patch, the all-day forms both ways, the
+series found whatever its position, a detached instance that restates the
+series, one with no series at all, `RANGE=THISANDFUTURE`, and a detached
+instance beside an `RDATE` for the same instant), three in `jmap-cal-sync`
+against `jmap-mockd`, and the rewritten marshal test. Ten failed on assertions
+immediately. Four passed against the old code, so each was checked by mutating
+what it guards — letting an `excluded` override say more, accepting any patch
+key, ignoring `RANGE`, and not skipping the series in the detached loop each
+fail a named test. `ctest` still runs the four functional tests through real
+EDS daemons; no functional test covers an *edited* occurrence yet, which is the
+gap in this increment (it needs `e_cal_client_modify_object_sync` with
+`E_CAL_OBJ_MOD_THIS` in `tests/functional/cal-client.c`).
+
+**What an override may say, and what it still may not.** `OVERRIDE_PROPERTIES`
+is the new machine-readable list: `title`, `description`, `start`, `duration`,
+`status`. A patch naming anything else — a location, a participant, an alert —
+is still *drawn* with a bare `RDATE` at the series' title and still flagged by
+`maps_recurrence_override`, exactly as an `RRULE` that had to drop its `byDay`
+is. `timeZone` is deliberately out: every date-time in the document is written
+in the series' zone, so an instance in another one has no spelling here.
+`excluded` is now exclusive — an override that is off may say nothing else,
+because the `EXDATE` carrying it has nowhere to put an edited title, so
+`{"excluded": true, "title": …}` is flagged rather than silently truncated.
+
+Three readings worth writing down. A detached instance is a *whole component*,
+not a patch, so a property the series has and the instance does not comes back
+as a `null` — which is how a PatchObject removes one, and the only reading
+that lets a user clear an instance's description. An override's key *is* its
+instance's start (RFC 8984 §4.3.4), so `DTSTART` is compared against the
+`RECURRENCE-ID` rather than against the series, and says something only when
+the occurrence moved. And `RANGE=THISANDFUTURE` (RFC 5545 §3.2.13) is skipped
+rather than read: it stands for every instance from that one on, which
+`recurrenceOverrides` has no single entry for, so reading it as one would move
+one day and drop the change to all the others. Evolution splits the series
+instead of writing it, so this should not arise — but misreading it would move
+appointments, and skipping it only loses an edit.
+
+`shows_without_time` grew the matching conditions: an edited instance's own
+start has to be midnight and its length whole days, or the DATE form cannot
+hold it and the whole document goes out timed — the same trade already made for
+an `UNTIL` or an `EXDATE` at 09:00.
+
+Verified locally: `cargo test --locked` 541 (was 527: +14 net, 15 added and one
+rewritten), the EDS-header crates green via the `rust-test-eds` set, `ctest`
+14/14, `cargo fmt --check`, and `cargo clippy --all-targets --locked -D
+warnings` clean for both crate sets. `reuse lint` and `cargo deny` not run
+(neither is on this VM); no files were added, so no new SPDX headers were
+needed, and no dependency changed.
+
+Next in this area: a functional test for an edited occurrence, which is the
+level this increment is missing. Then an `RDATE` of `VALUE=PERIOD` (legal, not
+something Evolution writes) is read as its start and written back as a plain
+date-time; a per-instance `timeZone` has no spelling; and `DTEND` is still the
+only way Evolution states a length while `DURATION` is the only way we write
+one, so a re-saved event patches `duration` to the equivalent spelling — which
+now applies to an instance's duration too, where calcard also normalises
+`PT60M` to `PT1H`, so an unrelated edit rewrites the spelling of a length that
+did not change.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last eight sessions asked for is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
+dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
