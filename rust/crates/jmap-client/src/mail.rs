@@ -22,6 +22,7 @@ use serde_json::Value;
 use crate::client::Client;
 use crate::error::Error;
 use crate::transport::HttpMethod;
+use crate::url::encode_template_value;
 
 /// Pull the object for `creation_id` out of a `/set` response, mapping a
 /// rejection to [`Error::Set`].
@@ -738,7 +739,7 @@ impl Client {
         let url = self
             .session()
             .upload_url
-            .replace("{accountId}", account_id.as_str());
+            .replace("{accountId}", &encode_template_value(account_id.as_str()));
         let response = self.execute_with_content_type(
             HttpMethod::Post,
             &url,
@@ -750,6 +751,15 @@ impl Client {
 
     /// Download a blob's raw bytes via the session's `downloadUrl` template
     /// (RFC 8620 §6.2).
+    ///
+    /// The `name` is a label for the download, not part of its identity: the
+    /// blob is addressed by `account_id` and `blob_id` alone, and the name is
+    /// only what the server may echo as the `Content-Disposition` filename.
+    /// It still has to be encoded — a label is no less able to reshape a URL
+    /// than an id is.
+    ///
+    /// Every substituted value is percent-encoded — see [`crate::url`] for why
+    /// that matters when the values are the server's own.
     pub fn download_blob(
         &self,
         account_id: &Id,
@@ -759,10 +769,10 @@ impl Client {
         let url = self
             .session()
             .download_url
-            .replace("{accountId}", account_id.as_str())
-            .replace("{blobId}", blob_id.as_str())
-            .replace("{name}", name)
-            .replace("{type}", "application/octet-stream");
+            .replace("{accountId}", &encode_template_value(account_id.as_str()))
+            .replace("{blobId}", &encode_template_value(blob_id.as_str()))
+            .replace("{name}", &encode_template_value(name))
+            .replace("{type}", &encode_template_value("application/octet-stream"));
         let response = self.execute(HttpMethod::Get, &url, None)?;
         Ok(response.body)
     }

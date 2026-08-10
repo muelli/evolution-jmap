@@ -376,7 +376,8 @@ fn handle_request(
         }
         (tiny_http::Method::Post, _) if path.starts_with("/upload/") => {
             // /upload/{accountId} (RFC 8620 §6.1)
-            let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            let decoded = path_segments(&path);
+            let segments: Vec<&str> = decoded.iter().map(String::as_str).collect();
             let ["upload", account_id] = segments.as_slice() else {
                 respond_json(
                     request,
@@ -439,7 +440,8 @@ fn handle_request(
         }
         (tiny_http::Method::Get, _) if path.starts_with("/download/") => {
             // /download/{accountId}/{blobId}/{name}
-            let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            let decoded = path_segments(&path);
+            let segments: Vec<&str> = decoded.iter().map(String::as_str).collect();
             let ["download", account_id, blob_id, _name] = segments.as_slice() else {
                 respond_json(
                     request,
@@ -481,6 +483,66 @@ fn handle_request(
             404,
             &json!({"status": 404, "detail": format!("no route for {path}")}),
         ),
+    }
+}
+
+/// Split a request path into its segments, each percent-decoded.
+///
+/// The blob endpoints are the only routes here whose path holds values a
+/// client chose, and RFC 8620 §6.1/§6.2 tell that client to URI-encode each
+/// one before it substitutes it into the template this server published. So
+/// the escapes have to come back off, and — this is the part that matters —
+/// the split has to happen *first*: an `%2F` inside an id is a character of
+/// the id, not a separator, and decoding before splitting would let a
+/// server-chosen value invent a path segment. That is precisely the confusion
+/// the encoding exists to prevent.
+fn path_segments(path: &str) -> Vec<String> {
+    path.trim_start_matches('/')
+        .split('/')
+        .map(percent_decode)
+        .collect()
+}
+
+/// Undo percent-encoding in one path segment.
+///
+/// A `%` that is not followed by two hex digits is kept as itself rather than
+/// rejected: this is a test server, and a malformed escape should surface as
+/// the 404 of an id that matches nothing, not as a parse error that hides
+/// which id was asked for. Decoded octets that are not UTF-8 go through
+/// [`String::from_utf8_lossy`] for the same reason — a `jmap_proto::Id` is a
+/// `String`, so bytes that spell no string can only miss the lookup.
+fn percent_decode(segment: &str) -> String {
+    let bytes = segment.as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match (bytes[index], bytes.get(index + 1), bytes.get(index + 2)) {
+            (b'%', Some(high), Some(low)) => match (hex_value(*high), hex_value(*low)) {
+                (Some(high), Some(low)) => {
+                    decoded.push((high << 4) | low);
+                    index += 3;
+                }
+                _ => {
+                    decoded.push(b'%');
+                    index += 1;
+                }
+            },
+            _ => {
+                decoded.push(bytes[index]);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// One hex digit's value, in either case, or `None` if it is not one.
+fn hex_value(digit: u8) -> Option<u8> {
+    match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        b'A'..=b'F' => Some(digit - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -578,5 +640,39 @@ fn session_document(state: &ServerState, origin: &str) -> Session {
         event_source_url: format!("{origin}/eventsource"),
         state: state.session_state(),
         extra: Default::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{path_segments, percent_decode};
+
+    #[test]
+    fn an_escaped_separator_stays_inside_its_segment() {
+        assert_eq!(
+            path_segments("/download/A1/b%2F1/name.bin"),
+            ["download", "A1", "b/1", "name.bin"],
+            "%2F is a character of the id, not a path separator"
+        );
+    }
+
+    #[test]
+    fn the_escapes_a_client_writes_come_back_off() {
+        assert_eq!(percent_decode("b%231%3F2%2F3%204%255"), "b#1?2/3 4%5");
+        assert_eq!(percent_decode("%C3%A4"), "ä");
+        assert_eq!(percent_decode("%c3%a4"), "ä", "hex digits in either case");
+    }
+
+    #[test]
+    fn a_segment_without_escapes_is_itself() {
+        assert_eq!(percent_decode("B1"), "B1");
+        assert_eq!(percent_decode(""), "");
+    }
+
+    #[test]
+    fn a_malformed_escape_is_kept_rather_than_swallowed() {
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("a%zz"), "a%zz");
+        assert_eq!(percent_decode("%2"), "%2");
     }
 }
