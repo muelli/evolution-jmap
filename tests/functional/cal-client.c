@@ -65,6 +65,17 @@
  * `FREE_BUSY_STATUS` in `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_TRANSP "TRANSPARENT"
 
+/* And how important it is: PRIORITY on the component (RFC 5545 §3.8.1.9), a
+ * JSCalendar `priority` on the server (RFC 8984 §4.4.1). The same integer in
+ * both formats, which is what makes this leg about the *plumbing* rather than
+ * about a translation — the mapping's own tests supply the property by hand, so
+ * only real EDS says whether a numeric property a libecal consumer wrote is
+ * still on the component the meta backend's cache hands back. 1 rather than 0,
+ * because 0 is the state a component with no line on it is already in. The same
+ * value is asserted from both ends; see `PRIORITY` in
+ * `rust/crates/jmap-functional/tests/calendar.rs`. */
+#define TEST_PRIORITY "1"
+
 /* And an all-day event, written the way Evolution writes one: DATE values
  * rather than DATE-TIMEs, on both ends. RFC 5545 §3.6.1's other form of an
  * event, and the only thing in iCalendar that says "this is a day, not a time
@@ -392,6 +403,7 @@ main (int argc,
 	gchar *icalendar;
 	gchar *categories;
 	gchar *transp;
+	gchar *priority;
 	gchar *exdates;
 	gchar *rrule;
 	gchar *tzid;
@@ -495,9 +507,10 @@ main (int argc,
 		"LOCATION:%s\r\n"
 		"CATEGORIES:%s\r\n"
 		"TRANSP:%s\r\n"
+		"PRIORITY:%s\r\n"
 		"END:VEVENT\r\n",
 		TEST_DTSTART, TEST_DTEND, summary, TEST_LOCATION, TEST_CATEGORIES,
-		TEST_TRANSP);
+		TEST_TRANSP, TEST_PRIORITY);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 
@@ -549,6 +562,12 @@ main (int argc,
 	transp = joined_values (read_back_event, I_CAL_TRANSP_PROPERTY);
 	g_print ("read-back-transp=%s\n", transp);
 	g_free (transp);
+	/* And how important it is, read as text for the same reason:
+	 * i_cal_property_get_priority reports a missing property as 0, which is
+	 * exactly the state a lost PRIORITY would leave the component in. */
+	priority = joined_values (read_back_event, I_CAL_PRIORITY_PROPERTY);
+	g_print ("read-back-priority=%s\n", priority);
+	g_free (priority);
 	g_object_unref (read_back_event);
 
 	/* The all-day one, through the same path. Written second so that a

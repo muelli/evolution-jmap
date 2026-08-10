@@ -46,7 +46,7 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
 
     // A property the iCalendar mapping drops: EDS cannot see it change, so
     // re-downloading every event because of it would be pure churn.
-    fixture.patch(&id, json!({"priority": 5}));
+    fixture.patch(&id, json!({"useDefaultAlerts": true}));
     assert_eq!(sync.load_component(id.as_str()).unwrap().revision, before);
 
     fixture.patch(&id, json!({"title": "Standup (short)"}));
@@ -66,6 +66,12 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
     // server has to show up in Evolution's category list.
     let before = sync.load_component(id.as_str()).unwrap().revision;
     fixture.patch(&id, json!({"keywords": {"offsite": true}}));
+    assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
+
+    // And the importance, which reaches it as PRIORITY. (This was the exemplar of
+    // a *dropped* property above until the property became mapped.)
+    let before = sync.load_component(id.as_str()).unwrap().revision;
+    fixture.patch(&id, json!({"priority": 1}));
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 }
 

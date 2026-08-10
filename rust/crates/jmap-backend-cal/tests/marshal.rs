@@ -1127,6 +1127,45 @@ fn libical_neither_invents_a_transparency_nor_respells_one() {
     }
 }
 
+/// How important an event is, through the parser that actually reads it.
+///
+/// Two readings rest on this. `jmap-ical` reads a missing `PRIORITY` as *nothing
+/// said* rather than as RFC 5545 §3.8.1.9's undefined priority, so a save can tell
+/// an event the server never gave an importance from one the user just made
+/// unimportant — which is only sound if the component EDS hands back does not
+/// acquire a line the mapping never wrote.
+///
+/// And `PRIORITY:0` is written out rather than left off, even though RFC 5545
+/// §3.8.1.9 and RFC 8984 §4.4.1 both make 0 and no value the same state. That is
+/// the reading with something to lose: were libical to drop the property as
+/// meaning nothing, an event the server states as 0 would come back with no line,
+/// read as `None`, and every save of it would carry a redundant `"priority": null`
+/// — the same state, so not wrong, but a write nobody asked for.
+///
+/// It does neither: no line stays no line, and every value 0 to 9 comes back as
+/// itself. What this cannot say is what Evolution's *appointment editor* writes —
+/// but for once that question has an answer that does not need a display:
+/// `e_comp_editor_property_part_priority_new` is called only from
+/// `e_comp_editor_task` and `e_bulk_edit_tasks` in Evolution 3.52's
+/// `libevolution-calendar.so`, never from `e_comp_editor_event`. The event editor
+/// has no priority control at all, so it has nothing to write and leaves the line
+/// as it found it — which is what makes this probe the whole story for events.
+#[test]
+fn libical_neither_invents_a_priority_nor_respells_one() {
+    assert_eq!(
+        reparsed("PRIORITY", "DESCRIPTION:the quarter"),
+        Vec::<String>::new(),
+        "libical filled in an undefined priority"
+    );
+    for priority in 0..=9 {
+        let line = format!("PRIORITY:{priority}");
+        assert_eq!(reparsed("PRIORITY", &line), vec![line.clone()]);
+        let object = reparsed_object(&line);
+        let read_back = jmap_ical::ical_to_event(&object).expect("parse");
+        assert_eq!(read_back.priority, Some(priority), "{object}");
+    }
+}
+
 /// The `LOCATION` lines of a `VEVENT` after libical has parsed and re-rendered
 /// it, unfolded.
 fn reparsed_lines(lines: &str) -> Vec<String> {

@@ -188,13 +188,14 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     // Properties no component we produce can carry. (`locations` was the
     // exemplar here until the place an event happens at became mapped,
-    // `keywords` until the tags did and `freeBusyStatus` until the transparency
-    // did; the guest list and the priority are still nowhere on a component.)
+    // `keywords` until the tags did, `freeBusyStatus` until the transparency did
+    // and `priority` until the importance did; the guest list and the reminders
+    // are still nowhere on a component.)
     fixture.patch(
         &id,
         json!({
             "participants": {"p1": {"@type": "Participant", "email": "vera@example.com"}},
-            "priority": 5,
+            "useDefaultAlerts": true,
         }),
     );
     let sync = fixture.sync();
@@ -206,8 +207,8 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let stored = fixture.event(&id);
     assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
     assert_eq!(
-        stored.extra.get("priority"),
-        Some(&json!(5)),
+        stored.extra.get("useDefaultAlerts"),
+        Some(&json!(true)),
         "an unmapped property was overwritten"
     );
     assert!(stored.extra.contains_key("participants"));
@@ -2181,6 +2182,144 @@ fn marking_one_occurrence_free_reaches_the_server_as_an_override() {
             )]
             .into()
         )
+    );
+}
+
+/// An event whose importance the server states, and the component Evolution is
+/// shown for it.
+fn prioritised(fixture: &Fixture, priority: serde_json::Value) -> (jmap_proto::Id, String) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"priority": priority}));
+    let icalendar = fixture
+        .sync()
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar;
+    (id, icalendar)
+}
+
+#[test]
+fn making_an_event_urgent_reaches_the_server_as_a_priority() {
+    // A PRIORITY line on the component (RFC 5545 §3.8.1.9) and RFC 8984 §4.4.1's
+    // `priority` on the server, which are the same integer. The event the mock
+    // holds says nothing about it, so this is also the case of a property the save
+    // creates rather than changes.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(!icalendar.contains("PRIORITY"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup\r\nPRIORITY:1");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.event(&id).priority, Some(1));
+}
+
+#[test]
+fn the_priority_the_server_states_is_shown_and_left_alone_by_an_unrelated_edit() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = prioritised(&fixture, json!(5));
+    assert!(icalendar.contains("PRIORITY:5"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(stored.priority, Some(5));
+}
+
+#[test]
+fn lowering_an_events_priority_sends_the_number_the_component_now_carries() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = prioritised(&fixture, json!(1));
+
+    let edited = icalendar.replace("PRIORITY:1", "PRIORITY:9");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).priority, Some(9));
+}
+
+#[test]
+fn removing_the_priority_line_removes_the_property() {
+    // A PatchObject removes a property to say "back to the default", and RFC 8984
+    // §4.4.1's default is 0 — which is also what RFC 5545 §3.8.1.9 means by a
+    // VEVENT with no PRIORITY on it, so the two agree about what the user just
+    // asked for.
+    let fixture = Fixture::start();
+    let (id, icalendar) = prioritised(&fixture, json!(5));
+
+    let edited = icalendar.replace("PRIORITY:5\r\n", "");
+    assert!(!edited.contains("PRIORITY"), "{edited}");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).priority, None);
+}
+
+#[test]
+fn a_priority_the_component_could_not_show_is_not_cleared_by_a_save() {
+    // The range both formats share is 0..=9 and this server answered outside it,
+    // so no PRIORITY line was drawn. The baseline is what keeps that from reading
+    // as the user clearing the field: the server's own event goes through the same
+    // rendering, loses the value on both sides, and the save sends nothing.
+    let fixture = Fixture::start();
+    let (id, icalendar) = prioritised(&fixture, json!(42));
+    assert!(!icalendar.contains("PRIORITY"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.priority,
+        Some(42),
+        "a value the component never showed cannot have been edited"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
+        "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn making_one_occurrence_urgent_reaches_the_server_as_an_override() {
+    // One occurrence of a series marked important: EDS keeps the master and adds a
+    // VEVENT carrying its RECURRENCE-ID, and the priority on that component is the
+    // one property of it that differs.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Everything the series states, restated — an instance is compared against
+    // the series property by property, so a line left off here would be an edit
+    // to that property and not to the priority.
+    let instance = format!(
+        "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
+         DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
+         STATUS:CONFIRMED\r\nPRIORITY:1\r\nEND:VEVENT\r\n"
+    );
+    let edited = icalendar.replace("END:VCALENDAR", &format!("{instance}END:VCALENDAR"));
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).recurrence_overrides,
+        Some([("2026-01-22T09:00:00".to_owned(), json!({"priority": 1}))].into())
     );
 }
 

@@ -5,10 +5,10 @@
 //!
 //! The mapped set is the one the calendar backend needs to be useful — UID,
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
-//! the event is shown without a time), DURATION, STATUS, TRANSP, LOCATION,
-//! CATEGORIES, RRULE, and the instances an EXDATE, an RDATE or a
+//! the event is shown without a time), DURATION, STATUS, TRANSP, PRIORITY,
+//! LOCATION, CATEGORIES, RRULE, and the instances an EXDATE, an RDATE or a
 //! `RECURRENCE-ID` component names one at a time — and no more. Everything
-//! else on an event (participants, alarms, links, priority, …) is *dropped*,
+//! else on an event (participants, alarms, links, …) is *dropped*,
 //! which is only safe because saving goes back to the server as a PatchObject
 //! naming the mapped properties: a property we never mapped is a property we
 //! never overwrite. See [`MAPPED_PROPERTIES`], [`maps_locations`],
@@ -112,6 +112,19 @@ const STATUSES: [(&str, &str); 3] = [
 /// no property does, and neither direction has to invent one.
 const FREE_BUSY_STATUSES: [(&str, &str); 2] = [("free", "TRANSPARENT"), ("busy", "OPAQUE")];
 
+/// The importances both formats admit: RFC 8984 §4.4.1's `priority` and RFC 5545
+/// §3.8.1.9's `PRIORITY` are the same integer with the same meaning — 0
+/// undefined, 1 highest, 9 lowest — so this range crosses digit for digit and a
+/// value outside it is dropped, as a value outside a closed vocabulary is.
+///
+/// The two also agree that 0 and no value at all are the same state. That does
+/// *not* make 0 something to leave off: an event whose `priority` the server
+/// states as 0 is written `PRIORITY:0` and read straight back, so the round trip
+/// is the identity and the save path has nothing to explain. What it does mean is
+/// that clearing the field — `"priority": null` — and setting it to 0 ask a server
+/// for the same thing.
+const PRIORITIES: std::ops::RangeInclusive<i64> = 0..=9;
+
 /// The JSCalendar properties this mapping covers, and therefore the only ones
 /// a save may name in a `CalendarEvent/set` update patch.
 ///
@@ -122,7 +135,7 @@ const FREE_BUSY_STATUSES: [(&str, &str); 2] = [("free", "TRANSPARENT"), ("busy",
 /// `locations` is also the one property named *into* rather than replaced: a
 /// save patches `locations/<key>/name`, so the rest of the entry stays. See
 /// [`X_JMAP_KEY`].
-pub const MAPPED_PROPERTIES: [&str; 12] = [
+pub const MAPPED_PROPERTIES: [&str; 13] = [
     "title",
     "description",
     "start",
@@ -131,6 +144,7 @@ pub const MAPPED_PROPERTIES: [&str; 12] = [
     "showWithoutTime",
     "status",
     "freeBusyStatus",
+    "priority",
     "locations",
     "keywords",
     "recurrenceRules",
@@ -148,7 +162,7 @@ pub const MAPPED_PROPERTIES: [&str; 12] = [
 ///
 /// `showWithoutTime` is absent, one step further out — see
 /// [`shows_without_time`], which is decided once for the whole document.
-pub const OVERRIDE_PROPERTIES: [&str; 7] = [
+pub const OVERRIDE_PROPERTIES: [&str; 8] = [
     "title",
     "description",
     "start",
@@ -156,6 +170,7 @@ pub const OVERRIDE_PROPERTIES: [&str; 7] = [
     "duration",
     "status",
     "freeBusyStatus",
+    "priority",
 ];
 
 /// Whether the places an event happens at survive the trip through iCalendar
@@ -395,6 +410,12 @@ fn maps_override_field(name: &str, value: &Value) -> bool {
         // back to the default, which the component says by carrying no line —
         // the state an event with no property is in anyway.
         "freeBusyStatus" => value.is_null() || value.as_str().is_some_and(known_transparency),
+        // The same again, one type over: a `PRIORITY` this mapping cannot write
+        // leaves the instance as important as the series is, which is what the
+        // override said it is *not*. `as_i64` also refuses the number spelled as a
+        // string or as a fraction, neither of which reaches a content line as the
+        // integer that would come back.
+        "priority" => value.is_null() || value.as_i64().is_some_and(known_priority),
         // A start is required by RFC 8984, so a null says nothing, and the
         // value has to be one a DTSTART can carry.
         "start" => value.as_str().and_then(to_ical_date_time).is_some(),
@@ -577,6 +598,12 @@ fn vevent_of(
         vevent = vevent.with(Property::raw("TRANSP", transparency));
     }
 
+    // How important the event is. Only a number inside the range both formats
+    // admit — see [`PRIORITIES`], which is also what reads the property back.
+    if let Some(priority) = event.priority.filter(|priority| known_priority(*priority)) {
+        vevent = vevent.with(Property::raw("PRIORITY", &priority.to_string()));
+    }
+
     // One place of possibly several, by name, with the key it came from riding
     // alongside so a save can patch that entry rather than replace the property.
     // See [`maps_locations`] for what the drawing leaves out.
@@ -641,6 +668,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         show_without_time: event.show_without_time,
         status: event.status.clone(),
         free_busy_status: event.free_busy_status.clone(),
+        priority: event.priority,
         // Inherited, not patchable: RFC 8984 §4.3.4 has an instance hold every
         // property its override does not restate, and an override may name
         // neither a place nor a tag ([`OVERRIDE_PROPERTIES`]). Leaving them off
@@ -654,6 +682,14 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
     let mut modified = false;
     for (name, value) in fields {
         if !maps_override_field(name, value) {
+            continue;
+        }
+        // The one restatable property that is not text. Checked above, so a null
+        // clears the importance and anything else is an integer inside the range
+        // both formats admit.
+        if name == "priority" {
+            instance.priority = value.as_i64();
+            modified = true;
             continue;
         }
         // Checked above: a null removes the property, and anything else here is
@@ -761,6 +797,27 @@ fn ical_transparency(free_busy_status: &str) -> Option<&'static str> {
 
 fn known_transparency(free_busy_status: &str) -> bool {
     ical_transparency(free_busy_status).is_some()
+}
+
+/// Whether an importance is one both formats admit — see [`PRIORITIES`].
+fn known_priority(priority: i64) -> bool {
+    PRIORITIES.contains(&priority)
+}
+
+/// The JSCalendar `priority` a `PRIORITY` states, or `None` where the component
+/// states none this mapping can carry — an integer outside the shared range, or
+/// something that is no integer at all, which is read as nothing said like every
+/// other unreadable value rather than passed on for the server to reject.
+///
+/// `parse` is deliberately strict about what an integer is: it refuses leading
+/// space, a fraction and a second value after a comma, none of which is the RFC
+/// 5545 §3.3.8 INTEGER the property is defined to carry.
+fn read_priority(vevent: &Component) -> Option<i64> {
+    vevent
+        .text("PRIORITY")?
+        .parse()
+        .ok()
+        .filter(|priority| known_priority(*priority))
 }
 
 /// The JSCalendar `freeBusyStatus` a `TRANSP` states, or `None` where the
@@ -918,6 +975,7 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
                 .map(|(jscalendar, _)| (*jscalendar).to_owned())
         }),
         free_busy_status: read_transparency(vevent),
+        priority: read_priority(vevent),
         locations: read_locations(vevent),
         keywords: read_keywords(vevent),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
@@ -1157,6 +1215,16 @@ fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) ->
                 now.clone().map_or(Value::Null, Value::String),
             );
         }
+    }
+    // The one restated property that is not text, compared the same way: an
+    // instance whose component carries no `PRIORITY` where the series does is an
+    // occurrence the user made unimportant, which is the `null` a PatchObject
+    // removes a property with.
+    if series.priority != instance.priority {
+        patch.insert(
+            "priority".to_owned(),
+            instance.priority.map_or(Value::Null, Value::from),
+        );
     }
     if let Some(start) = instance.start.as_deref().filter(|start| *start != id) {
         patch.insert("start".to_owned(), Value::String(start.to_owned()));

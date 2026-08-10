@@ -45,6 +45,13 @@ const KEYWORDS: [&str; 2] = ["offsite", "planning"];
 const TRANSP: &str = "TRANSPARENT";
 const FREE_BUSY_STATUS: &str = "free";
 
+/// And how important it is — the `PRIORITY` in `tests/functional/cal-client.c`,
+/// which has to reach the server as a JSCalendar `priority` (RFC 8984 §4.4.1).
+/// The one mapped property that is a number rather than text on both sides, so
+/// this is the leg that says a numeric property survives EDS's cache; 1 rather
+/// than the 0 both formats treat as no value at all.
+const PRIORITY: &str = "1";
+
 /// The length of that event, which the client states as a `DTEND` — the way
 /// Evolution's editor does — an hour and a half after the start. Nothing but
 /// this test says the two forms end up alike on the server.
@@ -346,6 +353,14 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(&TRANSP),
         "the event EDS handed back blocks time after all\n{report}"
     );
+    // And how important it is. An empty string here is a component EDS handed back
+    // with no PRIORITY on it, which reads as the undefined importance both formats
+    // default to — so the number the client asked for would be gone.
+    assert_eq!(
+        seen.get("read-back-priority"),
+        Some(&PRIORITY),
+        "the event EDS handed back lost its priority\n{report}"
+    );
     // What EDS made of the edit, read back through the client rather than off
     // the server: `ECalMetaBackend` holds a series and its detached instances
     // as one object, so a component set that lost the override here would have
@@ -523,6 +538,17 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(FREE_BUSY_STATUS),
         "the event reached the server blocking time, so the TRANSP the client \
          wrote was lost: {event:?}"
+    );
+    // And the importance, as the server holds it: the integer both formats spell
+    // the same way, which is the reading a mapping that dropped the property would
+    // leave as nothing at all.
+    assert_eq!(
+        event
+            .priority
+            .map(|priority| priority.to_string())
+            .as_deref(),
+        Some(PRIORITY),
+        "the priority the client wrote did not reach the server: {event:?}"
     );
 
     // The all-day one, and the property that is the whole point of it: without
