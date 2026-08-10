@@ -14899,3 +14899,113 @@ asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
 two; the *reading* direction of a per-instance zone through real EDS is untested;
 calcard silently drops or wraps an unreadable `BYDAY`/`BYMONTHDAY` token below
 this crate, which only an upstream fix reaches.
+
+## 2026-08-10 (hundred-and-fifty-first session)
+
+A rule can now name the day its weeks start on. `firstDayOfWeek` — RFC 8984
+§4.3.3's weekday, iCalendar's `WKST` — is modeled rather than parked in
+`RecurrenceRule::extra`, and it is the first rule part whose *absence* from the
+`RRULE` this mapping writes is not a refusal.
+
+**Why it is not decoration.** RFC 5545 §3.3.10 counts a
+`FREQ=WEEKLY;INTERVAL=2` series' weeks from this day, so the same `byDay`
+counted from Sunday and from Monday names different Tuesdays. A rule holding it
+used to fail `maps_recurrence_rule` on the `extra` check, so the whole recurrence
+was read-only; now it crosses in both directions.
+
+**The default is dropped, and that is measured rather than chosen.** libical
+drops `WKST=MO` from a rule it reads — Monday is §3.3.10's default — while
+calcard keeps it verbatim. The save path's baseline is our own drawing put
+through calcard, and the *edited* side comes back through libical (EDS's cache),
+so writing `WKST=MO` would produce a baseline holding `mo` against an edited side
+holding nothing: a patch removing `firstDayOfWeek` that the user never asked for.
+So `first_day_of_week_part` leaves Monday off, exactly as `INTERVAL=1` is left
+off. The cost is named in the rustdoc: a save that patches `recurrenceRules` for
+some other reason drops an explicit `firstDayOfWeek: "mo"` the server held —
+which is the value the property defaults to, so the rule still names the same
+dates.
+
+That asymmetry forced a shape change in `maps_recurrence_rule`. Every other part
+is checked by asking whether its `*_part` function produced anything; for this
+one that would flag a Monday rule as unmappable, so the check asks
+`weekday_token` about the *value* instead. Same answer for a bad day, right
+answer for the default.
+
+**No frequency gate, and the refusal is expensive.** libical keeps `WKST=SU`
+beside `DAILY`, `WEEKLY`, `MONTHLY` and `YEARLY` — §3.3.10 says only where the
+part is *significant*, which is a reader's business — so dropping it where the
+parser keeps it would be this mapping inventing a narrowing of its own. But
+`WKST=XX` and `WKST=` cost the **entire** `RRULE`, the expensive failure an
+out-of-range day of the month has: the event would reach EDS's cache as a single
+appointment with the user's series gone. Hence the closed vocabulary, and hence
+the refusal is worth having even though calcard drops such a token before this
+crate sees it (the same below-this-crate narrowing an unreadable `BYDAY` gets).
+
+**Only the lower-case spelling.** `weekday_token` refuses `MO` and `SU` for the
+reason `month_token` refuses `03`: RFC 8984 spells the day in lower case, so a
+value in another case is one this mapping would hand back respelled, and a rule
+that comes back spelled differently reads as an edit the user never made. The
+parser can only produce the canonical spelling, so nothing legitimate is lost.
+`WKST` is written last, after `BYMONTH`, which is where both libical and calcard
+put it.
+
+Ten tests, red first: one in `jmap-proto/tests/calendars.rs` against a new
+fixture (`su` modeled, `extra` empty), seven in `jmap-ical/tests/event.rs` (the
+day out and back beside `INTERVAL=2;BYDAY=TU`; all five modeled parts at once in
+libical's order; Monday left off while the rule still maps; the day carried at
+all four frequencies; every weekday of the vocabulary round-tripped; a
+hand-written `WKST=sa` arriving canonical; seven shapes of impossible day —
+including `MO` and `SU` — flagged and left off the `RRULE`), one in
+`jmap-backend-cal/tests/marshal.rs` (the five libical answers above), and two in
+`jmap-cal-sync/tests/save.rs` against the mock (Sunday becoming Saturday on the
+server; a rule the server holds with `firstDayOfWeek: "xx"` keeping its day while
+a `COUNT=4` added in the same save is dropped and the title edit lands).
+
+The two mock-level tests were red only by assertion, so both were
+mutation-checked. The first one's mutation is dropping the `WKST` read arm: the
+save then finds nothing changed and Sunday stays. The second's is dropping the
+new `maps_recurrence_rule` clause: `xx` is then *cleared* from the server's rule
+by a save that never touched the recurrence — and the first draft of that test
+did **not** catch it, because with only a title edit the baseline and the edited
+rule agree and the property is never patched at all. The test was rewritten to
+edit the recurrence too, which is the scenario the clause exists for; that is the
+session's one real correction. `first_day_of_week_part`'s Monday drop and
+`weekday_token`'s case check were mutation-checked the same way and each bites.
+
+Verified locally: `cargo test --locked` 617 (up 10), `cargo test -p
+jmap-backend-cal --locked` 23 in `marshal` (up 1), `ctest` 14/14 including all
+four functional legs against real EDS, `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal`. `reuse lint` and `cargo deny` not run (neither is on this
+VM); the one file added is a JSON fixture, covered by `REUSE.toml`'s
+`rust/crates/*/tests/fixtures/**` annotation rather than a header; no dependency
+changed.
+
+No milestone tag. What this session did **not** do: no functional leg through
+real EDS for a fortnightly series counted from Sunday — the libical round-trip
+test is what stands in for it, as it did for `byMonthDay`, `byMonth` and
+`byYearDay`, and it answers the question a functional leg would (does the
+spelling survive the parser EDS uses). `byWeekNo` is now unblocked — its meaning
+depends on this day — but is deliberately left for its own session: libical keeps
+`BYWEEKNO=54` and `-53` verbatim while `0` costs the whole rule (measured
+tonight in passing), so it needs the same range/refusal treatment `byYearDay`
+got rather than a copy of this. `bySetPosition`, `byHour`/`byMinute`/`bySecond`,
+`rscale` and `skip` are still unmodeled, and a rule holding one is still drawn
+narrowed and never written back — which is safe.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, for an instance's zone
+as well as the series', relying on libical resolving an IANA name out of its
+builtin table; the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag the last twenty-three
+sessions asked for is still unwritten; the manual-test recipes are unlinked from
+the README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is still unexplained. Still open from before: nothing
+asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
+two; the *reading* direction of a per-instance zone through real EDS is untested;
+calcard silently drops or wraps an unreadable `BYDAY`/`BYMONTHDAY`/`WKST` token
+below this crate, which only an upstream fix reaches.

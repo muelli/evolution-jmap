@@ -626,6 +626,56 @@ fn libical_answers_for_a_day_of_the_year_this_mapping_refuses() {
     }
 }
 
+/// The same question for the day a rule's weeks start on, which decides the one
+/// asymmetry in `jmap-ical`'s `first_day_of_week_part`: the default is *dropped*
+/// on the way out rather than written, and this is the measurement that says it
+/// has to be.
+#[test]
+fn libical_answers_for_the_day_a_week_starts_on() {
+    // The reason the default is left off: libical drops `WKST=MO` from a rule it
+    // reads, because RFC 5545 §3.3.10 makes Monday the default. A rule written
+    // with it would come back out of EDS's cache without it — which the save path
+    // would read as the user removing `firstDayOfWeek`.
+    assert_eq!(
+        reparsed_rrule("FREQ=WEEKLY;WKST=MO").as_deref(),
+        Some("FREQ=WEEKLY"),
+    );
+    // Every other day survives verbatim, at every frequency — including the ones
+    // where §3.3.10 calls the part insignificant. So there is no frequency gate in
+    // the mapping: dropping the day where libical keeps it would be the mapping
+    // inventing a narrowing of its own.
+    for rrule in [
+        "FREQ=WEEKLY;WKST=SU",
+        "FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;WKST=SU",
+        "FREQ=DAILY;WKST=SU",
+        "FREQ=MONTHLY;WKST=SA",
+        "FREQ=YEARLY;WKST=SU",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // A day outside RFC 5545's `weekday` costs the **whole** `RRULE`, as an
+    // out-of-range day of the month does: the event would reach EDS's cache as a
+    // single appointment with the user's series gone. That is what
+    // `jmap-ical`'s refusal of an unknown `firstDayOfWeek` prevents.
+    for rrule in ["FREQ=WEEKLY;WKST=XX", "FREQ=WEEKLY;WKST="] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
+    }
+    // And the third shape, a spelling kept but *changed*: iCalendar's weekday is
+    // upper case, so a lower-case one comes back respelled. The mapping writes
+    // upper case, so this cannot bite it.
+    assert_eq!(
+        reparsed_rrule("FREQ=YEARLY;WKST=su").as_deref(),
+        Some("FREQ=YEARLY;WKST=SU"),
+    );
+    // Written last, after `BYMONTH` — which is the order `jmap-ical` emits the
+    // parts in, so that a rule that went out this way and came back through EDS's
+    // own cache compares equal to itself.
+    assert_eq!(
+        reparsed_rrule("FREQ=WEEKLY;BYDAY=MO;WKST=SU;BYMONTH=3").as_deref(),
+        Some("FREQ=WEEKLY;BYDAY=MO;BYMONTH=3;WKST=SU"),
+    );
+}
+
 /// The `RRULE` value libical hands back after reading a component carrying
 /// `value`, or `None` if it kept no `RRULE` at all.
 fn reparsed_rrule(value: &str) -> Option<String> {

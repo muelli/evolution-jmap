@@ -141,6 +141,16 @@ pub struct RecurrenceRule {
     /// invent a spelling for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_month: Option<Vec<String>>,
+    /// The day each week of the rule starts on — iCalendar's `WKST`. One of the
+    /// two-letter lowercase weekdays [`NDay::day`] uses, and RFC 8984 §4.3.3's
+    /// default is `mo`.
+    ///
+    /// It changes which dates a rule produces rather than merely describing them:
+    /// RFC 5545 §3.3.10 counts a `FREQ=WEEKLY;INTERVAL=2` series' weeks from this
+    /// day, so the same `byDay` counted from Sunday and from Monday name different
+    /// Tuesdays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_day_of_week: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
