@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# CPACK_PROJECT_CONFIG_FILE: CPack includes this once per generator, inside the
+# `cpack` process, before it stages the install tree and writes the archive.
+# That makes it the only place from which the package's timestamps can be fixed
+# — CPackConfig.cmake carries variables, and this carries the one thing that has
+# to be an *environment* variable by the time the archive is written.
+#
+# Why it has to be here at all: `cpack` re-runs the install into a fresh staging
+# tree, so without this the directory entries and the ar member headers are
+# dated by the packaging clock, and the file entries by whenever the modules
+# happened to be linked. Two packages built from one tree then differ, and the
+# `.deb` cannot be one of the artifacts this project asks people to verify
+# against a published digest.
+#
+# The value is the one this build resolved at configure time — the exported
+# SOURCE_DATE_EPOCH if there was one, else the last commit's timestamp — so the
+# package is dated by the same instant as the binaries inside it. Deliberately
+# *not* deferring to whatever is exported when `cpack` runs: that would let the
+# person packaging redate a build they did not make, which is the difference
+# between a timestamp and a fact.
+#
+# Generated from cmake/cpack-project-config.cmake.in; edit that, not this.
+
+set(_epoch "@SOURCE_DATE_EPOCH@")
+if(_epoch MATCHES "^[0-9]+$")
+	set(ENV{SOURCE_DATE_EPOCH} "${_epoch}")
+endif()
