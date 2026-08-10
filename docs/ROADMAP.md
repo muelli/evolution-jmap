@@ -223,11 +223,13 @@ verification" is a *good* session, not a failure. Concretely:
   history; do not modify `infra/` or `.github/workflows/ci-image.yml`
   unless a milestone requires it.
 - TDD: red test first (against fixtures or `jmap-mockd`), then green.
-  `cargo test` and `cargo clippy --all-targets -- -D warnings` must pass
-  before every push. Crates needing EDS headers stay out of
-  `default-members`.
-- Every source file: SPDX header, `GPL-3.0-or-later` (`reuse lint` must
-  stay green).
+  Before every push, run **`ci/checks.sh`** and make sure it passes — it
+  is the single source of truth for the gate (rustfmt, clippy
+  `-D warnings`, tests, `cargo deny`, `reuse lint`), the very same script
+  CI runs, so a green local run means a green pipeline. Crates needing
+  EDS headers stay out of `default-members`.
+- Every source file: SPDX header, `GPL-3.0-or-later` (checked by
+  `ci/checks.sh`).
 - **Commit messages a tired reviewer can skim.** Author
   `Tobias Mueller <muelli@cryptobitch.de>`, **no Co-Authored-By
   trailers**. The subject line states, in the imperative, *what the
