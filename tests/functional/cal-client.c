@@ -17,7 +17,7 @@
  *
  *   usage: functional-cal-client <source-uid> <summary> <all-day-summary>
  *                               <recurring-summary> <edited-occurrence-summary>
- *                               <split-summary>
+ *                               <split-summary> <zoned-summary>
  */
 
 #include <libecal/libecal.h>
@@ -44,6 +44,30 @@
  * told, in JSCalendar's showWithoutTime, that the user made a day of it. */
 #define TEST_ALL_DAY_DTSTART "20260201"
 #define TEST_ALL_DAY_DTEND "20260202"
+
+/* And an event in a named zone — the one thing in this file that is deliberately
+ * not written as text. Evolution's appointment editor sets a start from an
+ * ICalTime carrying the zone *object* (e_cal_component_set_dtstart with a time
+ * whose zone is the one the user picked), and libical then writes the TZID
+ * parameter itself: for a builtin zone that is its own
+ * `/freeassociation.sourceforge.net/Europe/Berlin`, which is neither an IANA
+ * name nor anything a JMAP server can resolve. Building the component through
+ * the setters is what makes this test carry that identifier without naming it,
+ * so it keeps holding whatever libical writes rather than a string copied from
+ * libical once.
+ *
+ * The zone reaches the server only if the envelope the backend builds also
+ * carries the VTIMEZONE that defines the identifier — RFC 5545 §3.2.19 — and
+ * that is what nothing below real EDS can check: the mapping's own tests have
+ * to supply the identifier by hand, so they cannot say whether the component
+ * Evolution actually hands over travels with its zone.
+ *
+ * A wall-clock time, not a UTC one, because a zoned event is the point; the
+ * builtin zone data is compiled into libical, so this still asks nothing of the
+ * scratch session's environment. */
+#define TEST_ZONED_LOCATION "Europe/Berlin"
+#define TEST_ZONED_DTSTART "20260115T160000"
+#define TEST_ZONED_DTEND "20260115T173000"
 
 /* And a recurring event with one occurrence deleted, which is what a user
  * does with "Delete this occurrence" in the appointment list: EDS keeps the
@@ -239,23 +263,27 @@ main (int argc,
 	ICalComponent *read_back_event;
 	ICalComponent *split_event;
 	ICalTime *dtstart;
+	ICalTime *zoned_time;
+	ICalTimezone *zone;
 	gchar *icalendar;
 	gchar *exdates;
 	gchar *rrule;
 	gchar *added_uid = NULL;
 	gchar *all_day_uid = NULL;
 	gchar *recurring_uid = NULL;
+	gchar *zoned_uid = NULL;
 	const gchar *source_uid;
 	const gchar *summary;
 	const gchar *all_day_summary;
 	const gchar *recurring_summary;
 	const gchar *edited_summary;
 	const gchar *split_summary;
+	const gchar *zoned_summary;
 
-	if (argc != 7) {
+	if (argc != 8) {
 		g_printerr ("usage: %s <source-uid> <summary> <all-day-summary> "
 			    "<recurring-summary> <edited-occurrence-summary> "
-			    "<split-summary>\n", argv[0]);
+			    "<split-summary> <zoned-summary>\n", argv[0]);
 		return 2;
 	}
 
@@ -265,6 +293,7 @@ main (int argc,
 	recurring_summary = argv[4];
 	edited_summary = argv[5];
 	split_summary = argv[6];
+	zoned_summary = argv[7];
 
 	/* Activates evolution-source-registry on the session bus, which reads
 	 * the scratch sources directory the harness wrote. */
@@ -399,6 +428,42 @@ main (int argc,
 	g_object_unref (event);
 	g_print ("added-all-day=%s\n", all_day_uid ? all_day_uid : "");
 	g_free (all_day_uid);
+
+	/* The zoned one, built through the setters so that the TZID on it is
+	 * libical's own rather than one written here — see TEST_ZONED_LOCATION. */
+	zone = i_cal_timezone_get_builtin_timezone (TEST_ZONED_LOCATION);
+
+	if (!zone) {
+		g_printerr ("build: libical has no builtin zone for %s\n",
+			    TEST_ZONED_LOCATION);
+		g_free (added_uid);
+		return 1;
+	}
+
+	event = i_cal_component_new_vevent ();
+	i_cal_component_set_uid (event, "jmap-functional-zoned-event");
+	i_cal_component_set_summary (event, zoned_summary);
+
+	zoned_time = i_cal_time_new_from_string (TEST_ZONED_DTSTART);
+	i_cal_time_set_timezone (zoned_time, zone);
+	i_cal_component_set_dtstart (event, zoned_time);
+	g_object_unref (zoned_time);
+
+	zoned_time = i_cal_time_new_from_string (TEST_ZONED_DTEND);
+	i_cal_time_set_timezone (zoned_time, zone);
+	i_cal_component_set_dtend (event, zoned_time);
+	g_object_unref (zoned_time);
+
+	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
+					      &zoned_uid, NULL, &error)) {
+		g_object_unref (event);
+		g_free (added_uid);
+		return fail ("create-zoned", error);
+	}
+
+	g_object_unref (event);
+	g_print ("added-zoned=%s\n", zoned_uid ? zoned_uid : "");
+	g_free (zoned_uid);
 
 	/* The recurring one, with an occurrence excluded. Written last for the
 	 * same reason as the all-day one. */

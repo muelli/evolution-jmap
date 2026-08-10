@@ -14171,3 +14171,107 @@ recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained. Still open
 from before: a per-instance `timeZone` has no spelling, and nothing asserts
 whether a split series' two writes arrive as one `CalendarEvent/set` or two.
+
+## 2026-08-10 (hundred-and-forty-fourth session)
+
+The envelope a save is built into now defines the zones it refers to, which is
+the half of last session's fix that was missing and the half that decides
+whether a zone the user picked in Evolution ever reaches the server.
+
+**Where it stood.** `marshal::icalendar_from_instances` put the instances EDS
+handed the save into a fresh `VCALENDAR` and nothing else. RFC 5545 §3.2.19 says
+a `TZID` parameter names a `VTIMEZONE` in the same object, and what Evolution's
+appointment editor writes for a builtin zone is libical's own
+`/freeassociation.sourceforge.net/Europe/Berlin` — so the object was not a legal
+calendar object, and the mapping, which translates that identifier off the
+definition's `X-LIC-LOCATION`, had nothing to translate it by. `patch::diff` then
+took the safe branch it was built for and left `timeZone` alone. Safe, and still
+a bug: **a zone change made in Evolution could not reach the server at all**, and
+a brand-new zoned appointment arrived floating.
+
+**The functional leg says so, and said it first.** `tests/functional/cal-client.c`
+now creates a sixth event through the libical setters rather than from text —
+`i_cal_component_set_dtstart` with an `ICalTime` carrying the zone *object*,
+which is what `e_cal_component_set_dtstart` does behind Evolution's editor — so
+the `TZID` that reaches the backend is whatever libical writes rather than a
+string this tree copied out of libical once. With the new code taken back out,
+the mock holds `time_zone: None` for it; with the code in, `Europe/Berlin` and a
+wall-clock `start` of `2026-01-15T16:00:00`. That is the one claim no test below
+real EDS can make: the mapping's own tests have to supply both the identifier and
+the definition by hand, so they cannot say whether the component Evolution
+actually hands over travels with its zone.
+
+**What was added, and why each piece is the shape it is.** `referenced_tzids`
+walks *every* property of *every* instance rather than each instance's `DTSTART`:
+a detached occurrence states the instant it replaces in the series' zone and may
+have been moved into another, and `EXDATE`/`RDATE` carry zones of their own.
+Duplicates are dropped, because two copies of one `VTIMEZONE` is a duplicate
+`TZID` in one object. Each identifier is resolved with
+`i_cal_timezone_get_builtin_timezone_from_tzid` and, failing that,
+`i_cal_timezone_get_builtin_timezone` — the first form is libical's prefixed
+identifier, the second a plain IANA name, and a component this crate wrote and
+Evolution handed back unchanged carries the latter. The definition copied in is
+then **renamed to the identifier the properties use**, because a definition under
+another name defines another zone: without that, an event saying
+`TZID=Europe/Zurich` would travel beside a `VTIMEZONE` called
+`/freeassociation.sourceforge.net/Europe/Zurich` and still refer to nothing.
+
+Two identifiers are deliberately left undefined, both with a test:
+- one no zone database knows — Windows' `W. Europe Standard Time`, which is what
+  an Exchange invitation brings — because the alternatives are guessing a city or
+  failing the save, and the mapping already refuses a zone it cannot name, which
+  keeps the server's own value instead of overwriting it with a guess;
+- `UTC`, which libical resolves and has **no component for**. Measured on this
+  VM, not assumed: `i_cal_timezone_get_component` of the UTC zone is NULL. It is
+  the absence of transition rules rather than a zone with any, and NULL is not
+  something to put in an envelope.
+
+**FFI surface.** Six functions joined `eds-sys`'s allowlist, named one at a time
+rather than as `i_cal_timezone_.*`/`i_cal_property_.*`: the three zone lookups
+above, `i_cal_property_get_first_parameter` and `i_cal_parameter_get_tzid` to read
+a `TZID` parameter, and `i_cal_property_set_tzid` to rename a definition. Ownership
+was read off `ICalGLib-3.0.gir` rather than guessed — the two zone lookups are
+transfer *none* (builtins the library owns, so unreffing them would be a
+double free), while `get_component` and `get_first_parameter` are transfer full
+and are dropped here. `find_master` now takes the already-collected components
+instead of walking the `GSList` a second time.
+
+**Two prose claims in `jmap-cal-sync/tests/save.rs` were false the moment this
+landed and were rewritten rather than left to rot.** `LIBICAL_VTIMEZONE`'s comment
+said the backend's envelope does not carry it; it does now. And
+`a_zone_the_document_could_not_name_leaves_the_servers_alone` said libical's
+identifier with no definition beside it "is what the envelope the backend builds
+today hands over" — it no longer is, so the comment now says which of its two
+cases still arrives from where (the unresolvable name), and the test keeps both
+because a document is not only ever built by Evolution.
+
+Five tests red first in `jmap-backend-cal/tests/marshal.rs` — three of them (the
+prefixed identifier translating end-to-end through `jmap_ical::ical_to_event`, the
+plain name defined under its own spelling, one definition per zone across two
+instances and two properties) plus the two negative ones, which passed the day
+they were written and are there to pin the branches that must *not* invent a
+zone. And the functional leg, red as shown above.
+
+Verified locally: `cargo test --locked` 563 (unchanged — `jmap-backend-cal` is
+out of `default-members`), `cargo test -p jmap-backend-cal --locked` 81 (up 5),
+`ctest` 14/14 including `rust-test-eds` and all four functional legs against real
+EDS, `cargo fmt --check`, and `cargo clippy --all-targets --locked -- -D warnings`
+clean for the default set and for `jmap-backend-cal`/`jmap-functional`. `reuse
+lint` and `cargo deny` not run (neither is on this VM); no files were added, so no
+new SPDX headers were needed, and no dependency changed.
+
+No milestone tag. Next in this area: the *outgoing* direction is still asymmetric
+— `jmap-ical` writes `TZID=Europe/Berlin` and no `VTIMEZONE`, relying on libical
+resolving an IANA name out of its builtin table, which Evolution does but a
+stricter reader need not; and a per-instance `timeZone` still has no spelling.
+Unchanged blockers: the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag the last sixteen sessions
+asked for is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is still unexplained. Still open from before: nothing
+asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
+two.
