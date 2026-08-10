@@ -1,0 +1,6 @@
+{
+  "@type": "RecurrenceRule",
+  "frequency": "monthly",
+  "byDay": [{"@type": "NDay", "day": "fr"}],
+  "bySetPosition": [-1]
+}

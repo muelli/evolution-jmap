@@ -899,11 +899,10 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
 
 #[test]
 fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
-    // bySetPosition & friends ride in `extra` and do not survive the trip
-    // through iCalendar, so the save path must not patch recurrenceRules for
-    // them.
+    // byHour & friends ride in `extra` and do not survive the trip through
+    // iCalendar, so the save path must not patch recurrenceRules for them.
     let mut rule = RecurrenceRule::new("monthly");
-    rule.extra.insert("bySetPosition".to_owned(), json!([-1]));
+    rule.extra.insert("byHour".to_owned(), json!([9, 17]));
     assert!(!maps_recurrence_rule(&rule));
     assert!(maps_recurrence_rule(&RecurrenceRule::new("weekly")));
 }
@@ -1956,6 +1955,186 @@ fn a_week_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=YEARLY",
         "and the weeks are left off the rule it is drawn as"
+    );
+}
+
+#[test]
+fn a_monthly_rule_names_which_occurrence_of_the_set_it_takes() {
+    // "The last Friday of the month" — RFC 8984 §4.3.3's `bySetPosition`,
+    // iCalendar's `BYSETPOS`. It is unlike every other part here: the others say
+    // which dates the interval expands to, and this one picks out of that set
+    // after the fact, counting from the end when negative.
+    //
+    // `BYDAY=FR;BYSETPOS=-1` and `BYDAY=-1FR` name the same Fridays, but a server
+    // is entitled to spell it either way and only one of them was carried before.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_day: Some(vec![NDay::new("fr")]),
+            by_set_position: Some(vec![-1]),
+            count: Some(4),
+            ..RecurrenceRule::new("monthly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=MONTHLY;COUNT=4;BYDAY=FR;BYSETPOS=-1"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].by_set_position.as_deref(), Some(&[-1][..]));
+    // Which is what tells the save path it may write the property back.
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn the_position_in_the_set_is_written_after_the_months() {
+    // Every modeled part at once, in the order libical writes them — `BYSETPOS`
+    // after `BYMONTH` and before `WKST` — so that a rule read back out of EDS's
+    // own cache compares equal to the one that went in.
+    let rule = RecurrenceRule {
+        by_day: Some(vec![NDay::new("we")]),
+        by_month_day: Some(vec![15]),
+        by_year_day: Some(vec![100]),
+        by_week_no: Some(vec![20]),
+        by_month: Some(vec!["3".to_owned()]),
+        by_set_position: Some(vec![2]),
+        first_day_of_week: Some("su".to_owned()),
+        ..RecurrenceRule::new("yearly")
+    };
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![rule.clone()]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        content_line(&ics, "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;\
+         BYMONTH=3;BYSETPOS=2;WKST=SU"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0], rule);
+}
+
+#[test]
+fn reads_the_position_in_the_set_off_a_rule_written_by_hand() {
+    // RFC 5545 §3.3.10's `setposday` is spelled as `yeardaynum` is: the leading
+    // plus JSCalendar has no room for, and a count to 366 in either direction.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=+1,-1\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_set_position.as_deref(), Some(&[1, -1][..]));
+    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1,-1"
+    );
+}
+
+#[test]
+fn a_position_with_nothing_to_select_from_is_flagged_rather_than_written() {
+    // RFC 5545 §3.3.10: BYSETPOS MUST only be used together with another BYxxx
+    // part. Alone it selects out of the one occurrence the frequency already
+    // names, so `BYSETPOS=2` beside nothing is a series that never happens again.
+    //
+    // The gate is on the parts actually *written*, not on the ones the rule
+    // holds: `byWeekNo` beside a monthly frequency is a part this mapping leaves
+    // off, so a `BYSETPOS` written next to it would be selecting from a set the
+    // reader cannot see either.
+    for rule in [
+        RecurrenceRule {
+            by_set_position: Some(vec![-1]),
+            ..RecurrenceRule::new("monthly")
+        },
+        RecurrenceRule {
+            by_week_no: Some(vec![20]),
+            by_set_position: Some(vec![-1]),
+            ..RecurrenceRule::new("monthly")
+        },
+    ] {
+        assert!(!maps_recurrence_rule(&rule), "{rule:?}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule.clone()]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=MONTHLY",
+            "{rule:?}"
+        );
+    }
+}
+
+#[test]
+fn a_position_no_set_has_is_flagged_rather_than_written() {
+    // RFC 5545's `setposday` is 1 to 366 and RFC 8984 §4.3.3 counts backwards to
+    // -366; zero selects nothing at all. A set holding one such value is refused
+    // whole, because a `BYSETPOS` holding the rest picks different occurrences
+    // rather than showing fewer of these.
+    //
+    // 367 has to be refused *here*: libical keeps it verbatim rather than
+    // dropping the rule — `jmap-backend-cal/tests/marshal.rs` measures that — so
+    // nothing below this mapping would catch it.
+    for positions in [vec![0], vec![367], vec![-367], vec![1, 0], vec![]] {
+        let rule = RecurrenceRule {
+            by_day: Some(vec![NDay::new("fr")]),
+            by_set_position: Some(positions.clone()),
+            ..RecurrenceRule::new("monthly")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{positions:?}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=MONTHLY;BYDAY=FR",
+            "{positions:?}"
+        );
+    }
+}
+
+#[test]
+fn a_position_a_hand_written_rule_invents_is_not_written_back() {
+    // The refusal above, reached the way a component really arrives: through the
+    // parser. `367` is outside RFC 5545's `setposday`, so the mapping is the one
+    // that has to refuse it — and refuse the whole set, leaving the days it
+    // selects from in place.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=1,367\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_set_position.as_deref(), Some(&[1, 367][..]));
+    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=MONTHLY;BYDAY=FR",
+        "and the position is left off the rule it is drawn as"
     );
 }
 
