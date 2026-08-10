@@ -13186,3 +13186,66 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last three sessions asked for is still unwritten; the manual-test
 recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-second session)
+
+The item the previous session left on the record as "a candidate for a later
+increment": neither the old lexer nor calcard range-checks a date-time's
+*fields*, so `DTSTART:20261315T250000` travelled intact in both directions.
+`jmap-ical` now asks whether the instant exists before converting it, and treats
+one that does not the way it treats a value it cannot read at all — as absent.
+
+**Red first, and both directions are a real loss.** Outbound (server → EDS) the
+impossible `DTSTART` reaches libical, which refuses the component and takes
+every other field of the event with it — the summary, the description, the
+recurrence, all of it, over one bad digit. Inbound (EDS → server) it becomes
+`"start": "2026-13-15T25:00:00"`, which is not a JSCalendar LocalDateTime, so
+the whole `CalendarEvent/set` fails and the user's edit to the *title* is lost
+alongside the start they never typed. Dropping the property costs one field and
+nothing else: `jmap-cal-sync`'s patch builder already refuses to send
+`"start": null`, so an unreadable start means the server's start simply stands.
+
+The check is month 1-12, day against the month's real length in the proleptic
+Gregorian calendar, hour ≤ 23, minute ≤ 59, second ≤ 60. The two dates that look
+wrong and are not have their own test: 29 February of a leap year (2024 and 2000
+yes, 1900, 2100 and 2026 no), and the leap second RFC 5545 §3.3.12 and RFC 3339
+§5.6 both spell `:60` — calcard round-trips it, so a server that stores one gets
+it back unchanged.
+
+**A second finding fell out of the same code path, and it is the worse one.**
+`UNTIL` goes through the same conversion, and an `UNTIL` that could not be
+written was simply left off the `RRULE` — turning a recurrence that *ends* into
+one that never does. A weekly meeting that finished in March would have been
+drawn into every week of the user's calendar for ever. Such a rule is now
+refused whole: showing no recurrence under-states the event, showing an
+unbounded one fabricates it. `maps_recurrence_rule` was widened to agree — it
+now answers "does this rule survive the trip" for all three ways it can fail
+(unmodeled parts in `extra`, no frequency, an unwritable `until`), so the save
+path still never patches `recurrenceRules` over a recurrence the user was not
+shown. Deliberately unchanged: a rule with `byDay` in `extra` is still *drawn*,
+narrowed to what an `RRULE` holds, because a weekly event on the wrong days
+beats no event; `extra` is a narrowing, the other two are losses.
+
+Verified locally: `cargo test --locked` 499 (was 496: +3 red-first), the
+EDS-header crates green via the `rust-test-eds` set, `ctest -L functional` 4/4 —
+`functional-cal` drives an event through `e-cal-client` and real EDS into the
+mock against the rebuilt module — `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean for both crate sets. `reuse lint`
+and `cargo deny` not run (neither is on this VM); no files were added, so no new
+SPDX headers were needed, and no dependency changed.
+
+Housekeeping, and it is now a pattern rather than an incident: `/` hit 100% again
+mid-session and failed a link. `rust/target/debug` had reached 33G, 32G of it in
+`deps` — cargo never collects the test binaries of past sessions, and this repo
+has had a great many. Deleting it freed 33G and cost one full rebuild. Worth a
+`cargo clean` between sessions, or a `CARGO_TARGET_DIR` on the larger disk.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so the
+M8 tag the last four sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
