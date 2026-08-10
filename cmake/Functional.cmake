@@ -63,13 +63,20 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	pkg_check_modules(LIBEBOOK REQUIRED libebook-1.2>=${REQUIRE_EVOLUTION_VERSION})
 	pkg_check_modules(LIBECAL REQUIRED libecal-2.0>=${REQUIRE_EVOLUTION_VERSION})
 
-	add_executable(functional-book-client tests/functional/book-client.c)
+	# connection-status.c is compiled into both: the question it answers —
+	# did EDS decide the backend is connected? — is the same for a book and
+	# for a calendar, and so is the main-loop dance it takes to ask.
+	add_executable(functional-book-client
+		tests/functional/book-client.c
+		tests/functional/connection-status.c)
 	target_include_directories(functional-book-client PRIVATE ${LIBEBOOK_INCLUDE_DIRS})
 	target_compile_options(functional-book-client PRIVATE ${LIBEBOOK_CFLAGS_OTHER})
 	target_link_libraries(functional-book-client PRIVATE ${LIBEBOOK_LIBRARIES})
 	target_link_directories(functional-book-client PRIVATE ${LIBEBOOK_LIBRARY_DIRS})
 
-	add_executable(functional-cal-client tests/functional/cal-client.c)
+	add_executable(functional-cal-client
+		tests/functional/cal-client.c
+		tests/functional/connection-status.c)
 	target_include_directories(functional-cal-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
 	target_compile_options(functional-cal-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
 	target_link_libraries(functional-cal-client PRIVATE ${LIBECAL_LIBRARIES})

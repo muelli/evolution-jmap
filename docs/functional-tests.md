@@ -73,6 +73,28 @@ Each client prints `key=value` lines and exits non-zero the moment a call
 fails. It holds no opinion about what is correct; the Rust side has all of
 those.
 
+### Why the clients pass "do not wait for connected"
+
+Both call `e_*_client_connect_sync` with `(guint32) -1`, and then wait for
+`ESource:connection-status` themselves, with a main loop, in
+`tests/functional/connection-status.c`. That is not belt-and-braces; the
+built-in wait cannot work in a program shaped like these:
+
+`ESource` does not apply a connection-status change where it learns of it. It
+queues an idle on the source's `GMainContext`, which is whatever was
+thread-default when `ESourceRegistry` was constructed — in a synchronous
+program, the default context on the main thread.
+`e_client_wait_for_connected_sync` then blocks *that thread* on an `EFlag`
+until `notify::connection-status` fires. The signal comes from the idle; the
+idle needs the context iterated; the only thread that would iterate it is the
+one blocked on the flag. So the wait always expires, whatever the backend did.
+
+Evolution never meets this: it has a main loop and does the wait on a worker
+thread. But it means a 30-second stall on opening a JMAP address book from a
+small synchronous test program is a property of the *program*, not evidence
+about the backend — which is exactly how it was read for a while. Running a
+main loop is the whole fix, and it is on the client's side of the contract.
+
 ## Why they are gated behind an option
 
 The shared CI image has the EDS development headers and neither daemon. A
@@ -99,6 +121,11 @@ maintainer decision, because it grows the image every job pulls.
 - the factory found and loaded `libebookbackendjmap.so`, and matched its
   factory to the keyfile's `BackendName=jmap` — a failure here is a client
   that cannot connect at all;
+- **EDS saw the source reach `connected`.** `ESource:connection-status` is
+  EDS's own verdict on the connect — what Evolution shows as a connected
+  account, and what an EDS client that waits for a backend waits on. The meta
+  backend sets it to `connected` only when the backend's `connect_sync`
+  returned TRUE, and to `disconnected` when it did not;
 - **the opened book is writable.** EDS derives this from what the backend
   said during its connect; a backend that connects happily and never claims
   the book is writable gives an address book Evolution greys out and whose
@@ -126,10 +153,13 @@ line for line, and this test is what found it.
 
 - the factory found and loaded `libecalbackendjmap.so` and matched it to
   `BackendName=jmap`;
-- **the opened calendar is writable**, for the reason above. Note that this
-  assertion is a broad net: `e_cal_client_connect_sync` succeeds even when the
-  backend's `connect_sync` failed, so a calendar the backend could not open at
-  all also lands here rather than at the connect;
+- **EDS saw the source reach `connected`**, which carries more here than it
+  does for the address book: `e_cal_client_connect_sync` succeeds even when the
+  backend's `connect_sync` failed — `ECalMetaBackend` opens the calendar and
+  schedules the connect — so this is the one observation that tells a calendar
+  the backend could not open from one it opened and forgot to claim writable.
+  It is therefore asserted *before* the writable check, whose net covers both;
+- **the opened calendar is writable**, for the reason above;
 - an event added through `e_cal_client_create_object_sync` reaches the server:
   the mock recorded a `CalendarEvent/set`, and the event in its store has the
   summary, the start time and the calendar it was given;

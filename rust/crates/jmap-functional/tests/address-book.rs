@@ -93,6 +93,19 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
             output.status
         )
     });
+    // The other half of "EDS is satisfied with this backend": the source's
+    // connection status, which is what Evolution's UI shows as a connected
+    // account and what every EDS client that waits for a backend waits on.
+    // `readonly=0` says the backend claimed the book writable; this says
+    // EDS's own view of the connection agrees, rather than the source still
+    // sitting in `connecting` or having fallen back to `disconnected`.
+    // Asserted first, for the reason `calendar.rs` spells out.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+
     assert_eq!(readonly, "0", "EDS opened the book read-only\n{report}");
 
     assert!(
