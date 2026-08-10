@@ -414,3 +414,76 @@ fn the_interface_has_no_default_behind_any_of_its_three_methods() {
         gobject_sys::g_type_default_interface_unref(vtable.cast());
     }
 }
+
+/// Whether `camel_provider_register` writes back into the struct it is given.
+///
+/// It matters because `jmap-mail`'s `provider::register` hands the registered
+/// struct out as a `&'static CamelProvider` — a *shared* Rust reference to
+/// memory Camel keeps a mutable pointer to for the life of the process. That is
+/// only a claim Rust's model allows while nothing on the C side ever writes
+/// there. Camel's documented in-place work is on `extra_conf`, which a JMAP
+/// account leaves NULL, so the expectation is that the bytes come back
+/// unchanged — and if a Camel release ever starts filling in `priv_` or
+/// defaulting `url_hash`, this is where it surfaces rather than as a
+/// mysteriously mutated `&'static`.
+///
+/// Originally `docs/AUDIT-FFI.md`'s F8, on the branch that check was written
+/// on; the squash that brought F1–F4 to master left it behind, which is
+/// `docs/AUDIT-FFI-20260810.md`'s F12.
+#[test]
+fn registering_a_provider_does_not_write_back_into_the_struct() {
+    // SAFETY: as in the round-trip test above; `provider` outlives the call and
+    // everything it points at is 'static.
+    let store_type = unsafe {
+        camel_provider_init();
+        camel_offline_store_get_type()
+    };
+
+    let protocol = c"jmap-eds-sys-immutable";
+    let mut provider = CamelProvider {
+        protocol: protocol.as_ptr(),
+        name: c"JMAP immutability".as_ptr(),
+        description: c"only ever registered by this test".as_ptr(),
+        domain: c"mail".as_ptr(),
+        flags: (CAMEL_PROVIDER_IS_REMOTE | CAMEL_PROVIDER_IS_SOURCE) as CamelProviderFlags,
+        url_flags: CAMEL_URL_ALLOW_USER as CamelProviderURLFlags,
+        extra_conf: ptr::null_mut(),
+        port_entries: ptr::null_mut(),
+        auto_detect: None,
+        object_types: [store_type, G_TYPE_INVALID],
+        authtypes: ptr::null_mut(),
+        url_hash: None,
+        url_equal: None,
+        translation_domain: ptr::null(),
+        priv_: ptr::null_mut(),
+    };
+
+    // SAFETY: reading the struct's own bytes, which are initialised above.
+    let before = unsafe {
+        std::slice::from_raw_parts(
+            (&raw const provider).cast::<u8>(),
+            std::mem::size_of::<CamelProvider>(),
+        )
+        .to_vec()
+    };
+
+    // SAFETY: the pointer stays valid for the rest of the process — the struct
+    // is a `static`-lifetime local of a test that never returns it, and Camel
+    // is not asked for it again after this test.
+    unsafe { camel_provider_register(&mut provider) };
+
+    // SAFETY: as `before`.
+    let after = unsafe {
+        std::slice::from_raw_parts(
+            (&raw const provider).cast::<u8>(),
+            std::mem::size_of::<CamelProvider>(),
+        )
+        .to_vec()
+    };
+
+    assert_eq!(
+        before, after,
+        "camel_provider_register mutated the provider struct; \
+         handing it out as a shared &'static is no longer sound"
+    );
+}
