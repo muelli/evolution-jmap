@@ -96,6 +96,20 @@ pub struct CalendarEvent {
     /// refuses to write a value outside the range instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<i64>,
+    /// How much of the event may be shared with other calendar users — RFC 8984
+    /// §4.4.3's `privacy`, one of `public`, `private` and `secret`, which is what
+    /// Evolution's Options ▸ Classification states.
+    ///
+    /// `None` is "nothing was said" rather than the RFC's default of `public`,
+    /// for the reason [`Self::show_without_time`] gives.
+    ///
+    /// Held as a string rather than an enum because RFC 8984 §4.4.3 leaves the
+    /// vocabulary open — a registered or a vendor-specific value is legal — and
+    /// a whole `CalendarEvent/get` response is deserialized into this type at
+    /// once, so one event's unusual value must not take the calendar down with
+    /// it. The mapping refuses to write a value it cannot spell instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
     /// The places the event happens at (RFC 8984 §4.2.5), keyed by an id of
     /// whoever wrote them.
     ///

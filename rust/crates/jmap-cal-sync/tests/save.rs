@@ -2323,6 +2323,210 @@ fn making_one_occurrence_urgent_reaches_the_server_as_an_override() {
     );
 }
 
+/// An event whose classification the server states, and the component Evolution
+/// is shown for it.
+fn classified(fixture: &Fixture, privacy: serde_json::Value) -> (jmap_proto::Id, String) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"privacy": privacy}));
+    let icalendar = fixture
+        .sync()
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar;
+    (id, icalendar)
+}
+
+#[test]
+fn marking_an_event_private_reaches_the_server_as_a_privacy() {
+    // Evolution's Options ▸ Classification ▸ Private, which is a CLASS line on the
+    // component (RFC 5545 §3.8.1.3) and RFC 8984 §4.4.3's `privacy` on the server.
+    // The event the mock holds says nothing about it, so this is also the case of a
+    // property the save creates rather than changes.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(!icalendar.contains("CLASS"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup\r\nCLASS:PRIVATE");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.event(&id).privacy.as_deref(), Some("private"));
+}
+
+#[test]
+fn the_privacy_the_server_states_is_shown_and_left_alone_by_an_unrelated_edit() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = classified(&fixture, json!("secret"));
+    assert!(icalendar.contains("CLASS:CONFIDENTIAL"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(stored.privacy.as_deref(), Some("secret"));
+}
+
+#[test]
+fn saving_a_public_event_back_unchanged_sends_no_patch() {
+    // The case Evolution's appointment editor makes routine: it writes CLASS on
+    // every save from its Classification menu, and public is what that menu
+    // defaults to. So the component comes back stating the default explicitly, and
+    // the save must send *nothing* — which it only can because the baseline is
+    // rendered with the line too. That is the whole reason `CLASS:PUBLIC` is
+    // written out rather than left off as the default it also is: were it left
+    // off, the baseline would differ from the component on every save of a public
+    // event, forever, and each one would carry a redundant `"privacy": "public"`.
+    //
+    // `get_changes` is the witness. A save that patches nothing never reaches the
+    // server, so the account state does not move; one that patches the default
+    // back in does, and the event turns up in the delta.
+    //
+    // The component is shaped the way the editor leaves it — carrying a CLASS
+    // line whether or not the rendering already put one there — rather than saved
+    // back verbatim. Saving the rendering verbatim would pass no matter what the
+    // writer does, since both sides of the diff would then agree by construction;
+    // it is the editor's line meeting a baseline that lacks it that costs a patch.
+    let fixture = Fixture::start();
+    let (id, icalendar) = classified(&fixture, json!("public"));
+    let as_the_editor_leaves_it = if icalendar.contains("CLASS:") {
+        icalendar
+    } else {
+        icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup\r\nCLASS:PUBLIC")
+    };
+
+    let sync = fixture.sync();
+    let (state, _) = sync.list_existing().unwrap();
+    sync.save_component(&as_the_editor_leaves_it, Some(id.as_str()))
+        .unwrap();
+
+    let changes = sync.get_changes(&state).unwrap();
+    assert!(
+        changes.changed.is_empty() && changes.removed.is_empty(),
+        "the save patched something: {changes:?}"
+    );
+}
+
+#[test]
+fn the_public_classification_survives_an_unrelated_edit() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = classified(&fixture, json!("public"));
+    assert!(icalendar.contains("CLASS:PUBLIC"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(stored.privacy.as_deref(), Some("public"));
+}
+
+#[test]
+fn hiding_a_private_event_completely_sends_the_other_classification() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = classified(&fixture, json!("private"));
+
+    let edited = icalendar.replace("CLASS:PRIVATE", "CLASS:CONFIDENTIAL");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).privacy.as_deref(), Some("secret"));
+}
+
+#[test]
+fn removing_the_class_line_removes_the_property() {
+    // A PatchObject removes a property to say "back to the default", and RFC 8984
+    // §4.4.3's default is public — which is also what RFC 5545 §3.8.1.3 means by a
+    // VEVENT with no CLASS on it, so the two agree about what the user just asked
+    // for.
+    let fixture = Fixture::start();
+    let (id, icalendar) = classified(&fixture, json!("secret"));
+
+    let edited = icalendar.replace("CLASS:CONFIDENTIAL\r\n", "");
+    assert!(!edited.contains("CLASS"), "{edited}");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).privacy, None);
+}
+
+#[test]
+fn a_privacy_the_component_could_not_show_is_not_cleared_by_a_save() {
+    // RFC 8984 §4.4.3 leaves the vocabulary open and this server answered outside
+    // the three values iCalendar can spell, so no CLASS line was drawn. The
+    // baseline is what keeps that from reading as the user making the event
+    // public: the server's own event goes through the same rendering, loses the
+    // value on both sides, and the save sends nothing. Which matters more here
+    // than for the other closed vocabularies — the value being dropped is the one
+    // that says who may read the event.
+    let fixture = Fixture::start();
+    let (id, icalendar) = classified(&fixture, json!("x-eyes-only"));
+    assert!(!icalendar.contains("CLASS"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.privacy.as_deref(),
+        Some("x-eyes-only"),
+        "a value the component never showed cannot have been edited"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
+        "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn hiding_one_occurrence_reaches_the_server_as_an_override() {
+    // One occurrence of a series marked private: EDS keeps the master and adds a
+    // VEVENT carrying its RECURRENCE-ID, and the classification on that component
+    // is the one property of it that differs.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Everything the series states, restated — an instance is compared against
+    // the series property by property, so a line left off here would be an edit
+    // to that property and not to the classification.
+    let instance = format!(
+        "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
+         DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
+         STATUS:CONFIRMED\r\nCLASS:PRIVATE\r\nEND:VEVENT\r\n"
+    );
+    let edited = icalendar.replace("END:VCALENDAR", &format!("{instance}END:VCALENDAR"));
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).recurrence_overrides,
+        Some(
+            [(
+                "2026-01-22T09:00:00".to_owned(),
+                json!({"privacy": "private"})
+            )]
+            .into()
+        )
+    );
+}
+
 #[test]
 fn saving_over_an_unknown_identifier_is_not_found() {
     let fixture = Fixture::start();

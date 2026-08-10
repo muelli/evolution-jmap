@@ -16081,3 +16081,165 @@ whether Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the
 user edited is untested; whether it writes a `TRANSP` it was not asked to is
 untested. New from this session: nothing — the appointment editor has no priority
 control, so there is no editor behaviour here left to wonder about.
+
+## 2026-08-10 (hundred-and-sixty-first session)
+
+**Who may see an event** now crosses: JSCalendar `privacy` (RFC 8984 §4.4.3) ↔
+iCalendar `CLASS` (RFC 5545 §3.8.1.3), both directions. The fourteenth mapped
+property, and mechanically the `status`/`freeBusyStatus` shape exactly — a closed
+table of three, a scalar string, nothing shown in part, so `diff` needs nothing
+beyond the baseline and there is no `maps_*` predicate to add. `PRIVACIES` is
+`[("public","PUBLIC"), ("private","PRIVATE"), ("secret","CONFIDENTIAL")]`: the
+same three-step scale of how much may be shared, in the same order, in each
+format's own spelling.
+
+**Neither vocabulary is closed, and that is why an unknown value is dropped rather
+than passed through.** RFC 5545 admits an x-name or an iana-token on a `CLASS`
+line; RFC 8984 admits a registered or vendor value for `privacy`; and *neither
+specification says how a value in one becomes a value in the other*. So the table
+is the whole of what crosses, in both directions, and `x-eyes-only` on the server
+survives a save untouched because the baseline loses it on both sides of the
+comparison — the same trick `status` and `freeBusyStatus` rely on. It matters more
+here than for those two: the value being dropped is the one that says who may read
+the appointment, so silently turning it into `public` would be a confidentiality
+bug, not a display bug. `a_privacy_the_component_could_not_show_is_not_cleared_by_a_save`
+is that guarantee.
+
+**Case is ignored, which took a correction.** The first cut read `CLASS` and wrote
+`privacy` case-*sensitively*, on the reasoning that the two vocabularies spell
+themselves in different cases and a value differing only in case is therefore an
+extension value. That is wrong about iCalendar: RFC 5545 §3.1 makes every
+enumerated property value case-insensitive, so `CLASS:confidential` *is* that
+classification and reading it as an unknown would drop a classification a
+conforming client wrote. The mapping now uses `eq_ignore_ascii_case` in both
+directions, as `ical_status` and `ical_transparency` already did. What is still not
+a match is JSCalendar's own spelling of a *different* value: the two vocabularies
+overlap nowhere, so `CLASS:secret` stays an x-name-shaped value and not RFC 8984's
+`secret`. Both halves are in
+`an_unknown_privacy_is_dropped_rather_than_passed_through`.
+
+**`CLASS:PUBLIC` is written out rather than left off, and this time the reason is
+measured rather than argued.** Both RFCs make public and no value the same state,
+so the `PRIORITY:0` question recurs — and the priority session's answer (write it,
+so the round trip is the identity and an override restating it does not become a
+`null` patch) would have carried on its own. But here there is a stronger, second
+reason, and it comes out of Evolution's binary.
+
+Every previous property left "what does the appointment editor write?" either open
+(`TRANSP`) or answered by the editor having no control at all (`PRIORITY`). For
+`CLASS` the answer is neither, and it is the one that constrains the design.
+`objdump` over Evolution 3.52's `libevolution-calendar.so` shows
+`e_comp_editor_property_part_classification_new` called only from the task, memo
+and bulk-task editors — so the *appointment* editor has no classification combo.
+It exposes the classification a different way: an Options ▸ Classification radio
+menu (`classification-menu` holding `classify-public` / `classify-private` /
+`classify-confidential`, visible in the editor's UI XML in the same binary), and
+the event editor's `fill_component` reads that menu with
+`gtk_toggle_action_get_active` and then calls `i_cal_property_set_class` on the
+existing property — or `i_cal_property_new_class` plus `take_property` when the
+component carries none — **unconditionally**. There is no "only if changed" branch.
+
+So the editor states the classification on *every* save, and the radio defaults to
+public. Had `CLASS:PUBLIC` been left off as the redundant default it also is, the
+baseline for a public event would carry no line, the component EDS hands back would
+carry one, and the diff would send `"privacy": "public"` on every save of that
+event, forever — not once. Writing it out makes the two sides agree and the save
+send nothing. `saving_a_public_event_back_unchanged_sends_no_patch` is that claim,
+and it is asserted through `get_changes` rather than through the stored value: a
+save that patches nothing never reaches the server, so the account state does not
+move. The test also shapes the component the way the editor leaves it — inserting
+`CLASS:PUBLIC` if the rendering did not already — because saving our own rendering
+back verbatim would pass whatever the writer does, both sides agreeing by
+construction. That distinction is what the mutation check exposed: the first
+version of the test died on its `contains` assertion instead of on the one that
+matters.
+
+**The remaining redundant write is the first save of an event the server never
+classified**, which comes back from the editor stating `PUBLIC` where the server
+said nothing, and patches `privacy` to `public` once. RFC 8984 §4.4.3 makes those
+the same state, so it is a write nobody asked for rather than a wrong one, and the
+baseline carries the line from then on. Recorded in `patch.rs` beside the property
+rather than fixed: the alternative — normalising public to `None` on read — would
+cost the round-trip identity and force `maps_recurrence_override` to refuse an
+override restating public, which is the trade the priority session already
+declined.
+
+**`CLASS` is also the first mapped property libical does not hold as text.**
+`i_cal_property_new_class` takes an `ICalPropertyClass` enum, so a value the parser
+fails to recognise is a value it cannot render back, and `i_cal_property_get_class`
+reports an unrecognised value and a *missing* property as the same
+`I_CAL_CLASS_NONE`. Two consequences. `jmap-backend-cal`'s
+`libical_neither_invents_a_classification_nor_respells_one` measures the enum trip
+rather than assuming it: no line stays no line (libical does not fill the default
+in) and all three values come back as themselves. And the functional client reads
+the property as *text* — `joined_values (…, I_CAL_CLASS_PROPERTY)` — because
+reading through the enum could not tell a lost `CLASS` from one libical declined to
+understand, which is exactly the failure this leg watches for.
+
+**`privacy` joins `OVERRIDE_PROPERTIES` (now nine).** RFC 8984 §4.3.4 lets an
+instance restate it and iCalendar spells it on that instance's own component, so
+the one occurrence of a series the user hid is a one-key patch. The inheritance is
+drawn, as it must be: an instance written without the line reads back as an
+occurrence the user just made public.
+
+**A revision claim worth stating separately.** `privacy` joins
+`the_revision_tracks_the_mapped_content_and_nothing_else`, and it is the first
+entry on that list where a stale revision is a confidentiality problem rather than
+a stale display: an event the server has since made private would keep being shown,
+and offered for editing, as the public one Evolution cached.
+
+Tests: red first at every layer — 7 compile-red in `jmap-ical` (the field did not
+exist), then every new behaviour test mutation-checked, since all of them passed on
+their first run. Six mutations of the implementation, each killed by a different
+test: writer omits `CLASS:PUBLIC`; `diff` never names `privacy`; reader ignores
+`CLASS`; instance does not inherit the series' classification; `instance_patch`
+misses a differing classification; `maps_override_field` accepts any `privacy`.
+The libical probe was mutation-checked in both halves (invention and respelling),
+and the functional leg in both directions (`CONFIDENTIAL` on the cache side,
+`secret` on the server side — the latter's failure prints the mock's event with
+`privacy: Some("secret")` in it). Counts: `cargo test --locked` 740, up 13 from
+727; `jmap-backend-cal` 33 in `marshal.rs`, up one; `ctest` 14/14 including all
+four functional legs against real EDS.
+
+Not done, deliberately: an **override** still may not restate its tags or its
+place, and `showWithoutTime` is still decided once for the whole document. A
+`CLASS` parameter is not a thing, so nothing here needs the `X-JMAP-KEY` treatment
+`locations` got.
+
+Verified locally: `cargo test --locked` 740 green, `cargo test -p jmap-backend-cal
+--locked` green, `ctest` 14/14, `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal` and `jmap-functional`. `ci/checks.sh` again stops at its first
+step: `reuse` is not on this VM and neither `pipx` nor `uvx` is installed;
+`cargo-deny` is not installed either. Exposure is nil on both — **no file was
+added**, only edits to files that already carry SPDX headers, and `Cargo.lock` is
+untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+
+Disk: 3.1G free of 58G, with `rust/target` at 22G and `~/audit-ffi` at 14G;
+`CARGO_INCREMENTAL=0` throughout. **The maintainer decision is still wanted**: a
+periodic `cargo clean` in the night-shift driver, a bigger disk, or a shared
+target directory.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two; the *reading* direction of a
+per-instance zone through real EDS is untested; calcard silently drops an
+unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`; whether
+Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the user
+edited is untested; whether it writes a `TRANSP` it was not asked to is untested.
+New from this session: the `TRANSP` question above now has a shape worth
+re-asking, because the answer for `CLASS` turned out to be "always, from a menu
+the user may never have opened" — the appointment editor's `fill_component` is
+worth reading property by property rather than probed one property at a time. And
+an event carrying an x-name `CLASS` cannot survive a trip through Evolution's
+editor at all (the radio menu can only write the three it knows), which is a
+libical/Evolution limit rather than ours, but it means our "drop the unknown value,
+leave the server's alone" behaviour is the best available and not merely the
+cautious choice.

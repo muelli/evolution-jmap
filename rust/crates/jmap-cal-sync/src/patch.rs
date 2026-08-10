@@ -4,7 +4,7 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps thirteen properties and
+//! lossy view of a JSCalendar event. The mapping keeps fourteen properties and
 //! drops everything else, so a save that sent the parsed event back whole
 //! would silently delete what it could not represent — participants, alerts,
 //! links — none of which the user ever saw, let alone asked to remove.
@@ -44,9 +44,9 @@
 //! - **`recurrenceOverrides` is the same story one level down.** An
 //!   `EXDATE`, an `RDATE` and a `RECURRENCE-ID` component between them say that
 //!   an instance is off, that it happens, and that it happens with another
-//!   title, start, zone, length, description, status, transparency or
-//!   importance — but not that it happens in another place or with another
-//!   guest list. An override the component could only place with a bare
+//!   title, start, zone, length, description, status, transparency,
+//!   importance or classification — but not that it happens in another place
+//!   or with another guest list. An override the component could only place with a bare
 //!   `RDATE` would come back as the empty patch, deleting what it could not
 //!   draw, so if any override the server holds fails
 //!   [`maps_recurrence_override`], the property is left alone entirely — as it
@@ -112,6 +112,15 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
             &baseline.free_busy_status,
             &edited.free_busy_status,
         ),
+        // How much of the event may be shared. The same shape again, with one
+        // thing worth naming: Evolution's appointment editor writes `CLASS` on
+        // every save from its Options ▸ Classification menu, so an event the
+        // server gave no `privacy` comes back from the editor stating the default
+        // explicitly, and the first save of it patches `privacy` to `public`. That
+        // is a redundant write, not a wrong one — RFC 8984 §4.4.3 makes `public`
+        // and no value the same state — and it happens once: the baseline then
+        // renders the line too, so every later save diffs clean.
+        ("privacy", &baseline.privacy, &edited.privacy),
     ] {
         if was != now {
             set(&mut patch, property, now.as_deref());
