@@ -538,9 +538,22 @@ fn libical_keeps_the_recurrence_parts_this_mapping_writes() {
         // RFC 5545 §3.3.10 defines BYMONTH at every frequency, so a weekly rule
         // may carry one and `jmap-ical` does not gate it as it gates BYMONTHDAY.
         "FREQ=WEEKLY;BYDAY=MO;BYMONTH=12",
+        // And the two parts that are not `BYxxx` at all: libical writes the end
+        // of the series — `COUNT` or `UNTIL` — *before* `INTERVAL`, which is why
+        // `jmap-ical` emits them in that order. It is the only ordering claim in
+        // the mapping that concerns a part outside the `BYxxx` block.
+        "FREQ=WEEKLY;COUNT=6;INTERVAL=2;BYDAY=MO",
+        "FREQ=DAILY;UNTIL=20261231T000000Z;INTERVAL=2",
     ] {
         assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule));
     }
+    // The order the other way round, to show the claim is about libical's
+    // preference and not about what it will accept: it takes the rule and hands it
+    // back respelled, which is exactly what the save path must not be shown.
+    assert_eq!(
+        reparsed_rrule("FREQ=WEEKLY;INTERVAL=2;COUNT=6;BYDAY=MO").as_deref(),
+        Some("FREQ=WEEKLY;COUNT=6;INTERVAL=2;BYDAY=MO"),
+    );
 }
 
 /// And why a day of the month outside RFC 5545's `ordmoday` is refused whole
