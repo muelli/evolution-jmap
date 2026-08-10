@@ -195,14 +195,16 @@ never touch other streams' checkouts).
 ### Open audit recommendations to action
 Findings the re-audits raised as recommendations rather than fixing in
 place. Close them like any other work — red test first, then fix.
-- **F14 (from AUDIT-FFI-20260810) — URI-encode server-chosen values in
-  blob URLs.** `jmap-client/src/mail.rs` `download_blob`/`upload_blob`
-  build the request URL by `str::replace` on the session's `downloadUrl`/
-  `uploadUrl` templates, substituting `{accountId}`, `{blobId}`, `{name}`
-  verbatim; RFC 8620 §6.2 requires each to be URI-encoded. `Id` has no
-  grammar check, and `blobId`/`name` come off the wire, so a value with
-  `#`, `?`, `/` or a space mangles the request. Percent-encode each
-  substituted value; add a test with a hostile `blobId`.
+- ~~**F14 (from AUDIT-FFI-20260810) — URI-encode server-chosen values in
+  blob URLs.**~~ **Closed 2026-08-10.** `jmap-client/src/url.rs`
+  percent-encodes every value substituted into the `downloadUrl`/
+  `uploadUrl` templates, down to RFC 3986 §2.3's unreserved set so one
+  encoder is correct in a path segment and in a query value alike; the
+  mock decodes path segments after splitting them, and
+  `jmap-client/tests/blob_urls.rs` drives a hostile `blobId`, `name` and
+  `accountId` end to end. The alternative the report offered — a grammar
+  check in `Id`'s constructor — was not taken: it constrains ids the RFC
+  allows, and encoding is what §6.2 actually asks for.
 - **F15 (from AUDIT-FFI-20260810) — `jmap-client/src/transport.rs:203`**:
   see the report for the specific recommendation; action or record why
   not when the transport is next touched (the libsoup transport for the

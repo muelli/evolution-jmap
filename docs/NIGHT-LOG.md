@@ -15123,3 +15123,86 @@ asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
 two; the *reading* direction of a per-instance zone through real EDS is untested;
 calcard silently drops or wraps an unreadable `BYDAY`/`BYMONTHDAY`/`WKST` token
 below this crate, which only an upstream fix reaches.
+
+## 2026-08-10 (hundred-and-fifty-third session)
+
+F14 from the second FFI re-audit, closed: the blob URLs this client builds now
+percent-encode every value they substitute into the session's templates. Not a
+milestone step — the roadmap's "open audit recommendations" list is work like
+any other, and this was the tractable one on it.
+
+**What was actually wrong.** `download_blob` and `upload_blob` built the request
+URL by `str::replace` on `downloadUrl`/`uploadUrl`, pasting `{accountId}`,
+`{blobId}`, `{name}` and `{type}` in verbatim. RFC 8620 §6.1/§6.2 require the
+client to URI-encode each. None of the four values is this crate's to choose:
+two come off the wire — the account id out of the session document, the blob id
+out of `Email/get` — and `jmap_proto::Id` is a newtype over `String` with no
+grammar check at all, while `{name}` is a caller's label, which in
+`jmap-mail-sync/src/lib.rs:412` is a message uid. So a `#` truncated the URL at
+a fragment, a `?` opened a query string and a `/` invented a path segment: the
+request addressed a URL other than the blob it was read from.
+
+**Why the strictest escape set.** `encode_template_value` keeps only RFC 3986
+§2.3's unreserved characters (`ALPHA / DIGIT / - . _ ~`) and escapes every other
+byte. A template may put a variable in a path segment
+(`/download/{accountId}/{blobId}`) or in a query value (`?accept={type}`), and
+this crate does not parse the template to find out which; the unreserved set is
+the one answer correct in both. Encoding by byte rather than by `char` is what
+makes non-ASCII right — `%` escapes octets, so `ä` is `%C3%A4`, not one escape.
+`{type}` is our own constant `application/octet-stream` and is encoded too: in
+a query position a bare `/` was already legal, so this changes nothing there,
+and in a path position it was the same bug as the others.
+
+**The mock had to grow the other half, and the ordering is the subtle part.**
+The mock's blob routes split the path on `/` and matched the segments raw, so
+once the client encoded, every hostile-id test 404'd on the *server*. A
+conformant server decodes what the RFC told the client to encode, so
+`path_segments` now splits first and percent-decodes each segment after — never
+the reverse. Decoding before splitting would let a `%2F` inside a server-chosen
+id invent a path segment, which is precisely the confusion the encoding exists
+to prevent. A malformed escape (`100%`, `a%zz`, `%2`) is kept as itself rather
+than rejected, and non-UTF-8 octets go through `from_utf8_lossy`: an `Id` is a
+`String`, so bytes that spell no string can only miss the lookup, and a 404
+naming the id asked for is more use in a test server than a parse error.
+
+Eleven tests, red first: three in the new `jmap-client/tests/blob_urls.rs`
+against the mock (a blob seeded under the id `b#1?2/3 4%5` downloading its own
+bytes; a download named `../../etc/passwd?x=1` staying one path segment; an
+account whose id is the hostile string uploading and downloading), four unit
+tests on the encoder, four on the mock's decoder. All three integration tests
+failed with `Http { status: 404 }` before the fix. The mock half was then
+mutation-checked rather than assumed: dropping the decode from `path_segments`
+loses the blob-id and account-id tests, and — measured, not predicted — leaves
+the name test passing, because the mock matches the name segment as `_name` and
+never reads it. That test is about the *shape* of the path the client sends, so
+the client encoding is the only thing standing under it; the other two rest on
+both halves.
+
+The report's cheaper alternative — reuse `jmap-mail/src/cache.rs`'s `valid_key`
+grammar as a constructor check on `Id` — was considered and not taken. It
+constrains ids RFC 8620 §1.2 permits at a type with 40-odd construction sites,
+and §6.2 asks for encoding, not validation. `valid_key` stays where it is: a
+file name and a URL segment are different boundaries with different rules.
+
+Verified locally: `cargo test --locked` 642 (up 11 from 631),
+`cargo test -p jmap-mail --locked` green, `cargo fmt --check`, and
+`cargo clippy --all-targets --locked -- -D warnings` clean. `ci/checks.sh` still
+stops at its first step — `reuse` is not on this VM and neither `pipx`, `uvx`
+nor `python3 -m venv` can install it without sudo (`python3-venv` is absent, so
+the venv it creates has no interpreter). Both new files carry the SPDX header by
+hand; no dependency changed, so `cargo deny`'s answer is the one it gave on the
+last green run. `cargo clippy --workspace` still fails in `example-module` on
+`manual_c_str_literals`, which is pre-existing, outside the gate's default set,
+and untouched here.
+
+No milestone tag. What this did **not** do: F15 (the 10 MiB body cap `ureq`
+imposes by default) is still open and still the right thing to settle when the
+libsoup transport lands, since the number to pick is a product decision.
+`bySetPosition` remains the next calendar part and is still not a copy of the
+five before it. Unchanged blockers: `jmap-ical` writes `TZID=Europe/Berlin`
+with no `VTIMEZONE` beside it; the calcard directive's two emitters are still
+ours by choice; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is still unexplained.
