@@ -50,6 +50,19 @@ pub struct CalendarEvent {
     pub event_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    /// When the event first arrived — RFC 8984 §4.1.7's `created`, a
+    /// UTCDateTime such as `2026-01-02T09:30:00Z`.
+    ///
+    /// The server's to state: it stamps this when the event is created and
+    /// nothing here ever proposes a value for it. The iCalendar mapping draws it
+    /// as a `CREATED` for whoever reads the document and does not read it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    /// When the event was last changed — RFC 8984 §4.1.8's `updated`, a
+    /// UTCDateTime. The server's to state, for the reason [`Self::created`]
+    /// gives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

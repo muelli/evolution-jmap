@@ -16636,3 +16636,89 @@ writes the component by hand, so which menu (if any) reaches it is unverified; a
 `useDefaultAlerts` now silences an occurrence's own reminders as well as the series',
 which is right by the RFC but means a user of a defaults-driven server cannot set a
 one-off reminder on a single occurrence through this backend at all.
+
+## 2026-08-10 (hundred-and-sixty-fifth session)
+
+**When an event was made and last changed now crosses.** RFC 8984 §4.1.7's
+`created` and §4.1.8's `updated` are modeled on `CalendarEvent` and drawn as RFC
+5545 §3.8.7's `CREATED`, `DTSTAMP` and `LAST-MODIFIED`. `DTSTAMP` carries
+`updated` alongside `LAST-MODIFIED` because §3.8.7.2 both makes it REQUIRED on a
+`VEVENT` and declares it equivalent to `LAST-MODIFIED` in a calendar carrying no
+`METHOD`, which is every calendar this crate emits — so the two cannot disagree,
+and writing one without the other would leave the grammar unsatisfied for no gain.
+
+**Written and never read — the mirror of `DTEND`.** Neither timestamp is in
+`MAPPED_PROPERTIES`, `read_vevent` sets both to `None`, and `jmap-cal-sync`'s
+`diff` enumerates properties, so no save can name them. That is not tidiness: both
+instants are the *server's* record of the event — when it first arrived and when
+it last changed — and a client that read them off a component would be proposing a
+value for them. On a create, a guess at when the server first saw the event; on a
+save, a claim about when the server last changed it. The measurement below says
+what the claim would actually be worth.
+
+**libical stamps a `DTSTAMP` of its own.** `jmap-backend-cal`'s
+`libical_stamps_a_dtstamp_of_its_own_and_keeps_the_timestamps_written` drives a
+`VEVENT` with no timestamps through `marshal::icalendar_from_instances`: libical
+fills in a `DTSTAMP` from the clock — 20260810T225441Z on the run that first
+measured it — and invents neither `CREATED` nor `LAST-MODIFIED`. So the component
+EDS hands a save *always* carries a `DTSTAMP`, and reading `updated` back off one
+would be reading the local clock and reporting it as the server's. It re-renders
+all three verbatim when they are written, so the invented stamp is a default and
+not an overwrite. The test was written asserting no `DTSTAMP` at all, went red on
+exactly this, and was rewritten to record what libical does rather than what it
+was assumed to do.
+
+**An event with no `updated` still gets no line**, RFC 5545 §3.6.1 notwithstanding.
+The only value that could be invented is "now", and a rendering that differs
+between two runs is precisely what the save path cannot have: it reads an edit off
+a difference from a re-rendering of what the server holds, so an invented stamp
+would make every save see a change. libical closing the gap downstream is what
+makes the omission cost nothing.
+
+**A timestamp that names no instant is left off**, like every other unreadable
+value. `to_utc_date_time` is `to_ical_date_time`'s UTC-only sibling: it *requires*
+the `Z`, because a value without one is a local time and these properties have no
+zone to resolve it against — writing it as UTC anyway would move the instant by
+the user's offset. A sub-second fraction falls out of `strip`'s digit count and is
+refused the same way; neither format's DATE-TIME carries one.
+
+**The instance inherits both.** `modified_instance` copies them for the reason
+RFC 8984 §4.3.4 gives — an occurrence holds every property its override does not
+restate, and neither of these is restatable: they are the server's record of the
+*event*, not of one of its occurrences — and RFC 5545 wants the `DTSTAMP` on the
+detached component all the same.
+
+Tests: red first — compile-red in `jmap-ical` (`CalendarEvent` had no such
+fields), then five behaviour tests there, one save-boundary test in
+`jmap-cal-sync/tests/save.rs` (the editor rewrites all three from its own clock
+and the server's two survive it), and the libical measurement above, which was
+genuinely red. Counts: `cargo test --locked` 775, up 6 from 769; `jmap-backend-cal`
+100, up one; `ctest` 14/14 including all four functional legs after a full `ninja`.
+
+Not done, deliberately: `sequence` (RFC 8984 §4.1.9 / RFC 5545 §3.8.7.4), which is
+the scheduling revision and belongs with the guest list rather than with the
+timestamps; and `method`, `prodId` and `relatedTo`, the rest of §4.1's metadata.
+
+Verified locally: `cargo test --locked` 775 green, `cargo test -p jmap-backend-cal
+--locked` 100 green, `ctest` 14/14 after a full `ninja`, `cargo fmt --all --check`,
+and `cargo clippy --all-targets --locked -- -D warnings` clean for the default set
+and for `jmap-backend-cal` and `jmap-functional`. `ci/checks.sh` again stops at its
+first step: `reuse` is not on this VM and neither `pipx` nor `uvx` is installed.
+Exposure is nil — **no file was added**, only edits to files that already carry
+SPDX headers — and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one
+it gave on the last green run.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. New from this session: nothing says what Evolution's appointment
+editor *shows* of `CREATED` and `LAST-MODIFIED` — whether either reaches the UI at
+all, or whether the two lines are only ever read by other clients — and, since the
+mock stamps neither timestamp itself, no test here exercises an event whose
+`updated` a server actually maintains; both would need a real server or a real
+Evolution session.
