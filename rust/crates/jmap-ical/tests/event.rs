@@ -828,7 +828,7 @@ fn an_edited_instance_may_show_a_transparency_of_its_own() {
     // it on the instance's own component, so an occurrence the user marked free
     // in a series that blocks time is a difference this mapping can carry whole.
     let patch = json!({"freeBusyStatus": "free"});
-    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(maps_override("2026-01-29T13:00:00", &patch));
 
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     event.free_busy_status = Some("busy".to_owned());
@@ -935,7 +935,7 @@ fn an_edited_instance_may_show_a_priority_of_its_own() {
     // in an otherwise unremarkable series is a difference this mapping carries
     // whole.
     let patch = json!({"priority": 1});
-    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(maps_override("2026-01-29T13:00:00", &patch));
 
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     event.priority = Some(5);
@@ -1061,7 +1061,7 @@ fn an_edited_instance_may_show_a_privacy_of_its_own() {
     // it on the instance's own component, so the one occurrence of a series the
     // user marked private is a difference this mapping carries whole.
     let patch = json!({"privacy": "private"});
-    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(maps_override("2026-01-29T13:00:00", &patch));
 
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     event.privacy = Some("public".to_owned());
@@ -1519,7 +1519,7 @@ fn an_edited_instance_may_show_tags_of_its_own() {
     // carries that tag and no other — the series' own set is not merged in. Which
     // is why the patch below restates `offsite` to keep it.
     let patch = json!({"keywords": {"cancelled": true, "offsite": true}});
-    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(maps_override("2026-01-29T13:00:00", &patch));
 
     let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     event.keywords = Some([("offsite".to_owned(), json!(true))].into());
@@ -1558,7 +1558,7 @@ fn an_instance_that_drops_its_tags_reads_back_as_removing_them() {
         ical_to_event(&ics).expect("parse").recurrence_overrides,
         event.recurrence_overrides
     );
-    assert!(maps_recurrence_override(
+    assert!(maps_override(
         "2026-01-29T13:00:00",
         &json!({"keywords": null})
     ));
@@ -1614,10 +1614,7 @@ fn a_tag_an_instance_cannot_show_leaves_the_override_flagged() {
         json!(["offsite"]),
     ] {
         let patch = json!({"keywords": keywords});
-        assert!(
-            !maps_recurrence_override("2026-01-29T13:00:00", &patch),
-            "{patch}"
-        );
+        assert!(!maps_override("2026-01-29T13:00:00", &patch), "{patch}");
 
         // And still placed as far as it goes: the occurrence gets a bare RDATE at
         // the series' tags rather than vanishing from the calendar.
@@ -1884,9 +1881,9 @@ fn an_edited_instance_is_drawn_with_the_series_reminders() {
 
     assert_eq!(vevents(&ics), 2, "{ics}");
     assert_eq!(ics.matches("BEGIN:VALARM\r\n").count(), 2, "{ics}");
-    // And the instance's own reminder is not read as a difference from the
-    // series': `alerts` is not one of the properties an override may restate, so
-    // the round trip states the title alone.
+    // And the reminder it inherited is not read as a difference from the series':
+    // an override states what an instance differs *by*, and this one differs by
+    // its title alone.
     assert_eq!(
         ical_to_event(&ics)
             .expect("parse")
@@ -1894,6 +1891,171 @@ fn an_edited_instance_is_drawn_with_the_series_reminders() {
             .expect("overrides")["2026-01-29T13:00:00"],
         json!({"title": "Sprint planning (long)"})
     );
+}
+
+#[test]
+fn an_edited_instance_may_show_reminders_of_its_own() {
+    // RFC 8984 §4.3.4 lets an override restate the property and iCalendar spells
+    // it as the VALARMs of the instance's own component, so the one occurrence of
+    // a series the user is reminded of differently is a difference this mapping
+    // carries whole.
+    //
+    // The map is *replaced* rather than added to, exactly as `keywords` is: an
+    // override naming one alert is an occurrence with that reminder and no other.
+    // Which is why the patch below restates the series' own key — an hour before
+    // rather than a quarter of one is that same reminder moved, and a save under
+    // another key would leave the user reminded twice.
+    let mut moved = quarter_of_an_hour_before();
+    moved["trigger"]["offset"] = json!("-PT1H");
+    let patch = json!({"alerts": {"k1": moved}});
+    assert!(maps_override("2026-01-29T13:00:00", &patch));
+
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+    event.alerts = Some([("k1".to_owned(), quarter_of_an_hour_before())].into());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(ics.matches("BEGIN:VALARM\r\n").count(), 2, "{ics}");
+    assert_eq!(content_line(&ics, "TRIGGER"), "TRIGGER:-PT15M");
+    assert_eq!(content_line(vevent(&ics, 1), "TRIGGER"), "TRIGGER:-PT1H");
+    // Under the server's own key on both components, which is what makes the two
+    // the same reminder at different times.
+    assert_eq!(content_line(vevent(&ics, 1), "UID:k1"), "UID:k1");
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+}
+
+#[test]
+fn an_instance_that_drops_its_reminders_reads_back_as_removing_them() {
+    // A PatchObject removes a property with a null and the component says the same
+    // thing by carrying no VALARM at all — so the one occurrence the user is not
+    // reminded of comes back that way, rather than at the series' reminders, and a
+    // save does not put them back.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"alerts": null}}));
+    event.alerts = Some([("k1".to_owned(), quarter_of_an_hour_before())].into());
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert!(without(vevent(&ics, 1), "BEGIN:VALARM"), "{ics}");
+    assert_eq!(
+        ics.matches("BEGIN:VALARM\r\n").count(),
+        1,
+        "the series keeps its own\n{ics}"
+    );
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
+    assert!(maps_override(
+        "2026-01-29T13:00:00",
+        &json!({"alerts": null})
+    ));
+}
+
+#[test]
+fn a_reminder_one_instance_could_not_show_is_flagged_rather_than_drawn() {
+    // `a_reminder_the_component_cannot_show_is_flagged_rather_than_drawn` one level
+    // down, asked of the same `drawn_alert`: an alert left off the instance's
+    // component is one the next save deletes from that occurrence.
+    let mut dismissed = quarter_of_an_hour_before();
+    dismissed["acknowledged"] = json!("2026-01-29T12:46:00Z");
+    for alerts in [
+        // A reminder the user has already dismissed (RFC 9074 §6.1), which a
+        // VALARM cannot say.
+        json!({"k2": dismissed}),
+        // A reminder that sends mail, and one that fires at an instant rather than
+        // at an offset — neither of which this mapping writes.
+        json!({"k2": {"@type": "Alert", "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}, "action": "email"}}),
+        json!({"k2": {"@type": "Alert", "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-29T12:45:00Z"}}}),
+        // A key no UID can carry back, so the entry would return renamed.
+        json!({"": quarter_of_an_hour_before()}),
+        // The empty map, refused for the reason the empty set of tags is: it is
+        // written the same way as a removal and would come back as that null,
+        // which is a different patch.
+        json!({}),
+    ] {
+        // Beside a title, so the instance is drawn at all: an override whose only
+        // field is one this mapping cannot state says nothing a component of its
+        // own would show, and is placed by a bare `RDATE` instead.
+        let patch = json!({"title": "Sprint planning (long)", "alerts": alerts});
+        assert!(
+            !maps_override("2026-01-29T13:00:00", &patch),
+            "{patch} was called covered"
+        );
+
+        // And the instance is still drawn, at the reminders it inherited: an
+        // occurrence is worth showing even where its override was not seen whole,
+        // and `maps_recurrence_override` is what tells the save path so.
+        let mut event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
+        event.alerts = Some([("k1".to_owned(), quarter_of_an_hour_before())].into());
+        let ics = event_to_ical(&event);
+        assert_eq!(vevents(&ics), 2, "{ics}");
+        assert_eq!(ics.matches("BEGIN:VALARM\r\n").count(), 2, "{ics}");
+        assert_eq!(ics.matches("\r\nUID:k1\r\n").count(), 2, "{ics}");
+        // The unshowable reminder reaches neither component, and the occurrence
+        // reads back reminded as the series is — which is what makes replacing the
+        // property from the drawing the deletion `maps_recurrence_override` is
+        // refusing.
+        assert!(!ics.contains("k2"), "{ics}");
+        assert_eq!(
+            ical_to_event(&ics)
+                .expect("parse")
+                .recurrence_overrides
+                .expect("overrides")["2026-01-29T13:00:00"],
+            json!({"title": "Sprint planning (long)"})
+        );
+    }
+}
+
+#[test]
+fn an_occurrence_of_an_event_that_uses_the_default_reminders_is_drawn_with_none() {
+    // `an_event_that_uses_the_default_reminders_is_drawn_with_none` one level down,
+    // and the reason `maps_recurrence_override` is asked of the series rather than
+    // of the patch alone: RFC 8984 §4.5.1's `useDefaultAlerts` is not a property an
+    // override may restate, so the series' answer holds for every instance and an
+    // occurrence's own `alerts` is ignored exactly as the series' is.
+    let mut event = recurring_with(json!({
+        "2026-01-29T13:00:00": {"title": "Sprint planning (long)"},
+    }));
+    event.alerts = Some([("k1".to_owned(), quarter_of_an_hour_before())].into());
+    event
+        .extra
+        .insert("useDefaultAlerts".to_owned(), json!(true));
+    let ics = event_to_ical(&event);
+
+    // Neither component draws them — an occurrence reminded where the series
+    // beside it is not would be a reminder that never fires, and would read back as
+    // an occurrence the user had just set one on.
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert!(without(&ics, "BEGIN:VALARM"), "{ics}");
+    assert_eq!(
+        ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_overrides
+            .expect("overrides")["2026-01-29T13:00:00"],
+        json!({"title": "Sprint planning (long)"})
+    );
+    // And the override is refused rather than replaced by the nothing that was
+    // drawn.
+    assert!(!maps_recurrence_override(
+        &event,
+        "2026-01-29T13:00:00",
+        &json!({"alerts": {"k1": quarter_of_an_hour_before()}})
+    ));
+    // Down to the null: a save that sent it would be editing what nothing reads.
+    assert!(!maps_recurrence_override(
+        &event,
+        "2026-01-29T13:00:00",
+        &json!({"alerts": null})
+    ));
+    // What the flag does not touch is every other restated property.
+    assert!(maps_recurrence_override(
+        &event,
+        "2026-01-29T13:00:00",
+        &json!({"title": "Sprint planning (long)"})
+    ));
 }
 
 #[test]
@@ -3681,6 +3843,19 @@ fn an_all_day_event_whose_minutes_are_unwritable_stays_a_date() {
     ));
 }
 
+/// [`maps_recurrence_override`] asked of an override on a series that says
+/// nothing about reminders.
+///
+/// The predicate takes the series because one restated property's coverage is the
+/// series' to decide — RFC 8984 §4.5.1's `useDefaultAlerts`, which an override may
+/// not restate — and that is all it reads the event for. So every test but the
+/// flag's own asks it of a series that does not set it; see
+/// `an_occurrence_of_an_event_that_uses_the_default_reminders_is_drawn_with_none`,
+/// which asks it of one that does.
+fn maps_override(id: &str, patch: &Value) -> bool {
+    maps_recurrence_override(&CalendarEvent::default(), id, patch)
+}
+
 /// A recurring event in one zone, with `overrides` naming single instances.
 fn recurring_with(overrides: Value) -> CalendarEvent {
     CalendarEvent {
@@ -3830,7 +4005,7 @@ fn an_instance_edited_on_its_own_is_a_vevent_of_its_own() {
     // (RFC 5545 §3.8.4.4) — and the properties it does not restate are the
     // series'.
     let patch = json!({"title": "Sprint review"});
-    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(maps_override("2026-01-29T13:00:00", &patch));
 
     let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     let ics = event_to_ical(&event);
@@ -3894,7 +4069,7 @@ fn an_instance_moved_to_another_zone_carries_it_on_its_own_start() {
     // series' zone, because it names the occurrence the *rules* generated and
     // the rules run on the series' clock (RFC 5545 §3.8.4.4).
     let patch = json!({"start": "2026-01-29T09:00:00", "timeZone": "America/New_York"});
-    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(maps_override("2026-01-29T13:00:00", &patch));
 
     let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     let ics = event_to_ical(&event);
@@ -3943,7 +4118,7 @@ fn an_instance_that_drops_its_zone_floats_rather_than_inheriting_the_series() {
     // §3.3.5 form 1 says. The series' zone does not reach across to it, so the
     // two ends agree without either inventing a zone.
     let patch = json!({"timeZone": null});
-    assert!(maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(maps_override("2026-01-29T13:00:00", &patch));
 
     let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     let ics = event_to_ical(&event);
@@ -3973,10 +4148,7 @@ fn a_zone_an_instance_cannot_name_is_flagged_rather_than_written_back() {
         json!(42),
     ] {
         let patch = json!({"timeZone": zone});
-        assert!(
-            !maps_recurrence_override("2026-01-29T13:00:00", &patch),
-            "{patch}"
-        );
+        assert!(!maps_override("2026-01-29T13:00:00", &patch), "{patch}");
 
         // Nothing left to draw, so the occurrence is placed by a bare RDATE at
         // the series' zone rather than moved to a zone we could not name.
@@ -4080,7 +4252,7 @@ fn an_instance_that_drops_a_property_reads_back_as_removing_it() {
 
     let read_back = ical_to_event(&ics).expect("parse");
     assert_eq!(read_back.recurrence_overrides, event.recurrence_overrides);
-    assert!(maps_recurrence_override(
+    assert!(maps_override(
         "2026-01-29T13:00:00",
         &json!({"description": null})
     ));
@@ -4092,7 +4264,7 @@ fn an_instance_both_edited_and_excluded_is_excluded_and_flagged() {
     // so the exclusion wins and the rest of the patch is lost — which the save
     // path has to be told, or the next save writes the loss back.
     let patch = json!({"excluded": true, "title": "Sprint review"});
-    assert!(!maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(!maps_override("2026-01-29T13:00:00", &patch));
 
     let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     let ics = event_to_ical(&event);
@@ -4122,10 +4294,7 @@ fn an_override_the_mapping_cannot_draw_is_still_placed_at_the_parents_title() {
         json!({"keywords": {"offsite": 1}}),
         json!({"start": "2026-02-30T13:00:00"}),
     ] {
-        assert!(
-            !maps_recurrence_override("2026-01-29T13:00:00", &patch),
-            "{patch}"
-        );
+        assert!(!maps_override("2026-01-29T13:00:00", &patch), "{patch}");
 
         let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
         let ics = event_to_ical(&event);
@@ -4142,7 +4311,7 @@ fn an_override_naming_one_property_it_can_draw_is_drawn_and_the_rest_narrowed() 
     // Half-known is the same trade as an RRULE that had to drop its byDay: draw
     // what can be drawn, and flag the property so a save leaves it alone.
     let patch = json!({"title": "Sprint review", "locations/1/name": "Room 3"});
-    assert!(!maps_recurrence_override("2026-01-29T13:00:00", &patch));
+    assert!(!maps_override("2026-01-29T13:00:00", &patch));
 
     let event = recurring_with(json!({"2026-01-29T13:00:00": patch}));
     let ics = event_to_ical(&event);
@@ -4507,10 +4676,7 @@ fn an_override_whose_instant_cannot_be_written_is_flagged() {
     // No EXDATE can name it, so a save that replaced recurrenceOverrides would
     // delete the exclusion outright.
     for id in ["2026-13-29T13:00:00", "sometime", "2026-02-30T13:00:00"] {
-        assert!(
-            !maps_recurrence_override(id, &json!({"excluded": true})),
-            "{id}"
-        );
+        assert!(!maps_override(id, &json!({"excluded": true})), "{id}");
 
         let event = recurring_with(json!({id: {"excluded": true}}));
         let ics = event_to_ical(&event);
@@ -4531,15 +4697,18 @@ fn an_override_whose_instant_cannot_be_written_is_flagged() {
         json!({"priority": 9}),
         json!({"privacy": "secret"}),
         json!({"keywords": {"offsite": true}}),
+        json!({"alerts": {"k1": {
+            "@type": "Alert",
+            "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+            "action": "display",
+        }}}),
         json!({
             "status": null, "duration": null, "freeBusyStatus": null,
             "priority": null, "privacy": null, "keywords": null,
+            "alerts": null,
         }),
     ] {
-        assert!(
-            maps_recurrence_override("2026-01-29T13:00:00", &patch),
-            "{patch}"
-        );
+        assert!(maps_override("2026-01-29T13:00:00", &patch), "{patch}");
     }
 }
 
@@ -4553,7 +4722,7 @@ fn an_overrides_duration_that_states_no_length_is_flagged() {
     // quietly shortening an occurrence nobody touched.
     for value in ["-PT1H", "next tuesday", "PT", "3600"] {
         assert!(
-            !maps_recurrence_override("2026-01-29T13:00:00", &json!({"duration": value})),
+            !maps_override("2026-01-29T13:00:00", &json!({"duration": value})),
             "{value}"
         );
 
@@ -4576,7 +4745,7 @@ fn an_overrides_duration_that_states_no_length_is_flagged() {
     // the same thing, which is what an override has to promise.
     for value in [json!("PT30M"), json!("P1D"), json!("+PT1H"), Value::Null] {
         assert!(
-            maps_recurrence_override("2026-01-29T13:00:00", &json!({"duration": value})),
+            maps_override("2026-01-29T13:00:00", &json!({"duration": value})),
             "{value}"
         );
     }

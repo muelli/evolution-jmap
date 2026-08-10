@@ -51,8 +51,8 @@
 //!   `EXDATE`, an `RDATE` and a `RECURRENCE-ID` component between them say that
 //!   an instance is off, that it happens, and that it happens with another
 //!   title, start, zone, length, description, status, transparency,
-//!   importance, classification or set of tags — but not that it happens in
-//!   another place, with another reminder, or with another guest list. An
+//!   importance, classification, set of tags or set of reminders — but not that
+//!   it happens in another place or with another guest list. An
 //!   override the component could only place with a bare
 //!   `RDATE` would come back as the empty patch, deleting what it could not
 //!   draw, so if any override the server holds fails
@@ -323,10 +323,11 @@ fn diff_keywords(
 /// writing there at all. The *edited* side needs no such check: every alert on it
 /// was read off a `VALARM` this crate would draw again, key included.
 ///
-/// This is the series' reminders only. `alerts` is not a property an override may
-/// restate ([`jmap_ical::OVERRIDE_PROPERTIES`]), so a reminder changed on one
-/// occurrence of a recurring event is not saved — the standing limitation
-/// `locations` has.
+/// This is the series' reminders only. An instance edited on its own states its
+/// own `VALARM`s on its own component, and that difference rides in the override
+/// [`diff_overrides`] sends — under the same rule about what a `VALARM` can show,
+/// asked by [`maps_recurrence_override`], which is handed the series so that
+/// `useDefaultAlerts` reaches an occurrence's reminders too.
 fn diff_alerts(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
@@ -411,7 +412,7 @@ fn diff_overrides(
             .recurrence_overrides
             .iter()
             .flatten()
-            .any(|(id, override_patch)| !maps_recurrence_override(id, override_patch))
+            .any(|(id, override_patch)| !maps_recurrence_override(event, id, override_patch))
     }) {
         return;
     }
