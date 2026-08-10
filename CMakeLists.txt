@@ -10,6 +10,11 @@ project(example-modules C)
 #
 set(GETTEXT_PACKAGE "example-module")
 set(RELEASE_NAME "Evolution example module.")
+# What this project installs as, as distinct from the CMake project name it
+# still carries from the upstream skeleton (`example-modules`). It is the
+# Debian package name, the gettext domain the Rust modules bind, and the name
+# a bug report would use.
+set(PACKAGE_NAME "evolution-jmap")
 set(VERSION "0.0.1")
 set(VERSION_INFO "Release")
 set(LANGUAGE_SUPPORT_DIRECTORY ${CMAKE_INSTALL_PREFIX}/share/locale)
@@ -59,6 +64,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffile-prefix-map=${CMAKE_SOURCE_DIR}=/build
 
 include(cmake/Rust.cmake)
 include(cmake/Backends.cmake)
+include(cmake/Packaging.cmake)
 
 # uninstall target
 configure_file(

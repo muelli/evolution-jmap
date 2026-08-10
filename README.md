@@ -44,6 +44,24 @@ cmake --build build
 ctest --test-dir build
 ```
 
+### Building the package
+
+The five modules also install as one Debian package, built from that same
+install tree:
+
+```bash
+cpack -G DEB --config build/CPackConfig.cmake -B build/package
+sudo apt install ./build/package/evolution-jmap_*.deb
+```
+
+Its dependencies are derived from the built objects by `dpkg-shlibdeps`
+rather than written down, so the package pins the ABI it was compiled
+against — `libevolution (>= 3.52.3), libevolution (<< 3.53)` and the
+matching evolution-data-server sonames. That is the contract for modules
+Evolution and EDS dlopen: build them against the versions they will be
+installed alongside. `ctest -R package-deb` builds the package and checks
+its contents and control fields.
+
 ### Poking at the mock server
 
 ```bash
