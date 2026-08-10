@@ -8,12 +8,26 @@
 //! [`Property`] values and back. The semantic mapping lives in
 //! [`crate::contact`].
 //!
-//! vCard 3.0 rather than 4.0 because that is the only format Evolution's
-//! `EVCard` emits (`EVC_FORMAT_VCARD_30`), and every vCard we produce is
-//! handed straight to `e_contact_new_from_vcard()`.
+//! **Reading is [`calcard`](https://github.com/stalwartlabs/calcard)'s**, the
+//! text layer of Stalwart's CalDAV/CardDAV stack: unfolding, unescaping,
+//! parameter quoting, the case rules, and the legacy transfer encodings
+//! (`QUOTED-PRINTABLE`, `BASE64`) that exporters still emit. That is the side
+//! hostile input arrives on, and it is not a liability worth carrying
+//! ourselves.
+//!
+//! **Writing is still ours**, deliberately, because calcard's vCard writer
+//! targets 4.0 output and three of its choices are wrong for a 3.0 reader —
+//! see [`fold_into`] and [`quote_param`], and `docs/NIGHT-LOG.md` for the
+//! measurements. vCard 3.0 rather than 4.0 because that is the only format
+//! Evolution's `EVCard` emits (`EVC_FORMAT_VCARD_30`), and every vCard we
+//! produce is handed straight to `e_contact_new_from_vcard()`.
 //!
 //! [RFC 2425]: https://www.rfc-editor.org/rfc/rfc2425
 //! [RFC 2426]: https://www.rfc-editor.org/rfc/rfc2426
+
+use calcard::common::IanaString;
+use calcard::vcard::{VCardEntry, VCardParameterValue, VCardValue};
+use calcard::{Entry, Parser};
 
 use crate::error::VCardError;
 
@@ -22,9 +36,9 @@ const FOLD_AT: usize = 75;
 
 /// One vCard content line.
 ///
-/// The value is kept in its escaped, on-the-wire form so that structured
-/// values can be split on their real separators before unescaping; use
-/// [`Property::text`] or [`Property::components`] to read it.
+/// The values are held decoded — unescaped, unfolded, and with any legacy
+/// transfer encoding already undone — because that is what the mapping wants;
+/// the escaping is applied on the way out, by [`write`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
     /// The `item1` in `item1.TEL:…`, if the line was grouped.
@@ -32,17 +46,18 @@ pub struct Property {
     /// Upper-cased property name.
     pub name: String,
     params: Vec<(String, Vec<String>)>,
-    value: String,
+    /// The `;`-separated components of the value; a plain property has one.
+    values: Vec<String>,
 }
 
 impl Property {
-    /// A property with a single text value, escaped on the way in.
+    /// A property with a single text value.
     pub fn new(name: &str, value: &str) -> Self {
         Self {
             group: None,
             name: name.to_ascii_uppercase(),
             params: Vec::new(),
-            value: escape(value),
+            values: vec![value.to_owned()],
         }
     }
 
@@ -53,16 +68,14 @@ impl Property {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let value = components
-            .into_iter()
-            .map(|component| escape(component.as_ref()))
-            .collect::<Vec<_>>()
-            .join(";");
         Self {
             group: None,
             name: name.to_ascii_uppercase(),
             params: Vec::new(),
-            value,
+            values: components
+                .into_iter()
+                .map(|component| component.as_ref().to_owned())
+                .collect(),
         }
     }
 
@@ -88,17 +101,15 @@ impl Property {
         self
     }
 
-    /// The value as text, with escapes resolved.
+    /// The value as text. A structured value reads back as its components
+    /// rejoined on `;`, which is how it looked on the wire.
     pub fn text(&self) -> String {
-        unescape(&self.value)
+        self.values.join(";")
     }
 
-    /// The value split on unescaped `;`, each component unescaped.
+    /// The value split into its `;`-separated components.
     pub fn components(&self) -> Vec<String> {
-        split_unescaped(&self.value, ';')
-            .into_iter()
-            .map(|component| unescape(&component))
-            .collect()
+        self.values.clone()
     }
 
     /// The first value of the named parameter.
@@ -138,7 +149,8 @@ impl Property {
             line.push_str(&quoted.join(","));
         }
         line.push(':');
-        line.push_str(&self.value);
+        let escaped: Vec<String> = self.values.iter().map(|value| escape(value)).collect();
+        line.push_str(&escaped.join(";"));
         line
     }
 }
@@ -154,81 +166,79 @@ pub fn write(properties: &[Property]) -> String {
 }
 
 /// Parse a complete vCard into its properties, `BEGIN`/`END` stripped.
+///
+/// calcard runs in its strict mode: this reads either a whole vCard or
+/// nothing. Being liberal about a truncated card would mean handing the
+/// mapping half a contact, which the next save would write back over the
+/// whole one.
 pub fn parse(text: &str) -> Result<Vec<Property>, VCardError> {
-    let lines = unfold(text);
-    let mut lines = lines.iter().map(String::as_str);
-
-    let begin = lines.next().ok_or(VCardError::NotAVCard)?;
-    if !begin.eq_ignore_ascii_case("BEGIN:VCARD") {
-        return Err(VCardError::NotAVCard);
-    }
-
-    let mut properties = Vec::new();
-    for line in lines {
-        if line.eq_ignore_ascii_case("END:VCARD") {
-            return Ok(properties);
-        }
-        properties.push(parse_line(line)?);
-    }
-    Err(VCardError::Unterminated)
-}
-
-/// Undo line folding and drop blank lines, yielding logical content lines.
-fn unfold(text: &str) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    for raw in text.replace("\r\n", "\n").split('\n') {
-        match raw.strip_prefix([' ', '\t']) {
-            // A continuation of the previous logical line — but only if
-            // there is one; leading whitespace at the top is just noise.
-            Some(rest) if !lines.is_empty() => lines.last_mut().expect("non-empty").push_str(rest),
-            _ => {
-                let line = raw.trim_end_matches('\r');
-                if !line.is_empty() {
-                    lines.push(line.to_owned());
-                }
-            }
-        }
-    }
-    lines
-}
-
-fn parse_line(line: &str) -> Result<Property, VCardError> {
-    let colon = find_unquoted(line, ':').ok_or_else(|| VCardError::Malformed(line.to_owned()))?;
-    let (head, value) = line.split_at(colon);
-    let value = &value[1..];
-
-    let mut tokens = split_unquoted(head, ';').into_iter();
-    let first = tokens.next().unwrap_or_default();
-    if first.is_empty() {
-        return Err(VCardError::Malformed(line.to_owned()));
-    }
-    let (group, name) = match first.split_once('.') {
-        Some((group, name)) => (Some(group.to_owned()), name.to_ascii_uppercase()),
-        None => (None, first.to_ascii_uppercase()),
+    let card = match Parser::new(text).strict().entry() {
+        Entry::VCard(card) => card,
+        Entry::UnterminatedComponent(_) => return Err(VCardError::Unterminated),
+        Entry::InvalidLine(line) => return Err(VCardError::Malformed(line)),
+        _ => return Err(VCardError::NotAVCard),
     };
 
-    let mut params: Vec<(String, Vec<String>)> = Vec::new();
-    for token in tokens {
-        match token.split_once('=') {
-            Some((key, values)) => params.push((
-                key.to_ascii_uppercase(),
-                split_unquoted(values, ',')
-                    .iter()
-                    .map(|value| unquote_param(value))
-                    .collect(),
-            )),
-            // vCard 2.1 wrote bare type values (`EMAIL;INTERNET:…`), and
-            // exporters still do. Read them as TYPE rather than discard them.
-            None => params.push(("TYPE".to_owned(), vec![unquote_param(&token)])),
-        }
-    }
+    Ok(card.entries.iter().map(from_entry).collect())
+}
 
-    Ok(Property {
-        group,
-        name,
-        params,
-        value: value.to_owned(),
-    })
+fn from_entry(entry: &VCardEntry) -> Property {
+    Property {
+        group: entry.group.clone(),
+        name: entry.name.as_str().to_ascii_uppercase(),
+        params: entry
+            .params
+            .iter()
+            .map(|param| {
+                (
+                    param.name.as_str().to_ascii_uppercase(),
+                    vec![param_text(&param.value)],
+                )
+            })
+            .collect(),
+        values: entry.values.iter().filter_map(value_text).collect(),
+    }
+}
+
+/// A parameter value as the mapping reads it. Everything this crate writes is
+/// text; the typed forms appear on a parsed card, where the mapping compares
+/// them against `TYPE` spellings.
+fn param_text(value: &VCardParameterValue) -> String {
+    match value {
+        VCardParameterValue::Text(text) => text.clone(),
+        VCardParameterValue::Integer(number) => number.to_string(),
+        VCardParameterValue::Timestamp(stamp) => stamp.to_string(),
+        VCardParameterValue::Bool(true) => "TRUE".to_owned(),
+        VCardParameterValue::Bool(false) => "FALSE".to_owned(),
+        VCardParameterValue::ValueType(kind) => kind.as_str().to_owned(),
+        VCardParameterValue::Type(kind) => kind.as_str().to_owned(),
+        VCardParameterValue::Calscale(scale) => scale.as_str().to_owned(),
+        VCardParameterValue::Level(level) => level.as_str().to_owned(),
+        VCardParameterValue::Phonetic(system) => system.as_str().to_owned(),
+        // A valueless parameter (`EMAIL;INTERNET:…`, which calcard has already
+        // read as `TYPE=INTERNET` where the value names a known type), and the
+        // JSCOMPS structure, which this mapping has no use for.
+        _ => String::new(),
+    }
+}
+
+/// A value as the mapping reads it, or `None` for one it has no text for.
+///
+/// Only the text forms are surfaced: the mapped property set — UID, FN, N,
+/// EMAIL, TEL and the two `X-JMAP-*` lines — is text throughout, and a card
+/// that also carries a `PHOTO` or a `BDAY` is read for the properties this
+/// crate maps rather than re-emitted. Dropping the value of a property nothing
+/// reads loses nothing: the vCard it came from is EDS's copy and stays as it
+/// is, and a JSContact property this mapping never mapped is one it never
+/// overwrites.
+fn value_text(value: &VCardValue) -> Option<String> {
+    match value {
+        VCardValue::Text(text) => Some(text.clone()),
+        // A comma-separated run inside one `;` component, which the mapping
+        // reads as the text it was written as.
+        VCardValue::Component(items) => Some(items.join(",")),
+        _ => None,
+    }
 }
 
 /// Append a content line, folded to [`FOLD_AT`] octets. Folds land on
@@ -247,6 +257,14 @@ fn parse_line(line: &str) -> Result<Property, VCardError> {
 /// property it likes into the user's address book. A caller that means a line
 /// break in a value spells it `\n`, which [`escape`] produces and this leaves
 /// alone.
+///
+/// calcard's writer is not used for this. It folds one octet late — the `:`
+/// between the parameters and the value is written without being counted, so
+/// the first line of every folded property is 76 octets against RFC 2426
+/// §2.6's 75 — and it encodes a CR as `\r` and a quote as `\"`, neither of
+/// which vCard 3.0 defines: `EVCard` resolves an unknown escape to the
+/// character itself, so the `\r` would arrive as a literal `r` and the `"`
+/// would close the quoted parameter it was meant to sit inside.
 fn fold_into(out: &mut String, line: &str) {
     let mut budget = FOLD_AT;
     let mut used = 0;
@@ -281,75 +299,6 @@ fn escape(value: &str) -> String {
     out
 }
 
-fn unescape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut characters = value.chars();
-    while let Some(character) = characters.next() {
-        if character != '\\' {
-            out.push(character);
-            continue;
-        }
-        match characters.next() {
-            Some('n' | 'N') => out.push('\n'),
-            // An unknown escape stands for the character itself; that keeps
-            // `\;`, `\,`, `\\` right and never loses data on the odd input.
-            Some(escaped) => out.push(escaped),
-            None => out.push('\\'),
-        }
-    }
-    out
-}
-
-/// Split on a separator that is not preceded by a backslash.
-fn split_unescaped(value: &str, separator: char) -> Vec<String> {
-    let mut parts = vec![String::new()];
-    let mut escaped = false;
-    for character in value.chars() {
-        let current = parts.last_mut().expect("non-empty");
-        if escaped {
-            current.push(character);
-            escaped = false;
-        } else if character == '\\' {
-            current.push(character);
-            escaped = true;
-        } else if character == separator {
-            parts.push(String::new());
-        } else {
-            current.push(character);
-        }
-    }
-    parts
-}
-
-/// Split on a separator that is not inside a double-quoted parameter value.
-fn split_unquoted(value: &str, separator: char) -> Vec<String> {
-    let mut parts = vec![String::new()];
-    let mut quoted = false;
-    for character in value.chars() {
-        if character == '"' {
-            quoted = !quoted;
-        }
-        if character == separator && !quoted {
-            parts.push(String::new());
-        } else {
-            parts.last_mut().expect("non-empty").push(character);
-        }
-    }
-    parts
-}
-
-fn find_unquoted(value: &str, separator: char) -> Option<usize> {
-    let mut quoted = false;
-    for (index, character) in value.char_indices() {
-        if character == '"' {
-            quoted = !quoted;
-        } else if character == separator && !quoted {
-            return Some(index);
-        }
-    }
-    None
-}
-
 fn quote_param(value: &str) -> String {
     // RFC 2425 §5.8.2: a parameter value containing the structural
     // characters has to be quoted. There is no escape inside the quotes, so
@@ -360,12 +309,4 @@ fn quote_param(value: &str) -> String {
     } else {
         value
     }
-}
-
-fn unquote_param(value: &str) -> String {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or(value)
-        .to_owned()
 }
