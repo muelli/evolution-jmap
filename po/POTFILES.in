@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Every source holding a string a user of this project reads, for the
+# `evolution-jmap` gettext domain. `xgettext` reads this list and nothing else,
+# so a marked string in an unlisted file is a string no translator is ever
+# offered; `rust/crates/jmap-backend-core/tests/potfiles.rs` holds the list to
+# the sources in both directions so that cannot happen quietly.
+#
+# Paths are relative to the directory holding this `po/`, which is gettext's
+# convention and what the extraction has to be run from:
+#
+#   xgettext --files-from=po/POTFILES.in -L C --from-code=UTF-8 \
+#            --keyword=N_ --keyword=translate --add-comments=TRANSLATORS \
+#            --package-name=evolution-jmap -o po/evolution-jmap.pot
+#
+# `-L C` because gettext 0.21 has no Rust parser. It extracts our markers
+# correctly — `N_(c"…")` reads as a call with a string argument either way — but
+# it lexes a lifetime as an opening character constant and says so:
+#
+#   provider.rs:125: warning: unterminated character constant
+#
+# Harmless where it stands today, and not something to leave unwatched: the
+# lexer resumes at the next `'`, so a marked string between two lifetimes could
+# in principle be swallowed. Whoever wires the extraction into the build should
+# either check the `.pot` against this list or use a Rust-aware extractor.
+#
+# What is NOT here, and why:
+#
+# - `src/*.c`. The C example module is upstream skeleton code from the GNOME
+#   Evolution wiki, and it carries its own gettext domain — the top-level
+#   CMakeLists.txt still sets `GETTEXT_PACKAGE` to `example-module`, which is
+#   not this project's domain. Its strings ("My Maildir Folder Action…") are
+#   demonstration text that will leave with the skeleton; folding them into
+#   this catalogue would hand translators strings for a module nobody ships.
+# - Anything under a crate's `tests/`. A string that exists only in a test
+#   binary is not one a user reads.
+# - Protocol constants, JMAP property names, log and trace text, and errors
+#   only a developer sees. The standing directive in `docs/ROADMAP.md` excludes
+#   them deliberately: translating them makes bug reports unreadable and gains
+#   no user anything.
+
+rust/crates/jmap-mail/src/provider.rs

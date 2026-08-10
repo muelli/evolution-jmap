@@ -12095,3 +12095,130 @@ sessions: M7 still **needs human verification in real Evolution**
 (`insert_widgets` remains unwritten, so an account arrives on the server settings
 page filled in and cannot be corrected there), the four manual-test recipes are
 unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
+
+## 2026-08-10 (hundred-and-twenty-first session)
+
+**`po/`, the first two marked strings, and the check that keeps the list of
+them honest.** The previous session ranked this first, and most of it landed;
+the part that did not is blocked on something outside this repository, recorded
+below rather than worked around.
+
+**The strings were already there and already user-visible.** The previous
+session's "next" note guessed at the collection backend's child-source display
+names. Reading them says otherwise: `Child::display_name` is
+`resource.name.clone()` — the name the *server* gave the address book or the
+calendar. Translating server data would be a bug, not a feature. The strings
+this repository actually originates and a user actually reads are the
+`CamelProvider`'s `name` and `description`: `"JMAP"` and `"For reading and
+storing mail on JMAP servers."`, which is why the catalogue test written two
+sessions ago uses the latter as its msgid. They are already routed through our
+domain — `translation_domain: DOMAIN` — so Camel has been calling `dgettext` on
+them all along, against a catalogue that does not exist.
+
+**Red first, twice, and the second red is the interesting one.**
+`jmap-backend-core/tests/potfiles.rs` failed first because `po/POTFILES.in` did
+not exist. Adding `po/POTFILES.in` listing `jmap-mail/src/provider.rs` made the
+first test pass vacuously and the second one fail:
+
+    po/POTFILES.in lists these, and none of them marks a string any more —
+    either the strings moved and their new home is unlisted, or the entry
+    should go: ["rust/crates/jmap-mail/src/provider.rs"]
+
+Marking the two strings turned it green. The two directions are separate tests
+because they catch opposite mistakes and both are silent in the build: a marked
+string in an unlisted file never reaches a translator, and a listed file that
+has stopped marking anything goes on working while its strings quietly leave
+the catalogue.
+
+**`N_`, in `jmap_backend_core::i18n`.** A `const fn` returning its argument,
+`#[allow(non_snake_case)]` for the spelling every gettext-using project and
+every extractor's defaults already know. `N_` rather than `translate` because
+the lookup is not ours to make: Camel translates those two strings each time it
+displays them, and doing it here would freeze them into whatever locale was
+current when the module happened to be dlopened. It also makes them constants,
+which `translate` cannot be — it returns an owned `String`.
+
+**The lint matches text, on purpose.** `N_(c"` and `translate(c"`, on lines that
+do not start with `//`. That is what `xgettext` does, so the check agrees with
+the tool by construction — including where the tool is the crude one. The `c"`
+is part of the pattern because a marker whose argument is not a literal
+(`translate(NAME)`) contributes nothing to extract; the literal is wherever
+`NAME` was written. Comments are stripped so that documentation may spell a
+marker out — `potfiles.rs`'s own module docs do — without dragging the file
+into the list.
+
+**Verified against the real extractor, not just asserted.** gettext is not on
+this VM; it was installed locally (`apt-get install gettext`, 0.21) purely to
+check the design, and the command in `po/POTFILES.in`'s header produced exactly
+the two msgids, with both `TRANSLATORS:` comments and correct line numbers.
+
+It also produced one warning, which is a finding rather than noise:
+
+    rust/crates/jmap-mail/src/provider.rs:125: warning: unterminated character constant
+
+`-L C` has no Rust parser (0.21 has none at all) and lexes the lifetime in
+`&'static CamelProvider` as an opening character constant. Harmless where it
+stands — the lexer resumes at the next `'` and both strings still came out —
+but not something to leave unwatched: a marked string sitting between two
+lifetimes could in principle be swallowed silently. Written into
+`po/POTFILES.in` beside the command, for whoever wires extraction into the
+build.
+
+**What did not land, and why it is a blocker rather than a shortcut.** The
+install rule putting a compiled `.mo` under `LANGUAGE_SUPPORT_DIRECTORY` needs
+`msgfmt` at build time, and `xgettext` for the `.pot`. Neither is in the CI
+image: `Containerfile.ci` installs no gettext package, and the image is
+referenced by digest, so adding one means editing `Containerfile.ci` and
+rebuilding through `.github/workflows/ci-image.yml` — which this session is
+directed not to touch. A `find_program(... msgfmt)` that skips when absent
+would have compiled here and done nothing in CI forever, which is the kind of
+machinery that looks done and is not. So: `po/` is the source side only.
+`po/LINGUAS` is deliberately empty and says so — there are no translations yet,
+which is not the same as translation being unsupported.
+
+**The `GETTEXT_PACKAGE` question, decided rather than left open.** The
+top-level `CMakeLists.txt` still sets it to the skeleton's `example-module`
+while our domain is `evolution-jmap`, and `src/*.c` marks ten strings with
+`N_()` against it. Those stay out of `po/POTFILES.in`: they are upstream
+demonstration text ("My Maildir Folder Action…") that leaves with the skeleton,
+and handing translators strings for a module nobody ships is worse than leaving
+them untranslated. Written into the file's header so the exclusion is a
+decision on the record. The lint therefore scans `rust/crates/*/src` only.
+
+`cargo fmt --check`, `cargo test --locked` (491 on the default members,
+unchanged — the new tests are in an EDS-gated crate) and `cargo clippy
+--all-targets --locked -- -D warnings` are clean, as are clippy and test over
+the EDS crates and the four `*-module` cdylibs — 887 tests, was 885, the two new
+ones being the two directions of the `POTFILES.in` check. The one ignored test
+is the pre-existing `ignore` doctest in `jmap-backend-core`'s `instance::Slot`.
+`cmake -S . -B build-verify -G Ninja && cmake --build build-verify && ctest` is
+7/7. `RUSTDOCFLAGS=-D warnings cargo doc --no-deps` is clean for
+`jmap-backend-core`; `jmap-mail` still carries its 25 pre-existing
+`rustdoc::private_intra_doc_links` and none of them is in `provider.rs`. Not
+verified locally, as in every session: `reuse lint` and `cargo deny` (neither
+binary is on this VM); every new file carries an SPDX `GPL-3.0-or-later` header,
+`po/POTFILES.in` and `po/LINGUAS` as `#` comments, which is why neither needed a
+`REUSE.toml` entry. Pre-existing and untouched: `example-module` does not build
+on this VM.
+
+No milestone tag. The translatable-strings directive is now carried out except
+for the catalogue's binary half: markers exist, the first strings are marked,
+`POTFILES.in` and `LINGUAS` exist, and a check in both directions keeps the list
+in step with the sources. Nothing compiles a `.mo` and nothing installs one.
+
+Next, in the order they would be taken: (1) get gettext into the CI image — the
+one blocker above — and then the `.pot` target and the `msgfmt` install rule,
+with a staged-install ctest asserting the catalogue lands at
+`<LANGUAGE_SUPPORT_DIRECTORY>/<lang>/LC_MESSAGES/evolution-jmap.mo`, which is
+exactly the path `i18n::LOCALE_DIR` plus gettext's layout, and which would make
+`tests/catalogue.rs`'s hand-built proof an end-to-end one. This is a maintainer
+decision, not an autonomous one: it needs `Containerfile.ci` and a CI image
+rebuild. (2) While there: decide whether the top-level `GETTEXT_PACKAGE` should
+stop saying `example-module`, which today is only read by the C skeleton.
+(3) M7's account-setup labels, which are the next strings a user reads and the
+first that will use `translate` rather than `N_` — they must be marked as they
+are written, which is what the directive asks and what the lint now enforces.
+Unchanged from previous sessions: M7 still **needs human verification in real
+Evolution** (`insert_widgets` remains unwritten, so an account arrives on the
+server settings page filled in and cannot be corrected there), the four manual-
+test recipes are unlinked from the README, and `jmap-mail`'s rustdoc is dirty.

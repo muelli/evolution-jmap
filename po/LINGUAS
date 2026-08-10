@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The languages this project has a translation for, one code per line, as
+# gettext's own build machinery expects. A language listed here must have a
+# `<code>.po` beside this file.
+#
+# Empty on purpose: there are no translations yet. That is not the same as
+# translation being unsupported — the modules bind the `evolution-jmap` domain
+# at their entry points and Camel already looks the provider's name and
+# description up in it, so a `.po` added here starts being used as soon as a
+# catalogue is installed. Until then every lookup falls back to the English
+# msgid, which is gettext's normal behaviour and not a failure.
