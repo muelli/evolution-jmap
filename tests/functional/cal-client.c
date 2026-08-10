@@ -89,6 +89,22 @@
  * in `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_CLASS "CONFIDENTIAL"
 
+/* And when the user is reminded of it, which is Evolution's "Reminder" control:
+ * a VALARM inside the VEVENT (RFC 5545 §3.6.6), and on the server an entry in a
+ * JSCalendar `alerts` map (RFC 8984 §4.5.2). The first mapped property that is a
+ * child *component* rather than a content line, which is what makes this leg
+ * worth having: nothing below real EDS says whether `ECalMetaBackend`'s cache
+ * keeps a component nested inside the one it was handed, nor whether the
+ * RFC 9074 §6 UID the entry's key rides on survives beside the
+ * X-EVOLUTION-ALARM-UID libecal adds of its own.
+ *
+ * A negative offset, because a reminder is normally before the event and a sign
+ * silently lost is a reminder that fires afterwards. The same values are
+ * asserted from both ends; see `ALARM_TRIGGER` in
+ * `rust/crates/jmap-functional/tests/calendar.rs`. */
+#define TEST_ALARM_UID "k1"
+#define TEST_ALARM_TRIGGER "-PT15M"
+
 /* And an all-day event, written the way Evolution writes one: DATE values
  * rather than DATE-TIMEs, on both ends. RFC 5545 §3.6.1's other form of an
  * event, and the only thing in iCalendar that says "this is a day, not a time
@@ -312,6 +328,39 @@ joined_values (ICalComponent *component,
 	return g_string_free (values, FALSE);
 }
 
+/* When the first reminder of a component fires, as text: the TRIGGER of the
+ * first VALARM inside it (RFC 5545 §3.8.6.3), or an empty string for an event
+ * EDS handed back with no alarm at all — which is what a reminder lost between
+ * the write and the cache looks like.
+ *
+ * The value rather than a typed offset, for the reason the CLASS and the PRIORITY
+ * are read as text: i_cal_property_get_trigger hands back a struct whose zero
+ * value is a perfectly good "no offset", so it could not tell a lost sign from a
+ * lost property. */
+static gchar *
+first_alarm_trigger (ICalComponent *event)
+{
+	ICalComponent *alarm;
+	ICalProperty *property;
+	gchar *value;
+
+	alarm = i_cal_component_get_first_component (event, I_CAL_VALARM_COMPONENT);
+	if (!alarm)
+		return g_strdup ("");
+
+	property = i_cal_component_get_first_property (alarm, I_CAL_TRIGGER_PROPERTY);
+	if (!property) {
+		g_object_unref (alarm);
+		return g_strdup ("");
+	}
+
+	value = i_cal_property_get_value_as_string (property);
+	g_object_unref (property);
+	g_object_unref (alarm);
+
+	return value ? value : g_strdup ("");
+}
+
 /* The recurrence rule a component carries, as text — the RRULE of RFC 5545
  * §3.8.5.3, read back the same way for the truncated master and for the series
  * EDS split off it. An empty string for a component with no rule, which is a
@@ -426,6 +475,7 @@ main (int argc,
 	ICalTimezone *moved_zone;
 	gchar *icalendar;
 	gchar *categories;
+	gchar *trigger;
 	gchar *transp;
 	gchar *priority;
 	gchar *classification;
@@ -534,9 +584,16 @@ main (int argc,
 		"TRANSP:%s\r\n"
 		"PRIORITY:%s\r\n"
 		"CLASS:%s\r\n"
+		"BEGIN:VALARM\r\n"
+		"UID:%s\r\n"
+		"ACTION:DISPLAY\r\n"
+		"DESCRIPTION:%s\r\n"
+		"TRIGGER:%s\r\n"
+		"END:VALARM\r\n"
 		"END:VEVENT\r\n",
 		TEST_DTSTART, TEST_DTEND, summary, TEST_LOCATION, TEST_CATEGORIES,
-		TEST_TRANSP, TEST_PRIORITY, TEST_CLASS);
+		TEST_TRANSP, TEST_PRIORITY, TEST_CLASS,
+		TEST_ALARM_UID, summary, TEST_ALARM_TRIGGER);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 
@@ -602,6 +659,13 @@ main (int argc,
 	classification = joined_values (read_back_event, I_CAL_CLASS_PROPERTY);
 	g_print ("read-back-class=%s\n", classification);
 	g_free (classification);
+	/* And when the user is reminded of it, out of the same cached component:
+	 * the alarm is a child component, so this is the one property whose survival
+	 * asks the cache to keep a whole nested component rather than a line. An
+	 * empty string is an event EDS handed back with no reminder on it. */
+	trigger = first_alarm_trigger (read_back_event);
+	g_print ("read-back-alarm-trigger=%s\n", trigger);
+	g_free (trigger);
 	g_object_unref (read_back_event);
 
 	/* The all-day one, through the same path. Written second so that a

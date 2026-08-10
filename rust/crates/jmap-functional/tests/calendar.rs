@@ -62,6 +62,16 @@ const PRIORITY: &str = "1";
 const CLASS: &str = "CONFIDENTIAL";
 const PRIVACY: &str = "secret";
 
+/// And when the user is reminded of it — the `VALARM` in
+/// `tests/functional/cal-client.c`, which has to reach the server as an entry in
+/// a JSCalendar `alerts` map (RFC 8984 §4.5.2). The one mapped property that is a
+/// child *component*, so this is the leg that says `ECalMetaBackend`'s cache
+/// keeps a component nested inside the one it was handed — and that the key of
+/// the entry, which rides on the alarm's RFC 9074 §6 `UID`, is the one the client
+/// wrote rather than the one `jmap-ical` invents for an alarm that names none.
+const ALARM_UID: &str = "k1";
+const ALARM_TRIGGER: &str = "-PT15M";
+
 /// The length of that event, which the client states as a `DTEND` — the way
 /// Evolution's editor does — an hour and a half after the start. Nothing but
 /// this test says the two forms end up alike on the server.
@@ -389,6 +399,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         Some(&CLASS),
         "the event EDS handed back lost its classification\n{report}"
     );
+    // And when it reminds the user. An empty string here is a component EDS handed
+    // back with no VALARM in it at all — the reminder the client set would be gone
+    // from Evolution's own view of the appointment, and the next save would delete
+    // it from the server too.
+    assert_eq!(
+        seen.get("read-back-alarm-trigger"),
+        Some(&ALARM_TRIGGER),
+        "the event EDS handed back lost its reminder\n{report}"
+    );
     // What EDS made of the edit, read back through the client rather than off
     // the server: `ECalMetaBackend` holds a series and its detached instances
     // as one object, so a component set that lost the override here would have
@@ -600,6 +619,25 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         event.privacy.as_deref(),
         Some(PRIVACY),
         "the classification the client wrote did not reach the server: {event:?}"
+    );
+    // And the reminder, as the server holds it: an Alert object under the key the
+    // alarm's own UID named, not the one `jmap-ical` invents for an alarm that
+    // carries none — so this also says libecal kept that UID beside the
+    // X-EVOLUTION-ALARM-UID it adds of its own.
+    assert_eq!(
+        event.alerts,
+        Some(
+            [(
+                ALARM_UID.to_owned(),
+                serde_json::json!({
+                    "@type": "Alert",
+                    "trigger": {"@type": "OffsetTrigger", "offset": ALARM_TRIGGER},
+                    "action": "display",
+                })
+            )]
+            .into()
+        ),
+        "the reminder the client set did not reach the server: {event:?}"
     );
 
     // The all-day one, and the property that is the whole point of it: without

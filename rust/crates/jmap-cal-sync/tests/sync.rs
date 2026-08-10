@@ -46,7 +46,9 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
 
     // A property the iCalendar mapping drops: EDS cannot see it change, so
     // re-downloading every event because of it would be pure churn.
-    fixture.patch(&id, json!({"useDefaultAlerts": true}));
+    // (`useDefaultAlerts` was the exemplar here until the reminders became
+    // mapped — it now decides whether they are drawn.)
+    fixture.patch(&id, json!({"sequence": 3}));
     assert_eq!(sync.load_component(id.as_str()).unwrap().revision, before);
 
     fixture.patch(&id, json!({"title": "Standup (short)"}));
@@ -80,6 +82,21 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
     // for editing, as the public one Evolution cached.
     let before = sync.load_component(id.as_str()).unwrap().revision;
     fixture.patch(&id, json!({"privacy": "private"}));
+    assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
+
+    // And the reminders, which reach it as VALARMs — the first mapped property
+    // that is a child component, so a revision computed from the properties alone
+    // would miss it and leave the user un-reminded of an event they were reminded
+    // of on every other client.
+    let before = sync.load_component(id.as_str()).unwrap().revision;
+    fixture.patch(
+        &id,
+        json!({"alerts": {"k1": {
+            "@type": "Alert",
+            "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+            "action": "display",
+        }}}),
+    );
     assert_ne!(sync.load_component(id.as_str()).unwrap().revision, before);
 }
 
