@@ -794,7 +794,7 @@ fn libical_answers_for_the_hours_of_the_day() {
     ] {
         assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
     }
-    // And why `hour_token` refuses anything outside RFC 5545's `hour`: unlike the
+    // And why `time_of_day_part` refuses anything outside RFC 5545's `hour`: unlike
     // days of the year and the positions in the set, where libical keeps an
     // out-of-range value verbatim, *every* hour it cannot use costs the *whole*
     // `RRULE` — the event reaches EDS's cache as a single appointment with the
@@ -826,16 +826,74 @@ fn libical_answers_for_the_hours_of_the_day() {
     }
 }
 
-/// And the gate that is not libical's to enforce: RFC 5545 §3.3.10 forbids
-/// `BYHOUR` beside a `DTSTART` of value type DATE, since an hour of the day means
-/// nothing on a day with no clock. libical keeps such a component whole, so
-/// `jmap-ical` is the only place the contradiction is resolved — by drawing an
-/// all-day event whose rule names hours as a timed one instead.
+/// The same question for the minutes and seconds a rule repeats at, the last two
+/// `BYxxx` parts of RFC 8984 §4.3.3 this mapping models — and the two that go
+/// ahead of even the hours.
 #[test]
-fn libical_keeps_the_hours_beside_an_all_day_start_that_forbids_them() {
+fn libical_answers_for_the_minutes_and_seconds() {
+    // Where they go: `BYSECOND`, then `BYMINUTE`, then `BYHOUR`, then the dates —
+    // libical's own order, and the one `jmap-ical`'s `named_by_parts` writes, so
+    // a rule that goes out this way comes back out of EDS's cache spelled
+    // identically instead of reordered and read as an edit.
+    assert_eq!(
+        reparsed_rrule("FREQ=WEEKLY;BYDAY=MO;BYMINUTE=30;BYSECOND=15;BYHOUR=9").as_deref(),
+        Some("FREQ=WEEKLY;BYSECOND=15;BYMINUTE=30;BYHOUR=9;BYDAY=MO"),
+    );
+    let all = "FREQ=YEARLY;BYSECOND=0;BYMINUTE=30;BYHOUR=9;BYDAY=WE;BYMONTHDAY=15;\
+               BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;BYSETPOS=2;WKST=SU";
+    assert_eq!(reparsed_rrule(all).as_deref(), Some(all));
+    // The values survive verbatim, in the order given and at every frequency, so
+    // the mapping neither sorts nor gates them — and the sixtieth second is a
+    // *legal* value, RFC 5545 §3.3.10's `seconds` running 0 to 60 to admit the
+    // leap second, which is the one place the two ranges differ.
+    for rrule in [
+        "FREQ=HOURLY;BYMINUTE=0,30",
+        "FREQ=MINUTELY;BYSECOND=30,0",
+        "FREQ=DAILY;BYMINUTE=59",
+        "FREQ=DAILY;BYSECOND=60",
+        // And both are sets `BYSETPOS` may select out of, as the hours are.
+        "FREQ=DAILY;BYMINUTE=30;BYSETPOS=-1",
+        "FREQ=DAILY;BYSECOND=30;BYSETPOS=-1",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // And why `time_of_day_part` refuses a value out of range: as with the hours,
+    // *every* one libical cannot use costs the **whole** `RRULE` — the event
+    // reaches EDS's cache as a single appointment with the user's series gone.
+    for rrule in [
+        "FREQ=DAILY;BYMINUTE=60",
+        "FREQ=DAILY;BYSECOND=61",
+        "FREQ=DAILY;BYMINUTE=-1",
+        "FREQ=DAILY;BYSECOND=9,XX",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
+    }
+    // The empty part is worse again, and for the reason it is worse for the
+    // hours: libical answers it with the zeroth minute or second rather than
+    // dropping it, quietly moving every occurrence of the series.
+    for (written, back) in [
+        ("FREQ=DAILY;BYMINUTE=", "FREQ=DAILY;BYMINUTE=0"),
+        ("FREQ=DAILY;BYSECOND=", "FREQ=DAILY;BYSECOND=0"),
+        // The spelling shape, as for the hours: the leading zero and the leading
+        // plus come back canonical, which cannot bite a mapping holding numbers.
+        ("FREQ=DAILY;BYMINUTE=09", "FREQ=DAILY;BYMINUTE=9"),
+        ("FREQ=DAILY;BYSECOND=+9", "FREQ=DAILY;BYSECOND=9"),
+    ] {
+        assert_eq!(reparsed_rrule(written).as_deref(), Some(back), "{written}");
+    }
+}
+
+/// And the gate that is not libical's to enforce: RFC 5545 §3.3.10 forbids
+/// `BYHOUR`, `BYMINUTE` and `BYSECOND` beside a `DTSTART` of value type DATE,
+/// since a time of day means nothing on a day with no clock. libical keeps such a
+/// component whole, so `jmap-ical` is the only place the contradiction is
+/// resolved — by drawing an all-day event whose rule names a time as a timed one
+/// instead.
+#[test]
+fn libical_keeps_a_time_of_day_beside_an_all_day_start_that_forbids_it() {
     let vevent = concat!(
         "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:S\r\nDTSTART;VALUE=DATE:20260810\r\n",
-        "RRULE:FREQ=DAILY;BYHOUR=9\r\nEND:VEVENT\r\n",
+        "RRULE:FREQ=DAILY;BYSECOND=0;BYMINUTE=30;BYHOUR=9\r\nEND:VEVENT\r\n",
     );
     let component = instance(vevent);
     let list = instance_list(&[component]);
@@ -846,7 +904,9 @@ fn libical_keeps_the_hours_beside_an_all_day_start_that_forbids_them() {
     }
 
     assert!(
-        saved.icalendar.contains("RRULE:FREQ=DAILY;BYHOUR=9"),
+        saved
+            .icalendar
+            .contains("RRULE:FREQ=DAILY;BYSECOND=0;BYMINUTE=30;BYHOUR=9"),
         "the rule libical is expected to keep as written: {}",
         saved.icalendar
     );
