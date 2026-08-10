@@ -12446,3 +12446,97 @@ CI image, and whether `GETTEXT_PACKAGE` should stop saying `example-module`.
 Unchanged: M7 still **needs human verification in real Evolution**, the four
 manual-test recipes are unlinked from the README, and `jmap-mail`'s rustdoc is
 dirty.
+
+## 2026-08-10 (hundred-and-twenty-fourth session)
+
+**The `.deb` is now in the release, and the release workflow is checked as a
+document because it cannot be run.** This was the previous session's ranked
+item (1), and the reason it was ranked below reproducibility was that it cannot
+be executed here: a release workflow runs when a tag is pushed and at no other
+time. That is an argument for care, not for deferral — the workflow was already
+unrunnable when it was written, and it will be unrunnable again on every future
+edit. So the increment is the wiring *plus* a `ctest` case that asserts the
+properties of the file which only a pushed tag would otherwise exercise.
+
+**Two jobs, because the artifacts need two environments.** `jmap-mockd` and the
+source tarball need Rust and git; the `.deb` needs the Evolution/EDS headers the
+modules link against and `dpkg-shlibdeps` to read the result. So `package`
+builds in the digest-pinned CI image — the same image and the same
+`safe.directory` dance as CI's `build-full`, since without it git will not
+report the commit timestamp that seeds `SOURCE_DATE_EPOCH` and the package would
+be dated from the packaging clock instead of from the tag. Deliberately not
+`apt-get install`-ing the headers on the stock runner: `dpkg-shlibdeps` derives
+the package's `Depends` by reading our own modules against the libraries
+actually present, so the `.deb` describes the distribution it was built in, and
+that description is only worth something if it is the distribution CI tests in.
+The confirmation the previous session asked for — that the environment has
+`dpkg-dev`, whose absence makes `dpkg-shlibdeps` fail loudly — is that
+`Containerfile.ci` installs `build-essential`, which depends on it; the packaging
+`ctest`s already pass in that image.
+
+**The one real bug this could have shipped is an unattested artifact.** The old
+workflow listed its attestation subjects by hand (`dist/jmap-mockd`,
+`dist/evolution-jmap-*.tar.xz`, `dist/SHA256SUMS`) and published `dist/*`. Two
+lists that happened to agree. Add a fourth artifact to `dist/` and the release
+gains a file with no provenance — which is invisible in the worst way, because
+an unattested `.deb` downloads exactly like its signed neighbours and
+`gh attestation verify` on it fails with "no attestation found", reading like a
+tooling problem rather than a gap. The fix is not to remember: both sides are
+now the same glob, `dist/*`, so the attested set and the published set are equal
+by construction.
+
+**`cmake/tests/check-release-workflow.cmake` (test 10 of 10) asserts three
+things**, each an ordinary edit away from being false:
+
+1. The `subject-path:` entries and the `dist/`-tokens on `gh release create`
+   are the same set, compared as written — two globs that happen to cover the
+   same files today are exactly the drift being caught.
+2. The workflow builds a package (`cpack` or `--target package`) *and* copies a
+   `.deb` into `dist/`. A release that quietly stops carrying the package is the
+   regression nothing else would notice, `apt install ./evolution-jmap.deb`
+   being what M8 exists to deliver.
+3. Every CI config that pins the shared image pins the same digest, and
+   `release.yml` is one of them. `ci-image.yml` is skipped: it *builds* the
+   image, so a digest there is an output, not a pin.
+
+Red first, and red for the right reason: the first run failed on assertion 1
+with the two lists printed side by side. Then each assertion was checked by
+mutation against a scratch copy of the CI configs — remove `--target package`,
+drop the `cp deb/*.deb dist/`, skew the digest, unpin the image, delete the
+`subject-path` — and all five mutants fail with their own message. Without that
+the test would have been three tautologies over a file I had just written to
+satisfy them.
+
+Verified locally: `ctest` 10/10, `cmake --build build --target package` puts
+`evolution-jmap_0.0.1_amd64.deb` exactly where the workflow's
+`path: build/*.deb` looks for it, the workflow parses as YAML with the two
+expected jobs, `cargo fmt --check`, `cargo test --locked` (491, unchanged — no
+Rust changed) and `cargo clippy --all-targets --locked -- -D warnings` clean.
+`reuse lint` and `cargo deny` not run (neither binary is on this VM); the one
+new file carries an SPDX `GPL-3.0-or-later` header as `#` comments and needs no
+`REUSE.toml` entry, like the other `cmake/tests/` scripts.
+
+**Not verified, and this is the honest limit: the workflow has never run.**
+Compiling is not working and parsing is not running. What a document check
+cannot see: whether the container job can pull the private ghcr image with the
+job token (`ci.yml`'s `build-full` does exactly this, so the pattern is proven
+in this repo, and `packages: read` was added to `release.yml`'s permissions);
+whether `actions/upload-artifact` and `download-artifact` behave in that
+container; whether the release runner's `cp deb/*.deb dist/` finds one file.
+**So no `M8 COMPLETE` tag** — and `docs/MILESTONES.md` still does not exist, so
+no tag has ever been written. The human step that would settle it is one test
+tag (`git tag v0.0.1-rc1 && git push --tags`), then checking the release has
+four files, that `gh attestation verify` passes on each, and that the `.deb`
+installs; that is a five-minute check and it is the only thing standing between
+here and a defensible M8.
+
+Next, in order: (1) that test tag, by hand — everything else in M8 is done.
+(2) The `reproducible` CI job could build the `.deb` in two checkouts and
+compare; `ctest` proves it within one tree, that job would prove it across two,
+and it is the one reproducibility claim in `docs/verifying-artifacts.md` no
+machine checks. (3) M9 Layer 1 — the headless EDS functional tests — is the
+next milestone with nothing blocking it, and this VM has the EDS runtime to do
+it. (4) Unchanged maintainer decisions: gettext in the CI image, and whether
+`GETTEXT_PACKAGE` should stop saying `example-module`. Unchanged: M7 still
+**needs human verification in real Evolution**, the four manual-test recipes are
+unlinked from the README, and `jmap-mail`'s rustdoc is dirty.
