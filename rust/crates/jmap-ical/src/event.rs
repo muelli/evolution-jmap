@@ -126,16 +126,17 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
-/// Only `frequency`, `interval`, `count`, `until` and `byDay` are modeled;
-/// `byMonthDay` and the rest of RFC 8984 §4.3.3 ride in
+/// Only `frequency`, `interval`, `count`, `until`, `byDay` and `byMonthDay` are
+/// modeled; `bySetPosition` and the rest of RFC 8984 §4.3.3 ride in
 /// [`RecurrenceRule::extra`] and would be lost. A caller that patches
 /// `recurrenceRules` for a rule this returns `false` for narrows the user's
 /// recurrence behind their back.
 ///
 /// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
 /// never patches over a recurrence the user was not shown — as does one whose
-/// days the `BYDAY` cannot carry, which [`by_day_part`] decides and
-/// [`rule_to_rrule`] then leaves off.
+/// days of the week or of the month the `RRULE` cannot carry, which
+/// [`by_day_part`] and [`by_month_day_part`] decide and [`rule_to_rrule`] then
+/// leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
         && writable(rule)
@@ -143,6 +144,10 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
             .by_day
             .as_ref()
             .is_none_or(|_| by_day_part(rule).is_some())
+        && rule
+            .by_month_day
+            .as_ref()
+            .is_none_or(|_| by_month_day_part(rule).is_some())
 }
 
 /// Whether a recurrence override survives the trip through iCalendar.
@@ -1251,8 +1256,11 @@ fn rule_to_rrule(
             }
         });
     }
-    // Last, where RFC 5545's own examples put it.
+    // Last, where RFC 5545's own examples put them, and in the order libical
+    // writes them — so a rule that went out this way and came back through EDS's
+    // own cache compares equal to itself.
     parts.extend(by_day_part(rule));
+    parts.extend(by_month_day_part(rule));
     Some(parts.join(";"))
 }
 
@@ -1312,9 +1320,40 @@ fn counts_within_a_period(frequency: &str) -> bool {
         .any(|period| period.eq_ignore_ascii_case(frequency))
 }
 
+/// The `BYMONTHDAY` part of a rule's `RRULE`, or `None` when the rule names no
+/// days of the month — and, as with [`by_day_part`], when it names ones this
+/// mapping will not write.
+///
+/// It is all the days or none of them, for the same reason: a `BYMONTHDAY`
+/// holding a subset is a different recurrence, not a narrower view of one.
+fn by_month_day_part(rule: &RecurrenceRule) -> Option<String> {
+    let days = rule.by_month_day.as_ref()?;
+    // `BYMONTHDAY=` names no day, and a week is not a period a day of the month
+    // sits inside: RFC 5545 §3.3.10 says the part MUST NOT be specified when
+    // `FREQ` is `WEEKLY`, and a content line libical refuses costs the whole
+    // component.
+    if days.is_empty() || "weekly".eq_ignore_ascii_case(&rule.frequency) {
+        return None;
+    }
+    let tokens: Option<Vec<String>> = days.iter().copied().map(month_day_token).collect();
+    Some(format!("BYMONTHDAY={}", tokens?.join(",")))
+}
+
+/// One day of the month as an `RRULE` writes it — `15`, `-1` — or `None` for a
+/// value no `BYMONTHDAY` can carry.
+fn month_day_token(day: i32) -> Option<String> {
+    match day {
+        // RFC 5545's `ordmoday` is 1 to 31, which RFC 8984 §4.3.3 counts
+        // backwards from the end of the month as well. Zero is no day of any
+        // month, and neither format admits it.
+        -31..=-1 | 1..=31 => Some(day.to_string()),
+        _ => None,
+    }
+}
+
 /// The reverse. Parts outside the modeled set are dropped rather than parked
-/// in `extra`: a `BYMONTHDAY=15` copied verbatim into JSCalendar would be
-/// rejected by the server, whose `byMonthDay` is an array of numbers.
+/// in `extra`: a `BYSETPOS=-1` copied verbatim into JSCalendar would be
+/// rejected by the server, whose `bySetPosition` is an array of numbers.
 fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
     let mut rule = RecurrenceRule::default();
     for part in value.split(';') {
@@ -1327,6 +1366,9 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             "COUNT" => rule.count = value.parse().ok(),
             "UNTIL" => rule.until = to_local_date_time(value),
             "BYDAY" => rule.by_day = Some(value.split(',').map(to_nday).collect()),
+            "BYMONTHDAY" => {
+                rule.by_month_day = Some(value.split(',').map(to_month_day).collect());
+            }
             _ => {}
         }
     }
@@ -1364,4 +1406,18 @@ fn to_nday(token: &str) -> NDay {
         },
         _ => NDay::new(&token.to_ascii_lowercase()),
     }
+}
+
+/// One `BYMONTHDAY` token as the number JSCalendar holds — RFC 5545 §3.3.10's
+/// signed `monthdaynum`, whose leading plus `str::parse` accepts and JSCalendar
+/// has no room for.
+///
+/// A token this cannot read becomes zero, which is a day no month has: it is
+/// refused by [`month_day_token`] on the way back out and so flagged by
+/// [`maps_recurrence_rule`], exactly as a `BYDAY` token [`to_nday`] cannot take
+/// apart is. Dropping it instead would leave a *smaller* set of days looking
+/// like the whole rule, and a save would then delete whichever day the server
+/// really held there.
+fn to_month_day(token: &str) -> i32 {
+    token.parse().unwrap_or(0)
 }

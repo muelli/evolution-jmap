@@ -890,10 +890,11 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
 
 #[test]
 fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
-    // byMonthDay & friends ride in `extra` and do not survive the trip through
-    // iCalendar, so the save path must not patch recurrenceRules for them.
+    // bySetPosition & friends ride in `extra` and do not survive the trip
+    // through iCalendar, so the save path must not patch recurrenceRules for
+    // them.
     let mut rule = RecurrenceRule::new("monthly");
-    rule.extra.insert("byMonthDay".to_owned(), json!([15]));
+    rule.extra.insert("bySetPosition".to_owned(), json!([-1]));
     assert!(!maps_recurrence_rule(&rule));
     assert!(maps_recurrence_rule(&RecurrenceRule::new("weekly")));
 }
@@ -1061,6 +1062,146 @@ fn a_day_no_weekday_names_is_flagged_rather_than_written() {
             "{days:?}"
         );
     }
+}
+
+#[test]
+fn a_monthly_rule_names_the_days_of_the_month_it_repeats_on() {
+    // The other half of Evolution's monthly recurrence page: not "the second
+    // Wednesday" but "the 15th", and RFC 8984 §4.3.3's negative value for the
+    // last day of the month, whichever day of the week that lands on.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_month_day: Some(vec![15, -1]),
+            count: Some(6),
+            ..RecurrenceRule::new("monthly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        line(&ics, "RRULE:"),
+        "RRULE:FREQ=MONTHLY;COUNT=6;BYMONTHDAY=15,-1"
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules[0].by_month_day.as_deref(), Some(&[15, -1][..]));
+    // Which is what tells the save path it may write the property back.
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn the_days_of_the_month_are_written_after_the_days_of_the_week() {
+    // Both parts at once, in the order libical writes them, so that a rule read
+    // back out of EDS's own cache compares equal to the one that went in.
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            by_day: Some(vec![NDay::new("we")]),
+            by_month_day: Some(vec![15]),
+            ..RecurrenceRule::new("yearly")
+        }]),
+        ..CalendarEvent::default()
+    };
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15"
+    );
+}
+
+#[test]
+fn reads_the_days_of_the_month_off_a_rule_written_by_hand() {
+    // RFC 5545 §3.3.10's `monthdaynum` may carry the leading plus JSCalendar has
+    // no room for.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYMONTHDAY=+1,-31\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let rules = ical_to_event(ics).expect("parse").recurrence_rules.unwrap();
+    assert_eq!(rules[0].by_month_day.as_deref(), Some(&[1, -31][..]));
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn days_of_the_month_are_refused_where_a_week_is_the_period() {
+    // RFC 5545 §3.3.10: BYMONTHDAY MUST NOT be specified when FREQ is WEEKLY —
+    // a week does not sit inside a month. As with an ordinal weekday, the part
+    // is left off whole and the save path told the rule was seen in part, rather
+    // than writing a line libical is entitled to refuse.
+    let rule = RecurrenceRule {
+        by_month_day: Some(vec![15]),
+        ..RecurrenceRule::new("weekly")
+    };
+    assert!(!maps_recurrence_rule(&rule));
+
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![rule]),
+        ..CalendarEvent::default()
+    };
+    assert_eq!(line(&event_to_ical(&event), "RRULE:"), "RRULE:FREQ=WEEKLY");
+}
+
+#[test]
+fn a_day_no_month_has_is_flagged_rather_than_written() {
+    // RFC 5545's ordmoday is 1 to 31 and RFC 8984 §4.3.3 counts backwards to
+    // -31; zero is no day of any month. A set holding one such value is refused
+    // whole, because a BYMONTHDAY holding the rest is a different recurrence
+    // rather than a narrower view of this one.
+    for days in [vec![0], vec![32], vec![-32], vec![15, 0], vec![]] {
+        let rule = RecurrenceRule {
+            by_month_day: Some(days.clone()),
+            ..RecurrenceRule::new("monthly")
+        };
+        assert!(!maps_recurrence_rule(&rule), "{days:?}");
+
+        let event = CalendarEvent {
+            recurrence_rules: Some(vec![rule]),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            line(&event_to_ical(&event), "RRULE:"),
+            "RRULE:FREQ=MONTHLY",
+            "{days:?}"
+        );
+    }
+}
+
+#[test]
+fn a_day_of_the_month_a_hand_written_rule_invents_is_not_written_back() {
+    // The refusal above, reached the way a component really arrives: through the
+    // parser. `32` is outside RFC 5545's `ordmoday` and survives calcard's own
+    // representation of the rule unchanged, so the mapping is the one that has to
+    // refuse it — and refuse the whole set, leaving the `RRULE` at its frequency.
+    //
+    // Not every malformed token gets this far: calcard re-renders an `RRULE` from
+    // what it parsed, which drops a token it could not read (`BYMONTHDAY=15,XX`
+    // arrives as `[15]`) and wraps one too large for its own field (`999` arrives
+    // as `-25`). Both then look like days the user chose. That narrowing happens
+    // below this crate and cannot be seen from here — see docs/NIGHT-LOG.md.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260115T090000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYMONTHDAY=15,32\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event = ical_to_event(ics).expect("parse");
+    let rules = event.recurrence_rules.as_deref().unwrap();
+    assert_eq!(rules[0].by_month_day.as_deref(), Some(&[15, 32][..]));
+    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        line(&event_to_ical(&event), "RRULE:"),
+        "RRULE:FREQ=MONTHLY",
+        "and the days are left off the rule it is drawn as"
+    );
 }
 
 /// A recurring event in one zone, with `overrides` naming single instances.

@@ -14573,3 +14573,122 @@ README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
 `tests/transport.rs` hang is still unexplained. Still open from before: nothing
 asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
 two; the *reading* direction of a per-instance zone through real EDS is untested.
+
+## 2026-08-10 (hundred-and-forty-eighth session)
+
+A monthly bill now keeps the day of the month it falls on. `byMonthDay` — RFC
+8984 §4.3.3's array of signed integers, iCalendar's `BYMONTHDAY` — is modeled
+rather than parked in `RecurrenceRule::extra`, so it crosses in both directions,
+and libical itself was asked what it makes of the spelling.
+
+**Why this half was worth having, next to `byDay`.** Evolution's monthly
+recurrence page offers two shapes: "the second Wednesday", which is `byDay` with
+an `nthOfPeriod` and landed last session, and "the 15th", which is `byMonthDay`
+and did not. A rule the server held with `byMonthDay` was drawn narrowed —
+`FREQ=MONTHLY` alone, an event on whatever day its start happened to fall — and
+`extra` being non-empty kept the save path from writing that narrowing back, so
+nothing was lost, only shown wrong. The reverse direction had no way to say it at
+all: `rrule_to_rule` dropped `BYMONTHDAY`, so a rule created as "the 15th of
+every month" reached the server as `{"frequency": "monthly"}` and every other
+client showed it on the wrong day. That is the same asymmetry `byDay` had, and
+the same fix: model the property, and let `maps_recurrence_rule` gate what the
+mapping cannot spell.
+
+**The values that are refused, and what libical says about each.** `-31..=-1 |
+1..=31`, RFC 5545's `ordmoday` counted from either end; zero is no day of any
+month and neither format admits it. Refused whole rather than filtered, because a
+`BYMONTHDAY` holding the survivors is a *different* recurrence — the standing
+rule in this crate, one level down inside a property.
+
+The frequency gate is new in shape: RFC 5545 §3.3.10 says `BYMONTHDAY` MUST NOT
+be specified when `FREQ` is `WEEKLY` — a week does not sit inside a month — so
+the part is left off there, as an ordinal weekday is left off where there is no
+period to count within. libical, asked directly (`marshal.rs`), turns out **not**
+to enforce that MUST NOT: `FREQ=WEEKLY;BYMONTHDAY=15` round-trips through it
+unchanged. So the refusal is ours and stricter than the parser's, which is the
+right way round — the *server* is the one entitled to reject it, and
+`recurrenceRules` goes out replaced whole, so one part it rejects costs every
+other edit in the `CalendarEvent/set`.
+
+What libical does refuse is a day out of range, and it refuses it expensively: it
+drops the **entire** `RRULE`. `FREQ=MONTHLY;BYMONTHDAY=32` and `…=0` come back
+out of `e_cal_component_new_from_string` with no recurrence at all, so an event
+written that way would reach EDS's cache as a single appointment with the user's
+series gone. That is now a test of its own — the justification for
+`month_day_token` refusing, measured rather than assumed.
+
+**The order the parts are written in is a claim only libical can check.** This
+crate emits `BYDAY` before `BYMONTHDAY` because that is the order libical writes
+them in (its `recurmap` table), and a rule that comes back out of EDS's own cache
+spelled differently than it went in compares unequal to itself — which the save
+path reads as an edit and sends. `jmap-ical` cannot check that: calcard is what
+parses there. So the check lives in `jmap-backend-cal/tests/marshal.rs`, which
+has libical linked in, and it confirms all three shapes survive byte for byte,
+negative values and `INTERVAL` included.
+
+**A calcard finding, and the honest limit of the test that names it.** calcard
+re-renders an `RRULE` from what it parsed rather than slicing the input, and its
+`BYMONTHDAY` field is narrower than the text it accepts. `BYMONTHDAY=15,XX`
+arrives here as `[15]` — the unreadable token silently dropped — and
+`BYMONTHDAY=999` arrives as `[-25]`, wrapped into an 8-bit field. Both then look
+like days the user chose: they pass `maps_recurrence_rule` and would be written
+back. This crate cannot see the difference, because the original text is gone
+before `raw_value()` is called; `to_month_day` mapping an unreadable token to
+zero is defence for anything that *does* reach it, not a fix for this. It is the
+same class as `BYDAY=XX` being dropped by calcard, found last session. Neither is
+reachable from Evolution — libical validates before EDS hands us anything, and
+the appointment editor cannot produce either — so the exposure is a hand-written
+`.ics` imported through some other path. Logged, not fixed: the fix is upstream.
+The test that would have pinned it (`BYMONTHDAY=15,XX` flagged) was written red,
+found unreachable, and replaced with `BYMONTHDAY=15,32`, which does survive
+calcard unchanged and is refused end to end.
+
+Three existing tests used `byMonthDay` as *the* example of an unmappable rule
+part; they now use `bySetPosition`, which really is one. One of them —
+`a_save_that_changes_nothing_sends_no_patch` — had quietly lost its teeth last
+session, when `byDay` became mappable and the "recurrence part the RRULE has to
+drop" leg of it stopped dropping anything; it drops something again.
+
+Twelve tests, red first: one in `jmap-proto/tests/calendars.rs` against a new
+fixture (`[15, -1]` modeled, `extra` empty), seven in `jmap-ical/tests/event.rs`
+(the days out and back; both `by*` parts in libical's order; a hand-written
+`+1,-31`, whose plus JSCalendar has no room for; the part refused beside
+`FREQ=WEEKLY`; five shapes of impossible day flagged and left off the `RRULE`;
+and the out-of-range day refused through the parser), two in
+`jmap-cal-sync/tests/save.rs` against the mock (the 15th becoming the last day of
+the month and reaching the server; `BYMONTHDAY=15` beside `FREQ=WEEKLY` leaving
+`recurrenceRules` alone while the title edit in the same save still lands), and
+two in `jmap-backend-cal/tests/marshal.rs` against real libical.
+
+Verified locally: `cargo test --locked` 587 (up 9), `cargo test -p
+jmap-backend-cal --locked` 83 (up 2), `ctest` 14/14 including all four functional
+legs against real EDS, `cargo fmt --check`, and `cargo clippy --all-targets
+--locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal`/`jmap-functional`. `reuse lint` and `cargo deny` not run
+(neither is on this VM); the one file added is a JSON fixture, covered by
+`REUSE.toml`'s `rust/crates/*/tests/fixtures/**` annotation rather than a header;
+no dependency changed.
+
+No milestone tag. What this session did **not** do: no functional leg was added
+for a monthly series through real EDS. The existing recurring event there is
+weekly, where `BYMONTHDAY` is forbidden, so covering this would mean a seventh
+event and its own set of assertions; the libical round-trip test above is what
+stands in for it, and it answers the one question a functional leg would have
+answered differently (does the spelling survive the parser EDS uses). `byMonth`,
+`bySetPosition`, `byWeekNo` and the rest of RFC 8984 §4.3.3 are still unmodeled,
+and a rule holding one is still drawn narrowed and never written back.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, for an instance's zone
+as well as the series', relying on libical resolving an IANA name out of its
+builtin table; the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag the last twenty sessions
+asked for is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is still unexplained. Still open from before: nothing
+asserts whether a split series' two writes arrive as one `CalendarEvent/set` or
+two; the *reading* direction of a per-instance zone through real EDS is untested.

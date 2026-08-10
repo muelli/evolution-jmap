@@ -77,3 +77,18 @@ fn recurrence_rule_roundtrip() {
     assert_eq!(days[0].day_type.as_deref(), Some("NDay"));
     assert!(rule.extra.is_empty());
 }
+
+#[test]
+fn recurrence_rule_days_of_the_month_roundtrip() {
+    // `byMonthDay` is modeled for the same reason `byDay` is: an `RRULE` spells
+    // it as `BYMONTHDAY`, so "the 15th and the last day of every month" is a
+    // rule the mapping can both show and hand back unchanged. The negative
+    // value is the one RFC 8984 §4.3.3 counts from the end of the month.
+    let value = fixture("calendars/recurrence_rule_days_of_month.json");
+    assert_eq!(roundtrip::<RecurrenceRule>(&value), value);
+
+    let rule: RecurrenceRule = serde_json::from_value(value).unwrap();
+    assert_eq!(rule.frequency, "monthly");
+    assert_eq!(rule.by_month_day.as_deref(), Some(&[15, -1][..]));
+    assert!(rule.extra.is_empty());
+}
