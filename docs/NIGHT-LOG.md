@@ -15206,3 +15206,124 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag is still unwritten; the manual-test recipes are unlinked from the
 README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
 `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-fifty-fourth session)
+
+`bySetPosition` modeled and mapped to `BYSETPOS` — the seventh recurrence part
+to come out of `extra`, and the first one that is not a copy of the six before
+it.
+
+**Why it is different.** Every part carried so far *names* dates: `BYDAY` says
+which weekdays, `BYWEEKNO` which weeks, and each is a set the reader expands on
+its own. `BYSETPOS` names none. RFC 5545 §3.3.10 has it select out of the set
+the other parts expand to within one interval — "the last Friday of the month"
+is `BYDAY=FR;BYSETPOS=-1` — and §3.3.10 says in as many words that it MUST only
+be used together with another `BYxxx` part. So the gate this part needed is one
+no other part has: not on the frequency, but on whether any date-naming part was
+*written*.
+
+That distinction is the subtle half. The gate asks `named_by_parts(rule)`, which
+is the same list `rule_to_rrule` emits — not whether the rule *holds* another
+`by*`. A `byWeekNo` beside a monthly frequency is a part this mapping already
+leaves off (§3.3.10 admits `BYWEEKNO` beside `YEARLY` alone), so a rule holding
+`byWeekNo` and `bySetPosition` at `FREQ=MONTHLY` writes neither: a `BYSETPOS`
+next to a dropped `BYWEEKNO` would be selecting from a set no reader of that
+line can see. Asking the rule instead of asking the emitter would have written
+exactly that line. `maps_recurrence_rule` calls the same helper, so what the
+save path is told matches what was drawn, which is the whole contract here.
+
+Alone, the part is worse than merely meaningless: with no other `BYxxx`, the set
+for an interval holds the single occurrence the frequency already names, so
+`BYSETPOS=1` is a no-op and `BYSETPOS=2` is a series that happens once and never
+again. libical keeps such a rule verbatim — measured, at `DAILY`, `MONTHLY` and
+`YEARLY` — so nothing below this mapping would have caught it.
+
+**libical was asked before anything was written**, since the roadmap's rule is
+that these answers are measured, not predicted. Three findings, all now in
+`jmap-backend-cal/tests/marshal.rs` against real libical:
+- The write order is `BYDAY, BYMONTHDAY, BYYEARDAY, BYWEEKNO, BYMONTH, BYSETPOS,
+  WKST` — `BYSETPOS` after the months and before the day the week starts on.
+  A rule that went out in another order comes back reordered from EDS's own
+  cache and compares unequal to itself, which the save path reads as an edit.
+- The range splits the same three ways the weeks of the year did: `0` and `999`
+  cost the **whole** `RRULE` (the user's series gone, one appointment left in
+  its place), while `367` and `-367` are kept verbatim. So `set_position_token`
+  refusing outside RFC 5545's `setposday` (1..366, and -1..-366 for RFC 8984's
+  backwards count) is this mapping's own judgement, not the parser's: no
+  interval expands to 367 occurrences, and such a rule would sit in the cache
+  selecting an occurrence that is never there.
+- `+1` and `01` come back canonical. That cannot bite the save path, because
+  `bySetPosition` holds a number and the only spelling this mapping can write is
+  the canonical one — unlike `BYMONTH=03`, where the model holds a string.
+
+Twelve tests, red first (compile-red on the new field, then mutation-checked
+rather than assumed — the three claims that are not "a field exists" each had
+their implementation mutated to confirm a test dies): six in `jmap-ical`
+(round-trip, the all-seven-parts write order, a hand-written rule with `+1,-1`,
+the nothing-to-select-from gate in both its forms, the out-of-range refusal, and
+that refusal reached through the parser), three in `jmap-cal-sync/tests/save.rs`
+against the mock (the position reaching the server, a hand-added `BYSETPOS=2`
+with nothing beside it *not* being sent, and a position the server holds alone
+not being cleared by a save that only narrowed the rule), one fixture round-trip
+in `jmap-proto`, and two in `marshal.rs` against libical.
+
+`bySetPosition` was also the exemplar three existing tests used for "a part the
+`RRULE` cannot carry", which it no longer is; those now use `byHour`, which is
+genuinely unmodeled, as do the doc comments in `jmap-proto/src/calendars.rs`,
+`jmap-ical/src/event.rs` and `jmap-cal-sync/src/patch.rs` that named it. The one
+place it stays is `a_save_that_changes_nothing_sends_no_patch`, where a
+`bySetPosition` alone on a weekly rule is still a part the component has to drop
+— for the new reason rather than the old one, and the comment now says which.
+
+Verified locally: `cargo test --locked` 651 (up 9 from 642), `cargo test -p
+jmap-backend-cal --locked` 25 in `marshal` (up 1), `ctest` 14/14 including all
+four functional legs against real EDS, `cargo fmt --check`, and `cargo clippy
+--all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal`. `ci/checks.sh` stops at its first step for the same reason
+as the last several sessions: `reuse` is not on this VM and neither `pipx`,
+`uvx` nor `python3 -m venv` can install it without sudo. The exposure is smaller
+than usual here — the one file added is a JSON fixture, covered by `REUSE.toml`'s
+`rust/crates/*/tests/fixtures/**` annotation rather than a header, and no
+dependency changed, so `cargo deny`'s answer is the one it gave on the last
+green run. (`ci/checks.sh` also needs `bash`, not `sh`: line 12's `set -o
+pipefail` is not POSIX.)
+
+**New blocker, and it stopped the session mid-way: the VM filled its disk.** The
+root filesystem hit 100% of 58G during the first full `cargo test`, which failed
+with "No space left on device" in the middle of linking. `rust/target` held 25G
+(21G of it `debug/deps`, 3.4G `debug/incremental`) and `~/audit-ffi` — the audit
+stream's own clone, which this session does not touch — holds 14G more. Deleting
+this repo's `target/debug/incremental`, `target/doc` and `target/tmp` freed 3.5G,
+enough to finish, and the suite was then run with `CARGO_INCREMENTAL=0`. This is
+a patch, not a fix: the two clones' build trees grow every session and nothing
+prunes them. A maintainer decision is wanted on which — a periodic `cargo clean`
+in the night-shift driver, a bigger disk, or a shared target directory.
+
+No milestone tag. What this did **not** do: no functional leg through real EDS
+for "the last Friday of the month" — the libical round-trip test is what stands
+in for it, as it did for `byMonthDay`, `byMonth`, `byYearDay`, `firstDayOfWeek`
+and `byWeekNo`, and it answers the question a functional leg would (does the
+spelling survive the parser EDS uses). `byHour`/`byMinute`/`bySecond`, `rscale`
+and `skip` are still unmodeled, and a rule holding one is still drawn narrowed
+and never written back — which is safe. `byHour` is the obvious next one, and it
+is a return to the copyable shape: a plain numeric set with a frequency gate,
+unlike this one.
+
+Unchanged blockers: the outgoing direction is still asymmetric — `jmap-ical`
+writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it, for an instance's zone
+as well as the series', relying on libical resolving an IANA name out of its
+builtin table; the calcard directive's two emitters are still ours by choice,
+waiting on the fold off-by-one being fixed upstream or a maintainer decision that
+76-octet lines are acceptable; M9 has no CI job (needs `evolution-data-server` +
+`dbus-daemon` in the CI image, a maintainer decision) and no GUI tier (needs a
+display this VM lacks); M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open and still the right thing to settle when the libsoup transport lands;
+the manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
+dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+Still open from before: nothing asserts whether a split series' two writes arrive
+as one `CalendarEvent/set` or two; the *reading* direction of a per-instance zone
+through real EDS is untested; calcard silently drops or wraps an unreadable
+`BYDAY`/`BYMONTHDAY`/`WKST` token below this crate, which only an upstream fix
+reaches.

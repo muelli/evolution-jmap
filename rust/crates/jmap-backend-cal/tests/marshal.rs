@@ -525,6 +525,13 @@ fn libical_keeps_the_recurrence_parts_this_mapping_writes() {
         // And where `BYWEEKNO` is written: between the days of the year and the
         // months, before the day the week is counted from.
         "FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;WKST=SU",
+        "FREQ=MONTHLY;COUNT=4;BYDAY=FR;BYSETPOS=-1",
+        "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1,-1",
+        // And where `BYSETPOS` is written: after the months, before the day the
+        // week is counted from — the seventh part, and the one that decides
+        // where a rule naming everything folds.
+        "FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;\
+         BYSETPOS=2;WKST=SU",
         // RFC 5545 §3.3.10 defines BYYEARDAY beside a period shorter than a day
         // as well, limiting what those expand to.
         "FREQ=HOURLY;BYYEARDAY=100",
@@ -673,6 +680,64 @@ fn libical_answers_for_a_week_of_the_year_this_mapping_refuses() {
     for (written, back) in [
         ("FREQ=YEARLY;BYWEEKNO=020", "FREQ=YEARLY;BYWEEKNO=20"),
         ("FREQ=YEARLY;BYWEEKNO=+20", "FREQ=YEARLY;BYWEEKNO=20"),
+    ] {
+        assert_eq!(reparsed_rrule(written).as_deref(), Some(back), "{written}");
+    }
+}
+
+/// The same question for the occurrence a rule selects out of its set, whose
+/// answers split the same three ways the weeks of the year's do — and where the
+/// gate that matters most, RFC 5545 §3.3.10's "only in conjunction with another
+/// BYxxx rule part", libical does not enforce at all.
+#[test]
+fn libical_answers_for_a_position_in_the_set_this_mapping_refuses() {
+    // Some values cost the whole `RRULE`: an event written that way would reach
+    // EDS's cache as a single appointment with the user's series gone.
+    for rrule in [
+        "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=0",
+        "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=999",
+        "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1,XX",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), None, "{rrule}");
+    }
+    // But not every position outside RFC 5545's `setposday`: 367 and -367
+    // libical keeps verbatim, where 999 costs the rule. So the reason
+    // `jmap-ical`'s `set_position_token` refuses a position just past the end of
+    // a leap year is not that the parser objects — it is that no interval
+    // expands to that many occurrences, and the rule would sit in EDS's cache
+    // selecting an occurrence that is never there.
+    for rrule in [
+        "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=367",
+        "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=-367",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // And the gate `jmap-ical` carries that none of the other parts needs:
+    // libical keeps a `BYSETPOS` with no other `BYxxx` beside it, at every
+    // frequency, though §3.3.10 admits none of these. Such a rule selects out of
+    // the single occurrence the frequency already names, so `BYSETPOS=2` is a
+    // series that happens once and never again — which is why the mapping leaves
+    // the part off rather than trusting the parser to object.
+    for rrule in [
+        "FREQ=DAILY;BYSETPOS=1",
+        "FREQ=MONTHLY;BYSETPOS=-1",
+        "FREQ=YEARLY;BYSETPOS=2",
+    ] {
+        assert_eq!(reparsed_rrule(rrule).as_deref(), Some(rrule), "{rrule}");
+    }
+    // And the third shape, a spelling kept but *changed*: `setposday` admits the
+    // leading zero and the leading plus, and both come back canonical. As with
+    // `BYYEARDAY`, that cannot bite the save path — `bySetPosition` holds a
+    // number, so the only spelling this mapping can write is the canonical one.
+    for (written, back) in [
+        (
+            "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=01",
+            "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1",
+        ),
+        (
+            "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=+1",
+            "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1",
+        ),
     ] {
         assert_eq!(reparsed_rrule(written).as_deref(), Some(back), "{written}");
     }

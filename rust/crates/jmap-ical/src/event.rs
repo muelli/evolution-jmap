@@ -127,8 +127,8 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
 /// Only `frequency`, `interval`, `count`, `until`, `byDay`, `byMonthDay`,
-/// `byYearDay`, `byWeekNo`, `byMonth` and `firstDayOfWeek` are modeled;
-/// `bySetPosition` and the rest of RFC 8984 §4.3.3 ride in
+/// `byYearDay`, `byWeekNo`, `byMonth`, `bySetPosition` and `firstDayOfWeek` are
+/// modeled; `byHour` and the rest of RFC 8984 §4.3.3 ride in
 /// [`RecurrenceRule::extra`] and would be lost. A caller that patches
 /// `recurrenceRules` for a rule this returns `false` for narrows the user's
 /// recurrence behind their back.
@@ -136,10 +136,11 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
 /// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
 /// never patches over a recurrence the user was not shown — as does one whose
 /// days of the week, days of the month, days of the year, weeks of the year,
-/// months of the year or day the week starts on the `RRULE` cannot carry, which
-/// [`by_day_part`], [`by_month_day_part`], [`by_year_day_part`],
-/// [`by_week_no_part`], [`by_month_part`] and [`weekday_token`] decide and
-/// [`rule_to_rrule`] then leaves off.
+/// months of the year, position in the set or day the week starts on the
+/// `RRULE` cannot carry, which [`by_day_part`], [`by_month_day_part`],
+/// [`by_year_day_part`], [`by_week_no_part`], [`by_month_part`],
+/// [`by_set_position_part`] and [`weekday_token`] decide and [`rule_to_rrule`]
+/// then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
         && writable(rule)
@@ -163,6 +164,12 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
             .by_month
             .as_ref()
             .is_none_or(|_| by_month_part(rule).is_some())
+        // Asked with the same answer [`rule_to_rrule`] computes, because this
+        // part is writable only beside another one that was written.
+        && rule
+            .by_set_position
+            .as_ref()
+            .is_none_or(|_| by_set_position_part(rule, !named_by_parts(rule).is_empty()).is_some())
         // Asked of the value rather than of the part, because this is the one
         // part whose absence from the `RRULE` is not a refusal: the default day
         // is left off deliberately — see [`first_day_of_week_part`].
@@ -1281,13 +1288,30 @@ fn rule_to_rrule(
     // Last, where RFC 5545's own examples put them, and in the order libical
     // writes them — so a rule that went out this way and came back through EDS's
     // own cache compares equal to itself.
-    parts.extend(by_day_part(rule));
-    parts.extend(by_month_day_part(rule));
-    parts.extend(by_year_day_part(rule));
-    parts.extend(by_week_no_part(rule));
-    parts.extend(by_month_part(rule));
+    let named = named_by_parts(rule);
+    // `BYSETPOS` selects out of what the parts above expand to, so whether it
+    // may be written depends on whether any of them was — see
+    // [`by_set_position_part`].
+    let selects_from_a_set = !named.is_empty();
+    parts.extend(named);
+    parts.extend(by_set_position_part(rule, selects_from_a_set));
     parts.extend(first_day_of_week_part(rule));
     Some(parts.join(";"))
+}
+
+/// The `BYxxx` parts of a rule's `RRULE` that name dates, in the order libical
+/// writes them — everything but `BYSETPOS`, which picks from what they produce.
+fn named_by_parts(rule: &RecurrenceRule) -> Vec<String> {
+    [
+        by_day_part(rule),
+        by_month_day_part(rule),
+        by_year_day_part(rule),
+        by_week_no_part(rule),
+        by_month_part(rule),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// The `BYDAY` part of a rule's `RRULE`, or `None` when the rule names no days
@@ -1506,6 +1530,51 @@ fn month_token(month: &str) -> Option<&str> {
     }
 }
 
+/// The `BYSETPOS` part of a rule's `RRULE`, or `None` when the rule selects no
+/// occurrence — and, as with [`by_day_part`], when it selects ones this mapping
+/// will not write.
+///
+/// It is all the positions or none of them, for the same reason the other parts
+/// are all-or-nothing: a `BYSETPOS` holding a subset picks *different*
+/// occurrences out of the set rather than showing fewer of these.
+///
+/// The gate has no counterpart in the parts above, because this is the one part
+/// that names no date of its own: RFC 5545 §3.3.10 says `BYSETPOS` MUST only be
+/// used together with another `BYxxx` part, since it selects out of the set
+/// those expand to. So `selects_from_a_set` is asked of the parts
+/// [`rule_to_rrule`] actually *wrote*, not of the ones the rule holds — a
+/// `byWeekNo` beside a monthly frequency is left off, and a `BYSETPOS` written
+/// next to it would be selecting from a set no reader of the line can see.
+/// Alone, `BYSETPOS=1` would be a no-op and `BYSETPOS=2` a series that never
+/// happens again, so the part is left off and [`maps_recurrence_rule`] tells the
+/// save path the rule was seen in part.
+///
+/// There is no frequency gate: §3.3.10 defines the part at every frequency, and
+/// libical keeps it beside each one.
+fn by_set_position_part(rule: &RecurrenceRule, selects_from_a_set: bool) -> Option<String> {
+    let positions = rule.by_set_position.as_ref()?;
+    // `BYSETPOS=` selects nothing, and a content line libical refuses costs the
+    // whole component — every field of the event, not just its recurrence.
+    if positions.is_empty() || !selects_from_a_set {
+        return None;
+    }
+    let tokens: Option<Vec<String>> = positions.iter().copied().map(set_position_token).collect();
+    Some(format!("BYSETPOS={}", tokens?.join(",")))
+}
+
+/// One occurrence of the set as an `RRULE` writes it — `1`, `-1` — or `None`
+/// for a value no `BYSETPOS` can carry.
+fn set_position_token(position: i32) -> Option<String> {
+    match position {
+        // RFC 5545's `setposday` is spelled as `yeardaynum` is, so 1 to 366 —
+        // the most occurrences a `BYYEARDAY` can put in one interval's set —
+        // which RFC 8984 §4.3.3 counts backwards from the last as well. Zero
+        // selects no occurrence, and neither format admits it.
+        -366..=-1 | 1..=366 => Some(position.to_string()),
+        _ => None,
+    }
+}
+
 /// The `WKST` part of a rule's `RRULE`, or `None` when the rule names no first
 /// day of the week — **and when it names Monday**, which is the one part this
 /// mapping leaves off a rule it is perfectly able to write.
@@ -1550,8 +1619,8 @@ fn weekday_token(day: &str) -> Option<&'static str> {
 }
 
 /// The reverse. Parts outside the modeled set are dropped rather than parked
-/// in `extra`: a `BYSETPOS=-1` copied verbatim into JSCalendar would be
-/// rejected by the server, whose `bySetPosition` is an array of numbers.
+/// in `extra`: a `BYHOUR=9` copied verbatim into JSCalendar would be rejected
+/// by the server, whose `byHour` is an array of numbers.
 fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
     let mut rule = RecurrenceRule::default();
     for part in value.split(';') {
@@ -1583,6 +1652,12 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             // by [`month_token`] on the way out, which is what
             // [`maps_recurrence_rule`] then reads.
             "BYMONTH" => rule.by_month = Some(value.split(',').map(str::to_owned).collect()),
+            // Likewise again: `setposday` is spelled as `monthdaynum` is, and a
+            // token [`to_month_day`] cannot read becomes the zero that selects
+            // no occurrence.
+            "BYSETPOS" => {
+                rule.by_set_position = Some(value.split(',').map(to_month_day).collect());
+            }
             // RFC 5545's `weekday` is upper case where RFC 8984 §4.3.3's is
             // lower, and iCalendar is case-insensitive besides, so the day is
             // lowered rather than matched: a token that is no weekday at all
