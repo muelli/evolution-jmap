@@ -54,8 +54,8 @@ use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use eds_sys::{
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalMetaBackend, ECalMetaBackendClass, ECalOperationFlags,
     EConflictResolution, ENamedParameters, ESourceAuthenticationResult, GTlsCertificateFlags,
-    ICalComponent, e_backend_get_source, e_cal_meta_backend_get_type,
-    e_cal_meta_backend_set_connected_writable, e_client_error_create,
+    ICalComponent, e_backend_get_source, e_cal_backend_set_writable, e_cal_meta_backend_get_type,
+    e_client_error_create,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar};
@@ -250,11 +250,23 @@ unsafe extern "C" fn connect_sync(
             };
 
             backend.store_connection(sync);
-            // Without this the calendar is read-only in the UI: it is how
-            // `ECalMetaBackend` decides whether a connected backend accepts
-            // writes. JMAP has no per-calendar "may I write" flag, so the
-            // answer is the same as the account's.
-            e_cal_meta_backend_set_connected_writable(meta_backend, GTRUE);
+            // Without this the calendar is read-only: every write comes back
+            // as "Permission denied" and Evolution greys the calendar out.
+            // JMAP has no per-calendar "may I write" flag, so the answer is
+            // the same as the account's.
+            //
+            // This is `e_cal_backend_set_writable` and not the meta backend's
+            // `set_connected_writable`, which reads like the one to call and
+            // is not — the same trap the address book's `connect_sync` walks
+            // past for the same reason: the moment this vfunc returns TRUE,
+            // EDS's `ecmb_update_connection_values` *overwrites*
+            // connected-writable with `e_cal_backend_get_writable()`, so the
+            // meta backend's setter is undone by the very call that was about
+            // to read it. Setting the backend's flag sets both, and
+            // connected-writable is what EDS restores the backend's flag from
+            // when it opens the calendar offline. What the vfunc's own
+            // documentation asks for.
+            e_cal_backend_set_writable(meta_backend.cast(), GTRUE);
             GTRUE
         })
     }
