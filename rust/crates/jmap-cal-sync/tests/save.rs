@@ -227,22 +227,42 @@ fn a_save_leaves_the_servers_own_timestamps_alone() {
 fn editing_an_event_leaves_unmapped_properties_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // Properties no component we produce can carry. (`locations` was the
+    // A property no component we produce can carry. (`locations` was the
     // exemplar here until the place an event happens at became mapped,
     // `keywords` until the tags did, `freeBusyStatus` until the transparency
     // did, `priority` until the importance did and `useDefaultAlerts` until the
-    // reminders did; the guest list and the scheduling revision are still
-    // nowhere on a component.)
+    // reminders did; the scheduling revision is still nowhere on a component.)
+    //
+    // The guest list beside it is the other half of the same rule, one step on:
+    // it *is* drawn now — the ATTENDEE below — and still may not be written
+    // back, because changing it means an iTIP message this backend does not
+    // send. So it stands here as the property that survives a save it appears
+    // on, not one it is missing from.
+    let guest = json!({
+        "@type": "Participant",
+        "name": "Vera Example",
+        "sendTo": {"imip": "mailto:vera@example.com"},
+        "roles": {"attendee": true},
+        "participationStatus": "accepted",
+    });
     fixture.patch(
         &id,
         json!({
-            "participants": {"p1": {"@type": "Participant", "email": "vera@example.com"}},
+            "participants": {"p1": guest.clone()},
             "sequence": 3,
         }),
     );
     let sync = fixture.sync();
 
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    // Unfolded first: RFC 5545 §3.1 splits a content line longer than 75 octets,
+    // and this one is.
+    assert!(
+        icalendar
+            .replace("\r\n ", "")
+            .contains("ATTENDEE;CN=Vera Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:vera@example.com"),
+        "{icalendar}"
+    );
     let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -253,7 +273,14 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
         Some(&json!(3)),
         "an unmapped property was overwritten"
     );
-    assert!(stored.extra.contains_key("participants"));
+    assert_eq!(
+        stored
+            .participants
+            .as_ref()
+            .and_then(|guests| guests.get("p1")),
+        Some(&guest),
+        "the guest list was rewritten by a save that only changed the title"
+    );
 }
 
 #[test]

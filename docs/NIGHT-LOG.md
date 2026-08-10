@@ -16722,3 +16722,106 @@ all, or whether the two lines are only ever read by other clients — and, since
 mock stamps neither timestamp itself, no test here exercises an event whose
 `updated` a server actually maintains; both would need a real server or a real
 Evolution session.
+
+## 2026-08-10 (hundred-and-sixty-sixth session)
+
+**The guest list now crosses, in one direction only.** RFC 8984 §4.4.6's
+`participants` is a map of Participants — an address to reach each of them at,
+a name, the roles they hold, what they replied — and RFC 5545 §3.8.4.1 spells
+one as an `ATTENDEE` line whose value is the CAL-ADDRESS and whose parameters
+carry the rest. `jmap-ical` draws it: `CN` from `name`, `CUTYPE` from `kind`,
+`ROLE` from `roles`, `PARTSTAT` from `participationStatus`, `RSVP=TRUE` from
+`expectReply`. The organizer comes out of the same map — RFC 8984 gives it no
+property of its own, it is the participant holding the `owner` role — as the
+`ORGANIZER` of RFC 5545 §3.8.4.3.
+
+**Written and never read, and this one is not tidiness.** `participants` is
+absent from `MAPPED_PROPERTIES`, `read_vevent` sets it to `None`, and
+`jmap-cal-sync`'s `diff` enumerates properties, so no save can name it. The
+reason is heavier than the one `CREATED`/`LAST-MODIFIED` have: who is invited,
+and what each of them replied, is *scheduling* state. Changing it means an iTIP
+REQUEST or REPLY going out to those people (RFC 5546), which this backend does
+not send. A save that patched `participants` would therefore rewrite the
+server's guest list while nobody was told — an invitation silently withdrawn, or
+an acceptance invented on somebody's behalf. Reading nothing is what keeps that
+impossible, and it is what makes every "left off" decision below safe: a
+participant this mapping cannot draw is one the user does not see, not one that
+was deleted.
+
+**A participant with no `sendTo/imip` is left off.** An `ATTENDEE`'s value is a
+CAL-ADDRESS (RFC 5545 §3.3.3), which is a URI; iMIP (RFC 6047) is the `sendTo`
+method whose address is the `mailto:` iCalendar wants. There is nothing to
+invent for a guest the server gave no address for, and a line libical refuses
+costs every other field of the event with it. `names_a_uri` therefore asks for
+RFC 3986 §3.1's scheme, a `:` and something after it, and refuses whitespace —
+which is also belt and braces against a CR or an LF in a value that skips
+`syntax::escape`, the thing `syntax::fold_into` already drops on the way out.
+
+**Two vocabularies crossed and one ordered.** `participationStatus` and
+`PARTSTAT` admit the same five answers under the same names, and `kind` and
+`CUTYPE` the same four things differing in one word — a JSCalendar `location` is
+iCalendar's `ROOM`. `roles` is the odd one: RFC 8984 has it as a *set* and
+iCalendar's `ROLE` is one value, so `PARTICIPANT_ROLES` is a precedence order —
+chair, informational, optional, attendee — and a guest who is both an attendee
+and an optional one is written as the optional one. The narrower statement is
+what the user needs, and `REQ-PARTICIPANT` is iCalendar's default anyway.
+
+**An owner who is also attending gets both lines**; one whose only spellable
+role is `owner` gets the `ORGANIZER` alone, because it called the meeting
+without coming to it and an `ATTENDEE` would put it on the guest list. Only the
+first owner gets an `ORGANIZER`: RFC 8984 admits several (the role is a set
+member like any other) where RFC 5545 §3.6.1 admits one line, and showing the
+first beats showing an event nobody called.
+
+**The instance inherits the guest list.** `participants` is not in
+`OVERRIDE_PROPERTIES` — an occurrence drawn without them is a meeting nobody was
+invited to — so `modified_instance` copies it, like `locations`.
+
+Tests: red first — compile-red in `jmap-ical` (`CalendarEvent` had no such
+field), then eight behaviour tests there. Two existing tests changed and say why:
+`jmap-cal-sync`'s `editing_an_event_leaves_unmapped_properties_alone` now
+asserts the *typed* guest list survives a save that only changed the title
+(`sequence` stays as the property no component carries at all), and
+`jmap-proto`'s round trip asserts the modeled shape rather than a key in
+`extra`. One libical measurement in `jmap-backend-cal`,
+`libical_keeps_the_guest_list_it_was_handed`: it hands both lines back verbatim,
+every parameter in the order written, and invents neither — which matters
+because these lines exist to be *read*, and a dropped `CN` or `PARTSTAT` is a
+guest list Evolution shows wrongly. Counts: `cargo test --locked` 783, up 8 from
+775; `jmap-backend-cal` 101, up one; `ctest` 14/14 including all four functional
+legs after a full `ninja`.
+
+Not done, deliberately: `delegatedTo`/`delegatedFrom`, `memberOf`,
+`scheduleAgent`/`scheduleForceSend` and `invitedBy` — the rest of §4.4.6, all of
+which are scheduling machinery that only matters once iTIP does; `replyTo`
+(§4.4.5), which is the same story from the other end; and `sequence` (§4.1.9),
+the scheduling revision, which still belongs with that work rather than with the
+timestamps.
+
+Verified locally: `cargo test --locked` 783 green, `cargo test -p
+jmap-backend-cal --locked` 101 green, `ctest` 14/14 after a full `ninja`, `cargo
+fmt --all --check`, and `cargo clippy --all-targets --locked -- -D warnings`
+clean for the default set and for `jmap-backend-cal`. `ci/checks.sh` again stops
+at its first step: `reuse` is not on this VM and neither `pipx` nor `uvx` is
+installed. Exposure is nil — **no file was added**, only edits to files that
+already carry SPDX headers — and `Cargo.lock` is untouched, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric
+— `jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the
+calcard directive's two emitters are still ours by choice; M9 has no CI job and
+no GUI tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. New from this session: nothing here says what Evolution *shows* of
+an `ATTENDEE` — the functional calendar leg drives the save direction (a
+component the C client writes reaching the mock), and the guest list only ever
+travels the other way, so proving a user sees Bob's name and his acceptance
+would need a read-side assertion in `tests/functional/cal-client.c` that does
+not exist yet; nothing says whether Evolution's appointment editor, which does
+have a meeting page, *rewrites* the `ATTENDEE` lines it was shown (harmless
+today, since no save can name the property, but it is the first thing to measure
+if the guest list is ever made writable); and the mock seeds no participant of
+its own, so every test here states the guest list by hand.
