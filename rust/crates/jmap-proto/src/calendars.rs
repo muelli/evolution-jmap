@@ -74,6 +74,18 @@ pub struct CalendarEvent {
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_rules: Option<Vec<RecurrenceRule>>,
+    /// The instances named one at a time rather than by a rule (RFC 8984
+    /// §4.3.4): a map from an instance's start, as a LocalDateTime, to a
+    /// PatchObject describing how that instance differs.
+    ///
+    /// The patch is left as JSON because it is genuinely open — `excluded: true`
+    /// for an instance that does not happen, `{}` for one that happens as the
+    /// rules would have it, and any set of event properties for one that was
+    /// edited on its own. Modeling only the shapes the iCalendar mapping can
+    /// spell would quietly discard the third, which the mapping instead has to
+    /// see in order to refuse to overwrite it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recurrence_overrides: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

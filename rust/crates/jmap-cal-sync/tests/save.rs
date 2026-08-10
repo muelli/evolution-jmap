@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The write side. The theme throughout is that saving a component must not
-//! destroy what the component could not carry: the mapping keeps eight
+//! destroy what the component could not carry: the mapping keeps nine
 //! properties of a JSCalendar event and drops the rest, so a save that
 //! replaced properties wholesale would delete data the user never touched and
 //! cannot even see.
@@ -319,6 +319,136 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     );
 }
 
+/// A daily event on the server, so that the tests below have a recurrence to
+/// name single instances of.
+fn seed_daily(fixture: &Fixture) -> jmap_proto::Id {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"recurrenceRules": [
+            {"@type": "RecurrenceRule", "frequency": "daily"},
+        ]}),
+    );
+    id
+}
+
+/// The component with `line` inserted ahead of its `END:VEVENT`, which is what
+/// deleting one occurrence in Evolution amounts to.
+fn with_line(icalendar: &str, line: &str) -> String {
+    icalendar.replace("END:VEVENT\r\n", &format!("{line}\r\nEND:VEVENT\r\n"))
+}
+
+#[test]
+fn deleting_one_occurrence_reaches_the_server_as_an_excluded_override() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = with_line(&icalendar, "EXDATE:20260116T090000Z");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some([("2026-01-16T09:00:00".to_owned(), json!({"excluded": true}))].into()),
+        "the instance the user deleted is off, and only that one"
+    );
+    // The rule it is an exception to is untouched.
+    assert_eq!(stored.recurrence_rules.unwrap()[0].frequency, "daily");
+}
+
+#[test]
+fn restoring_a_deleted_occurrence_removes_the_override() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    fixture.patch(
+        &id,
+        json!({"recurrenceOverrides": {"2026-01-16T09:00:00": {"excluded": true}}}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(icalendar.contains("EXDATE:20260116T090000Z"), "{icalendar}");
+    let edited: String = icalendar
+        .lines()
+        .filter(|line| !line.starts_with("EXDATE"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    // Removing the property is how a PatchObject says "back to the default",
+    // which for recurrenceOverrides is no named instances at all.
+    assert_eq!(fixture.event(&id).recurrence_overrides, None);
+}
+
+#[test]
+fn an_instance_edited_on_its_own_survives_an_edit_to_another_instance() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    // An override that changes the instance has no iCalendar spelling in a
+    // single VEVENT, so the component the user edited is a narrower view of the
+    // overrides than the server holds.
+    fixture.patch(
+        &id,
+        json!({"recurrenceOverrides": {
+            "2026-01-20T09:00:00": {"title": "Standup with the board"},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = with_line(&icalendar, "EXDATE:20260116T090000Z");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).recurrence_overrides,
+        Some(
+            [(
+                "2026-01-20T09:00:00".to_owned(),
+                json!({"title": "Standup with the board"}),
+            )]
+            .into()
+        ),
+        "narrowing overrides we cannot fully see is worse than ignoring the edit"
+    );
+}
+
+#[test]
+fn an_instance_the_server_says_is_not_excluded_stays_spelled_that_way() {
+    // RFC 8984 §4.3.4 defaults `excluded` to false, so an override that says so
+    // out loud and one that says nothing are the same instance, and the
+    // component has the same single RDATE for both. Re-saving it must not
+    // rewrite the property merely because the spelling comes back shorter —
+    // the baseline is the round trip, not the server's own event.
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    fixture.patch(
+        &id,
+        json!({"recurrenceOverrides": {"2026-01-20T09:00:00": {"excluded": false}}}),
+    );
+    let sync = fixture.sync();
+
+    let before = sync.load_component(id.as_str()).unwrap();
+    assert!(
+        before.icalendar.contains("RDATE:20260120T090000Z"),
+        "{before:?}"
+    );
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_component(&before.icalendar, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(
+        fixture.event(&id).recurrence_overrides,
+        Some([("2026-01-20T09:00:00".to_owned(), json!({"excluded": false}))].into()),
+    );
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a no-op save must not bump the server state and wake every other client"
+    );
+}
+
 #[test]
 fn clearing_the_description_clears_it_on_the_server() {
     let fixture = Fixture::start();
@@ -360,9 +490,10 @@ fn a_save_whose_start_cannot_be_read_leaves_the_servers_start_alone() {
 fn a_save_that_changes_nothing_sends_no_patch() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // Two things the component cannot say exactly: a time zone spelled the
-    // other legal way, and a recurrence part the RRULE has to drop. Neither is
-    // an edit, and neither may look like one.
+    // Three things the component cannot say exactly: a time zone spelled the
+    // other legal way, a recurrence part the RRULE has to drop, and an instance
+    // edited on its own, which an RDATE can place but not describe. None of
+    // them is an edit, and none may look like one.
     fixture.patch(
         &id,
         json!({
@@ -372,6 +503,9 @@ fn a_save_that_changes_nothing_sends_no_patch() {
                 "frequency": "weekly",
                 "byDay": [{"@type": "NDay", "day": "mo"}],
             }],
+            "recurrenceOverrides": {
+                "2026-01-22T09:00:00": {"title": "Standup (long)"},
+            },
         }),
     );
     let sync = fixture.sync();

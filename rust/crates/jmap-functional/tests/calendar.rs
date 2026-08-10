@@ -34,6 +34,14 @@ const ALL_DAY_SUMMARY: &str = "Team offsite";
 const ALL_DAY_START: &str = "2026-02-01T00:00:00";
 const ALL_DAY_DURATION: &str = "P1D";
 
+/// The third event: a weekly one with a single occurrence deleted, which EDS
+/// hands to the backend as an `EXDATE` on the master component. On the server
+/// that has to be an entry in `recurrenceOverrides` saying the instance is
+/// `excluded` — the only thing JSCalendar has for it. An `EXDATE` the mapping
+/// drops is an appointment the user cancelled and everybody else still sees.
+const RECURRING_SUMMARY: &str = "Weekly standup";
+const RECURRING_EXCLUDED: &str = "2026-01-29T13:00:00";
+
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
 /// mock's ephemeral port filled in. Kept as a literal here rather than read
 /// from `docs/` so that a change to the documented recipe fails this test
@@ -87,7 +95,15 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     session.write_source("jmap-functional", &keyfile(port));
     session.stage_calendar_backend(&module);
 
-    let output = session.run(&client, &["jmap-functional", SUMMARY, ALL_DAY_SUMMARY]);
+    let output = session.run(
+        &client,
+        &[
+            "jmap-functional",
+            SUMMARY,
+            ALL_DAY_SUMMARY,
+            RECURRING_SUMMARY,
+        ],
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
@@ -139,7 +155,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "a fresh cache against an empty calendar should hold nothing\n{report}"
     );
 
-    for key in ["added", "added-all-day"] {
+    for key in ["added", "added-all-day", "added-recurring"] {
         let added = seen
             .get(key)
             .unwrap_or_else(|| panic!("the client reported no {key} event\n{report}"));
@@ -157,7 +173,7 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     );
     assert_eq!(
         seen.get("events-after"),
-        Some(&"2"),
+        Some(&"3"),
         "the added events are not both in the calendar they were added to\n{report}"
     );
 
@@ -183,8 +199,8 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         .collect();
     assert_eq!(
         events.len(),
-        2,
-        "the server holds {} events, not two",
+        3,
+        "the server holds {} events, not three",
         events.len()
     );
 
@@ -241,5 +257,28 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     assert_eq!(
         all_day.time_zone, None,
         "a day has no zone (RFC 8984 §4.1.5): {all_day:?}"
+    );
+
+    // And the recurring one, whose EXDATE has to have become an override. The
+    // rule is asserted alongside it because an event that lost its recurrence
+    // has nothing for an exclusion to be an exception to.
+    let recurring = by_title(RECURRING_SUMMARY);
+    let rules = recurring
+        .recurrence_rules
+        .as_ref()
+        .unwrap_or_else(|| panic!("the recurring event has no rule: {recurring:?}"));
+    assert_eq!(rules[0].frequency, "weekly", "{recurring:?}");
+    assert_eq!(rules[0].count, Some(6), "{recurring:?}");
+    assert_eq!(
+        recurring.recurrence_overrides,
+        Some(
+            [(
+                RECURRING_EXCLUDED.to_owned(),
+                serde_json::json!({"excluded": true}),
+            )]
+            .into()
+        ),
+        "the deleted occurrence did not reach the server as an excluded \
+         override, so every other client still shows it: {recurring:?}"
     );
 }

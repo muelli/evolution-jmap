@@ -643,6 +643,7 @@ version = "0.1.0"
 dependencies = [
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "serde_json",
 ]
 
 [[package]]

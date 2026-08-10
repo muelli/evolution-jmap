@@ -13414,3 +13414,105 @@ verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
 the M8 tag the last six sessions asked for is still unwritten; the manual-test
 recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
 once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
+
+## 2026-08-10 (hundred-and-thirty-fifth session)
+
+Deleting one occurrence of a recurring event did nothing. Evolution's "Delete
+this occurrence" leaves the master component in place and adds an `EXDATE` to
+it — RFC 5545 §3.8.5.1 is the only thing iCalendar has for "not that one" — and
+the mapping read neither `EXDATE` nor `RDATE`, so the property was dropped on
+the floor and the save patched everything *except* it. The cancelled standup
+stayed on the server and in every other client reading the account, and the
+user's own Evolution showed it gone: the two ends disagreed silently, which is
+worse than either answer. `recurrenceOverrides` (RFC 8984 §4.3.4) is now
+modeled — on `CalendarEvent`, in `jmap-ical` both ways, and in the save path's
+patch.
+
+**Red first, at three levels.** Ten unit tests in `jmap-ical` (the `EXDATE` and
+`RDATE` round trips, several instances on one line, the UTC `Z` form, the
+all-day DATE form and the shape that refuses it, an instance edited on its own,
+an unwritable id, the both-excluded-and-added contradiction, and the event that
+names none) and four save-path tests through `jmap-mockd`. Eleven of the
+fourteen failed on assertions immediately. The other three pass vacuously
+against the old code, so each was checked live afterwards by mutating what it
+guards: dropping the midnight condition on override ids, swapping the
+`EXDATE`/`RDATE` read order, removing the id check from
+`maps_recurrence_override`, dropping the save guard, and diffing against
+`current` instead of `baseline` each fail exactly one named test. The last of
+those mutations survived the first four tests, which is how the fourth save test
+— an override the server spells `{"excluded": false}`, which the component can
+only render as the shorter `RDATE` — came to be written at all. Then the end
+no unit test reaches: `tests/functional/cal-client.c` writes a third event —
+`RRULE:FREQ=WEEKLY;COUNT=6` with `EXDATE:20260129T130000Z` — and
+`functional-cal` asserts the mock holds `{"2026-01-29T13:00:00": {"excluded":
+true}}` beside a weekly rule counting six. Real `evolution-calendar-factory`,
+real `libecalbackendjmap.so`, real `e_cal_client_create_object_sync`; making
+the reader answer `None` fails it with the stored event printed.
+
+**One property in JSCalendar, two in iCalendar, and a third thing neither
+`EXDATE` nor `RDATE` can say.** An override is a PatchObject, so it says three
+things: this instance is off (`excluded: true` → `EXDATE`), this instance
+happens (`{}` → `RDATE`), and — the one with no spelling in a single `VEVENT` —
+this instance happens *differently*, which iCalendar writes as another `VEVENT`
+carrying a `RECURRENCE-ID`. The third is handled exactly as a rule with `byDay`
+in it already was: still **drawn**, narrowed to a bare `RDATE` so the occurrence
+is at least visible at the parent's title, and flagged by a new
+`maps_recurrence_override` so the save path never patches
+`recurrenceOverrides` over it. `patch.rs` now has three properties that need
+more than a difference from the baseline rather than two.
+
+The id is checked as well as the patch, which the rule side taught: an override
+keyed on a LocalDateTime no `EXDATE` can spell — `2026-13-29T13:00:00`,
+`2026-02-30T…` — would vanish from a property replaced whole, so it fails the
+guard too. Two smaller decisions, each tested. `excluded` is read strictly:
+anything that is not literally `true`, including the `false` RFC 8984 defaults
+to and a value of the wrong type, counts as an instance that happens, because
+that reading cannot make an appointment disappear. And a component naming one
+instant in *both* properties is read as excluded, since `EXDATE` wins over the
+recurrence set anyway and the other reading invents an appointment.
+
+**The three date-time properties now agree by construction.** RFC 5545
+§3.8.5.1/§3.8.5.2 oblige an `EXDATE`/`RDATE` to carry `DTSTART`'s value type and
+zone — otherwise the exclusion resolves against a different clock and misses the
+occurrence it was meant to remove — so the four-way choice that used to be
+inline in `DTSTART` (DATE, `Z`, `TZID`, floating) moved into one `dated()`
+helper all three go through. `shows_without_time` grew the matching condition:
+an all-day event whose override is named at 09:00 is written as the timed event
+it half is, rather than truncating an exclusion onto the wrong day. That is the
+same trade already made for an `UNTIL` at 09:00.
+
+Also corrected: `MAPPED_PROPERTIES` claimed seven properties and omitted
+`recurrenceRules`, which the save path has named since M4. It is now nine, with
+a note that the last two are covered conditionally.
+
+Verified locally: `cargo test --locked` 527 (was 513: +14 red-first), the
+EDS-header crates green via the `rust-test-eds` set (`-p eds-sys -p evo-sys
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
+-p jmap-backend-collection -p jmap-config`), `ctest` 14/14 including the four
+functional tests, `cargo fmt --check`, and `cargo clippy --all-targets --locked
+-- -D warnings` clean for both crate sets. `reuse lint` and `cargo deny` not run
+(neither is on this VM); no files were added, so no new SPDX headers were
+needed. One dependency line changed: `serde_json` is now a real dependency of
+`jmap-ical` (it was a dev-dependency) and a dev-dependency of `jmap-functional`,
+both already in the lock file as workspace members' deps, so `Cargo.lock` gained
+one line and no new crate.
+
+Next in this area, in the order they matter: a `RECURRENCE-ID` `VEVENT` is the
+only way a *modified* instance can be shown properly, and it is a bigger
+increment than this one — it means rendering several components into one
+`VCALENDAR` and reading them back into a map of patches, which is also what
+`ECalMetaBackend` expects for a recurring event with detached instances. An
+`RDATE` of `VALUE=PERIOD` (legal, not something Evolution writes) is read as its
+start and would be written back as a plain date-time. And `DTEND` is still the
+only way Evolution states a length while `DURATION` is the only way we write
+one, so a re-saved event patches `duration` to the equivalent spelling.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice, waiting on the fold off-by-one being fixed upstream or a
+maintainer decision that 76-octet lines are acceptable; M9 has no CI job (needs
+`evolution-data-server` + `dbus-daemon` in the CI image, a maintainer decision)
+and no GUI tier (needs a display this VM lacks); M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag the last seven sessions asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained.
