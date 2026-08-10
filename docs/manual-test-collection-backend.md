@@ -129,6 +129,8 @@ What each load-bearing line does:
   transport it is handed — but the three sources (account, identity, transport)
   are the setup UI's to create, as they are in every EDS backend, and that is
   M7. Until then an account claiming mail would claim a part nothing serves.
+  Writing those three by hand is the second run below, which is where the mail
+  half of this backend becomes visible.
 - `Method=none` is what allows plain HTTP, and it is refused for any host that
   is not loopback. **The key is `Method`, not `Secure`**: `ESourceSecurity:secure`
   is a boolean *over* the `Method` string, so a keyfile saying `Secure=true`
@@ -192,3 +194,186 @@ book under it in the Contacts view and a calendar in the Calendar view.
 
 Anything short of that is a bug in this repository, not in the recipe;
 `docs/NIGHT-LOG.md` is where the ones found this way get written down.
+
+## A second run: the mail sources
+
+The account above switches mail off, and the bullet on `MailEnabled` says why:
+this backend creates no mail children. What it *does* do for them is give them a
+server, and that is worth testing on its own, because it is the one thing about a
+JMAP mail account that nothing else can supply.
+
+The three sources a mail account is made of — the receiving account, the identity
+and the transport — are written into the registry's own directory with `Parent=`
+set to the account, not into the backend's cache; `prepare_mail`'s module comment
+is the long version of why. Evolution's assistant is what mints them, and it
+mints a transport carrying the service name `jmap` and nothing else: the *Sending
+Email* page is hidden for a store-and-transport provider, so nothing in the
+dialog is ever asked where the account sends through. A JMAP transport therefore
+reaches no server at all until `child_added` binds the account's host, port, user
+and security method onto it, which this backend does because it is the only place
+holding both halves.
+
+Until M7's assistant exists there is nothing here to mint them, so this run
+writes the three by hand and then reads them back — which is also the only way to
+see the binding without a GUI.
+
+### Prerequisites, beyond the ones above
+
+- The Camel provider installed: `sudo cmake --install build --component
+  camel-provider`. Without it the account is a mail account Evolution has no
+  provider for, and the sources below are ignored rather than shown.
+- The account from step 3 removed —
+  `rm ~/.config/evolution/sources/jmap-mock-collection.source` — or you get two
+  accounts against the same mock and have to keep track of which sidebar entry is
+  which.
+
+### 1. The account
+
+Copy `docs/examples/jmap-mock-mail-collection.source` to
+`~/.config/evolution/sources/jmap-mock-mail-collection.source`:
+
+```ini
+[Data Source]
+DisplayName=JMAP mock mail account
+Enabled=true
+
+[Collection]
+BackendName=jmap
+ContactsEnabled=true
+CalendarEnabled=true
+MailEnabled=true
+
+[Authentication]
+Host=127.0.0.1
+Port=8080
+
+[Security]
+Method=none
+```
+
+The same account as step 3's with `MailEnabled=true`, and the switch is not
+cosmetic: `collection_backend_bind_child_enabled()` binds every mail source's
+`enabled` to the account's `mail-enabled`, so the three files below under an
+account with mail off are three sources that arrive *disabled*. They sit in
+`~/.config/evolution/sources/`, they do not appear in Evolution, and nothing says
+why.
+
+### 2. The three mail sources
+
+Copy all three into the same directory. Their file names are their uids, and
+those uids are what the `Parent=`, `IdentityUid=` and `TransportUid=` lines below
+refer to, so renaming one file means editing two others.
+
+`docs/examples/jmap-mock-mail-account.source` — what Evolution receives through:
+
+```ini
+[Data Source]
+DisplayName=JMAP mock inbox
+Enabled=true
+Parent=jmap-mock-mail-collection
+
+[Mail Account]
+BackendName=jmap
+IdentityUid=jmap-mock-mail-identity
+```
+
+`docs/examples/jmap-mock-mail-identity.source` — who the mail is from:
+
+```ini
+[Data Source]
+DisplayName=JMAP mock identity
+Enabled=true
+Parent=jmap-mock-mail-collection
+
+[Mail Identity]
+Name=JMAP mock user
+Address=alice@example.com
+
+[Mail Submission]
+TransportUid=jmap-mock-mail-transport
+```
+
+`docs/examples/jmap-mock-mail-transport.source` — what Evolution sends through:
+
+```ini
+[Data Source]
+DisplayName=JMAP mock transport
+Enabled=true
+Parent=jmap-mock-mail-collection
+
+[Mail Transport]
+BackendName=jmap
+```
+
+What each load-bearing line does:
+
+- `Parent=jmap-mock-mail-collection` on all three. This is what makes them the
+  account's: `ECollectionBackend` listens for every source the registry exports
+  and emits `child-added` for the ones naming its own collection, which is how
+  `child_added` — and so the whole binding this run is about — ever sees them. A
+  typo here is three sources that belong to nothing, shown nowhere, logged
+  nowhere.
+- `BackendName=jmap` on the account and the transport, and on neither more nor
+  fewer. It names M5's Camel provider, and it is also the test this backend
+  applies before it writes anything: a transport of *another* provider parented
+  to this account keeps its own server and its own password, which is the case
+  EDS's `e_util_can_use_collection_as_credential_source` exists to allow.
+- No `[Authentication]` and no `[Security]` on any of the three. That is the
+  point of the run — they are written by the backend, from the account, and a
+  host you put here by hand would hide exactly the bug this checks for.
+- The identity names no backend, because it is a person rather than a service.
+  It reaches no server and gets no groups written onto it.
+- `Address=` is yours to change if you like; nothing here sends mail, but it is
+  the `From:` Evolution would use.
+
+### 3. Restart and look
+
+The same restart as step 4 above — Evolution itself closed first, so that it
+picks the new account up when you launch it after the registry.
+
+### What "it worked" means
+
+- `~/.config/evolution/sources/jmap-mock-mail-transport.source` has **grown two
+  groups** it was not written with:
+
+  ```
+  [Authentication]
+  Host=127.0.0.1
+  Port=8080
+
+  [Security]
+  Method=none
+  ```
+
+  This is the whole run. The file is the one you wrote; the two groups are the
+  backend's, bound from the account and written back out by EDS. The same is true
+  of `jmap-mock-mail-account.source`, and *not* of
+  `jmap-mock-mail-identity.source`, which should still be exactly what you copied.
+- Against a TLS account — change `Method` on the *account* to something other
+  than `none` — the mail sources come back with
+  `Method=ssl-on-alternate-port`, and not with EDS's own word `tls`. Camel reads
+  that key as a `CamelNetworkSecurityMethod` enum nick, and `tls` is not one:
+  a source carrying it connects with whatever Camel defaults to instead, which is
+  the quietest failure in this document and the reason
+  `rust/crates/jmap-backend-collection/src/mail_child.rs` exists as its own
+  module.
+- The account appears in Evolution's mail view with the mock's three mailboxes
+  under it, and opening one lists its messages. That is M5's provider doing its
+  job through the settings this backend wrote — if the folders appear but the
+  account cannot connect, compare the transport's `[Authentication] Host` with
+  the account's before looking anywhere else.
+- Moving the account moves its mail sources with it, exactly as it moves the
+  address books: change `[Authentication] Host` on the account, restart the
+  registry, and both mail files name the new host too. A stale one is not only a
+  wrong server — EDS decides whether a mail source shares its collection's
+  password by comparing those two host strings, so it is a second password prompt
+  as well.
+
+`rust/crates/jmap-backend-collection/tests/recipe.rs` loads all four files above
+the way the registry does and asserts the parts of this that need no daemon: the
+parents, the two uids the sources point at each other with, which of the three
+counts as a service, and — at the far end — that the transport, after
+`child_added` has had it, hands `jmap-mail`'s own reader
+`http://127.0.0.1:8080`. What is left for you is that a running registry
+dispatches `child-added` for these files at all, and that Evolution shows what
+comes out.
