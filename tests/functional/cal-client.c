@@ -76,6 +76,19 @@
  * `rust/crates/jmap-functional/tests/calendar.rs`. */
 #define TEST_PRIORITY "1"
 
+/* And who may see it: CLASS on the component (RFC 5545 §3.8.1.3), a JSCalendar
+ * `privacy` on the server (RFC 8984 §4.4.3). This is the one property in this
+ * file whose iCalendar value libical does not hold as text — the parser turns it
+ * into an ICalPropertyClass enum, so a value it fails to recognise is a value it
+ * cannot render back — which is why the trip through the real cache is worth
+ * asserting rather than assuming. CONFIDENTIAL rather than the PUBLIC both
+ * formats default to, because the default is the state a component with no line
+ * on it is already in, and because it is the value whose JSCalendar spelling
+ * (`secret`) differs from its iCalendar one: it therefore also says the
+ * translation happened. The same value is asserted from both ends; see `CLASS`
+ * in `rust/crates/jmap-functional/tests/calendar.rs`. */
+#define TEST_CLASS "CONFIDENTIAL"
+
 /* And an all-day event, written the way Evolution writes one: DATE values
  * rather than DATE-TIMEs, on both ends. RFC 5545 §3.6.1's other form of an
  * event, and the only thing in iCalendar that says "this is a day, not a time
@@ -404,6 +417,7 @@ main (int argc,
 	gchar *categories;
 	gchar *transp;
 	gchar *priority;
+	gchar *classification;
 	gchar *exdates;
 	gchar *rrule;
 	gchar *tzid;
@@ -508,9 +522,10 @@ main (int argc,
 		"CATEGORIES:%s\r\n"
 		"TRANSP:%s\r\n"
 		"PRIORITY:%s\r\n"
+		"CLASS:%s\r\n"
 		"END:VEVENT\r\n",
 		TEST_DTSTART, TEST_DTEND, summary, TEST_LOCATION, TEST_CATEGORIES,
-		TEST_TRANSP, TEST_PRIORITY);
+		TEST_TRANSP, TEST_PRIORITY, TEST_CLASS);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 
@@ -568,6 +583,14 @@ main (int argc,
 	priority = joined_values (read_back_event, I_CAL_PRIORITY_PROPERTY);
 	g_print ("read-back-priority=%s\n", priority);
 	g_free (priority);
+	/* And who may see it, read as text for a stronger version of the same
+	 * reason: i_cal_property_get_class reports a missing property as
+	 * I_CAL_CLASS_NONE, but libical also parses an unrecognised value to that
+	 * same enum member — so reading through the enum could not tell a lost
+	 * CLASS from one libical declined to understand. The line itself can. */
+	classification = joined_values (read_back_event, I_CAL_CLASS_PROPERTY);
+	g_print ("read-back-class=%s\n", classification);
+	g_free (classification);
 	g_object_unref (read_back_event);
 
 	/* The all-day one, through the same path. Written second so that a

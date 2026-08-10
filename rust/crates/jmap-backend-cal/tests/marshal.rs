@@ -1166,6 +1166,58 @@ fn libical_neither_invents_a_priority_nor_respells_one() {
     }
 }
 
+/// How much of an event may be shared, through the parser that actually reads it.
+///
+/// `CLASS` is the one property so far whose iCalendar value libical does *not*
+/// hold as text: `i_cal_property_new_class` takes an `ICalPropertyClass` enum, so
+/// the parser has to recognise a value in order to keep it. That makes both
+/// readings this mapping rests on worth measuring rather than assuming.
+///
+/// The first: `jmap-ical` reads a missing `CLASS` as *nothing said* rather than as
+/// RFC 5545 §3.8.1.3's PUBLIC default, so a save can tell an event the server
+/// never classified from one the user just made public — which is only sound if
+/// the component EDS hands back does not acquire a line the mapping never wrote.
+///
+/// The second, and the one with something to lose: `CLASS:PUBLIC` is written out
+/// rather than left off, even though RFC 5545 §3.8.1.3 and RFC 8984 §4.4.3 both
+/// make public and no value the same state. Were libical to drop the property as
+/// meaning nothing, an event the server states as public would come back with no
+/// line and every save of it would carry a redundant `"privacy": "public"`.
+///
+/// It does neither: no line stays no line, and all three values come back as
+/// themselves. And unlike `TRANSP` and `PRIORITY`, what Evolution's *appointment
+/// editor* does here is not left open — it is measurable from the installed
+/// binary. Evolution 3.52's `libevolution-calendar.so` has no classification
+/// property *part* on the event editor (`e_comp_editor_property_part_classification_new`
+/// is called only from the task, memo and bulk-task editors); the appointment
+/// editor exposes the classification as an Options ▸ Classification radio menu
+/// (`classify-public` / `classify-private` / `classify-confidential`) and its
+/// `fill_component` reads that menu and calls `i_cal_property_set_class` — or
+/// `i_cal_property_new_class` when the component has no `CLASS` yet —
+/// **unconditionally**. So the editor states the classification on every save,
+/// defaulting to public, which is exactly why writing `CLASS:PUBLIC` out is not
+/// optional: a baseline rendered without it would differ from what EDS hands back
+/// on every save of a public event rather than once. See
+/// `jmap-cal-sync/tests/save.rs`'s `saving_a_public_event_back_unchanged_sends_no_patch`.
+#[test]
+fn libical_neither_invents_a_classification_nor_respells_one() {
+    assert_eq!(
+        reparsed("CLASS", "DESCRIPTION:the quarter"),
+        Vec::<String>::new(),
+        "libical filled in the PUBLIC default"
+    );
+    for (line, privacy) in [
+        ("CLASS:PUBLIC", "public"),
+        ("CLASS:PRIVATE", "private"),
+        ("CLASS:CONFIDENTIAL", "secret"),
+    ] {
+        assert_eq!(reparsed("CLASS", line), vec![line.to_owned()]);
+        let object = reparsed_object(line);
+        let read_back = jmap_ical::ical_to_event(&object).expect("parse");
+        assert_eq!(read_back.privacy.as_deref(), Some(privacy), "{object}");
+    }
+}
+
 /// The `LOCATION` lines of a `VEVENT` after libical has parsed and re-rendered
 /// it, unfolded.
 fn reparsed_lines(lines: &str) -> Vec<String> {
