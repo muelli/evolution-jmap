@@ -5,14 +5,15 @@
 //!
 //! The mapped set is the one the calendar backend needs to be useful — UID,
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
-//! the event is shown without a time), DURATION, STATUS, RRULE, and the
-//! instances an EXDATE, an RDATE or a `RECURRENCE-ID` component names one at a
-//! time — and no more. Everything else on an event (participants, alarms,
-//! locations, links, …) is *dropped*, which is only safe because saving goes
+//! the event is shown without a time), DURATION, STATUS, LOCATION, RRULE, and
+//! the instances an EXDATE, an RDATE or a `RECURRENCE-ID` component names one at
+//! a time — and no more. Everything else on an event (participants, alarms,
+//! links, keywords, …) is *dropped*, which is only safe because saving goes
 //! back to the server as a PatchObject naming the mapped properties: a property
 //! we never mapped is a property we never overwrite. See [`MAPPED_PROPERTIES`],
-//! [`maps_recurrence_rule`] and [`maps_recurrence_override`], which are that
-//! knowledge in machine-readable form.
+//! [`maps_locations`], [`maps_recurrence_rule`] and
+//! [`maps_recurrence_override`], which are that knowledge in machine-readable
+//! form.
 //!
 //! A `VCALENDAR` here therefore holds more than one `VEVENT` whenever an
 //! instance of a recurring event was edited on its own: the series first, then
@@ -55,6 +56,17 @@ use crate::syntax::{self, Component, Property};
 /// id, mirroring `X-JMAP-UID` on the address book side.
 const X_JMAP_UID: &str = "X-JMAP-UID";
 
+/// Carries the key of the `locations` entry a `LOCATION` was drawn from, so
+/// that a save patches that entry in place instead of replacing the property —
+/// the same parameter, for the same reason, as the JSContact map keys on the
+/// address book side.
+const X_JMAP_KEY: &str = "X-JMAP-KEY";
+
+/// The `locations` key for a `LOCATION` that carries none: the place is one
+/// Evolution's appointment editor just typed, and no entry exists server-side
+/// for it to name.
+const INVENTED_KEY: &str = "l1";
+
 /// The `PRODID` of every calendar this crate emits.
 const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
 
@@ -90,9 +102,14 @@ const STATUSES: [(&str, &str); 3] = [
 /// The JSCalendar properties this mapping covers, and therefore the only ones
 /// a save may name in a `CalendarEvent/set` update patch.
 ///
-/// The last two are covered *conditionally* — see [`maps_recurrence_rule`] and
-/// [`maps_recurrence_override`], which say when a save may name them.
-pub const MAPPED_PROPERTIES: [&str; 9] = [
+/// Three are covered *conditionally* — see [`maps_locations`],
+/// [`maps_recurrence_rule`] and [`maps_recurrence_override`], which say when a
+/// save may name them.
+///
+/// `locations` is also the one property named *into* rather than replaced: a
+/// save patches `locations/<key>/name`, so the rest of the entry stays. See
+/// [`X_JMAP_KEY`].
+pub const MAPPED_PROPERTIES: [&str; 10] = [
     "title",
     "description",
     "start",
@@ -100,6 +117,7 @@ pub const MAPPED_PROPERTIES: [&str; 9] = [
     "duration",
     "showWithoutTime",
     "status",
+    "locations",
     "recurrenceRules",
     "recurrenceOverrides",
 ];
@@ -123,6 +141,67 @@ pub const OVERRIDE_PROPERTIES: [&str; 6] = [
     "duration",
     "status",
 ];
+
+/// Whether the places an event happens at survive the trip through iCalendar
+/// well enough for a save to name the property.
+///
+/// A JSCalendar event holds a *map* of Locations (RFC 8984 §4.2.5), each with a
+/// `description`, `coordinates`, `links`, `locationTypes` and a `timeZone`
+/// besides its `name`; RFC 5545 §3.6.1 gives a `VEVENT` one `LOCATION` line of
+/// text. So only the name of one place is ever shown — and the save path
+/// answers that not by refusing to write, but by patching
+/// `locations/<key>/name` and leaving the entry otherwise untouched. What it
+/// needs from here is whether that path is safe to walk:
+///
+/// - **More than one place** cannot be shown, so the user was never given the
+///   chance to edit the second; a save must not act on a field that stands for
+///   only part of the property.
+/// - **An entry that is not an object** has no `name` member to patch into.
+///   RFC 8620 §5.3 makes patching *through* a non-object an error, and a
+///   rejected `CalendarEvent/set` costs every other edit in the same save.
+/// - **A `name` that is not a string** is a place the user cannot see, so a
+///   patch naming it would overwrite what was never shown.
+/// - **An empty key** names no member of the map at all. Any other key is
+///   carried: `~` and `/` have RFC 6901 escapes, which the save path applies.
+///
+/// An event with no places at all passes: there is nothing to lose, and a
+/// `LOCATION` the user just typed is a place to create.
+pub fn maps_locations(locations: &BTreeMap<String, Value>) -> bool {
+    let mut entries = locations.iter();
+    let Some((key, location)) = entries.next() else {
+        return true;
+    };
+    entries.next().is_none()
+        && !key.is_empty()
+        && location.is_object()
+        && matches!(location.get("name"), None | Some(Value::String(_)))
+}
+
+/// The place a component shows: the key of the entry it comes from, and the
+/// name to write on the `LOCATION` line.
+///
+/// The first entry that has a name, in the map's own order, so a document is
+/// stable across renderings — the save path diffs against a re-rendering of what
+/// the server holds. Where there is more than one, [`maps_locations`] has
+/// already said the property must not be written back; drawing the first is
+/// still better than showing an event as happening nowhere.
+fn drawn_place(event: &CalendarEvent) -> Option<(&String, &str)> {
+    event
+        .locations
+        .iter()
+        .flatten()
+        .find_map(|(key, location)| Some((key, place_name(location)?)))
+}
+
+/// The `name` of one Location, or `None` when it has none this mapping can put
+/// on a content line — no name, one that is not text, or an empty one, which
+/// would write a `LOCATION` saying nothing.
+fn place_name(location: &Value) -> Option<&str> {
+    location
+        .get("name")?
+        .as_str()
+        .filter(|name| !name.is_empty())
+}
 
 /// Whether a recurrence rule survives the trip through iCalendar.
 ///
@@ -417,6 +496,13 @@ fn vevent_of(
         vevent = vevent.with(Property::raw("STATUS", status));
     }
 
+    // One place of possibly several, by name, with the key it came from riding
+    // alongside so a save can patch that entry rather than replace the property.
+    // See [`maps_locations`] for what the drawing leaves out.
+    if let Some((key, name)) = drawn_place(event) {
+        vevent = vevent.with(Property::new("LOCATION", name).with_param(X_JMAP_KEY, key));
+    }
+
     vevent
 }
 
@@ -465,6 +551,11 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         duration: event.duration.clone(),
         show_without_time: event.show_without_time,
         status: event.status.clone(),
+        // Inherited, not patchable: RFC 8984 §4.3.4 has an instance hold every
+        // property its override does not restate, and an override may not name a
+        // place ([`OVERRIDE_PROPERTIES`]). Leaving it off would draw an
+        // occurrence of a meeting as happening nowhere.
+        locations: event.locations.clone(),
         ..CalendarEvent::default()
     };
 
@@ -708,10 +799,52 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
                 .find(|(_, ical)| ical.eq_ignore_ascii_case(&status))
                 .map(|(jscalendar, _)| (*jscalendar).to_owned())
         }),
+        locations: read_locations(vevent),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
         recurrence_overrides: None,
         extra: Default::default(),
     }
+}
+
+/// The place the component names, as a one-entry `locations` map.
+///
+/// The key is the one the `LOCATION` came out with — [`X_JMAP_KEY`], so that a
+/// save reaches the server's own entry — or [`INVENTED_KEY`] for a line that
+/// carries none, which is what Evolution's appointment editor writes and what
+/// any other client's component looks like.
+///
+/// A key that is not an RFC 8984 §1.4.4 `Id` — up to 255 octets of letters,
+/// digits, `-` and `_` — is treated as absent, because this is the one direction
+/// where the key may be *created* server-side: a component whose event has no
+/// place yet is saved with the property written whole, under the key read here.
+/// A key the server would reject there costs the whole `CalendarEvent/set`, and
+/// the value came off a content line, so it is not ours to trust. (A key the
+/// *server* chose is used as it is, from the event the save is diffed against —
+/// see `jmap_cal_sync::patch`.)
+///
+/// `None` rather than an empty map for a component that names no place: the save
+/// path reads an edit off a difference from what was shown, and an empty map
+/// would claim the event happens nowhere where the component made no claim.
+fn read_locations(vevent: &Component) -> Option<BTreeMap<String, Value>> {
+    let property = vevent.property("LOCATION")?;
+    let name = property.text();
+    if name.is_empty() {
+        return None;
+    }
+    let key = property
+        .param(X_JMAP_KEY)
+        .filter(|key| names_map_entry(key))
+        .unwrap_or(INVENTED_KEY);
+    Some([(key.to_owned(), json!({"@type": "Location", "name": name}))].into())
+}
+
+/// Whether a value is an RFC 8984 §1.4.4 `Id`: 1 to 255 octets of letters,
+/// digits, `-` and `_`.
+fn names_map_entry(value: &str) -> bool {
+    (1..=255).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 /// The event's start as a JSCalendar LocalDateTime, its time zone, and whether

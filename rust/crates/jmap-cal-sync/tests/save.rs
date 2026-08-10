@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The write side. The theme throughout is that saving a component must not
-//! destroy what the component could not carry: the mapping keeps nine
+//! destroy what the component could not carry: the mapping keeps ten
 //! properties of a JSCalendar event and drops the rest, so a save that
 //! replaced properties wholesale would delete data the user never touched and
 //! cannot even see.
@@ -186,13 +186,15 @@ fn an_all_day_event_the_component_could_not_say_is_all_day_keeps_its_flag() {
 fn editing_an_event_leaves_unmapped_properties_alone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    // Properties no component we produce can carry.
+    // Properties no component we produce can carry. (`locations` was the
+    // exemplar here until the place an event happens at became mapped; the guest
+    // list, the priority and the tags are still nowhere on a component.)
     fixture.patch(
         &id,
         json!({
-            "locations": {"l1": {"@type": "Location", "name": "Room 3"}},
             "participants": {"p1": {"@type": "Participant", "email": "vera@example.com"}},
             "priority": 5,
+            "keywords": {"offsite": true},
         }),
     );
     let sync = fixture.sync();
@@ -204,8 +206,8 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     let stored = fixture.event(&id);
     assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
     assert_eq!(
-        stored.extra.get("locations"),
-        Some(&json!({"l1": {"@type": "Location", "name": "Room 3"}})),
+        stored.extra.get("keywords"),
+        Some(&json!({"offsite": true})),
         "an unmapped property was overwritten"
     );
     assert_eq!(stored.extra.get("priority"), Some(&json!(5)));
@@ -1656,6 +1658,213 @@ fn an_occurrences_unnameable_zone_leaves_the_overrides_alone() {
     assert_eq!(
         stored.title.as_deref(),
         Some("Standup (daily)"),
+        "the edit the user made must still arrive"
+    );
+}
+
+/// An event with one place, keyed the way a server keys it, and the component
+/// Evolution is shown for it.
+fn placed(fixture: &Fixture, location: serde_json::Value) -> (jmap_proto::Id, String) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"locations": {"srv1": location}}));
+    let icalendar = fixture
+        .sync()
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar;
+    (id, icalendar)
+}
+
+#[test]
+fn naming_a_place_reaches_the_server_as_a_location() {
+    // The event had none, so RFC 8620 §5.3 leaves nowhere to patch into: the
+    // property is written whole, under a key the component invented.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup\r\nLOCATION:Room 42");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.event(&id).locations,
+        Some(
+            [(
+                "l1".to_owned(),
+                json!({"@type": "Location", "name": "Room 42"})
+            )]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn renaming_a_place_keeps_what_the_component_could_not_show() {
+    // The point of patching `locations/<key>/name` rather than replacing the
+    // property: a `LOCATION` line is one string, and the place the user renamed
+    // also has coordinates, a description and a zone that were never on it.
+    let fixture = Fixture::start();
+    let (id, icalendar) = placed(
+        &fixture,
+        json!({
+            "@type": "Location",
+            "name": "Room 42",
+            "coordinates": "geo:52.520008,13.404954",
+            "locationTypes": {"office": true},
+        }),
+    );
+
+    let edited = icalendar.replace("Room 42", "Room 43");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(
+        fixture.event(&id).locations,
+        Some(
+            [(
+                "srv1".to_owned(),
+                json!({
+                    "@type": "Location",
+                    "name": "Room 43",
+                    "coordinates": "geo:52.520008,13.404954",
+                    "locationTypes": {"office": true},
+                })
+            )]
+            .into()
+        ),
+        "the entry was replaced instead of renamed"
+    );
+}
+
+#[test]
+fn a_place_renamed_without_its_key_still_reaches_the_servers_own_entry() {
+    // Evolution's appointment editor writes the LOCATION afresh, so the
+    // X-JMAP-KEY the component was shown with may not come back. The name is
+    // what the diff compares, and the key it patches is the server's own.
+    let fixture = Fixture::start();
+    let (id, icalendar) = placed(
+        &fixture,
+        json!({"@type": "Location", "name": "Room 42", "coordinates": "geo:52,13"}),
+    );
+
+    let edited = icalendar.replace("LOCATION;X-JMAP-KEY=srv1:Room 42", "LOCATION:Room 43");
+    assert!(edited.contains("LOCATION:Room 43"), "{icalendar}");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(
+        fixture.event(&id).locations,
+        Some(
+            [(
+                "srv1".to_owned(),
+                json!({"@type": "Location", "name": "Room 43", "coordinates": "geo:52,13"})
+            )]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn a_place_that_did_not_change_is_not_sent_at_all() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = placed(&fixture, json!({"@type": "Location", "name": "Room 42"}));
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(
+        stored.locations,
+        Some(
+            [(
+                "srv1".to_owned(),
+                json!({"@type": "Location", "name": "Room 42"})
+            )]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn clearing_a_place_that_was_only_a_name_removes_it() {
+    // Nothing is left of the entry, and `maps_locations` has already said there
+    // is no second place that would be stranded, so the property goes.
+    let fixture = Fixture::start();
+    let (id, icalendar) = placed(&fixture, json!({"@type": "Location", "name": "Room 42"}));
+
+    let edited = icalendar.replace("LOCATION;X-JMAP-KEY=srv1:Room 42\r\n", "");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).locations, None);
+}
+
+#[test]
+fn clearing_a_place_that_said_more_than_its_name_keeps_the_rest() {
+    let fixture = Fixture::start();
+    let (id, icalendar) = placed(
+        &fixture,
+        json!({"@type": "Location", "name": "Room 42", "coordinates": "geo:52,13"}),
+    );
+
+    let edited = icalendar.replace("LOCATION;X-JMAP-KEY=srv1:Room 42\r\n", "");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(
+        fixture.event(&id).locations,
+        Some(
+            [(
+                "srv1".to_owned(),
+                json!({"@type": "Location", "coordinates": "geo:52,13"})
+            )]
+            .into()
+        ),
+        "only the name the user cleared was cleared"
+    );
+}
+
+#[test]
+fn a_second_place_the_component_could_not_show_is_left_alone() {
+    // One LOCATION line, two places: the user was never shown the second, so
+    // an edit to the first is not theirs to have made either.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let places = json!({
+        "srv1": {"@type": "Location", "name": "Room 42"},
+        "srv2": {"@type": "Location", "name": "Cafeteria"},
+    });
+    fixture.patch(&id, json!({"locations": places.clone()}));
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    let edited = icalendar
+        .replace("Room 42", "Room 43")
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.locations,
+        Some(serde_json::from_value(places).unwrap()),
+        "a property shown in part must not be written back"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
         "the edit the user made must still arrive"
     );
 }

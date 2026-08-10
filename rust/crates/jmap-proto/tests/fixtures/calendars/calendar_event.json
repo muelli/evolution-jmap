@@ -10,6 +10,13 @@
   "duration": "PT1H",
   "status": "confirmed",
   "sequence": 0,
+  "locations": {
+    "loc1": {
+      "@type": "Location",
+      "name": "Room 42",
+      "coordinates": "geo:52.520008,13.404954"
+    }
+  },
   "recurrenceRules": [
     {
       "@type": "RecurrenceRule",

@@ -3,13 +3,13 @@
 
 //! JSCalendar `CalendarEvent` ↔ iCalendar `VEVENT`, the minimal property set
 //! the calendar backend needs: UID, SUMMARY, DESCRIPTION, DTSTART (+timeZone,
-//! or as a date for showWithoutTime), DURATION, STATUS, RRULE, and the
-//! instances named one at a time by an EXDATE, an RDATE, or a component of
+//! or as a date for showWithoutTime), DURATION, STATUS, LOCATION, RRULE, and
+//! the instances named one at a time by an EXDATE, an RDATE, or a component of
 //! their own carrying a RECURRENCE-ID.
 
 use jmap_ical::{
-    ICalError, event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule,
-    names_time_zone,
+    ICalError, event_to_ical, ical_to_event, maps_locations, maps_recurrence_override,
+    maps_recurrence_rule, names_time_zone,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -765,6 +765,235 @@ fn an_unknown_status_is_dropped_rather_than_passed_through() {
         ..CalendarEvent::default()
     };
     assert!(without(&event_to_ical(&event), "STATUS"), "{event:?}");
+}
+
+/// An event happening at one place, keyed the way a server keys it.
+fn placed(key: &str, location: Value) -> CalendarEvent {
+    CalendarEvent {
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        locations: Some([(key.to_owned(), location)].into()),
+        ..CalendarEvent::default()
+    }
+}
+
+#[test]
+fn the_place_an_event_happens_at_is_the_location_and_keeps_its_key() {
+    // The key is what makes the place patchable in situ rather than replaced:
+    // it rides in X-JMAP-KEY, as the JSContact map keys do on the address book
+    // side, so a save names `locations/<key>/name` and leaves the coordinates,
+    // links and types the line could not show exactly where they were.
+    let event = placed("loc1", json!({"@type": "Location", "name": "Room 42"}));
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        content_line(&ics, "LOCATION"),
+        "LOCATION;X-JMAP-KEY=loc1:Room 42"
+    );
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").locations,
+        event.locations,
+        "the place and its key survive the round trip"
+    );
+    assert!(maps_locations(event.locations.as_ref().unwrap()));
+}
+
+#[test]
+fn a_place_name_is_escaped_as_text() {
+    // LOCATION is TEXT (RFC 5545 §3.8.1.7), so a comma in a room name is a
+    // literal and not the separator of a value list.
+    let event = placed(
+        "loc1",
+        json!({"@type": "Location", "name": "Berlin, Room 42; 3rd floor"}),
+    );
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        content_line(&ics, "LOCATION"),
+        "LOCATION;X-JMAP-KEY=loc1:Berlin\\, Room 42\\; 3rd floor"
+    );
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").locations,
+        event.locations
+    );
+}
+
+#[test]
+fn an_event_that_names_no_place_carries_no_location() {
+    let ics = event_to_ical(&fixture_event());
+
+    assert!(without(&ics, "LOCATION"), "{ics}");
+    assert_eq!(ical_to_event(&ics).expect("parse").locations, None);
+}
+
+#[test]
+fn a_component_whose_location_carries_no_key_gets_one_invented() {
+    // What Evolution writes: the appointment editor sets a location, and there
+    // was never a server-side entry for it to name.
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+UID:E1\r\nDTSTART;TZID=Europe/Berlin:20260115T130000\r\nLOCATION:Room 42\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+
+    assert_eq!(
+        event.locations,
+        Some(
+            [(
+                "l1".to_owned(),
+                json!({"@type": "Location", "name": "Room 42"})
+            )]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn a_place_that_says_more_than_its_name_is_still_drawn_by_name() {
+    // The whole reason the name is patched by key: coordinates have no
+    // iCalendar spelling here, and the entry keeps them because nothing
+    // replaces the entry.
+    let event = placed(
+        "loc1",
+        json!({
+            "@type": "Location",
+            "name": "Room 42",
+            "coordinates": "geo:52.520008,13.404954",
+        }),
+    );
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        content_line(&ics, "LOCATION"),
+        "LOCATION;X-JMAP-KEY=loc1:Room 42"
+    );
+    assert!(
+        maps_locations(event.locations.as_ref().unwrap()),
+        "a place with more than a name is still one whose name can be renamed"
+    );
+}
+
+#[test]
+fn a_place_with_no_name_is_not_drawn_but_may_still_be_named() {
+    // A Location may say only where it is. There is no text to put on the line,
+    // so nothing is drawn — and a user who types a place into the empty field
+    // is naming *this* entry, not replacing it.
+    let event = placed(
+        "loc1",
+        json!({"@type": "Location", "coordinates": "geo:52,13"}),
+    );
+    let ics = event_to_ical(&event);
+
+    assert!(without(&ics, "LOCATION"), "{ics}");
+    assert!(maps_locations(event.locations.as_ref().unwrap()));
+}
+
+#[test]
+fn more_than_one_place_is_drawn_in_part_and_flagged() {
+    // RFC 5545 §3.6.1 admits one LOCATION in a VEVENT (RFC 9073's VLOCATION
+    // components are not something libical reads), so a second place cannot be
+    // shown — and a property shown in part is one a save must not write.
+    let mut event = placed("loc1", json!({"@type": "Location", "name": "Room 42"}));
+    event.locations.as_mut().unwrap().insert(
+        "loc2".to_owned(),
+        json!({"@type": "Location", "name": "Cafeteria"}),
+    );
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        content_line(&ics, "LOCATION"),
+        "LOCATION;X-JMAP-KEY=loc1:Room 42",
+        "the first place is at least visible"
+    );
+    assert!(!maps_locations(event.locations.as_ref().unwrap()));
+}
+
+#[test]
+fn a_place_the_mapping_cannot_read_is_flagged_rather_than_drawn() {
+    for location in [
+        // Not an object: patching `locations/loc1/name` would be patching
+        // *through* a string, which RFC 8620 §5.3 makes an error — and an error
+        // costs every other edit in the same CalendarEvent/set.
+        json!("Room 42"),
+        json!(null),
+        // A name that is not text has no line to be written on, and writing
+        // one would invent a spelling for it.
+        json!({"@type": "Location", "name": 42}),
+    ] {
+        let event = placed("loc1", location.clone());
+        assert!(
+            without(&event_to_ical(&event), "LOCATION"),
+            "{location} was drawn"
+        );
+        assert!(
+            !maps_locations(event.locations.as_ref().unwrap()),
+            "{location} was called covered"
+        );
+    }
+}
+
+#[test]
+fn a_place_key_no_patch_could_name_is_flagged() {
+    // The key becomes a path segment of the save's PatchObject. `~` and `/` are
+    // escapable (RFC 6901), so they are carried; an empty key names no member
+    // of the map at all.
+    let event = placed("", json!({"@type": "Location", "name": "Room 42"}));
+    assert!(!maps_locations(event.locations.as_ref().unwrap()));
+
+    let event = placed("wing/2~a", json!({"@type": "Location", "name": "Room 42"}));
+    assert!(maps_locations(event.locations.as_ref().unwrap()));
+    let ics = event_to_ical(&event);
+    assert_eq!(
+        content_line(&ics, "LOCATION"),
+        "LOCATION;X-JMAP-KEY=wing/2~a:Room 42"
+    );
+    // It does *not* come back under that key. A key read off a content line may
+    // be created server-side — see the save path — and RFC 8984 §1.4.4 admits
+    // only letters, digits, `-` and `_` in one; the server's own key is the one
+    // a rename patches, and it is taken from the event, not from the component.
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").locations,
+        Some(
+            [(
+                "l1".to_owned(),
+                json!({"@type": "Location", "name": "Room 42"})
+            )]
+            .into()
+        )
+    );
+}
+
+#[test]
+fn an_edited_instance_is_drawn_at_the_series_place() {
+    // RFC 8984 §4.3.4: an instance holds every property of the series its
+    // override does not patch. A component that left the place off would show
+    // the user an occurrence that happens nowhere.
+    let mut event = placed("loc1", json!({"@type": "Location", "name": "Room 42"}));
+    event.recurrence_rules = Some(vec![RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        ..RecurrenceRule::default()
+    }]);
+    event.recurrence_overrides = Some(
+        [(
+            "2026-01-29T13:00:00".to_owned(),
+            json!({"title": "Sprint review"}),
+        )]
+        .into(),
+    );
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(
+        content_line(vevent(&ics, 1), "LOCATION"),
+        "LOCATION;X-JMAP-KEY=loc1:Room 42"
+    );
+    // And it is not read back as an instance that moved: an override may not
+    // name a place (see OVERRIDE_PROPERTIES), so a difference here would be one
+    // the save path could neither send nor explain.
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_overrides,
+        event.recurrence_overrides
+    );
 }
 
 #[test]

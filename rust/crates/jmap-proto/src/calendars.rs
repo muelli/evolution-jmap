@@ -72,6 +72,17 @@ pub struct CalendarEvent {
     pub show_without_time: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// The places the event happens at (RFC 8984 §4.2.5), keyed by an id of
+    /// whoever wrote them.
+    ///
+    /// Left as JSON, for the reason [`Self::recurrence_overrides`] is: a
+    /// Location holds a `description`, `coordinates`, `links`, `locationTypes`
+    /// and a `timeZone` besides its `name`, and iCalendar's `LOCATION` is one
+    /// line of text. The mapping therefore patches the name *in place*, by the
+    /// entry's key, rather than replacing the property — which it can only do
+    /// if it can see what else is in there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locations: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_rules: Option<Vec<RecurrenceRule>>,
     /// The instances named one at a time rather than by a rule (RFC 8984

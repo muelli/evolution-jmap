@@ -4,11 +4,11 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps nine properties and
+//! lossy view of a JSCalendar event. The mapping keeps ten properties and
 //! drops everything else, so a save that sent the parsed event back whole
-//! would silently delete what it could not represent — locations,
-//! participants, alerts, links — none of which the user ever saw, let alone
-//! asked to remove.
+//! would silently delete what it could not represent — participants, alerts,
+//! links, keywords — none of which the user ever saw, let alone asked to
+//! remove.
 //!
 //! The lossiness also recurs *inside* the properties that are mapped, and
 //! this module answers that with one move: it does not compare the edited
@@ -24,9 +24,13 @@
 //! - and a `status` outside the closed vocabulary is not cleared by a save
 //!   that never touched it.
 //!
-//! Three properties need more than the baseline, because for them "no
+//! Four properties need more than the baseline, because for them "no
 //! difference" is not the whole question:
 //!
+//! - **`locations` is a map of places and the component has one line.** So the
+//!   name is patched *into* the server's own entry rather than the property
+//!   being replaced, which is the one place this module reaches below the top
+//!   level — see [`diff_locations`].
 //! - **`recurrenceRules` is one property, not a merge point.** A rule with
 //!   `rscale` cannot be spelled as an `RRULE` this crate emits, so patching
 //!   the array at all would narrow the user's recurrence behind their back.
@@ -53,8 +57,11 @@
 //! baseline: a `TZID` is an iCalendar identifier, which RFC 8984 §1.4.9 only
 //! sometimes admits as a time zone. See [`names_time_zone`] and [`diff`].
 
+use std::collections::BTreeMap;
+
 use jmap_ical::{
-    event_to_ical, ical_to_event, maps_recurrence_override, maps_recurrence_rule, names_time_zone,
+    event_to_ical, ical_to_event, maps_locations, maps_recurrence_override, maps_recurrence_rule,
+    names_time_zone,
 };
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value};
@@ -115,9 +122,99 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
         );
     }
 
+    diff_locations(&mut patch, current, &baseline, edited);
     diff_recurrence(&mut patch, current, &baseline, edited);
     diff_overrides(&mut patch, current, &baseline, edited);
     patch
+}
+
+/// The place the event happens at — the one property patched *into* rather than
+/// replaced.
+///
+/// A `LOCATION` is a line of text; a JSCalendar Location also holds coordinates,
+/// links, types and a zone, and the event holds a whole map of them. So the name
+/// is patched where it stands, `locations/<key>/name`, under the key the server
+/// chose: everything the line could not show stays exactly where it was, which
+/// is what replacing the property whole could not manage.
+///
+/// The key is taken from the event the **server** holds rather than from the
+/// component. It does ride out and back in `X-JMAP-KEY`, but Evolution's
+/// appointment editor writes the `LOCATION` afresh and need not keep a parameter
+/// it knows nothing about; the name is what the diff compares, and there is only
+/// ever one place on the component to compare.
+///
+/// [`maps_locations`] is asked of the server's own map first, for the reason the
+/// recurrence properties are: a second place has no line to be shown on, and a
+/// property shown in part is not the user's to have edited.
+fn diff_locations(
+    patch: &mut Map<String, Value>,
+    current: &CalendarEvent,
+    baseline: &CalendarEvent,
+    edited: &CalendarEvent,
+) {
+    let empty = BTreeMap::new();
+    let places = current.locations.as_ref().unwrap_or(&empty);
+    if !maps_locations(places) {
+        return;
+    }
+    if drawn_name(baseline) == drawn_name(edited) {
+        return;
+    }
+    match (places.iter().next(), drawn_name(edited)) {
+        // The server's own entry, renamed in place.
+        (Some((key, _)), Some(name)) => {
+            patch.insert(name_of(key), Value::String(name.to_owned()));
+        }
+        // The place was cleared. Where the entry said nothing but its name there
+        // is nothing left to keep, and `maps_locations` has already ruled out a
+        // second place that removing the property would strand; where it said
+        // more, only the name the user cleared goes.
+        (Some((key, place)), None) => {
+            let path = match place.as_object().is_some_and(|place| {
+                place
+                    .keys()
+                    .all(|member| member == "name" || member == "@type")
+            }) {
+                true => "locations".to_owned(),
+                false => name_of(key),
+            };
+            patch.insert(path, Value::Null);
+        }
+        // A place the event did not have. RFC 8620 §5.3 requires every path
+        // segment before the last to exist on the object already, so the property
+        // is written whole rather than reached into.
+        (None, Some(_)) => {
+            patch.insert(
+                "locations".to_owned(),
+                // Serialising a map this crate's own reader built cannot fail:
+                // it holds one object of two strings.
+                serde_json::to_value(&edited.locations).unwrap_or(Value::Null),
+            );
+        }
+        // Both sides name no place, which the comparison above already returned
+        // on.
+        (None, None) => {}
+    }
+}
+
+/// The name of the one place a component was shown with, or `None` for a
+/// component that named none.
+fn drawn_name(event: &CalendarEvent) -> Option<&str> {
+    event
+        .locations
+        .iter()
+        .flatten()
+        .find_map(|(_, place)| place.get("name")?.as_str())
+}
+
+/// The patch path of one place's name. RFC 8620 §5.3 spells a map key as a JSON
+/// pointer segment, so a `~` or a `/` in a key the server chose is escaped
+/// (RFC 6901 §3) rather than read as structure.
+fn name_of(key: &str) -> String {
+    format!(
+        "locations/{}/name",
+        key.replace('~', "~0").replace('/', "~1")
+    )
 }
 
 /// The recurrence, replaced whole or not at all — and not at all whenever
