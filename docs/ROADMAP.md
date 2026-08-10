@@ -227,9 +227,23 @@ verification" is a *good* session, not a failure. Concretely:
   before every push. Crates needing EDS headers stay out of
   `default-members`.
 - Every source file: SPDX header, `GPL-3.0-or-later` (`reuse lint` must
-  stay green). Commits: small, imperative subject, author
+  stay green).
+- **Commit messages a tired reviewer can skim.** Author
   `Tobias Mueller <muelli@cryptobitch.de>`, **no Co-Authored-By
-  trailers**.
+  trailers**. The subject line states, in the imperative, *what the
+  commit does* — someone reading `git log --oneline` must understand it
+  without opening the diff. Shape it `crate: do the thing` (≤ ~70 chars;
+  a leading `Mn ` milestone tag is fine). Do **not** write oblique
+  noun-phrase subjects: they read as riddles.
+    - ✗ `M6: jmap-collection-sync, the address books an account is not one of`
+      → ✓ `jmap-collection-sync: skip address books the account doesn't own`
+    - ✗ `M5: the message that leaves the account`
+      → ✓ `jmap-mail: send a message via EmailSubmission`
+  The body is concise — *what* changed and *why*, a few lines (wrap ~72),
+  not an essay. The deep design narrative (the "here is exactly why this
+  was subtle" prose) belongs in `docs/NIGHT-LOG.md`, which is its right
+  home; a commit body is 2–6 lines, and repeating the diary there is
+  wasted words.
 - Push after each green increment (deploy key is configured).
 - Keep a running log in `docs/NIGHT-LOG.md`: what was done, decisions
   taken, blockers hit. If blocked on a milestone, log it and take the
