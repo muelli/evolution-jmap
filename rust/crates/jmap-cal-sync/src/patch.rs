@@ -45,8 +45,8 @@
 //!   `EXDATE`, an `RDATE` and a `RECURRENCE-ID` component between them say that
 //!   an instance is off, that it happens, and that it happens with another
 //!   title, start, zone, length, description, status, transparency,
-//!   importance or classification — but not that it happens in another place
-//!   or with another guest list. An override the component could only place with a bare
+//!   importance, classification or set of tags — but not that it happens in
+//!   another place or with another guest list. An override the component could only place with a bare
 //!   `RDATE` would come back as the empty patch, deleting what it could not
 //!   draw, so if any override the server holds fails
 //!   [`maps_recurrence_override`], the property is left alone entirely — as it
@@ -268,6 +268,11 @@ fn name_of(key: &str) -> String {
 /// so a set replaced whole would delete it. The *edited* side needs no such check
 /// — every tag it holds was read off a content line, and any string is a keyword
 /// RFC 8984 admits.
+///
+/// This is the series' set only. An instance edited on its own states a set of
+/// its own on its own component, and that difference rides in the override
+/// [`diff_overrides`] sends — under the same [`maps_keywords`] rule, asked by
+/// [`maps_recurrence_override`].
 fn diff_keywords(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,

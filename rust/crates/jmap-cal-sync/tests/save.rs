@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The write side. The theme throughout is that saving a component must not
-//! destroy what the component could not carry: the mapping keeps ten
+//! destroy what the component could not carry: the mapping keeps fourteen
 //! properties of a JSCalendar event and drops the rest, so a save that
 //! replaced properties wholesale would delete data the user never touched and
 //! cannot even see.
@@ -2001,6 +2001,88 @@ fn a_tag_the_component_could_not_show_leaves_the_whole_set_alone() {
         stored.keywords,
         Some(serde_json::from_value(keywords).unwrap()),
         "a property shown in part must not be written back"
+    );
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (short)"),
+        "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn refiling_one_occurrence_reaches_the_server_as_an_override() {
+    // One occurrence of a tagged series filed elsewhere: EDS keeps the master and
+    // adds a VEVENT carrying its RECURRENCE-ID, and the CATEGORIES on that
+    // component are what that occurrence is now filed under — replacing the
+    // series' set for that instance rather than adding to it, which is what a
+    // PatchObject naming `keywords` means.
+    let fixture = Fixture::start();
+    let (id, _) = tagged(&fixture, json!({"offsite": true}));
+    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Everything the series states, restated but for the tags — an instance is
+    // compared against the series property by property, so a line left off here
+    // would be an edit to that property and not to the filing.
+    let instance = format!(
+        "BEGIN:VEVENT\r\nUID:{id}\r\nRECURRENCE-ID:20260122T090000Z\r\n\
+         DTSTART:20260122T090000Z\r\nSUMMARY:Standup\r\nDURATION:PT1H\r\n\
+         STATUS:CONFIRMED\r\nCATEGORIES:cancelled\r\nEND:VEVENT\r\n"
+    );
+    let edited = icalendar.replace("END:VCALENDAR", &format!("{instance}END:VCALENDAR"));
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-22T09:00:00".to_owned(),
+                json!({"keywords": {"cancelled": true}})
+            )]
+            .into()
+        )
+    );
+    assert_eq!(
+        stored.keywords,
+        Some([("offsite".to_owned(), json!(true))].into()),
+        "the series keeps the tags it had"
+    );
+}
+
+#[test]
+fn a_tag_one_occurrence_could_not_show_leaves_the_overrides_alone() {
+    // The `a_tag_the_component_could_not_show_leaves_the_whole_set_alone` rule one
+    // level down. This instance's set holds an entry RFC 8984 §1.4.3 does not
+    // admit, so the occurrence could only be placed by a bare RDATE — and
+    // `recurrenceOverrides` goes back replaced whole, so sending what was drawn
+    // would delete the tag the user never saw along with the whole override.
+    let fixture = Fixture::start();
+    let (id, _) = tagged(&fixture, json!({"offsite": true}));
+    let overrides = json!({"2026-01-22T09:00:00": {"keywords": {"cancelled": true, "odd": "yes"}}});
+    fixture.patch(
+        &id,
+        json!({
+            "recurrenceRules": [{"frequency": "weekly"}],
+            "recurrenceOverrides": overrides,
+        }),
+    );
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("RDATE:20260122T090000Z"),
+        "the occurrence was drawn as more than a bare date\n{icalendar}"
+    );
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(serde_json::from_value(overrides).unwrap()),
+        "an override shown in part must not be written back"
     );
     assert_eq!(
         stored.title.as_deref(),

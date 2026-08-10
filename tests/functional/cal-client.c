@@ -154,6 +154,17 @@
 #define TEST_RECURRING_EDITED_DTSTART "20260122T130000Z"
 #define TEST_RECURRING_EDITED_DTEND "20260122T143000Z"
 
+/* And what that one occurrence is filed under, which is the same "Categories…"
+ * button pressed in the editor for an instance rather than for the series:
+ * CATEGORIES on the detached component, and a `keywords` patch under that
+ * instance's start in `recurrenceOverrides`. The series above carries no tags at
+ * all, so the whole set here is the difference, and an instance whose tags the
+ * cache dropped comes back as the series' — untagged. Two of them, so that the
+ * per-value split libical does applies on this component too. The same literals
+ * are asserted from both ends; see `RECURRING_EDITED_KEYWORDS` in
+ * `rust/crates/jmap-functional/tests/calendar.rs`. */
+#define TEST_RECURRING_EDITED_CATEGORIES "cancelled,offsite"
+
 /* And the occurrence deleted the way a user deletes one, rather than by writing
  * the EXDATE above into the component before it is created. "Delete this
  * occurrence" is e_cal_client_remove_object_sync with a RECURRENCE-ID and
@@ -704,10 +715,11 @@ main (int argc,
 		"DTSTART:%s\r\n"
 		"DTEND:%s\r\n"
 		"SUMMARY:%s\r\n"
+		"CATEGORIES:%s\r\n"
 		"END:VEVENT\r\n",
 		recurring_uid, TEST_RECURRING_EDITED_RECURRENCE_ID,
 		TEST_RECURRING_EDITED_DTSTART, TEST_RECURRING_EDITED_DTEND,
-		edited_summary);
+		edited_summary, TEST_RECURRING_EDITED_CATEGORIES);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
 
@@ -766,6 +778,15 @@ main (int argc,
 
 	g_print ("edited-occurrence-summary=%s\n",
 		 i_cal_component_get_summary (read_back_event));
+	/* And the tags that instance carries, read the same way the series' are —
+	 * as text, joined, whatever shape libical kept them in. This is the only
+	 * place the set for that one occurrence is stated, so a cache that
+	 * dropped them hands the next save an instance filed under whatever the
+	 * series is, and the user's filing is undone by a save that never
+	 * touched it. */
+	categories = joined_values (read_back_event, I_CAL_CATEGORIES_PROPERTY);
+	g_print ("edited-occurrence-categories=%s\n", categories);
+	g_free (categories);
 	g_object_unref (read_back_event);
 
 	/* And "Delete this occurrence" on a fourth one, which is a removal only
