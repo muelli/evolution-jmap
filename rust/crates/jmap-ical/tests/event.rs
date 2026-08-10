@@ -189,7 +189,7 @@ fn a_start_that_is_not_a_date_time_is_left_out_rather_than_mangled() {
         assert!(without(&ics, "DTSTART"), "{start}: {ics}");
     }
 
-    for value in ["tuesday", "2026-01-15T13:00:00", "20260115T1300"] {
+    for value in ["tuesday", "2026-01-15T13:00:00", "202601"] {
         let ics = format!(
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E6\r\n\
              DTSTART:{value}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
@@ -197,6 +197,39 @@ fn a_start_that_is_not_a_date_time_is_left_out_rather_than_mangled() {
         let event = ical_to_event(&ics).expect("parse");
         assert_eq!(event.start, None, "{value}");
         assert_eq!(event.time_zone, None, "{value}");
+    }
+}
+
+/// Where the line above now sits, and why it moved.
+///
+/// A DATE-TIME whose seconds — or minutes and seconds — are missing is not
+/// legal RFC 5545 §3.3.5, and the hand-rolled lexer refused it. calcard
+/// completes it instead, and that is the better answer for the only case it can
+/// arise in: the missing field can only be zero, so the event does not move,
+/// and refusing it would drop the start of an event that says plainly when it
+/// begins.
+///
+/// The boundary matters, so it is asserted rather than described: a truncated
+/// *date* is refused here only when it is too short to be a date at all
+/// (`202601`, above). `2026011` is read as 2026-01-01 — the day the author
+/// meant, 15, lost its second digit and the event moves two weeks. Nothing in
+/// this repository can produce that: the iCalendar this mapping reads comes
+/// from EDS, whose libical would itself have refused the value, and the JMAP
+/// server sends JSON rather than iCalendar. But it *is* laxer than libical, so
+/// it is written down here rather than left to be discovered.
+#[test]
+fn a_dtstart_missing_its_seconds_is_completed_rather_than_dropped() {
+    for value in ["20260115T1300", "20260115T13"] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:E6\r\n\
+             DTSTART:{value}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse");
+        assert_eq!(
+            event.start.as_deref(),
+            Some("2026-01-15T13:00:00"),
+            "{value}"
+        );
     }
 }
 

@@ -35,6 +35,40 @@ fn parses_a_calendar_and_its_nested_event() {
     assert_eq!(event.text("DESCRIPTION"), None);
 }
 
+/// A UTF-8 byte order mark is what Windows calendar exporters put in front of
+/// `BEGIN:VCALENDAR`, and an `.ics` a user imported keeps it. Refusing the
+/// whole document over three invisible bytes loses every event in it.
+#[test]
+fn reads_a_calendar_behind_a_byte_order_mark() {
+    let calendar = parse(&format!("\u{feff}{MINIMAL}")).expect("parse");
+
+    let event = calendar.child("VEVENT").expect("a VEVENT");
+    assert_eq!(event.text("SUMMARY").as_deref(), Some("Standup"));
+}
+
+/// One unreadable content line costs that line, not the event. This is the
+/// same policy the semantic mapping states — a property whose value cannot be
+/// read is treated as absent, because an event that loses a field is better
+/// than a calendar that refuses to open — applied one layer down, where a
+/// single bad line used to fail the whole parse.
+#[test]
+fn skips_a_content_line_it_cannot_read_and_keeps_the_rest() {
+    let calendar = parse(concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:1234\r\n",
+        "this line has no colon at all\r\n",
+        "SUMMARY:Standup\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    ))
+    .expect("parse");
+
+    let event = calendar.child("VEVENT").expect("a VEVENT");
+    assert_eq!(event.text("UID").as_deref(), Some("1234"));
+    assert_eq!(event.text("SUMMARY").as_deref(), Some("Standup"));
+}
+
 #[test]
 fn rejects_input_that_is_not_a_well_formed_calendar() {
     // No BEGIN:VCALENDAR at all.
@@ -175,7 +209,7 @@ fn collects_repeated_properties_in_order() {
     .expect("parse");
     let event = calendar.child("VEVENT").expect("a VEVENT");
 
-    let attendees: Vec<&str> = event
+    let attendees: Vec<String> = event
         .all("ATTENDEE")
         .iter()
         .map(|property| property.raw_value())

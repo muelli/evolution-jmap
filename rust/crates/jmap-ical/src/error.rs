@@ -22,8 +22,6 @@ pub enum ICalError {
         /// The component the `END` line named.
         found: String,
     },
-    /// A content line has no `name:value` structure.
-    Malformed(String),
     /// Content follows the end of the calendar. Dropping it silently would
     /// lose whole events when a stream carries more than one `VCALENDAR`.
     Trailing(String),
@@ -46,7 +44,6 @@ impl std::fmt::Display for ICalError {
             Self::Mismatched { expected, found } => {
                 write!(f, "END:{found} closes nothing; END:{expected} was due")
             }
-            Self::Malformed(line) => write!(f, "malformed iCalendar content line: {line}"),
             Self::Trailing(line) => write!(f, "content after END:VCALENDAR: {line}"),
             Self::TooDeep(name) => write!(
                 f,
