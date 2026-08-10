@@ -16243,3 +16243,126 @@ editor at all (the radio menu can only write the three it knows), which is a
 libical/Evolution limit rather than ours, but it means our "drop the unknown value,
 leave the server's alone" behaviour is the best available and not merely the
 cautious choice.
+
+## 2026-08-10 (hundred-and-sixty-second session)
+
+**An edited instance may now restate the tags it is filed under.** `keywords`
+joins `OVERRIDE_PROPERTIES` (now ten), which is the first entry added to that
+list that is neither a scalar nor a string: an override's `keywords` is an RFC
+8984 §1.4.3 Set, and it goes onto the instance's own `CATEGORIES` line and comes
+back off it. So "this Thursday is a cancelled offsite, the rest of the series is
+not" is a one-key override patch instead of a bare `RDATE` at the series' tags.
+
+**The property is replaced, not merged.** RFC 8984 §4.3.4 applies an override as
+a PatchObject, so `keywords` naming one tag means the instance carries that tag
+*and no other* — the series' set is not added to it. That is what iCalendar says
+too (the instance's `CATEGORIES` is that component's whole answer), so the two
+agree without either side having to explain itself, and
+`an_edited_instance_may_show_tags_of_its_own` restates `offsite` in the patch
+precisely to keep it. Worth writing down because the mental model a user has of
+"Categories…" on one occurrence is additive and the data model is not.
+
+**Why `keywords` is restatable where `locations` is not**, which is the line this
+session drew and the reason the two sets diverge for the first time. Both are
+inherited by an instance and both are drawn on the instance's own component, but
+`locations` is *shown in part* and therefore patched **into** — a save reaches
+`locations/<key>/name` and leaves the coordinates and links alone. An override's
+PatchObject would have to reach that same path inside an entry the instance does
+not have (RFC 8620 §5.3 requires every segment before the last to exist), so an
+override naming a place stays refused, and `json!({"locations/1/name": "Room 3"})`
+stays in the "cannot draw" list. `keywords` has no such interior: the whole set
+fits on the line, so it goes back replaced whole, which is exactly the property
+that makes it safe to restate per instance and exactly the property that makes an
+*undrawn* tag a deleted one.
+
+**Which is why the empty set is refused.** `"keywords": {}` and
+`"keywords": null` are written the same way — no `CATEGORIES` line at all — so the
+empty set would read back as the null, and a save would send a different patch
+than the one it was shown. That is the `"title": ""` rule one type over, and it is
+the case the mutation check caught: dropping `!tags.is_empty()` from
+`maps_override_field` leaves every other test green.
+
+**The libical question this rests on, measured rather than assumed.** The tags of
+one occurrence are stated in exactly one place, so the whole feature depends on
+libical keeping the master's and the instance's `CATEGORIES` apart through the
+marshalling — and on the per-value split it does to a multi-valued line applying
+on the instance component too.
+`jmap-backend-cal`'s `libical_keeps_the_tags_of_one_occurrence_apart_from_the_series`
+drives a two-component envelope through the real parser and reads the result with
+`jmap_ical::ical_to_event`, asserting the override that comes out is exactly
+`{"keywords": {"cancelled": true, "offsite": true}}` — one key, no extra
+difference the marshalling invented. It holds.
+
+**And the functional leg, which got its red run by accident and is the better for
+it.** `tests/functional/cal-client.c` now writes `CATEGORIES:cancelled,offsite`
+onto the detached component it hands `e_cal_client_modify_object_sync` with
+`E_CAL_OBJ_MOD_THIS`, and reports what EDS's cache kept
+(`edited-occurrence-categories`); `calendar.rs` asserts that *and* the override
+the mock ends up holding. The first run failed both — empty tags in the cache,
+`{"title": …}` alone on the server — and it took a while to work out that the
+build had picked up the new C client beside a **stale backend module**: `ninja
+functional-cal-client` alone does not rebuild `libecalbackendjmap.so`. So that run
+was an unintended mutation test of the whole increment through real EDS, and a
+convincing one: without the mapping change the user's filing of one occurrence
+reaches neither EDS's cache nor the server. With it, both. **The lesson for future
+sessions: run plain `ninja` before `ctest`, never a single target.**
+
+**Two redundancies recorded rather than fixed**, both inherited rather than new.
+An override restating the series' own set round-trips to `{}` — the same
+no-op-rewrite `{"title": <the series' title>}` already had — because
+`instance_patch` reports differences and a restatement is not one. And
+`"keywords": null` on a series that has no tags round-trips to nothing, as
+`"title": null` on a titleless series already did. Both are patches nobody asked
+for being dropped, not values being changed, so the save sends less rather than
+something wrong.
+
+Tests: red first — four failing claims in `jmap-ical` before any implementation
+(`an_edited_instance_may_show_tags_of_its_own`,
+`an_instance_that_drops_its_tags_reads_back_as_removing_them`,
+`the_tags_on_an_instances_own_component_are_the_tags_it_was_refiled_with`, and the
+accepted-shapes list), then the two save-path tests and the libical probe
+mutation-checked because they passed on their first run. Four mutations, each
+killed by a different test: `maps_override_field` accepts an empty set; it accepts
+an undrawable tag; `instance_patch` never names `keywords`; and — via the stale
+module — the whole feature absent. Counts: `cargo test --locked` 746, up 6 from
+740; `jmap-backend-cal` 34 in `marshal.rs`, up one; `ctest` 14/14 including all
+four functional legs against real EDS.
+
+Not done, deliberately: an **override** still may not restate its *place*, for the
+structural reason above, and `showWithoutTime` is still decided once for the whole
+document.
+
+Verified locally: `cargo test --locked` 746 green, `cargo fmt --check`, `cargo
+clippy --all-targets --locked -- -D warnings` clean for the default set and for
+`jmap-backend-cal` and `jmap-functional`, and `ctest` 14/14 after a full `ninja`.
+`ci/checks.sh` again stops at its first step: `reuse` is not on this VM and neither
+`pipx` nor `uvx` is installed (`python3 -m venv` cannot bootstrap one either — no
+`ensurepip`), and `cargo-deny` is not installed. Exposure is nil on both — **no
+file was added**, only edits to files that already carry SPDX headers, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the last
+green run.
+
+Disk: 2.9G free of 58G, with `rust/target` at 22G and `~/audit-ffi` at 14G;
+`CARGO_INCREMENTAL=0` throughout. **The maintainer decision is still wanted**: a
+periodic `cargo clean` in the night-shift driver, a bigger disk, or a shared
+target directory.
+
+No milestone tag. Unchanged blockers: the outgoing direction is still asymmetric —
+`jmap-ical` writes `TZID=Europe/Berlin` with no `VTIMEZONE` beside it; the calcard
+directive's two emitters are still ours by choice; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist yet, so the M8 tag many sessions have asked
+for is still unwritten; F15 (the 10 MiB body cap `ureq` imposes by default) is
+still open; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs` hang is still
+unexplained. Still open from before: nothing asserts whether a split series' two
+writes arrive as one `CalendarEvent/set` or two; the *reading* direction of a
+per-instance zone through real EDS is untested; calcard silently drops an
+unreadable `BYDAY`/`BYMONTHDAY`/`BYSECOND`/`WKST` token below `jmap-ical`; whether
+Evolution's appointment editor keeps an `X-JMAP-KEY` on a `LOCATION` the user
+edited is untested; whether it writes a `TRANSP` it was not asked to is untested;
+and the appointment editor's `fill_component` is still worth reading property by
+property rather than probed one property at a time. New from this session:
+nothing says whether Evolution's editor lets a user set categories on a *single
+occurrence* at all — the mapping and EDS both carry it now, but the leg above
+writes the component by hand, so which menu (if any) reaches it is unverified.

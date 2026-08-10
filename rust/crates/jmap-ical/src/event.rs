@@ -186,9 +186,16 @@ pub const MAPPED_PROPERTIES: [&str; 14] = [
 /// occurrence the user moved into another zone has a spelling of its own, and
 /// one with no `TZID` at all is the floating instance a null asks for.
 ///
+/// `keywords` is here because a `CATEGORIES` line is drawn whole and the
+/// instance has one of its own, so the tags an occurrence is filed under are
+/// stated where that occurrence is. `locations` is *not*, for the opposite
+/// reason: it is shown in part and patched into (see [`maps_locations`]), and an
+/// override's PatchObject would have to reach `locations/<key>/name` inside an
+/// entry the instance does not have.
+///
 /// `showWithoutTime` is absent, one step further out — see
 /// [`shows_without_time`], which is decided once for the whole document.
-pub const OVERRIDE_PROPERTIES: [&str; 9] = [
+pub const OVERRIDE_PROPERTIES: [&str; 10] = [
     "title",
     "description",
     "start",
@@ -198,6 +205,7 @@ pub const OVERRIDE_PROPERTIES: [&str; 9] = [
     "freeBusyStatus",
     "priority",
     "privacy",
+    "keywords",
 ];
 
 /// Whether the places an event happens at survive the trip through iCalendar
@@ -450,6 +458,19 @@ fn maps_override_field(name: &str, value: &Value) -> bool {
         // at the series' classification. A null is the instance set back to the
         // default, which the component says by carrying no line.
         "privacy" => value.is_null() || value.as_str().is_some_and(known_privacy),
+        // The one restated property that is a set. Its `CATEGORIES` line is drawn
+        // whole, so a tag the line cannot show is a tag the next save deletes from
+        // this occurrence — the same rule [`maps_keywords`] applies to the series,
+        // asked of the same [`drawn_tag`]. A null is the instance filed under
+        // nothing, which the component says by carrying no line; the *empty* set is
+        // refused, because it is written the same way and would come back as that
+        // null, which is a different patch — the `title: ""` case one type over.
+        "keywords" => {
+            value.is_null()
+                || value.as_object().is_some_and(|tags| {
+                    !tags.is_empty() && tags.iter().all(|(tag, set)| drawn_tag(tag, set))
+                })
+        }
         // A start is required by RFC 8984, so a null says nothing, and the
         // value has to be one a DTSTART can carry.
         "start" => value.as_str().and_then(to_ical_date_time).is_some(),
@@ -711,11 +732,12 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         free_busy_status: event.free_busy_status.clone(),
         priority: event.priority,
         privacy: event.privacy.clone(),
-        // Inherited, not patchable: RFC 8984 §4.3.4 has an instance hold every
-        // property its override does not restate, and an override may name
-        // neither a place nor a tag ([`OVERRIDE_PROPERTIES`]). Leaving them off
-        // would draw an occurrence of a meeting as happening nowhere and
-        // belonging to nothing.
+        // Inherited: RFC 8984 §4.3.4 has an instance hold every property its
+        // override does not restate. Leaving them off would draw an occurrence of
+        // a meeting as happening nowhere and belonging to nothing — and, since
+        // both are drawn on the instance's own component, would read back as the
+        // user having emptied them there. `locations` is inherited and nothing
+        // else: an override may not name a place ([`OVERRIDE_PROPERTIES`]).
         locations: event.locations.clone(),
         keywords: event.keywords.clone(),
         ..CalendarEvent::default()
@@ -731,6 +753,20 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         // both formats admit.
         if name == "priority" {
             instance.priority = value.as_i64();
+            modified = true;
+            continue;
+        }
+        // The one restatable property that is a set, and the one that replaces
+        // rather than adds to what it inherited: a PatchObject sets the property to
+        // the value it names, so an override naming one tag is an occurrence filed
+        // under that tag alone. Checked above, so a null empties it and every entry
+        // is one the `CATEGORIES` line carries.
+        if name == "keywords" {
+            instance.keywords = value.as_object().map(|tags| {
+                tags.iter()
+                    .map(|(tag, set)| (tag.clone(), set.clone()))
+                    .collect()
+            });
             modified = true;
             continue;
         }
@@ -1300,6 +1336,22 @@ fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) ->
         patch.insert(
             "priority".to_owned(),
             instance.priority.map_or(Value::Null, Value::from),
+        );
+    }
+    // And the one that is a set, compared the same way: an instance carrying no
+    // `CATEGORIES` where the series does is an occurrence the user unfiled, which
+    // is the `null` a PatchObject removes a property with. The set is compared
+    // whole rather than tag by tag, because that is how the property goes back —
+    // an override states what the instance is filed under, not how it differs.
+    if series.keywords != instance.keywords {
+        patch.insert(
+            "keywords".to_owned(),
+            match &instance.keywords {
+                // Serialising a set this crate's own reader built cannot fail: it
+                // holds strings and `true`.
+                Some(tags) => serde_json::to_value(tags).unwrap_or(Value::Null),
+                None => Value::Null,
+            },
         );
     }
     if let Some(start) = instance.start.as_deref().filter(|start| *start != id) {
