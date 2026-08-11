@@ -10,18 +10,18 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Seven legs, because they need seven books. The first starts empty and writes
-//! a contact into it. The other six each start from a card the mock was
+//! Eight legs, because they need eight books. The first starts empty and writes
+//! a contact into it. The other seven each start from a card the mock was
 //! seeded with before EDS ever connected — a card from the *server*, holding a
 //! shape no vCard can state, which is the only way to ask what real EDS does to
 //! it — and take the branches a save can take with it: the user edits a field
 //! beside the name, retypes the name itself, picks a new picture, retypes their
-//! calendar address, retypes who they are married to, or clears that field
-//! altogether.
+//! calendar address, retypes who they are married to, clears that field
+//! altogether, or retypes the note on a card carrying two of them.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
-use jmap_proto::contacts::{Calendar, ContactCard, Media, Name, NameComponent, Relation};
+use jmap_proto::contacts::{Calendar, ContactCard, Media, Name, NameComponent, Note, Relation};
 
 /// The contact the client writes. One string, passed to the client on its
 /// command line and looked for in the mock's store, so the two ends cannot
@@ -773,6 +773,25 @@ const SEEDED_SPOUSE: &str = "Marie Oldenburg";
 /// `phonetic` beside it, and the reason the map is seeded with two entries
 /// rather than one.
 const SEEDED_SIBLING: &str = "Klaus Oldenburg";
+/// The keys the *server* filed the seeded card's two notes under, and what each
+/// says. Two of them, and that is the shape under test: Evolution's Notes field
+/// is the **first** `NOTE` line and nothing else, so a card carrying two notes
+/// is one where the user edits a single entry of a map they can see only part
+/// of — and what a save does to the part they cannot see is what no fixture can
+/// answer, because only real EDS says what is left on the card it hands back.
+const SEEDED_NOTE_KEY: &str = "note-1";
+const SEEDED_SECOND_NOTE_KEY: &str = "note-2";
+/// The semicolon and the comma are here for the reason [`NOTE`] carries them: a
+/// note is the one mapped property a user types prose into, and both characters
+/// are ones vCard gives structural meaning to, so a note arriving at the server
+/// cut off at either — or carrying the backslash EDS wrote — shows up here.
+const SEEDED_NOTE: &str = "met in Ghent; still owes me a beer, apparently";
+const SEEDED_SECOND_NOTE: &str = "do not call before 10:00, ever";
+/// When the server says the first note was written. RFC 9553 §2.8.3's `created`
+/// has no `NOTE` component and no parameter to sit in, so it rides in the
+/// entry's `extra` — which makes it the member that says whether a save
+/// *patched* the entry or replaced it: a replacement would hold the text alone.
+const SEEDED_NOTE_CREATED: &str = "2026-02-01T09:30:00Z";
 
 /// Put the card both name legs start from into the mock's store, and hand back
 /// the id the server filed it under.
@@ -865,6 +884,32 @@ fn seed_double_barrelled_card(server: &jmap_mock::MockServer) -> Id {
         [
             (SEEDED_SPOUSE.to_owned(), relation_of("spouse")),
             (SEEDED_SIBLING.to_owned(), relation_of("sibling")),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    // The two notes, likewise under keys only a server would choose, and
+    // likewise on the card every seeded leg starts from: the only mapped
+    // property of which the user can see one entry and not the other, since the
+    // field Evolution shows is the first line of a name every entry writes a
+    // line of. The `created` is there because no line can carry it — see
+    // [`SEEDED_NOTE_CREATED`].
+    let mut note = Note {
+        note: SEEDED_NOTE.to_owned(),
+        ..Note::default()
+    };
+    note.extra
+        .insert("created".to_owned(), serde_json::json!(SEEDED_NOTE_CREATED));
+    card.notes = Some(
+        [
+            (SEEDED_NOTE_KEY.to_owned(), note),
+            (
+                SEEDED_SECOND_NOTE_KEY.to_owned(),
+                Note {
+                    note: SEEDED_SECOND_NOTE.to_owned(),
+                    ..Note::default()
+                },
+            ),
         ]
         .into_iter()
         .collect(),
@@ -975,6 +1020,60 @@ fn assert_the_seeded_calendars_survived(card: &ContactCard) {
     assert_eq!(
         calendar.extra.get("pref"),
         Some(&serde_json::json!(SEEDED_CALENDAR_PREF)),
+        "{card:?}"
+    );
+}
+
+/// Hold the card the server now holds to the second note it was seeded with —
+/// the same text, under the same server-chosen key.
+///
+/// Split out from the first note because the leg that retypes the note leaves
+/// this one alone, and that is what it has to prove. It is the `notes`
+/// counterpart of the brother beside it, one step weaker: the entry does reach
+/// a line, so it is not invisible to the *mapping* — but it is invisible to the
+/// **user**, since Evolution's Notes field is the first `NOTE` line and stops
+/// there. A save that took it with the entry the user did edit would delete a
+/// note nobody could have seen, let alone asked to lose.
+fn assert_the_seeded_second_note_survived(card: &ContactCard) {
+    let notes = card
+        .notes
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's notes: {card:?}"));
+    let second = notes
+        .get(SEEDED_SECOND_NOTE_KEY)
+        .unwrap_or_else(|| panic!("the save dropped the note nobody could see: {card:?}"));
+    assert_eq!(
+        second.note, SEEDED_SECOND_NOTE,
+        "the save rewrote a note nobody touched: {card:?}"
+    );
+}
+
+/// Hold the card the server now holds to both notes it was seeded with,
+/// untouched.
+///
+/// Shared by the legs that edit something else entirely, for the reason
+/// [`assert_the_seeded_calendars_survived`] is: a user who retypes their name
+/// has not rewritten their notes, so a save that re-filed either entry under a
+/// key of its own making — or dropped the `created` no line can carry — did
+/// something nobody asked for.
+fn assert_the_seeded_notes_survived(card: &ContactCard) {
+    assert_the_seeded_second_note_survived(card);
+    let notes = card.notes.as_ref().expect("notes, just checked");
+    assert_eq!(
+        notes.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_NOTE_KEY, SEEDED_SECOND_NOTE_KEY],
+        "the save re-filed a note nobody touched: {card:?}"
+    );
+    let note = notes
+        .get(SEEDED_NOTE_KEY)
+        .expect("the seeded note, just checked");
+    assert_eq!(
+        note.note, SEEDED_NOTE,
+        "the save rewrote the note nobody touched: {card:?}"
+    );
+    assert_eq!(
+        note.extra.get("created"),
+        Some(&serde_json::json!(SEEDED_NOTE_CREATED)),
         "{card:?}"
     );
 }
@@ -1200,6 +1299,7 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
+    assert_the_seeded_notes_survived(card);
 }
 
 /// What the user retypes the given-name field to, and the full name Evolution's
@@ -1356,6 +1456,7 @@ fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
+    assert_the_seeded_notes_survived(card);
 }
 
 /// The fourth leg, and the one edit that reaches the picture itself: the user
@@ -1506,6 +1607,7 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
         "choosing a picture rewrote the name: {card:?}"
     );
     assert_the_seeded_relations_survived(card);
+    assert_the_seeded_notes_survived(card);
 }
 
 /// What the user retypes the Calendar field to. A URI on a different host from
@@ -1658,6 +1760,7 @@ fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
     // `N` line flattened, asserted for the reason the other legs assert them.
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_relations_survived(card);
+    assert_the_seeded_notes_survived(card);
 }
 
 /// What the user retypes the Spouse field to. A different person from the one
@@ -1795,6 +1898,7 @@ fn retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed() {
     // assert them.
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
+    assert_the_seeded_notes_survived(card);
 }
 
 /// The seventh leg: the user *clears* the Spouse field, on the same card the
@@ -1932,4 +2036,156 @@ fn clearing_the_spouse_through_eds_withdraws_the_marriage_and_keeps_the_brother(
     // assert them.
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
+    assert_the_seeded_notes_survived(card);
+}
+
+/// What the user retypes the Notes field to. Deliberately not a respelling of
+/// either seeded note: a save that patched the wrong entry, or that replaced the
+/// map with what the vCard could state, could not pass by two texts happening to
+/// agree.
+const RETYPED_NOTE: &str = "met in Ghent, and paid up at last";
+
+/// The eighth leg: the user retypes the note on a card the server filed **two**
+/// notes on.
+///
+/// The property where the user sees part of a map and edits it anyway.
+/// `E_CONTACT_NOTE` is Evolution's Notes field, and it is the *first* `NOTE`
+/// line — every `notes` entry writes a line, so a card with two notes shows the
+/// user one and hides the other behind it. Retyping the field is therefore an
+/// edit to one entry of a map, made through a field that cannot express the map,
+/// and what happens to the entry behind it is the question.
+///
+/// Two things only real EDS can answer, and the leg exists for both:
+///
+/// - whether `e_contact_set` on a plain vCard attribute rewrites the first line
+///   of that name **in place**, keeping its parameters — the `X-JMAP-KEY` among
+///   them — or drops the key the way it drops a `PHOTO`'s. Keyless, the retyped
+///   text would reach the server under an `n1` the reader invented by counting
+///   lines, and the note it replaced would be deleted;
+/// - whether the *second* line survives the set at all. If it did not, a user
+///   editing their note in Evolution would silently delete a note they were
+///   never shown — and nothing below the daemons could see it, because the card
+///   the save is handed is EDS's rendering rather than this repository's.
+#[test]
+fn retyping_the_note_through_eds_patches_the_entry_it_replaces() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/address-book-renote"));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(
+        &client,
+        &["jmap-functional", "renote", card_id.as_str(), RETYPED_NOTE],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // What EDS made of the two lines the emitter wrote. The field shows the
+    // first note, which is the reader's half of the mapping checked against real
+    // EDS — and the line count beside it is the half the field cannot show,
+    // since a card holding one note and a card holding five read alike here.
+    assert_eq!(
+        seen.get("read-note"),
+        Some(&SEEDED_NOTE),
+        "EDS did not read the note off the first line the emitter wrote\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-note-lines"),
+        Some(&"2"),
+        "EDS did not keep both of the emitter's NOTE lines on the card\n{report}"
+    );
+
+    // And what the set left behind, which is the observation this leg was
+    // written for: one line rewritten, the other still standing. A `1` here is
+    // `e_contact_set` having replaced every line of the name — the user's edit
+    // deleting a note they were never shown — and a `3` is it having appended
+    // beside the old one, which reaches the server as a note nobody typed.
+    assert_eq!(
+        seen.get("retyped-note-lines"),
+        Some(&"2"),
+        "setting the Notes field did not leave the card's two NOTE lines \
+         standing\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-note"),
+        Some(&RETYPED_NOTE),
+        "the note the user typed did not survive the save\n{report}"
+    );
+
+    // The other end, and the load-bearing assertion: two entries still, under
+    // the two keys the *server* chose, and the one the user edited holding the
+    // new text with the `created` no line could carry still on it. A third entry
+    // here — the new text filed under an `n1` the reader invented by counting
+    // lines — is the key having failed to survive EDS.
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the new note never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    let notes = card
+        .notes
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's notes: {card:?}"));
+    assert_eq!(
+        notes.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_NOTE_KEY, SEEDED_SECOND_NOTE_KEY],
+        "the note the user typed was filed beside the old one instead of over \
+         it: {card:?}"
+    );
+    let note = notes
+        .get(SEEDED_NOTE_KEY)
+        .expect("the seeded note, just checked");
+    assert_eq!(
+        note.note, RETYPED_NOTE,
+        "the note the user typed did not reach the server: {card:?}"
+    );
+    assert_eq!(
+        note.extra.get("created"),
+        Some(&serde_json::json!(SEEDED_NOTE_CREATED)),
+        "the save replaced the entry instead of patching it: {card:?}"
+    );
+    assert_the_seeded_second_note_survived(card);
+    // And what nobody touched at all, asserted for the reason the other legs
+    // assert them.
+    assert_the_seeded_picture_survived(card);
+    assert_the_seeded_calendars_survived(card);
+    assert_the_seeded_relations_survived(card);
 }
