@@ -4,8 +4,8 @@
 //! JSContact [`ContactCard`] ↔ vCard 3.0.
 //!
 //! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, EMAIL, TEL, ADR, ORG, TITLE, ROLE, NOTE — and no
-//! more. Everything else on a card (nicknames, anniversaries, …) is
+//! be useful — UID, FN, N, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE —
+//! and no more. Everything else on a card (nicknames, anniversaries, …) is
 //! *dropped*, which is only safe because saving goes back to the server as a
 //! PatchObject naming the mapped properties: a property we never mapped is a
 //! property we never overwrite.
@@ -25,15 +25,20 @@
 //! than written on a line that would misstate it — and, as with every other
 //! dropped thing here, the save path must then leave it alone.
 //!
-//! `addresses` is lossy the same way one level down. RFC 2426 §3.2.1's `ADR`
-//! has seven fields; RFC 9553 §2.5.1 builds an address out of named
-//! components, sixteen kinds of them. Seven of those kinds have a field
-//! ([`ADDRESS_COMPONENTS`]) and cross; the rest — `floor`, `room`, a street
-//! `number` stated apart from its street — have nowhere to go, and are left
-//! off the line rather than written into a field that would say something
-//! else about them. An address of nothing but those has no `ADR` line at
-//! all, which makes it invisible, so `addresses` too is a map of which the
-//! vCard states only some entries.
+//! `addresses` is lossy the same way one level down, and is the one property
+//! that crosses on two lines. RFC 2426 §3.2.1's `ADR` has seven fields; RFC
+//! 9553 §2.5.1 builds an address out of named components, sixteen kinds of
+//! them. Seven of those kinds have a field ([`ADDRESS_COMPONENTS`]) and
+//! cross; the rest — `floor`, `room`, a street `number` stated apart from its
+//! street — have nowhere to go, and are left off the line rather than written
+//! into a field that would say something else about them. Beside the `ADR`
+//! goes RFC 2426 §3.2.2's `LABEL`, the address written out as it should be
+//! printed, which is RFC 9553's `full` and what EDS keeps in its three
+//! synthetic address-label fields. An address may have either line, or both:
+//! `full` stands on its own for an address "even if the individual address
+//! components are not known", and an address stated only in components vCard
+//! has no field for has neither line and is invisible — so `addresses` too is
+//! a map of which the vCard states only some entries.
 //!
 //! `notes` is the plainest of them and lossy only around the value: RFC 2426
 //! §3.6.2's `NOTE` is free text, so an entry's own text crosses whole, while
@@ -141,7 +146,7 @@ pub fn maps_address_component(kind: &str) -> bool {
 }
 
 /// Whether an address reaches the user at all — whether it has anything an
-/// `ADR` line can state.
+/// `ADR` or a `LABEL` line can state.
 ///
 /// This is the emitter's own decision, asked of it by name, so that the save
 /// path cannot drift from what [`card_to_vcard`] actually wrote. Every keyed
@@ -150,7 +155,14 @@ pub fn maps_address_component(kind: &str) -> bool {
 /// were would eventually decide differently, and delete an entry the user
 /// never saw.
 pub fn states_address(address: &Address) -> bool {
-    address_fields(address).is_some()
+    address_fields(address).is_some() || address_label(address).is_some()
+}
+
+/// The text a `LABEL` line states for an address, or `None` for one written
+/// out as nothing — which says no more than an `EMAIL:` with no address does,
+/// and gets no line either.
+pub fn address_label(address: &Address) -> Option<&str> {
+    address.full.as_deref().filter(|full| !full.is_empty())
 }
 
 /// Whether a note reaches the user at all — whether it says anything a
@@ -247,14 +259,24 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     for (key, address) in card.addresses.iter().flatten() {
-        let Some(fields) = address_fields(address) else {
-            continue;
-        };
-        properties.push(
-            Property::structured("ADR", fields)
-                .with_param(X_JMAP_KEY, key)
-                .with_params("TYPE", type_names(&CONTEXTS, address.contexts.as_ref())),
-        );
+        let types = type_names(&CONTEXTS, address.contexts.as_ref());
+        if let Some(fields) = address_fields(address) {
+            properties.push(
+                Property::structured("ADR", fields)
+                    .with_param(X_JMAP_KEY, key)
+                    .with_params("TYPE", types.clone()),
+            );
+        }
+        // The same address written out for an envelope, on the line RFC 2426
+        // §3.2.2 gives it — directly after its own `ADR`, and on its own when
+        // the components are not known and there is no `ADR` to follow.
+        if let Some(full) = address_label(address) {
+            properties.push(
+                Property::new("LABEL", full)
+                    .with_param(X_JMAP_KEY, key)
+                    .with_params("TYPE", types),
+            );
+        }
     }
 
     for (key, organization) in card.organizations.iter().flatten() {
@@ -371,6 +393,27 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         }
     }
 
+    // The `LABEL` lines after the `ADR` ones, because a label states an
+    // address the card may already have named and has to find it first.
+    for property in properties
+        .iter()
+        .filter(|property| property.name == "LABEL")
+    {
+        let full = property.text();
+        if full.is_empty() {
+            continue;
+        }
+        let contexts = read_flags(&CONTEXTS, property);
+        let key = label_entry(property, contexts.as_ref(), &addresses);
+        addresses
+            .entry(key)
+            .or_insert_with(|| Address {
+                contexts,
+                ..Address::default()
+            })
+            .full = Some(full);
+    }
+
     Ok(ContactCard {
         id: text("UID").map(Into::into),
         // Membership follows from which EDS source is being served, not from
@@ -461,6 +504,8 @@ fn read_address(property: &Property) -> Option<Address> {
     Some(Address {
         components: Some(components),
         contexts: read_flags(&CONTEXTS, property),
+        // Filled in by the `LABEL` line, if the card has one for this address.
+        full: None,
         extra: BTreeMap::new(),
     })
 }
@@ -507,6 +552,39 @@ fn read_organization(property: &Property) -> Option<Organization> {
         units: (!units.is_empty()).then_some(units),
         extra: BTreeMap::new(),
     })
+}
+
+/// The `addresses` entry a `LABEL` line states: the one it names, the one it
+/// matches, or a new one of its own.
+///
+/// An address stated only in `full` has no `ADR` line, so its key crosses on
+/// the `LABEL` and nowhere else — which is why a key naming no address yet is
+/// taken at its word rather than being replaced by an invented one.
+///
+/// Failing a key there is the `TYPE`, which is how RFC 2426 §3.2.2 has a
+/// `LABEL` say which `ADR` it is the written-out form of. That fallback is
+/// not decoration: `E_CONTACT_ADDRESS_LABEL_HOME` is one of EDS's synthetic
+/// fields, so EDS rebuilds the line from the text alone and the `X-JMAP-KEY`
+/// this side wrote does not survive the trip through Evolution. Without the
+/// fallback every save would then file the label as a second address.
+fn label_entry(
+    property: &Property,
+    contexts: Option<&Value>,
+    addresses: &BTreeMap<String, Address>,
+) -> String {
+    let unlabelled = |address: &Address| address.full.is_none();
+    if let Some(key) = property.param(X_JMAP_KEY).filter(|key| !key.is_empty())
+        && addresses.get(key).is_none_or(unlabelled)
+    {
+        return key.to_owned();
+    }
+    if let Some((key, _)) = addresses
+        .iter()
+        .find(|(_, address)| unlabelled(address) && address.contexts.as_ref() == contexts)
+    {
+        return key.clone();
+    }
+    entry_key(property, "a", addresses)
 }
 
 /// The JSContact map key for an entry: the one we round-tripped, or the

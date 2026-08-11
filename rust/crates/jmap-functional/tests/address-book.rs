@@ -39,6 +39,14 @@ const STREET: &str = "Hauptstrasse 1";
 const LOCALITY: &str = "Berlin";
 const POSTCODE: &str = "10115";
 const COUNTRY: &str = "Germany";
+/// The same address written out for an envelope, which EDS keeps on a `LABEL`
+/// line and JSContact as the address's `full`. This is the leg's one claim
+/// about a pairing rather than about a value: `E_CONTACT_ADDRESS_LABEL_WORK`
+/// is a synthetic field, so the `X-JMAP-KEY` naming the address a label
+/// belongs to does not survive EDS, and only the shared `TYPE` says the label
+/// and the `ADR` are two views of one address. If that fell through, the
+/// server would end up holding two addresses instead of one.
+const ADDRESS_LABEL: &str = "Hauptstrasse 1\n10115 Berlin\nGermany";
 /// The free-text note, spelled as `book-client.c` spells it. The semicolon
 /// and the comma in it are the point: vCard gives both structural meaning,
 /// and this is the one mapped property that holds prose, so what is checked
@@ -204,6 +212,14 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
             "the contact EDS handed back lost or misplaced its {field}\n{report}"
         );
     }
+    // The client escapes this one observation's line breaks, since the report
+    // is read a line at a time.
+    let escaped_label = ADDRESS_LABEL.replace('\n', "\\n");
+    assert_eq!(
+        seen.get("read-back-address-label"),
+        Some(&escaped_label.as_str()),
+        "the contact EDS handed back lost or mangled its address label\n{report}"
+    );
     assert_eq!(
         seen.get("contacts-after"),
         Some(&"1"),
@@ -299,11 +315,21 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     // spelled out here rather than borrowed from the mapping, so this end
     // states the wire shape it expects instead of agreeing with the code
     // that produced it.
-    let address = card
+    let addresses = card
         .addresses
         .as_ref()
-        .and_then(|addresses| addresses.values().next())
         .unwrap_or_else(|| panic!("the card on the server has no address: {card:?}"));
+    assert_eq!(
+        addresses.len(),
+        1,
+        "the LABEL line was filed as an address of its own: {addresses:?}"
+    );
+    let address = addresses.values().next().expect("one address");
+    assert_eq!(
+        address.full.as_deref(),
+        Some(ADDRESS_LABEL),
+        "the written-out address did not reach the server: {card:?}"
+    );
     let components: Vec<(&str, &str)> = address
         .components
         .iter()
