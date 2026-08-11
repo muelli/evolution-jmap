@@ -65,6 +65,12 @@ pub struct ContactCard {
     /// `TITLE` or a `ROLE` line, depending on the entry's `kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub titles: Option<BTreeMap<String, Title>>,
+    /// The postal addresses the contact can be reached at (RFC 9553 §2.5.1),
+    /// keyed like the other JSContact maps. vCard states each as one
+    /// structured `ADR` line, whose seven fields have room for only some of
+    /// the component kinds RFC 9553 allows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addresses: Option<BTreeMap<String, Address>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -213,6 +219,55 @@ pub struct Title {
     pub kind: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact Address (RFC 9553 §2.5.1): one postal address.
+///
+/// Only the two members a vCard `ADR` line can carry are modeled. `full`,
+/// `coordinates`, `countryCode`, `timeZone`, `pref` and the rest ride in
+/// [`Self::extra`] — where the save path can see the members it is refusing
+/// to touch, which is the whole reason this is a struct and not a `Value`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Address {
+    /// The parts the address is built from, each naming what it is.
+    ///
+    /// RFC 9553 §2.5.1 leaves the order meaningful only when `isOrdered` is
+    /// set, so this is a list of named parts rather than a fixed shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub components: Option<Vec<AddressComponent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// One part of an [`Address`]: `kind` is `name` (the street), `locality`,
+/// `postcode`, `floor`, …
+///
+/// Unlike [`NameComponent`], this keeps what it does not model: a component
+/// carries a `phonetic` spelling besides its value, and the save path writes
+/// the component list back whole, so a member dropped on the way in is a
+/// member deleted on the way out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressComponent {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl AddressComponent {
+    pub fn new(kind: &str, value: &str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            value: value.to_owned(),
+            extra: BTreeMap::new(),
+        }
+    }
 }
 
 /// `ContactCard/query` filter conditions (RFC 9610 §3.3). Flat conditions

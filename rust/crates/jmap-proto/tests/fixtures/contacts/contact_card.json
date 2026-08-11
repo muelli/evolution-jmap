@@ -44,6 +44,21 @@
       "organizationId": "o1"
     }
   },
+  "addresses": {
+    "a1": {
+      "@type": "Address",
+      "contexts": {"work": true},
+      "components": [
+        {"@type": "AddressComponent", "kind": "name", "value": "Hauptstraße", "phonetic": "howptshtrahse"},
+        {"@type": "AddressComponent", "kind": "number", "value": "1"},
+        {"@type": "AddressComponent", "kind": "locality", "value": "Berlin"},
+        {"@type": "AddressComponent", "kind": "postcode", "value": "10115"},
+        {"@type": "AddressComponent", "kind": "country", "value": "Germany"}
+      ],
+      "countryCode": "DE",
+      "full": "Hauptstraße 1\n10115 Berlin\nGermany"
+    }
+  },
   "notes": {
     "n1": {"note": "met at FOSDEM"}
   }

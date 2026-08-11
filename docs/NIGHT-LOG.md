@@ -17537,3 +17537,107 @@ here either way: whether `e_contact_set (E_CONTACT_TITLE, …)` preserves the
 contact; it does not edit one. Believed yes, as for `EMAIL`, and worth a
 real-Evolution check. The obvious next contact increments remain `addresses` ↔
 `ADR` and `notes` ↔ `NOTE`.
+
+## 2026-08-11 (hundred-and-seventy-fourth session)
+
+**The contact mapping's third new property, and the first structured one that
+is lossy inside the value rather than around it.** `addresses` ↔ `ADR` was the
+next item on the list the last two sessions left. RFC 2426 §3.2.1 gives `ADR`
+seven fields whose meaning is their position; RFC 9553 §2.5.1 builds an
+address out of *named* components, sixteen kinds of them. Seven kinds have a
+field — `postOfficeBox`, `apartment`, `name` (the street), `locality`,
+`region`, `postcode`, `country` — and those cross, keyed by the
+`X-JMAP-KEY` every other entry map already carries and typed `WORK`/`HOME`
+from the same `contexts` table the emails use.
+
+**The other nine kinds are left off the line rather than squeezed onto it.**
+A `floor`, a `room`, a street `number` stated apart from its street: putting
+any of them in a field that means something else would tell the user their
+flat number is their post box. So they are dropped on the way out — which
+makes them invisible, and everything this repository says about invisible
+things then applies. Two consequences, both tested:
+
+- An address made of *nothing but* unmappable kinds has no `ADR` line at all,
+  so `addresses` joins `titles` as a map of which the vCard states only some
+  entries. It therefore goes through `diff_visible_entries`, and the
+  visibility predicate is `jmap_vcard::states_address` — which is literally
+  `address_fields(address).is_some()`, the emitter's own decision asked of it
+  by name, so the save path cannot drift from what was actually written.
+- A component the line had no field for must come back in its *place*, not
+  merely survive. `merge_components` walks the server's list rather than the
+  edited one: a component still on the line keeps the server's copy (and with
+  it the `phonetic` spelling `ADR` has no room for), one gone from the line is
+  deleted only if the line had a field for it, and a component the user typed
+  is appended. Had it instead appended the invisible ones at the end — the
+  shape `diff_name` uses for `name.components` — then merely opening a
+  contact whose card lists its street `number` between two mapped components
+  and closing it again would have rewritten the address, bumping the server
+  state and waking every other client. The no-op leg of
+  `editing_an_address_keeps_what_the_adr_line_cannot_carry` is what pins
+  that, and all three guards were mutation-checked: forcing the predicate to
+  `|_| true`, deleting the unmapped-kind arm, and sorting the mapped
+  components last each turn exactly one of the new tests red.
+
+**`AddressComponent` keeps its unknown members, unlike `NameComponent`.**
+It carries a `#[serde(flatten)] extra`, because the save path writes the
+component list back whole and a member dropped on the way in is a member
+deleted on the way out. `NameComponent` has no such field, which means a
+`phonetic` on a name component *is* destroyed by any save that touches the
+name today — a real hole of the same family, left alone deliberately rather
+than smuggled into this increment: fixing it changes `diff_name` and wants
+its own red test. Written down here so it is a known bug rather than a
+surprise.
+
+**What does not cross, and rides in `extra` untouched:** `full` (vCard 3.0
+states a label on a separate `LABEL` property, which would have to be paired
+back to its `ADR` by matching `TYPE` — fragile, and Evolution's label fields
+are a separate question), `coordinates`, `countryCode`, `timeZone`,
+`isOrdered`, `defaultSeparator` and `pref`. Two components of one kind are
+joined with a space into their single field; `defaultSeparator` is not
+consulted, which is a small unfaithfulness worth revisiting if a real server
+ever sets it.
+
+**Verified on real EDS, not only in unit tests.** The M9 layer-1 book leg now
+sets `E_CONTACT_ADDRESS_WORK` through `e-book-client` with a street, locality,
+postcode and country, reports all four back out of the meta backend's cache,
+and the Rust half asserts the mock's stored card holds one `addresses` entry
+whose components are exactly `name`/`locality`/`postcode`/`country` in that
+order with `contexts: {work: true}`. That is the positional half of the
+mapping — which `ADR` field means which JSContact kind — checked against the
+EDS that writes the line rather than against our reading of the RFC, and it
+is the claim the mapping's own tests cannot make.
+
+Tests: 843 in the default set, up 8 from 835 — five in `jmap-vcard`, three in
+`jmap-book-sync` — plus the extended functional leg and the `jmap-proto`
+round-trip fixture, which now pins that a component's `phonetic` and an
+address's `countryCode`/`full` survive deserialization. Red was compile-red
+first (the tests name a `ContactCard::addresses` that did not exist), then the
+three save tests.
+
+Verified locally: `cargo test --locked` 843; full `ninja` then `ctest` 14/14
+including all four functional legs; `cargo fmt --all --check` and `cargo
+clippy --all-targets --locked -- -D warnings` clean for the default set and
+for the EDS-header crates. `ci/checks.sh` again stops at its first step:
+`reuse` is not on this VM and neither `pipx` nor `uvx` is installed. Exposure
+is nil — no file was added, every file touched already carries an SPDX header
+— and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave
+on the last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is unexplained; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions about what Evolution round-trips; the multi-`ORG` risk stands; and
+whether `e_contact_set` preserves an `X-JMAP-KEY` on an attribute it rewrites
+is still unverified, the functional leg adding a contact rather than editing
+one. New from this session: the `NameComponent` hole above; the `ADR` line
+Evolution shows for a card whose street is a `name` plus a separate `number`
+loses the number *visually* (it is preserved, but the user sees a street with
+no house number, and typing one back in lands it in the street name) — the
+honest cost of refusing to guess, and the first place where invisibility is
+visible to the user rather than only to the save; and the `LABEL` property
+behind Evolution's address-label fields as the obvious next thing anyone will
+ask for. The remaining contact increment on the old list is `notes` ↔ `NOTE`.
