@@ -526,16 +526,15 @@ fn maps_every_field_the_adr_value_has() {
 
 #[test]
 fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
-    // RFC 9553 §2.5.1 has kinds — floor, room, landmark, and the street
-    // `number` on its own — that vCard's seven fields cannot state. Putting
-    // one in a field it does not belong to would misplace it, so it stays
-    // off the line, and an address made of nothing else has no line at all.
+    // RFC 9553 §2.5.1 has kinds — floor, room, landmark — that vCard's seven
+    // fields cannot state. Putting one in a field it does not belong to would
+    // misplace it, so it stays off the line, and an address made of nothing
+    // else has no line at all.
     let card = one_address(
         "a1",
         Address {
             components: Some(vec![
                 AddressComponent::new("name", "Hauptstraße"),
-                AddressComponent::new("number", "1"),
                 AddressComponent::new("floor", "3"),
             ]),
             ..Address::default()
@@ -554,6 +553,73 @@ fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
         },
     );
     assert!(!card_to_vcard(&only_unmapped).contains("\r\nADR"));
+}
+
+#[test]
+fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
+    // RFC 9553 §2.5.1 lets a card name the street and the house number as two
+    // components; RFC 2426 §3.2.1 gives the street address one field. Leaving
+    // the number off would take the house out of the address the user reads,
+    // so both go on the field, in the order the card lists them — which is
+    // the only thing that says whether the number is read before the street
+    // name or after it.
+    let english = one_address(
+        "a1",
+        Address {
+            components: Some(vec![
+                AddressComponent::new("number", "1"),
+                AddressComponent::new("name", "Main Street"),
+            ]),
+            ..Address::default()
+        },
+    );
+    assert_eq!(
+        line(&card_to_vcard(&english), "ADR"),
+        "ADR;X-JMAP-KEY=a1:;;1 Main Street;;;;"
+    );
+
+    let german = one_address(
+        "a1",
+        Address {
+            components: Some(vec![
+                AddressComponent::new("name", "Hauptstraße"),
+                AddressComponent::new("number", "1"),
+            ]),
+            ..Address::default()
+        },
+    );
+    let vcard = card_to_vcard(&german);
+    assert_eq!(line(&vcard, "ADR"), "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1;;;;");
+
+    // Read back, the field is one street name again: nothing in
+    // "Hauptstraße 1" says where the number ends and the street begins, and
+    // a guess would be wrong in half the world's addresses. Putting the parts
+    // back together is the save path's job, and it does it by asking whether
+    // the field still says what they said — see the book-sync save tests.
+    let back = vcard_to_card(&vcard).expect("parse");
+    let addresses = back.addresses.expect("addresses");
+    assert_eq!(
+        components_of(&addresses["a1"]),
+        vec![("name", "Hauptstraße 1")]
+    );
+}
+
+#[test]
+fn an_address_that_states_only_a_house_number_is_on_the_line() {
+    // The number is not decoration on a street name: an address holding
+    // nothing else is still something to show, so it gets an ADR of its own
+    // rather than being counted invisible and hidden from the save.
+    let card = one_address(
+        "a1",
+        Address {
+            components: Some(vec![AddressComponent::new("number", "1")]),
+            ..Address::default()
+        },
+    );
+    assert_eq!(
+        line(&card_to_vcard(&card), "ADR"),
+        "ADR;X-JMAP-KEY=a1:;;1;;;;"
+    );
 }
 
 #[test]
