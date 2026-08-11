@@ -47,6 +47,17 @@ pub enum Error {
     /// `urn:ietf:params:jmap:error:limit`, which is the same string for every
     /// request-level limit there is.
     RequestTooLarge { size: u64, limit: u64 },
+    /// The server's answer was longer than the octets that request said it
+    /// would take (see [`crate::limits`]), and was abandoned unread rather than
+    /// buffered.
+    ///
+    /// Only the limit, because the size is not known: the body was never read
+    /// to the end, which is the point of having a ceiling. Distinct from
+    /// [`Self::Transport`] because it is not a failure that retrying mends —
+    /// the same message will be the same length next time — and distinct from
+    /// the two limits above because those are refusals of something this client
+    /// was about to *send*.
+    ResponseTooLarge { limit: u64 },
 }
 
 impl Error {
@@ -100,6 +111,10 @@ impl std::fmt::Display for Error {
             Error::RequestTooLarge { size, limit } => write!(
                 f,
                 "{size} bytes is larger than the {limit} bytes this account accepts in one request"
+            ),
+            Error::ResponseTooLarge { limit } => write!(
+                f,
+                "the server's answer is larger than the {limit} bytes this request allowed for it"
             ),
         }
     }

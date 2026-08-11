@@ -18,6 +18,7 @@ mod changes;
 mod client;
 mod contacts;
 mod error;
+pub mod limits;
 mod mail;
 pub mod transport;
 mod url;

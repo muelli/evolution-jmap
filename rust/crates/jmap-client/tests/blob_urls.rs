@@ -12,7 +12,7 @@
 //! `#`, `?`, `/` or a space that is pasted in verbatim does not name the blob
 //! it came from — it names a different URL.
 
-use jmap_client::{Client, Credentials};
+use jmap_client::{Client, Credentials, limits};
 use jmap_mock::{AccountState, Blob, MockServer};
 use jmap_proto::Id;
 
@@ -41,7 +41,12 @@ fn a_blob_id_with_url_syntax_downloads_the_blob_it_names() {
 
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
     let downloaded = client
-        .download_blob(&account_id, &blob_id, "attachment.bin")
+        .download_blob(
+            &account_id,
+            &blob_id,
+            "attachment.bin",
+            limits::MAX_BLOB_BYTES,
+        )
         .unwrap();
 
     assert_eq!(downloaded, data);
@@ -60,7 +65,12 @@ fn a_download_name_with_url_syntax_stays_one_path_segment() {
     // The name is decoration in the URL — a filename hint for the browser —
     // but an unencoded one still reshapes the path it sits in.
     let downloaded = client
-        .download_blob(&account_id, &uploaded.blob_id, "../../etc/passwd?x=1")
+        .download_blob(
+            &account_id,
+            &uploaded.blob_id,
+            "../../etc/passwd?x=1",
+            limits::MAX_BLOB_BYTES,
+        )
         .unwrap();
 
     assert_eq!(downloaded, data);
@@ -84,7 +94,12 @@ fn an_account_id_with_url_syntax_uploads_and_downloads() {
         .upload_blob(&account_id, "application/octet-stream", data.clone())
         .unwrap();
     let downloaded = client
-        .download_blob(&account_id, &uploaded.blob_id, "blob.bin")
+        .download_blob(
+            &account_id,
+            &uploaded.blob_id,
+            "blob.bin",
+            limits::MAX_BLOB_BYTES,
+        )
         .unwrap();
 
     assert_eq!(downloaded, data);
