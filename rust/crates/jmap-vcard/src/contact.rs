@@ -109,7 +109,7 @@ pub fn title_kind(kind: Option<&str>) -> &str {
 }
 
 /// Whether the vCard mapping covers a JSContact title of this `kind`.
-pub fn maps_title_kind(kind: Option<&str>) -> bool {
+fn maps_title_kind(kind: Option<&str>) -> bool {
     TITLE_KINDS
         .iter()
         .any(|(mapped, _)| *mapped == title_kind(kind))
@@ -144,19 +144,47 @@ pub fn maps_address_component(kind: &str) -> bool {
 /// `ADR` line can state.
 ///
 /// This is the emitter's own decision, asked of it by name, so that the save
-/// path cannot drift from what [`card_to_vcard`] actually wrote.
+/// path cannot drift from what [`card_to_vcard`] actually wrote. Every keyed
+/// map the mapping carries has one of these, because every one of them has
+/// entries a vCard leaves out; a save that decided for itself which those
+/// were would eventually decide differently, and delete an entry the user
+/// never saw.
 pub fn states_address(address: &Address) -> bool {
     address_fields(address).is_some()
 }
 
 /// Whether a note reaches the user at all — whether it says anything a
 /// `NOTE` line could state.
-///
-/// A note is all text, so this is only the empty case; it is a named
-/// predicate anyway, for the same reason [`states_address`] is: the save path
-/// asks the emitter what it wrote rather than deciding again for itself.
 pub fn states_note(note: &Note) -> bool {
     !note.note.is_empty()
+}
+
+/// Whether an email address reaches the user at all. An entry with no
+/// address states nothing, so it gets no `EMAIL` line.
+pub fn states_email(email: &ContactEmail) -> bool {
+    !email.address.is_empty()
+}
+
+/// Whether a phone number reaches the user at all.
+pub fn states_phone(phone: &ContactPhone) -> bool {
+    !phone.number.is_empty()
+}
+
+/// Whether a title reaches the user at all: the mapping must have a property
+/// for its `kind` *and* the entry must name something.
+///
+/// The kind alone is not the question. A title of kind `title` that names
+/// nothing has no `TITLE` line either, and asking only [`maps_title_kind`]
+/// would call it visible and let a save delete it.
+pub fn states_title(title: &Title) -> bool {
+    !title.name.is_empty() && maps_title_kind(title.kind.as_deref())
+}
+
+/// Whether an organisation reaches the user at all — whether the `ORG` line
+/// has a name or a unit to state. An entry holding only a `sortAs` has
+/// neither.
+pub fn states_organization(organization: &Organization) -> bool {
+    organization_components(organization).is_some()
 }
 
 /// Render a contact card as a vCard 3.0 string, ready for
@@ -190,7 +218,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     for (key, email) in card.emails.iter().flatten() {
-        if email.address.is_empty() {
+        if !states_email(email) {
             continue;
         }
         let mut types = type_names(&CONTEXTS, email.contexts.as_ref());
@@ -206,7 +234,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     for (key, phone) in card.phones.iter().flatten() {
-        if phone.number.is_empty() {
+        if !states_phone(phone) {
             continue;
         }
         let mut types = type_names(&CONTEXTS, phone.contexts.as_ref());
@@ -237,7 +265,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     for (key, title) in card.titles.iter().flatten() {
-        if title.name.is_empty() {
+        if !states_title(title) {
             continue;
         }
         let Some((_, name)) = TITLE_KINDS

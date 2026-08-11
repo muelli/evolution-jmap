@@ -681,3 +681,147 @@ fn saving_something_that_is_not_a_vcard_fails_before_any_request() {
     );
     assert!(fixture.sync().list_existing().unwrap().1.is_empty());
 }
+
+// The same invisibility one property at a time. `titles`, `addresses` and
+// `notes` learned it first, each when it landed; `emails`, `phones` and
+// `organizations` have entries the vCard leaves out too — one whose value is
+// empty — and the save has to see them the same way.
+
+#[test]
+fn an_email_with_no_address_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // An entry with nothing to state gets no EMAIL line, so it never reaches
+    // the user — and must not then be deleted by a save, nor have its key
+    // taken by the address the user types.
+    fixture.patch(
+        &id,
+        json!({"emails": {
+            "e0": {"@type": "EmailAddress", "address": "vera@example.com"},
+            "e1": {"@type": "EmailAddress", "address": "", "label": "spare"},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert_eq!(vcard.matches("\r\nEMAIL").count(), 1, "{vcard}");
+    // The reader counts only the entries it can see, so the key it invents
+    // for a typed-in address is `e1` — the key the hidden entry holds.
+    let edited = vcard.replace("END:VCARD\r\n", "EMAIL:beer@example.com\r\nEND:VCARD\r\n");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let emails = fixture.card(&id).emails.expect("emails");
+    let hidden = emails.get("e1").expect("the hidden entry");
+    assert_eq!(
+        (hidden.address.as_str(), hidden.extra.get("label")),
+        ("", Some(&json!("spare"))),
+        "an entry the vCard never showed was overwritten: {emails:?}"
+    );
+    assert!(
+        emails
+            .values()
+            .any(|email| email.address == "beer@example.com"),
+        "the address the user typed was not saved: {emails:?}"
+    );
+    assert_eq!(emails.len(), 3);
+}
+
+#[test]
+fn a_phone_with_no_number_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"phones": {"p1": {"@type": "Phone", "number": "", "label": "spare"}}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nTEL"), "{vcard}");
+    let edited = vcard.replace("END:VCARD\r\n", "TEL:+49 30 123456\r\nEND:VCARD\r\n");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let phones = fixture.card(&id).phones.expect("phones");
+    let hidden = phones.get("p1").expect("the hidden entry");
+    assert_eq!(
+        (hidden.number.as_str(), hidden.extra.get("label")),
+        ("", Some(&json!("spare"))),
+        "an entry the vCard never showed was overwritten: {phones:?}"
+    );
+    assert!(
+        phones.values().any(|phone| phone.number == "+49 30 123456"),
+        "the number the user typed was not saved: {phones:?}"
+    );
+    assert_eq!(phones.len(), 2);
+}
+
+#[test]
+fn a_title_with_no_name_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A title of a mapped kind, but naming nothing: the emitter skips it for
+    // the value, which `maps_title_kind` alone cannot see.
+    fixture.patch(
+        &id,
+        json!({"titles": {"t1": {
+            "@type": "Title",
+            "name": "",
+            "kind": "title",
+            "organizationId": "o1",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nTITLE"), "{vcard}");
+    let edited = vcard.replace("END:VCARD\r\n", "TITLE:Head of Beer\r\nEND:VCARD\r\n");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let titles = fixture.card(&id).titles.expect("titles");
+    assert_eq!(
+        titles
+            .get("t1")
+            .and_then(|title| title.extra.get("organizationId")),
+        Some(&json!("o1")),
+        "an entry the vCard never showed was overwritten: {titles:?}"
+    );
+    assert!(
+        titles.values().any(|title| title.name == "Head of Beer"),
+        "the title the user typed was not saved: {titles:?}"
+    );
+    assert_eq!(titles.len(), 2);
+}
+
+#[test]
+fn an_organization_with_nothing_to_name_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Neither a name nor a unit, so `organization_components` has nothing to
+    // put on an ORG line.
+    fixture.patch(
+        &id,
+        json!({"organizations": {"o1": {"@type": "Organization", "sortAs": "Oldenburg"}}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nORG"), "{vcard}");
+    let edited = vcard.replace("END:VCARD\r\n", "ORG:Brauerei\r\nEND:VCARD\r\n");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let organizations = fixture.card(&id).organizations.expect("organizations");
+    assert_eq!(
+        organizations
+            .get("o1")
+            .and_then(|organization| organization.extra.get("sortAs")),
+        Some(&json!("Oldenburg")),
+        "an entry the vCard never showed was overwritten: {organizations:?}"
+    );
+    assert!(
+        organizations
+            .values()
+            .any(|organization| organization.name.as_deref() == Some("Brauerei")),
+        "the organisation the user typed was not saved: {organizations:?}"
+    );
+    assert_eq!(organizations.len(), 2);
+}
