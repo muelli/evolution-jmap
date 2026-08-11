@@ -116,6 +116,17 @@ pub struct HttpRequest<'a> {
     pub headers: &'a [(String, String)],
     pub body: Option<&'a [u8]>,
     pub cancel: Option<&'a CancelFlag>,
+    /// The most octets of response body this request will accept — exactly
+    /// this many are fine, one more is [`TransportError::ResponseTooLarge`].
+    ///
+    /// It has no default and every caller states it, which is the whole point:
+    /// a response is buffered whole, JMAP gives no number to bound one by (see
+    /// [`crate::limits`]), and the number in force before this field existed
+    /// was a dependency's. A transport must apply it rather than treat it as
+    /// advice, and must apply it while *reading* rather than after: a body that
+    /// is refused for being too long has to stop being read at the ceiling, or
+    /// the memory it was meant to bound has already been taken.
+    pub max_response_bytes: u64,
 }
 
 pub struct HttpResponse {
@@ -130,6 +141,16 @@ pub struct HttpResponse {
 pub enum TransportError {
     Cancelled,
     Failed(String),
+    /// The response body passed [`HttpRequest::max_response_bytes`] and was
+    /// abandoned there; `limit` is the ceiling it passed.
+    ///
+    /// Separate from [`Self::Failed`] because the two mean opposite things to
+    /// whoever is waiting: a failed request may well work on the next attempt,
+    /// while a body that is too large will be too large every time, and the
+    /// number is what a layer above needs in order to say so.
+    ResponseTooLarge {
+        limit: u64,
+    },
 }
 
 pub trait Transport: Send + Sync + 'static {
@@ -200,10 +221,29 @@ mod ureq_transport {
                 .get("content-type")
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
+            // `read_to_vec()` would apply `ureq`'s own `MAX_BODY_SIZE`; the
+            // limit is set here so the number in force is the caller's.
+            //
+            // One more than the ceiling, deliberately. `ureq`'s limiting reader
+            // fails on the read that finds nothing left rather than on the
+            // octet that overran, so a body of exactly `limit` octets is
+            // rejected by it: the last read consumes the allowance, and the
+            // read that would have returned end-of-file finds none. Asking for
+            // one octet more leaves that read an allowance to return zero
+            // against, which makes `max_response_bytes` mean "this many octets
+            // are fine" — the only reading a caller sizing a ceiling from a
+            // blob's own `size` can use.
             let body = response
                 .into_body()
+                .with_config()
+                .limit(request.max_response_bytes.saturating_add(1))
                 .read_to_vec()
-                .map_err(|error| TransportError::Failed(error.to_string()))?;
+                .map_err(|error| match error {
+                    ureq::Error::BodyExceedsLimit(_) => TransportError::ResponseTooLarge {
+                        limit: request.max_response_bytes,
+                    },
+                    error => TransportError::Failed(error.to_string()),
+                })?;
 
             Ok(HttpResponse {
                 status,

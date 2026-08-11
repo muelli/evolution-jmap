@@ -159,3 +159,75 @@ fn the_source_is_asked_for_by_the_blob_the_server_names_now() {
     let source = String::from_utf8(fixture.sync().message_source(&uid).unwrap()).unwrap();
     assert!(source.contains("Subject: Dinner?"), "{source}");
 }
+
+/// The message that used not to open. A body past the 10 MiB that `ureq`'s
+/// default used to impose comes back whole — this is the layer where that
+/// limit was felt, because one photo attachment reaches it.
+#[test]
+fn a_message_larger_than_ten_mebibytes_is_readable() {
+    let fixture = Fixture::start();
+    // Not a round multiple of anything, so a truncated read cannot come out the
+    // right length by accident.
+    let body = "x".repeat(11 * 1024 * 1024 + 7);
+    let uid = fixture.seed_message("Holiday photos", &body);
+
+    let source = fixture
+        .sync()
+        .message_source(&uid)
+        .expect("a large message is still a message");
+    let source = String::from_utf8(source).expect("the mock serves a text message");
+
+    assert!(source.contains(&body), "the body did not arrive whole");
+}
+
+/// Whose number the download is held to. The row says how many octets the
+/// message is, and that is what bounds the read: a row that claims far fewer
+/// than the blob turns out to hold is a server contradicting itself, and the
+/// answer is refused at the ceiling rather than buffered and then judged.
+///
+/// The discriminating half of the test above — without it, a constant large
+/// enough to let any message through would pass both.
+#[test]
+fn a_row_that_understates_its_size_bounds_the_download_to_what_it_said() {
+    let fixture = Fixture::start();
+    let uid = fixture.seed_message("Holiday photos", &"x".repeat(512 * 1024));
+    // Well below the message *and* below the margin `download_ceiling` allows
+    // for a server counting line endings differently, so this is a claim about
+    // the row being read rather than about the margin being tight.
+    fixture.with_email(&uid, |email| email.size = Some(1));
+
+    let error = fixture
+        .sync()
+        .message_source(&uid)
+        .expect_err("a blob far past the size its row states is not read");
+
+    match error {
+        SyncError::Client(jmap_client::Error::ResponseTooLarge { limit }) => {
+            assert_eq!(limit, jmap_mail_sync::download_ceiling(Some(1)));
+        }
+        other => panic!("expected the download to be bounded by the row, got {other:?}"),
+    }
+}
+
+/// A row with no size to be proportional to still gets a ceiling — this
+/// repository's, not a dependency's, and above the old 10 MiB either way.
+#[test]
+fn a_row_with_no_size_still_reads_a_large_message() {
+    let fixture = Fixture::start();
+    let body = "x".repeat(11 * 1024 * 1024 + 7);
+    let uid = fixture.seed_message("Holiday photos", &body);
+    // RFC 8621 §4.1.1 makes `size` server-set, so this is a server in the
+    // wrong; it must not cost the user the message.
+    fixture.with_email(&uid, |email| email.size = None);
+
+    let source = fixture
+        .sync()
+        .message_source(&uid)
+        .expect("a message whose size the server withheld is still a message");
+    assert!(
+        String::from_utf8(source)
+            .expect("the mock serves a text message")
+            .contains(&body),
+        "the body did not arrive whole"
+    );
+}

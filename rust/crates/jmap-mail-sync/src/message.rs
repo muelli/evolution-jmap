@@ -37,6 +37,7 @@
 //!   summary, so the choice belongs to the layer that fills that summary. Here
 //!   the headers stay text.
 
+use jmap_client::limits;
 use jmap_proto::Id;
 use jmap_proto::mail::{Email, EmailAddress, keyword};
 
@@ -70,11 +71,47 @@ pub const SUMMARY_PROPERTIES: &[&str] = &[
 
 /// The properties one `Email/get` has to ask for to find a message's bytes.
 ///
-/// Two, and neither of them is any of the sixteen above: fetching a message is
+/// Three, and none of them is any of the sixteen above: fetching a message is
 /// not fetching its summary again, and asking for a row's worth of properties
 /// to learn one id would be paying for the message list a second time on every
 /// message the user opens.
-pub const SOURCE_PROPERTIES: &[&str] = &["id", "blobId"];
+///
+/// `size` is here for [`download_ceiling`] rather than for the summary, and it
+/// is free: it rides the `Email/get` that had to be made anyway to learn the
+/// `blobId`, so knowing how large the download will be costs no round trip.
+pub const SOURCE_PROPERTIES: &[&str] = &["id", "blobId", "size"];
+
+/// How many octets of blob to accept for a message whose row says it is
+/// `advertised` octets long.
+///
+/// RFC 8621 §4.1.1 defines `size` as the octets of the raw data the `blobId`
+/// refers to, which is exactly what the download returns, so the honest ceiling
+/// is that number — and taking it means the memory one open message can cost is
+/// bounded by something the account said before the download started, rather
+/// than by a constant this crate guessed.
+///
+/// It is not taken *exactly*, and the margin is the interesting part. A server
+/// that stores a message with bare-LF line endings and serves it with CRLF adds
+/// one octet per line, and its `size` may well be counting the stored form;
+/// refusing such a message would make a server's rounding into mail the user
+/// cannot open, which is a far worse failure than buffering a few percent more
+/// than expected. An eighth is generous cover for that — a mail line averages
+/// well over eight octets — and the flat 64 KiB keeps the margin meaningful for
+/// a short message, where an eighth of it is nothing. Neither term makes the
+/// bound stop being the account's: it stays proportional to what the row said.
+///
+/// A row with no `size` gives nothing to be proportional to, and gets
+/// [`limits::MAX_BLOB_BYTES`] — this repository's answer to "how large a
+/// message will we open at all".
+pub fn download_ceiling(advertised: Option<u64>) -> u64 {
+    match advertised {
+        // Saturating, so a server naming a size near `u64::MAX` gets a
+        // meaningless ceiling rather than a wrapped one — it is not describing
+        // a message, and the download will fail on its own terms.
+        Some(size) => size.saturating_add(size / 8).saturating_add(64 * 1024),
+        None => limits::MAX_BLOB_BYTES,
+    }
+}
 
 /// The bits of Camel's flags word this provider can honestly set.
 ///
@@ -258,4 +295,52 @@ fn references(email: &Email) -> Vec<String> {
         references.push(parent.clone());
     }
     references
+}
+
+#[cfg(test)]
+mod ceiling_tests {
+    use super::*;
+
+    /// The number a download is held to comes from the row, and is above it —
+    /// a message of exactly the size it advertises has to arrive.
+    #[test]
+    fn the_ceiling_a_row_gets_is_above_the_size_it_states() {
+        for size in [0, 1, 1024, 11 * 1024 * 1024, 900 * 1024 * 1024] {
+            let ceiling = download_ceiling(Some(size));
+            assert!(
+                ceiling > size,
+                "a {size}-octet message needs room for {size} octets, got {ceiling}"
+            );
+        }
+    }
+
+    /// And it stays proportional to that row rather than becoming a constant:
+    /// a small message does not license a large buffer.
+    #[test]
+    fn the_ceiling_stays_within_reach_of_the_size_it_states() {
+        assert!(
+            download_ceiling(Some(1024)) < limits::MAX_BLOB_BYTES,
+            "a one-kilobyte message must not license the fallback ceiling"
+        );
+        let big = 100 * 1024 * 1024;
+        assert!(
+            download_ceiling(Some(big)) < big * 2,
+            "the margin is slack, not a doubling"
+        );
+    }
+
+    /// A row that states no size gives nothing to be proportional to, and gets
+    /// this repository's answer instead of an unbounded read.
+    #[test]
+    fn a_row_that_states_no_size_gets_the_fallback_ceiling() {
+        assert_eq!(download_ceiling(None), limits::MAX_BLOB_BYTES);
+    }
+
+    /// A size no message has does not wrap into a *small* ceiling, which would
+    /// turn a nonsense row into a refusal of the mail behind it for the wrong
+    /// reason.
+    #[test]
+    fn a_size_no_message_has_saturates_rather_than_wrapping() {
+        assert_eq!(download_ceiling(Some(u64::MAX)), u64::MAX);
+    }
 }

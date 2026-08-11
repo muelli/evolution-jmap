@@ -4,7 +4,7 @@
 //! Sending email: draft creation + submission in one request, envelope
 //! derivation, onSuccessUpdateEmail, and rejection paths.
 
-use jmap_client::{Client, Credentials, Error};
+use jmap_client::{Client, Credentials, Error, limits};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::{Email, EmailAddress, EmailBodyPart, EmailBodyValue, keyword, role};
@@ -137,7 +137,12 @@ fn upload_download_blob_roundtrip() {
     assert_eq!(uploaded.size, data.len() as u64);
 
     let downloaded = client
-        .download_blob(&account_id, &uploaded.blob_id, "img.png")
+        .download_blob(
+            &account_id,
+            &uploaded.blob_id,
+            "img.png",
+            limits::MAX_BLOB_BYTES,
+        )
         .unwrap();
     assert_eq!(downloaded, data);
 }

@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use jmap_client::transport::{HttpMethod, HttpRequest, Transport, UreqTransport};
-use jmap_client::{Client, Credentials, Error};
+use jmap_client::{Client, Credentials, Error, limits};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
@@ -81,6 +81,7 @@ fn a_server_that_takes_a_small_request_refuses_a_larger_one() {
             headers: &[("Content-Type".to_owned(), "application/json".to_owned())],
             body: Some(&body),
             cancel: None,
+            max_response_bytes: limits::MAX_API_RESPONSE_BYTES,
         })
         .unwrap();
 
