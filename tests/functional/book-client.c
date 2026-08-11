@@ -20,17 +20,18 @@
  * backends implement. Binding a second surface just to call it from a test
  * would put a layer of our own between EDS and the thing under test.
  *
- * There are four phases, chosen on the command line, because they need
+ * There are five phases, chosen on the command line, because they need
  * different books: `write` starts from an empty address book and puts a
- * contact into it, while `edit`, `rename` and `repicture` each start from one
- * the mock was seeded with before EDS connected — a card that came from the
- * *server*, which is the only way to have EDS read something no vCard this
- * program could write would produce. Those three differ only in which field the
- * user changes, and that is the whole distinction under test: `edit` touches a
- * field beside the name, `rename` retypes the name itself, and `repicture`
- * replaces the photo. They are modes of one program rather than separate
- * programs because they open the same book the same way and differ only in what
- * they then ask of it.
+ * contact into it, while `edit`, `rename`, `repicture` and `recalendar` each
+ * start from one the mock was seeded with before EDS connected — a card that
+ * came from the *server*, which is the only way to have EDS read something no
+ * vCard this program could write would produce. Those four differ only in which
+ * field the user changes, and that is the whole distinction under test: `edit`
+ * touches a field beside the name, `rename` retypes the name itself,
+ * `repicture` replaces the photo, and `recalendar` retypes the calendar
+ * address. They are modes of one program rather than separate programs because
+ * they open the same book the same way and differ only in what they then ask of
+ * it.
  *
  *   usage: functional-book-client <source-uid> write <full-name> <photo-base64>
  *          functional-book-client <source-uid> edit <contact-uid> <email>
@@ -38,6 +39,8 @@
  *                                 <full-name> <given-name>
  *          functional-book-client <source-uid> repicture <contact-uid> \
  *                                 <photo-base64>
+ *          functional-book-client <source-uid> recalendar <contact-uid> \
+ *                                 <calendar-uri>
  */
 
 #include <libebook/libebook.h>
@@ -107,6 +110,16 @@
  * the user typed is shown to survive real EDS whole, rather than arriving at
  * the server cut off at the comma or carrying a backslash EDS put there. */
 #define TEST_HOMEPAGE "https://dana.example/profile?tags=x-files,ufo"
+
+/* The contact's own calendar and the free/busy data drawn from it, which EDS
+ * keeps on CALURI and FBURL — the two fields Evolution shows as Calendar and
+ * Free/Busy — and JSContact keeps in one `calendars` map told apart by a `kind`
+ * neither line carries. Both are set because the crossing is which line a kind
+ * chose: a mapping that put both URIs under one kind would still produce two
+ * lines with the right two URIs, and only setting both and reading both back
+ * out of their own fields can say they did not swap. */
+#define TEST_CALENDAR_URI "https://dana.example/cal/dana.ics"
+#define TEST_FREEBUSY_URI "https://dana.example/fb/dana.ifb"
 
 /* The instant-messaging handle, which EDS keeps on an X-JABBER line and
  * JSContact keeps as an entry of the `onlineServices` map. Set through the
@@ -276,6 +289,25 @@ report_photo (const gchar *prefix,
 	e_contact_photo_free (photo);
 }
 
+/* Report the two calendaring addresses EDS holds for a contact, each out of the
+ * field it belongs to.
+ *
+ * Both together and never one alone: the mapping tells them apart by a `kind`
+ * that neither CALURI nor FBURL carries, so the failure worth catching is the
+ * two having swapped — which is invisible to whichever of them is asked about on
+ * its own. An unset field is reported as the empty string rather than left out,
+ * so a leg can say a resource is absent. */
+static void
+report_calendars (const gchar *prefix,
+                  EContact *contact)
+{
+	const gchar *calendar = e_contact_get_const (contact, E_CONTACT_CALENDAR_URI);
+	const gchar *freebusy = e_contact_get_const (contact, E_CONTACT_FREEBUSY_URL);
+
+	g_print ("%s-calendar-uri=%s\n", prefix, calendar ? calendar : "");
+	g_print ("%s-freebusy-uri=%s\n", prefix, freebusy ? freebusy : "");
+}
+
 /* The first phase: an empty book, one contact written into it with every
  * mapped property set, and that contact read back. */
 static int
@@ -326,6 +358,8 @@ write_phase (EBookClient *book,
 	e_contact_set (contact, E_CONTACT_ROLE, TEST_ROLE);
 	e_contact_set (contact, E_CONTACT_NOTE, TEST_NOTE);
 	e_contact_set (contact, E_CONTACT_HOMEPAGE_URL, TEST_HOMEPAGE);
+	e_contact_set (contact, E_CONTACT_CALENDAR_URI, TEST_CALENDAR_URI);
+	e_contact_set (contact, E_CONTACT_FREEBUSY_URL, TEST_FREEBUSY_URI);
 	e_contact_set (contact, E_CONTACT_BIRTH_DATE, &birthday);
 	e_contact_set (contact, E_CONTACT_IM_JABBER_HOME_1, TEST_IM_HANDLE);
 
@@ -397,6 +431,7 @@ write_phase (EBookClient *book,
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_NOTE));
 	g_print ("read-back-homepage=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_HOMEPAGE_URL));
+	report_calendars ("read-back", read_back);
 	/* Read out of the same slot it was written to: a handle that reached the
 	 * server but came back on a line without a TYPE would be missing here
 	 * while sitting in the vCard, which is exactly the failure the parameter
@@ -515,6 +550,10 @@ report_seeded_contact (EContact *contact)
 	 * the emitter wrote — the direction the `write` phase cannot ask about,
 	 * where that line came from EDS in the first place. */
 	report_photo ("read", contact);
+	/* Likewise the two calendaring addresses, and for the same reason: what
+	 * EDS made of lines the emitter wrote rather than of lines it wrote
+	 * itself. */
+	report_calendars ("read", contact);
 }
 
 /* Save an edited contact and report what EDS holds for it afterwards. Takes
@@ -553,6 +592,7 @@ save_and_report (EBookClient *book,
 	 * picture the backend rewrote would come back out of the cache changed
 	 * even though nobody asked. */
 	report_photo ("read-back", read_back);
+	report_calendars ("read-back", read_back);
 	g_object_unref (read_back);
 
 	return 0;
@@ -670,14 +710,48 @@ repicture_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
+/* The fifth phase: the user moves their calendar, on a card the server filed
+ * two calendaring resources on.
+ *
+ * The distinction from `repicture` beside it is the whole point.
+ * E_CONTACT_CALENDAR_URI is a plain vCard attribute rather than a synthetic
+ * field, so a set on it rewrites the value of the first CALURI line in place and
+ * leaves the parameters — X-JMAP-KEY included — where they were, which means the
+ * save can patch by key instead of having to pair a keyless URI with the one it
+ * replaced. That is a claim about libebook-contacts, and this is the phase that
+ * makes it through the daemons Evolution actually goes through.
+ *
+ * Only the calendar is set. The free/busy address beside it is what says a patch
+ * aimed at one entry did not land on the map. */
+static int
+recalendar_phase (EBookClient *book,
+                  const gchar *uid,
+                  const gchar *calendar_uri)
+{
+	EContact *contact;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	report_seeded_contact (contact);
+
+	e_contact_set (contact, E_CONTACT_CALENDAR_URI, calendar_uri);
+
+	return save_and_report (book, contact, uid);
+}
+
 static void
 usage (const gchar *program)
 {
 	g_printerr ("usage: %s <source-uid> write <full-name> <photo-base64>\n"
 		    "       %s <source-uid> edit <contact-uid> <email>\n"
 		    "       %s <source-uid> rename <contact-uid> <full-name> <given-name>\n"
-		    "       %s <source-uid> repicture <contact-uid> <photo-base64>\n",
-		    program, program, program, program);
+		    "       %s <source-uid> repicture <contact-uid> <photo-base64>\n"
+		    "       %s <source-uid> recalendar <contact-uid> <calendar-uri>\n",
+		    program, program, program, program, program);
 }
 
 int
@@ -704,7 +778,8 @@ main (int argc,
 	if (!((g_str_equal (phase, "write") && argc == 5) ||
 	      (g_str_equal (phase, "edit") && argc == 5) ||
 	      (g_str_equal (phase, "rename") && argc == 6) ||
-	      (g_str_equal (phase, "repicture") && argc == 5))) {
+	      (g_str_equal (phase, "repicture") && argc == 5) ||
+	      (g_str_equal (phase, "recalendar") && argc == 5))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -765,8 +840,10 @@ main (int argc,
 		status = edit_phase (book, argv[3], argv[4]);
 	else if (g_str_equal (phase, "rename"))
 		status = rename_phase (book, argv[3], argv[4], argv[5]);
-	else
+	else if (g_str_equal (phase, "repicture"))
 		status = repicture_phase (book, argv[3], argv[4]);
+	else
+		status = recalendar_phase (book, argv[3], argv[4]);
 
 	g_object_unref (client);
 	g_object_unref (source);

@@ -187,7 +187,7 @@ ordering worth waiting out rather than flaking on.
 
 ### The picture: what a meta backend does to a photo behind the backend's back
 
-The contact's photo crosses all four book legs, and it is the one property where
+The contact's photo crosses all five book legs, and it is the one property where
 EDS does something to the data on its own initiative — which is why it needs real
 daemons rather than a fixture. Two facts, both measured here against EDS 3.52,
 and neither of them anything this repository asks for:
@@ -215,6 +215,41 @@ entry it replaces, and the save has to pair it with the one it replaced
 only test in the tree that goes red: the server ends up holding the picture under
 a key the reader invented by counting lines, and the one it was filed under
 deleted.
+
+### The calendaring addresses: a key that *does* survive being set
+
+The contact's Calendar and Free/Busy fields — `CALURI` and `FBURL`, one
+JSContact `calendars` map told apart by a `kind` neither line carries — are the
+counter-example to the picture above, and the fifth leg
+(`retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces`) is
+where that is measured rather than assumed.
+
+Both are plain vCard attributes rather than synthetic fields, so
+`e_contact_set` on either rewrites the *value* of the first line of that name in
+place and leaves its parameters — the `X-JMAP-KEY` among them — where they were.
+A picture the user replaces loses its key and has to be paired; a calendar
+address the user retypes keeps its key and is simply patched. Same user action,
+opposite requirement, and only real EDS says which is which.
+
+What the leg asserts, on the seeded card with two calendaring resources the
+server filed under `calendar-1` and `freebusy-1`:
+
+- EDS reads each URI back out of the field its `kind` chose, which is the only
+  check that the two cannot have swapped on the way — a `freeBusy` URI shown to
+  the user as their calendar is a plausible failure that no single-field
+  assertion would see;
+- retyping the Calendar field patches `calendars/calendar-1/uri` and nothing
+  else: the entry keeps its key and keeps the `pref` no line can carry, so the
+  save patched rather than replaced;
+- the free/busy address beside it — a second line, of a different name, that
+  nobody touched — is untouched on the server and unchanged in EDS's cache.
+
+The first book leg covers the other direction: a contact written through
+`e_book_client_add_contact_sync` with both fields set reaches the server as two
+`calendars` entries of kind `calendar` and `freeBusy`. Drop the `X-JMAP-KEY`
+from the emitter's two lines and the three seeded legs all go red together, with
+the server's entries deleted and re-added under the `c1`/`c2` the reader invents
+by counting lines.
 
 ## What the calendar test asserts
 

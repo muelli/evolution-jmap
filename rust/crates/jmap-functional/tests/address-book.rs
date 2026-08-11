@@ -10,16 +10,17 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Four legs, because they need four books. The first starts empty and writes
-//! a contact into it. The other three each start from a card the mock was
+//! Five legs, because they need five books. The first starts empty and writes
+//! a contact into it. The other four each start from a card the mock was
 //! seeded with before EDS ever connected — a card from the *server*, holding a
 //! shape no vCard can state, which is the only way to ask what real EDS does to
 //! it — and take the branches a save can take with it: the user edits a field
-//! beside the name, retypes the name itself, or picks a new picture.
+//! beside the name, retypes the name itself, picks a new picture, or retypes
+//! their calendar address.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
-use jmap_proto::contacts::{ContactCard, Media, Name, NameComponent};
+use jmap_proto::contacts::{Calendar, ContactCard, Media, Name, NameComponent};
 
 /// The contact the client writes. One string, passed to the client on its
 /// command line and looked for in the mock's store, so the two ends cannot
@@ -74,6 +75,16 @@ const NOTE: &str = "met at FOSDEM; owes me a beer, apparently";
 /// shown to reach the server as the one the user typed — neither cut off at the
 /// comma nor carrying the backslash EDS wrote.
 const HOMEPAGE: &str = "https://dana.example/profile?tags=x-files,ufo";
+/// The contact's own calendar and the free/busy data drawn from it, spelled as
+/// `book-client.c` spells them. EDS keeps them on `CALURI` and `FBURL` and
+/// JSContact keeps both in the one `calendars` map, told apart by a `kind` no
+/// line carries — so what only real EDS can answer is whether the two fields
+/// Evolution shows as Calendar and Free/Busy are the two lines the emitter
+/// writes, and whether the reader puts each URI back under the kind it came
+/// off. A URI that crossed under the wrong kind would be shown to the user as
+/// the other resource, and the two fields sit next to each other.
+const CALENDAR_URI: &str = "https://dana.example/cal/dana.ics";
+const FREEBUSY_URI: &str = "https://dana.example/fb/dana.ifb";
 /// The instant-messaging handle the client sets, spelled as `book-client.c`
 /// spells it. EDS keeps it on an `X-JABBER` line and JSContact as an
 /// `onlineServices` entry, and two things about the crossing only real EDS can
@@ -290,6 +301,19 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         seen.get("read-back-homepage"),
         Some(&HOMEPAGE),
         "the contact EDS handed back lost or mangled its home page\n{report}"
+    );
+    // The two calendaring fields, read back out of the same two EDS keeps them
+    // in. Swapped here would mean the `kind` had picked the wrong line, which
+    // is a failure no single-field assertion could see.
+    assert_eq!(
+        seen.get("read-back-calendar-uri"),
+        Some(&CALENDAR_URI),
+        "the contact EDS handed back lost or moved its calendar address\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-freebusy-uri"),
+        Some(&FREEBUSY_URI),
+        "the contact EDS handed back lost or moved its free/busy address\n{report}"
     );
     assert_eq!(
         seen.get("read-back-birthday"),
@@ -545,6 +569,29 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     let link = links.values().next().expect("one link");
     assert_eq!(link.uri, HOMEPAGE, "{card:?}");
     assert_eq!(link.kind, None, "{card:?}");
+    // The CALURI and FBURL lines, as the server sees them: two `calendars`
+    // entries, each stating what it is. The kinds are spelled out here rather
+    // than borrowed from the mapping, so this end states the wire shape it
+    // expects instead of agreeing with the code that produced it — and they are
+    // asserted as a pair, since a mapping that put both URIs under one kind
+    // would still have two entries and the right two URIs.
+    let calendars = card
+        .calendars
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no calendars: {card:?}"));
+    let mut stated: Vec<(Option<&str>, &str)> = calendars
+        .values()
+        .map(|calendar| (calendar.kind.as_deref(), calendar.uri.as_str()))
+        .collect();
+    stated.sort();
+    assert_eq!(
+        stated,
+        vec![
+            (Some("calendar"), CALENDAR_URI),
+            (Some("freeBusy"), FREEBUSY_URI),
+        ],
+        "{card:?}"
+    );
     // The X-JABBER line, as the server sees it: one `onlineServices` entry
     // stating the service and the handle. Asserted at this end too because the
     // client's read-back comes out of EDS's own cache, which would agree with
@@ -666,6 +713,18 @@ const EDITED_EMAIL_AFTER: &str = "jp@example.org";
 /// back at all depends on what real EDS does to a card whose picture the user
 /// never touched.
 const SEEDED_PHOTO_KEY: &str = "picture-1";
+/// The keys the *server* filed the seeded card's two calendaring resources
+/// under, and where each points. Nothing like the keys the reader invents
+/// (`c1`, `c2`, …), for the reason [`SEEDED_PHOTO_KEY`] is not.
+const SEEDED_CALENDAR_KEY: &str = "calendar-1";
+const SEEDED_FREEBUSY_KEY: &str = "freebusy-1";
+const SEEDED_CALENDAR_URI: &str = "https://oldenburg.example/cal/jp.ics";
+const SEEDED_FREEBUSY_URI: &str = "https://oldenburg.example/fb/jp.ifb";
+/// How strongly the server says the calendar is preferred. A `CALURI` has no
+/// parameter for it, so it rides in the entry's `extra` and is the member that
+/// says whether a save *patched* the entry or replaced it: a replacement would
+/// hold the URI and nothing else.
+const SEEDED_CALENDAR_PREF: u64 = 1;
 
 /// Put the card both name legs start from into the mock's store, and hand back
 /// the id the server filed it under.
@@ -722,8 +781,88 @@ fn seed_double_barrelled_card(server: &jmap_mock::MockServer) -> Id {
         .into_iter()
         .collect(),
     );
+    // The two calendaring resources, likewise under keys only a server would
+    // choose, and likewise on the card every leg starts from: two entries of one
+    // map that cross on lines of *different* names, which is the shape the
+    // reader's per-line key counter has to keep free of itself. The `pref` is
+    // there because no line can carry it — see [`SEEDED_CALENDAR_PREF`].
+    let mut calendar = Calendar {
+        kind: Some("calendar".to_owned()),
+        uri: SEEDED_CALENDAR_URI.to_owned(),
+        ..Calendar::default()
+    };
+    calendar
+        .extra
+        .insert("pref".to_owned(), serde_json::json!(SEEDED_CALENDAR_PREF));
+    card.calendars = Some(
+        [
+            (SEEDED_CALENDAR_KEY.to_owned(), calendar),
+            (
+                SEEDED_FREEBUSY_KEY.to_owned(),
+                Calendar {
+                    kind: Some("freeBusy".to_owned()),
+                    uri: SEEDED_FREEBUSY_URI.to_owned(),
+                    ..Calendar::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
     account.contact_cards.seed_with_id(id.clone(), card);
     id
+}
+
+/// Hold the card the server now holds to the free/busy address it was seeded
+/// with — the same URI, of the same kind, under the same server-chosen key.
+///
+/// Split out from the calendar beside it because the leg that retypes the
+/// calendar address leaves this one alone, and that is exactly what it has to
+/// prove: the field the user did not touch is not the field the save patched.
+fn assert_the_seeded_freebusy_survived(card: &ContactCard) {
+    let calendars = card
+        .calendars
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's calendars: {card:?}"));
+    let freebusy = calendars.get(SEEDED_FREEBUSY_KEY).unwrap_or_else(|| {
+        panic!("the save re-filed the free/busy address nobody touched: {card:?}")
+    });
+    assert_eq!(freebusy.kind.as_deref(), Some("freeBusy"), "{card:?}");
+    assert_eq!(
+        freebusy.uri, SEEDED_FREEBUSY_URI,
+        "the save rewrote the free/busy address nobody touched: {card:?}"
+    );
+}
+
+/// Hold the card the server now holds to both calendaring resources it was
+/// seeded with, untouched.
+///
+/// Shared by the legs that edit something else entirely, for the reason
+/// [`assert_the_seeded_picture_survived`] is: a user who retypes their name has
+/// not moved their calendar, so a save that re-filed either entry under a key of
+/// its own making — or dropped the `pref` no line can carry — did something
+/// nobody asked for.
+fn assert_the_seeded_calendars_survived(card: &ContactCard) {
+    assert_the_seeded_freebusy_survived(card);
+    let calendars = card.calendars.as_ref().expect("calendars, just checked");
+    assert_eq!(
+        calendars.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_CALENDAR_KEY, SEEDED_FREEBUSY_KEY],
+        "the save re-filed a calendaring resource nobody touched: {card:?}"
+    );
+    let calendar = calendars
+        .get(SEEDED_CALENDAR_KEY)
+        .expect("the seeded calendar, just checked");
+    assert_eq!(calendar.kind.as_deref(), Some("calendar"), "{card:?}");
+    assert_eq!(
+        calendar.uri, SEEDED_CALENDAR_URI,
+        "the save rewrote the calendar address nobody touched: {card:?}"
+    );
+    assert_eq!(
+        calendar.extra.get("pref"),
+        Some(&serde_json::json!(SEEDED_CALENDAR_PREF)),
+        "{card:?}"
+    );
 }
 
 /// Hold the card the server now holds to the picture it was seeded with — the
@@ -945,6 +1084,7 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
         "{card:?}"
     );
     assert_the_seeded_picture_survived(card);
+    assert_the_seeded_calendars_survived(card);
 }
 
 /// What the user retypes the given-name field to, and the full name Evolution's
@@ -1099,6 +1239,7 @@ fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
         "{card:?}"
     );
     assert_the_seeded_picture_survived(card);
+    assert_the_seeded_calendars_survived(card);
 }
 
 /// The fourth leg, and the one edit that reaches the picture itself: the user
@@ -1248,4 +1389,155 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
         EDITED_GIVEN_PARTS.map(|(value, _)| value).to_vec(),
         "choosing a picture rewrote the name: {card:?}"
     );
+}
+
+/// What the user retypes the Calendar field to. A URI on a different host from
+/// the free/busy address beside it, so a save that patched the wrong entry could
+/// not pass by the two happening to agree.
+const RETYPED_CALENDAR_URI: &str = "https://calendars.example/jp/personal.ics";
+
+/// The fifth leg: the user moves their calendar, on a card carrying both
+/// calendaring resources the server filed under keys of its own.
+///
+/// The claim is that the save patches the entry the user edited and leaves the
+/// one beside it alone — which needs real daemons for a reason the mapping's own
+/// tests cannot reach. `E_CONTACT_CALENDAR_URI` and `E_CONTACT_FREEBUSY_URL` are
+/// plain vCard attributes rather than synthetic fields, so a set on one is
+/// measured to rewrite the *value* of the first line of that name in place and
+/// leave its parameters — the `X-JMAP-KEY` among them — where they were. That
+/// measurement was a throwaway C probe against libebook-contacts; here it is the
+/// path Evolution takes, through the daemons, and the key surviving is what says
+/// the save may patch by key rather than having to pair a keyless URI with the
+/// one it replaced the way a picture does.
+///
+/// Two entries rather than one because they cross on lines of *different* names:
+/// the free/busy address is what says a patch aimed at `calendars/calendar-1`
+/// did not land on the whole map, and its untouched URI is what says EDS wrote
+/// the second line back out of the cached card rather than out of a field
+/// nobody set.
+#[test]
+fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/address-book-recalendar"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(
+        &client,
+        &[
+            "jmap-functional",
+            "recalendar",
+            card_id.as_str(),
+            RETYPED_CALENDAR_URI,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // What EDS made of the two lines the emitter wrote — the direction the write
+    // leg cannot ask about, where the lines came from EDS in the first place.
+    // Each URI in the field its kind chose, which is the reader's half of the
+    // mapping checked against real EDS rather than against a probe.
+    assert_eq!(
+        seen.get("read-calendar-uri"),
+        Some(&SEEDED_CALENDAR_URI),
+        "EDS did not read the calendar address off the line the emitter wrote\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-freebusy-uri"),
+        Some(&SEEDED_FREEBUSY_URI),
+        "EDS did not read the free/busy address off the line the emitter wrote\n{report}"
+    );
+
+    // And what EDS holds after the save: the address the user typed, and the one
+    // they did not.
+    assert_eq!(
+        seen.get("read-back-calendar-uri"),
+        Some(&RETYPED_CALENDAR_URI),
+        "the calendar address the user typed did not survive the save\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-freebusy-uri"),
+        Some(&SEEDED_FREEBUSY_URI),
+        "the save changed the free/busy address nobody edited\n{report}"
+    );
+
+    // The other end, and the load-bearing assertion: two entries still, under
+    // the two keys the *server* chose, and the one the user edited holding the
+    // new URI with the `pref` no line could carry still on it. A third entry
+    // here — the new URI filed under a `c1` the reader invented by counting
+    // lines — is the key having failed to survive EDS.
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the new calendar address never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    let calendars = card
+        .calendars
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's calendars: {card:?}"));
+    assert_eq!(
+        calendars.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_CALENDAR_KEY, SEEDED_FREEBUSY_KEY],
+        "the calendar address the user typed was filed beside the old one \
+         instead of over it: {card:?}"
+    );
+    let calendar = calendars
+        .get(SEEDED_CALENDAR_KEY)
+        .expect("the seeded calendar, just checked");
+    assert_eq!(calendar.kind.as_deref(), Some("calendar"), "{card:?}");
+    assert_eq!(
+        calendar.uri, RETYPED_CALENDAR_URI,
+        "the calendar address the user typed did not reach the server: {card:?}"
+    );
+    assert_eq!(
+        calendar.extra.get("pref"),
+        Some(&serde_json::json!(SEEDED_CALENDAR_PREF)),
+        "the save replaced the entry instead of patching it: {card:?}"
+    );
+    assert_the_seeded_freebusy_survived(card);
+    // And what nobody touched at all: the picture and the name components the
+    // `N` line flattened, asserted for the reason the other legs assert them.
+    assert_the_seeded_picture_survived(card);
 }
