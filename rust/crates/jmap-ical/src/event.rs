@@ -46,14 +46,15 @@
 //! `virtualLocations/<key>/uri`. See [`drawn_conferences`],
 //! [`read_virtual_locations`] and [`maps_virtual_locations`].
 //!
-//! What the event points at — RFC 8984 §4.2.7's `links` — is written and never
-//! read back, and crosses as two properties rather than one: a document
-//! attached to the event is an `ATTACH` (RFC 5545 §3.8.1.1), a picture *of* it
-//! is an `IMAGE` (RFC 7986 §5.10), and the [`ICON_REL`] relation is what tells
-//! them apart. A Link holds a `cid`, a `rel` and a `title` no line has room for,
-//! so a save naming the property would delete the half of every resource the
-//! user was never shown; closing that means patching `links/<key>/href` the way
-//! `virtualLocations` is patched. See [`drawn_links`].
+//! What the event points at — RFC 8984 §4.2.7's `links` — is the third property
+//! read back *into* rather than as a whole, and crosses as two properties rather
+//! than one: a document attached to the event is an `ATTACH` (RFC 5545
+//! §3.8.1.1), a picture *of* it is an `IMAGE` (RFC 7986 §5.10), and the
+//! [`ICON_REL`] relation is what tells them apart. A Link holds a `cid` and a
+//! `title` no line has room for, so a save naming the property would delete the
+//! half of every resource the user was never shown; the key of the entry a line
+//! was drawn from rides on it in an [`X_JMAP_KEY`] instead, and the save patches
+//! `links/<key>/href`. See [`drawn_links`] and [`read_links`].
 //!
 //! `ORGANIZER` and `ATTENDEE` are written and never read for a heavier reason:
 //! who is invited, and what each of them replied, is *scheduling* state. Moving
@@ -107,6 +108,12 @@ const INVENTED_KEY: &str = "l1";
 /// afresh. Numbered from 1, skipping the keys the document already named, so
 /// that two conferences cannot collapse into one entry of a map.
 const INVENTED_CONFERENCE_KEY: &str = "v";
+
+/// The stem of the `links` key invented for an `ATTACH` or an `IMAGE` that
+/// carries no [`X_JMAP_KEY`]. Numbered like [`INVENTED_CONFERENCE_KEY`] and
+/// under a letter of its own, so that a key in a document says which map it was
+/// invented for.
+const INVENTED_LINK_KEY: &str = "k";
 
 /// The stem of the `alerts` key invented for a `VALARM` that names no id of its
 /// own — a reminder Evolution's editor has just added, which carries an
@@ -314,11 +321,14 @@ const PARTICIPANT_KINDS: [(&str, &str); 4] = [
 /// [`maps_virtual_locations`], [`maps_alerts`], [`maps_recurrence_rule`] and
 /// [`maps_recurrence_override`], which say when a save may name them.
 ///
-/// `locations` and `virtualLocations` are also the two properties named *into*
-/// rather than replaced: a save patches `locations/<key>/name` and
-/// `virtualLocations/<key>/uri`, so the rest of the entry stays. See
-/// [`X_JMAP_KEY`], which is how a line says which entry it was drawn from.
-pub const MAPPED_PROPERTIES: [&str; 16] = [
+/// `locations`, `virtualLocations` and `links` are also the three properties
+/// named *into* rather than replaced: a save patches `locations/<key>/name`,
+/// `virtualLocations/<key>/uri` and `links/<key>/href`, so the rest of the entry
+/// stays. See [`X_JMAP_KEY`], which is how a line says which entry it was drawn
+/// from. `links` is conditional too, per entry rather than per property — see
+/// `jmap_cal_sync::patch`, which is where the condition lives, since it is about
+/// which entry a patch path can reach.
+pub const MAPPED_PROPERTIES: [&str; 17] = [
     "title",
     "description",
     "start",
@@ -331,6 +341,7 @@ pub const MAPPED_PROPERTIES: [&str; 16] = [
     "privacy",
     "locations",
     "virtualLocations",
+    "links",
     "keywords",
     "alerts",
     "recurrenceRules",
@@ -802,7 +813,7 @@ fn drawn_links(event: &CalendarEvent) -> Vec<Property> {
         .links
         .iter()
         .flatten()
-        .filter_map(|(_, link)| drawn_link(link))
+        .filter_map(|(key, link)| drawn_link(key, link))
         .collect()
 }
 
@@ -815,9 +826,12 @@ fn drawn_links(event: &CalendarEvent) -> Vec<Property> {
 /// estimate), so one this mapping cannot spell costs the parameter and not the
 /// resource — the user can still open what the line points at.
 ///
-/// No [`X_JMAP_KEY`] rides along, unlike a `LOCATION` or a `CONFERENCE`: the
-/// property is written and never read back, so no save has an entry to name.
-fn drawn_link(link: &Value) -> Option<Property> {
+/// An [`X_JMAP_KEY`] rides along for the reason it does on a `CONFERENCE`: an
+/// edit goes back as a patch of `links/<key>/href`, so the line has to say which
+/// entry of the server's map it is a drawing of. Position could not do that job —
+/// an editor that drops a line it has no URI for would slide every later
+/// resource onto the wrong entry.
+fn drawn_link(key: &str, link: &Value) -> Option<Property> {
     let href = link
         .get("href")?
         .as_str()
@@ -832,7 +846,8 @@ fn drawn_link(link: &Value) -> Option<Property> {
             Property::raw("IMAGE", href)
                 .with_param("VALUE", "URI")
                 .with_params("DISPLAY", spelled(&LINK_DISPLAYS, link.get("display")))
-                .with_params("FMTTYPE", media_type),
+                .with_params("FMTTYPE", media_type)
+                .with_param(X_JMAP_KEY, key),
         );
     }
     // No `VALUE`: RFC 5545 §3.8.1.1 already makes `URI` the default value type
@@ -843,7 +858,8 @@ fn drawn_link(link: &Value) -> Option<Property> {
     Some(
         Property::raw("ATTACH", href)
             .with_params("FMTTYPE", media_type)
-            .with_params("SIZE", stated_size(link)),
+            .with_params("SIZE", stated_size(link))
+            .with_param(X_JMAP_KEY, key),
     )
 }
 
@@ -1986,14 +2002,12 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         // here is what keeps that impossible: the property is not in
         // `MAPPED_PROPERTIES`, so no save can name it.
         participants: None,
-        // Drawn and never read back, for the reason `participants` is minus the
-        // scheduling: a Link (RFC 8984 §1.4.11) holds a `cid`, a `rel` and a
-        // `title` that no `ATTACH` or `IMAGE` line has room for, and a save
-        // naming `links` would replace the property whole — deleting the half of
-        // every resource the user was never shown. The property is not in
-        // `MAPPED_PROPERTIES`, so no save can name it. Doing better means
-        // patching `links/<key>/href` the way `virtualLocations` is patched.
-        links: None,
+        // Read back the way `virtualLocations` is, and for the same reason: a
+        // Link (RFC 8984 §1.4.11) holds a `cid`, a `rel` and a `title` that no
+        // `ATTACH` or `IMAGE` line has room for, so what the line showed comes
+        // back under the key it came out with and a save patches
+        // `links/<key>/href`. See [`read_links`].
+        links: read_links(vevent),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
         recurrence_overrides: None,
         extra: Default::default(),
@@ -2103,6 +2117,108 @@ fn read_virtual_locations(vevent: &Component) -> Option<BTreeMap<String, Value>>
         places.insert(key, place);
     }
     (!places.is_empty()).then_some(places)
+}
+
+/// The external resources the component points at, as a `links` map.
+///
+/// Both properties are read — every `ATTACH` (RFC 5545 §3.8.1.1) and every
+/// `IMAGE` (RFC 7986 §5.10), which is the split RFC 8984 §4.2.7 keeps in one map
+/// — and only what the line shows: the `href` it is made of, the `contentType`
+/// an `FMTTYPE` carries, the `size` a `SIZE` does and, for an `IMAGE`, the
+/// `display` of §6.1 and the [`ICON_REL`] the property name itself states. A
+/// `cid` and a `title` are neither drawn nor read, which is why the save path
+/// patches `links/<key>/href` rather than replacing the property: the members
+/// with no room on the line stay where the server put them.
+///
+/// The key is the one the line came out with — [`X_JMAP_KEY`] — or an invented
+/// one for a line carrying none, under the same rules
+/// [`read_virtual_locations`] gives: invented keys avoid the ones the document
+/// already named, and a key that is not an RFC 8984 §1.4.4 `Id` is treated as
+/// absent, because on a create the key is what the server is asked to file the
+/// entry under.
+///
+/// Two kinds of line are dropped rather than read, and both would otherwise send
+/// the server somewhere it cannot go:
+///
+/// - **A value that is not a URI**, since RFC 8984 §1.4.11 makes `href` the one
+///   mandatory member of a Link. An inline attachment is such a line: a
+///   `VALUE=BINARY` `ATTACH` holds the file itself, which [`syntax`] has no text
+///   for at all.
+/// - **A `file:` URI**, which is where Evolution keeps an attachment the user
+///   added from their own disk. Nobody else's client could fetch it, and the path
+///   names the user's home directory — so filing it as a Link would put a local
+///   path in a record every other client of the account can read. Sending the
+///   file itself means uploading it as a blob, which this crate has no part in.
+///
+/// Neither dropped line is read as a deletion: a missing entry is one the save
+/// path says nothing about (see `jmap_cal_sync::patch`).
+///
+/// `None` rather than an empty map for a component that points nowhere, for the
+/// reason [`read_locations`] gives.
+///
+/// [`syntax`]: crate::syntax
+fn read_links(vevent: &Component) -> Option<BTreeMap<String, Value>> {
+    let lines: Vec<&Property> = vevent
+        .properties
+        .iter()
+        .filter(|property| property.name == "ATTACH" || property.name == "IMAGE")
+        .collect();
+    let keys: Vec<Option<&str>> = lines
+        .iter()
+        .map(|line| line.param(X_JMAP_KEY).filter(|key| names_map_entry(key)))
+        .collect();
+
+    let mut links = BTreeMap::new();
+    let mut invented = 0;
+    for (line, key) in lines.iter().zip(&keys) {
+        let href = line.raw_value();
+        if !names_a_uri(&href) || fetched_locally(&href) {
+            continue;
+        }
+        let key = match key {
+            Some(key) => (*key).to_owned(),
+            None => loop {
+                invented += 1;
+                let key = format!("{INVENTED_LINK_KEY}{invented}");
+                if !keys.contains(&Some(key.as_str())) {
+                    break key;
+                }
+            },
+        };
+        let mut link = json!({"@type": "Link", "href": href});
+        if line.name == "IMAGE" {
+            // The property is what says the resource is a picture of the event,
+            // so the `rel` it stands for is read off the name — without it a
+            // re-drawing would put the picture back on an `ATTACH`.
+            link["rel"] = Value::String(ICON_REL.to_owned());
+            if let Some(display) = line.param("DISPLAY").and_then(|display| {
+                LINK_DISPLAYS
+                    .iter()
+                    .find(|(_, ical)| ical.eq_ignore_ascii_case(display))
+            }) {
+                link["display"] = Value::String(display.0.to_owned());
+            }
+        } else if let Some(size) = line.param("SIZE").and_then(|size| size.parse::<u64>().ok()) {
+            // Only on an `ATTACH`: RFC 8607 §4.1 adds the parameter to that
+            // property, and RFC 7986 §5.10 admits no `SIZE` on an `IMAGE`, so a
+            // drawing never wrote one there.
+            link["size"] = Value::from(size);
+        }
+        if let Some(media_type) = line.param("FMTTYPE").filter(|name| !name.is_empty()) {
+            link["contentType"] = Value::String(media_type.to_owned());
+        }
+        links.insert(key, link);
+    }
+    (!links.is_empty()).then_some(links)
+}
+
+/// Whether a URI names a file on this machine rather than a resource anybody
+/// could fetch — RFC 8089's `file` scheme, which is what Evolution's attachment
+/// store hands out. Compared case-insensitively, since RFC 3986 §3.1 makes a
+/// scheme case-insensitive.
+fn fetched_locally(href: &str) -> bool {
+    href.split_once(':')
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
 }
 
 /// The tags the component carries, as a JSCalendar `keywords` Set.

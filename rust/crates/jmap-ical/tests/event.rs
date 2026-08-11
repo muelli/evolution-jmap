@@ -5741,8 +5741,9 @@ fn an_external_resource_is_written_as_an_attach() {
     assert_eq!(
         attachments(&ics),
         [
-            "ATTACH;FMTTYPE=application/pdf;SIZE=51200:https://files.example.com/agenda.pdf",
-            "ATTACH:https://files.example.com/minutes.txt",
+            "ATTACH;FMTTYPE=application/pdf;SIZE=51200;X-JMAP-KEY=l1:\
+             https://files.example.com/agenda.pdf",
+            "ATTACH;X-JMAP-KEY=l2:https://files.example.com/minutes.txt",
         ],
         "{ics}"
     );
@@ -5807,7 +5808,7 @@ fn a_media_type_no_fmttype_can_carry_is_left_off() {
 
         assert_eq!(
             attachments(&ics),
-            ["ATTACH:https://files.example.com/agenda.pdf"],
+            ["ATTACH;X-JMAP-KEY=l1:https://files.example.com/agenda.pdf"],
             "{content_type}: {ics}"
         );
         assert!(!ics.contains("SUMMARY:Gone"), "{content_type}: {ics}");
@@ -5835,7 +5836,7 @@ fn a_size_that_is_not_a_count_of_octets_is_left_off() {
 
         assert_eq!(
             attachments(&ics),
-            ["ATTACH:https://files.example.com/agenda.pdf"],
+            ["ATTACH;X-JMAP-KEY=l1:https://files.example.com/agenda.pdf"],
             "{size}: {ics}"
         );
     }
@@ -5871,7 +5872,7 @@ fn a_link_to_an_icon_is_written_as_an_image() {
         assert_eq!(
             images(&ics),
             [format!(
-                "IMAGE;VALUE=URI;DISPLAY={drawn};FMTTYPE=image/png:\
+                "IMAGE;VALUE=URI;DISPLAY={drawn};FMTTYPE=image/png;X-JMAP-KEY=l1:\
                  https://files.example.com/party.png"
             )],
             "{display}: {ics}"
@@ -5897,7 +5898,7 @@ fn an_icon_with_no_way_of_displaying_it_carries_no_display() {
 
         assert_eq!(
             images(&ics),
-            ["IMAGE;VALUE=URI:https://files.example.com/party.png"],
+            ["IMAGE;VALUE=URI;X-JMAP-KEY=l1:https://files.example.com/party.png"],
             "{display}: {ics}"
         );
     }
@@ -5925,7 +5926,7 @@ fn a_link_that_is_not_an_icon_is_an_attachment_however_it_asks_to_be_displayed()
 
         assert_eq!(
             attachments(&ics),
-            ["ATTACH:https://files.example.com/party.png"],
+            ["ATTACH;X-JMAP-KEY=l1:https://files.example.com/party.png"],
             "{rel}: {ics}"
         );
         assert!(without(&ics, "IMAGE"), "{rel}: {ics}");
@@ -5933,23 +5934,197 @@ fn a_link_that_is_not_an_icon_is_an_attachment_however_it_asks_to_be_displayed()
 }
 
 #[test]
-fn a_component_that_names_an_attachment_reads_back_no_links() {
-    // Written and never read, like the guest list and for a reason of the same
-    // shape: a Link holds a `cid`, a `rel` and a `title` (RFC 8984 §1.4.11) that
-    // no ATTACH line has room for, and a save naming `links` would replace the
-    // property whole — deleting the half of every resource the user was never
-    // shown. So `links` stays out of `MAPPED_PROPERTIES` and the reader leaves
-    // it empty; a resource added in another client survives, and one Evolution's
-    // editor drops is not read as a deletion.
+fn a_resource_line_carries_the_key_of_the_entry_it_was_drawn_from() {
+    // The third property patched *into* rather than replaced, and the parameter
+    // that makes that possible: a Link holds a `cid`, a `rel` and a `title` (RFC
+    // 8984 §1.4.11) no line has room for, so a save names `links/<key>/href` and
+    // the line has to say which entry of the server's map it is a drawing of.
+    // Position could not do it — an editor that drops a line it has no UI for
+    // would slide every later resource onto the wrong entry — and both
+    // properties admit being stated more than once, so there really are several
+    // lines to tell apart.
     let ics = event_to_ical(&points_at(json!({
-        "l1": fetched_from("https://files.example.com/agenda.pdf", json!({
+        "agenda": fetched_from("https://files.example.com/agenda.pdf", json!({})),
+        "picture": fetched_from("https://files.example.com/party.png", json!({"rel": "icon"})),
+    })));
+
+    assert_eq!(
+        attachments(&ics),
+        ["ATTACH;X-JMAP-KEY=agenda:https://files.example.com/agenda.pdf"],
+        "{ics}"
+    );
+    assert_eq!(
+        images(&ics),
+        ["IMAGE;VALUE=URI;X-JMAP-KEY=picture:https://files.example.com/party.png"],
+        "{ics}"
+    );
+}
+
+#[test]
+fn a_component_that_names_resources_reads_them_back_under_the_servers_keys() {
+    // What the two lines show — the address, the media type, the size, and for a
+    // picture the way of displaying it — reads back into the entry it was drawn
+    // from, so that a save patches `links/<key>/href` and the `cid`, `rel` and
+    // `title` the line had no room for stay where the server put them. The
+    // property name is itself a member: RFC 7986 §5.10's IMAGE is a link whose
+    // `rel` is "icon" (RFC 8984 §1.4.11), which is what a re-drawing needs to
+    // put it back on an IMAGE rather than an ATTACH.
+    let ics = event_to_ical(&points_at(json!({
+        "agenda": fetched_from("https://files.example.com/agenda.pdf", json!({
             "contentType": "application/pdf",
+            "size": 51_200,
+            "title": "What we said we would do",
         })),
-        "l2": fetched_from("https://files.example.com/party.png", json!({"rel": "icon"})),
+        "picture": fetched_from("https://files.example.com/party.png", json!({
+            "rel": "icon",
+            "display": "badge",
+            "contentType": "image/png",
+        })),
     })));
 
     let event = ical_to_event(&ics).expect("a calendar");
-    assert_eq!(event.links, None, "{ics}");
+    assert_eq!(
+        serde_json::to_value(event.links.expect("links")).expect("a map"),
+        json!({
+            "agenda": {
+                "@type": "Link",
+                "href": "https://files.example.com/agenda.pdf",
+                "contentType": "application/pdf",
+                "size": 51_200,
+            },
+            "picture": {
+                "@type": "Link",
+                "href": "https://files.example.com/party.png",
+                "rel": "icon",
+                "display": "badge",
+                "contentType": "image/png",
+            },
+        }),
+        "{ics}"
+    );
+}
+
+#[test]
+fn what_was_read_back_off_a_resource_line_draws_the_same_line_again() {
+    // The save path diffs an edited component against a re-rendering of the
+    // event the server holds, so a drawing that did not survive its own round
+    // trip would read as an edit on every save. The members with no room on the
+    // line are absent from both sides, and the ones with room come back in the
+    // same spelling.
+    let ics = event_to_ical(&points_at(json!({
+        "agenda": fetched_from("https://files.example.com/agenda.pdf", json!({
+            "contentType": "application/pdf",
+            "size": 51_200,
+        })),
+        "picture": fetched_from("https://files.example.com/party.png", json!({
+            "rel": "icon",
+            "display": "thumbnail",
+        })),
+    })));
+
+    let event = ical_to_event(&ics).expect("a calendar");
+    let again = event_to_ical(&event);
+
+    assert_eq!(attachments(&again), attachments(&ics), "{again}");
+    assert_eq!(images(&again), images(&ics), "{again}");
+}
+
+#[test]
+fn a_resource_line_naming_no_entry_gets_a_key_of_its_own() {
+    // What another client's component looks like, and what an editor writing an
+    // attachment afresh writes: a line with no X-JMAP-KEY on it. A key is
+    // invented so that the resource is still read — on a create the property is
+    // written whole under the keys read here — and the invented keys avoid the
+    // ones the document already named, because two resources that collided on a
+    // key would become one.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+BEGIN:VEVENT\r\n\
+UID:planning-1\r\n\
+DTSTART:20260115T130000Z\r\n\
+ATTACH:https://files.example.com/one.pdf\r\n\
+ATTACH;X-JMAP-KEY=k1:https://files.example.com/two.pdf\r\n\
+IMAGE;VALUE=URI:https://files.example.com/party.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("a calendar");
+    let links = event.links.expect("links");
+    assert_eq!(
+        links.keys().collect::<Vec<_>>(),
+        ["k1", "k2", "k3"],
+        "{links:?}"
+    );
+    assert_eq!(
+        links["k2"]["href"],
+        json!("https://files.example.com/one.pdf"),
+        "{links:?}"
+    );
+    assert_eq!(
+        links["k1"]["href"],
+        json!("https://files.example.com/two.pdf"),
+        "{links:?}"
+    );
+    assert_eq!(links["k3"]["rel"], json!("icon"), "{links:?}");
+}
+
+#[test]
+fn a_resource_line_pointing_at_a_local_file_is_not_read_back() {
+    // A `file:` URI is where Evolution keeps an attachment the user added from
+    // their own disk. It is not an address the server, or anybody else's client,
+    // could fetch — and the path names the user's home directory, so filing it
+    // as a Link would put a local path in a record every other client of the
+    // account can read. Sending the file itself means uploading it as a blob,
+    // which this crate has no part in, so the line is left unread: the entry the
+    // server holds stays as it is rather than being pointed at a machine only
+    // this user has.
+    for href in [
+        "file:///home/vera/.local/share/evolution/calendar/agenda.pdf",
+        "FILE:///home/vera/agenda.pdf",
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+BEGIN:VEVENT\r\n\
+UID:planning-1\r\n\
+DTSTART:20260115T130000Z\r\n\
+ATTACH:{href}\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+        );
+
+        let event = ical_to_event(&ics).expect("a calendar");
+        assert_eq!(event.links, None, "{href}");
+    }
+}
+
+#[test]
+fn a_component_that_names_no_resource_reads_back_no_links() {
+    // `None` rather than an empty map, for the reason every other read-back
+    // gives: the save path reads an edit off a difference from what was shown,
+    // and an empty map would claim the event points at nothing where the
+    // component made no claim at all. A value that is not a URI — an inline
+    // binary attachment, which is what Evolution writes for a file it holds
+    // itself — says nothing either.
+    for line in [
+        "",
+        "ATTACH;VALUE=BINARY;ENCODING=BASE64:dGhlIGFnZW5kYQ==\r\n",
+        "ATTACH:files.example.com/agenda.pdf\r\n",
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+BEGIN:VEVENT\r\n\
+UID:planning-1\r\n\
+DTSTART:20260115T130000Z\r\n\
+{line}\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+        );
+
+        let event = ical_to_event(&ics).expect("a calendar");
+        assert_eq!(event.links, None, "{line}");
+    }
 }
 
 #[test]
@@ -5967,7 +6142,7 @@ fn an_edited_instance_carries_the_links_of_the_series() {
     assert_eq!(vevents(&ics), 2, "{ics}");
     assert_eq!(
         attachments(vevent(&ics, 1)),
-        ["ATTACH:https://files.example.com/agenda.pdf"],
+        ["ATTACH;X-JMAP-KEY=l1:https://files.example.com/agenda.pdf"],
         "{ics}"
     );
 }

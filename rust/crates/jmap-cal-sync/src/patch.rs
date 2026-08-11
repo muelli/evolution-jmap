@@ -4,10 +4,11 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps sixteen properties and
+//! lossy view of a JSCalendar event. The mapping keeps seventeen properties and
 //! drops everything else, so a save that sent the parsed event back whole
-//! would silently delete what it could not represent — participants, links —
-//! neither of which the user ever saw, let alone asked to remove.
+//! would silently delete what it could not represent — the guest list, the
+//! sequence number — none of which the user ever saw, let alone asked to
+//! remove.
 //!
 //! The lossiness also recurs *inside* the properties that are mapped, and
 //! this module answers that with one move: it does not compare the edited
@@ -23,7 +24,7 @@
 //! - and a `status` outside the closed vocabulary is not cleared by a save
 //!   that never touched it.
 //!
-//! Seven properties need more than the baseline, because for them "no
+//! Eight properties need more than the baseline, because for them "no
 //! difference" is not the whole question:
 //!
 //! - **`locations` is a map of places and the component has one line.** So the
@@ -36,6 +37,11 @@
 //!   shows are patched into the entry it names, and a line naming an entry the
 //!   server does not hold is neither created nor read as a deletion — see
 //!   [`diff_virtual_locations`].
+//! - **`links` is a map of resources, and only one member of an entry is the
+//!   user's.** A line shows the address, the media type and the size; the type
+//!   and the size are the server's own description of what it holds, and the
+//!   `cid` and `title` beside them have no room on the line at all. So the save
+//!   patches `links/<key>/href` and nothing else — see [`diff_links`].
 //! - **`keywords` is a set, and a set has no keys to leave unnamed.** The
 //!   property goes back replaced whole, so a tag that never reached the
 //!   `CATEGORIES` line is one the user never saw and a plain rewrite would
@@ -175,6 +181,7 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
 
     diff_locations(&mut patch, current, &baseline, edited);
     diff_virtual_locations(&mut patch, current, &baseline, edited);
+    diff_links(&mut patch, current, &baseline, edited);
     diff_keywords(&mut patch, current, &baseline, edited);
     diff_alerts(&mut patch, current, &baseline, edited);
     diff_recurrence(&mut patch, current, &baseline, edited);
@@ -357,6 +364,91 @@ fn diff_virtual_locations(
 /// The patch path of one member of one virtual location.
 fn member_of(key: &str, member: &str) -> String {
     format!("virtualLocations/{}/{member}", escaped(key))
+}
+
+/// What the event points at — the third property patched *into* rather than
+/// replaced, and the narrowest of the three: only the address goes back.
+///
+/// A Link (RFC 8984 §1.4.11) holds a `cid` and a `title` that neither an `ATTACH`
+/// nor an `IMAGE` line has room for, so naming `links` in the patch would delete
+/// half of every resource the user was never shown. The save names
+/// `links/<key>/href` under the key the line was drawn with, and everything
+/// beside it stays as the server had it.
+///
+/// `contentType` and `size` are shown on the line — an `FMTTYPE` and a `SIZE` —
+/// and are still not written back, which is the one place this property differs
+/// from [`diff_virtual_locations`]. They are the *server's* description of the
+/// resource rather than a field the user was offered (§1.4.11 calls the size an
+/// estimate), and an editor that rewrites a line without the parameters it has no
+/// UI for is the ordinary case: reading that as "the media type was cleared"
+/// would delete what the server knows on the first save of an unrelated edit. So
+/// they are drawn to be read and left alone on the way back, like `created` and
+/// `updated`. Neither is `rel`, which the property name states rather than the
+/// line: what a resource *is* is not something Evolution offers to change, and a
+/// picture rewritten as a plain attachment by an editor with no notion of `IMAGE`
+/// must not turn into a save that says so.
+///
+/// The two cautions [`diff_virtual_locations`] takes apply unchanged, for the same
+/// reasons — a resource the component stopped naming is left where it is, and one
+/// the server does not hold is not created — and the second binds harder here: a
+/// file the user attached in Evolution is a `file:` URI into a local store, which
+/// is nobody else's to fetch and which `jmap_ical` therefore never reads. Filing
+/// it as a Link would put a path from the user's home directory in a record every
+/// other client of the account can read. Sending the file itself means uploading
+/// it as a blob, which this crate does not do.
+///
+/// The condition is asked per entry rather than per property, which is what the
+/// narrowness buys: a patch of one entry's `href` cannot touch another, so a
+/// resource the drawing left out costs the sight of itself and nothing else. What
+/// it must be is the entry the drawing really came from, and the address the
+/// server stated is what says so — see [`the_servers_own_entry`].
+fn diff_links(
+    patch: &mut Map<String, Value>,
+    current: &CalendarEvent,
+    baseline: &CalendarEvent,
+    edited: &CalendarEvent,
+) {
+    let empty = BTreeMap::new();
+    let held = current.links.as_ref().unwrap_or(&empty);
+    let was = baseline.links.as_ref().unwrap_or(&empty);
+    let now = edited.links.as_ref().unwrap_or(&empty);
+
+    for (key, before) in was {
+        let (Some(after), true) = (now.get(key), the_servers_own_entry(held, key, before)) else {
+            continue;
+        };
+        if before.get("href") == after.get("href") {
+            continue;
+        }
+        // `href` is the one member RFC 8984 §1.4.11 requires and the whole of the
+        // line, so a component that named none is one `jmap_ical` would not have
+        // read a resource off at all — there is no removal to express here.
+        if let Some(href) = after.get("href") {
+            patch.insert(format!("links/{}/href", escaped(key)), href.clone());
+        }
+    }
+}
+
+/// Whether the key of a drawn resource is the key of the entry the server drew it
+/// from — the check that makes `links/<key>/href` safe to send.
+///
+/// A key alone does not settle it. [`diff_virtual_locations`] asks whether the
+/// server holds the key at all, because a key outside RFC 8984 §1.4.4's `Id`
+/// grammar cannot ride on the line and reads back as an invented one; here that
+/// is not enough, since an invented key can *collide* with a key the server holds
+/// for some other entry. (`jmap_ical` invents keys that avoid the ones the
+/// document names, so the entry collided with is one the drawing left out — one
+/// with no address to show, or a `file:` URI it refuses to read.) Patching that
+/// entry's `href` would move a resource the user never saw and lose the edit they
+/// made.
+///
+/// So the address decides: the baseline is the server's own entry drawn and read
+/// back, and `href` crosses both ways unchanged, so the entry a drawing belongs to
+/// is the one stating the address it was drawn with. Where they disagree the edit
+/// is dropped — a key this side invented is not one it can patch under, exactly as
+/// a conference's is not.
+fn the_servers_own_entry(held: &BTreeMap<String, Value>, key: &str, before: &Value) -> bool {
+    held.get(key).and_then(|resource| resource.get("href")) == before.get("href")
 }
 
 /// The tags the event carries — replaced whole, which is what separates this
