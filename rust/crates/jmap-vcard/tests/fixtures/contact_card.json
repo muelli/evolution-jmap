@@ -48,6 +48,17 @@
   "notes": {
     "n1": {"note": "met at FOSDEM"}
   },
+  "anniversaries": {
+    "y1": {
+      "@type": "Anniversary",
+      "kind": "birth",
+      "date": {"@type": "PartialDate", "year": 1964, "month": 3, "day": 27}
+    },
+    "y2": {
+      "kind": "wedding",
+      "date": {"year": 1996, "month": 8, "day": 3}
+    }
+  },
   "nicknames": {
     "k1": {"name": "Vee"}
   }
