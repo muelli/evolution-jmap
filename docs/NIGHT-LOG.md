@@ -20664,3 +20664,119 @@ unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
 editor writes for a replaced photo, and into a cleared field, is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-fourth session)
+
+**The side of the calendar nothing had ever driven.** Eleven `functional-book`
+legs start from a card the *server* holds; `functional-cal` had one leg, and it
+creates every event it looks at. That asymmetry hid the calendar mapping's
+load-bearing assumption: `locations` and `virtualLocations` are the two
+properties patched *into* rather than replaced — `locations/<key>/name`,
+`virtualLocations/<key>/uri` — and the key comes back to the mapping in an
+`X-JMAP-KEY` on the line. Every test that claim has ever had supplies the
+component by hand, so the parameter was there by construction. Whether real EDS
+carries an unknown parameter on a `LOCATION`, and on a property libical-glib does
+not even name, through `ECalMetaBackend`'s cache and back into a save was
+untested — and a cache that dropped it would leave every fixture in `jmap-ical`
+and `jmap-cal-sync` green while the user's edit reached nothing.
+
+It now is, as a second `functional-cal` leg,
+`retyping_a_place_through_eds_patches_the_entry_the_server_chose`, against a
+seeded event holding a `locations` entry and a `virtualLocations` entry, each
+under a server-chosen key and each with a `description` no line has room for.
+
+**A second client program rather than a phase.** `book-client.c` has ten phases;
+`cal-client.c` has none — its `main` is one six-hundred-line story about EDS's
+recurrence machinery, and splitting it to add an opposite question would risk the
+green leg for no gain. `cal-edit-client.c` is the new program, wired into the
+same `functional-cal` ctest leg under `JMAP_FUNCTIONAL_CAL_EDIT_CLIENT`, so the
+suite is still fourteen tests.
+
+**What the daemons actually said.** Measured against EDS 3.52 / libical 3.0:
+`read-location-key=srv-loc`, `read-conference-key=srv-conf` — both parameters
+survive the round trip — and `read-conference-label=Video bridge`, which is the
+standard parameter beside the invented one and would have been the answer of a
+cache that kept only what libical has an enum for. Both edits reached the server
+as patches of the entries they were drawn from, with the two `description`s still
+where the server put them.
+
+**Where the key is load-bearing and where it is not.** The first draft asserted
+the `LOCATION` key with a comment saying a save could not otherwise name the
+server's entry. Reading `diff_locations` withdrew that: RFC 5545 §3.6.1 allows one
+`LOCATION`, so `maps_locations` already refuses a second place and the save takes
+`places.iter().next()` — the single entry in the *server's* map — whatever the
+line carries. Only `virtualLocations` reads the key off the line, because RFC 7986
+§5.11 admits several `CONFERENCE`s. So the leg retypes the conference too, and the
+`LOCATION` key stays asserted but is documented as an observation held for the day
+the mapping draws a second place, not as something the save depends on today.
+
+Retyping a conference is the one edit here a user of Evolution 3.52 cannot make:
+it has no control for the property, and **libical-glib 3.0's generated
+`ICalPropertyKind` has no `I_CAL_CONFERENCE_PROPERTY`** even though the libical C
+enumerator exists and the parser produces it — so the client casts. That is worth
+recording as a fact about the platform rather than a wrinkle in a test: a client
+that wanted to *offer* a conference through libical-glib has no named constant
+for the property, which is part of why 3.52 has no UI for one. The edit is what
+another client on the same account does; the mapping has a path for it and this
+is what says the path works.
+
+**The doomed wait, met again.** The first draft passed `30` as
+`e_cal_client_connect_sync`'s timeout and the leg took 30.17 s. That is exactly
+the deadlock `docs/functional-tests.md` already describes — `ESource` queues the
+connection-status change as an idle on the context the blocked thread would have
+had to iterate, so the built-in wait always expires. `(guint32) -1` and
+`functional_report_connection_status` are the fix the other clients already use;
+the leg now runs in 0.17 s. Thirty seconds of a passing test was the only symptom,
+which is how it would have stayed.
+
+**Mutation checks.** Three, each reddening a different assertion: dropping
+`X_JMAP_KEY` from `drawn_conference` fails `read-conference-key`; making
+`read_virtual_locations` ignore the key on the line — the drawing intact, the save
+unable to name the entry — fails the read-back address, because EDS's cache hands
+the old one over; and making `diff_locations` replace `locations` rather than patch
+into it fails the server-side entry, which comes back without its `description`.
+The third is the one no fixture could have caught differently, and its message
+prints the lost note.
+
+Tests: 988 in the default set, unchanged — `jmap-functional` is not in
+`default-members`. The `functional-cal` leg count goes from one to two.
+
+Verified locally: `cargo test --locked` 988; full `ninja` then `ctest` 14/14 with
+all four functional legs; `cargo fmt --all --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings`, `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` and `cargo clippy -p
+jmap-functional --all-targets` all clean. `ci/checks.sh` still stops at its first
+step — no `reuse`, no `pipx`, no `uvx` on this VM — so the licence check was done
+by hand: the one new file, `tests/functional/cal-edit-client.c`, carries an SPDX
+`GPL-3.0-or-later` header, it marks no translatable string so `po/POTFILES.in` is
+unchanged (and `potfiles.rs` scans `crates/` only), and `Cargo.lock` is untouched,
+so `cargo deny`'s answer is the one it gave on the last green run.
+
+**What this still does not settle.** Nothing here observes Evolution's own
+appointment editor, so which field it writes a place into remains an inference;
+the leg says only that a `LOCATION` a libecal consumer retypes reaches the entry
+the server chose. The seeded event carries **one** entry in each map, so the
+several-`CONFERENCE` case the key exists for is still fixtures-only, and so is a
+`locations` map of more than one — which `maps_locations` refuses a save over, and
+which no leg has watched it refuse through real EDS. `links` is still written and
+never read back, so an attachment the user removes is still invisible to the save.
+
+No milestone tag. Removed from the blocker list: nothing had ever driven a
+seeded calendar event through real EDS, and the `X-JMAP-KEY` round trip on a
+`LOCATION` and a `CONFERENCE` was unmeasured. Unchanged blockers: the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; `example-module` does not
+pass this VM's clippy (1.97) on unmodified master, 26 `manual_c_str_literals`;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty;
+`jmap-ical` emits no `VTIMEZONE` of its own; `links` on the calendar side is
+written and never read back; the multi-`ORG`/`TITLE` "Evolution shows only the
+first" bet is still unverified; the two `LABEL` `TYPE` risks stand; a deathday and
+a birthday stated as a year alone are still invisible; the conventional URI
+schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore
+untabled; `X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour
+unmeasured; whether the editor lets a handle be moved between the Home and Work
+slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; what
+Evolution's contact editor writes for a replaced photo, and into a cleared field,
+is inferred rather than measured; and the `jmap-mail` `transport.rs` hang is still
+an open design question with a lock-order hypothesis attached.

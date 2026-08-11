@@ -74,13 +74,19 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-book-client PRIVATE ${LIBEBOOK_LIBRARIES})
 	target_link_directories(functional-book-client PRIVATE ${LIBEBOOK_LIBRARY_DIRS})
 
-	add_executable(functional-cal-client
-		tests/functional/cal-client.c
-		tests/functional/connection-status.c)
-	target_include_directories(functional-cal-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
-	target_compile_options(functional-cal-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
-	target_link_libraries(functional-cal-client PRIVATE ${LIBECAL_LIBRARIES})
-	target_link_directories(functional-cal-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+	# Two calendar clients rather than one program with a phase argument,
+	# because they ask opposite questions: cal-client.c creates every event it
+	# looks at, cal-edit-client.c reads one the server already held and saves
+	# it back. See the header of the latter.
+	foreach(_client cal cal-edit)
+		add_executable(functional-${_client}-client
+			tests/functional/${_client}-client.c
+			tests/functional/connection-status.c)
+		target_include_directories(functional-${_client}-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+		target_compile_options(functional-${_client}-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+		target_link_libraries(functional-${_client}-client PRIVATE ${LIBECAL_LIBRARIES})
+		target_link_directories(functional-${_client}-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+	endforeach()
 
 	# The mail client is the odd one out and does not link a client library
 	# at all: there is no libecamel to match libebook and libecal, because a
@@ -147,7 +153,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		LABELS functional
 		TIMEOUT 300
 		ENVIRONMENT
-			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_EDIT_CLIENT=$<TARGET_FILE:functional-cal-edit-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# The mail leg needs a third path the other two do not: the `.urls` file,
