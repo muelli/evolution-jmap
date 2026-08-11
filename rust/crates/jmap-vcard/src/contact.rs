@@ -5,7 +5,8 @@
 //!
 //! The mapped set is deliberately the one the address book backend needs to
 //! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
-//! NOTE, BDAY, URL, PHOTO, CATEGORIES and the instant-messaging `X-` lines —
+//! NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the instant-messaging
+//! `X-` lines —
 //! and no more. Everything else on a card (preferred languages, the crypto keys
 //! it lists, what the contact is spoken to as, …) is *dropped*, which is only
 //! safe because saving goes back to the server as a PatchObject naming the
@@ -90,6 +91,24 @@
 //! line's value and leaves its parameters alone, and any further `URL` line
 //! passes through untouched.
 //!
+//! `calendars` is the first property whose `kind` picks the *line* rather than
+//! deciding whether there is one. RFC 9553 §2.4.1 keys the calendaring
+//! resources of the contact and tells them apart by a `kind` it makes
+//! mandatory: a `calendar` of theirs, or the `freeBusy` data drawn from one.
+//! RFC 9555 §2.13.2 and §2.13.3 state those on `CALURI` and `FBURL`, which are
+//! vCard 4.0 properties (RFC 6350 §6.9.3 and §6.9.1) — and they are written on
+//! the 3.0 card anyway, because EDS keeps `E_CONTACT_CALENDAR_URI` and
+//! `E_CONTACT_FREEBUSY_URL` on exactly those lines whatever the version says,
+//! measured against libebook-contacts 3.52. So the two kinds cross and an entry
+//! naming any other — or, malformed, naming none — gets no line at all, since
+//! nothing then says which of the two fields it belongs in and both are in
+//! front of the user under a heading of their own. What does not cross is the
+//! entry's `mediaType`, `contexts`, `pref` and `label`, for which neither line
+//! has a parameter, so they ride in its `extra` as a link's do. The
+//! [`X_JMAP_KEY`] survives here too, for the reason it survives on a `URL`: a
+//! set rewrites the first line of that name in place and leaves its parameters
+//! alone, and any further line of the same name passes through untouched.
+//!
 //! `onlineServices` is the one property vCard 3.0 has no line for at all. RFC
 //! 9553 §2.3.2 names the contact as one service or protocol knows them; RFC
 //! 4770's `IMPP` is vCard 4.0, which is not the format
@@ -160,8 +179,8 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as BASE64, STANDARD_NO_PAD as BASE64_UNPADDED};
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Media,
-    Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
+    Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use serde_json::{Map, Value, json};
 
@@ -336,6 +355,19 @@ const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
 const ANNIVERSARY_KINDS: [(&str, &str); 2] =
     [("birth", "BDAY"), ("wedding", X_EVOLUTION_ANNIVERSARY)];
 
+/// JSContact calendar `kind` values and the vCard property stating each.
+///
+/// RFC 9555 §2.13.2 and §2.13.3 pair them: `calendar` with RFC 6350 §6.9.3's
+/// `CALURI` and `freeBusy` with §6.9.1's `FBURL`. Both are vCard 4.0
+/// properties, and both are nevertheless written on the 3.0 card EDS is handed
+/// — because EDS reads them off one and writes them back onto one, measured
+/// against libebook-contacts 3.52, which is what decides the question here.
+///
+/// EDS's third calendaring field, `ICSCALENDAR`, is missing on purpose: RFC
+/// 9553 §2.4.1 has two kinds, so nothing on a card says an entry belongs there
+/// rather than on the `CALURI` beside it.
+const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", "FBURL")];
+
 /// RFC 9553 §2.2.4's default `kind` for a title that names none.
 const DEFAULT_TITLE_KIND: &str = "title";
 
@@ -458,6 +490,39 @@ pub fn states_link(link: &Link) -> bool {
 /// it is the contact's home page.
 fn maps_link_kind(kind: Option<&str>) -> bool {
     kind.is_none()
+}
+
+/// Whether a calendar reaches the user at all: it must point somewhere *and*
+/// be of a kind one of the two lines states.
+///
+/// As with a link, the kind alone is not the question — a calendar with no URI
+/// has no line either, and calling it visible would let a save delete it.
+pub fn states_calendar(calendar: &Calendar) -> bool {
+    !calendar.uri.is_empty() && calendar_property(calendar.kind.as_deref()).is_some()
+}
+
+/// The vCard property a calendar of this `kind` is stated on.
+///
+/// RFC 9553 §2.4.1 makes the kind mandatory and gives it no default, so an
+/// entry naming none says nothing about which of the two lines its URI belongs
+/// on — and the two are different fields in front of the user. A kind outside
+/// the table, vendor kinds included, is the same case: the mapping states the
+/// kinds it knows and leaves the rest to the server.
+fn calendar_property(kind: Option<&str>) -> Option<&'static str> {
+    let kind = kind?;
+    CALENDAR_KINDS
+        .iter()
+        .find(|(name, _)| *name == kind)
+        .map(|(_, property)| *property)
+}
+
+/// The calendar `kind` a line of this name states, the inverse of
+/// [`calendar_property`].
+fn calendar_kind(property: &str) -> Option<&'static str> {
+    CALENDAR_KINDS
+        .iter()
+        .find(|(_, name)| *name == property)
+        .map(|(kind, _)| *kind)
 }
 
 /// Whether a media entry reaches the user at all: it must be a photo, and the
@@ -1122,6 +1187,19 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         properties.push(Property::new("URL", &link.uri).with_param(X_JMAP_KEY, key));
     }
 
+    // The contact's own calendar and the free/busy data drawn from it, each on
+    // the line EDS keeps that one on. An entry naming neither kind gets no
+    // line: see [`calendar_property`].
+    for (key, calendar) in card.calendars.iter().flatten() {
+        let Some(name) = calendar_property(calendar.kind.as_deref()) else {
+            continue;
+        };
+        if calendar.uri.is_empty() {
+            continue;
+        }
+        properties.push(Property::new(name, &calendar.uri).with_param(X_JMAP_KEY, key));
+    }
+
     // The picture the card carries, on the line Evolution shows as the
     // contact's photo — inline where the card holds the bytes, since that is
     // the only form EDS reads a media type off, and a `VALUE=uri` reference
@@ -1206,6 +1284,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut notes = BTreeMap::new();
     let mut anniversaries = BTreeMap::new();
     let mut links = BTreeMap::new();
+    let mut calendars = BTreeMap::new();
     let mut media = BTreeMap::new();
     let mut online_services = BTreeMap::new();
 
@@ -1295,6 +1374,21 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 }
                 links.insert(entry_key(property, "l", &links), link);
             }
+            // Both calendaring lines feed one keyed map, so the line's own name
+            // is the only thing that says what kind the entry is — and the keys
+            // the reader invents for the two have to be free of each other's.
+            "CALURI" | "FBURL" => {
+                let uri = property.text();
+                if uri.is_empty() {
+                    continue;
+                }
+                let calendar = Calendar {
+                    kind: calendar_kind(&property.name).map(str::to_owned),
+                    uri,
+                    extra: BTreeMap::new(),
+                };
+                calendars.insert(entry_key(property, "c", &calendars), calendar);
+            }
             "PHOTO" => {
                 let Some(photo) = read_photo(property) else {
                     continue;
@@ -1369,6 +1463,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         notes: (!notes.is_empty()).then_some(notes),
         anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
         links: (!links.is_empty()).then_some(links),
+        calendars: (!calendars.is_empty()).then_some(calendars),
         // Only the pictures — a `PHOTO` line is the one media kind vCard 3.0
         // states, so the sounds and logos a card carries are read back by
         // nothing and left to the save to patch around.
