@@ -19152,3 +19152,99 @@ entry through real EDS; the functional book leg still has no modify phase, so no
 test in this repository proves EDS returns an `N` field value unchanged — and
 two mechanisms now depend on it; and the `jmap-mail` `transport.rs` hang is
 still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-eighty-ninth session)
+
+**The gap two sessions in a row ended on is closed: real EDS does hand the `N`
+field back byte-identically, and there is now a test that says so.** The last
+two increments — a component's `phonetic` spelling, and the two halves of a
+double-barrelled given name — both rest on the same string comparison: the save
+puts the server's parts back only when the `N` field *still reads as those parts
+joined*. Every test for it lived on our side of EDS, driving genuine vCard text
+through the real reader and patch builder, but never through the daemon that
+actually parses and rewrites the line. So the mechanism's premise was assumed,
+not measured, and the log said so twice.
+
+The functional book leg now has a second test. It starts from the other end from
+everything else in this repository: a contact card **seeded into the mock's store
+before EDS connects**, holding a given name as two `given` components each with a
+`phonetic`. The client waits for EDS to produce that contact, reports what EDS
+made of the `N` line, edits *one field that is not the name* — the email address
+— saves, and the Rust side asserts the server's `name/components` are still both
+halves, in order, each with its pronunciation.
+
+**What it establishes that nothing else could.** `read-given-name=Jean Paul`
+is real EDS's own answer, byte for byte what the emitter wrote: no collapsed
+double space, no trim. That is the exact string the restore compares against, so
+the premise is now a checked one. Had EDS normalised it, this test would have
+failed rather than the mechanism silently deleting a name nobody touched.
+
+**Mutation-checked, and the mutation is the interesting part.** Dropping the
+`restore_name_components` call in `diff_name` — `patch.rs` backed up and restored
+with `cp` — makes the new leg fail through the whole real stack: the server's card
+comes back `[("surname","Oldenburg",None), ("given","Jean Paul",None)]`, both
+halves collapsed into their concatenation and both pronunciations gone. The first
+leg stays green, which is the point: this failure is invisible to a test that
+starts from a contact EDS wrote.
+
+Worth writing down, because it decides what each assertion is worth: the
+*read-back* observations (`read-back-given-name`) do **not** catch the collapse.
+EDS's cache holds the vCard the backend re-rendered after the save, and a
+collapsed single component renders the same `N` field as two joined ones. So the
+read-backs guard a different failure — EDS or our emitter mangling the field —
+and the whole weight of the name claim sits on the server-side assertion. Both
+were kept; only the second one is load-bearing.
+
+**Two modes of one program, not two programs.** `book-client.c` grew a phase
+argument (`write` / `edit`) and its create path moved into `write_phase()`
+unchanged. The two phases need different books — one empty, one holding a
+server-seeded card — so they cannot be one run, but they open the same book the
+same way, which by `Functional.cmake`'s own stated reasoning for the mail/transport
+split makes them modes rather than programs. No new CMake target and no new
+environment variable: the second test is another `#[test]` in the same binary.
+
+The contact is fetched in a poll loop, and what it measured is worth recording:
+`waited-tries=0`. `EBookMetaBackend` answers a get for a contact its cache has
+never heard of by asking the backend to `load_contact_sync`, so the first try
+succeeds and this is the one place the *read* path is exercised at all —
+through the load, not through the refresh the docs decline to race with. The
+loop stays because the connect also schedules that refresh, and a get arriving
+mid-refresh is an ordering worth waiting out rather than flaking on.
+
+Tests: 946 in the default set, unchanged — the new test is in `jmap-functional`,
+which is outside `default-members` and runs under CTest.
+
+Verified locally: `cargo test --locked` 946; full `ninja` then `ctest` 14/14,
+including all four functional legs; `cargo fmt --all --check` and
+`cargo clippy --all-targets --locked -- -D warnings` clean, plus
+`cargo clippy -p jmap-functional --all-targets --locked` for the crate that is
+outside the default set. `ci/checks.sh` still stops at its first step —
+no `reuse`, no `pipx`, no `uvx` on this VM — so the licence check was done by
+hand: no file was added, all three sources touched already carry an SPDX header,
+and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+**What is still *not* verified.** The claim is now measured for EDS 3.52 on this
+VM, and only there — it is exactly the kind of thing M10's version matrix exists
+to watch, since a newer EDS normalising vCard values would break the mechanism
+without changing any struct layout. And the leg drives an edit of the *email*
+only; a save that edits the `N` field itself through real EDS (the "user retypes
+the name" half, green on the mock side) still has no functional test.
+
+No milestone tag. Removed from the blocker list: the functional book leg having
+no modify phase, and no test proving EDS returns an `N` field value unchanged.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has
+no CI job and no GUI tier; M7 still **needs human verification in real
+Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side rest on untested assumptions; the
+multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL` "Evolution shows only the first" bet
+is still unverified in real Evolution; the two `LABEL` `TYPE` risks stand; a
+deathday and a birthday stated as a year alone are still invisible; the
+conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified
+and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; no test drives a `uri`-only
+entry through real EDS; and the `jmap-mail` `transport.rs` hang is still an open
+design question with a lock-order hypothesis attached.

@@ -53,7 +53,8 @@ error naming the missing one. That is deliberate: see below.
 1. starts a mock JMAP server in-process, on an ephemeral port, and seeds it
    with what the test needs — one address book or one calendar flagged as the
    account default, or a few mailboxes with some mail in them, or the mailbox
-   roles and the sending identity a submission needs;
+   roles and the sending identity a submission needs, or a whole contact card
+   for a test about what EDS makes of one it did not write;
 2. builds a throwaway EDS installation in a directory under the crate's
    target tmpdir: a scratch `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
    `XDG_CACHE_HOME`, the `.source` keyfiles that describe the account and name
@@ -143,10 +144,46 @@ maintainer decision, because it grows the image every job pulls.
   has the name, the email address and the address book it was given;
 - the same contact reads back out of EDS with its name and email intact.
 
-The read path is deliberately *not* asserted. `EBookMetaBackend` schedules its
-refresh rather than running it, so whether a `ContactCard/query` has happened
-by the time the test looks is a race; the write is synchronous. A test that
-asserted it would be a flake waiting for a slow machine.
+The refresh path is deliberately *not* asserted. `EBookMetaBackend` schedules
+its refresh rather than running it, so whether a `ContactCard/query` has
+happened by the time the test looks is a race; the write is synchronous. A test
+that asserted it would be a flake waiting for a slow machine.
+
+### The second book leg: an edit of a card that came from the server
+
+Everything above starts from a contact EDS itself wrote, which bounds what it
+can say: a card that went out as a vCard cannot hold anything a vCard cannot
+state. The second test (`an_edit_through_eds_keeps_the_name_parts_the_vcard_
+flattened`) starts from the other end — a card **seeded into the mock's store
+before EDS connects** — and edits it the way a user edits one.
+
+What it is for: a JSContact name may hold several components of one kind (RFC
+9553 §2.2.1 states a double-barrelled given name as two `given` components),
+while the vCard `N` value has one field per kind. So the emitter joins them, EDS
+is handed `N:Oldenburg;Jean Paul;;;`, and on the way back the save path puts the
+parts in again by recognising that the field *still reads as its parts joined* —
+a string comparison against text that has been through real EDS. Nothing below
+this file can measure that: if EDS normalised the whitespace in the field, a
+name nobody touched would read as retyped, and both halves would be replaced by
+the field's text along with the pronunciations only the server holds.
+
+The leg therefore asserts, on a card whose given name is two components each
+carrying a `phonetic`:
+
+- EDS hands the given name back as `Jean Paul`, byte for byte what the emitter
+  wrote;
+- an edit to the **email address** — one field, and not the name — leaves the
+  server's `name/components` exactly as they were: both halves, in order, each
+  still carrying its `phonetic`;
+- and the edit itself reached the server, patched in place.
+
+The contact is fetched by UID in a poll loop. In practice the first try
+succeeds: `EBookMetaBackend` answers a get for a contact its cache never heard
+of by asking the backend to `load_contact_sync`, so this is the one place the
+*read* path is exercised — through the load, not through the refresh the
+paragraph above declines to race with. The loop is there because the connect
+also schedules that refresh, and a get arriving mid-refresh is the kind of
+ordering worth waiting out rather than flaking on.
 
 ## What the calendar test asserts
 
