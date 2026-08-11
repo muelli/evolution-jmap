@@ -146,6 +146,19 @@ pub struct CalendarEvent {
     /// `CalendarEvent/get` and taking every event in the calendar with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_locations: Option<BTreeMap<String, Value>>,
+    /// The external resources the event points at (RFC 8984 §4.2.7), keyed by
+    /// an id of whoever wrote them — the agenda document, the minutes, the
+    /// picture shown beside the title.
+    ///
+    /// Left as JSON, for the reason [`Self::virtual_locations`] is: a Link (RFC
+    /// 8984 §1.4.11) holds a `cid`, a `rel`, a `display` and a `title` besides
+    /// the `href`, `contentType` and `size` that iCalendar's `ATTACH` (RFC 5545
+    /// §3.8.1.1) and `IMAGE` (RFC 7986 §5.10) have room for. The mapping draws
+    /// the resources and never reads them back, so nothing here has to model the
+    /// rest; holding them as values keeps one server's unusual link from failing
+    /// a `CalendarEvent/get` and taking every event in the calendar with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<BTreeMap<String, Value>>,
     /// The tags the event carries (RFC 8984 §4.2.9), an RFC 8984 §1.4.3 Set:
     /// the keys are the keywords and every value is `true`.
     ///

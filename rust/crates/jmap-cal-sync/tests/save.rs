@@ -257,11 +257,23 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
         "uri": "https://meet.example.com/standup",
         "features": {"video": true},
     });
+    // And what the event points at, which is the guest list's case again: it is
+    // drawn as the ATTACH below and may not be written back, because a Link's
+    // `title` (RFC 8984 §1.4.11) has no room on the line and a save naming
+    // `links` replaces the property whole.
+    let agenda = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/standup.pdf",
+        "contentType": "application/pdf",
+        "size": 51_200,
+        "title": "What we said we would do",
+    });
     fixture.patch(
         &id,
         json!({
             "participants": {"p1": guest.clone()},
             "virtualLocations": {"v1": online.clone()},
+            "links": {"l1": agenda.clone()},
             "sequence": 3,
         }),
     );
@@ -283,7 +295,17 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
         ),
         "{icalendar}"
     );
+    assert!(
+        icalendar.replace("\r\n ", "").contains(
+            "ATTACH;FMTTYPE=application/pdf;SIZE=51200:https://files.example.com/standup.pdf"
+        ),
+        "{icalendar}"
+    );
     assert!(!icalendar.contains("passcode"), "{icalendar}");
+    assert!(
+        !icalendar.contains("What we said we would do"),
+        "{icalendar}"
+    );
     let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -309,6 +331,11 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
             .and_then(|places| places.get("v1")),
         Some(&online),
         "the conference link was rewritten by a save that only changed the title"
+    );
+    assert_eq!(
+        stored.links.as_ref().and_then(|links| links.get("l1")),
+        Some(&agenda),
+        "the agenda was rewritten by a save that only changed the title"
     );
 }
 

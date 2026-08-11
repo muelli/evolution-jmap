@@ -17226,3 +17226,118 @@ included**. If it does not, nothing is lost — the diff sees no keyed line and
 writes nothing — but nothing is gained either, and the whole surface is
 decorative until someone drives a real Evolution against it. That is the one
 experiment worth running before building anything further on `CONFERENCE`.
+
+## 2026-08-11 (hundred-and-seventy-first session)
+
+**What an event points at now reaches the component.** RFC 8984 §4.2.7's
+`links` — the agenda, the minutes, the picture shown beside the title — was
+named in the module doc as the exemplar of "everything else is dropped" and was
+indeed dropped. It is now drawn: the resources a `CalendarEvent` links to reach
+the `VEVENT` as content lines, so an Evolution user who opens a meeting sees the
+document that meeting is about.
+
+**One JSCalendar property, two iCalendar ones.** This is the first crossing in
+this crate that *splits* rather than narrows. RFC 8984 keeps in one map what
+iCalendar puts in two properties: a document attached to the event is RFC 5545
+§3.8.1.1's `ATTACH`, and a picture *of* the event is RFC 7986 §5.10's `IMAGE`.
+What tells them apart is the Link's `rel` (RFC 8288): §1.4.11 permits `display`
+only when the relation is `icon`, so `icon` is exactly the marker JSCalendar
+itself uses for "this is a picture, not an enclosure". A link that sets
+`display` and says any other `rel` is one whose author contradicted themselves,
+and `rel` wins — it is the member that says what the resource *is*, and an
+`ATTACH` has nowhere to put a `DISPLAY` anyway (RFC 7986 §6.1 admits the
+parameter on `IMAGE` alone). Both properties may be stated more than once, so
+this is `CONFERENCE`'s situation and not `LOCATION`'s: every entry of the map is
+written, in the map's own order so a re-rendering is stable.
+
+**The crossings, and one that is free.** `href` is the whole of the line, and an
+entry whose `href` is missing, is not a string or is not a URI has nothing to
+write and is dropped — `names_a_uri` again, which is also what keeps a CR/LF out
+of a value that skips `syntax::escape`. `display` ↔ `DISPLAY` is the third free
+table in this crate after `FEATURE` and the participant roles: RFC 8984 §1.4.11
+and RFC 7986 §6.1 name the same four intentions — badge, graphic, fullsize,
+thumbnail — in the same words, differing only in case. Dropping an unknown one
+is the *safe* direction here and worth stating: §6.1 requires a reader that
+meets a `DISPLAY` it does not recognise to show **no image at all**, where the
+absent parameter means its default of `BADGE`. So passing a vendor value through
+would hide the picture; leaving it off shows it.
+
+**Two parameters that cost the parameter and not the resource.**
+`contentType` becomes an `FMTTYPE` and `size` a `SIZE` (RFC 8607 §4.1), and both
+are checked rather than trusted. RFC 5545 §3.2.8's `fmttypeparam` is a type-name,
+a `/` and a subtype-name of RFC 6838 §4.2's restricted-name and nothing else — so
+`text/plain; charset=utf-8`, which is what a careless server puts in
+`contentType`, has no spelling here, and checking the grammar is also what keeps
+a `;` or a `:` out of a parameter value. `size` must be an UnsignedInt, since a
+negative number or a fraction would put a value outside §4.1's `1*DIGIT` on the
+line. Neither failure drops the link: unlike `uri` on a `CONFERENCE`, these are
+informational (§1.4.11 calls the size an estimate), so the user still gets
+something they can open. `VALUE=URI` is written on the `IMAGE` because §5.10's
+grammar makes it REQUIRED, and *not* on the `ATTACH`, because §3.8.1.1 already
+makes URI that property's default value type and nothing demands it be restated.
+
+**Written and never read back, and this time it is `participants`' reason minus
+the scheduling.** A Link holds a `cid`, a `rel` and a `title` that no line has
+room for, and a property a save names is replaced whole — so a resource read
+back off the component would delete the half of itself the user was never shown.
+`links` therefore stays out of `MAPPED_PROPERTIES`, `read_vevent` leaves it
+`None`, and no save can name it. That is the same position `virtualLocations`
+was in one session ago, and it has the same exit: patching `links/<key>/href`
+and `/contentType` by a key carried on an `X-JMAP-KEY`. No key rides on the line
+in this increment, deliberately — a key that no save reads is a parameter that
+only makes the line longer, and the conference surface added its key in the
+session that gave it a meaning. `jmap-proto` grew a typed `links` field beside
+`virtual_locations`, held as JSON for the same reason: a whole
+`CalendarEvent/get` response is deserialized at once, and one server's odd entry
+must not take the calendar down with it.
+
+Tests: nine new in `jmap-ical`, and the existing
+`editing_an_event_leaves_unmapped_properties_alone` in `jmap-cal-sync` extended
+— it is now home to three kinds of "drawn but not freely writable" at once (the
+guest list, the conference link, and now the agenda), and the agenda's `title`
+is asserted absent from the component *and* byte-for-byte intact on the server
+after a save that only changed the summary. The red run was two-stage.
+Compile-red first: `read_vevent` builds a `CalendarEvent` exhaustively, so
+adding the field to `jmap-proto` made the crate refuse to compile until the
+"never read back" decision was written down where it is taken. Then, with the
+field present and no emitter, seven of the nine fail — the two that pass are the
+negative ones (nothing written, nothing read back), which is what a negative test
+does before and after.
+
+One test was wrong on the first draft and the crate corrected it: `display` was
+asserted to reject an upper-case `BADGE`, but `spelled` — the helper every closed
+vocabulary in this mapping goes through — compares case-insensitively, and
+inventing a stricter rule for one property would have been a worse answer than
+following the file. The test now pins the leniency instead.
+
+Verified locally: `cargo test --locked` 821, up 9 from 812; `jmap-backend-cal`,
+`jmap-backend-book`, `jmap-backend-collection` and `jmap-mail` all green and
+unchanged; `ctest` 14/14 including all four functional legs after a full
+`ninja`. `cargo fmt --all --check` and `cargo clippy --all-targets --locked --
+-D warnings` clean for the default set and for the four EDS-header crates.
+`ci/checks.sh` again stops at its first step: `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed. Exposure is nil — **no file was added**,
+only edits to four files that already carry SPDX headers — and `Cargo.lock` is
+untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+`cargo doc` gains two more "links to private item" warnings (`ICON_REL`,
+`drawn_links`); that is the convention this file already follows for
+`read_duration` and `drawn_conferences`, not a new kind of dirt.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so the
+M8 tag many sessions have asked for is still unwritten; the manual-test recipes
+are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the once-seen
+`jmap-mail` `tests/transport.rs` hang is still unexplained; `jmap-ical` still
+emits no `VTIMEZONE` of its own; and the `CONFERENCE` edit path still rests on
+the untested assumption that Evolution round-trips a property it has no UI for.
+New from this session: `links` is drawn and unwritable, so a user who removes an
+attachment in Evolution will see it come back on the next sync — the same
+conservatism `CONFERENCE` had one session ago and the natural next increment on
+this surface. And it shares the same open question with more force, because
+`ATTACH` is a property Evolution 3.52 *does* have a UI for: its appointment
+editor shows attachments, so whether it round-trips an `ATTACH` whose URI points
+at a server it cannot fetch from — and what it does with an `IMAGE` it almost
+certainly ignores — decides whether an edit path here would be safe. That is a
+question for a real Evolution, not for this VM, and nothing about the UI is
+claimed.
