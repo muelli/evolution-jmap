@@ -187,7 +187,7 @@ ordering worth waiting out rather than flaking on.
 
 ### The picture: what a meta backend does to a photo behind the backend's back
 
-The contact's photo crosses all eight book legs, and it is the one property where
+The contact's photo crosses all nine book legs, and it is the one property where
 EDS does something to the data on its own initiative — which is why it needs real
 daemons rather than a fixture. Two facts, both measured here against EDS 3.52,
 and neither of them anything this repository asks for:
@@ -247,7 +247,7 @@ server filed under `calendar-1` and `freebusy-1`:
 The first book leg covers the other direction: a contact written through
 `e_book_client_add_contact_sync` with both fields set reaches the server as two
 `calendars` entries of kind `calendar` and `freeBusy`. Drop the `X-JMAP-KEY`
-from the emitter's two lines and six of the seven seeded legs go red together —
+from the emitter's two lines and seven of the eight seeded legs go red together —
 every one that asserts the map survived an edit elsewhere — with the server's
 entries deleted and re-added under the `c1`/`c2` the reader invents by counting
 lines.
@@ -286,9 +286,9 @@ spouse and a brother:
 
 The first book leg covers the other direction: a contact written through
 `e_book_client_add_contact_sync` with the Spouse field set reaches the server as
-one `relatedTo` entry, keyed by the name and stating `spouse`. The other five
+one `relatedTo` entry, keyed by the name and stating `spouse`. The other six
 seeded legs assert the whole `relatedTo` map is untouched by an edit elsewhere,
-so dropping the spouse line from the emitter turns all eight legs red at once.
+so dropping the spouse line from the emitter turns all nine legs red at once.
 
 ### Clearing that field: the withdrawal with nothing to put in its place
 
@@ -360,16 +360,64 @@ What the leg asserts, on the seeded card the server filed two notes on under
   express — so the save patched `notes/note-1/note` rather than replacing the
   entry — and `note-2` untouched.
 
-The other seven legs assert the whole `notes` map is untouched by an edit
-elsewhere, so dropping the `X-JMAP-KEY` from the emitter's `NOTE` line turns all
-seven seeded legs red at once, with the server's notes deleted and re-added under
-the `n1`/`n2` the reader invents by counting lines.
+The other legs assert the whole `notes` map is untouched by an edit elsewhere, so
+dropping the `X-JMAP-KEY` from the emitter's `NOTE` line turns all eight seeded
+legs red at once, with the server's notes deleted and re-added under the `n1`/`n2`
+the reader invents by counting lines.
 
 What this leg does **not** add is a mutation only it catches: stop `diff_notes`
 patching the text and it goes red, but so does the fixture test that models the
 same edit (`editing_a_note_keeps_when_it_was_written_and_by_whom` in
 `jmap-book-sync`). What it adds is the *input* — the fixture states the card a
 retyped Notes field produces, and only the daemons can say that EDS produces it.
+
+### Clearing the Notes field: the note the user was never shown, revealed
+
+The ninth leg
+(`clearing_the_note_through_eds_withdraws_it_and_keeps_the_one_behind_it`) is the
+other half of the eighth, and it takes the branch of the save no other leg
+reaches: an entry **withdrawn** from a keyed map through a field that cannot
+express the map. Every leg above hands the save a `notes` holding something for
+each entry it knows about.
+
+What EDS leaves on the card when the field is emptied is the measurement it
+exists for, and against libebook-contacts 3.52 the answer matches the spouse
+line's: `e_contact_set (contact, E_CONTACT_NOTE, "")` — the empty string, which
+is what Evolution's contact editor hands over for a field the user emptied —
+leaves the line **standing with no value on it** rather than striking it off, so
+`cleared-note-lines` reads 2. The mapping withdraws the note either way, because
+the reader refuses a `NOTE` saying nothing (`states_note`), so the leg reports the
+count and asserts only what is true of both cards.
+
+Neither the field nor that count can say *which* line is which — a card whose
+first note was emptied and a card whose second note was deleted read alike
+through `e_contact_get`, and both leave one line saying something — so the client
+also reports every `NOTE` value on the card, joined on `|`, and the harness
+compares the ones that say something.
+
+What the leg asserts, on the same seeded card:
+
+- the note the field showed was read by EDS, off the first of two lines, so the
+  clearing is of something that was there;
+- the card handed to the save shows an empty field and carries exactly one
+  `NOTE` value: the note **behind** the cleared one;
+- the server ends up holding `note-2` alone, under the key it chose and with its
+  text untouched — the entry withdrawn rather than the property taken back whole,
+  and rather than the withdrawal never made. Drop the removal pass in
+  `diff_entries` and this leg goes red on its own; so does making `states_note`
+  accept a note that says nothing, which would send the emptied line back to the
+  server as a note spelled as nothing;
+- and, after the save, EDS's cache hands the Notes field back holding
+  `do not call before 10:00, ever` — one line, `read-back-note-lines=1`. Clearing
+  the field therefore **reveals** the note behind it rather than emptying the
+  field, which is surprising and correct: the field is the first `NOTE` line, and
+  after the withdrawal that is the second note. It is asserted because both other
+  readings are failures — the old text is a withdrawal that never reached the
+  server, and an empty field is the second note having gone with the first.
+
+The fixture beside it is `emptying_one_note_line_of_two_withdraws_that_note_alone`
+in `jmap-book-sync`, which states the card an emptied field produces; this leg is
+what says EDS produces it.
 
 ## What the calendar test asserts
 
