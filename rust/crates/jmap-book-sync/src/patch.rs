@@ -5,7 +5,8 @@
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, NICKNAME,
-//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, PHOTO, CATEGORIES, the
+//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, CALURI, FBURL, PHOTO,
+//! CATEGORIES, the
 //! instant-messaging `X-` lines and the two date lines, and drops everything
 //! else, so a save that sent the parsed card back whole would silently delete
 //! the properties it could not represent — preferred languages, what the
@@ -55,6 +56,11 @@
 //!   nickname's is: what the resource is and how strongly it is preferred have
 //!   no parameter on a `URL` line. Their key survives Evolution — EDS rewrites
 //!   the value of that line in place and leaves the parameters where they were.
+//! - `calendars` entries are patched by their URI alone, as a link's are, and
+//!   their key survives Evolution the same way. Their `kind` is stated — it is
+//!   which of the two lines the URI is on — but cannot have been *edited*:
+//!   moving an address from the Calendar field to the Free/Busy one is a
+//!   deletion and an addition, and arrives here as exactly that.
 //! - `media` entries have no surviving key either, and are patched by what the
 //!   `PHOTO` line states rather than by their members — a picture read back off
 //!   a line is not the entry that produced it. Only the first of them is ever
@@ -86,8 +92,9 @@
 //!   property; an address with neither an `ADR` field nor a written-out form
 //!   to put on a `LABEL`, an organisation with neither a name nor a unit, an
 //!   email with no address, a phone with no number, a note that says nothing,
-//!   a date naming no single day, a link of a kind vCard 3.0 cannot state and a
-//!   handle at a service EDS has no field for all have no line to be written
+//!   a date naming no single day, a link of a kind vCard 3.0 cannot state, a
+//!   calendaring resource naming neither of the two kinds that have a line, and
+//!   a handle at a service EDS has no field for all have no line to be written
 //!   on. Each is dropped on the way
 //!   out and must
 //!   therefore be invisible to the save in both directions — neither deleted
@@ -104,16 +111,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Media,
-    Name, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
+    Link, Media, Name, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
     maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
     restore_name_components, same_photo, same_service, states_a_point_in_time, states_address,
-    states_anniversary, states_email, states_keyword, states_link, states_media, states_nickname,
-    states_note, states_online_service, states_organization, states_phone, states_title,
-    title_kind,
+    states_anniversary, states_calendar, states_email, states_keyword, states_link, states_media,
+    states_nickname, states_note, states_online_service, states_organization, states_phone,
+    states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -147,6 +154,11 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.anniversaries.as_ref(),
     );
     diff_links(&mut patch, current.links.as_ref(), edited.links.as_ref());
+    diff_calendars(
+        &mut patch,
+        current.calendars.as_ref(),
+        edited.calendars.as_ref(),
+    );
     diff_media(&mut patch, current.media.as_ref(), edited.media.as_ref());
     diff_online_services(
         &mut patch,
@@ -482,6 +494,41 @@ fn diff_links(
             // through. Nor can the `kind` have changed — a `URL` states the
             // one kind that has no name, and an entry of any other kind has no
             // line to be edited on.
+            if old.uri != new.uri {
+                patch.insert(format!("{path}/uri"), Value::String(new.uri.clone()));
+            }
+        },
+    );
+}
+
+/// The contact's calendaring resources, which cross on two lines of different
+/// names rather than on one.
+///
+/// Patched by their URI alone, for the reason a link's is: what the resource
+/// is, where it is used and how strongly it is preferred have no parameter on a
+/// `CALURI` or an `FBURL`. The `kind` cannot have been edited either, though it
+/// *is* stated — it is the line's own name, and moving a URI from one field to
+/// the other in Evolution is deleting it from one and typing it into the other,
+/// which arrives here as exactly that.
+///
+/// Their key survives Evolution: measured against libebook-contacts 3.52, a set
+/// on `E_CONTACT_CALENDAR_URI` or `E_CONTACT_FREEBUSY_URL` rewrites the value of
+/// the first line of that name in place and leaves its parameters — the
+/// `X-JMAP-KEY` included — where they were, exactly as a set on the home page
+/// does. Only that first line is the one the user can edit; any further line of
+/// the same name passes through untouched and is matched by the key it kept.
+fn diff_calendars(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Calendar>>,
+    edited: Option<&BTreeMap<String, Calendar>>,
+) {
+    diff_entries(
+        patch,
+        "calendars",
+        current,
+        edited,
+        states_calendar,
+        |patch, path, old, new| {
             if old.uri != new.uri {
                 patch.insert(format!("{path}/uri"), Value::String(new.uri.clone()));
             }
