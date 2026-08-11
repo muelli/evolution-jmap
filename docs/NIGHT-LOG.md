@@ -18602,3 +18602,109 @@ moved between the Home and Work slots at all is unknown, and if it does, the mov
 loses the entry's `X-JMAP-KEY` and a save would delete and recreate the entry
 rather than patch it — the `rekey_anniversaries` shape would fix that once the
 behaviour is known.
+
+## 2026-08-11 (hundred-and-eighty-fourth session)
+
+**The follow-up the last session named, taken: an `onlineServices` entry stated
+only as a `uri` is no longer invisible.** RFC 9553 §2.3.2 asks for a `user` or a
+`uri`, and only the first is a handle — which is all the EDS field holds. The
+previous increment therefore drew nothing for an entry that stated only the
+second, and wrote down why: reading a handle out of `xmpp:vera@jabber.example`
+means knowing the service's URI scheme, and a mapping that guessed would write
+the guess back on the next save. This session supplies the missing knowledge as a
+table rather than a guess, and the entry is drawn.
+
+**The table is deliberately shorter than the list of services.** `SERVICE_SCHEMES`
+holds a scheme only where its scheme-specific part *is* the handle and nothing
+else: `xmpp` (RFC 5122 §2.1, whose path is a JID) for Jabber and for Google Talk,
+which ran on XMPP and whose handles are therefore JIDs too, and `skype`, where the
+bare `skype:<name>` is the Skype Name and everything past it is a query telling
+the client what to do. `matrix` is registered and still left out, because it
+states an identifier as `u/vera:matrix.example` rather than as the
+`@vera:matrix.example` the field holds — reading one means rewriting it and
+writing one means the reverse. AIM, Gadu-Gadu, ICQ, MSN and Yahoo each had a
+conventional scheme that this session could not verify against the IANA registry
+from here, so none is named; that omission costs exactly what it cost before the
+table existed, and closing it is a line of table plus a test.
+
+**Getting a scheme wrong is bounded, and that is why a short table is safe rather
+than merely cautious.** The scheme is only ever used to *recognise* a URI. One
+that does not match is not drawn — which is precisely the behaviour of every
+service missing from the table. So the failure mode of a wrong entry is the
+status quo, never a fabricated handle.
+
+**The `scheme:handle` shape is checked in both directions by one predicate.**
+`plain_handle` refuses a path, a query, a fragment, a percent-encoding and any
+whitespace or control character. A query is what keeps `skype:echo123?call` — an
+action, not an identity — off the line; a percent-encoding is what keeps this side
+from having to decode `xmpp:vera%40jabber.example` and the save from having to
+re-encode it. The same predicate governs writing, so a handle read out of a URI is
+exactly a handle that can be written back into one, and the two directions cannot
+drift apart.
+
+**The save compares handles, not members — and that is the half a careless
+implementation gets wrong silently.** An entry the server states as a `uri` is
+drawn as a handle and read back as a `user` saying the same thing. Comparing the
+JSContact members would call that an edit, so *every* save of the contact, for any
+reason, would patch this entry and bump the server state for every other client
+watching. `online_service_handle` is what both sides are compared through.
+
+**A rename goes back on the member it was drawn from.** An entry that stated only
+a `uri` keeps that shape, rebuilt around the new handle by the same scheme that
+let the old one be read — answering a card shaped one way with a card shaped
+another is a change the user did not ask for. Where the rebuild is impossible —
+no scheme for the service, or a handle no URI can state, since the user is typing
+into a free-text field and may well type a space — the entry changes shape
+instead: the handle goes on the `user` and the stale `uri` is nulled, which is
+what a renamed entry stating *both* has always done. Falling back is never wrong,
+only less faithful, which is what makes it the right default.
+
+**Every implementation half was mutation-checked**, each file backed up with `cp`
+and restored with `cp`. Dropping `plain_handle`'s refusals, comparing the scheme
+case-sensitively, preferring the `uri` over the `user` where an entry states both,
+comparing the `user` members instead of the handles, never rebuilding the URI, and
+rebuilding one around any handle at all — each was caught by exactly one test. The
+fourth of those initially caught *nothing*: the test asserted the entry's final
+state, and the mutation rewrote the URI to the value it already held, so the
+assertions still passed. It now saves the vCard back unmodified and asserts the
+server's state string did not move, which is the thing actually at stake.
+
+One existing test changed its fixture rather than its meaning:
+`a_service_the_vcard_cannot_state_survives_a_save_it_was_never_part_of` used a
+Jabber entry stated as `xmpp:` as its "URI with no handle to show" case, which is
+now visible; it uses a Matrix `matrix:u/...` entry instead, which is the same case
+for a sharper reason. The mapping test asserting a `uri`-only entry gets no line
+was replaced by four: the entry is drawn, a service with no known scheme is still
+not, a URI saying more than a handle is still not, and an entry stating both is
+drawn from its handle.
+
+Tests: 933 in the default set, up 6 from 927 — four new in `jmap-vcard`'s mapping
+(one removed), three in `jmap-book-sync`'s save path.
+
+Verified locally: `cargo test --locked` 933; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all --check`
+and `cargo clippy --all-targets --locked -- -D warnings` clean. `ci/checks.sh`
+still stops at its first step — `reuse` is not on this VM and neither `pipx` nor
+`uvx` is installed — so the licence check was done by hand: no file was added,
+every source touched already carries an SPDX header, and `Cargo.lock` is
+untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification
+in real Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side rest on untested assumptions; the
+`NameComponent` `phonetic` hole stands; the multi-`NOTE`/`ORG`/`TITLE`/
+`NICKNAME`/`URL` "Evolution shows only the first" bet is still unverified in real
+Evolution; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as
+a year alone are still invisible; a tag whose ends are whitespace freezes the whole
+category set for that card; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order hypothesis
+attached. Narrowed: a `uri`-only entry is invisible only at a service outside
+`SERVICE_SCHEMES` now. New: the conventional URI schemes for AIM, Gadu-Gadu, ICQ,
+MSN and Yahoo are unverified and therefore untabled, so entries stated only as URIs
+at those five services stay invisible; and no test drives a `uri`-only entry
+through real EDS — the functional book leg still exercises only the `user` path.
