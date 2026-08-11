@@ -19971,3 +19971,123 @@ be moved between the Home and Work slots at all is unknown; no test drives a
 what Evolution's contact editor writes for a replaced photo is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-ninety-seventh session)
+
+**Saving the spouse, and the one property where an edit is not an edit.** The
+last session put a spouse on the line EDS keeps `E_CONTACT_SPOUSE` on and stopped
+there: a name the user retyped reached the local cache and no further. This
+increment is the write side, and it is the only mapped property that does not go
+through `diff_entries` — because the key is the value. RFC 9553 §2.1.8 keys
+`relatedTo` by the related entity, RFC 9555 §2.9.5 is what lets that key be free
+text rather than a `uid`, so the name on the line *is* the entry's name. There is
+nothing on the entry to patch. What arrives here is one entity losing a marriage
+and another gaining one.
+
+**Which is where the previous session's own sketch was overruled.** It proposed
+carrying the relation set across — moving `kin` from `Jean Paul Oldenburg` to
+`Jean-Paul Oldenburg` so it was not deleted along the way. But a rename that
+carries members is this mapping *inventing a claim*: the server never said the new
+name was kin, and nothing on the line said it either. The line stated exactly one
+bit about that entity — that it is a spouse — so exactly one bit is what a save may
+withdraw. `states_nothing_but_the_marriage` is the whole judgement: an entry the
+server also calls `kin` stays, with `relatedTo/<name>/relation/spouse` struck off,
+and an entry that said nothing else goes entirely rather than lingering as a
+relation of no stated type, which is not what emptying the field said. That is the
+judgement `merge_units` already makes about a renamed unit's `sortAs` ("a hint for
+the old name is not one for the new") and the one `diff_online_services` makes
+about the URI that named a replaced handle.
+
+**The wart this leaves, named rather than hidden.** Retyping a spouse who was also
+`kin` ends with the card saying "Jean Paul Oldenburg is kin" *and* "Jean-Paul
+Oldenburg is spouse" — so a user fixing a typo leaves the kinship attached to the
+misspelling. The alternative loses that in the other direction, by telling the
+server a person it has never heard of is kin. Lingering under an old key states
+nothing false and is recoverable; an invented relation is neither. If a human
+prefers the rename reading, the change is local to `diff_related_to`.
+
+**`@type` is not something else said.** A server that tags its objects — most do —
+would otherwise make every spouse-only entry unremovable, left behind as
+`{"@type": "Relation"}` with its relation set emptied, and the user who cleared the
+Spouse field would still have a spouse. So the tag is excluded from the "said more
+than the marriage" test, which is the same exclusion `jmap-cal-sync`'s
+`diff_locations` makes about a location that named nothing but its name. The
+mutation that counts it as content reddens `clearing_the_spouse_field_removes_the_relation`.
+
+**Two things this property gets for free and one it pays for.** Free: no invented
+keys, so no `free_key` and no collision with an entry the vCard never showed. A
+name is a name on both sides, and an entry the reader cannot see is either keyed by
+something no field produces — a URI, filtered by `states_spouse` — or is *the very
+entity the user just named*, in which case the addition is a merge into the
+existing set rather than a new entry. `a_spouse_the_card_already_relates_to_gains_the_marriage`
+is that branch: typing the name of someone the card already calls `kin` says one
+more thing about them, it does not name a second person. Paid for: the key is a
+string a human typed, so RFC 6901 §3's `/` and `~` have to be escaped into the
+patch path for the first time on a value the user chose rather than one a server
+did. `a_spouse_whose_name_holds_a_pointer_character_is_patched_under_that_name`
+drives `Anne/Marie Oldenburg` → `Jo~Ann Oldenburg`, which is the only test that
+reddens when `escape` is dropped.
+
+**RFC 8620 §5.3, twice.** A card relating to nobody has no `relatedTo` for a path
+to reach into, so the property is written whole; a card whose every entry was a
+marriage the field no longer names is patched to `null` rather than left as an
+empty map, since §2.1.8's default of no relations and an empty map are different
+things to store. The second is tested (`clearing_the_spouse_field_removes_the_relation`
+asserts `related_to == None`, and the mutation removing that branch reddens it).
+The first is *not* provable here: `jmap-mock`'s `apply_patch` creates intermediate
+objects on demand, so patching into an absent property succeeds against this
+server and would not against one holding to §5.3. The test asserts the behaviour —
+the spouse is saved — and the comment says which server the branch is for.
+
+**Mutation checks.** Withdrawing by deleting the whole entry always: two red,
+including the pointer-character leg. Letting an addition replace an entry the card
+already holds: one red. Dropping `escape`: one red. Dropping the empties-out
+branch: one red. Counting `@type` as content: one red. And dropping the
+`diff_related_to` call entirely: all seven, which is where they started.
+
+Tests: 986 in the default set, up from 979.
+
+Verified locally: `cargo test --locked` 986; full `ninja` then `ctest` 14/14, all
+four functional legs included, `functional-book`'s five real-EDS legs re-run alone
+to confirm they exercised the rebuilt module; `cargo fmt --all --check` clean;
+`cargo clippy --all-targets --locked -- -D warnings` and `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` both clean.
+`cargo doc` adds one warning of a class this module already carries five of (a
+module doc linking a private `diff_*`). `ci/checks.sh` still stops at its first
+step — no `reuse`, no `pipx`, no `uvx` on this VM — so the licence check was done by
+hand: no file was added, the four sources touched already carry an SPDX header, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the last
+green run.
+
+**What is still *not* verified.** No functional leg drives a spouse through real
+EDS, so what Evolution's contact editor writes into the field — and whether it
+writes `X-EVOLUTION-SPOUSE` with a `e_contact_set` at all — is still inferred from
+libebook-contacts rather than measured through the daemons; that is the next
+increment, and it is the one that would also settle whether clearing the field
+really leaves an empty line rather than dropping it, which
+`as_evolution_retypes_the_spouse` currently asserts by analogy with the Free/Busy
+field. Nothing here can move a relation *between* types, and the nineteen types
+with no field remain invisible in both directions. A card carrying several spouse
+lines has only its first editable in Evolution; the save handles the rest by name,
+untested through the daemons.
+
+No milestone tag. Removed from the blocker list: `jmap-book-sync` cannot save a
+spouse. Unchanged blockers: no functional leg drives a spouse through real EDS;
+the calcard directive's two emitters are still ours; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**; `example-module`
+does not pass this VM's clippy (1.97) on unmodified master, 26
+`manual_c_str_literals`; `docs/MILESTONES.md` does not exist, so the M8 tag is
+still unwritten; the manual-test recipes are unlinked from the README;
+`jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own;
+`links` and `CONFERENCE` on the calendar side rest on untested assumptions; the
+multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL`/`PHOTO` "Evolution shows only the
+first" bet is verified for `PHOTO` and still unverified for the rest; the two
+`LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone are
+still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and
+Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped
+and their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; no test drives a
+`uri`-only entry through real EDS; a `VALUE=uri` photo's rendering is unmeasured;
+what Evolution's contact editor writes for a replaced photo is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.
