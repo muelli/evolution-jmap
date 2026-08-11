@@ -437,9 +437,10 @@ pub struct OnlineService {
     /// The contact's identifier at the service as a URI (RFC 9553 §2.3.2
     /// requires RFC 3986 §3).
     ///
-    /// Modeled but never drawn, because reading a handle out of it means
-    /// knowing each service's URI scheme; it is here so that the save path can
-    /// tell an entry that states one from an entry that does not.
+    /// Drawn only where the service's scheme is known to state the handle and
+    /// nothing besides, which is a short list; elsewhere it is modeled so that
+    /// the save path can tell an entry that states one from an entry that does
+    /// not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
     #[serde(flatten)]

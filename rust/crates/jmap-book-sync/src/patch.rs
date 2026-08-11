@@ -56,8 +56,10 @@
 //!   part of them an `X-JABBER` line states; where the handle is used and how
 //!   strongly it is preferred have no parameter on it, and the `TYPE` it does
 //!   carry is the slot EDS files the handle in rather than the entry's
-//!   `contexts`. Renaming the handle also *drops* the entry's `uri`, which named
-//!   the handle the user has just replaced — see [`diff_online_services`], the
+//!   `contexts`. The handle is the entry's `user`, or the one its `uri` states
+//!   for a service whose URI scheme says nothing else — and a rename goes back
+//!   on whichever of the two it was drawn from. Where it cannot, the `uri` that
+//!   named the replaced handle is *dropped*: see [`diff_online_services`], the
 //!   one place here where a save removes a member the vCard never showed.
 //! - `keywords` is the one mapped property that is a *set*, and the one that
 //!   goes back **replaced whole**: a tag is a bare string with no key and no
@@ -94,10 +96,10 @@ use jmap_proto::contacts::{
 };
 use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_keywords,
-    maps_name_component, maps_phone_feature, restore_address_components, same_service,
-    states_a_point_in_time, states_address, states_anniversary, states_email, states_link,
-    states_nickname, states_note, states_online_service, states_organization, states_phone,
-    states_title, title_kind,
+    maps_name_component, maps_phone_feature, online_service_handle, online_service_uri,
+    restore_address_components, same_service, states_a_point_in_time, states_address,
+    states_anniversary, states_email, states_link, states_nickname, states_note,
+    states_online_service, states_organization, states_phone, states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -464,16 +466,40 @@ fn diff_online_services(
         edited,
         states_online_service,
         |patch, path, old, new| {
-            if old.user != new.user {
-                patch.insert(format!("{path}/user"), value_or_null(new.user.as_ref()));
-                // The URI stated the handle that has just been replaced, and
-                // nothing here can rebuild it from the new one: that needs the
-                // service's URI scheme, which this mapping does not know and
-                // must not guess at. So it goes with the name it belonged to,
-                // for the reason `merge_units` drops a renamed unit's `sortAs` —
-                // a URI for the old handle is not one for the new.
-                if old.uri.is_some() {
-                    patch.insert(format!("{path}/uri"), Value::Null);
+            // What the line stated, on either side — not the `user`, because an
+            // entry the server stated as a URI is drawn from that URI and comes
+            // back as a `user` saying the same thing. Comparing the members
+            // would call that an edit and rewrite the entry on every save.
+            let handle = online_service_handle(new);
+            if online_service_handle(old) != handle {
+                // The rename goes back on the member it was drawn from. An entry
+                // that stated only a URI keeps that shape, rebuilt around the new
+                // handle — the scheme that let the handle be read is the one that
+                // writes it.
+                let rebuilt = match (&old.user, handle) {
+                    (None, Some(handle)) => new
+                        .service
+                        .as_deref()
+                        .or(old.service.as_deref())
+                        .and_then(|service| online_service_uri(service, handle)),
+                    _ => None,
+                };
+                match rebuilt {
+                    Some(uri) => {
+                        patch.insert(format!("{path}/uri"), Value::String(uri));
+                    }
+                    // Otherwise the handle goes on the `user`, and the URI that
+                    // named the old one goes with it: nothing here can rebuild
+                    // it — either the service has no scheme this mapping knows,
+                    // or no URI states what the user typed — and a URI for the
+                    // old handle is not one for the new. The same judgement
+                    // `merge_units` makes about a renamed unit's `sortAs`.
+                    None => {
+                        patch.insert(format!("{path}/user"), value_or_null(new.user.as_ref()));
+                        if old.uri.is_some() {
+                            patch.insert(format!("{path}/uri"), Value::Null);
+                        }
+                    }
                 }
             }
             // Which the line does not state — it states the service by *being*

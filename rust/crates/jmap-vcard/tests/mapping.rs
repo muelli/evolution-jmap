@@ -1493,36 +1493,118 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
     }
 }
 
-#[test]
-fn an_entry_stated_only_as_a_uri_gets_no_line() {
-    // RFC 9553 §2.3.2 asks for the `uri` or the `user`, and the two are not
-    // interchangeable here: Evolution's instant-messaging field holds a handle,
-    // and reading one out of `xmpp:vera@jabber.example` means knowing the URI
-    // scheme of every service — a guess this mapping would then write back.
-    //
-    // So an entry stating only a URI has no line, which makes it invisible to
-    // the user *and* to the save, exactly like an address stated only in
-    // components vCard has no field for.
-    let card = ContactCard {
+fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {
+    ContactCard {
         online_services: Some(
             [(
                 "s1".to_owned(),
                 OnlineService {
-                    service: Some("Jabber".to_owned()),
-                    uri: Some("xmpp:vera@jabber.example".to_owned()),
+                    service: service.map(str::to_owned),
+                    uri: Some(uri.to_owned()),
                     ..OnlineService::default()
                 },
             )]
             .into(),
         ),
         ..ContactCard::default()
-    };
-    assert!(!card_to_vcard(&card).contains("X-JABBER"));
+    }
+}
+
+#[test]
+fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
+    // RFC 9553 §2.3.2 asks for the `uri` or the `user`, and Evolution's
+    // instant-messaging field holds only the second: a handle. Reading one out
+    // of a URI means knowing the service's scheme — which for the services whose
+    // scheme states the handle and nothing else is a fact, not a guess, so the
+    // entry is drawn rather than left invisible.
+    let vcard = card_to_vcard(&at_uri(Some("Jabber"), "xmpp:vera@jabber.example"));
+    assert_eq!(
+        line(&vcard, "X-JABBER"),
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example"
+    );
+
+    // Read back as a handle with no URI, as every line is: the reader states
+    // what the line says, and the save path is what knows the entry it belongs
+    // to was a URI.
+    let services = vcard_to_card(&vcard)
+        .expect("parse")
+        .online_services
+        .expect("online services");
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
+    assert_eq!(services["s1"].uri, None);
+
+    // The scheme is compared case-insensitively, as RFC 3986 §3.1 requires.
+    assert!(
+        card_to_vcard(&at_uri(Some("Jabber"), "XMPP:vera@jabber.example"))
+            .contains(":vera@jabber.example")
+    );
+    // And it is the service's scheme, not any scheme: an `https` URI under a
+    // service whose handles are JIDs states no handle this mapping can read.
+    assert!(
+        !card_to_vcard(&at_uri(Some("Jabber"), "https://jabber.example/vera")).contains("vera")
+    );
+}
+
+#[test]
+fn a_uri_at_a_service_with_no_known_scheme_gets_no_line() {
+    // The table holds the services whose scheme names the handle literally.
+    // Everything else stays invisible exactly as before: `matrix:` states the
+    // identifier as `u/vera:matrix.example`, which is not the `@vera:...` the
+    // field holds, and GroupWise has no scheme at all. Inventing one for either
+    // would put a fabricated handle in front of the user and then write the
+    // user's correction of it back to the server.
+    for (service, uri) in [
+        (Some("Matrix"), "matrix:u/vera:matrix.example"),
+        (Some("GroupWise"), "vera.oldenburg"),
+        (Some("Signal"), "sgnl://signal.me/vera"),
+        (None, "xmpp:vera@jabber.example"),
+    ] {
+        let vcard = card_to_vcard(&at_uri(service, uri));
+        assert!(!vcard.contains("vera"), "{service:?} was drawn: {vcard}");
+    }
 
     // The fixture's Mastodon entry is the same case twice over — a service EDS
     // has no field for, stated as a URI.
     let vcard = card_to_vcard(&fixture_card());
     assert!(!vcard.contains("social.example"), "{vcard}");
+}
+
+#[test]
+fn a_uri_that_says_more_than_a_handle_gets_no_line() {
+    // Only the plain `scheme:handle` shape states a handle and nothing else. A
+    // path, a query, a fragment or a percent-encoding means the URI carries
+    // something the field cannot hold — so drawing it would show the user a
+    // handle the service does not know them by, and a save would write that
+    // back. Whitespace is refused for the same reason it is in a `user`: what
+    // the user sees and what the line says would differ.
+    for uri in [
+        "xmpp:",
+        "xmpp:vera@jabber.example/work",
+        "xmpp:vera@jabber.example?message",
+        "xmpp:vera@jabber.example#anchor",
+        "xmpp:vera%40jabber.example",
+        "xmpp: vera@jabber.example",
+        "xmpp:vera\t@jabber.example",
+        "vera@jabber.example",
+    ] {
+        let vcard = card_to_vcard(&at_uri(Some("Jabber"), uri));
+        assert!(!vcard.contains("X-JABBER"), "{uri} was drawn: {vcard}");
+    }
+}
+
+#[test]
+fn an_entry_stating_both_is_drawn_from_its_handle() {
+    // The `user` is what the service calls the contact; the `uri` is a second
+    // way of saying it. Where both are there the handle wins, so an entry whose
+    // URI disagrees with its handle shows the handle — the member the field is
+    // for.
+    let mut card = at_uri(Some("Jabber"), "xmpp:old@jabber.example");
+    let services = card.online_services.as_mut().expect("online services");
+    services.get_mut("s1").expect("the entry").user = Some("vera@jabber.example".to_owned());
+    assert_eq!(
+        line(&card_to_vcard(&card), "X-JABBER"),
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example"
+    );
 }
 
 #[test]
