@@ -187,7 +187,7 @@ ordering worth waiting out rather than flaking on.
 
 ### The picture: what a meta backend does to a photo behind the backend's back
 
-The contact's photo crosses all seven book legs, and it is the one property where
+The contact's photo crosses all eight book legs, and it is the one property where
 EDS does something to the data on its own initiative — which is why it needs real
 daemons rather than a fixture. Two facts, both measured here against EDS 3.52,
 and neither of them anything this repository asks for:
@@ -247,9 +247,10 @@ server filed under `calendar-1` and `freebusy-1`:
 The first book leg covers the other direction: a contact written through
 `e_book_client_add_contact_sync` with both fields set reaches the server as two
 `calendars` entries of kind `calendar` and `freeBusy`. Drop the `X-JMAP-KEY`
-from the emitter's two lines and the three seeded legs all go red together, with
-the server's entries deleted and re-added under the `c1`/`c2` the reader invents
-by counting lines.
+from the emitter's two lines and six of the seven seeded legs go red together —
+every one that asserts the map survived an edit elsewhere — with the server's
+entries deleted and re-added under the `c1`/`c2` the reader invents by counting
+lines.
 
 ### The spouse: the one property whose *key* is what the user sees
 
@@ -285,9 +286,9 @@ spouse and a brother:
 
 The first book leg covers the other direction: a contact written through
 `e_book_client_add_contact_sync` with the Spouse field set reaches the server as
-one `relatedTo` entry, keyed by the name and stating `spouse`. The other four
+one `relatedTo` entry, keyed by the name and stating `spouse`. The other five
 seeded legs assert the whole `relatedTo` map is untouched by an edit elsewhere,
-so dropping the spouse line from the emitter turns all seven legs red at once.
+so dropping the spouse line from the emitter turns all eight legs red at once.
 
 ### Clearing that field: the withdrawal with nothing to put in its place
 
@@ -323,6 +324,52 @@ What the leg asserts, on the same seeded card:
   in `jmap-book-sync`). What the leg adds over that fixture is the input — the
   fixture *states* the card a cleared field produces, and only the daemons can
   say EDS produces it.
+
+### The notes: the map the user is shown only part of
+
+Evolution's Notes field is `E_CONTACT_NOTE`, which is the **first** `NOTE` line
+and nothing else — while every JSContact `notes` entry writes a line of its own.
+A card the server filed two notes on therefore shows the user one note, with the
+other sitting behind it and nothing in the UI saying it is there. That is the one
+mapped property where the user edits part of a map they cannot see the whole of,
+and the eighth leg
+(`retyping_the_note_through_eds_patches_the_entry_it_replaces`) is where what
+happens to the hidden part is measured rather than assumed.
+
+Measured against libebook-contacts 3.52, `e_contact_set` on a plain vCard
+attribute rewrites the **value of the first line of that name in place**: its
+parameters stay — the `X-JMAP-KEY` among them, quoted on the way out because the
+key holds a hyphen — and every further line of the same name is left standing.
+So the calendaring addresses' behaviour, not the picture's: the retyped note is
+patched by key, and the note behind it is neither rewritten nor deleted. The two
+failures that claim would hide are both invisible at the client end, since
+`e_contact_get` reads the first line whatever else is on the card, so the leg
+reports a **count** beside the field and the harness holds it to a number.
+
+What the leg asserts, on the seeded card the server filed two notes on under
+`note-1` and `note-2`:
+
+- EDS read the first note off the first line the emitter wrote, and kept both
+  lines through its cache — `read-note-lines=2`;
+- the set left two lines standing — `retyped-note-lines=2`. A `1` is
+  `e_contact_set` having replaced every line of the name, so a user editing their
+  note in Evolution deletes one they were never shown; a `3` is it having
+  appended beside the old line, which reaches the server as a note nobody typed;
+- the server ends up with two entries under the **two keys it chose**, the edited
+  one holding the new text and still carrying the `created` no `NOTE` line can
+  express — so the save patched `notes/note-1/note` rather than replacing the
+  entry — and `note-2` untouched.
+
+The other seven legs assert the whole `notes` map is untouched by an edit
+elsewhere, so dropping the `X-JMAP-KEY` from the emitter's `NOTE` line turns all
+seven seeded legs red at once, with the server's notes deleted and re-added under
+the `n1`/`n2` the reader invents by counting lines.
+
+What this leg does **not** add is a mutation only it catches: stop `diff_notes`
+patching the text and it goes red, but so does the fixture test that models the
+same edit (`editing_a_note_keeps_when_it_was_written_and_by_whom` in
+`jmap-book-sync`). What it adds is the *input* — the fixture states the card a
+retyped Notes field produces, and only the daemons can say that EDS produces it.
 
 ## What the calendar test asserts
 
