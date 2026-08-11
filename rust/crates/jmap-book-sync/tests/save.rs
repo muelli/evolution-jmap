@@ -1143,6 +1143,125 @@ fn clearing_the_home_page_removes_the_link() {
     assert_eq!(fixture.card(&id).links, None);
 }
 
+#[test]
+fn editing_a_calendar_address_keeps_what_the_caluri_line_cannot_carry() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.4.1 hangs a `mediaType`, a `pref` and a `label` off a
+    // calendar, and RFC 6350 §6.9.3's CALURI is a bare URI, so none of them
+    // reaches the vCard. They survive only if the patch reaches in.
+    fixture.patch(
+        &id,
+        json!({"calendars": {"c1": {
+            "@type": "Calendar",
+            "kind": "calendar",
+            "uri": "https://vera.example/cal/vera.ics",
+            "mediaType": "text/calendar",
+            "pref": 1,
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("CALURI;X-JMAP-KEY=c1:https://vera.example/cal/vera.ics"),
+        "{vcard}"
+    );
+
+    // EDS rewrites the value of that line in place and leaves the parameters
+    // where they were, so the key comes back — measured against
+    // libebook-contacts 3.52, where a set on `E_CONTACT_CALENDAR_URI` keeps
+    // the `X-JMAP-KEY`, exactly as one on `E_CONTACT_HOMEPAGE_URL` does.
+    let edited = vcard.replace(
+        "CALURI;X-JMAP-KEY=c1:https://vera.example/cal/vera.ics",
+        "CALURI;X-JMAP-KEY=c1:https://vera.example/cal/new.ics",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let calendars = fixture.card(&id).calendars.expect("calendars");
+    assert_eq!(calendars.len(), 1, "patched in place, not re-added");
+    assert_eq!(calendars["c1"].uri, "https://vera.example/cal/new.ics");
+    assert_eq!(
+        calendars["c1"].kind.as_deref(),
+        Some("calendar"),
+        "the kind is what put the URI on that line and cannot have been edited"
+    );
+    assert_eq!(
+        calendars["c1"].extra.get("mediaType"),
+        Some(&json!("text/calendar")),
+        "a member the CALURI line cannot carry was overwritten"
+    );
+    assert_eq!(calendars["c1"].extra.get("pref"), Some(&json!(1)));
+}
+
+#[test]
+fn a_calendar_of_no_stated_kind_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.4.1 makes the kind mandatory, so an entry naming none says
+    // nothing about which line its URI belongs on: it gets no line and never
+    // reaches the user — and must not then be deleted by a save, nor have its
+    // key taken by the calendar address the user types.
+    fixture.patch(
+        &id,
+        json!({"calendars": {"c1": {
+            "@type": "Calendar",
+            "uri": "https://vera.example/cal/nameless",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nCALURI"), "{vcard}");
+    // The reader counts only the entries it can see, so the key it invents for
+    // a CALURI line with no parameters is `c1` — the key the hidden entry holds.
+    let edited = vcard.replace(
+        "END:VCARD\r\n",
+        "CALURI:https://vera.example/cal/vera.ics\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let calendars = fixture.card(&id).calendars.expect("calendars");
+    assert_eq!(
+        calendars["c1"].uri, "https://vera.example/cal/nameless",
+        "an entry the vCard never showed was overwritten: {calendars:?}"
+    );
+    assert_eq!(calendars["c1"].kind, None);
+    assert!(
+        calendars.values().any(|calendar| {
+            calendar.uri == "https://vera.example/cal/vera.ics"
+                && calendar.kind.as_deref() == Some("calendar")
+        }),
+        "the calendar address the user typed was not saved: {calendars:?}"
+    );
+    assert_eq!(calendars.len(), 2);
+}
+
+#[test]
+fn clearing_the_free_busy_address_removes_the_calendar() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"calendars": {"c1": {"kind": "freeBusy", "uri": "https://vera.example/fb"}}}),
+    );
+    let sync = fixture.sync();
+
+    // What EDS leaves behind when the user empties Evolution's Free/Busy
+    // field: the line stays, with nothing on it. Measured against
+    // libebook-contacts 3.52 — a set to the empty string rewrites the value
+    // and keeps the line, and only a set to NULL drops the line outright — so
+    // the save has to read an empty line as a deletion just as a missing one.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "FBURL;X-JMAP-KEY=c1:https://vera.example/fb",
+        "FBURL;X-JMAP-KEY=c1:",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).calendars, None);
+}
+
 /// The birthday as EDS hands it back after the user has edited it: the date
 /// line is rebuilt from `E_CONTACT_BIRTH_DATE`, which drops the `X-JMAP-KEY`
 /// this side wrote on it. Verified against libebook-contacts 3.52 — an
