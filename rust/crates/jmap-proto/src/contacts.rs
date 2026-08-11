@@ -90,6 +90,12 @@ pub struct ContactCard {
     /// Evolution shows the first as the contact's home page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<BTreeMap<String, Link>>,
+    /// The calendaring resources of the contact (RFC 9553 §2.4.1), keyed like
+    /// the other JSContact maps. vCard states the calendar itself on a
+    /// `CALURI` line and the free/busy data drawn from it on an `FBURL`,
+    /// which are the two Evolution shows as the contact's calendar addresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendars: Option<BTreeMap<String, Calendar>>,
     /// The media the card carries (RFC 9553 §2.6.4), keyed like the other
     /// JSContact maps. vCard states a photo on a `PHOTO` line, which is what
     /// Evolution shows as the contact's picture.
@@ -426,6 +432,36 @@ pub struct Link {
     /// kinds it must leave alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact Calendar (RFC 9553 §2.4.1): one calendaring resource of the
+/// contact — a calendar of theirs, or the free/busy data drawn from one.
+///
+/// `mediaType`, `contexts`, `pref` and `label` are not modeled, for the reason
+/// [`Link`]'s are not: the `CALURI` and `FBURL` lines EDS keeps these on are
+/// bare URIs with no parameter for what the resource is, where it is used, how
+/// strongly it is preferred or what to call it, so all four ride in
+/// [`Self::extra`] — where the save path can see the members it is refusing to
+/// touch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Calendar {
+    /// What the resource is: `calendar` or `freeBusy` per RFC 9553 §2.4.1,
+    /// which makes it mandatory and gives it no default — an entry stating
+    /// none is malformed, and is modeled as `None` rather than refused so that
+    /// one bad entry does not cost the user the whole address book.
+    ///
+    /// Modeled rather than carried because it is the mapping's filter, as
+    /// [`Media`]'s is: it says which of the two lines the URI goes on, and
+    /// there is no third line to put an entry that names neither on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Where the resource is. Mandatory per RFC 9553 §2.4.1, and the only
+    /// part of a calendar either line has room for.
+    #[serde(default)]
+    pub uri: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
