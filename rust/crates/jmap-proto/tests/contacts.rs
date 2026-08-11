@@ -50,6 +50,17 @@ fn contact_card_roundtrip() {
         card.emails.as_ref().unwrap()["work"].address,
         "vera@example.com"
     );
-    // Unmodeled JSContact properties (organizations) survive via `extra`.
-    assert!(card.extra.contains_key("organizations"));
+    let organization = &card.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(organization.name.as_deref(), Some("Example GmbH"));
+    assert_eq!(organization.units.as_ref().unwrap()[0].name, "Research");
+    // Members of an organisation the vCard mapping has no room for stay
+    // visible to the save path rather than being deserialized away.
+    assert!(organization.extra.contains_key("sortAs"));
+    assert!(
+        organization.units.as_ref().unwrap()[0]
+            .extra
+            .contains_key("sortAs")
+    );
+    // Unmodeled JSContact properties (notes) survive via `extra`.
+    assert!(card.extra.contains_key("notes"));
 }

@@ -32,6 +32,13 @@
  * rather than hardcoded on both sides. */
 #define TEST_EMAIL "dana@example.com"
 
+/* The employer and the department within it, which EDS keeps in the first
+ * two components of one ORG line. Written here so the test says what EDS
+ * makes of the JSContact `organizations` map, rather than only what our own
+ * mapping tests say it should. */
+#define TEST_ORG "Acme Ltd"
+#define TEST_ORG_UNIT "Research"
+
 static int
 fail (const gchar *step,
       GError *error)
@@ -134,6 +141,8 @@ main (int argc,
 	contact = e_contact_new ();
 	e_contact_set (contact, E_CONTACT_FULL_NAME, full_name);
 	e_contact_set (contact, E_CONTACT_EMAIL_1, TEST_EMAIL);
+	e_contact_set (contact, E_CONTACT_ORG, TEST_ORG);
+	e_contact_set (contact, E_CONTACT_ORG_UNIT, TEST_ORG_UNIT);
 
 	if (!e_book_client_add_contact_sync (book, contact, E_BOOK_OPERATION_FLAG_NONE,
 					     &added_uid, NULL, &error)) {
@@ -157,6 +166,10 @@ main (int argc,
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_FULL_NAME));
 	g_print ("read-back-email=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_EMAIL_1));
+	g_print ("read-back-org=%s\n",
+		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_ORG));
+	g_print ("read-back-org-unit=%s\n",
+		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_ORG_UNIT));
 	g_object_unref (read_back);
 
 	if (!e_book_client_get_contacts_sync (book, query_string, &contacts, NULL, &error)) {

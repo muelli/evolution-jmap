@@ -17341,3 +17341,104 @@ at a server it cannot fetch from — and what it does with an `IMAGE` it almost
 certainly ignores — decides whether an edit path here would be safe. That is a
 question for a real Evolution, not for this VM, and nothing about the UI is
 claimed.
+
+## 2026-08-11 (hundred-and-seventy-second session)
+
+**The address book got its first new property since M3.** The calendar mapping
+has had fifteen consecutive sessions and is now the detailed half of this
+repository; the contact mapping has been UID/FN/N/EMAIL/TEL since the milestone
+landed, and `organizations` — the employer, and the department inside it — was
+the exemplar three separate tests used for "a property we drop". An Evolution
+user syncing contacts over JMAP saw no company at all. It is now carried, in
+both directions, and the tests that used it as the dropped exemplar moved to
+`notes` and `nicknames`, which really are dropped.
+
+**One JSContact map, one vCard line, and the line's value is a list.** RFC 2426
+§3.5.5's `ORG` states the organisation's name and then its units, outermost
+first, which is exactly the order RFC 9553 §2.2.3 gives `units` — so an entry
+crosses as one structured line with as many components as it has units, and
+the mapping needed no ordering decision of its own. Two spots did need one. An
+organisation with units and no name keeps the empty first component
+(`ORG:;Research`): the name's meaning is its *position*, so letting a
+department slide up into it would say the department is the employer. And an
+entry with neither a name nor a unit gets no line at all, which is the same
+"nothing was said" an `EMAIL:` with no address already gets, in both
+directions.
+
+**What does not fit on the line is why the entry is patched rather than
+replaced.** An Organization holds a `sortAs` and `contexts`, and `ORG` has
+neither a component nor a parameter for either — RFC 2426 defines no `TYPE` on
+it, so writing the contexts as one would be inventing a parameter. The entry
+therefore rides with the [`X_JMAP_KEY`] this side already writes on an `EMAIL`,
+and a save patches `organizations/<key>/name`, leaving the rest of the entry
+where it is. That is also why `Organization` and `OrgUnit` are structs with a
+flattened `extra` rather than `Value`s: the save path has to *see* the members
+it is refusing to touch.
+
+**The units are the one list in this mapping, and lists have no keys.** They
+are written whole, so a unit's own unmapped members would be lost the moment a
+sibling changed. They are instead matched **by name, not by position**: a
+`sortAs` is a hint about how to file *that* unit, so it follows the name
+wherever in the list it moved to, and is left behind when the name is gone.
+Renaming a unit therefore drops its hint, which is right — a hint for the old
+name is not one for the new — and dissolving one department does not renumber
+the hints of the others. `renaming_an_employer_keeps_what_the_org_line_cannot_carry`
+drives exactly that: rename the employer, dissolve the second department, and
+assert the entry's `sortAs`, its `contexts` and the surviving unit's own
+`sortAs` are all byte-for-byte intact.
+
+**Removing the line removes the entry**, as it does for an `EMAIL` or a `TEL`.
+This is the one place the increment accepts a known risk rather than dodging
+it: Evolution's contact editor has a single Company field, so a card carrying
+two `ORG` lines is one whose second line only survives if `EVCard` round-trips
+the attributes it has no field for. It is believed to — `EContact` is a view
+over a preserved attribute list — but it is *not verified here*, and if it is
+wrong the second organisation is deleted on the next save. The alternative,
+never nulling an entry, was rejected because it would make clearing the Company
+field impossible, and because emails and phones have taken the same bet since
+M3. Worth a real-Evolution check.
+
+**And the crossing itself is verified on real EDS, not only in unit tests.**
+The M9 layer-1 book leg now sets `E_CONTACT_ORG` and `E_CONTACT_ORG_UNIT` on
+the contact it writes through `e-book-client`, reports both back out of the
+meta backend's cache, and the Rust half asserts the mock's stored card has one
+`organizations` entry whose name is the employer and whose first unit is the
+department. That is the claim the mapping's own tests cannot make: that EDS's
+two fields and JSContact's map meet in the middle. They do.
+
+Tests: 828 in the default set, up 7 from 821 — five in `jmap-vcard`, two in
+`jmap-book-sync` — plus the extended functional leg and three existing tests
+rewritten onto genuinely-unmapped properties (`jmap-proto`'s round-trip
+fixture, which now also pins that an organisation's `sortAs` survives
+deserialization, `jmap-book-sync`'s revision test, which additionally asserts
+that an employer change *does* bump the revision now that EDS can see it, and
+the vCard "dropped not mangled" test). The red run was two-stage again:
+compile-red first, because the tests name a `ContactCard::organizations` that
+did not exist, then two failing save tests once the field and the vCard side
+were in — `left: Some("Acme")` against `right: Some("Acme Ltd")`, the diff not
+yet naming the property.
+
+Verified locally: `cargo test --locked` 828; `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-backend-collection` and `jmap-mail` green; full
+`ninja` then `ctest` 14/14 including all four functional legs. `cargo fmt --all
+--check` and `cargo clippy --all-targets --locked -- -D warnings` clean for the
+default set and for the EDS-header crates (`example-module`'s pre-existing
+`manual_c_str_literals` warnings are why `--workspace` clippy is not the gate;
+`ci/checks.sh` runs the default set, which is clean). `ci/checks.sh` again stops
+at its first step: `reuse` is not on this VM and neither `pipx` nor `uvx` is
+installed. Exposure is nil — no file was added, and every file touched already
+carries an SPDX header or is covered by `REUSE.toml`'s fixture glob —
+and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on
+the last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the README;
+`jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail` `tests/transport.rs`
+hang is unexplained; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side still rest on untested assumptions about what
+Evolution round-trips. New from this session: the multi-`ORG` risk above, and
+the obvious next contact increments now that the shape is proven — `addresses`
+↔ `ADR`, `titles` ↔ `TITLE`/`ROLE`, `notes` ↔ `NOTE`, each of which is a keyed
+map patched the same way.

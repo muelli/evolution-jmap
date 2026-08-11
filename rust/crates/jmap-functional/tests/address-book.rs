@@ -17,6 +17,13 @@ use jmap_functional::{Session, observations, required_path};
 /// disagree about it by a typo.
 const FULL_NAME: &str = "Dana Scully";
 const EMAIL: &str = "dana@example.com";
+/// The employer and department the client sets, spelled as `book-client.c`
+/// spells them. Together they are one `ORG` line, which is what makes them
+/// worth asserting here: whether EDS's two fields and JSContact's
+/// `organizations` map meet in the middle is a claim about real EDS, not one
+/// the mapping's own tests can make.
+const ORG: &str = "Acme Ltd";
+const ORG_UNIT: &str = "Research";
 
 /// The keyfile from `docs/examples/jmap-mock.source`, with the mock's
 /// ephemeral port filled in. Kept as a literal here rather than read from
@@ -140,6 +147,16 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         "the contact EDS handed back lost its email address\n{report}"
     );
     assert_eq!(
+        seen.get("read-back-org"),
+        Some(&ORG),
+        "the contact EDS handed back lost its employer\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-org-unit"),
+        Some(&ORG_UNIT),
+        "the contact EDS handed back lost its department\n{report}"
+    );
+    assert_eq!(
         seen.get("contacts-after"),
         Some(&"1"),
         "the added contact is not in the book it was added to\n{report}"
@@ -185,5 +202,22 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
             .as_ref()
             .is_some_and(|books| books.values().any(|included| *included)),
         "the card on the server is in no address book: {card:?}"
+    );
+    // The ORG line EDS wrote, as the server sees it: one `organizations`
+    // entry whose name is the employer and whose first unit is the
+    // department — the crossing this leg exists to check on real EDS.
+    let organization = card
+        .organizations
+        .as_ref()
+        .and_then(|organizations| organizations.values().next())
+        .unwrap_or_else(|| panic!("the card on the server has no organisation: {card:?}"));
+    assert_eq!(organization.name.as_deref(), Some(ORG), "{card:?}");
+    assert_eq!(
+        organization
+            .units
+            .as_ref()
+            .map(|units| units.iter().map(|unit| unit.name.as_str()).collect()),
+        Some(vec![ORG_UNIT]),
+        "{card:?}"
     );
 }
