@@ -214,6 +214,26 @@ pub struct CalendarEvent {
     /// see in order to refuse to overwrite it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_overrides: Option<BTreeMap<String, Value>>,
+    /// The zones the event defines for itself (RFC 8984 §4.7.2), keyed by the
+    /// identifier [`Self::time_zone`] and the overrides refer to them by.
+    ///
+    /// §1.4.9 lets a `TimeZoneId` be either an IANA name or a custom identifier
+    /// beginning with a solidus **that this property defines** — the second is
+    /// what a server has to invent for a zone no database names, such as the
+    /// one an Exchange invitation carries its own `VTIMEZONE` for. A reader
+    /// cannot look such an identifier up anywhere, so the definition is the only
+    /// thing that says what the zone is, and the iCalendar mapping draws it as a
+    /// `VTIMEZONE` beside the event.
+    ///
+    /// Left as JSON, for the reason [`Self::locations`] is: a TimeZone holds
+    /// `aliases`, a `validUntil`, a `url` and two arrays of transition rules with
+    /// names and comments on them, of which the mapping draws what a `VTIMEZONE`
+    /// can hold. Nothing ever writes the property back — a zone definition is the
+    /// server's, not something Evolution offers to edit — so the odd entry costs
+    /// only the sight of itself rather than failing a whole
+    /// `CalendarEvent/get`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zones: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

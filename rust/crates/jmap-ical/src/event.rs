@@ -67,7 +67,10 @@
 //! one by a `TZID`, which is an identifier the document itself may define, and
 //! JSCalendar wants the zone's IANA name. [`names_time_zone`] says which is
 //! which and [`zone_names`] does the translating, off the `VTIMEZONE` the
-//! document is required to carry.
+//! document is required to carry. In the other direction the identifier a
+//! zone *has no name* under is the one this crate has to define rather than
+//! refer to, out of the event's own RFC 8984 §4.7.2 `timeZones` — see
+//! [`drawn_time_zone`].
 //!
 //! An all-day event has no property of its own in iCalendar; it is a `DTSTART`
 //! written as a date rather than a date-time, which puts JSCalendar's
@@ -1353,12 +1356,200 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
 
     let mut calendar = Component::new("VCALENDAR")
         .with(Property::raw("VERSION", "2.0"))
-        .with(Property::raw("PRODID", PRODID))
-        .with_child(vevent);
+        .with(Property::raw("PRODID", PRODID));
+    // Ahead of the events that refer to it, which is where a reader resolving a
+    // `TZID` as it walks wants it.
+    if let Some(vtimezone) = drawn_time_zone(event, as_a_date) {
+        calendar = calendar.with_child(vtimezone);
+    }
+    calendar = calendar.with_child(vevent);
     for (id, instance) in modified_instances(event) {
         calendar = calendar.with_child(vevent_of(&instance, as_a_date, zone, Some(&id)));
     }
     calendar.to_ics()
+}
+
+/// The zone the document has to define itself, as a `VTIMEZONE`.
+///
+/// RFC 5545 §3.2.19 says a `TZID` parameter names a `VTIMEZONE` in the *same*
+/// object. The mapping leans on the reader for an IANA name — libical resolves
+/// one out of its builtin table, and `jmap_backend_cal` puts that definition into
+/// the object EDS caches, which is a better description of a zone than whatever a
+/// server managed to state about it. What no reader can look up is RFC 8984
+/// §1.4.9's other form of a `TimeZoneId`: a custom identifier beginning with a
+/// solidus, which the event defines in its own `timeZones` (§4.7.2) and nowhere
+/// else — what a server has to invent for the zone an Exchange invitation carries
+/// its own `VTIMEZONE` for. A `DTSTART` naming one and defining nothing is a wall
+/// clock time in no particular zone: libical floats it, and the appointment lands
+/// hours from where the server put it, deterministically and silently.
+///
+/// So the identifiers this crate cannot name are exactly the ones it defines,
+/// which is [`names_time_zone`] used the other way round.
+///
+/// One definition is all a document ever needs, however many components it holds.
+/// The `TZID`s on it are the series' zone and — for an instance that moved into
+/// one of its own — the instance's, and [`maps_override_field`] admits only a
+/// zone that [`names_time_zone`] as an override's, so no `TZID` but the series'
+/// can be a custom identifier. Which is just as well: a second copy of one
+/// `VTIMEZONE` is a duplicate `TZID` in one object.
+fn drawn_time_zone(event: &CalendarEvent, as_a_date: bool) -> Option<Component> {
+    // A date-valued `DTSTART` takes no `TZID` at all (RFC 5545 §3.2.19), so a
+    // document written that way refers to no zone and defines none.
+    if as_a_date {
+        return None;
+    }
+    let tzid = event.time_zone.as_deref()?;
+    if names_time_zone(tzid) || is_utc(tzid) {
+        return None;
+    }
+    let definitions = event.time_zones.as_ref()?;
+    // RFC 8984 §4.7.2 types the map as `Id[TimeZone]` while §1.4.9 puts the
+    // solidus on the identifier and §1.4.4's `Id` grammar has no solidus in it,
+    // so where the prefix lives is genuinely ambiguous and both readings are in
+    // the wild. Asking for either costs nothing, and a zone left undefined
+    // because the server chose the other one is a silent hour.
+    definitions
+        .get(tzid)
+        .or_else(|| definitions.get(tzid.trim_start_matches('/')))
+        .and_then(|definition| vtimezone_of(tzid, definition))
+}
+
+/// One RFC 8984 §4.7.2 TimeZone as a `VTIMEZONE`, or `None` for a definition this
+/// mapping cannot draw whole.
+///
+/// Whole is the point. Every observance of a zone describes the offset between
+/// the transitions the others name, so a `VTIMEZONE` missing one is not a
+/// narrowed description of the zone — it is a *different* zone, and an event in
+/// it is at a different instant. Half a definition is therefore worse than none:
+/// none leaves the reader floating the event, which is visibly wrong, where half
+/// of one is confidently wrong by an hour. The same goes for a rule an `RRULE`
+/// cannot spell, which would draw a transition that happens once where the zone
+/// moves every year.
+///
+/// RFC 5545 §3.6.5 requires at least one subcomponent, and libical refuses a
+/// `VTIMEZONE` without one — which would cost the whole object rather than only
+/// the zone — so a definition stating no observance is not drawn either.
+///
+/// What is left out: `aliases`, `url`, `validUntil` and the `comments` on a rule,
+/// none of which a reader needs to resolve the identifier, and the
+/// `recurrenceOverrides` of an observance, which would need a `RDATE` per
+/// transition and describes a zone whose past was corrected rather than one whose
+/// future differs.
+fn vtimezone_of(tzid: &str, definition: &Value) -> Option<Component> {
+    let mut vtimezone = Component::new("VTIMEZONE").with(Property::new("TZID", tzid));
+    let mut observances = 0;
+    for (name, member) in [("STANDARD", "standard"), ("DAYLIGHT", "daylight")] {
+        // A zone that never moves states one of the two and not the other, which
+        // is most of the world. A member that is there and is not a list of rules
+        // is a definition this mapping cannot read, and gives up the whole zone
+        // like any other part it cannot draw.
+        let rules = match definition.get(member) {
+            None | Some(Value::Null) => continue,
+            Some(rules) => rules.as_array()?,
+        };
+        for rule in rules {
+            vtimezone = vtimezone.with_child(observance(name, rule)?);
+            observances += 1;
+        }
+    }
+    (observances > 0).then_some(vtimezone)
+}
+
+/// One RFC 8984 §4.7.2 TimeZoneRule as the `STANDARD` or `DAYLIGHT` subcomponent
+/// it is, or `None` for one that cannot be drawn — see [`vtimezone_of`], which
+/// gives up on the whole zone when this does.
+///
+/// The three properties RFC 5545 §3.6.5 makes REQUIRED are the three JSCalendar
+/// makes mandatory, so a rule missing one is not a rule. `DTSTART` is a local
+/// time and has no `TZID`: §3.6.5 resolves it against `TZOFFSETFROM`, which is
+/// why an observance can date itself in the zone it is defining.
+fn observance(name: &str, rule: &Value) -> Option<Component> {
+    let member = |name: &str| rule.get(name).and_then(Value::as_str);
+    let mut observance = Component::new(name)
+        .with(Property::raw(
+            "DTSTART",
+            &member("start").and_then(to_ical_date_time)?,
+        ))
+        .with(Property::raw(
+            "TZOFFSETFROM",
+            &member("offsetFrom").and_then(utc_offset)?,
+        ))
+        .with(Property::raw(
+            "TZOFFSETTO",
+            &member("offsetTo").and_then(utc_offset)?,
+        ));
+
+    // When the transition repeats. `rule_to_rrule` is asked for the local
+    // spelling of an `UNTIL` — no zone, no date — which is what RFC 5545 §3.3.10
+    // requires beside a `DTSTART` that is a local time, as every observance's is.
+    for value in rule
+        .get("recurrenceRules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let recurrence: RecurrenceRule = serde_json::from_value(value.clone()).ok()?;
+        observance = observance.with(Property::raw(
+            "RRULE",
+            &rule_to_rrule(&recurrence, None, false)?,
+        ));
+    }
+
+    // What a reader shows for the offset — `CET`, `CEST`. RFC 8984 §4.7.2 keys
+    // the names by locale-independent name; RFC 5545 §3.8.3.2 admits several
+    // `TZNAME`s and distinguishes them by `LANGUAGE`, which the JSCalendar side
+    // does not carry, so each name is drawn plainly.
+    for named in rule
+        .get("names")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(_, wanted)| *wanted == &Value::Bool(true))
+        .map(|(name, _)| name)
+    {
+        observance = observance.with(Property::new("TZNAME", named));
+    }
+    Some(observance)
+}
+
+/// An RFC 5545 §3.3.14 UTC-OFFSET — `±hhmm[ss]` — or `None` for a value that is
+/// no offset.
+///
+/// The one place the two formats may spell the same thing differently: RFC 8984
+/// §4.7.2 states the same value iCalendar does, and JSON in the wild puts colons
+/// in it. Both are read; what is written is iCalendar's, which is the format the
+/// property this feeds is defined in.
+///
+/// `-0000` is picked out by the grammar itself: §3.3.14 forbids it, because the
+/// sign says which side of UTC the zone is on and there is no negative zero.
+fn utc_offset(value: &str) -> Option<String> {
+    let (sign, digits) = value.split_at_checked(1)?;
+    if !matches!(sign, "+" | "-") {
+        return None;
+    }
+    let digits: String = digits.replace(':', "");
+    if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let field = |at: usize| digits.get(at..at + 2)?.parse::<u32>().ok();
+    let (hours, minutes) = (field(0)?, field(2)?);
+    let seconds = match digits.len() {
+        4 => 0,
+        6 => field(4)?,
+        _ => return None,
+    };
+    if hours > 23 || minutes > 59 || seconds > 60 {
+        return None;
+    }
+    if sign == "-" && (hours, minutes, seconds) == (0, 0, 0) {
+        return None;
+    }
+    // The seconds are written only when there are any: a whole number of minutes
+    // is the short form, whichever way the server stated it.
+    match seconds {
+        0 => Some(format!("{sign}{hours:02}{minutes:02}")),
+        _ => Some(format!("{sign}{hours:02}{minutes:02}{seconds:02}")),
+    }
 }
 
 /// One `VEVENT`: the properties an event and an edited instance of it spell the
@@ -1711,15 +1902,16 @@ fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> 
         (false, Some(zone)) if is_utc(zone) => {
             Property::raw(name, &join(&|value| format!("{value}Z")))
         }
-        // Form 3. libical resolves an IANA name from its built-in zone table, so
-        // no VTIMEZONE is emitted; a zone it does not know falls back to
-        // floating on its side, which is the same guess we would have to make.
-        // RFC 5545 §3.2.19 has the document define what a `TZID` refers to, so
-        // this is the one place the mapping leans on the consumer instead — and
-        // it is measured rather than assumed: `jmap-functional`'s second calendar
-        // leg reads such a start back through real EDS and holds a libecal
-        // consumer to the instant it means, two hours from where a floating one
-        // would land.
+        // Form 3. RFC 5545 §3.2.19 has the document define what a `TZID` refers
+        // to; for an IANA name this is the one place the mapping leans on the
+        // consumer instead, since libical resolves one from its built-in zone
+        // table — measured rather than assumed: `jmap-functional`'s second
+        // calendar leg reads such a start back through real EDS and holds a
+        // libecal consumer to the instant it means, two hours from where a
+        // floating one would land. A zone with no name to resolve is defined in
+        // the document instead where the event says what it is (see
+        // [`drawn_time_zone`]); one that is neither still falls back to floating
+        // on the consumer's side, which is the same guess we would have to make.
         (false, Some(zone)) => Property::raw(name, &join(&String::clone)).with_param("TZID", zone),
         // Form 1, floating. Inventing UTC here would move the event.
         (false, None) => Property::raw(name, &join(&String::clone)),
@@ -2016,6 +2208,14 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         links: read_links(vevent),
         recurrence_rules: (!rules.is_empty()).then_some(rules),
         recurrence_overrides: None,
+        // The definitions a document carries are the server's own — see
+        // [`drawn_time_zones`], which writes them — and nothing ever sends one
+        // back: a zone definition is not something Evolution offers to edit, and
+        // a `VTIMEZONE` an editor rewrote in its own idiom would read as the user
+        // redefining the zone. What the document says about a `TZID` is used
+        // where it is needed instead, to name the zone the event is in — see
+        // [`zone_names`].
+        time_zones: None,
         extra: Default::default(),
     }
 }

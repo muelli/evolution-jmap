@@ -31,6 +31,11 @@ gobject-sys = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
-# Only to name an ICalError variant when checking the error mapping; the
-# backend itself never sees one that jmap-cal-sync has not already wrapped.
+# To name an ICalError variant when checking the error mapping — the backend
+# itself never sees one that jmap-cal-sync has not already wrapped — and to
+# render the object whose zone libical is asked to resolve, so that what is
+# measured is what the mapping writes rather than a copy of it.
 evolution-jmap-ical = { workspace = true }
+# Only to state the JSON members of a JSCalendar event the mapping holds as
+# values: a `timeZones` definition, in the test above.
+serde_json = { workspace = true }

@@ -569,6 +569,7 @@ dependencies = [
  "glib-sys",
  "gobject-sys",
  "jmap-backend-core",
+ "serde_json",
 ]
 
 [[package]]

@@ -13,7 +13,7 @@ use std::ptr;
 use eds_sys::{
     ECalComponent, ECalMetaBackendInfo, I_CAL_VCALENDAR_COMPONENT, e_cal_component_new_from_string,
     e_cal_meta_backend_info_free, i_cal_component_get_timezone, i_cal_component_isa,
-    i_cal_component_new_from_string,
+    i_cal_component_new_from_string, i_cal_timezone_get_component,
 };
 use glib_sys::{GSList, g_slist_length, g_slist_nth_data};
 use gobject_sys::g_object_unref;
@@ -536,21 +536,41 @@ fn object(vevents: &str) -> String {
 /// does not fall back to the builtin table, which is why it can tell a defined
 /// zone from a merely named one.
 fn resolves(icalendar: &str, tzid: &str) -> bool {
+    resolved_definition(icalendar, tzid).is_some()
+}
+
+/// The definition libical built the zone out of, rendered — `None` where it
+/// resolved no zone at all.
+///
+/// [`resolves`] asks whether a reader can find the zone; this asks what the
+/// reader found, which is the difference between a `VTIMEZONE` that is present
+/// and one that says anything. libical builds a zone out of a subcomponent-less
+/// definition happily, so "the identifier resolves" alone would still hold for a
+/// definition that has lost the transitions that make it a zone.
+fn resolved_definition(icalendar: &str, tzid: &str) -> Option<String> {
     let text = std::ffi::CString::new(icalendar).unwrap();
     let name = std::ffi::CString::new(tzid).unwrap();
     // SAFETY: both strings are NUL-terminated and valid for the calls. The
-    // component is a fresh allocation and the zone is transfer full, so both are
-    // dropped here.
+    // component is a fresh allocation, and the zone and the definition it hands
+    // back are both transfer full, so all three are dropped here.
     unsafe {
         let component = i_cal_component_new_from_string(text.as_ptr());
         assert!(!component.is_null(), "not a calendar object: {icalendar}");
         let zone = i_cal_component_get_timezone(component, name.as_ptr());
-        let found = !zone.is_null();
-        if found {
-            g_object_unref(zone.cast());
-        }
+        let definition = match zone.is_null() {
+            true => None,
+            false => {
+                let definition = i_cal_timezone_get_component(zone);
+                let rendered = marshal::ical_from_component(definition);
+                if !definition.is_null() {
+                    g_object_unref(definition.cast());
+                }
+                g_object_unref(zone.cast());
+                rendered
+            }
+        };
         g_object_unref(component.cast());
-        found
+        definition
     }
 }
 
@@ -682,10 +702,12 @@ fn one_zone_named_by_two_events_is_defined_once() {
     }
 }
 
-/// A zone the object already defines is left alone. `jmap-ical` defines none
-/// today, so this is the guard that keeps that from becoming a duplicate `TZID`
-/// the day it does — and the day EDS hands one of these objects back through
-/// this path.
+/// A zone the object already defines is left alone. `jmap-ical` defines the one
+/// kind libical cannot resolve — a custom identifier the event carries its own
+/// RFC 8984 §4.7.2 definition for, see
+/// [`the_zone_only_the_server_could_name_reaches_eds_and_resolves`] — so this is
+/// what keeps the two from meeting as a duplicate `TZID` in one object, here and
+/// on the day EDS hands one of these objects back through this path.
 #[test]
 fn a_zone_the_object_already_defines_is_not_defined_twice() {
     let text = object(&format!(
@@ -706,6 +728,140 @@ fn a_zone_the_object_already_defines_is_not_defined_twice() {
         );
         assert_eq!(object, text, "the object was rebuilt for nothing");
         glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+/// The object `jmap-ical` renders for an event in a zone no database names, with
+/// the RFC 8984 §4.7.2 definition the server sent for it.
+///
+/// The identifier is the one an Exchange invitation's own `VTIMEZONE` becomes
+/// when a server converts the invitation to JSCalendar: nothing outside that
+/// server can look it up, so the definition travelling with the event is the only
+/// thing that says what the zone is.
+fn in_a_zone_only_the_server_can_name() -> String {
+    let tzid = "/example.com/Europe-Berlin";
+    let event = jmap_proto::calendars::CalendarEvent {
+        id: Some("K1".into()),
+        title: Some("Standup".to_owned()),
+        start: Some("2026-08-10T09:00:00".to_owned()),
+        time_zone: Some(tzid.to_owned()),
+        duration: Some("PT1H".to_owned()),
+        time_zones: serde_json::from_value(serde_json::json!({tzid: {
+            "@type": "TimeZone",
+            "tzId": tzid,
+            "standard": [{
+                "@type": "TimeZoneRule",
+                "start": "1970-10-25T03:00:00",
+                "offsetFrom": "+0200",
+                "offsetTo": "+0100",
+                "recurrenceRules": [{
+                    "@type": "RecurrenceRule",
+                    "frequency": "yearly",
+                    "byMonth": ["10"],
+                    "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+                }],
+                "names": {"CET": true},
+            }],
+            "daylight": [{
+                "@type": "TimeZoneRule",
+                "start": "1970-03-29T02:00:00",
+                "offsetFrom": "+0100",
+                "offsetTo": "+0200",
+                "recurrenceRules": [{
+                    "@type": "RecurrenceRule",
+                    "frequency": "yearly",
+                    "byMonth": ["3"],
+                    "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+                }],
+                "names": {"CEST": true},
+            }],
+        }}))
+        .expect("a map of time zones"),
+        ..Default::default()
+    };
+    jmap_ical::event_to_ical(&event)
+}
+
+/// The `VTIMEZONE` the mapping draws is one libical can build a zone out of.
+///
+/// This is the one identifier `jmap-ical` cannot lean on the reader for. An IANA
+/// name resolves out of libical's builtin table, and the marshalling puts that
+/// definition in the object EDS caches — see
+/// [`an_object_handed_to_eds_defines_the_zone_it_refers_to`]; a custom identifier
+/// resolves nowhere, so the definition the server
+/// sent is all there is — and a `VTIMEZONE` libical rejects would leave the
+/// `DTSTART` floating, which moves the appointment by the zone's offset without
+/// saying so.
+///
+/// Nothing in `jmap-ical` can check that: calcard is what parses there, and a
+/// definition nobody could build a zone from reads back as text exactly like one
+/// anybody could. This is where libical is available to be asked.
+#[test]
+fn the_zone_only_the_server_could_name_reaches_eds_and_resolves() {
+    let text = in_a_zone_only_the_server_can_name();
+    let infos = [info("K1", "r1", &text)];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        let object = nth_info(list, 0).2.expect("an object");
+        // The claim. The assertions below say how it was met, so that a failure
+        // names the missing half rather than only the symptom.
+        let zone = resolved_definition(&object, "/example.com/Europe-Berlin")
+            .unwrap_or_else(|| panic!("libical resolved no zone at all: {object}"));
+        // What libical built the zone out of has to be the zone the server
+        // described: both transitions, the offsets on either side of each and the
+        // rule that repeats them. A definition it kept in part is a *different*
+        // zone, and the appointment is an hour from where the server put it.
+        for part in [
+            "BEGIN:STANDARD",
+            "DTSTART:19701025T030000",
+            "TZOFFSETFROM:+0200",
+            "TZOFFSETTO:+0100",
+            "RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10",
+            "TZNAME:CET",
+            "BEGIN:DAYLIGHT",
+            "DTSTART:19700329T020000",
+            "TZOFFSETFROM:+0100",
+            "TZOFFSETTO:+0200",
+            "RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3",
+            "TZNAME:CEST",
+        ] {
+            assert!(
+                zone.lines().any(|line| line.trim_end() == part),
+                "the zone libical built has no {part} line in it: {zone}"
+            );
+        }
+        assert_eq!(
+            definitions(&object),
+            1,
+            "the zone is defined more than once, or not at all: {object}"
+        );
+        // Handed over byte for byte: the zone is already defined, so there is
+        // nothing for the marshalling to add and the object is not rebuilt —
+        // which is what keeps the save path's comparison a comparison of the
+        // event rather than of two spellings of it.
+        assert_eq!(object, text, "the object was rebuilt for nothing");
+        glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+/// And on the way in: the component `load_component_sync` hands back keeps the
+/// definition, and libical resolves the identifier out of *that* — the path EDS
+/// takes for an event whose info carried no object.
+#[test]
+fn the_component_handed_back_defines_the_zone_only_the_server_could_name() {
+    let text = in_a_zone_only_the_server_can_name();
+    let component = marshal::component_from_ical(&text);
+    assert!(!component.is_null());
+
+    unsafe {
+        let rendered = marshal::ical_from_component(component).expect("a rendering");
+        marshal::component_unref(component);
+        assert_eq!(definitions(&rendered), 1, "{rendered}");
+        assert!(
+            resolves(&rendered, "/example.com/Europe-Berlin"),
+            "a reader cannot resolve the zone out of the component: {rendered}"
+        );
     }
 }
 
