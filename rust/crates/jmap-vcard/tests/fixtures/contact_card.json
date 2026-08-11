@@ -32,6 +32,19 @@
     "t1": {"@type": "Title", "name": "Research Scientist"},
     "t2": {"@type": "Title", "name": "Project Lead", "kind": "role"}
   },
+  "addresses": {
+    "a1": {
+      "@type": "Address",
+      "contexts": {"work": true},
+      "components": [
+        {"kind": "name", "value": "Hauptstraße 1"},
+        {"kind": "locality", "value": "Berlin"},
+        {"kind": "postcode", "value": "10115"},
+        {"kind": "country", "value": "Germany"}
+      ],
+      "full": "Hauptstraße 1\n10115 Berlin\nGermany"
+    }
+  },
   "notes": {
     "n1": {"note": "met at FOSDEM"}
   }

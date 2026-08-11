@@ -71,6 +71,16 @@ fn contact_card_roundtrip() {
     // Which organisation a title is held at has no room on a TITLE line, so
     // it too stays visible to the save path.
     assert!(titles["t2"].extra.contains_key("organizationId"));
+    let address = &card.addresses.as_ref().unwrap()["a1"];
+    let components = address.components.as_ref().unwrap();
+    assert_eq!(components[0].kind, "name");
+    assert_eq!(components[0].value, "Hauptstraße");
+    // A component member the `ADR` value has no field for, and the address
+    // members it has no room for at all: both stay visible to the save path,
+    // which writes the component list back whole.
+    assert!(components[0].extra.contains_key("phonetic"));
+    assert!(address.extra.contains_key("countryCode"));
+    assert!(address.extra.contains_key("full"));
     // Unmodeled JSContact properties (notes) survive via `extra`.
     assert!(card.extra.contains_key("notes"));
 }

@@ -394,6 +394,152 @@ fn removing_the_title_line_removes_the_title() {
 }
 
 #[test]
+fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Three kinds of thing an ADR line has no room for: members of the
+    // address itself, a component of a kind vCard has no field for, and a
+    // member of a component that does have one.
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {
+            "@type": "Address",
+            "contexts": {"work": true},
+            "components": [
+                {"@type": "AddressComponent", "kind": "name", "value": "Hauptstraße",
+                 "phonetic": "howptshtrahse"},
+                {"@type": "AddressComponent", "kind": "number", "value": "1"},
+                {"@type": "AddressComponent", "kind": "locality", "value": "Berlin"},
+            ],
+            "full": "Hauptstraße 1\n10115 Berlin",
+            "coordinates": "geo:52.5,13.4",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("ADR;X-JMAP-KEY=a1;TYPE=WORK:;;Hauptstraße;Berlin;;;"),
+        "{vcard}"
+    );
+
+    // Saving it back untouched must be a no-op, or every open of a contact
+    // rewrites its address: the invisible parts have to come back in the
+    // order and shape they went out in, not merely survive.
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a save that changed nothing rewrote the address"
+    );
+
+    // The user moves the contact to Potsdam.
+    let edited = vcard.replace("Berlin", "Potsdam");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    let addresses = stored.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.len(), 1, "patched in place, not re-added");
+    let address = &addresses["a1"];
+    assert_eq!(
+        address.extra.get("full"),
+        Some(&json!("Hauptstraße 1\n10115 Berlin")),
+        "a member the ADR line cannot carry was overwritten"
+    );
+    assert_eq!(
+        address.extra.get("coordinates"),
+        Some(&json!("geo:52.5,13.4"))
+    );
+    let components = address.components.as_ref().expect("components");
+    let by_kind: Vec<(&str, &str)> = components
+        .iter()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        by_kind,
+        vec![
+            ("name", "Hauptstraße"),
+            ("number", "1"),
+            ("locality", "Potsdam"),
+        ],
+        "a component kind the ADR value has no field for was dropped"
+    );
+    assert_eq!(
+        components[0].extra.get("phonetic"),
+        Some(&json!("howptshtrahse")),
+        "a component that kept its value kept nothing else"
+    );
+}
+
+#[test]
+fn an_address_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // An address stated only in components vCard has no field for gets no
+    // ADR line, so it never reaches the user — and must not then be deleted
+    // by a save, nor have its key taken by the address the user types.
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {
+            "@type": "Address",
+            "components": [{"@type": "AddressComponent", "kind": "floor", "value": "3"}],
+            "full": "third floor",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nADR"), "{vcard}");
+    // The reader counts only the entries it can see, so the key it invents
+    // for this one is `a1` — the key the hidden entry already holds.
+    let edited = vcard.replace(
+        "END:VCARD\r\n",
+        "ADR;TYPE=HOME:;;Hauptstraße 1;Berlin;;10115;Germany\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let addresses = fixture.card(&id).addresses.expect("addresses");
+    assert_eq!(
+        addresses["a1"].extra.get("full"),
+        Some(&json!("third floor")),
+        "an entry the vCard never showed was overwritten: {addresses:?}"
+    );
+    assert!(
+        addresses.values().any(|address| {
+            address
+                .components
+                .iter()
+                .flatten()
+                .any(|component| component.value == "Hauptstraße 1")
+        }),
+        "the address the user typed was not saved: {addresses:?}"
+    );
+    assert_eq!(addresses.len(), 2);
+}
+
+#[test]
+fn removing_the_adr_line_removes_the_address() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {"components": [{"kind": "locality", "value": "Berlin"}]}}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited: String = vcard
+        .lines()
+        .filter(|line| !line.starts_with("ADR"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).addresses, None);
+}
+
+#[test]
 fn a_save_that_changes_nothing_sends_no_patch() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");

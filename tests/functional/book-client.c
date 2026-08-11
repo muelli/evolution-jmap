@@ -39,6 +39,17 @@
 #define TEST_ORG "Acme Ltd"
 #define TEST_ORG_UNIT "Research"
 
+/* The postal address, which EDS keeps in the fields of one ADR line and
+ * JSContact keeps as a list of named components. Only some of RFC 9553's
+ * component kinds have an ADR field, so what this leg says is that the ones
+ * that do make the crossing through real EDS, and land in the fields that
+ * mean what they meant. TYPE=WORK is what makes it E_CONTACT_ADDRESS_WORK
+ * rather than one of the other two synthetic fields. */
+#define TEST_STREET "Hauptstrasse 1"
+#define TEST_LOCALITY "Berlin"
+#define TEST_CODE "10115"
+#define TEST_COUNTRY "Germany"
+
 /* The job title and the role played, which EDS keeps on separate TITLE and
  * ROLE lines and JSContact keeps in one `titles` map told apart by `kind`.
  * Set here so the test says whether the two halves of that map survive a
@@ -70,6 +81,8 @@ main (int argc,
 	GSList *contacts = NULL;
 	EContact *contact;
 	EContact *read_back = NULL;
+	EContactAddress *address;
+	EContactAddress *read_back_address;
 	gchar *added_uid = NULL;
 	const gchar *source_uid;
 	const gchar *full_name;
@@ -153,6 +166,14 @@ main (int argc,
 	e_contact_set (contact, E_CONTACT_TITLE, TEST_TITLE);
 	e_contact_set (contact, E_CONTACT_ROLE, TEST_ROLE);
 
+	address = e_contact_address_new ();
+	address->street = g_strdup (TEST_STREET);
+	address->locality = g_strdup (TEST_LOCALITY);
+	address->code = g_strdup (TEST_CODE);
+	address->country = g_strdup (TEST_COUNTRY);
+	e_contact_set (contact, E_CONTACT_ADDRESS_WORK, address);
+	e_contact_address_free (address);
+
 	if (!e_book_client_add_contact_sync (book, contact, E_BOOK_OPERATION_FLAG_NONE,
 					     &added_uid, NULL, &error)) {
 		g_object_unref (contact);
@@ -183,6 +204,21 @@ main (int argc,
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_TITLE));
 	g_print ("read-back-role=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_ROLE));
+
+	/* Structured, so it comes back as a boxed struct rather than a
+	 * string: one report per field, because which field a part of the
+	 * address landed in is the whole question here. */
+	read_back_address = e_contact_get (read_back, E_CONTACT_ADDRESS_WORK);
+	g_print ("read-back-street=%s\n",
+		 read_back_address && read_back_address->street ? read_back_address->street : "");
+	g_print ("read-back-locality=%s\n",
+		 read_back_address && read_back_address->locality ? read_back_address->locality : "");
+	g_print ("read-back-code=%s\n",
+		 read_back_address && read_back_address->code ? read_back_address->code : "");
+	g_print ("read-back-country=%s\n",
+		 read_back_address && read_back_address->country ? read_back_address->country : "");
+	if (read_back_address)
+		e_contact_address_free (read_back_address);
 	g_object_unref (read_back);
 
 	if (!e_book_client_get_contacts_sync (book, query_string, &contacts, NULL, &error)) {
