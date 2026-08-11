@@ -9,8 +9,16 @@
 //! instant-messaging `X-` lines and the two date lines, and drops everything
 //! else, so a save that sent the parsed card back whole would silently delete
 //! the properties it could not represent — preferred languages, what the
-//! contact is spoken to as, the media a card carries — none of which the user
-//! ever saw, let alone asked to remove.
+//! contact is spoken to as, the crypto keys a card lists — none of which the
+//! user ever saw, let alone asked to remove.
+//!
+//! The picture a card carries is a third case: the vCard *states* it on a
+//! `PHOTO` line, so the user does see it, but nothing reads that line back, so
+//! `media` reaches this module absent from both cards and is left alone. Which
+//! is right until a save can carry the photo the user chose — and when it can,
+//! the entry it patches cannot be found by its key, because EDS rebuilds a
+//! `PHOTO` line out of the photo it holds and drops the parameters, as it does
+//! for a date line.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
 //! that is the subtler half of this module:

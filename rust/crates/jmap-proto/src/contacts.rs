@@ -90,6 +90,11 @@ pub struct ContactCard {
     /// Evolution shows the first as the contact's home page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<BTreeMap<String, Link>>,
+    /// The media the card carries (RFC 9553 §2.6.4), keyed like the other
+    /// JSContact maps. vCard states a photo on a `PHOTO` line, which is what
+    /// Evolution shows as the contact's picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<BTreeMap<String, Media>>,
     /// The online services the contact is reachable on (RFC 9553 §2.3.2),
     /// keyed like the other JSContact maps. vCard states each on the `X-` line
     /// EDS keeps that service's handles on — `X-JABBER`, `X-MATRIX`, … — which
@@ -421,6 +426,37 @@ pub struct Link {
     /// kinds it must leave alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact Media (RFC 9553 §2.6.4): one media resource the card carries.
+///
+/// `pref` and `label` are not modeled, for the reason [`Nickname`]'s are not:
+/// RFC 2426 §3.1.4's `PHOTO` has no parameter for a ranking or for what to call
+/// the picture. Both ride in [`Self::extra`], where the save path can see the
+/// members it is refusing to touch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Media {
+    /// What the resource is: `photo`, `sound` or `logo` per RFC 9553 §2.6.4,
+    /// which makes it mandatory — an entry stating none is malformed, and is
+    /// modeled as `None` rather than refused so that one bad entry does not
+    /// cost the user the whole address book.
+    ///
+    /// Modeled rather than carried because it is the mapping's filter: of the
+    /// three kinds, only a photo is the picture Evolution shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Where the resource is. Mandatory per RFC 9553 §2.6.4, and for a picture
+    /// the card carries rather than points at, a `data:` URI (RFC 2397).
+    #[serde(default)]
+    pub uri: String,
+    /// The media type of the resource, which RFC 9553 §2.6.4 asks for when the
+    /// URI does not state one. Modeled because a `PHOTO` line's `TYPE` is what
+    /// tells EDS what the bytes are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
