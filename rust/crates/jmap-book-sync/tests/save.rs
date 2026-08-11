@@ -218,12 +218,98 @@ fn editing_the_structured_name_replaces_only_the_mapped_components() {
     );
     // Carrying the unmapped kinds across must not also carry the mapped ones
     // it is meant to be replacing, or the card ends up with two surnames.
+    //
+    // The order is the server's for the components that survived the edit —
+    // which is what keeps a save that changed nothing from rewriting the list,
+    // see `saving_a_name_back_untouched_does_not_rewrite_its_components` — and
+    // the vCard's for the ones it added, here the title the user just typed.
     assert_eq!(
         by_kind,
         vec![
-            ("title", "Dr."),
             ("given", "Vera"),
+            ("generation", "III"),
+            ("title", "Dr."),
             ("surname", "Oldenburg-Meier"),
+        ]
+    );
+}
+
+#[test]
+fn a_name_the_user_did_not_retype_keeps_how_it_is_pronounced() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"name/components": [
+            {"kind": "surname", "value": "Oldenburg", "phonetic": "OL-den-boork"},
+            {"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    // The user changes the surname and leaves the given name where it was.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("N:Oldenburg;Vera;;;"), "{vcard}");
+    let edited = vcard.replace("N:Oldenburg;Vera;;;", "N:Oldenburg-Meier;Vera;;;");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let components = fixture.card(&id).name.unwrap().components.unwrap();
+    let phonetic = |kind: &str| {
+        components
+            .iter()
+            .find(|component| component.kind == kind)
+            .unwrap_or_else(|| panic!("no {kind} component: {components:?}"))
+            .extra
+            .get("phonetic")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+    };
+    // The `N` value has no field for a pronunciation, so the user never saw it
+    // and cannot have deleted it.
+    assert_eq!(phonetic("given").as_deref(), Some("VEH-ra"));
+    // The name it spelled out is gone, though, so keeping it would tell the
+    // server that "Oldenburg-Meier" is pronounced "OL-den-boork".
+    assert_eq!(phonetic("surname"), None);
+}
+
+#[test]
+fn saving_a_name_back_untouched_does_not_rewrite_its_components() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The server's own order, which is not the order the `N` value states the
+    // fields in, and one component the value has no field for at all.
+    fixture.patch(
+        &id,
+        json!({"name/components": [
+            {"kind": "surname", "value": "Oldenburg"},
+            {"kind": "given", "value": "Vera"},
+            {"kind": "generation", "value": "III"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a save that changed nothing rewrote the name"
+    );
+    // Nothing was reshuffled either: RFC 9553 leaves the order meaningless
+    // unless `isOrdered` says otherwise, but rewriting it still wakes every
+    // other client for nothing.
+    let components = fixture.card(&id).name.unwrap().components.unwrap();
+    let by_kind: Vec<(&str, &str)> = components
+        .iter()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        by_kind,
+        vec![
+            ("surname", "Oldenburg"),
+            ("given", "Vera"),
             ("generation", "III"),
         ]
     );

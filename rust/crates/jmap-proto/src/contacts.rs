@@ -152,11 +152,28 @@ pub struct Name {
 }
 
 /// One name component: kind is `given`, `surname`, `title`, …
+///
+/// Like [`AddressComponent`] this keeps what it does not model — a component
+/// carries a `phonetic` spelling besides its value — because the save path
+/// writes the component list back whole, so a member dropped on the way in is
+/// a member deleted on the way out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NameComponent {
     pub kind: String,
     pub value: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl NameComponent {
+    pub fn new(kind: &str, value: &str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            value: value.to_owned(),
+            extra: BTreeMap::new(),
+        }
+    }
 }
 
 /// JSContact Nickname (RFC 9553 §2.2.2): one name the contact is also known
@@ -310,7 +327,7 @@ pub struct Address {
 /// One part of an [`Address`]: `kind` is `name` (the street), `locality`,
 /// `postcode`, `floor`, …
 ///
-/// Unlike [`NameComponent`], this keeps what it does not model: a component
+/// Like [`NameComponent`], this keeps what it does not model: a component
 /// carries a `phonetic` spelling besides its value, and the save path writes
 /// the component list back whole, so a member dropped on the way in is a
 /// member deleted on the way out.

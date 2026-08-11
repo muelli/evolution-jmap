@@ -1417,15 +1417,16 @@ fn read_name(properties: &[Property]) -> Option<Name> {
     let full = find("FN").map(Property::text).filter(|f| !f.is_empty());
     let fields = find("N").map(Property::components).unwrap_or_default();
 
+    // Each component is read as the bare kind and value the `N` field states.
+    // What a name component carries besides that — RFC 9553 §2.2.1's `phonetic`
+    // spelling — has no field and no parameter here, so it is left to the save
+    // to put back on the component it belongs to.
     let mut components = Vec::new();
     for (kind, index) in NAME_COMPONENTS {
         let Some(value) = fields.get(index).filter(|value| !value.is_empty()) else {
             continue;
         };
-        components.push(NameComponent {
-            kind: kind.to_owned(),
-            value: value.clone(),
-        });
+        components.push(NameComponent::new(kind, value));
     }
 
     // No FN and no usable N: the vCard simply does not name anybody. Note
