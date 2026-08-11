@@ -110,6 +110,11 @@ fn contact_card_roundtrip() {
     // parameter on a `URL` line, so they too stay visible to the save path.
     assert!(links["l1"].extra.contains_key("mediaType"));
     assert!(links["l1"].extra.contains_key("pref"));
-    // Unmodeled JSContact properties (keywords) survive via `extra`.
-    assert!(card.extra.contains_key("keywords"));
+    // `keywords` is an RFC 9553 §1.4.3 Set — the keys are the tags and every
+    // value is `true`. vCard states the whole set on one `CATEGORIES` line.
+    let keywords = card.keywords.as_ref().expect("keywords");
+    assert_eq!(keywords.keys().collect::<Vec<_>>(), ["hiking"]);
+    assert!(keywords.values().all(|set| set == &Value::Bool(true)));
+    // Unmodeled JSContact properties (preferredLanguages) survive via `extra`.
+    assert!(card.extra.contains_key("preferredLanguages"));
 }

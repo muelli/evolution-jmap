@@ -18344,3 +18344,120 @@ birthday stated as a year alone are still invisible; and the `jmap-mail`
 hypothesis attached. New: an unescaped semicolon in a foreign card's `URL` is
 one URI to this mapping and two values to EDS, which shows the first — measured,
 judged harmless for the same reason the nickname's was, and written down here.
+
+## 2026-08-11 (hundred-and-eighty-second session)
+
+**The categories, which are the first mapped property that is a set.** RFC 9553
+§2.8.2's `keywords` files a card under bare-string tags; RFC 2426 §3.7.1's
+`CATEGORIES` lists them comma-separated on one line, and EDS reads that line as
+`E_CONTACT_CATEGORY_LIST` — the Categories field of Evolution's contact editor.
+Every property mapped before this one is a keyed map of objects, patched entry by
+entry through a key that rides in an `X-JMAP-KEY`. A tag has no key and no
+members, so there is nothing to carry and nothing to reach into: the set goes
+back **replaced whole**, which is the first time this mapping writes a whole
+property rather than a path into one.
+
+**Replaced whole changes what "the vCard cannot carry this" costs.** For every
+keyed map, an entry the vCard leaves off is merely one the user cannot see, and
+`diff_entries` keeps it by never naming it. For a set there is no such thing as
+naming part of it: a `keywords` in the patch is the whole property, so a tag left
+off the line would be *deleted* by the next save. `maps_keywords` is therefore
+asked of the server's own set and freezes the property for the whole card when it
+holds a tag the line cannot state — which makes this the one place in the save
+path where the user's edit is dropped rather than merged. The emitter still draws
+the tags it *can*, per tag, so the user sees most of the truth instead of none of
+it; the freeze is on the write, not on the display.
+
+**What the line cannot state, measured rather than guessed.** A value that is not
+`true` (RFC 9553 §1.4.3), the empty tag, a tag holding a carriage return — which
+`syntax::write` drops as a security property, so the tag would come back spelled
+differently — and a tag whose ends are whitespace. That last one is the new
+measurement: against libebook-contacts 3.52 a leading or trailing space, tab,
+form feed or newline is gone by the time `E_CONTACT_CATEGORY_LIST` hands the tag
+back, so the next save would rename the tag on the server. The refusal is written
+against ASCII whitespace, one character wider than what EDS strips — it keeps a
+vertical tab, and an NBSP — because refusing to draw a tag costs the sight of it
+while drawing one that comes back trimmed costs the tag itself.
+
+**One line, and the reader still takes them all.** The opposite of the `NICKNAME`
+decision, and for the reason that made that one go the other way: a second
+`CATEGORIES` line reaches no field the user can see. The probe measured four
+things the mapping now rests on. Only the first line contributes to
+`E_CONTACT_CATEGORY_LIST`; a second is left standing in the vCard untouched; a
+set rewrites the first line in place, parameters and all, so an `X-JMAP-KEY`
+would survive — the mapping writes none, because a tag is its own identity; and
+clearing the field removes the attribute outright rather than leaving an empty
+line, unlike the `URL` case, so no line at all is what a cleared set looks like
+to a save. Since EDS keeps the second line and rewrites only the first, the
+reader unions every line: the tags on a line EDS ignores were never shown, so a
+save must not delete them.
+
+**The comma is the risk, and the escaping holds at both ends.** A JMAP keyword is
+any string, and both punctuation marks are separators here — the comma to RFC
+2426 and to calcard, the semicolon to EDS as well, which splits a raw one. Our
+emitter escapes both, and EDS honours `\,` and `\;` and re-escapes them on the way
+out, so a tag reading `beer, in Berlin` stays one tag. The one divergence is a
+foreign card carrying a *raw* semicolon: EDS reads several tags, calcard one. The
+same judgement the `NICKNAME` and `URL` semicolons got — the text round-trips
+unchanged, so the only cost is what the user is shown for a card no client of ours
+wrote.
+
+**A mutation check that did not bite, and what it says about the two ends.**
+Writing the list `;`-joined instead of `,`-joined — the obvious way to get this
+wrong — leaves the functional leg green. EDS splits the value on the semicolon
+too, and re-emits the attribute comma-joined, so its normalisation repairs the
+line before our reader ever sees it. The two unit tests that assert the written
+line and its round trip through *our* reader are what pin the separator; the
+functional leg cannot, and that is now on the record rather than assumed.
+
+**Verified through real EDS, not only against the mock.** The functional book leg
+sets two categories, `Friends` and `beer, in Berlin` — the comma is the whole
+point — and asserts at both ends: that EDS hands back exactly those two out of its
+cache, joined on a character neither holds so that *how many* there are is as
+visible as what they say, and that the server holds exactly two `keywords`
+members. Three there would mean the comma had been read as the list separator
+somewhere along the path. Both assertions were mutation-checked: emitting one line
+per tag (the `NICKNAME` shape) fails the read-back on `Friends` alone, because EDS
+reads no further than the first line.
+
+Tests: 908 in the default set, up 14 from 894 — seven new in `jmap-vcard`'s
+mapping, two in its syntax layer, five in `jmap-book-sync`'s save path.
+`jmap-proto`'s round-trip test and the functional leg grew assertions rather than
+tests of their own. Every implementation half was mutation-checked: the separator,
+the union read, the whitespace refusal, the `maps_keywords` guard, and the null
+that clears the set. Four existing tests changed with the behaviour — the three
+that used `keywords` as their example of a property the vCard drops now use
+`preferredLanguages`, which really is dropped, and `jmap-proto`'s round-trip
+asserts the typed field.
+
+Verified locally: `cargo test --locked` 908; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all
+--check` and `cargo clippy --all-targets --locked -- -D warnings` clean.
+`ci/checks.sh` still stops at its first step — `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed — so the licence check was done by hand:
+no file was added, every source touched already carries an SPDX header, the two
+JSON fixtures are covered by `REUSE.toml`'s `rust/crates/*/tests/fixtures/**`
+entry, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave
+on the last green run.
+
+A process note worth keeping: mid-session a `git checkout` on
+`jmap-vcard/src/contact.rs` — meant to undo a mutation — discarded the whole of
+that file's uncommitted work, which had to be written again from the session's own
+record. Mutations belong in a copied file restored with `cp`, never in the working
+tree undone with `git checkout`.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the `NameComponent` `phonetic` hole stands; the multi-`NOTE`/
+`ORG`/`TITLE`/`NICKNAME`/`URL` "Evolution shows only the first" bet is still
+unverified in real Evolution; the two `LABEL` `TYPE` risks stand; a deathday
+and a birthday stated as a year alone are still invisible; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order
+hypothesis attached. New: a tag whose ends are whitespace is invisible in
+Evolution and freezes the whole set for that card — measured, deliberate, and the
+only case here where an edit the user made is dropped; and an unescaped semicolon
+in a foreign card's `CATEGORIES` is one tag to this mapping and several to EDS.

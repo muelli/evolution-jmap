@@ -205,6 +205,45 @@ fn writes_structured_values_without_escaping_the_separators() {
 }
 
 #[test]
+fn writes_a_text_list_value_separated_by_commas() {
+    // RFC 2425 §5.8.4's `text-list`, which is what RFC 2426 §3.7.1's
+    // `CATEGORIES` holds: the items are separated by the comma, so a comma
+    // *inside* an item has to be escaped or it would state two tags where the
+    // card means one. A semicolon is escaped for the opposite reason — EDS
+    // reads a raw one as a separator too, and honours the escape.
+    let text = syntax::write(&[Property::list(
+        "CATEGORIES",
+        ["Friends", "back, in Berlin", "a;b"],
+    )]);
+    assert!(
+        text.contains("\r\nCATEGORIES:Friends,back\\, in Berlin,a\\;b\r\n"),
+        "{text}"
+    );
+
+    // And it reads back as the three items it was written as.
+    let properties = syntax::parse(&text).expect("the written card parses");
+    assert_eq!(
+        named(&properties, "CATEGORIES").items(),
+        ["Friends", "back, in Berlin", "a;b"]
+    );
+}
+
+#[test]
+fn a_text_list_value_reads_back_as_its_items() {
+    let properties = syntax::parse(concat!(
+        "BEGIN:VCARD\r\n",
+        "CATEGORIES:Friends,Work\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    assert_eq!(
+        named(&properties, "CATEGORIES").items(),
+        ["Friends", "Work"]
+    );
+}
+
+#[test]
 fn folds_long_lines_without_splitting_characters() {
     // Two widths, because they fail differently: a one-octet value catches
     // an off-by-one in the limit (the continuation's leading space counts

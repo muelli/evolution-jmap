@@ -5,10 +5,10 @@
 //!
 //! The mapped set is deliberately the one the address book backend needs to
 //! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
-//! NOTE, BDAY, URL — and no more. Everything else on a card (keywords, preferred
-//! languages, …) is *dropped*, which is only safe because saving goes back to
-//! the server as a PatchObject naming the mapped properties: a property we
-//! never mapped is a property we never overwrite.
+//! NOTE, BDAY, URL, CATEGORIES — and no more. Everything else on a card
+//! (preferred languages, online services, …) is *dropped*, which is only safe
+//! because saving goes back to the server as a PatchObject naming the mapped
+//! properties: a property we never mapped is a property we never overwrite.
 //!
 //! `ORG` is the one property whose *value* is a list rather than a field: RFC
 //! 2426 §3.5.5 states the organisation's name and then the units within it,
@@ -87,6 +87,20 @@
 //! 3.52, `E_CONTACT_HOMEPAGE_URL` is the first `URL` line, a set rewrites that
 //! line's value and leaves its parameters alone, and any further `URL` line
 //! passes through untouched.
+//!
+//! `keywords` is the first mapped property that is a *set* rather than a keyed
+//! map, and the first to cross on one line holding all of it. RFC 9553 §2.8.2
+//! files a card under bare-string tags; RFC 2426 §3.7.1's `CATEGORIES` lists
+//! them, comma-separated, and EDS reads that line as `E_CONTACT_CATEGORY_LIST` —
+//! Evolution's Categories field. There is nothing inside an entry to preserve
+//! and no key to patch by, so unlike every property above it the set goes back
+//! **replaced whole**, and a tag the line cannot carry is therefore a tag the
+//! next save would *delete* rather than merely one the user cannot see. What
+//! those are, and why the whole property freezes for a card holding one, is
+//! [`maps_keywords`]. One line rather than one per tag — the opposite of the
+//! `NICKNAME` decision — because a second `CATEGORIES` line reaches no field the
+//! user can see, measured against libebook-contacts 3.52; the reader takes them
+//! all in anyway, so tags on a line EDS ignores are not lost by a save.
 
 use std::collections::BTreeMap;
 
@@ -155,6 +169,10 @@ const JOINED_COMPONENTS: [(&str, &str); 1] = [("number", "name")];
 
 /// JSContact title `kind` values and the vCard property stating each.
 const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
+
+/// RFC 2426 §3.7.1's `CATEGORIES` — the tags EDS reads as
+/// `E_CONTACT_CATEGORY_LIST`, which is Evolution's Categories field.
+const CATEGORIES: &str = "CATEGORIES";
 
 /// The line EDS keeps `E_CONTACT_ANNIVERSARY` on — the field Evolution's
 /// contact editor labels "Anniversary".
@@ -285,6 +303,100 @@ pub fn states_link(link: &Link) -> bool {
 /// it is the contact's home page.
 fn maps_link_kind(kind: Option<&str>) -> bool {
     kind.is_none()
+}
+
+/// Whether the tags a card is filed under survive the trip through vCard well
+/// enough for a save to name `keywords`.
+///
+/// This is the first mapped property that is a *set* rather than a keyed map of
+/// objects, and it changes what the question means. A `CATEGORIES` line holds
+/// the whole set and a JSContact keyword is a bare string, so there is nothing
+/// inside an entry to preserve and no key to patch by: the line states what was
+/// shown, and the save writes back the difference from it as a whole new set.
+/// Which is exactly what makes an *undrawn* tag a deleted tag — so a set holding
+/// one is a set no save may name:
+///
+/// - **A value that is not `true`.** RFC 9553 §1.4.3 has every value of a Set be
+///   `true`; drawing anything else would say the tag is set where the server
+///   said it is not.
+/// - **An empty tag.** An empty item between two commas reads back as no tag at
+///   all, so the tag would vanish between the drawing and the save.
+/// - **A tag holding a carriage return.** [`crate::syntax::write`] drops it —
+///   that is a security property, not tidiness — so the tag would come back
+///   spelled differently and a save would rename it. A line feed is not this
+///   case: it has an escape and survives both writers.
+/// - **A tag whose ends are whitespace.** EDS trims them: measured against
+///   libebook-contacts 3.52, `CATEGORIES: quiet` reaches the user as `quiet`,
+///   and the next save would rename the tag on the server. See
+///   [`edged_with_whitespace`].
+///
+/// A card with no tags at all passes: there is nothing to lose, and a
+/// `CATEGORIES` the user has just typed is a set to write.
+pub fn maps_keywords(keywords: &BTreeMap<String, Value>) -> bool {
+    keywords.iter().all(|(tag, set)| drawn_tag(tag, set))
+}
+
+/// Whether one entry of `keywords` goes on the `CATEGORIES` line. The single
+/// point [`maps_keywords`] and [`drawn_tags`] agree through, so a tag cannot be
+/// called covered and then left off.
+fn drawn_tag(tag: &str, set: &Value) -> bool {
+    set == &Value::Bool(true)
+        && !tag.is_empty()
+        && !tag.contains('\r')
+        && !edged_with_whitespace(tag)
+}
+
+/// Whether a tag begins or ends with a character EDS would trim off it.
+///
+/// The set is ASCII whitespace, which is one character wider than what EDS was
+/// measured to strip — it keeps a vertical tab — because the two errors are not
+/// the same size. Refusing to draw a tag costs the sight of it and freezes the
+/// property for that card; drawing one that comes back trimmed costs the tag,
+/// on the server, without anybody having asked.
+fn edged_with_whitespace(tag: &str) -> bool {
+    let whitespace = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
+    tag.starts_with(whitespace) || tag.ends_with(whitespace)
+}
+
+/// The tags to write on the `CATEGORIES` line, in the order the set holds them —
+/// which is sorted, so the vCard is stable across renderings; a reordering would
+/// otherwise look to the save like an edit.
+fn drawn_tags(card: &ContactCard) -> Vec<&str> {
+    card.keywords
+        .iter()
+        .flatten()
+        .filter(|(tag, set)| drawn_tag(tag, set))
+        .map(|(tag, _)| tag.as_str())
+        .collect()
+}
+
+/// The tags the card is filed under, as a JSContact `keywords` Set.
+///
+/// Every `CATEGORIES` line is read, not just the first, and that is not
+/// pedantry about RFC 2426 §3.7.1 admitting the property more than once: EDS
+/// shows the user the first line only and, when the Categories field is edited,
+/// rewrites that one and leaves the second exactly as it was — measured against
+/// libebook-contacts 3.52. Reading both is what keeps the tags on the second
+/// from being deleted by the next save, having never been shown.
+///
+/// A tag named twice — across the lines or within one — is one member, because a
+/// set is what both sides mean. An empty item is dropped rather than carried as
+/// the tag whose name is nothing: `CATEGORIES:` and `CATEGORIES:a,,b` state
+/// nothing between their separators.
+///
+/// `None` rather than an empty map for a card with no tags, for the reason the
+/// keyed maps have one: the save reads an edit off a difference from what was
+/// shown, and an empty set would claim the contact is untagged where the vCard
+/// made no claim at all.
+fn read_keywords(properties: &[Property]) -> Option<BTreeMap<String, Value>> {
+    let tags: BTreeMap<String, Value> = properties
+        .iter()
+        .filter(|property| property.name == CATEGORIES)
+        .flat_map(Property::items)
+        .filter(|tag| !tag.is_empty())
+        .map(|tag| (tag, Value::Bool(true)))
+        .collect();
+    (!tags.is_empty()).then_some(tags)
 }
 
 /// Whether an email address reaches the user at all. An entry with no
@@ -562,6 +674,15 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         properties.push(Property::new(name, &date).with_param(X_JMAP_KEY, key));
     }
 
+    // The whole set on one line, which is all EDS reads, and with no key on it:
+    // a tag is its own identity. Empty when every tag the card holds is one the
+    // line cannot carry — see [`maps_keywords`] — and then there is no line,
+    // exactly as for a card with no tags.
+    let tags = drawn_tags(card);
+    if !tags.is_empty() {
+        properties.push(Property::list(CATEGORIES, tags));
+    }
+
     syntax::write(&properties)
 }
 
@@ -727,6 +848,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         notes: (!notes.is_empty()).then_some(notes),
         anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
         links: (!links.is_empty()).then_some(links),
+        keywords: read_keywords(&properties),
         extra: BTreeMap::new(),
     })
 }

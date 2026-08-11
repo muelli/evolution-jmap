@@ -58,7 +58,7 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
     fixture.patch(
         &id,
         json!({
-            "keywords": {"hiking": true},
+            "preferredLanguages": {"l1": {"language": "de-DE", "pref": 1}},
             "anniversaries": {"y1": {"kind": "birth", "date": {"year": 1964}}},
             "emails/e0/label": "day job",
         }),
@@ -71,8 +71,8 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
 
     let stored = fixture.card(&id);
     assert_eq!(
-        stored.extra.get("keywords"),
-        Some(&json!({"hiking": true})),
+        stored.extra.get("preferredLanguages"),
+        Some(&json!({"l1": {"language": "de-DE", "pref": 1}})),
         "an unmapped property was overwritten"
     );
     let anniversaries = stored.anniversaries.as_ref().expect("anniversaries");
@@ -1360,4 +1360,121 @@ fn an_organization_with_nothing_to_name_survives_a_save_it_was_never_part_of() {
         "the organisation the user typed was not saved: {organizations:?}"
     );
     assert_eq!(organizations.len(), 2);
+}
+
+#[test]
+fn filing_a_contact_under_a_category_sends_the_whole_set() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(&id, json!({"keywords": {"hiking": true}}));
+    let sync = fixture.sync();
+
+    // RFC 2426 §3.7.1's `CATEGORIES` holds the tags on one line, which is what
+    // EDS rewrites when the user edits Evolution's Categories field: there is no
+    // key to patch by, so the set goes back replaced whole.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("\r\nCATEGORIES:hiking\r\n"), "{vcard}");
+    let edited = vcard.replace("CATEGORIES:hiking", "CATEGORIES:hiking,climbing");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).keywords.expect("keywords"),
+        [
+            ("climbing".to_owned(), json!(true)),
+            ("hiking".to_owned(), json!(true)),
+        ]
+        .into()
+    );
+}
+
+#[test]
+fn clearing_the_categories_leaves_the_contact_filed_under_nothing() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(&id, json!({"keywords": {"hiking": true}}));
+    let sync = fixture.sync();
+
+    // Which is a `"keywords": null` rather than an empty map: RFC 9553 §2.8.2's
+    // default is no tags, and an empty set would be a different thing to store.
+    // EDS removes the attribute outright when the field is cleared, measured
+    // against libebook-contacts 3.52, so no line at all is what a save sees.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("CATEGORIES:hiking\r\n", "");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).keywords, None);
+}
+
+#[test]
+fn a_tag_the_categories_line_cannot_carry_freezes_the_whole_set() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // EDS trims the ends of a category, so this tag would come back renamed and
+    // the next save would rename it on the server. It gets no line, and the
+    // tags that *can* be stated still do — the user sees most of the truth
+    // rather than none of it. But because the set is replaced whole rather than
+    // patched entry by entry, a save naming `keywords` would delete the tag that
+    // was left off, so the property is left alone even though the user did edit
+    // the field: the tag they added is lost, which is the trade that keeps the
+    // tag they never saw.
+    fixture.patch(&id, json!({"keywords": {" quiet": true, "hiking": true}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("\r\nCATEGORIES:hiking\r\n"), "{vcard}");
+    let edited = vcard.replace("CATEGORIES:hiking", "CATEGORIES:hiking,climbing");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).keywords.expect("keywords"),
+        [
+            (" quiet".to_owned(), json!(true)),
+            ("hiking".to_owned(), json!(true)),
+        ]
+        .into(),
+        "a set holding a tag the vCard could not state was rewritten"
+    );
+}
+
+#[test]
+fn an_edit_that_left_the_categories_alone_does_not_rewrite_them() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(&id, json!({"keywords": {"hiking": true}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("vera@example.com", "vera@example.org");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    // Not merely equal in the end — the patch must not have named the property
+    // at all, or a concurrent edit on another client would be undone by a save
+    // that had nothing to say about tags.
+    assert_eq!(
+        fixture.card(&id).keywords.expect("keywords"),
+        [("hiking".to_owned(), json!(true))].into()
+    );
+}
+
+#[test]
+fn an_empty_set_on_the_server_is_not_an_edit_waiting_to_happen() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A card whose `keywords` is present but holds nothing draws the same
+    // vCard as one with no `keywords` at all — no `CATEGORIES` line — so the
+    // two have to compare as the same set. Otherwise every save of such a card
+    // would patch the property to a null, an edit nobody made.
+    fixture.patch(&id, json!({"keywords": {}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nCATEGORIES"), "{vcard}");
+    let edited = vcard.replace("vera@example.com", "vera@example.org");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).keywords,
+        Some(std::collections::BTreeMap::new()),
+        "the empty set the server held was rewritten"
+    );
 }
