@@ -32,15 +32,18 @@
 //!   a unit that kept its name keeps the members it was carrying, matched by
 //!   that name rather than by position, so that dissolving one department
 //!   does not renumber the sorting hints of the others.
-//! - `titles` is a keyed map of which the vCard states only *some* entries:
-//!   one of a `kind` outside `title` and `role` has no vCard property, so it
-//!   is dropped on the way out. It must therefore be invisible to the save
-//!   in both directions — neither deleted for being absent from the edited
-//!   card, nor overwritten by an addition whose key the reader invented by
-//!   counting only the entries it could see. That is what
-//!   [`diff_visible_entries`] is for. `addresses` and `notes` are the same
-//!   shape, hiding an address stated only in components `ADR` has no field
-//!   for and a note that says nothing at all.
+//! - *Every* keyed map is one of which the vCard states only **some**
+//!   entries. A title of a `kind` outside `title` and `role` has no vCard
+//!   property; an address stated only in components `ADR` has no field for,
+//!   an organisation with neither a name nor a unit, an email with no
+//!   address, a phone with no number and a note that says nothing all have
+//!   no line to be written on. Each is dropped on the way out and must
+//!   therefore be invisible to the save in both directions — neither deleted
+//!   for being absent from the edited card, nor overwritten by an addition
+//!   whose key the reader invented by counting only the entries it could
+//!   see. That is what [`diff_entries`] and the `states_*` predicates it
+//!   takes are for; the predicates live next to the emitter, so what the
+//!   save calls invisible is what the emitter actually left out.
 //!
 //! RFC 8620 §5.3 requires every path segment before the last to exist on the
 //! object already, which is why a property that is absent server-side is
@@ -53,8 +56,8 @@ use jmap_proto::contacts::{
     Organization, Title,
 };
 use jmap_vcard::{
-    maps_address_component, maps_context, maps_name_component, maps_phone_feature, maps_title_kind,
-    states_address, states_note, title_kind,
+    maps_address_component, maps_context, maps_name_component, maps_phone_feature, states_address,
+    states_email, states_note, states_organization, states_phone, states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -123,23 +126,30 @@ fn diff_emails(
     current: Option<&BTreeMap<String, ContactEmail>>,
     edited: Option<&BTreeMap<String, ContactEmail>>,
 ) {
-    diff_entries(patch, "emails", current, edited, |patch, path, old, new| {
-        if old.address != new.address {
-            patch.insert(
-                format!("{path}/address"),
-                Value::String(new.address.clone()),
+    diff_entries(
+        patch,
+        "emails",
+        current,
+        edited,
+        states_email,
+        |patch, path, old, new| {
+            if old.address != new.address {
+                patch.insert(
+                    format!("{path}/address"),
+                    Value::String(new.address.clone()),
+                );
+            }
+            diff_flags(
+                patch,
+                path,
+                "contexts",
+                &old.contexts,
+                &new.contexts,
+                maps_context,
             );
-        }
-        diff_flags(
-            patch,
-            path,
-            "contexts",
-            &old.contexts,
-            &new.contexts,
-            maps_context,
-        );
-        diff_pref(patch, path, old.pref, new.pref);
-    });
+            diff_pref(patch, path, old.pref, new.pref);
+        },
+    );
 }
 
 fn diff_phones(
@@ -147,27 +157,34 @@ fn diff_phones(
     current: Option<&BTreeMap<String, ContactPhone>>,
     edited: Option<&BTreeMap<String, ContactPhone>>,
 ) {
-    diff_entries(patch, "phones", current, edited, |patch, path, old, new| {
-        if old.number != new.number {
-            patch.insert(format!("{path}/number"), Value::String(new.number.clone()));
-        }
-        diff_flags(
-            patch,
-            path,
-            "contexts",
-            &old.contexts,
-            &new.contexts,
-            maps_context,
-        );
-        diff_flags(
-            patch,
-            path,
-            "features",
-            &old.features,
-            &new.features,
-            maps_phone_feature,
-        );
-    });
+    diff_entries(
+        patch,
+        "phones",
+        current,
+        edited,
+        states_phone,
+        |patch, path, old, new| {
+            if old.number != new.number {
+                patch.insert(format!("{path}/number"), Value::String(new.number.clone()));
+            }
+            diff_flags(
+                patch,
+                path,
+                "contexts",
+                &old.contexts,
+                &new.contexts,
+                maps_context,
+            );
+            diff_flags(
+                patch,
+                path,
+                "features",
+                &old.features,
+                &new.features,
+                maps_phone_feature,
+            );
+        },
+    );
 }
 
 fn diff_organizations(
@@ -180,6 +197,7 @@ fn diff_organizations(
         "organizations",
         current,
         edited,
+        states_organization,
         |patch, path, old, new| {
             if old.name != new.name {
                 patch.insert(format!("{path}/name"), value_or_null(new.name.as_ref()));
@@ -200,12 +218,12 @@ fn diff_titles(
     current: Option<&BTreeMap<String, Title>>,
     edited: Option<&BTreeMap<String, Title>>,
 ) {
-    diff_visible_entries(
+    diff_entries(
         patch,
         "titles",
         current,
         edited,
-        |title| maps_title_kind(title.kind.as_deref()),
+        states_title,
         |patch, path, old, new| {
             if old.name != new.name {
                 patch.insert(format!("{path}/name"), Value::String(new.name.clone()));
@@ -226,7 +244,7 @@ fn diff_addresses(
     current: Option<&BTreeMap<String, Address>>,
     edited: Option<&BTreeMap<String, Address>>,
 ) {
-    diff_visible_entries(
+    diff_entries(
         patch,
         "addresses",
         current,
@@ -257,7 +275,7 @@ fn diff_notes(
     current: Option<&BTreeMap<String, Note>>,
     edited: Option<&BTreeMap<String, Note>>,
 ) {
-    diff_visible_entries(
+    diff_entries(
         patch,
         "notes",
         current,
@@ -335,20 +353,9 @@ fn merge_units(current: Option<&[OrgUnit]>, edited: Option<&[OrgUnit]>) -> Optio
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Shared shape of the keyed maps: added entries are written whole,
-/// dropped entries are nulled, and surviving entries are handed to
-/// `diff_entry` to be compared field by field.
-fn diff_entries<T: serde::Serialize>(
-    patch: &mut Map<String, Value>,
-    property: &str,
-    current: Option<&BTreeMap<String, T>>,
-    edited: Option<&BTreeMap<String, T>>,
-    diff_entry: impl Fn(&mut Map<String, Value>, &str, &T, &T),
-) {
-    diff_visible_entries(patch, property, current, edited, |_| true, diff_entry)
-}
-
-/// The same, for a keyed map of which the vCard states only some entries.
+/// Shared shape of the keyed maps: added entries are written whole, dropped
+/// entries are nulled, and surviving entries are handed to `diff_entry` to be
+/// compared field by field — over the entries the vCard actually stated.
 ///
 /// An entry the predicate calls invisible never reached the user, so the save
 /// must not read an edit into its absence. Three things follow, and each is
@@ -361,7 +368,7 @@ fn diff_entries<T: serde::Serialize>(
 /// - an addition is moved off its key if an invisible entry already holds it.
 ///   The reader invents keys by counting the entries it can see, so `t1` for
 ///   a title the user just typed can be the key of one it never showed.
-fn diff_visible_entries<T: serde::Serialize>(
+fn diff_entries<T: serde::Serialize>(
     patch: &mut Map<String, Value>,
     property: &str,
     current: Option<&BTreeMap<String, T>>,
