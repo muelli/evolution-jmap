@@ -10,12 +10,15 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Two legs, because they need two books. The first starts empty and writes a
-//! contact into it. The second starts from a card the mock was seeded with
-//! before EDS ever connected — a card from the *server*, holding a shape no
-//! vCard can state, which is the only way to ask what real EDS does to it.
+//! Three legs, because they need three books. The first starts empty and writes
+//! a contact into it. The second and third each start from a card the mock was
+//! seeded with before EDS ever connected — a card from the *server*, holding a
+//! shape no vCard can state, which is the only way to ask what real EDS does to
+//! it — and take the two branches the save can take with it: the user edits a
+//! field beside the name, or retypes the name itself.
 
 use jmap_functional::{Session, observations, required_path};
+use jmap_proto::Id;
 use jmap_proto::contacts::{ContactCard, Name, NameComponent};
 
 /// The contact the client writes. One string, passed to the client on its
@@ -565,6 +568,58 @@ const EDITED_FULL_NAME: &str = "Jean Paul Oldenburg";
 const EDITED_EMAIL_BEFORE: &str = "jp@example.com";
 const EDITED_EMAIL_AFTER: &str = "jp@example.org";
 
+/// Put the card both name legs start from into the mock's store, and hand back
+/// the id the server filed it under.
+///
+/// Seeded straight into the store rather than written through EDS, because the
+/// shape under test is one no vCard can state: a card created through EDS would
+/// arrive with the given name as a single component, leaving nothing for the
+/// save to put back — or, in the leg that retypes the name, to discard.
+fn seed_double_barrelled_card(server: &jmap_mock::MockServer) -> Id {
+    let account_id = server.account_id();
+    let state = server.state();
+    let mut state = state.lock().expect("mock state lock");
+    let account = state
+        .account_mut(&account_id)
+        .expect("the mock's default account");
+    let book = account.seed_address_book("Personal", true);
+
+    let mut components = vec![NameComponent::new("surname", EDITED_SURNAME)];
+    for (value, phonetic) in EDITED_GIVEN_PARTS {
+        let mut component = NameComponent::new("given", value);
+        component
+            .extra
+            .insert("phonetic".to_owned(), serde_json::json!(phonetic));
+        components.push(component);
+    }
+
+    let id = account.contact_cards.alloc_id();
+    let mut card = ContactCard::simple(book, EDITED_FULL_NAME, EDITED_EMAIL_BEFORE);
+    card.id = Some(id.clone());
+    // What a server assigns; the mock's own `ContactCard/set` fills the same
+    // shape in, and seeding bypasses it.
+    card.uid = Some(format!("urn:example:card:{}", id.as_str()));
+    card.name = Some(Name {
+        full: Some(EDITED_FULL_NAME.to_owned()),
+        components: Some(components),
+        ..Name::default()
+    });
+    account.contact_cards.seed_with_id(id.clone(), card);
+    id
+}
+
+/// The port the mock is listening on, for the keyfile the session is written
+/// with.
+fn mock_port(server: &jmap_mock::MockServer) -> u16 {
+    server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number")
+}
+
 #[test]
 fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
     let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
@@ -572,49 +627,8 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
 
     let server = jmap_mock::MockServer::builder().start();
     let account_id = server.account_id();
-    // Seeded straight into the mock's store rather than written through EDS,
-    // because the shape under test is one no vCard can state: a card created
-    // through EDS would arrive with the given name as a single component,
-    // leaving nothing for the save to put back.
-    let card_id = {
-        let state = server.state();
-        let mut state = state.lock().expect("mock state lock");
-        let account = state
-            .account_mut(&account_id)
-            .expect("the mock's default account");
-        let book = account.seed_address_book("Personal", true);
-
-        let mut components = vec![NameComponent::new("surname", EDITED_SURNAME)];
-        for (value, phonetic) in EDITED_GIVEN_PARTS {
-            let mut component = NameComponent::new("given", value);
-            component
-                .extra
-                .insert("phonetic".to_owned(), serde_json::json!(phonetic));
-            components.push(component);
-        }
-
-        let id = account.contact_cards.alloc_id();
-        let mut card = ContactCard::simple(book, EDITED_FULL_NAME, EDITED_EMAIL_BEFORE);
-        card.id = Some(id.clone());
-        // What a server assigns; the mock's own `ContactCard/set` fills the
-        // same shape in, and seeding bypasses it.
-        card.uid = Some(format!("urn:example:card:{}", id.as_str()));
-        card.name = Some(Name {
-            full: Some(EDITED_FULL_NAME.to_owned()),
-            components: Some(components),
-            ..Name::default()
-        });
-        account.contact_cards.seed_with_id(id.clone(), card);
-        id
-    };
-
-    let port: u16 = server
-        .origin()
-        .rsplit_once(':')
-        .expect("the mock's origin ends in a port")
-        .1
-        .parse()
-        .expect("the mock's port is a number");
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
 
     let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/address-book-edit"));
     session.write_source("jmap-functional", &keyfile(port));
@@ -751,6 +765,159 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
             .map(|email| email.address.as_str())
             .collect::<Vec<_>>(),
         vec![EDITED_EMAIL_AFTER],
+        "{card:?}"
+    );
+}
+
+/// What the user retypes the given-name field to, and the full name Evolution's
+/// contact editor keeps in step with it.
+///
+/// One word where the field held two, and one that is not a substring of either
+/// half: nothing about `Hans` says which part of `Jean Paul` it replaced, which
+/// is exactly why both parts have to go.
+const RETYPED_GIVEN_NAME: &str = "Hans";
+const RETYPED_FULL_NAME: &str = "Hans Oldenburg";
+
+#[test]
+fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/address-book-rename"));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(
+        &client,
+        &[
+            "jmap-functional",
+            "rename",
+            card_id.as_str(),
+            RETYPED_FULL_NAME,
+            RETYPED_GIVEN_NAME,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // The card EDS started from is the seeded one, with the two halves joined
+    // into the single field their kind owns — the same starting point the
+    // preceding leg checks, and worth checking again here because the branch
+    // under test is chosen by comparing against exactly this text.
+    assert_eq!(
+        seen.get("read-given-name"),
+        Some(&EDITED_GIVEN_FIELD),
+        "EDS did not hand back the given name the emitter wrote\n{report}"
+    );
+
+    // And what EDS holds after the save: the name the user typed, on both the
+    // field they typed it in and the FN line beside it.
+    assert_eq!(
+        seen.get("read-back-given-name"),
+        Some(&RETYPED_GIVEN_NAME),
+        "the name the user retyped did not survive the save\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-family-name"),
+        Some(&EDITED_SURNAME),
+        "the save changed the surname nobody edited\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-full-name"),
+        Some(&RETYPED_FULL_NAME),
+        "the full name the editor wrote did not survive the save\n{report}"
+    );
+
+    // The other end, and the load-bearing assertion: the card the server now
+    // holds states the given name as the *one* component the user typed. The
+    // two the card was seeded with are gone, and so are the pronunciations that
+    // belonged to them — a `phonetic` for `Jean` is not one for `Hans`, and
+    // keeping either would leave half an old first name beside the new one.
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the rename never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    let components = card
+        .name
+        .as_ref()
+        .and_then(|name| name.components.as_ref())
+        .unwrap_or_else(|| panic!("the card on the server lost its name: {card:?}"));
+    let stated: Vec<(&str, &str, Option<&str>)> = components
+        .iter()
+        .map(|component| {
+            (
+                component.kind.as_str(),
+                component.value.as_str(),
+                component
+                    .extra
+                    .get("phonetic")
+                    .and_then(|phonetic| phonetic.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        stated,
+        vec![
+            ("surname", EDITED_SURNAME, None),
+            ("given", RETYPED_GIVEN_NAME, None),
+        ],
+        "the name the user retyped did not replace the parts it was built \
+         from: {card:?}"
+    );
+    assert_eq!(
+        card.name.as_ref().and_then(|name| name.full.as_deref()),
+        Some(RETYPED_FULL_NAME),
+        "{card:?}"
+    );
+    // And what nobody touched: the email address is still the seeded one,
+    // patched around rather than through.
+    let emails = card
+        .emails
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server lost its email: {card:?}"));
+    assert_eq!(
+        emails
+            .values()
+            .map(|email| email.address.as_str())
+            .collect::<Vec<_>>(),
+        vec![EDITED_EMAIL_BEFORE],
         "{card:?}"
     );
 }
