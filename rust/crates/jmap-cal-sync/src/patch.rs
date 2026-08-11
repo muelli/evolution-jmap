@@ -36,9 +36,12 @@
 //!   shows are patched into the entry it names, and a line naming an entry the
 //!   server does not hold is neither created nor read as a deletion — see
 //!   [`diff_virtual_locations`].
-//! - **`keywords` is a set, and a set shown in part is not editable.** The
-//!   property goes back replaced whole, which is only safe if every tag the
-//!   server holds reached the `CATEGORIES` line — see [`diff_keywords`].
+//! - **`keywords` is a set, and a set has no keys to leave unnamed.** The
+//!   property goes back replaced whole, so a tag that never reached the
+//!   `CATEGORIES` line is one the user never saw and a plain rewrite would
+//!   delete. It is carried onto the set the save writes instead, which is how
+//!   the "an unshown entry is not the user's to delete" rule is kept where
+//!   leaving an entry unnamed is not available — see [`diff_keywords`].
 //! - **`alerts` is a map replaced whole, and a second property decides
 //!   whether anything reads it.** A `VALARM` cannot say that the user already
 //!   dismissed the reminder, or that it fires at an absolute instant, or that
@@ -76,7 +79,7 @@
 use std::collections::BTreeMap;
 
 use jmap_ical::{
-    event_to_ical, ical_to_event, maps_alerts, maps_keywords, maps_locations,
+    event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, maps_virtual_locations, names_time_zone,
 };
 use jmap_proto::calendars::CalendarEvent;
@@ -366,36 +369,63 @@ fn member_of(key: &str, member: &str) -> String {
 /// `"keywords": null`, which is how a PatchObject asks for RFC 8984 §4.2.9's
 /// default of no tags — an empty map would be a different thing to store.
 ///
-/// [`maps_keywords`] is asked of the server's own set, for the reason the other
-/// properties ask it: a tag the `CATEGORIES` line could not carry was never shown,
-/// so a set replaced whole would delete it. The *edited* side needs no such check
-/// — every tag it holds was read off a content line, and any string is a keyword
-/// RFC 8984 admits.
+/// [`maps_keyword`] is asked of the server's own set, for the reason the other
+/// properties ask their predicate: a tag the `CATEGORIES` line could not carry
+/// was never shown, so its absence from the edited component is not the user
+/// asking for it to go. Where a keyed map answers that by leaving the entry
+/// unnamed in the patch, a set has no key to leave alone — so the tag is carried
+/// onto the set the save writes instead. That is the same rule reached by the
+/// only means a set allows, and it is why an unstatable tag costs the sight of it
+/// and nothing more; the edit around it still lands.
+///
+/// The carried tags are read off the event the **server** holds rather than off
+/// the baseline, which is the one place this property cannot use the baseline:
+/// the baseline is what was *shown*, and these are precisely the tags it does not
+/// hold. The baseline still answers the other question — whether the user changed
+/// anything — because a difference from what they were shown is what an edit is.
+///
+/// A tag is carried back exactly as the server stated it, value included — even
+/// the value RFC 8984 §1.4.3 does not admit, because the server is the one who
+/// said it and rewriting it here would be this mapping inventing a change. The
+/// user's own set wins where the two name the same tag: a tag they typed is a tag
+/// they mean to be set, whatever the server had against that name.
+///
+/// The *edited* side needs no such check — every tag it holds was read off a
+/// content line, and any string is a keyword RFC 8984 admits.
 ///
 /// This is the series' set only. An instance edited on its own states a set of
 /// its own on its own component, and that difference rides in the override
-/// [`diff_overrides`] sends — under the same [`maps_keywords`] rule, asked by
-/// [`maps_recurrence_override`].
+/// [`diff_overrides`] sends — where the same [`maps_keyword`] is asked by
+/// [`maps_recurrence_override`] of every restated tag, and an override holding
+/// one it refuses is left alone whole rather than carried back: an override is
+/// itself an entry of a keyed map, so there the patch has a key to leave unnamed.
 fn diff_keywords(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
     baseline: &CalendarEvent,
     edited: &CalendarEvent,
 ) {
-    let empty = BTreeMap::new();
-    if !maps_keywords(current.keywords.as_ref().unwrap_or(&empty)) {
-        return;
-    }
     if baseline.keywords == edited.keywords {
         return;
     }
+    let empty = BTreeMap::new();
+    let mut wanted: BTreeMap<String, Value> = current
+        .keywords
+        .as_ref()
+        .unwrap_or(&empty)
+        .iter()
+        .filter(|(tag, set)| !maps_keyword(tag, set))
+        .map(|(tag, set)| (tag.clone(), set.clone()))
+        .collect();
+    wanted.extend(edited.keywords.clone().unwrap_or_default());
     patch.insert(
         "keywords".to_owned(),
-        match &edited.keywords {
+        if wanted.is_empty() {
+            Value::Null
+        } else {
             // Serialising a set this crate's own reader built cannot fail: it
-            // holds strings and `true`.
-            Some(tags) => serde_json::to_value(tags).unwrap_or(Value::Null),
-            None => Value::Null,
+            // holds strings and values the server itself sent.
+            serde_json::to_value(wanted).unwrap_or(Value::Null)
         },
     );
 }
