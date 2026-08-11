@@ -58,7 +58,7 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
     fixture.patch(
         &id,
         json!({
-            "organizations": {"o1": {"name": "Acme"}},
+            "nicknames": {"k1": {"name": "Vee"}},
             "notes": {"n1": {"note": "met at FOSDEM"}},
             "emails/e0/label": "day job",
         }),
@@ -71,8 +71,8 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
 
     let stored = fixture.card(&id);
     assert_eq!(
-        stored.extra.get("organizations"),
-        Some(&json!({"o1": {"name": "Acme"}})),
+        stored.extra.get("nicknames"),
+        Some(&json!({"k1": {"name": "Vee"}})),
         "an unmapped property was overwritten"
     );
     assert_eq!(
@@ -225,6 +225,77 @@ fn editing_the_structured_name_replaces_only_the_mapped_components() {
             ("generation", "III"),
         ]
     );
+}
+
+#[test]
+fn renaming_an_employer_keeps_what_the_org_line_cannot_carry() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // `sortAs` and `contexts` have no ORG component and no ORG parameter, so
+    // they survive only if the patch reaches into the entry.
+    fixture.patch(
+        &id,
+        json!({"organizations": {"o1": {
+            "name": "Acme",
+            "sortAs": "Acme",
+            "contexts": {"work": true},
+            "units": [
+                {"@type": "OrgUnit", "name": "Research", "sortAs": "Res"},
+                {"@type": "OrgUnit", "name": "Optics"},
+            ],
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o1:Acme;Research;Optics"),
+        "{vcard}"
+    );
+    // The user renames the employer and dissolves the second department.
+    let edited = vcard.replace("Acme;Research;Optics", "Acme Ltd;Research");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    let organizations = stored.organizations.as_ref().expect("organizations");
+    assert_eq!(organizations.len(), 1, "patched in place, not re-added");
+    let organization = &organizations["o1"];
+    assert_eq!(organization.name.as_deref(), Some("Acme Ltd"));
+    assert_eq!(
+        organization.extra.get("sortAs"),
+        Some(&json!("Acme")),
+        "a member the ORG line cannot carry was overwritten"
+    );
+    assert_eq!(
+        organization.extra.get("contexts"),
+        Some(&json!({"work": true}))
+    );
+    let units = organization.units.as_ref().expect("units");
+    assert_eq!(units.len(), 1);
+    assert_eq!(units[0].name, "Research");
+    assert_eq!(
+        units[0].extra.get("sortAs"),
+        Some(&json!("Res")),
+        "a unit that kept its name kept nothing else"
+    );
+}
+
+#[test]
+fn removing_the_org_line_removes_the_organization() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(&id, json!({"organizations": {"o1": {"name": "Acme"}}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited: String = vcard
+        .lines()
+        .filter(|line| !line.starts_with("ORG"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).organizations, None);
 }
 
 #[test]

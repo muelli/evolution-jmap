@@ -4,15 +4,25 @@
 //! JSContact [`ContactCard`] ↔ vCard 3.0.
 //!
 //! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, EMAIL, TEL — and no more. Everything else on a
-//! card (organisations, addresses, notes, …) is *dropped*, which is only
+//! be useful — UID, FN, N, EMAIL, TEL, ORG — and no more. Everything else on
+//! a card (addresses, notes, nicknames, …) is *dropped*, which is only
 //! safe because saving goes back to the server as a PatchObject naming the
 //! mapped properties: a property we never mapped is a property we never
 //! overwrite.
+//!
+//! `ORG` is the one property whose *value* is a list rather than a field: RFC
+//! 2426 §3.5.5 states the organisation's name and then the units within it,
+//! in the order RFC 9553 §2.2.3's `units` gives them, so an entry crosses as
+//! one line with as many components as it has units. What does not cross is
+//! the entry's `sortAs` and `contexts`, which `ORG` has no component and no
+//! parameter for — hence the [`X_JMAP_KEY`] this side already writes on an
+//! `EMAIL`, and a save that patches `organizations/<key>/name` in place.
 
 use std::collections::BTreeMap;
 
-use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Name, NameComponent};
+use jmap_proto::contacts::{
+    ContactCard, ContactEmail, ContactPhone, Name, NameComponent, OrgUnit, Organization,
+};
 use serde_json::{Map, Value};
 
 use crate::error::VCardError;
@@ -124,6 +134,13 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
+    for (key, organization) in card.organizations.iter().flatten() {
+        let Some(components) = organization_components(organization) else {
+            continue;
+        };
+        properties.push(Property::structured("ORG", components).with_param(X_JMAP_KEY, key));
+    }
+
     syntax::write(&properties)
 }
 
@@ -146,6 +163,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let name = read_name(&properties);
     let mut emails = BTreeMap::new();
     let mut phones = BTreeMap::new();
+    let mut organizations = BTreeMap::new();
 
     for property in &properties {
         match property.name.as_str() {
@@ -175,6 +193,12 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 phones.insert(entry_key(property, "p", &phones), phone);
             }
+            "ORG" => {
+                let Some(organization) = read_organization(property) else {
+                    continue;
+                };
+                organizations.insert(entry_key(property, "o", &organizations), organization);
+            }
             _ => {}
         }
     }
@@ -190,6 +214,51 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         name,
         emails: (!emails.is_empty()).then_some(emails),
         phones: (!phones.is_empty()).then_some(phones),
+        organizations: (!organizations.is_empty()).then_some(organizations),
+        extra: BTreeMap::new(),
+    })
+}
+
+/// The `ORG` components for an organisation — its name, then its units — or
+/// `None` for an entry that names neither and so has no line to be written on.
+///
+/// An organisation with units and no name keeps the empty first component:
+/// the name's meaning is its position, so letting a unit slide into it would
+/// say the department is the employer.
+fn organization_components(organization: &Organization) -> Option<Vec<String>> {
+    let name = organization.name.clone().unwrap_or_default();
+    let units: Vec<String> = organization
+        .units
+        .iter()
+        .flatten()
+        .filter(|unit| !unit.name.is_empty())
+        .map(|unit| unit.name.clone())
+        .collect();
+    if name.is_empty() && units.is_empty() {
+        return None;
+    }
+    let mut components = vec![name];
+    components.extend(units);
+    Some(components)
+}
+
+/// The organisation an `ORG` line states, or `None` when every component of
+/// it is empty — the same "nothing was said" an `EMAIL:` with no address is.
+fn read_organization(property: &Property) -> Option<Organization> {
+    let components = property.components();
+    let name = components.first().filter(|name| !name.is_empty()).cloned();
+    let units: Vec<OrgUnit> = components
+        .iter()
+        .skip(1)
+        .filter(|unit| !unit.is_empty())
+        .map(|unit| OrgUnit::new(unit))
+        .collect();
+    if name.is_none() && units.is_empty() {
+        return None;
+    }
+    Some(Organization {
+        name,
+        units: (!units.is_empty()).then_some(units),
         extra: BTreeMap::new(),
     })
 }
