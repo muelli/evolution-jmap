@@ -3,14 +3,14 @@
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
-//! ORG, TITLE, ROLE, NOTE, BDAY, URL, CATEGORIES and the instant-messaging
-//! `X-` lines.
+//! ORG, TITLE, ROLE, NOTE, BDAY, URL, PHOTO, CATEGORIES and the
+//! instant-messaging `X-` lines.
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
-    NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Media,
+    Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
-use jmap_vcard::{card_to_vcard, states_keyword, vcard_to_card};
+use jmap_vcard::{card_to_vcard, states_keyword, states_media, vcard_to_card};
 use serde_json::{Value, json};
 
 fn fixture_card() -> ContactCard {
@@ -1210,6 +1210,212 @@ fn invents_a_key_for_a_link_that_has_none() {
     let links = card.links.expect("links");
     assert_eq!(links["l1"].uri, "https://vera.example/");
     assert_eq!(links["l7"].uri, "https://vera.example/photos");
+}
+
+fn one_photo(uri: &str, media_type: Option<&str>) -> ContactCard {
+    photo_of_kind(Some("photo"), uri, media_type)
+}
+
+fn photo_of_kind(kind: Option<&str>, uri: &str, media_type: Option<&str>) -> ContactCard {
+    ContactCard {
+        media: Some(
+            [(
+                "m1".to_owned(),
+                Media {
+                    kind: kind.map(str::to_owned),
+                    uri: uri.to_owned(),
+                    media_type: media_type.map(str::to_owned),
+                    ..Media::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+/// "hello-photo", which stands in for the JPEG a real card carries.
+const PAYLOAD: &str = "aGVsbG8tcGhvdG8=";
+
+#[test]
+fn maps_a_photo_onto_the_line_evolution_shows_it_on() {
+    // The fixture's `m1` is a picture the card carries rather than points at:
+    // RFC 9553 §2.6.4 states it as a `data:` URI, and RFC 2426 §3.1.4's `PHOTO`
+    // takes the bytes themselves under `ENCODING=b`. That is the only form EDS
+    // reads a mime type off — measured against libebook-contacts 3.52,
+    // `TYPE=JPEG` arrives as `image/JPEG` — and it is what EDS's own writer
+    // emits for a photo the user has just chosen.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "PHOTO"),
+        format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PAYLOAD}")
+    );
+}
+
+#[test]
+fn a_picture_the_card_only_points_at_crosses_as_a_uri_line() {
+    // A `media` entry may name any URI, and one that is not a `data:` URI has
+    // no bytes to inline: it goes on the line RFC 2426 §3.1.4 gives a reference,
+    // with `VALUE=uri`. The parameter is not decoration — measured against
+    // libebook-contacts 3.52, a `PHOTO` whose value is a URI and which does not
+    // carry it reaches no field at all, so EDS shows the user no picture.
+    let vcard = card_to_vcard(&one_photo("https://vera.example/me.png", None));
+    assert_eq!(
+        line(&vcard, "PHOTO"),
+        "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://vera.example/me.png"
+    );
+
+    // And no `TYPE`: on a URI line EDS reads no mime type off it (measured),
+    // and its own writer emits none, so the parameter would state something
+    // nothing reads. `TYPE` here means the inlined bytes' media type, once.
+    assert!(!vcard.contains("TYPE"), "{vcard}");
+}
+
+#[test]
+fn the_type_parameter_states_the_subtype_and_nothing_else() {
+    // Because EDS builds the mime type by putting `image/` in front of it:
+    // measured against libebook-contacts 3.52, `TYPE=image/jpeg` arrives as
+    // `image/image/jpeg`, which names no image format at all.
+    let vcard = card_to_vcard(&one_photo(
+        &format!("data:image/jpeg;base64,{PAYLOAD}"),
+        Some("image/png"),
+    ));
+    assert_eq!(
+        line(&vcard, "PHOTO"),
+        format!("PHOTO;X-JMAP-KEY=m1;TYPE=png;ENCODING=b:{PAYLOAD}"),
+        "the entry's own `mediaType` is what it says the bytes are"
+    );
+
+    // With none stated, the `data:` URI states its own (RFC 2397 §3) — and a
+    // media type may carry parameters, which are no part of the subtype.
+    let vcard = card_to_vcard(&one_photo(
+        &format!("data:image/png;charset=binary;base64,{PAYLOAD}"),
+        None,
+    ));
+    assert_eq!(
+        line(&vcard, "PHOTO"),
+        format!("PHOTO;X-JMAP-KEY=m1;TYPE=png;ENCODING=b:{PAYLOAD}")
+    );
+}
+
+#[test]
+fn bytes_that_are_not_an_image_are_stated_without_a_type() {
+    // A `TYPE` reaches EDS as `image/<type>`, so writing one for a media type
+    // outside `image/*` would tell the user's address book the bytes are an
+    // image format that does not exist. The line is still written — the bytes
+    // are what the card carries — and EDS hands them on with no mime type,
+    // which its own reader accepts (measured against libebook-contacts 3.52).
+    let vcard = card_to_vcard(&one_photo(
+        &format!("data:application/pdf;base64,{PAYLOAD}"),
+        None,
+    ));
+    assert_eq!(
+        line(&vcard, "PHOTO"),
+        format!("PHOTO;X-JMAP-KEY=m1;ENCODING=b:{PAYLOAD}")
+    );
+
+    // The same for a `data:` URI that states no media type at all, whose RFC
+    // 2397 §2 default is `text/plain`.
+    let vcard = card_to_vcard(&one_photo(&format!("data:;base64,{PAYLOAD}"), None));
+    assert_eq!(
+        line(&vcard, "PHOTO"),
+        format!("PHOTO;X-JMAP-KEY=m1;ENCODING=b:{PAYLOAD}")
+    );
+}
+
+#[test]
+fn a_payload_spelled_loosely_is_written_out_as_canonical_base64() {
+    // The bytes are decoded and re-encoded rather than copied across, so what
+    // the line carries is the canonical spelling of what the URI meant. A
+    // `data:` URI is written by hand as often as by a library, and EDS decodes
+    // the line with glib's base64 reader rather than with the URI's.
+    let vcard = card_to_vcard(&one_photo(
+        &format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('=')),
+        None,
+    ));
+    assert_eq!(
+        line(&vcard, "PHOTO"),
+        format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PAYLOAD}")
+    );
+}
+
+#[test]
+fn a_picture_whose_bytes_the_line_cannot_state_gets_no_line() {
+    // RFC 2397 §3 lets a `data:` URI spell its data as percent-encoded octets
+    // instead of base64, and `ENCODING=b` is the only encoding an EDS-bound
+    // vCard 3.0 `PHOTO` carries. Rather than hand EDS a value it would decode
+    // into a broken image, such an entry gets no line — the same invisibility
+    // every other keyed map has — and must therefore be invisible to the save.
+    for uri in [
+        "data:image/jpeg,%89PNG%0D%0A",
+        "data:image/jpeg;base64,not base64 at all",
+        "data:image/jpeg",
+        "data:",
+        "",
+    ] {
+        let card = one_photo(uri, None);
+        assert!(
+            !card_to_vcard(&card).contains("\r\nPHOTO"),
+            "{uri} should state no PHOTO line"
+        );
+        assert!(
+            !states_media(&card.media.unwrap()["m1"]),
+            "{uri} states no line, and the save has to know it"
+        );
+    }
+}
+
+#[test]
+fn a_media_entry_of_a_kind_no_photo_line_states_gets_no_line() {
+    // The fixture's `m2` is a `logo`: RFC 9553 §2.6.4 keeps the three kinds of
+    // media in one map, and a `PHOTO` line is the picture *of the contact*.
+    // Putting a logo — or a sound, or a vendor kind — on it would show the user
+    // the wrong image, so only a photo crosses, exactly as only some `titles`
+    // and only some `links` do.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(vcard.matches("\r\nPHOTO").count(), 1, "{vcard}");
+    assert!(!vcard.contains("logo.png"), "{vcard}");
+
+    for kind in [Some("logo"), Some("sound"), Some("example.com:scan"), None] {
+        let card = photo_of_kind(kind, &format!("data:image/jpeg;base64,{PAYLOAD}"), None);
+        assert!(
+            !card_to_vcard(&card).contains("\r\nPHOTO"),
+            "{kind:?} should state no PHOTO line"
+        );
+        assert!(!states_media(&card.media.unwrap()["m1"]), "{kind:?}");
+    }
+}
+
+#[test]
+fn a_card_with_no_media_states_no_photo() {
+    let vcard = card_to_vcard(&ContactCard::default());
+    assert!(!vcard.contains("PHOTO"), "{vcard}");
+}
+
+#[test]
+fn a_photo_line_is_stated_but_never_read_back() {
+    // The picture crosses one way only, for now: nothing here reads a `PHOTO`
+    // back into `media`, so a photo the *user* chooses in Evolution does not
+    // reach the server yet. That is safe rather than lossy — the save patches
+    // the properties it names, and `media` is not one of them, so the server's
+    // picture is neither deleted nor overwritten — but it is a gap, and this
+    // test is what will go red when the save path closes it.
+    let card = vcard_to_card(&card_to_vcard(&fixture_card())).expect("parse");
+    assert_eq!(card.media, None);
+
+    // The forms EDS itself writes parse without error, which is what makes the
+    // gap safe: an `ENCODING=b` line is read as a property whose value this
+    // mapping has no text for, not as a malformed card.
+    for line in [
+        "PHOTO;TYPE=JPEG;ENCODING=b:aGVsbG8tcGhvdG8=",
+        "PHOTO;ENCODING=BASE64;TYPE=PNG:aGVsbG8tcGhvdG8=",
+        "PHOTO;VALUE=uri:https://vera.example/me.png",
+    ] {
+        let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
+        let card = vcard_to_card(&vcard).unwrap_or_else(|e| panic!("{line}: {e}"));
+        assert_eq!(card.name.expect("name").full.as_deref(), Some("Vera"));
+        assert_eq!(card.media, None);
+    }
 }
 
 fn tagged(tags: &[&str]) -> ContactCard {

@@ -89,6 +89,20 @@
       "uri": "https://vera.example/write-to-me"
     }
   },
+  "media": {
+    "m1": {
+      "@type": "Media",
+      "kind": "photo",
+      "uri": "data:image/jpeg;base64,aGVsbG8tcGhvdG8=",
+      "mediaType": "image/jpeg",
+      "pref": 1
+    },
+    "m2": {
+      "@type": "Media",
+      "kind": "logo",
+      "uri": "https://vera.example/logo.png"
+    }
+  },
   "onlineServices": {
     "s1": {
       "@type": "OnlineService",

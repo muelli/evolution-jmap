@@ -19339,3 +19339,113 @@ slots at all is unknown; no test drives a `uri`-only entry through real EDS; a
 contact's photo (RFC 9553's `media`) is mapped nowhere, so Evolution shows none;
 and the `jmap-mail` `transport.rs` hang is still an open design question with a
 lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-ninety-first session)
+
+**A contact's photo now reaches Evolution.** RFC 9553 §2.6.4's `media` was
+mapped nowhere, so a card whose picture the server holds showed the user a grey
+placeholder — the oldest remaining hole in the address-book property set, and
+the only one where the missing thing is what a user looks at first.
+
+**What EDS actually reads, measured before anything was written.** A throwaway
+probe against libebook-contacts 3.52 fed eleven `PHOTO` spellings through
+`e_contact_new_from_vcard()` and printed what `E_CONTACT_PHOTO` made of each,
+plus what `e_vcard_to_string()` wrote back. Four results shaped the mapping:
+
+- `PHOTO;VALUE=uri:<uri>` arrives as an `E_CONTACT_PHOTO_TYPE_URI` photo. The
+  same line **without** `VALUE=uri` reaches *no field at all* — the parameter is
+  load-bearing, not decoration.
+- `TYPE` is not the media type. EDS builds the mime type by prefixing `image/`,
+  so `TYPE=JPEG` arrives as `image/JPEG` and `TYPE=image/jpeg` as
+  `image/image/jpeg`, which names no format. The line therefore states the
+  *subtype* alone, and for bytes whose media type is not an `image/*` it states
+  no `TYPE` — EDS accepts that and reports no mime type, which is honest, where
+  `TYPE=pdf` would claim an image format that does not exist.
+- A folded `ENCODING=b` value unfolds and decodes; `ENCODING=BASE64` works too.
+- An `X-JMAP-KEY` on a `PHOTO` line survives a card EDS merely re-renders, but a
+  `set()` **drops it**: EDS rebuilds the line out of the photo it holds, exactly
+  as it does for a date line. Written down now because it is the constraint the
+  save path will hit — a photo entry cannot be patched by its key.
+
+**The mapping.** `media` entries of kind `photo` cross; `sound`, `logo`, a vendor
+kind and an entry naming no kind get no line, which is `titles`' filter again — a
+logo on a `PHOTO` line would show the user the wrong picture. A picture the card
+*carries* arrives as a `data:` URI and crosses inline under `ENCODING=b`, because
+that is the only form EDS reads a media type off. A picture the card only *points
+at* crosses as a `VALUE=uri` reference. The payload is decoded and re-encoded
+rather than copied out of the URI, so the line carries the canonical spelling of
+what the URI meant: a hand-written `data:` URI may omit its padding, and it is
+glib's base64 reader that decodes the line at the other end, not the one that
+wrote it. A `data:` URI stating its bytes as percent-encoded octets instead of
+base64 gets no line — `ENCODING=b` is the only encoding the line carries, and a
+value EDS would decode into a broken image is worse than no picture.
+
+**Verified through real EDS, not only against fixtures.** The emitter's own
+output — a 300-byte payload, so the line folds — was written to a file and read
+back with `e_contact_new_from_vcard()`: `INLINED len=300 mime=image/jpeg`, and
+the 300 bytes compare equal to the source. The `VALUE=uri` form comes back as the
+URI that went in. That closes the gap the unit tests cannot: they assert the text
+of a line, and only EDS can say the line means what we think.
+
+**Mutation-checked.** Writing the whole `mediaType` into `TYPE` instead of its
+subtype fails three tests; dropping `VALUE=uri` from the reference form fails the
+one test that exists for it.
+
+**One direction only, deliberately, and it is a gap rather than a decision.**
+Nothing reads a `PHOTO` line back into `media`, so a photo the *user* chooses in
+Evolution does not reach the server yet. That is safe rather than lossy for the
+reason every unmapped property is safe — `jmap-book-sync`'s `diff` patches the
+properties it names, and `media` is not one of them, so the server's picture is
+neither deleted nor overwritten — and
+`a_photo_line_is_stated_but_never_read_back` pins it down, including that the
+three forms EDS itself writes parse without error rather than as a malformed
+card. That test is what will go red when the save path closes the gap. The
+already-measured key-dropping is what it will have to work around.
+
+`states_media` is exported now, beside the other `states_*` predicates, and is
+the emitter's own filter rather than a copy of it: `card_to_vcard` and the
+predicate both go through `photo()`, so an entry cannot be called visible and
+then left off the vCard.
+
+Tests: 955 in the default set, up from 946 — nine new mapping tests, plus
+`media` assertions on the existing `jmap-proto` fixture round-trip.
+
+Verified locally: `cargo test --locked` 955; full `ninja` then `ctest` 14/14,
+including all four functional legs; `cargo fmt --all --check` and `cargo clippy
+--all-targets --locked -- -D warnings` clean. `cargo clippy --workspace` reports
+pre-existing `manual_c_str_literals` lints in `example-module`, which is outside
+the set `ci/checks.sh` lints and untouched here. `ci/checks.sh` still stops at
+its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so the licence
+check was done by hand: no file was added, every source touched already carries
+an SPDX header, and `Cargo.lock`'s only change is a `base64` edge on
+`evolution-jmap-vcard` (a crate the workspace already depends on twice over, so
+no package and no version moved and `cargo deny`'s last answer still holds).
+
+**What is still *not* verified.** As always, the EDS behaviour is measured for
+3.52 on this VM and only there — M10's matrix is what would watch it. Two things
+beyond that: whether Evolution *renders* a `VALUE=uri` photo it has to fetch over
+the network is unmeasured (EDS hands the URI on; who dereferences it, and whether
+it does so at all for an `https` URI, was not tested), and a card holding several
+photos gets a line each, of which measurement says Evolution shows only the
+first — deliberate, for consistency with `URL` and `NICKNAME`, but it means a
+card with several megabyte-sized pictures carries them all through EDS's cache
+and over D-Bus. If that ever bites, the fix is to state the preferred one alone.
+
+No milestone tag. Removed from the blocker list: a contact's photo being mapped
+nowhere. Added: a photo the user chooses in Evolution does not reach the server,
+and a `VALUE=uri` photo's rendering is unmeasured. Unchanged blockers: the
+calcard directive's two emitters are still ours; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty;
+`jmap-ical` emits no `VTIMEZONE` of its own; `links` and `CONFERENCE` on the
+calendar side rest on untested assumptions; the multi-`NOTE`/`ORG`/`TITLE`/
+`NICKNAME`/`URL` "Evolution shows only the first" bet is still unverified in real
+Evolution; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; no test drives a `uri`-only entry through real EDS; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order hypothesis
+attached.

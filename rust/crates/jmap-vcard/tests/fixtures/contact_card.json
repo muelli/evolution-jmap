@@ -66,6 +66,11 @@
     "l1": {"@type": "Link", "uri": "https://vera.example/"},
     "l2": {"@type": "Link", "kind": "contact", "uri": "https://vera.example/write-to-me"}
   },
+  "media": {
+    "m1": {"@type": "Media", "kind": "photo", "mediaType": "image/jpeg",
+           "uri": "data:image/jpeg;base64,aGVsbG8tcGhvdG8="},
+    "m2": {"@type": "Media", "kind": "logo", "uri": "https://vera.example/logo.png"}
+  },
   "onlineServices": {
     "s1": {"@type": "OnlineService", "service": "Jabber", "user": "vera@jabber.example"},
     "s2": {"@type": "OnlineService", "service": "Mastodon", "uri": "https://social.example/@vera"}

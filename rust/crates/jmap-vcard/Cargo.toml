@@ -14,6 +14,9 @@ publish = false
 name = "jmap_vcard"
 
 [dependencies]
+# A photo crosses as base64 on the wire in both formats — a `data:` URI's
+# payload on the JSContact side, an `ENCODING=b` value on the vCard side.
+base64 = { workspace = true }
 calcard = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 serde_json = { workspace = true }
