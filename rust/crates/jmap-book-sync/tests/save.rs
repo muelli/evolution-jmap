@@ -1406,17 +1406,16 @@ fn clearing_the_categories_leaves_the_contact_filed_under_nothing() {
 }
 
 #[test]
-fn a_tag_the_categories_line_cannot_carry_freezes_the_whole_set() {
+fn a_tag_the_categories_line_cannot_carry_survives_the_set_being_rewritten() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
     // EDS trims the ends of a category, so this tag would come back renamed and
     // the next save would rename it on the server. It gets no line, and the
     // tags that *can* be stated still do — the user sees most of the truth
-    // rather than none of it. But because the set is replaced whole rather than
-    // patched entry by entry, a save naming `keywords` would delete the tag that
-    // was left off, so the property is left alone even though the user did edit
-    // the field: the tag they added is lost, which is the trade that keeps the
-    // tag they never saw.
+    // rather than none of it. The set is replaced whole rather than patched
+    // entry by entry, so the tag the vCard never showed has to be put back on
+    // the set the save writes: it was not shown, so its absence from the edited
+    // card is not the user asking for it to go.
     fixture.patch(&id, json!({"keywords": {" quiet": true, "hiking": true}}));
     let sync = fixture.sync();
 
@@ -1429,10 +1428,110 @@ fn a_tag_the_categories_line_cannot_carry_freezes_the_whole_set() {
         fixture.card(&id).keywords.expect("keywords"),
         [
             (" quiet".to_owned(), json!(true)),
+            ("climbing".to_owned(), json!(true)),
             ("hiking".to_owned(), json!(true)),
         ]
         .into(),
-        "a set holding a tag the vCard could not state was rewritten"
+        "the tag the user typed was dropped, or the one they never saw was"
+    );
+}
+
+#[test]
+fn clearing_the_categories_leaves_the_tag_nobody_saw_behind() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Emptying the field deletes the tags it showed and nothing else. A `null`
+    // here would delete the tag that had no line to be shown on, which is the
+    // one thing the user cannot have meant by clearing a field it was not in.
+    fixture.patch(&id, json!({"keywords": {" quiet": true, "hiking": true}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("CATEGORIES:hiking\r\n", "");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).keywords.expect("keywords"),
+        [(" quiet".to_owned(), json!(true))].into()
+    );
+}
+
+#[test]
+fn a_tag_the_server_set_to_something_else_is_carried_back_as_the_server_had_it() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §1.4.3 has every value of a Set be `true`, so a `false` is the
+    // server contradicting itself and the line cannot state it either way. It
+    // is still the server's own word: carried back untouched rather than
+    // corrected, because correcting it would be this mapping inventing a change
+    // nobody made.
+    fixture.patch(&id, json!({"keywords": {"hiking": false, "loud": true}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("\r\nCATEGORIES:loud\r\n"), "{vcard}");
+    let edited = vcard.replace("CATEGORIES:loud", "CATEGORIES:loud,climbing");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).keywords.expect("keywords"),
+        [
+            ("climbing".to_owned(), json!(true)),
+            ("hiking".to_owned(), json!(false)),
+            ("loud".to_owned(), json!(true)),
+        ]
+        .into()
+    );
+}
+
+#[test]
+fn typing_a_tag_the_server_had_set_to_something_else_sets_it() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The one place the two sides name the same tag. The user's word wins: they
+    // typed it into a field that says nothing but "filed under", so they mean it
+    // set, whatever the server had against that name before.
+    fixture.patch(&id, json!({"keywords": {"hiking": false}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nCATEGORIES"), "{vcard}");
+    let edited = vcard.replace("FN:", "CATEGORIES:hiking\r\nFN:");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).keywords.expect("keywords"),
+        [("hiking".to_owned(), json!(true))].into()
+    );
+}
+
+#[test]
+fn a_set_holding_a_tag_with_no_line_is_not_an_edit_waiting_to_happen() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The tag put back is the tag that was already there, so the set the save
+    // would write is the set the server holds — and a patch naming it would
+    // undo a concurrent edit on another client for no reason at all. The
+    // property must be left unnamed, not merely written back unchanged.
+    fixture.patch(&id, json!({"keywords": {" quiet": true, "hiking": true}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+    let (state_after, _) = sync.list_existing().unwrap();
+
+    assert_eq!(
+        fixture.card(&id).keywords.expect("keywords"),
+        [
+            (" quiet".to_owned(), json!(true)),
+            ("hiking".to_owned(), json!(true)),
+        ]
+        .into()
+    );
+    assert_eq!(
+        state_after, state_before,
+        "a save with nothing to say about tags rewrote them anyway"
     );
 }
 

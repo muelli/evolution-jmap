@@ -63,11 +63,11 @@
 //!   one place here where a save removes a member the vCard never showed.
 //! - `keywords` is the one mapped property that is a *set*, and the one that
 //!   goes back **replaced whole**: a tag is a bare string with no key and no
-//!   members, so there is nothing to reach into. That makes a tag the
-//!   `CATEGORIES` line could not carry a tag a save would *delete* rather than
-//!   merely one the user cannot see, so [`maps_keywords`] freezes the whole
-//!   property for such a card — the one place here where the user's edit is
-//!   dropped rather than merged. See [`diff_keywords`].
+//!   members, so there is nothing to reach into. A tag the `CATEGORIES` line
+//!   could not carry is therefore one a save would *delete* rather than merely
+//!   one the user cannot see — so the save carries it onto the set it writes,
+//!   which is how a set keeps the rule the keyed maps keep by leaving an entry
+//!   unnamed. See [`diff_keywords`].
 //! - *Every* keyed map is one of which the vCard states only **some**
 //!   entries. A title of a `kind` outside `title` and `role` has no vCard
 //!   property; an address with neither an `ADR` field nor a written-out form
@@ -95,11 +95,11 @@ use jmap_proto::contacts::{
     Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{
-    address_label, anniversary_date, maps_address_component, maps_context, maps_keywords,
-    maps_name_component, maps_phone_feature, online_service_handle, online_service_uri,
-    restore_address_components, same_service, states_a_point_in_time, states_address,
-    states_anniversary, states_email, states_link, states_nickname, states_note,
-    states_online_service, states_organization, states_phone, states_title, title_kind,
+    address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
+    maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
+    same_service, states_a_point_in_time, states_address, states_anniversary, states_email,
+    states_keyword, states_link, states_nickname, states_note, states_online_service,
+    states_organization, states_phone, states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -153,37 +153,51 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
 /// would be a different thing to store, and is also what EDS does *not* leave
 /// behind: it removes the attribute outright.
 ///
-/// [`maps_keywords`] is asked of the server's own set, for the reason the other
+/// [`states_keyword`] is asked of the server's own set, for the reason the other
 /// properties ask their `states_*` predicate: a tag the `CATEGORIES` line could
-/// not carry was never shown, and replacing the set whole would delete it. The
-/// cost is that the user's edit to the field is dropped for such a card — the
-/// only property here where an edit can be lost rather than merged — which is
-/// the trade a set with no keys forces. The *edited* side needs no such check:
-/// every tag on it was read off a content line, and any string is a keyword RFC
-/// 9553 admits.
+/// not carry was never shown, so its absence from the edited card is not the
+/// user asking for it to go. Where a keyed map answers that by leaving the entry
+/// unnamed in the patch, a set has no key to leave alone — so the tag is carried
+/// onto the set the save writes instead. That is the same rule reached by the
+/// only means a set allows, and it is why an unstatable tag costs the sight of
+/// it and nothing more; the edit around it still lands.
+///
+/// A tag is carried back exactly as the server stated it, value included — even
+/// the value RFC 9553 §1.4.3 does not admit, because the server is the one who
+/// said it and rewriting it here would be this mapping inventing a change. The
+/// user's own set wins where the two name the same tag: a tag they typed is a
+/// tag they mean to be set, whatever the server had against that name.
+///
+/// The *edited* side needs no such check: every tag on it was read off a content
+/// line, and any string is a keyword RFC 9553 admits.
 fn diff_keywords(patch: &mut Map<String, Value>, current: &ContactCard, edited: &ContactCard) {
-    let empty = BTreeMap::new();
+    // An empty set server-side is compared as no tags, because that is what it
+    // was drawn as: without this a card holding one would be patched to a null
+    // by every save, an edit nobody made.
     let tags = |card: &ContactCard| {
         card.keywords
             .clone()
             .filter(|keywords| !keywords.is_empty())
+            .unwrap_or_default()
     };
-    if !maps_keywords(current.keywords.as_ref().unwrap_or(&empty)) {
-        return;
-    }
-    // An empty set server-side is compared as no tags, because that is what it
-    // was drawn as: without this a card holding one would be patched to a null
-    // by every save, an edit nobody made.
-    if tags(current) == tags(edited) {
+    let current = tags(current);
+    let mut wanted: BTreeMap<String, Value> = current
+        .iter()
+        .filter(|(tag, set)| !states_keyword(tag, set))
+        .map(|(tag, set)| (tag.clone(), set.clone()))
+        .collect();
+    wanted.extend(tags(edited));
+    if wanted == current {
         return;
     }
     patch.insert(
         "keywords".to_owned(),
-        match tags(edited) {
+        if wanted.is_empty() {
+            Value::Null
+        } else {
             // Serialising a set this crate's own reader built cannot fail: it
-            // holds strings and `true`.
-            Some(tags) => serde_json::to_value(tags).unwrap_or(Value::Null),
-            None => Value::Null,
+            // holds strings and values the server itself sent.
+            serde_json::to_value(wanted).unwrap_or(Value::Null)
         },
     );
 }

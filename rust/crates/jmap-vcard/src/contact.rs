@@ -116,9 +116,9 @@
 //! Evolution's Categories field. There is nothing inside an entry to preserve
 //! and no key to patch by, so unlike every property above it the set goes back
 //! **replaced whole**, and a tag the line cannot carry is therefore a tag the
-//! next save would *delete* rather than merely one the user cannot see. What
-//! those are, and why the whole property freezes for a card holding one, is
-//! [`maps_keywords`]. One line rather than one per tag — the opposite of the
+//! next save would *delete* rather than merely one the user cannot see — unless
+//! the save puts it back, which is what it does. What those tags are is
+//! [`states_keyword`]. One line rather than one per tag — the opposite of the
 //! `NICKNAME` decision — because a second `CATEGORIES` line reaches no field the
 //! user can see, measured against libebook-contacts 3.52; the reader takes them
 //! all in anyway, so tags on a line EDS ignores are not lost by a save.
@@ -565,16 +565,17 @@ fn service_slot(service: &OnlineService) -> &'static str {
     }
 }
 
-/// Whether the tags a card is filed under survive the trip through vCard well
-/// enough for a save to name `keywords`.
+/// Whether one tag of `keywords` goes on the `CATEGORIES` line — the
+/// `states_*` predicate of the one mapped property that is a *set* rather than
+/// a keyed map of objects.
 ///
-/// This is the first mapped property that is a *set* rather than a keyed map of
-/// objects, and it changes what the question means. A `CATEGORIES` line holds
-/// the whole set and a JSContact keyword is a bare string, so there is nothing
-/// inside an entry to preserve and no key to patch by: the line states what was
-/// shown, and the save writes back the difference from it as a whole new set.
-/// Which is exactly what makes an *undrawn* tag a deleted tag — so a set holding
-/// one is a set no save may name:
+/// Being a set changes what the save does with the answer, not what the
+/// question means. A `CATEGORIES` line holds the whole set and a JSContact
+/// keyword is a bare string, so there is nothing inside an entry to preserve
+/// and no key to patch by: the line states what was shown, and the save writes
+/// back a whole new set. A tag this predicate refuses was therefore not merely
+/// unseen but *absent from what the user edited*, and the save has to put it
+/// back by hand rather than read its absence as a deletion. What is refused:
 ///
 /// - **A value that is not `true`.** RFC 9553 §1.4.3 has every value of a Set be
 ///   `true`; drawing anything else would say the tag is set where the server
@@ -590,16 +591,9 @@ fn service_slot(service: &OnlineService) -> &'static str {
 ///   and the next save would rename the tag on the server. See
 ///   [`edged_with_whitespace`].
 ///
-/// A card with no tags at all passes: there is nothing to lose, and a
-/// `CATEGORIES` the user has just typed is a set to write.
-pub fn maps_keywords(keywords: &BTreeMap<String, Value>) -> bool {
-    keywords.iter().all(|(tag, set)| drawn_tag(tag, set))
-}
-
-/// Whether one entry of `keywords` goes on the `CATEGORIES` line. The single
-/// point [`maps_keywords`] and [`drawn_tags`] agree through, so a tag cannot be
-/// called covered and then left off.
-fn drawn_tag(tag: &str, set: &Value) -> bool {
+/// The single point the save and [`drawn_tags`] agree through, so a tag cannot
+/// be called shown and then left off the line.
+pub fn states_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true)
         && !tag.is_empty()
         && !tag.contains('\r')
@@ -610,9 +604,9 @@ fn drawn_tag(tag: &str, set: &Value) -> bool {
 ///
 /// The set is ASCII whitespace, which is one character wider than what EDS was
 /// measured to strip — it keeps a vertical tab — because the two errors are not
-/// the same size. Refusing to draw a tag costs the sight of it and freezes the
-/// property for that card; drawing one that comes back trimmed costs the tag,
-/// on the server, without anybody having asked.
+/// the same size. Refusing to draw a tag costs the sight of it; drawing one that
+/// comes back trimmed costs the tag, on the server, without anybody having
+/// asked.
 fn edged_with_whitespace(tag: &str) -> bool {
     let whitespace = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
     tag.starts_with(whitespace) || tag.ends_with(whitespace)
@@ -625,7 +619,7 @@ fn drawn_tags(card: &ContactCard) -> Vec<&str> {
     card.keywords
         .iter()
         .flatten()
-        .filter(|(tag, set)| drawn_tag(tag, set))
+        .filter(|(tag, set)| states_keyword(tag, set))
         .map(|(tag, _)| tag.as_str())
         .collect()
 }
