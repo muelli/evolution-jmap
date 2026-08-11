@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
-//! address book backend needs: UID, FN, N, EMAIL, TEL.
+//! address book backend needs: UID, FN, N, EMAIL, TEL, ORG.
 
-use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Name, NameComponent};
+use jmap_proto::contacts::{
+    ContactCard, ContactEmail, ContactPhone, Name, NameComponent, OrgUnit, Organization,
+};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::json;
 
@@ -265,13 +267,112 @@ fn an_email_without_an_address_is_skipped_in_both_directions() {
 }
 
 #[test]
-fn unmodeled_jscontact_properties_are_dropped_not_mangled() {
-    // `organizations` has no place in the minimal vCard set. Dropping it is
-    // safe only because saving goes through a PatchObject that touches the
-    // mapped properties alone — this test pins that expectation down.
+fn maps_organizations_onto_the_structured_org_property() {
     let vcard = card_to_vcard(&fixture_card());
-    assert!(!vcard.contains("Example GmbH"), "{vcard}");
-    assert!(!vcard.contains("organizations"), "{vcard}");
+    assert_eq!(line(&vcard, "ORG"), "ORG;X-JMAP-KEY=o1:Example GmbH");
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let organizations = card.organizations.expect("organizations");
+    assert_eq!(organizations["o1"].name.as_deref(), Some("Example GmbH"));
+    assert_eq!(organizations["o1"].units, None);
+}
+
+#[test]
+fn maps_organization_units_onto_the_components_after_the_name() {
+    // RFC 2426 §3.5.5: the ORG value is the organisation's name followed by
+    // its units, outermost first — which is the order RFC 9553 §2.2.3 gives
+    // `units` too.
+    let card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Example GmbH".to_owned()),
+                    units: Some(vec![OrgUnit::new("Research"), OrgUnit::new("Optics")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Example GmbH;Research;Optics"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
+}
+
+#[test]
+fn an_organization_with_units_but_no_name_keeps_the_field_it_leaves_empty() {
+    // The name is the first component, so a unit cannot move up into its
+    // place without changing which organisation is meant.
+    let card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    units: Some(vec![OrgUnit::new("Research")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(line(&vcard, "ORG"), "ORG;X-JMAP-KEY=o1:;Research");
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
+}
+
+#[test]
+fn an_organization_with_nothing_in_it_is_skipped_in_both_directions() {
+    let card = ContactCard {
+        organizations: Some([("o1".to_owned(), Organization::default())].into()),
+        ..ContactCard::default()
+    };
+    assert!(!card_to_vcard(&card).contains("\r\nORG"));
+
+    let back =
+        vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nORG:;;\r\nEND:VCARD\r\n").expect("parse");
+    assert_eq!(back.organizations, None);
+}
+
+#[test]
+fn invents_a_key_for_an_organization_that_has_none() {
+    // A vCard straight from Evolution carries no X-JMAP-KEY, and Evolution
+    // writes the department in the second component.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG:Example GmbH;Research\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let organizations = card.organizations.expect("organizations");
+    assert_eq!(organizations.keys().collect::<Vec<_>>(), vec!["o1"]);
+    assert_eq!(organizations["o1"].name.as_deref(), Some("Example GmbH"));
+    assert_eq!(
+        organizations["o1"].units,
+        Some(vec![OrgUnit::new("Research")])
+    );
+}
+
+#[test]
+fn unmodeled_jscontact_properties_are_dropped_not_mangled() {
+    // `notes` has no place in the minimal vCard set. Dropping it is safe
+    // only because saving goes through a PatchObject that touches the mapped
+    // properties alone — this test pins that expectation down.
+    let vcard = card_to_vcard(&fixture_card());
+    assert!(!vcard.contains("FOSDEM"), "{vcard}");
+    assert!(!vcard.contains("notes"), "{vcard}");
     assert!(vcard_to_card(&vcard).expect("parse").extra.is_empty());
 }
 

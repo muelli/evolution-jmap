@@ -27,5 +27,8 @@
   },
   "organizations": {
     "o1": {"name": "Example GmbH"}
+  },
+  "notes": {
+    "n1": {"note": "met at FOSDEM"}
   }
 }

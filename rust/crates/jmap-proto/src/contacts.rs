@@ -55,6 +55,11 @@ pub struct ContactCard {
     pub emails: Option<BTreeMap<String, ContactEmail>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phones: Option<BTreeMap<String, ContactPhone>>,
+    /// The organisations the contact belongs to (RFC 9553 §2.2.3), keyed by
+    /// an id of whoever wrote them — the employer and the department within
+    /// it, which vCard states in one `ORG` line each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organizations: Option<BTreeMap<String, Organization>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -132,6 +137,54 @@ pub struct ContactPhone {
     pub contexts: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact Organization (RFC 9553 §2.2.3).
+///
+/// `sortAs` and `contexts` are not modeled: vCard 3.0's `ORG` (RFC 2426
+/// §3.5.5) has no component and no parameter for either, so they ride in
+/// [`Self::extra`] — where the save path can see them and leave them alone,
+/// which is the whole reason this is a struct and not a `Value`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Organization {
+    /// The organisation's own name, which the `ORG` value states first.
+    ///
+    /// Optional, as RFC 9553 §2.2.3 has it: a card may name only the units,
+    /// and answering `Some("")` for that would put an empty employer on the
+    /// server where it never had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The units within it, outermost first — the departments the `ORG` value
+    /// lists after the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<Vec<OrgUnit>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact OrgUnit (RFC 9553 §2.2.3): one unit of an [`Organization`].
+///
+/// A unit holds a `sortAs` besides its name, which is why the vCard mapping
+/// cannot rebuild the list from the `ORG` components alone — see the save
+/// path, which carries a unit's unmapped members across a rename of its
+/// siblings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgUnit {
+    #[serde(default)]
+    pub name: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl OrgUnit {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            extra: BTreeMap::new(),
+        }
+    }
 }
 
 /// `ContactCard/query` filter conditions (RFC 9610 §3.3). Flat conditions

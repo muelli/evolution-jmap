@@ -4,10 +4,10 @@
 //! Turning an edited vCard back into a `ContactCard/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
-//! lossy view of a JSContact card. The mapping keeps UID, FN, N, EMAIL and
-//! TEL and drops everything else, so a save that sent the parsed card back
-//! whole would silently delete the properties it could not represent —
-//! organisations, addresses, notes — none of which the user ever saw, let
+//! lossy view of a JSContact card. The mapping keeps UID, FN, N, EMAIL, TEL
+//! and ORG and drops everything else, so a save that sent the parsed card
+//! back whole would silently delete the properties it could not represent —
+//! addresses, notes, nicknames — none of which the user ever saw, let
 //! alone asked to remove.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
@@ -25,6 +25,13 @@
 //!   introduce or remove a preference, never renumber one.
 //! - `name.components` can hold kinds the `N` value has no field for, which
 //!   are carried across the replacement.
+//! - `organizations` entries hold a `sortAs` and `contexts` the `ORG` line
+//!   has nowhere to put, so the entry is patched member by member
+//!   (`organizations/work/name`) rather than replaced. Its `units` are a
+//!   *list*, which has no keys to patch by, so they are written whole — and
+//!   a unit that kept its name keeps the members it was carrying, matched by
+//!   that name rather than by position, so that dissolving one department
+//!   does not renumber the sorting hints of the others.
 //!
 //! RFC 8620 §5.3 requires every path segment before the last to exist on the
 //! object already, which is why a property that is absent server-side is
@@ -32,7 +39,7 @@
 
 use std::collections::BTreeMap;
 
-use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Name};
+use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Name, OrgUnit, Organization};
 use jmap_vcard::{maps_context, maps_name_component, maps_phone_feature};
 use serde_json::{Map, Value};
 
@@ -43,6 +50,11 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
     diff_name(&mut patch, current.name.as_ref(), edited.name.as_ref());
     diff_emails(&mut patch, current.emails.as_ref(), edited.emails.as_ref());
     diff_phones(&mut patch, current.phones.as_ref(), edited.phones.as_ref());
+    diff_organizations(
+        &mut patch,
+        current.organizations.as_ref(),
+        edited.organizations.as_ref(),
+    );
     patch
 }
 
@@ -136,7 +148,56 @@ fn diff_phones(
     });
 }
 
-/// Shared shape of the two keyed maps: added entries are written whole,
+fn diff_organizations(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Organization>>,
+    edited: Option<&BTreeMap<String, Organization>>,
+) {
+    diff_entries(
+        patch,
+        "organizations",
+        current,
+        edited,
+        |patch, path, old, new| {
+            if old.name != new.name {
+                patch.insert(format!("{path}/name"), value_or_null(new.name.as_ref()));
+            }
+            let units = merge_units(old.units.as_deref(), new.units.as_deref());
+            if old.units.as_deref() != units.as_deref() {
+                patch.insert(
+                    format!("{path}/units"),
+                    units.map_or(Value::Null, |units| json_of(&units)),
+                );
+            }
+        },
+    );
+}
+
+/// The unit list a save writes: the names the `ORG` line now states, each
+/// keeping whatever the server's unit of that name was carrying besides it.
+///
+/// A list has no keys to patch by, so this is the same merging `diff_flags`
+/// does for a boolean map, done by name: a unit's `sortAs` is a hint about
+/// how to file *that* unit, so it follows the name wherever it moved to and
+/// is left behind when the name is gone. Renaming a unit therefore drops its
+/// hint — which is right, because a hint for the old name is not one for the
+/// new.
+fn merge_units(current: Option<&[OrgUnit]>, edited: Option<&[OrgUnit]>) -> Option<Vec<OrgUnit>> {
+    let edited = edited?;
+    let mut spare: Vec<&OrgUnit> = current.unwrap_or_default().iter().collect();
+    let merged: Vec<OrgUnit> = edited
+        .iter()
+        .map(
+            |unit| match spare.iter().position(|old| old.name == unit.name) {
+                Some(index) => spare.remove(index).clone(),
+                None => unit.clone(),
+            },
+        )
+        .collect();
+    (!merged.is_empty()).then_some(merged)
+}
+
+/// Shared shape of the keyed maps: added entries are written whole,
 /// dropped entries are nulled, and surviving entries are handed to
 /// `diff_entry` to be compared field by field.
 fn diff_entries<T: serde::Serialize>(

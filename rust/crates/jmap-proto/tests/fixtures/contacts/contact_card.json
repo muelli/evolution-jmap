@@ -26,6 +26,16 @@
     }
   },
   "organizations": {
-    "o1": {"name": "Example GmbH"}
+    "o1": {
+      "@type": "Organization",
+      "name": "Example GmbH",
+      "sortAs": "Example",
+      "units": [
+        {"@type": "OrgUnit", "name": "Research", "sortAs": "Res"}
+      ]
+    }
+  },
+  "notes": {
+    "n1": {"note": "met at FOSDEM"}
   }
 }
