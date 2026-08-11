@@ -23,7 +23,14 @@
  * runs this program and reads its output.
  *
  *   usage: functional-cal-edit-client <source-uid> <event-uid> <new-location>
- *                                    <new-conference-uri> <new-attach-uri>
+ *                                    <new-conference-uri> <old-attach-uri>
+ *                                    <new-attach-uri>
+ *
+ * The attachment to re-address is named by the address it already carries
+ * rather than by its position among the ATTACH lines or by the key the mapping
+ * put on it: an event holds any number of them (RFC 5545 §3.8.1.1), that is how
+ * a user picks the one they meant, and it keeps this program with no notion of
+ * what the mapping writes on a line.
  */
 
 #define LIBICAL_GLIB_UNSTABLE_API 1
@@ -213,7 +220,9 @@ report_places (const gchar *prefix,
 	}
 }
 
-/* Report what EDS holds for the document the event points at.
+/* Report what EDS holds for the documents the event points at — every ATTACH
+ * line, one group of observations per line, numbered from one in the order the
+ * component carries them.
  *
  * A separate question from the two places above, and the reason is the value
  * type. A LOCATION and a CONFERENCE are text and a URI, which libical keeps as
@@ -223,7 +232,15 @@ report_places (const gchar *prefix,
  * survives ECalMetaBackend's cache afterwards, is not settled by the other two
  * properties surviving it — which is what this leg is for.
  *
- * The address is therefore read through i_cal_property_get_attach rather than
+ * Every line rather than the first, because an event may point at several
+ * documents and that is where the key stops being decoration: with one resource
+ * a save that lost the key finds the server's only entry anyway, and with two it
+ * re-addresses whichever the mapping guessed. The number in each observation's
+ * name is this program's own counting and means nothing beyond keeping the
+ * groups apart — which line belongs to which of the server's entries is what the
+ * key beside it says, and the harness looks them up by that.
+ *
+ * The address is read through i_cal_property_get_attach rather than
  * i_cal_property_get_value_as_string: it is the URL libical parsed out, not the
  * text of the line, so a value the round trip re-spelled shows up as a
  * difference here instead of being hidden by the string form.
@@ -238,39 +255,79 @@ report_resource (const gchar *prefix,
 		 ICalComponent *event)
 {
 	ICalProperty *attach;
-	ICalParameter *parameter;
-	gchar *key;
+	guint index = 0;
+
+	g_print ("%s-attaches=%u\n", prefix, property_count (event, I_CAL_ATTACH_PROPERTY));
 
 	attach = i_cal_component_get_first_property (event, I_CAL_ATTACH_PROPERTY);
+	while (attach) {
+		ICalProperty *next;
+		ICalAttach *value;
+		ICalParameter *parameter;
+		const gchar *url;
+		gchar *key;
 
-	if (attach) {
-		ICalAttach *value = i_cal_property_get_attach (attach);
-		const gchar *url = value ? i_cal_attach_get_url (value) : NULL;
+		index++;
 
-		g_print ("%s-attach=%s\n", prefix, url ? url : "");
+		value = i_cal_property_get_attach (attach);
+		url = value ? i_cal_attach_get_url (value) : NULL;
+		g_print ("%s-attach-%u=%s\n", prefix, index, url ? url : "");
 		g_clear_object (&value);
-	} else {
-		g_print ("%s-attach=\n", prefix);
+
+		key = x_parameter (attach, JMAP_KEY_PARAMETER);
+		g_print ("%s-attach-%u-key=%s\n", prefix, index, key);
+		g_free (key);
+
+		parameter = i_cal_property_get_first_parameter (
+			attach, I_CAL_FMTTYPE_PARAMETER);
+		g_print ("%s-attach-%u-fmttype=%s\n", prefix, index,
+			 parameter ? i_cal_parameter_get_fmttype (parameter) : "");
+		g_clear_object (&parameter);
+
+		parameter = i_cal_property_get_first_parameter (
+			attach, I_CAL_SIZE_PARAMETER);
+		g_print ("%s-attach-%u-size=%s\n", prefix, index,
+			 parameter ? i_cal_parameter_get_size (parameter) : "");
+		g_clear_object (&parameter);
+
+		next = i_cal_component_get_next_property (event, I_CAL_ATTACH_PROPERTY);
+		g_object_unref (attach);
+		attach = next;
+	}
+}
+
+/* The ATTACH line pointing at one address, or NULL for a component holding
+ * none.
+ *
+ * The address is compared as libical hands it over — the URL parsed out of the
+ * line, the same one report_resource prints — so this picks the line a consumer
+ * would recognise rather than the one a text match would. Nothing here looks at
+ * the key: which of the server's entries a line stands for is the *mapping's*
+ * business, and a program that picked its line by that could not catch the
+ * mapping pairing them up wrongly. */
+static ICalProperty *
+attach_pointing_at (ICalComponent *event,
+		    const gchar *url)
+{
+	ICalProperty *attach;
+
+	attach = i_cal_component_get_first_property (event, I_CAL_ATTACH_PROPERTY);
+	while (attach) {
+		ICalProperty *next;
+		ICalAttach *value = i_cal_property_get_attach (attach);
+		gboolean matches = value && g_strcmp0 (i_cal_attach_get_url (value), url) == 0;
+
+		g_clear_object (&value);
+
+		if (matches)
+			return attach;
+
+		next = i_cal_component_get_next_property (event, I_CAL_ATTACH_PROPERTY);
+		g_object_unref (attach);
+		attach = next;
 	}
 
-	key = x_parameter (attach, JMAP_KEY_PARAMETER);
-	g_print ("%s-attach-key=%s\n", prefix, key);
-	g_print ("%s-attaches=%u\n", prefix, property_count (event, I_CAL_ATTACH_PROPERTY));
-	g_free (key);
-
-	parameter = attach ? i_cal_property_get_first_parameter (
-		attach, I_CAL_FMTTYPE_PARAMETER) : NULL;
-	g_print ("%s-attach-fmttype=%s\n", prefix,
-		 parameter ? i_cal_parameter_get_fmttype (parameter) : "");
-	g_clear_object (&parameter);
-
-	parameter = attach ? i_cal_property_get_first_parameter (
-		attach, I_CAL_SIZE_PARAMETER) : NULL;
-	g_print ("%s-attach-size=%s\n", prefix,
-		 parameter ? i_cal_parameter_get_size (parameter) : "");
-	g_clear_object (&parameter);
-
-	g_clear_object (&attach);
+	return NULL;
 }
 
 /* Ask for one event until EDS has it, or give up. A miss arrives as
@@ -320,11 +377,13 @@ main (int argc,
 	const gchar *event_uid;
 	const gchar *new_location;
 	const gchar *new_conference_uri;
+	const gchar *old_attach_uri;
 	const gchar *new_attach_uri;
 
-	if (argc != 6) {
+	if (argc != 7) {
 		g_printerr ("usage: %s <source-uid> <event-uid> <new-location> "
-			    "<new-conference-uri> <new-attach-uri>\n", argv[0]);
+			    "<new-conference-uri> <old-attach-uri> "
+			    "<new-attach-uri>\n", argv[0]);
 		return 2;
 	}
 
@@ -332,7 +391,8 @@ main (int argc,
 	event_uid = argv[2];
 	new_location = argv[3];
 	new_conference_uri = argv[4];
-	new_attach_uri = argv[5];
+	old_attach_uri = argv[5];
+	new_attach_uri = argv[6];
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
@@ -411,22 +471,27 @@ main (int argc,
 	i_cal_property_set_value_from_string (conference, new_conference_uri, "URI");
 	g_object_unref (conference);
 
-	/* And the third: the address of the document the event points at. Like the
-	 * conference this is an edit another client makes rather than one
+	/* And the third: the address of one of the documents the event points at.
+	 * Like the conference this is an edit another client makes rather than one
 	 * Evolution 3.52 offers — its appointment editor attaches files from the
 	 * user's own disk, which is a file: URI the mapping deliberately never
-	 * reads — and like the conference it is the only edit that makes the key
+	 * reads — and like the conference it is the edit that makes the key
 	 * load-bearing, since RFC 5545 §3.8.1.1 admits any number of ATTACH lines.
+	 *
+	 * The line is the one already pointing at old_attach_uri, which is the
+	 * user picking the attachment they meant out of several; with two on the
+	 * event, a save that took "the attachment" to mean the first line moves a
+	 * document nobody asked to move.
 	 *
 	 * Set through the existing property, and through the icalattach API rather
 	 * than as a string, for the same two reasons the conference is: a fresh
 	 * property would carry no parameters by construction, and the value is the
 	 * one libical hands a consumer, so this is the edit a consumer can actually
 	 * make. */
-	attach = i_cal_component_get_first_property (event, I_CAL_ATTACH_PROPERTY);
+	attach = attach_pointing_at (event, old_attach_uri);
 	if (!attach) {
-		g_printerr ("edit-attach: the event EDS handed back has no ATTACH to "
-			    "re-address\n");
+		g_printerr ("edit-attach: the event EDS handed back has no ATTACH "
+			    "pointing at %s to re-address\n", old_attach_uri);
 		return 1;
 	}
 	attach_value = i_cal_attach_new_from_url (new_attach_uri);

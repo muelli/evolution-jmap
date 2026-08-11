@@ -18,6 +18,8 @@
 //! state, and asks what survives the round trip out to a component and back
 //! through a save. Only an event nobody here created can ask that.
 
+use std::collections::BTreeMap;
+
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, NDay};
@@ -301,11 +303,42 @@ const PLACED_CONFERENCE_DESCRIPTION: &str = "dial in from the lobby phone";
 /// and a `SIZE` — and still never written back, since they are the server's
 /// description of what it holds rather than a field the user was offered; they
 /// are asserted after the save for that reason, not as decoration.
+///
+/// This is the resource the user does **not** touch. It is drawn first — the
+/// entries go out in key order, and `srv-att` sorts before
+/// [`PLACED_EDITED_ATTACH_KEY`] — so it is also the line a save that meant "the
+/// attachment" rather than "that one" would reach.
 const PLACED_ATTACH_KEY: &str = "srv-att";
 const PLACED_ATTACH_HREF: &str = "https://files.example/design-review/agenda.pdf";
 const PLACED_ATTACH_TITLE: &str = "Agenda, with the numbers";
 const PLACED_ATTACH_MEDIA_TYPE: &str = "application/pdf";
 const PLACED_ATTACH_SIZE: u64 = 20480;
+
+/// And the second document, which is the case the key exists for.
+///
+/// One resource per event is the shape in which a lost `X-JMAP-KEY` merely
+/// *fails*: whatever the line carries, there is one entry in the server's map and
+/// the save either names it or names nothing. RFC 5545 §3.8.1.1 admits any number
+/// of `ATTACH` lines and RFC 8984 §4.2.7 a whole map of Links, so with two the
+/// same loss *corrupts* — a line whose key EDS dropped, or carried over from its
+/// neighbour, is a save that re-addresses a document the user never touched and
+/// loses the edit they made. Nothing below real EDS can ask that: every fixture in
+/// `jmap-ical` and `jmap-cal-sync` writes the parameter by hand, so the line is
+/// paired with its entry there by construction.
+///
+/// This is the one the user re-addresses, and deliberately the one drawn
+/// *second*: a save that took the first `ATTACH` for the resource being edited
+/// reaches [`PLACED_ATTACH_KEY`] instead, which the assertions on both ends then
+/// see as the wrong document moved and the right one left where it was.
+///
+/// A media type and a size of its own, both different from the first entry's, so
+/// that a parameter reported against the wrong line is a difference rather than a
+/// coincidence.
+const PLACED_EDITED_ATTACH_KEY: &str = "srv-att-2";
+const PLACED_EDITED_ATTACH_HREF: &str = "https://files.example/design-review/slides.odp";
+const PLACED_EDITED_ATTACH_TITLE: &str = "Slides, as presented";
+const PLACED_EDITED_ATTACH_MEDIA_TYPE: &str = "application/vnd.oasis.opendocument.presentation";
+const PLACED_EDITED_ATTACH_SIZE: u64 = 51200;
 
 /// The place the user retypes into the appointment editor's Location field. A
 /// different room, so a value half-written shows up as neither.
@@ -318,11 +351,16 @@ const REPLACED_LOCATION_NAME: &str = "Room 7";
 /// host as well as a different path, so a URI half-rewritten is neither.
 const REPLACED_CONFERENCE_URI: &str = "https://call.example/rescheduled";
 
-/// And the address of the document afterwards — the edit an attachment can take
-/// through a libecal consumer, since `href` is the one member of a Link this
+/// And the address of the second document afterwards — the edit an attachment can
+/// take through a libecal consumer, since `href` is the one member of a Link this
 /// mapping writes back. A different host as well as a different path, so a URI
 /// half-rewritten is neither.
-const REPLACED_ATTACH_HREF: &str = "https://docs.example/design-review/agenda-2.pdf";
+///
+/// The client is told which line to re-address by the address it already carries,
+/// not by its position or by the key: that is how a user picks the attachment
+/// they meant, and it keeps the program free of any notion of what the mapping
+/// writes on a line. See `tests/functional/cal-edit-client.c`.
+const REPLACED_ATTACH_HREF: &str = "https://docs.example/design-review/slides-2.odp";
 
 /// Put the event the second leg starts from into the mock's store, and hand back
 /// the id the server filed it under — which is also the `UID` EDS keys its cache
@@ -370,21 +408,82 @@ fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
         )]
         .into(),
     );
+    // Two resources rather than one, because that is the shape in which a key
+    // lost between the drawing and the save costs the user a document rather
+    // than an edit — see [`PLACED_EDITED_ATTACH_KEY`].
     event.links = Some(
-        [(
-            PLACED_ATTACH_KEY.to_owned(),
-            serde_json::json!({
-                "@type": "Link",
-                "href": PLACED_ATTACH_HREF,
-                "contentType": PLACED_ATTACH_MEDIA_TYPE,
-                "size": PLACED_ATTACH_SIZE,
-                "title": PLACED_ATTACH_TITLE,
-            }),
-        )]
+        [
+            (
+                PLACED_ATTACH_KEY.to_owned(),
+                serde_json::json!({
+                    "@type": "Link",
+                    "href": PLACED_ATTACH_HREF,
+                    "contentType": PLACED_ATTACH_MEDIA_TYPE,
+                    "size": PLACED_ATTACH_SIZE,
+                    "title": PLACED_ATTACH_TITLE,
+                }),
+            ),
+            (
+                PLACED_EDITED_ATTACH_KEY.to_owned(),
+                serde_json::json!({
+                    "@type": "Link",
+                    "href": PLACED_EDITED_ATTACH_HREF,
+                    "contentType": PLACED_EDITED_ATTACH_MEDIA_TYPE,
+                    "size": PLACED_EDITED_ATTACH_SIZE,
+                    "title": PLACED_EDITED_ATTACH_TITLE,
+                }),
+            ),
+        ]
         .into(),
     );
     account.calendar_events.seed_with_id(id.clone(), event);
     id
+}
+
+/// What the client reported of one `ATTACH` line: the address libical parsed out
+/// of it, and the two parameters it carries that libical has an enum for.
+///
+/// Compared whole rather than one observation at a time, because the question is
+/// what stands on *one* line — a media type reported against the wrong resource
+/// is exactly the failure this leg exists to catch, and three separate
+/// assertions would each be satisfied by the other line's value.
+#[derive(Debug, PartialEq, Eq)]
+struct Resource<'a> {
+    href: &'a str,
+    media_type: &'a str,
+    size: &'a str,
+}
+
+/// The line the server's entry `key` was drawn onto, as the client reported it.
+///
+/// Found by the `X-JMAP-KEY` the line carries and never by where it stands: the
+/// order two `ATTACH` properties come back in is `ECalMetaBackend`'s business and
+/// not something this leg means to pin down, and reading the second line as "the
+/// second entry" would turn a swap — the very corruption two resources make
+/// possible — into a pass.
+///
+/// `None` for a component holding no line under that key, which is what a dropped
+/// key looks like from here: the client reports every line it found, so a key
+/// nothing answers to is either absent or on the wrong property.
+fn resource<'a>(
+    seen: &BTreeMap<&'a str, &'a str>,
+    prefix: &str,
+    key: &str,
+) -> Option<Resource<'a>> {
+    let lines: usize = seen
+        .get(format!("{prefix}-attaches").as_str())?
+        .parse()
+        .ok()?;
+    let at = |index: usize, member: &str| {
+        seen.get(format!("{prefix}-attach-{index}{member}").as_str())
+            .copied()
+    };
+    let index = (1..=lines).find(|index| at(*index, "-key") == Some(key))?;
+    Some(Resource {
+        href: at(index, "")?,
+        media_type: at(index, "-fmttype")?,
+        size: at(index, "-size")?,
+    })
 }
 
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
@@ -1059,6 +1158,9 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
             event_id.as_str(),
             REPLACED_LOCATION_NAME,
             REPLACED_CONFERENCE_URI,
+            // Which of the two documents is being re-addressed, named by the
+            // address it carries — see [`REPLACED_ATTACH_HREF`].
+            PLACED_EDITED_ATTACH_HREF,
             REPLACED_ATTACH_HREF,
         ],
     );
@@ -1149,43 +1251,47 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "EDS did not carry the LABEL naming the conference\n{report}"
     );
 
-    // And the document the event points at, read through libical's own
-    // `icalattach` rather than as a string — see `cal-edit-client.c`. The address
-    // says the drawing arrived; the key says a save can name the entry it came
-    // from, which for a `links` entry is the only way back, since the save
-    // compares the address the server stated against the one on the line.
-    assert_eq!(
-        seen.get("read-attach"),
-        Some(&PLACED_ATTACH_HREF),
-        "the resource the server holds did not reach the ATTACH line\n{report}"
-    );
-    // The observation this half of the leg was written for. `ATTACH` is not a
-    // text property: libical re-builds the value as an `icalattach`, so a cache
-    // that round-tripped the value and dropped what stood beside it would show
-    // up here and nowhere else in this file.
-    assert_eq!(
-        seen.get("read-attach-key"),
-        Some(&PLACED_ATTACH_KEY),
-        "EDS did not carry the X-JMAP-KEY the ATTACH went out with, so no save \
-         can name the entry the server chose\n{report}"
-    );
+    // And the two documents the event points at, read through libical's own
+    // `icalattach` rather than as a string — see `cal-edit-client.c`. Each is
+    // looked up by the `X-JMAP-KEY` on its line, which is both how the assertion
+    // stays free of the order EDS hands the lines back in and the observation
+    // this half of the leg was written for: `ATTACH` is not a text property, so a
+    // cache that round-tripped the value and dropped what stood beside it would
+    // show up here and nowhere else in this file. A key that reached the wrong
+    // line answers to the wrong address, which is a mismatch here rather than a
+    // missing entry.
+    //
+    // The address says the drawing arrived; the key says a save can name the entry
+    // it came from, which for a `links` entry is the only way back, since the save
+    // compares the address the server stated against the one on the line. The
+    // `FMTTYPE` and the `SIZE` beside them make the same argument the conference's
+    // `LABEL` does: a cache keeping only what libical has an enum for would answer
+    // those two and drop the key.
     assert_eq!(
         seen.get("read-attaches"),
-        Some(&"1"),
-        "EDS holds an ATTACH line other than the one the mapping wrote\n{report}"
-    );
-    // The two standard parameters beside the invented one, and the same argument
-    // the conference's LABEL makes: a cache keeping only what libical has an enum
-    // for would answer these and drop the key above.
-    assert_eq!(
-        seen.get("read-attach-fmttype"),
-        Some(&PLACED_ATTACH_MEDIA_TYPE),
-        "EDS did not carry the FMTTYPE stating the resource's media type\n{report}"
+        Some(&"2"),
+        "EDS does not hold exactly the two ATTACH lines the mapping wrote\n{report}"
     );
     assert_eq!(
-        seen.get("read-attach-size"),
-        Some(&PLACED_ATTACH_SIZE.to_string().as_str()),
-        "EDS did not carry the SIZE the server estimated the resource at\n{report}"
+        resource(&seen, "read", PLACED_ATTACH_KEY),
+        Some(Resource {
+            href: PLACED_ATTACH_HREF,
+            media_type: PLACED_ATTACH_MEDIA_TYPE,
+            size: &PLACED_ATTACH_SIZE.to_string(),
+        }),
+        "the first resource the server holds did not reach an ATTACH line under \
+         the key the server chose\n{report}"
+    );
+    assert_eq!(
+        resource(&seen, "read", PLACED_EDITED_ATTACH_KEY),
+        Some(Resource {
+            href: PLACED_EDITED_ATTACH_HREF,
+            media_type: PLACED_EDITED_ATTACH_MEDIA_TYPE,
+            size: &PLACED_EDITED_ATTACH_SIZE.to_string(),
+        }),
+        "the second resource the server holds did not reach an ATTACH line under \
+         the key the server chose, so a save can only guess which document the \
+         user re-addressed\n{report}"
     );
 
     // And what EDS holds after the save: the place the user typed, on the line it
@@ -1222,19 +1328,33 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the save left the old address on the event beside the new one\n{report}"
     );
     assert_eq!(
-        seen.get("read-back-attach"),
-        Some(&REPLACED_ATTACH_HREF),
-        "the address of the document did not survive the save\n{report}"
-    );
-    assert_eq!(
-        seen.get("read-back-attach-key"),
-        Some(&PLACED_ATTACH_KEY),
-        "the save refiled the resource under another key\n{report}"
-    );
-    assert_eq!(
         seen.get("read-back-attaches"),
-        Some(&"1"),
-        "the save left the old resource on the event beside the new one\n{report}"
+        Some(&"2"),
+        "the save left the old resource on the event beside the new one, or lost \
+         the one the user did not touch\n{report}"
+    );
+    assert_eq!(
+        resource(&seen, "read-back", PLACED_EDITED_ATTACH_KEY),
+        Some(Resource {
+            href: REPLACED_ATTACH_HREF,
+            media_type: PLACED_EDITED_ATTACH_MEDIA_TYPE,
+            size: &PLACED_EDITED_ATTACH_SIZE.to_string(),
+        }),
+        "the address of the document the user re-addressed did not survive the \
+         save, still under the key the server chose\n{report}"
+    );
+    // And the document the user did not touch, which is what having two of them
+    // is for: it comes back at the address it went out with, under its own key.
+    // A save that reached the wrong entry shows up here as the resource that was
+    // never edited pointing somewhere else.
+    assert_eq!(
+        resource(&seen, "read-back", PLACED_ATTACH_KEY),
+        Some(Resource {
+            href: PLACED_ATTACH_HREF,
+            media_type: PLACED_ATTACH_MEDIA_TYPE,
+            size: &PLACED_ATTACH_SIZE.to_string(),
+        }),
+        "the resource the user never touched did not come back as it went out\n{report}"
     );
 
     let calls = server.method_calls();
@@ -1297,29 +1417,47 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the new address did not reach the server as a patch of the entry the \
          line was drawn from: {event:?}"
     );
-    // And the resource, which asks the narrowest question of the three: only
-    // `href` goes back. The `title` had no room on the line and would be gone had
-    // the save named `links`; the `contentType` and the `size` were *shown* and
-    // are still the server's own, so a save that wrote them back — reading an
-    // editor's re-typed line as "the media type was cleared" — fails here even
-    // though every observation the client made would still pass.
+    // And the resources, which ask the narrowest question of the three: only
+    // `href` goes back, and only for the one entry the user re-addressed. The
+    // `title` had no room on the line and would be gone had the save named
+    // `links`; the `contentType` and the `size` were *shown* and are still the
+    // server's own, so a save that wrote them back — reading an editor's re-typed
+    // line as "the media type was cleared" — fails here even though every
+    // observation the client made would still pass.
+    //
+    // Both entries in one assertion, because the pair is the claim: a save that
+    // patched `links/srv-att/href` instead has moved a document the user never
+    // opened and left theirs where it was, and either entry alone would still
+    // read as somebody's edit landing.
     assert_eq!(
         event.links,
         Some(
-            [(
-                PLACED_ATTACH_KEY.to_owned(),
-                serde_json::json!({
-                    "@type": "Link",
-                    "href": REPLACED_ATTACH_HREF,
-                    "contentType": PLACED_ATTACH_MEDIA_TYPE,
-                    "size": PLACED_ATTACH_SIZE,
-                    "title": PLACED_ATTACH_TITLE,
-                }),
-            )]
+            [
+                (
+                    PLACED_ATTACH_KEY.to_owned(),
+                    serde_json::json!({
+                        "@type": "Link",
+                        "href": PLACED_ATTACH_HREF,
+                        "contentType": PLACED_ATTACH_MEDIA_TYPE,
+                        "size": PLACED_ATTACH_SIZE,
+                        "title": PLACED_ATTACH_TITLE,
+                    }),
+                ),
+                (
+                    PLACED_EDITED_ATTACH_KEY.to_owned(),
+                    serde_json::json!({
+                        "@type": "Link",
+                        "href": REPLACED_ATTACH_HREF,
+                        "contentType": PLACED_EDITED_ATTACH_MEDIA_TYPE,
+                        "size": PLACED_EDITED_ATTACH_SIZE,
+                        "title": PLACED_EDITED_ATTACH_TITLE,
+                    }),
+                ),
+            ]
             .into()
         ),
         "the resource the user re-addressed did not reach the server as a patch \
-         of the entry it was drawn from: {event:?}"
+         of the entry it was drawn from, leaving the other where it was: {event:?}"
     );
     // And the title, which says the save patched the event rather than replacing
     // it with what the one component EDS handed over could state.
