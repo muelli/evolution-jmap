@@ -1478,3 +1478,249 @@ fn an_empty_set_on_the_server_is_not_an_edit_waiting_to_happen() {
         "the empty set the server held was rewritten"
     );
 }
+
+#[test]
+fn editing_an_im_handle_patches_the_entry_by_its_key() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s1": {
+                    "@type": "OnlineService",
+                    "service": "Jabber",
+                    "user": "vera@jabber.example",
+                    "pref": 1,
+                },
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    // The handle crosses on the `X-JABBER` line EDS keeps it on, wearing the
+    // key it is filed under, so an edit patches that entry rather than
+    // replacing the property — and the `pref` the line has no parameter for
+    // stays where the server put it.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("\r\nX-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example\r\n"),
+        "{vcard}"
+    );
+    let edited = vcard.replace("vera@jabber.example", "vera@xmpp.example");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@xmpp.example"));
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s1"].extra.get("pref"), Some(&json!(1)));
+}
+
+#[test]
+fn renaming_a_handle_drops_the_uri_that_named_the_old_one() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // An entry may state both, and only the handle has a line. Once the user
+    // has replaced the handle, the URI names somebody the entry no longer
+    // claims to be — and it cannot be rebuilt from the new handle without
+    // knowing the service's URI scheme, which is a guess this mapping refuses
+    // to write. So it goes with the name it belonged to, exactly as an
+    // organisation unit's `sortAs` does when the unit is renamed.
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s1": {
+                    "service": "Jabber",
+                    "user": "vera@jabber.example",
+                    "uri": "xmpp:vera@jabber.example",
+                },
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example",
+        "X-JMAP-KEY=s1;TYPE=HOME:vera@xmpp.example",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@xmpp.example"));
+    assert_eq!(services["s1"].uri, None, "the stale URI was left behind");
+}
+
+#[test]
+fn an_edit_that_left_the_handle_alone_keeps_the_uri_it_came_with() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s1": {
+                    "service": "Jabber",
+                    "user": "vera@jabber.example",
+                    "uri": "xmpp:vera@jabber.example",
+                },
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    // The URI is only dropped by a rename. An edit elsewhere on the contact
+    // must not touch it — nor the handle, nor the service.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("vera@example.com", "vera@example.org");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
+    assert_eq!(
+        services["s1"].uri.as_deref(),
+        Some("xmpp:vera@jabber.example")
+    );
+}
+
+#[test]
+fn the_service_spelling_the_server_chose_is_not_rewritten() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.3.2 lets a service be capitalised as the service itself
+    // does and has two names be equal when they match case-insensitively. The
+    // `X-JABBER` line states no spelling at all, so this side reads back the
+    // one the table holds — and a save that wrote it would rename the service
+    // on the server for no reason the user gave.
+    fixture.patch(
+        &id,
+        json!({"onlineServices": {"s1": {"service": "jabber", "user": "vera@jabber.example"}}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("vera@jabber.example", "vera@xmpp.example");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services["s1"].service.as_deref(), Some("jabber"));
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@xmpp.example"));
+}
+
+#[test]
+fn typing_a_handle_evolution_had_no_line_for_creates_an_entry() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    // The line EDS writes when the user fills in one of the instant-messaging
+    // fields: no `X-JMAP-KEY`, since the entry is new, and a `TYPE` naming the
+    // slot they typed it into.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "END:VCARD",
+        "X-MATRIX;TYPE=WORK:@vera:matrix.example\r\nEND:VCARD",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    let service = services.values().next().expect("one service");
+    assert_eq!(service.service.as_deref(), Some("Matrix"));
+    assert_eq!(service.user.as_deref(), Some("@vera:matrix.example"));
+    // The slot is not the entry's contexts, so nothing about where the user
+    // typed it reaches the server.
+    assert_eq!(service.extra.get("contexts"), None, "{service:?}");
+}
+
+#[test]
+fn a_service_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Two entries with no line: one at a service EDS has no field for, one
+    // stated as a URI with no handle to show. Neither was ever visible, so
+    // neither may be deleted for being absent from the edited vCard — and the
+    // handle the user does type must not be filed under a key one of them
+    // already holds.
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s1": {"service": "Signal", "user": "+49301234"},
+                "s2": {"service": "Jabber", "uri": "xmpp:vera@jabber.example"},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("X-JABBER"), "{vcard}");
+    assert!(!vcard.contains("49301234"), "{vcard}");
+    let edited = vcard.replace("END:VCARD", "X-SKYPE;TYPE=HOME:vera.oldenburg\r\nEND:VCARD");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services["s1"].user.as_deref(), Some("+49301234"));
+    assert_eq!(
+        services["s2"].uri.as_deref(),
+        Some("xmpp:vera@jabber.example")
+    );
+    assert_eq!(services.len(), 3, "{services:?}");
+    let typed = services
+        .values()
+        .find(|service| service.service.as_deref() == Some("Skype"))
+        .unwrap_or_else(|| panic!("the handle the user typed is gone: {services:?}"));
+    assert_eq!(typed.user.as_deref(), Some("vera.oldenburg"));
+}
+
+#[test]
+fn clearing_the_last_im_handle_leaves_the_contact_on_no_service() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"onlineServices": {"s1": {"service": "Jabber", "user": "vera@jabber.example"}}}),
+    );
+    let sync = fixture.sync();
+
+    // EDS removes the attribute outright when the field is cleared, so no line
+    // at all is what a save sees — and every entry the card had was visible,
+    // so the whole property goes.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example\r\n",
+        "",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).online_services, None);
+}
+
+#[test]
+fn a_key_that_arrived_on_another_services_line_moves_the_service_with_it() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"onlineServices": {"s1": {"service": "Jabber", "user": "vera@jabber.example"}}}),
+    );
+    let sync = fixture.sync();
+
+    // Nothing Evolution does produces this — changing the service means EDS
+    // clearing one field and setting another, which loses the key — but another
+    // client writing the vCard can, and then the entry the key names really is
+    // at a different service. The line is what states the service, so the save
+    // has to follow it rather than leave the entry claiming the old one.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example",
+        "X-SKYPE;X-JMAP-KEY=s1;TYPE=HOME:vera.oldenburg",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
+    assert_eq!(services["s1"].service.as_deref(), Some("Skype"));
+    assert_eq!(services["s1"].user.as_deref(), Some("vera.oldenburg"));
+}

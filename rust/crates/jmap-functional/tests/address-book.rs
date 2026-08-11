@@ -65,6 +65,18 @@ const NOTE: &str = "met at FOSDEM; owes me a beer, apparently";
 /// shown to reach the server as the one the user typed — neither cut off at the
 /// comma nor carrying the backslash EDS wrote.
 const HOMEPAGE: &str = "https://dana.example/profile?tags=x-files,ufo";
+/// The instant-messaging handle the client sets, spelled as `book-client.c`
+/// spells it. EDS keeps it on an `X-JABBER` line and JSContact as an
+/// `onlineServices` entry, and two things about the crossing only real EDS can
+/// answer: that the `TYPE` our emitter writes is the one EDS reads a handle back
+/// out of — a line without one reaches no field at all — and that the comma
+/// inside the handle survives, since a JSContact `user` is free text while vCard
+/// gives the comma structural meaning.
+const IM_HANDLE: &str = "dana,scully@jabber.example";
+/// The service that handle is at, spelled as the mapping's own table spells it.
+/// The line states the service by *being* `X-JABBER`, so this is what the reader
+/// files a handle the user typed under.
+const IM_SERVICE: &str = "Jabber";
 /// The two categories the client files the contact under, spelled as
 /// `book-client.c` spells them, and the character it joins them with when it
 /// reports them back. EDS keeps them as a list on one `CATEGORIES` line and
@@ -246,6 +258,14 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         seen.get("read-back-birthday"),
         Some(&BIRTHDAY),
         "the contact EDS handed back lost or moved its birthday\n{report}"
+    );
+    // Read out of the same per-context slot the client wrote it to. Missing
+    // here would mean the handle had come back on a line with no `TYPE` — in
+    // the vCard, and in none of the fields Evolution shows.
+    assert_eq!(
+        seen.get("read-back-jabber"),
+        Some(&IM_HANDLE),
+        "the contact EDS handed back lost or cut off its Jabber handle\n{report}"
     );
     // Both tags, in the order EDS's list holds them, joined as the client
     // joined them. An extra item here would be a tag that had been split on
@@ -455,6 +475,21 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     let link = links.values().next().expect("one link");
     assert_eq!(link.uri, HOMEPAGE, "{card:?}");
     assert_eq!(link.kind, None, "{card:?}");
+    // The X-JABBER line, as the server sees it: one `onlineServices` entry
+    // stating the service and the handle. Asserted at this end too because the
+    // client's read-back comes out of EDS's own cache, which would agree with
+    // itself even about a handle that had reached the server cut off at the
+    // comma — and because the `user` is where it has to land: a `uri` would be
+    // this mapping claiming the handle is an RFC 3986 URI.
+    let services = card
+        .online_services
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no onlineServices: {card:?}"));
+    let service = services.values().next().expect("one online service");
+    assert_eq!(services.len(), 1, "{card:?}");
+    assert_eq!(service.service.as_deref(), Some(IM_SERVICE), "{card:?}");
+    assert_eq!(service.user.as_deref(), Some(IM_HANDLE), "{card:?}");
+    assert_eq!(service.uri, None, "{card:?}");
     // The CATEGORIES line, as the server sees it: exactly two `keywords`
     // members, each set to `true`. Three would mean the comma inside the second
     // tag had been read as RFC 2426 §3.7.1's list separator somewhere along the

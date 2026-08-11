@@ -110,6 +110,23 @@ fn contact_card_roundtrip() {
     // parameter on a `URL` line, so they too stay visible to the save path.
     assert!(links["l1"].extra.contains_key("mediaType"));
     assert!(links["l1"].extra.contains_key("pref"));
+    let services = card.online_services.as_ref().expect("onlineServices");
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
+    assert_eq!(services["s1"].uri, None);
+    // RFC 9553 §2.3.2 asks for the `uri` or the `user`, and only the `user` is
+    // a handle: this entry states the other one, and the mapping has to be able
+    // to see which.
+    assert_eq!(services["s2"].user, None);
+    assert_eq!(
+        services["s2"].uri.as_deref(),
+        Some("https://social.example/@vera")
+    );
+    // Where a service is used and how strongly it is preferred are not stated
+    // by the `X-` line's `TYPE` — that parameter is the slot EDS files the
+    // handle in — so they stay visible to the save path.
+    assert!(services["s1"].extra.contains_key("contexts"));
+    assert!(services["s1"].extra.contains_key("pref"));
     // `keywords` is an RFC 9553 §1.4.3 Set — the keys are the tags and every
     // value is `true`. vCard states the whole set on one `CATEGORIES` line.
     let keywords = card.keywords.as_ref().expect("keywords");

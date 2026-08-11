@@ -3,14 +3,15 @@
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
-//! ORG, TITLE, ROLE, NOTE, BDAY, URL, CATEGORIES.
+//! ORG, TITLE, ROLE, NOTE, BDAY, URL, CATEGORIES and the instant-messaging
+//! `X-` lines.
 
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
-    NameComponent, Nickname, Note, OrgUnit, Organization, Title,
+    NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{card_to_vcard, vcard_to_card};
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn fixture_card() -> ContactCard {
     let path = format!(
@@ -1393,6 +1394,273 @@ fn reads_the_tags_of_every_categories_line() {
     );
 }
 
+fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
+    ContactCard {
+        online_services: Some(
+            [(
+                "s1".to_owned(),
+                OnlineService {
+                    service: service.map(str::to_owned),
+                    user: user.map(str::to_owned),
+                    ..OnlineService::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+#[test]
+fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
+    // RFC 9553 §2.3.2's `onlineServices` names the contact as one service knows
+    // them. vCard 3.0 has no property for that at all — RFC 4770's `IMPP` is
+    // 4.0, which is not the format `e_contact_new_from_vcard()` is handed — so
+    // the line is the `X-` one EDS itself keeps a handle on: measured against
+    // libebook-contacts 3.52, `X-JABBER` is what `E_CONTACT_IM_JABBER` and the
+    // per-slot fields Evolution's contact editor shows are read out of.
+    //
+    // The `TYPE` is not optional decoration: a line without one reaches none of
+    // the `E_CONTACT_IM_JABBER_HOME_1`…`_WORK_3` fields, so the handle would be
+    // in the vCard and nowhere the user can see it.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "X-JABBER"),
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example"
+    );
+
+    let services = vcard_to_card(&vcard)
+        .expect("parse")
+        .online_services
+        .expect("online services");
+    assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
+    // Read back as a handle, never as a URI: the line states the one EDS field
+    // that holds free text, so there is nothing here to call an RFC 3986 URI.
+    assert_eq!(services["s1"].uri, None);
+}
+
+#[test]
+fn every_service_eds_has_a_field_for_gets_its_own_line() {
+    // The ten services libebook-contacts 3.52 gives HOME/WORK slots to. A
+    // service name is matched case-insensitively as RFC 9553 §2.3.2 requires,
+    // and a little wider than that — the punctuation inside it is ignored too —
+    // because `Gadu-Gadu`, `GaduGadu` and `gadu gadu` are one service under
+    // three spellings and only a normalising match keeps a save from renaming
+    // whichever one the server chose.
+    for (service, property) in [
+        ("AIM", "X-AIM"),
+        ("aim", "X-AIM"),
+        ("Gadu-Gadu", "X-GADUGADU"),
+        ("GaduGadu", "X-GADUGADU"),
+        ("Google Talk", "X-GOOGLE-TALK"),
+        ("google-talk", "X-GOOGLE-TALK"),
+        ("GroupWise", "X-GROUPWISE"),
+        ("ICQ", "X-ICQ"),
+        ("Jabber", "X-JABBER"),
+        ("Matrix", "X-MATRIX"),
+        ("MSN", "X-MSN"),
+        ("Skype", "X-SKYPE"),
+        ("Yahoo", "X-YAHOO"),
+    ] {
+        let vcard = card_to_vcard(&on_service(Some(service), Some("handle")));
+        assert_eq!(
+            line(&vcard, property),
+            format!("{property};X-JMAP-KEY=s1;TYPE=HOME:handle"),
+            "{service}"
+        );
+    }
+}
+
+#[test]
+fn a_service_eds_has_no_field_for_gets_no_line() {
+    // An `X-SIGNAL` line would reach no field of EDS's and no field of
+    // Evolution's, so it would say nothing to the user while making the save
+    // believe the entry had been shown. `Twitter` is the same case for a less
+    // obvious reason: libebook-contacts 3.52 knows `X-TWITTER` as a
+    // multi-valued field but gives it no HOME/WORK slot, so a handle on it is
+    // not one the contact editor can put anywhere.
+    //
+    // An entry naming no service at all cannot be drawn either: the property is
+    // what states the service, so there would be no line to choose.
+    for service in [Some("Signal"), Some("Twitter"), Some(""), None] {
+        let vcard = card_to_vcard(&on_service(service, Some("handle")));
+        assert!(
+            !vcard.contains("handle"),
+            "a handle at {service:?} was drawn: {vcard}"
+        );
+    }
+}
+
+#[test]
+fn an_entry_stated_only_as_a_uri_gets_no_line() {
+    // RFC 9553 §2.3.2 asks for the `uri` or the `user`, and the two are not
+    // interchangeable here: Evolution's instant-messaging field holds a handle,
+    // and reading one out of `xmpp:vera@jabber.example` means knowing the URI
+    // scheme of every service — a guess this mapping would then write back.
+    //
+    // So an entry stating only a URI has no line, which makes it invisible to
+    // the user *and* to the save, exactly like an address stated only in
+    // components vCard has no field for.
+    let card = ContactCard {
+        online_services: Some(
+            [(
+                "s1".to_owned(),
+                OnlineService {
+                    service: Some("Jabber".to_owned()),
+                    uri: Some("xmpp:vera@jabber.example".to_owned()),
+                    ..OnlineService::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    assert!(!card_to_vcard(&card).contains("X-JABBER"));
+
+    // The fixture's Mastodon entry is the same case twice over — a service EDS
+    // has no field for, stated as a URI.
+    let vcard = card_to_vcard(&fixture_card());
+    assert!(!vcard.contains("social.example"), "{vcard}");
+}
+
+#[test]
+fn a_handle_no_x_line_can_carry_gets_no_line() {
+    // The same measured refusals the `CATEGORIES` line makes, for the same
+    // reason: a handle that comes back from EDS spelled differently is a handle
+    // the next save renames on the server.
+    //
+    // The empty handle says nothing. A carriage return is dropped by
+    // `syntax::write` — a security property, not tidiness. And ends made of
+    // ASCII whitespace are trimmed by EDS: measured against libebook-contacts
+    // 3.52, `X-JABBER: vera@a ` reaches the user as `vera@a`, so the line keeps
+    // what the server said while every field the user can see disagrees with it.
+    for handle in [
+        Some(""),
+        None,
+        Some("two\rlines"),
+        Some(" leading"),
+        Some("trailing "),
+        Some("\ttabbed"),
+    ] {
+        let vcard = card_to_vcard(&on_service(Some("Jabber"), handle));
+        assert!(
+            !vcard.contains("X-JABBER"),
+            "the handle {handle:?} was drawn: {vcard}"
+        );
+    }
+}
+
+#[test]
+fn a_handle_holding_the_separators_is_escaped_and_comes_back_whole() {
+    // A JSContact `user` is free text, and EDS reads a raw semicolon in this
+    // value as the end of it: measured against libebook-contacts 3.52,
+    // `X-JABBER:a;b@c` hands the user `a`, while `a\;b@c` comes back whole and
+    // is re-escaped on the way out. The comma is the same case one step
+    // earlier — it separates the items of a `text-list` — so both are escaped.
+    let vcard = card_to_vcard(&on_service(Some("Jabber"), Some("a;b,c@d")));
+    assert_eq!(
+        line(&vcard, "X-JABBER"),
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:a\\;b\\,c@d"
+    );
+
+    let services = vcard_to_card(&vcard)
+        .expect("parse")
+        .online_services
+        .expect("online services");
+    assert_eq!(services["s1"].user.as_deref(), Some("a;b,c@d"));
+}
+
+#[test]
+fn the_work_context_files_the_handle_in_evolutions_work_slot() {
+    // The `TYPE` is the slot rather than the entry's `contexts`, but it is
+    // chosen from them where they say something: a work handle belongs in the
+    // field Evolution labels Work. Exactly one slot per line — a handle wearing
+    // both `TYPE`s shows up in two fields the user can edit independently, and
+    // nothing would say which edit wins.
+    let slotted = |contexts: Value| {
+        let mut card = on_service(Some("Jabber"), Some("handle"));
+        let services = card.online_services.as_mut().expect("online services");
+        let service = services.get_mut("s1").expect("the entry");
+        service.extra.insert("contexts".to_owned(), contexts);
+        let vcard = card_to_vcard(&card);
+        line(&vcard, "X-JABBER").to_owned()
+    };
+
+    assert!(slotted(json!({"work": true})).ends_with(";TYPE=WORK:handle"));
+    assert!(slotted(json!({"private": true})).ends_with(";TYPE=HOME:handle"));
+    // A handle used in both, and one used in a context vCard cannot spell, go
+    // in the Home slot: it is where EDS puts a handle of its own accord, so an
+    // entry the mapping cannot place lands where the user looks first.
+    assert!(slotted(json!({"work": true, "private": true})).ends_with(";TYPE=HOME:handle"));
+    assert!(slotted(json!({"school": true})).ends_with(";TYPE=HOME:handle"));
+    assert!(
+        card_to_vcard(&on_service(Some("Jabber"), Some("handle"))).contains(";TYPE=HOME:handle")
+    );
+}
+
+#[test]
+fn the_slot_a_handle_sits_in_is_not_read_back_as_a_context() {
+    // The other direction of the same decision. Every line carries a `TYPE`
+    // because a line without one is invisible, so reading the parameter back as
+    // RFC 9553 §1.5.1 contexts would put a context on every entry that had
+    // none — and the next save would write that invention to the server.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n",
+        "X-JABBER;TYPE=WORK:vera@work.example\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let services = card.online_services.expect("online services");
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@work.example"));
+    assert!(
+        services["s1"].extra.is_empty(),
+        "the slot was read back as a member: {:?}",
+        services["s1"]
+    );
+}
+
+#[test]
+fn reads_a_handle_on_a_line_that_never_carried_a_key() {
+    // A handle the user has just typed reaches this side on a line EDS built
+    // from its own field, without an `X-JMAP-KEY` — measured against
+    // libebook-contacts 3.52, that is what setting one of the slots writes. It
+    // is keyed by counting, as every other property's addition is, and its
+    // service is the line's own.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n",
+        "X-MATRIX;TYPE=HOME:@vera:matrix.example\r\n",
+        "X-SKYPE;TYPE=WORK:vera.oldenburg\r\n",
+        "X-SIGNAL;TYPE=HOME:+49301234\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let services = card.online_services.expect("online services");
+    // Two, not three: the `X-SIGNAL` line is not a property this mapping
+    // states, so reading it would invent an entry the server never had — and
+    // the line stays in EDS's copy either way.
+    assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1", "s2"]);
+    assert_eq!(services["s1"].service.as_deref(), Some("Matrix"));
+    assert_eq!(services["s1"].user.as_deref(), Some("@vera:matrix.example"));
+    assert_eq!(services["s2"].service.as_deref(), Some("Skype"));
+    assert_eq!(services["s2"].user.as_deref(), Some("vera.oldenburg"));
+}
+
+#[test]
+fn a_card_with_no_online_services_states_none() {
+    // `None` rather than an empty map, for the reason every other keyed map has
+    // one: the save reads an edit off a difference from what was shown, and an
+    // empty map would claim the contact is on no service where the vCard made
+    // no claim at all.
+    assert!(!card_to_vcard(&ContactCard::default()).contains("X-JABBER"));
+    let card =
+        vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nEND:VCARD\r\n").expect("parse");
+    assert_eq!(card.online_services, None);
+}
+
 #[test]
 fn unmodeled_jscontact_properties_are_dropped_not_mangled() {
     // `preferredLanguages` has no place in the minimal vCard set. Dropping it
@@ -1416,4 +1684,26 @@ fn address_book_membership_is_not_a_vcard_concept() {
 fn rejects_input_that_is_not_a_vcard() {
     assert!(vcard_to_card("").is_err());
     assert!(vcard_to_card("{\"id\": \"C1\"}").is_err());
+}
+
+#[test]
+fn a_foreign_handle_holding_a_raw_separator_is_read_as_the_line_states_it() {
+    // A card written by somebody else may carry an unescaped separator, and
+    // neither of them separates anything in this value: calcard hands an `X-`
+    // line's value back whole, so the handle is what the line says.
+    //
+    // Which agrees with EDS about the comma and not about the semicolon —
+    // measured against libebook-contacts 3.52, `X-JABBER:a;b@c` reaches the user
+    // as `a` while `X-JABBER:a,b@c` reaches them whole. The cost of that
+    // disagreement is bounded: EDS re-emits such a line untouched, so the text
+    // round-trips and the only difference is how much of the handle Evolution
+    // shows for a card no client of ours wrote.
+    for (line, handle) in [("X-JABBER:a,b@c", "a,b@c"), ("X-JABBER:a;b@c", "a;b@c")] {
+        let card = vcard_to_card(&format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n"
+        ))
+        .expect("parse");
+        let services = card.online_services.expect("online services");
+        assert_eq!(services["s1"].user.as_deref(), Some(handle), "{line}");
+    }
 }

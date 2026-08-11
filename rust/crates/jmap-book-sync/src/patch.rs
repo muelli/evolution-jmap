@@ -5,11 +5,12 @@
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, NICKNAME,
-//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, CATEGORIES and the two
-//! date lines, and drops everything else, so a save that sent the parsed card
-//! back whole would silently delete the properties it could not represent —
-//! preferred languages, online services, what the contact is spoken to as —
-//! none of which the user ever saw, let alone asked to remove.
+//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, CATEGORIES, the
+//! instant-messaging `X-` lines and the two date lines, and drops everything
+//! else, so a save that sent the parsed card back whole would silently delete
+//! the properties it could not represent — preferred languages, what the
+//! contact is spoken to as, the media a card carries — none of which the user
+//! ever saw, let alone asked to remove.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
 //! that is the subtler half of this module:
@@ -51,6 +52,13 @@
 //!   kind of date it is. The date itself is patched member by member, which
 //!   is what keeps a `calendarScale` — or a point in time the user did not
 //!   touch — from being flattened into the day the line showed.
+//! - `onlineServices` entries are patched by their handle, which is the only
+//!   part of them an `X-JABBER` line states; where the handle is used and how
+//!   strongly it is preferred have no parameter on it, and the `TYPE` it does
+//!   carry is the slot EDS files the handle in rather than the entry's
+//!   `contexts`. Renaming the handle also *drops* the entry's `uri`, which named
+//!   the handle the user has just replaced — see [`diff_online_services`], the
+//!   one place here where a save removes a member the vCard never showed.
 //! - `keywords` is the one mapped property that is a *set*, and the one that
 //!   goes back **replaced whole**: a tag is a bare string with no key and no
 //!   members, so there is nothing to reach into. That makes a tag the
@@ -63,8 +71,9 @@
 //!   property; an address with neither an `ADR` field nor a written-out form
 //!   to put on a `LABEL`, an organisation with neither a name nor a unit, an
 //!   email with no address, a phone with no number, a note that says nothing,
-//!   a date naming no single day and a link of a kind vCard 3.0 cannot state
-//!   all have no line to be written on. Each is dropped on the way
+//!   a date naming no single day, a link of a kind vCard 3.0 cannot state and a
+//!   handle at a service EDS has no field for all have no line to be written
+//!   on. Each is dropped on the way
 //!   out and must
 //!   therefore be invisible to the save in both directions — neither deleted
 //!   for being absent from the edited card, nor overwritten by an addition
@@ -81,13 +90,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
-    Nickname, Note, OrgUnit, Organization, Title,
+    Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_keywords,
-    maps_name_component, maps_phone_feature, restore_address_components, states_a_point_in_time,
-    states_address, states_anniversary, states_email, states_link, states_nickname, states_note,
-    states_organization, states_phone, states_title, title_kind,
+    maps_name_component, maps_phone_feature, restore_address_components, same_service,
+    states_a_point_in_time, states_address, states_anniversary, states_email, states_link,
+    states_nickname, states_note, states_online_service, states_organization, states_phone,
+    states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -121,6 +131,11 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.anniversaries.as_ref(),
     );
     diff_links(&mut patch, current.links.as_ref(), edited.links.as_ref());
+    diff_online_services(
+        &mut patch,
+        current.online_services.as_ref(),
+        edited.online_services.as_ref(),
+    );
     diff_keywords(&mut patch, current, edited);
     patch
 }
@@ -432,6 +447,45 @@ fn diff_links(
             // line to be edited on.
             if old.uri != new.uri {
                 patch.insert(format!("{path}/uri"), Value::String(new.uri.clone()));
+            }
+        },
+    );
+}
+
+fn diff_online_services(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, OnlineService>>,
+    edited: Option<&BTreeMap<String, OnlineService>>,
+) {
+    diff_entries(
+        patch,
+        "onlineServices",
+        current,
+        edited,
+        states_online_service,
+        |patch, path, old, new| {
+            if old.user != new.user {
+                patch.insert(format!("{path}/user"), value_or_null(new.user.as_ref()));
+                // The URI stated the handle that has just been replaced, and
+                // nothing here can rebuild it from the new one: that needs the
+                // service's URI scheme, which this mapping does not know and
+                // must not guess at. So it goes with the name it belonged to,
+                // for the reason `merge_units` drops a renamed unit's `sortAs` —
+                // a URI for the old handle is not one for the new.
+                if old.uri.is_some() {
+                    patch.insert(format!("{path}/uri"), Value::Null);
+                }
+            }
+            // Which the line does not state — it states the service by *being*
+            // the property EDS keeps that service's handles on — so this can
+            // only be a key that arrived on another service's line. Compared as
+            // RFC 9553 §2.3.2 asks, so the spelling the server chose is left
+            // alone rather than replaced by the one this side reads back.
+            if !same_service(old.service.as_deref(), new.service.as_deref()) {
+                patch.insert(
+                    format!("{path}/service"),
+                    value_or_null(new.service.as_ref()),
+                );
             }
         },
     );
