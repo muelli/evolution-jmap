@@ -68,5 +68,8 @@
   },
   "keywords": {
     "hiking": true
+  },
+  "preferredLanguages": {
+    "l1": {"@type": "LanguagePref", "language": "de-DE", "pref": 1}
   }
 }

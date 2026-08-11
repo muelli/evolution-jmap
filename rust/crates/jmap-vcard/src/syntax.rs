@@ -46,9 +46,22 @@ pub struct Property {
     /// Upper-cased property name.
     pub name: String,
     params: Vec<(String, Vec<String>)>,
-    /// The `;`-separated components of the value; a plain property has one.
+    /// The parts of the value, separated by [`Self::separator`] on the wire; a
+    /// plain property has one.
     values: Vec<String>,
+    /// The character that separates the values when the line is written: `;`
+    /// for a structured value, `,` for a `text-list`. A reader does not need
+    /// it — calcard has already split the value by whichever one its property's
+    /// kind gives it — but a writer does, and which kind a property is belongs
+    /// to the mapping.
+    separator: char,
 }
+
+/// The separator RFC 2426 §3.1.2 puts between the components of a structured
+/// value.
+const COMPONENT: char = ';';
+/// The separator RFC 2425 §5.8.4 puts between the items of a `text-list`.
+const LIST_ITEM: char = ',';
 
 impl Property {
     /// A property with a single text value.
@@ -58,6 +71,7 @@ impl Property {
             name: name.to_ascii_uppercase(),
             params: Vec::new(),
             values: vec![value.to_owned()],
+            separator: COMPONENT,
         }
     }
 
@@ -76,6 +90,24 @@ impl Property {
                 .into_iter()
                 .map(|component| component.as_ref().to_owned())
                 .collect(),
+            separator: COMPONENT,
+        }
+    }
+
+    /// A property whose value is a `,`-separated `text-list` (RFC 2425 §5.8.4),
+    /// such as `CATEGORIES`.
+    ///
+    /// The difference from [`Self::structured`] is only which separator goes
+    /// between the values: [`escape`] escapes both of them inside a value
+    /// either way, so an item holding a comma states one item rather than two.
+    pub fn list<I, S>(name: &str, items: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self {
+            separator: LIST_ITEM,
+            ..Self::structured(name, items)
         }
     }
 
@@ -130,6 +162,18 @@ impl Property {
         self.values.clone()
     }
 
+    /// The items of a `text-list` property (RFC 2425 §5.8.4), one per
+    /// unescaped comma the line held.
+    ///
+    /// The body is [`Self::components`]', because calcard splits either kind of
+    /// value into the same list and the separator that applied is a fact about
+    /// the property rather than about the parse. They are two methods because
+    /// the mapping should have to say which kind it means — the same reason
+    /// [`Self::text_list`] is not [`Self::text`].
+    pub fn items(&self) -> Vec<String> {
+        self.values.clone()
+    }
+
     /// The first value of the named parameter.
     pub fn param(&self, name: &str) -> Option<&str> {
         self.param_values(name).first().copied()
@@ -168,7 +212,7 @@ impl Property {
         }
         line.push(':');
         let escaped: Vec<String> = self.values.iter().map(|value| escape(value)).collect();
-        line.push_str(&escaped.join(";"));
+        line.push_str(&escaped.join(&self.separator.to_string()));
         line
     }
 }
@@ -215,6 +259,10 @@ fn from_entry(entry: &VCardEntry) -> Property {
             })
             .collect(),
         values: entry.values.iter().filter_map(value_text).collect(),
+        // A parsed property is read, never written back out — the mapping
+        // builds the vCard it emits from scratch — so this only has to be
+        // something: the values are already split.
+        separator: COMPONENT,
     }
 }
 

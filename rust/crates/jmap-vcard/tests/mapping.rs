@@ -3,7 +3,7 @@
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
-//! ORG, TITLE, ROLE, NOTE, BDAY, URL.
+//! ORG, TITLE, ROLE, NOTE, BDAY, URL, CATEGORIES.
 
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
@@ -1232,14 +1232,175 @@ fn invents_a_key_for_a_link_that_has_none() {
     assert_eq!(links["l7"].uri, "https://vera.example/photos");
 }
 
+fn tagged(tags: &[&str]) -> ContactCard {
+    ContactCard {
+        keywords: Some(
+            tags.iter()
+                .map(|tag| ((*tag).to_owned(), json!(true)))
+                .collect(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+#[test]
+fn maps_keywords_onto_one_categories_line() {
+    // RFC 9553 §2.8.2's `keywords` is a Set — the tags are the keys — and RFC
+    // 2426 §3.7.1's `CATEGORIES` is a list of them on one line, which EDS reads
+    // as `E_CONTACT_CATEGORY_LIST`: the Categories field of Evolution's contact
+    // editor. There is no key to carry, so no `X-JMAP-KEY`; the tag is its own
+    // identity.
+    //
+    // One line rather than one per tag, unlike `NICKNAME` and `NOTE`, because
+    // that is all EDS reads: measured against libebook-contacts 3.52, a second
+    // `CATEGORIES` line is left standing in the vCard but contributes nothing to
+    // the field the user sees.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:hiking");
+    assert_eq!(vcard.matches("\r\nCATEGORIES").count(), 1, "{vcard}");
+
+    let keywords = vcard_to_card(&vcard)
+        .expect("parse")
+        .keywords
+        .expect("tags");
+    assert_eq!(keywords.keys().collect::<Vec<_>>(), vec!["hiking"]);
+    assert!(keywords.values().all(|set| set == &json!(true)));
+}
+
+#[test]
+fn every_tag_goes_on_the_one_line_in_sorted_order() {
+    // A set has no order of its own, so the line states the tags in the order
+    // the map holds them — sorted — which makes the vCard stable across
+    // renderings. The save reads an edit off a difference from what was shown,
+    // and a reordering would look like one.
+    let vcard = card_to_vcard(&tagged(&["Work", "Friends", "hiking"]));
+    assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:Friends,Work,hiking");
+}
+
+#[test]
+fn a_tag_holding_the_separators_is_escaped_and_comes_back_whole() {
+    // A JMAP keyword is any string, and both the comma and the semicolon are
+    // separators in this value — the comma to RFC 2426 and this reader, the
+    // semicolon to EDS as well, measured against libebook-contacts 3.52, which
+    // splits a raw one and honours the escape. Unescaped, one tag would arrive
+    // at the server as two.
+    let vcard = card_to_vcard(&tagged(&["back, in Berlin", "a;b"]));
+    assert_eq!(
+        line(&vcard, "CATEGORIES"),
+        "CATEGORIES:a\\;b,back\\, in Berlin"
+    );
+
+    let keywords = vcard_to_card(&vcard)
+        .expect("parse")
+        .keywords
+        .expect("tags");
+    assert_eq!(
+        keywords.keys().collect::<Vec<_>>(),
+        vec!["a;b", "back, in Berlin"]
+    );
+}
+
+#[test]
+fn a_tag_no_categories_line_can_carry_gets_no_line() {
+    // The same partial visibility every keyed map has, one type over: the set
+    // is drawn *whole*, so a tag the line cannot state is a tag the next save
+    // would delete — which is why `maps_keywords` exists and why these tags are
+    // left off rather than mangled onto the line.
+    //
+    // The empty tag, because an empty item reads back as no tag at all. A tag
+    // holding a carriage return, because `syntax::write` drops it — a security
+    // property, not tidiness — so the tag would come back spelled differently.
+    // And a tag whose ends are ASCII whitespace, because EDS trims them:
+    // measured against libebook-contacts 3.52, a leading space, tab, form feed
+    // or newline is gone by the time the user sees the tag, so the next save
+    // would rename it on the server. The vertical tab is in this list without
+    // having been measured to need it — EDS keeps that one — because refusing to
+    // draw a tag costs nothing but the sight of it, while drawing one that comes
+    // back renamed costs the tag.
+    for tag in [
+        "",
+        "two\rlines",
+        " leading",
+        "trailing ",
+        "\ttabbed",
+        "\u{c}fed",
+        "\u{b}vertical",
+    ] {
+        let vcard = card_to_vcard(&tagged(&[tag]));
+        assert!(
+            !vcard.contains("\r\nCATEGORIES"),
+            "the tag {tag:?} was drawn: {vcard}"
+        );
+    }
+
+    // A newline *inside* a tag is not that case: it has an escape, EDS reads it
+    // back, and the tag survives the trip.
+    let vcard = card_to_vcard(&tagged(&["two\nlines"]));
+    assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:two\\nlines");
+    let keywords = vcard_to_card(&vcard)
+        .expect("parse")
+        .keywords
+        .expect("tags");
+    assert_eq!(keywords.keys().collect::<Vec<_>>(), vec!["two\nlines"]);
+}
+
+#[test]
+fn a_keyword_set_to_anything_but_true_gets_no_line() {
+    // RFC 9553 §1.4.3 has every value of a Set be `true`. Drawing a tag whose
+    // value is anything else would tell the user it is set where the server
+    // said it is not.
+    let card = ContactCard {
+        keywords: Some([("hiking".to_owned(), json!(false))].into()),
+        ..ContactCard::default()
+    };
+    assert!(!card_to_vcard(&card).contains("\r\nCATEGORIES"));
+}
+
+#[test]
+fn a_card_with_no_tags_states_none() {
+    // `None` rather than an empty set, for the reason the keyed maps have one:
+    // the save reads an edit off a difference from what was shown, and an empty
+    // set would claim the contact is untagged where the card made no claim.
+    assert!(!card_to_vcard(&ContactCard::default()).contains("\r\nCATEGORIES"));
+    let card =
+        vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nEND:VCARD\r\n").expect("parse");
+    assert_eq!(card.keywords, None);
+}
+
+#[test]
+fn reads_the_tags_of_every_categories_line() {
+    // EDS shows the user the first line only, and rewrites that one when the
+    // Categories field is edited — a second line is left exactly as it was,
+    // measured against libebook-contacts 3.52. Reading both is what keeps the
+    // tags on it from being deleted by a save: they were never shown, so the
+    // user never asked for them to go.
+    //
+    // A tag named twice is one member either way, because a set is what both
+    // sides mean, and an empty item is dropped rather than carried as a tag
+    // whose name is nothing.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "CATEGORIES:Friends,Work,\r\n",
+        "CATEGORIES:Work,hiking\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let keywords = card.keywords.expect("tags");
+    assert_eq!(
+        keywords.keys().collect::<Vec<_>>(),
+        vec!["Friends", "Work", "hiking"]
+    );
+}
+
 #[test]
 fn unmodeled_jscontact_properties_are_dropped_not_mangled() {
-    // `keywords` has no place in the minimal vCard set. Dropping it is safe
-    // only because saving goes through a PatchObject that touches the mapped
-    // properties alone — this test pins that expectation down.
+    // `preferredLanguages` has no place in the minimal vCard set. Dropping it
+    // is safe only because saving goes through a PatchObject that touches the
+    // mapped properties alone — this test pins that expectation down.
     let vcard = card_to_vcard(&fixture_card());
-    assert!(!vcard.contains("hiking"), "{vcard}");
-    assert!(!vcard.contains("keywords"), "{vcard}");
+    assert!(!vcard.contains("de-DE"), "{vcard}");
+    assert!(!vcard.contains("preferredLanguages"), "{vcard}");
     assert!(vcard_to_card(&vcard).expect("parse").extra.is_empty());
 }
 
