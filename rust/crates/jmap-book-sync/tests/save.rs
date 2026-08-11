@@ -419,7 +419,7 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(
-        vcard.contains("ADR;X-JMAP-KEY=a1;TYPE=WORK:;;Hauptstraße;Berlin;;;"),
+        vcard.contains("ADR;X-JMAP-KEY=a1;TYPE=WORK:;;Hauptstraße 1;Berlin;;;"),
         "{vcard}"
     );
 
@@ -465,12 +465,53 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
             ("number", "1"),
             ("locality", "Potsdam"),
         ],
-        "a component kind the ADR value has no field for was dropped"
+        "a street the ADR line stated in one field came back as one component"
     );
     assert_eq!(
         components[0].extra.get("phonetic"),
         Some(&json!("howptshtrahse")),
         "a component that kept its value kept nothing else"
+    );
+}
+
+#[test]
+fn retyping_a_street_replaces_the_parts_the_server_stated_it_in() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The street name and the house number share one ADR field, so a user who
+    // retypes that field has edited both at once. Nothing in the text says
+    // where the number ends, so the parts cannot be recovered — what must not
+    // happen is the old number staying behind next to the new street.
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {
+            "@type": "Address",
+            "components": [
+                {"@type": "AddressComponent", "kind": "name", "value": "Hauptstraße"},
+                {"@type": "AddressComponent", "kind": "number", "value": "1"},
+                {"@type": "AddressComponent", "kind": "floor", "value": "3"},
+            ],
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("Hauptstraße 1", "Nebenstraße 2");
+    assert_ne!(edited, vcard, "the street was not on the line: {vcard}");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let addresses = fixture.card(&id).addresses.expect("addresses");
+    let components: Vec<(&str, &str)> = addresses["a1"]
+        .components
+        .iter()
+        .flatten()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        components,
+        vec![("floor", "3"), ("name", "Nebenstraße 2")],
+        "the street the user retyped did not replace the parts it was built \
+         from: {addresses:?}"
     );
 }
 

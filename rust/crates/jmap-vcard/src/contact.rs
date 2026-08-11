@@ -28,10 +28,11 @@
 //! `addresses` is lossy the same way one level down, and is the one property
 //! that crosses on two lines. RFC 2426 §3.2.1's `ADR` has seven fields; RFC
 //! 9553 §2.5.1 builds an address out of named components, sixteen kinds of
-//! them. Seven of those kinds have a field ([`ADDRESS_COMPONENTS`]) and
-//! cross; the rest — `floor`, `room`, a street `number` stated apart from its
-//! street — have nowhere to go, and are left off the line rather than written
-//! into a field that would say something else about them. Beside the `ADR`
+//! them. Seven of those kinds have a field of their own
+//! ([`ADDRESS_COMPONENTS`]) and one more, the house `number`, shares the
+//! street's ([`JOINED_COMPONENTS`]); the rest — `floor`, `room`, `landmark` —
+//! have nowhere to go, and are left off the line rather than written into a
+//! field that would say something else about them. Beside the `ADR`
 //! goes RFC 2426 §3.2.2's `LABEL`, the address written out as it should be
 //! printed, which is RFC 9553's `full` and what EDS keeps in its three
 //! synthetic address-label fields. An address may have either line, or both:
@@ -99,6 +100,19 @@ const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("country", 6),
 ];
 
+/// JSContact address component kinds that share a vCard `ADR` field with
+/// another kind instead of having one of their own, paired with the kind
+/// whose field they join.
+///
+/// RFC 2426 §3.2.1 gives the street address one field, while RFC 9553 §2.5.1
+/// lets a card name the street and the house number separately. Leaving the
+/// number off the line would take the house out of the address the user
+/// reads, so it goes on the street field beside the street name, in the order
+/// the card lists its components — which is the only thing that says whether
+/// the number is read before the street name (`1 Main Street`) or after it
+/// (`Hauptstraße 1`).
+const JOINED_COMPONENTS: [(&str, &str); 1] = [("number", "name")];
+
 /// JSContact title `kind` values and the vCard property stating each.
 const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
 
@@ -142,7 +156,25 @@ pub fn maps_phone_feature(key: &str) -> bool {
 
 /// Whether the vCard mapping covers a JSContact address component kind.
 pub fn maps_address_component(kind: &str) -> bool {
-    ADDRESS_COMPONENTS.iter().any(|(mapped, _)| *mapped == kind)
+    address_field(kind).is_some()
+}
+
+/// The `ADR` field a component of this kind is stated in, whether it has one
+/// to itself or shares it with another kind.
+fn address_field(kind: &str) -> Option<usize> {
+    if let Some((_, index)) = ADDRESS_COMPONENTS
+        .iter()
+        .find(|(mapped, _)| *mapped == kind)
+    {
+        return Some(*index);
+    }
+    let (_, onto) = JOINED_COMPONENTS
+        .iter()
+        .find(|(mapped, _)| *mapped == kind)?;
+    ADDRESS_COMPONENTS
+        .iter()
+        .find(|(mapped, _)| mapped == onto)
+        .map(|(_, index)| *index)
 }
 
 /// Whether an address reaches the user at all — whether it has anything an
@@ -467,24 +499,69 @@ fn address_fields(address: &Address) -> Option<Vec<String>> {
     let mut fields = vec![String::new(); ADDRESS_COMPONENTS.len()];
     let mut any = false;
     for component in components {
-        let Some((_, index)) = ADDRESS_COMPONENTS
-            .iter()
-            .find(|(kind, _)| *kind == component.kind)
-        else {
+        let Some(index) = address_field(&component.kind) else {
             continue;
         };
         if component.value.is_empty() {
             continue;
         }
-        // Two components of the same kind — a street named on two lines —
-        // share the one field vCard gives them.
-        if !fields[*index].is_empty() {
-            fields[*index].push(' ');
+        // Components that share a field — a street named on two lines, or a
+        // street name and the house number standing on it — are written into
+        // it one after another, in the order the card lists them.
+        if !fields[index].is_empty() {
+            fields[index].push(' ');
         }
-        fields[*index].push_str(&component.value);
+        fields[index].push_str(&component.value);
         any = true;
     }
     any.then_some(fields)
+}
+
+/// The components an edited `ADR` line states, with every field that still
+/// says exactly what the server built it from given those parts back.
+///
+/// A field built from several components is read back as one component of the
+/// field's own kind, because nothing in `Hauptstraße 1` says where the street
+/// name ends and the house number begins, and a guess would be wrong in half
+/// the world's addresses. Left at that, opening a contact and closing it again
+/// would flatten the parts the server had stated separately — so the save asks
+/// this first: if the field still reads as the parts joined, it is those
+/// parts, unedited, and they are put back in the order and shape they went out
+/// in. If it does not, the user retyped the field, and it stays the one
+/// component they typed — the parts it was built from cannot be recovered, and
+/// keeping the old ones would leave a house number standing on a street that
+/// is no longer there.
+pub fn restore_address_components(
+    current: &[AddressComponent],
+    edited: &[AddressComponent],
+) -> Vec<AddressComponent> {
+    let mut restored = edited.to_vec();
+    for (_, index) in ADDRESS_COMPONENTS {
+        let parts: Vec<&AddressComponent> = current
+            .iter()
+            .filter(|component| {
+                address_field(&component.kind) == Some(index) && !component.value.is_empty()
+            })
+            .collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let joined = parts
+            .iter()
+            .map(|component| component.value.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut stated = restored
+            .iter()
+            .enumerate()
+            .filter(|(_, component)| address_field(&component.kind) == Some(index));
+        let at = match (stated.next(), stated.next()) {
+            (Some((at, component)), None) if component.value == joined => at,
+            _ => continue,
+        };
+        restored.splice(at..=at, parts.into_iter().cloned());
+    }
+    restored
 }
 
 /// The address an `ADR` line states, or `None` when every field of it is

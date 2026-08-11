@@ -22,7 +22,7 @@ pub mod syntax;
 
 pub use contact::{
     address_label, card_to_vcard, maps_address_component, maps_context, maps_name_component,
-    maps_phone_feature, states_address, states_email, states_note, states_organization,
-    states_phone, states_title, title_kind, vcard_to_card,
+    maps_phone_feature, restore_address_components, states_address, states_email, states_note,
+    states_organization, states_phone, states_title, title_kind, vcard_to_card,
 };
 pub use error::VCardError;
