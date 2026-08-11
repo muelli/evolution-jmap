@@ -247,12 +247,43 @@ const ZONED_MOVED_DTSTART: &str = "20260312T080000";
 /// through EDS, so its `locations` and `virtualLocations` hold exactly what an
 /// iCalendar line can state and there is nothing for a round trip to lose.
 ///
-/// The title is asserted from both ends, so a mix-up cannot pass; the start and
-/// the length are `CalendarEvent::simple`'s shape, since neither is what this
-/// leg is about.
+/// The title is asserted from both ends, so a mix-up cannot pass; the length is
+/// `CalendarEvent::simple`'s shape, since it is not what this leg is about. The
+/// start is, together with the zone below.
 const PLACED_TITLE: &str = "Design review";
 const PLACED_START: &str = "2026-04-09T10:00:00";
 const PLACED_DURATION: &str = "PT1H";
+
+/// And the clock that start is on — a named zone rather than the `Etc/UTC`
+/// `CalendarEvent::simple` fills in, which is what makes the start worth an
+/// observation at all.
+///
+/// UTC is RFC 5545 §3.3.5's form 2: `jmap-ical` draws it as a `DTSTART` ending in
+/// `Z`, which names no identifier and so needs no definition of one. A named zone
+/// is form 3, and there the mapping writes `DTSTART;TZID=Europe/Berlin` and **no
+/// `VTIMEZONE`** — betting that a consumer resolves an IANA name out of libical's
+/// builtin table, see `dated` in `jmap-ical`. RFC 5545 §3.2.19 has the document
+/// itself define what a `TZID` refers to, so the bet is this repository declining
+/// to ship a definition it has no zone database to build; and nothing below real
+/// EDS can test it, because every fixture in `jmap-ical` and `jmap-cal-sync`
+/// compares text against text, where a zone nobody could resolve reads back
+/// exactly like one anybody could.
+///
+/// Berlin rather than a zone that never leaves standard time, because the instant
+/// is what makes the bet visible: 2026-04-09 is inside CEST, so a consumer that
+/// resolved the name lands on 08:00 UTC while one that quietly floated the value
+/// lands on 10:00 — two hours apart, and on any machine, since libical does not
+/// adjust a floating time it converts.
+const PLACED_ZONE: &str = "Europe/Berlin";
+
+/// The wall clock EDS should show for that start, and the instant a consumer's
+/// own clock should land on. Two observations rather than one for the reason
+/// `dtstart_parts` in `tests/functional/cal-client.c` gives: a start that lost
+/// its zone and a start converted into another are the same appointment at the
+/// wrong hour, stated differently, and either value alone passes for the other
+/// going wrong.
+const PLACED_DTSTART: &str = "20260409T100000";
+const PLACED_DTSTART_UTC: &str = "20260409T080000Z";
 
 /// The place that event happens at, under a key only a server would choose, and
 /// with a member no `LOCATION` line has room for.
@@ -438,6 +469,10 @@ fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
     // What a server assigns; the mock's own `CalendarEvent/set` fills the same
     // shape in, and seeding bypasses it.
     event.uid = Some(format!("urn:example:event:{}", id.as_str()));
+    // In a named zone rather than the UTC `simple` fills in, which is the one
+    // shape of `DTSTART` the mapping writes without shipping the definition of
+    // the identifier it names — see [`PLACED_ZONE`].
+    event.time_zone = Some(PLACED_ZONE.to_owned());
     event.locations = Some(
         [(
             PLACED_LOCATION_KEY.to_owned(),
@@ -1301,6 +1336,33 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "the event EDS handed back is not the one the mock was seeded with\n{report}"
     );
 
+    // When EDS says the event starts — the one thing this leg asks about the
+    // document rather than about a map, and three observations because the
+    // mapping states the zone as a bare `TZID` and defines it nowhere. The value
+    // says the wall clock arrived; the identifier says the line still names the
+    // zone the server chose, which is what a save has to read back for the zone
+    // to survive one; and the instant says a consumer resolved that identifier
+    // *without* a `VTIMEZONE` to resolve it against — which is the bet
+    // [`PLACED_ZONE`] describes, and which no fixture can measure.
+    assert_eq!(
+        seen.get("read-dtstart"),
+        Some(&PLACED_DTSTART),
+        "the wall clock the server holds did not reach the DTSTART line\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-dtstart-tzid"),
+        Some(&PLACED_ZONE),
+        "EDS does not name the server's own zone on the DTSTART it handed back, \
+         so the zone a save reads is not the one the event is in\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-dtstart-utc"),
+        Some(&PLACED_DTSTART_UTC),
+        "a libecal consumer resolved the event's start to another instant than \
+         the one the server means: the TZID the mapping wrote carries no \
+         VTIMEZONE, and this is where a zone nobody could resolve shows up\n{report}"
+    );
+
     // What a libecal consumer was shown of the server's two places. The values
     // say the drawing arrived at all; the keys say a save can reach back into the
     // entry it was drawn from, which is the claim this leg exists for and one no
@@ -1509,6 +1571,27 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
          save, still under the key the server chose\n{report}"
     );
 
+    // And the start after the save, which the client never touched: a save that
+    // re-stated the event's clock — as UTC, say, or in the zone the machine
+    // running this happens to be in — is an appointment moved for every other
+    // client of the account, and it would be moved by an edit the user made to a
+    // resource.
+    assert_eq!(
+        seen.get("read-back-dtstart"),
+        Some(&PLACED_DTSTART),
+        "the save changed the wall clock the event starts at\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-dtstart-tzid"),
+        Some(&PLACED_ZONE),
+        "the save left the event's start on another zone than the server's\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-dtstart-utc"),
+        Some(&PLACED_DTSTART_UTC),
+        "the event starts at another instant after the save than before it\n{report}"
+    );
+
     let calls = server.method_calls();
     assert!(
         calls.iter().any(|call| call == "CalendarEvent/set"),
@@ -1638,5 +1721,18 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         event.title.as_deref(),
         Some(PLACED_TITLE),
         "the save renamed the event: {event:?}"
+    );
+    // And when it starts, from the server's end: the same wall clock on the same
+    // zone it was seeded with. The client's observations above say the round trip
+    // showed the right instant; this says the save did not *restate* it. A start
+    // and a zone the mapping read back in another form — the solidus-prefixed
+    // identifier libical writes for a builtin zone, an instant converted to UTC —
+    // would reach the server as a patch of `start` and `timeZone` here, and
+    // rewriting either on a save the user made to a picture is a change nobody
+    // asked for even where it names the same moment.
+    assert_eq!(
+        (event.start.as_deref(), event.time_zone.as_deref()),
+        (Some(PLACED_START), Some(PLACED_ZONE)),
+        "the save restated when the event starts: {event:?}"
     );
 }
