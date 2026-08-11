@@ -17752,3 +17752,77 @@ above, and the multi-`NOTE` risk. With `notes` landed, the contact list the
 last three sessions worked through is empty; the next obvious contact work is
 either closing that empty-value hole or the `LABEL` property behind Evolution's
 address-label fields.
+
+## 2026-08-11 (hundred-and-seventy-sixth session)
+
+**The hole the last session wrote down rather than fixed, closed.** It named
+`titles` and `emails`/`phones`: entries whose value is empty get no vCard
+line, so they never reach the user, but their save-side predicates did not
+know it — `maps_title_kind` asked only about the `kind`, and `diff_entries`
+called every email and phone visible. Auditing the rest of the keyed maps
+before writing the fix found a fourth: `organizations` went through the same
+always-visible path, while `organization_components` returns `None` for an
+entry with neither a name nor a unit. The previous entry's parenthetical
+("`ORG` and `ADR` are already safe") was half right — the *predicate* answers
+for the whole entry, but nothing on the save path was asking it. `ADR` and
+`NOTE` really were safe; `ORG` was not.
+
+**The damage was worse than deletion for `emails` and `phones`, and the tests
+say which.** For `titles` and `organizations` the invisible entry is simply
+nulled. For `emails` and `phones` the reader invents keys by counting only the
+lines it can see — `e1`, `p1` — so a hidden entry sitting on `e1` does not get
+deleted, it gets *collided with*: the address the user just typed is written
+into it by `diff_entry`, and the hidden entry's own value and unmapped members
+are what is left behind. The red run showed exactly that, `e1` coming back
+holding `beer@example.com` alongside the `label` of the entry it displaced.
+Both failure modes are the same bug, so both are asserted the same way — the
+hidden entry still holds its own value and its `label`/`sortAs`/
+`organizationId`, the typed entry exists, and the map has grown by one.
+
+**The fix is four more `states_*` predicates and one fewer function.**
+`states_email`, `states_phone`, `states_title` and `states_organization` join
+`states_address` and `states_note` next to the emitter, and `card_to_vcard`
+now asks them by name where it used to inline `!address.is_empty()` — which
+is the whole point of the pattern: the save cannot drift from what the emitter
+wrote if it asks the emitter. `states_title` is the only compound one,
+`!name.is_empty() && maps_title_kind(...)`, because a title can be invisible
+for either reason. `maps_title_kind` lost its last outside caller and became
+private.
+
+**With every keyed map now needing a predicate, the two diff helpers became
+one.** `diff_entries` was a wrapper passing `|_| true` to
+`diff_visible_entries`; there is no longer a caller for it, so it is gone and
+`diff_visible_entries` took its name. That is the honest shape: there is no
+such thing here as a keyed map the vCard states entirely, and a helper that
+offers one is an invitation to the next instance of this bug. The module doc
+was rewritten to say so — it previously listed `titles`/`addresses`/`notes` as
+the special case.
+
+Tests: 854 in the default set, up 4 from 850, all four in `jmap-book-sync`'s
+`save.rs`. Red first, and red in the two distinct ways above.
+
+Verified locally: `cargo test --locked` 854; full `ninja` then `ctest` 14/14
+including all four functional legs; `cargo fmt --all --check` and `cargo
+clippy --all-targets --locked -- -D warnings` clean. `ci/checks.sh` still
+stops at its first step (`reuse` absent, no `pipx`/`uvx`); no file was added
+and `Cargo.lock` is untouched, so the exposure is nil and `cargo deny`'s
+answer is the one it gave on the last green run. Noted in passing, not fixed:
+`cargo clippy --workspace` fails on `example-module` with 26
+`manual_c_str_literals` — a crate outside `default-members` and outside what
+`ci/checks.sh` checks, so it is pre-existing and untouched by this session.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is unexplained; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the `NameComponent` `phonetic` hole stands; the `ADR` line's
+missing house number is still visible to the user; the multi-`NOTE`/`ORG`/
+`TITLE` "Evolution shows only the first" bet is still unverified in real
+Evolution; and whether `e_contact_set` preserves an `X-JMAP-KEY` on an
+attribute it rewrites is still unverified. Nothing new opened. The next
+obvious contact work is the `LABEL` property behind Evolution's address-label
+fields, which is now the only item left on the list this and the last four
+sessions have been working through.
