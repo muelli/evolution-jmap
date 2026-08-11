@@ -1,0 +1,373 @@
+/* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * The second client half of the calendar functional test: an ordinary libecal
+ * consumer that opens a calendar, reads an event the *server* already held,
+ * retypes the place it happens at and writes it back.
+ *
+ * A program of its own rather than a phase of cal-client.c, which creates
+ * every event it looks at. The two ask opposite questions. cal-client.c asks
+ * what reaches the server when the user makes an appointment, so its whole
+ * story is a client writing components and EDS's recurrence machinery
+ * answering; this one asks what survives the *round trip* — a JSCalendar event
+ * the mapping could only draw part of, out to iCalendar, through
+ * ECalMetaBackend's cache, into a libecal consumer, back through a save. Only
+ * an event nobody here created can ask that, and none of cal-client.c's
+ * six hundred lines of series-splitting would be reached on the way.
+ *
+ * Like its twin it has no notion of what "correct" is: it reports what EDS
+ * told it on stdout, one `key=value` line per observation, and exits non-zero
+ * the moment a call fails. Every assertion belongs to
+ * `rust/crates/jmap-functional/tests/calendar.rs`, which seeds the event,
+ * runs this program and reads its output.
+ *
+ *   usage: functional-cal-edit-client <source-uid> <event-uid> <new-location>
+ *                                    <new-conference-uri>
+ */
+
+#define LIBICAL_GLIB_UNSTABLE_API 1
+
+#include <libecal/libecal.h>
+
+#include "connection-status.h"
+
+/* The parameter the mapping writes on a LOCATION and on a CONFERENCE to say
+ * which entry of the server's map the line was drawn from — jmap-ical's
+ * X_JMAP_KEY. Reading it back is the whole point of this program: the save
+ * path patches `locations/<key>/name`, so a key EDS did not carry is a save
+ * that cannot reach the entry the user edited. */
+#define JMAP_KEY_PARAMETER "X-JMAP-KEY"
+
+/* How long to wait for the seeded event to become gettable, and how often to
+ * ask. The same reasoning as book-client.c's EDIT_WAIT_TRIES: ECalMetaBackend
+ * answers a get for an event its cache has never heard of by asking the
+ * backend to load it, so the first try is expected to succeed — but the
+ * backend also schedules a refresh during the connect, and a get that arrives
+ * while that is still running can be answered out of a cache the refresh has
+ * not filled yet. Polling turns that ordering into a wait rather than a flake.
+ * Ten seconds in total, far beyond what a local mock needs and well inside the
+ * CTest timeout, so a genuinely absent event fails the test rather than
+ * hanging it. */
+#define EDIT_WAIT_TRIES 200
+#define EDIT_WAIT_INTERVAL_US 50000
+
+static int
+fail (const gchar *step,
+      GError *error)
+{
+	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
+	g_clear_error (&error);
+
+	return 1;
+}
+
+/* What EDS hands back from get_object: a bare VEVENT for an event with one
+ * instance, or a VCALENDAR wrapping the instances when there are several. The
+ * event this program reads has one, but taking the wrapper's first VEVENT
+ * rather than insisting on the bare form keeps the shape of EDS's answer from
+ * becoming a failure that says nothing about what is being tested. */
+static ICalComponent *
+first_vevent (ICalComponent *component)
+{
+	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
+		return g_object_ref (component);
+
+	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
+}
+
+/* The value of one non-standard parameter of a property, or the empty string
+ * for a property that carries none.
+ *
+ * libical holds every parameter it has no enum for as an I_CAL_X_PARAMETER
+ * whose name is readable through i_cal_parameter_get_xname, so this walks
+ * them rather than asking for one by kind. The name is compared
+ * case-insensitively because RFC 5545 §3.1 makes parameter names
+ * case-insensitive, and this program is reading back what another
+ * implementation — the meta backend's cache — chose to write.
+ *
+ * The empty string rather than NULL for absent, so that a parameter EDS
+ * dropped is an observation the harness can assert on instead of a line
+ * missing from the output. */
+static gchar *
+x_parameter (ICalProperty *property,
+	     const gchar *name)
+{
+	ICalParameter *parameter;
+
+	if (!property)
+		return g_strdup ("");
+
+	parameter = i_cal_property_get_first_parameter (property, I_CAL_X_PARAMETER);
+	while (parameter) {
+		ICalParameter *next;
+		const gchar *xname = i_cal_parameter_get_xname (parameter);
+
+		if (xname && g_ascii_strcasecmp (xname, name) == 0) {
+			gchar *value = g_strdup (i_cal_parameter_get_xvalue (parameter));
+
+			g_object_unref (parameter);
+
+			return value ? value : g_strdup ("");
+		}
+
+		next = i_cal_property_get_next_parameter (property, I_CAL_X_PARAMETER);
+		g_object_unref (parameter);
+		parameter = next;
+	}
+
+	return g_strdup ("");
+}
+
+/* How many properties of one kind a component carries. Counted rather than
+ * inferred from the values, because a line the round trip *added* — a second
+ * place under a key nobody chose — is a different bug from one whose value
+ * changed, and only the count tells them apart. */
+static guint
+property_count (ICalComponent *component,
+		ICalPropertyKind kind)
+{
+	ICalProperty *property;
+	guint count = 0;
+
+	property = i_cal_component_get_first_property (component, kind);
+	while (property) {
+		ICalProperty *next;
+
+		count++;
+		next = i_cal_component_get_next_property (component, kind);
+		g_object_unref (property);
+		property = next;
+	}
+
+	return count;
+}
+
+/* The CONFERENCE property kind, which libical-glib 3.0's generated
+ * ICalPropertyKind does not name.
+ *
+ * RFC 7986 §5.11 is a decade newer than the enum's oldest members, and the
+ * glib binding shipped with EDS 3.52 has no I_CAL_CONFERENCE_PROPERTY even
+ * though the libical C enum it is generated from has ICAL_CONFERENCE_PROPERTY
+ * and the parser produces it. The cast is therefore between two spellings of
+ * the same value, not a reinterpretation: I_CAL_* is defined as the ICAL_*
+ * member throughout i-cal-derived-property.h.
+ *
+ * Worth stating plainly because it is a fact about the platform this test
+ * measures: a client that wanted to *offer* a conference through libical-glib
+ * has no named constant for the property, which is part of why Evolution 3.52
+ * has no UI for one. */
+#define CONFERENCE_PROPERTY ((ICalPropertyKind) ICAL_CONFERENCE_PROPERTY)
+
+/* Report what EDS holds for the two places the mapping draws: the one line of
+ * text a LOCATION is, and the CONFERENCE beside it.
+ *
+ * Four observations per place rather than one, because they answer different
+ * questions and the value alone answers only the least interesting of them.
+ * The value says the drawing arrived; the key says the line can be *saved*
+ * back onto the entry the server chose, which is the claim the whole
+ * patch-into-the-property design rests on; the count says the round trip
+ * neither dropped the line nor added one beside it; and the conference's LABEL
+ * says a parameter the mapping invented no name for — a standard one, unlike
+ * the key — came along too. */
+static void
+report_places (const gchar *prefix,
+	       ICalComponent *event)
+{
+	ICalProperty *location;
+	ICalProperty *conference;
+	gchar *key;
+	gchar *value;
+
+	location = i_cal_component_get_first_property (event, I_CAL_LOCATION_PROPERTY);
+	value = location ? i_cal_property_get_value_as_string (location) : g_strdup ("");
+	key = x_parameter (location, JMAP_KEY_PARAMETER);
+	g_print ("%s-location=%s\n", prefix, value ? value : "");
+	g_print ("%s-location-key=%s\n", prefix, key);
+	g_print ("%s-locations=%u\n", prefix,
+		 property_count (event, I_CAL_LOCATION_PROPERTY));
+	g_free (value);
+	g_free (key);
+	g_clear_object (&location);
+
+	conference = i_cal_component_get_first_property (event, CONFERENCE_PROPERTY);
+	value = conference ? i_cal_property_get_value_as_string (conference) : g_strdup ("");
+	key = x_parameter (conference, JMAP_KEY_PARAMETER);
+	g_print ("%s-conference=%s\n", prefix, value ? value : "");
+	g_print ("%s-conference-key=%s\n", prefix, key);
+	g_print ("%s-conferences=%u\n", prefix,
+		 property_count (event, CONFERENCE_PROPERTY));
+	g_free (value);
+	g_free (key);
+
+	if (conference) {
+		ICalParameter *label = i_cal_property_get_first_parameter (
+			conference, I_CAL_LABEL_PARAMETER);
+
+		g_print ("%s-conference-label=%s\n", prefix,
+			 label ? i_cal_parameter_get_label (label) : "");
+		g_clear_object (&label);
+		g_object_unref (conference);
+	} else {
+		g_print ("%s-conference-label=\n", prefix);
+	}
+}
+
+/* Ask for one event until EDS has it, or give up. A miss arrives as
+ * E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND rather than as a failure of the call, so
+ * it is cleared and retried; any other error would be retried too, and the
+ * caller says what it was waiting for when the tries run out. */
+static ICalComponent *
+wait_for_event (ECalClient *cal,
+		const gchar *uid)
+{
+	guint try;
+
+	for (try = 0; try < EDIT_WAIT_TRIES; try++) {
+		ICalComponent *component = NULL;
+		GError *error = NULL;
+
+		if (e_cal_client_get_object_sync (cal, uid, NULL, &component, NULL, &error)) {
+			g_print ("waited-tries=%u\n", try);
+
+			return component;
+		}
+
+		g_clear_error (&error);
+		g_usleep (EDIT_WAIT_INTERVAL_US);
+	}
+
+	return NULL;
+}
+
+int
+main (int argc,
+      char **argv)
+{
+	GError *error = NULL;
+	ESourceRegistry *registry;
+	ESource *source;
+	EClient *client;
+	ECalClient *cal;
+	ICalComponent *fetched;
+	ICalComponent *event;
+	ICalComponent *read_back = NULL;
+	ICalComponent *read_back_event;
+	ICalProperty *conference;
+	const gchar *source_uid;
+	const gchar *event_uid;
+	const gchar *new_location;
+	const gchar *new_conference_uri;
+
+	if (argc != 5) {
+		g_printerr ("usage: %s <source-uid> <event-uid> <new-location> "
+			    "<new-conference-uri>\n", argv[0]);
+		return 2;
+	}
+
+	source_uid = argv[1];
+	event_uid = argv[2];
+	new_location = argv[3];
+	new_conference_uri = argv[4];
+
+	registry = e_source_registry_new_sync (NULL, &error);
+	if (!registry)
+		return fail ("registry", error);
+
+	source = e_source_registry_ref_source (registry, source_uid);
+	if (!source) {
+		g_printerr ("source: no source with uid %s\n", source_uid);
+		return 1;
+	}
+
+	/* (guint32) -1 is EDS's "do not wait for connected". A program shaped like
+	 * this one cannot use the built-in wait — it blocks the only thread that
+	 * would iterate the context the notification arrives on, so it always
+	 * expires — and waiting properly is what functional_report_connection_status
+	 * below is for. See "Why the clients pass 'do not wait for connected'" in
+	 * docs/functional-tests.md. */
+	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
+					    (guint32) -1, NULL, &error);
+	if (!client)
+		return fail ("connect", error);
+
+	/* Reported before anything is asked of the calendar, for the reason
+	 * cal-client.c gives: e_cal_client_connect_sync succeeds even when the
+	 * backend's connect_sync failed, so a calendar the backend never opened
+	 * looks from here exactly like one it opened and forgot to claim
+	 * writable. */
+	functional_report_connection_status (source, 10);
+
+	cal = E_CAL_CLIENT (client);
+	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
+
+	fetched = wait_for_event (cal, event_uid);
+	if (!fetched) {
+		g_printerr ("get-seeded: EDS never handed back the event %s\n", event_uid);
+		return 1;
+	}
+
+	event = first_vevent (fetched);
+	if (!event) {
+		g_printerr ("get-seeded: what EDS handed back holds no VEVENT\n");
+		return 1;
+	}
+
+	g_print ("read-summary=%s\n", i_cal_component_get_summary (event));
+	report_places ("read", event);
+
+	/* The first edit: the user retypes the place, which is what Evolution's
+	 * appointment editor writes into. i_cal_component_set_location replaces
+	 * the value of the existing LOCATION and leaves its parameters where they
+	 * are — measured, not assumed. */
+	i_cal_component_set_location (event, new_location);
+
+	/* And the second: the address the event is joined at. Evolution 3.52 has
+	 * no control for one — libical-glib does not even name the property, see
+	 * CONFERENCE_PROPERTY above — so this half of the edit is what another
+	 * client on the same account does, not what a user of this plugin can do
+	 * today. It is here because it is the only edit that makes the
+	 * X-JMAP-KEY load-bearing: RFC 7986 §5.11 admits several CONFERENCE lines,
+	 * so the mapping finds the server's entry by the key on the line and by
+	 * nothing else. A LOCATION cannot ask that question — RFC 5545 §3.6.1
+	 * allows one, so the save finds the single entry in the server's own map
+	 * whatever the line says.
+	 *
+	 * The value is set through the property rather than by replacing it, for
+	 * the same reason set_location is used above: what is under test is
+	 * whether a save carries the parameters the load handed over, and a fresh
+	 * property would carry none by construction. */
+	conference = i_cal_component_get_first_property (event, CONFERENCE_PROPERTY);
+	if (!conference) {
+		g_printerr ("edit-conference: the event EDS handed back has no "
+			    "CONFERENCE to retype\n");
+		return 1;
+	}
+	i_cal_property_set_value_from_string (conference, new_conference_uri, "URI");
+	g_object_unref (conference);
+
+	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
+					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
+		return fail ("modify", error);
+
+	g_object_unref (event);
+	g_object_unref (fetched);
+
+	if (!e_cal_client_get_object_sync (cal, event_uid, NULL, &read_back, NULL, &error))
+		return fail ("get-after-modify", error);
+
+	read_back_event = first_vevent (read_back);
+	if (!read_back_event) {
+		g_printerr ("get-after-modify: what EDS handed back holds no VEVENT\n");
+		return 1;
+	}
+
+	report_places ("read-back", read_back_event);
+
+	g_object_unref (read_back_event);
+	g_object_unref (read_back);
+	g_object_unref (client);
+	g_object_unref (source);
+	g_object_unref (registry);
+
+	return 0;
+}

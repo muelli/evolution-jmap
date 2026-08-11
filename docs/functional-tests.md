@@ -54,7 +54,7 @@ error naming the missing one. That is deliberate: see below.
    with what the test needs — one address book or one calendar flagged as the
    account default, or a few mailboxes with some mail in them, or the mailbox
    roles and the sending identity a submission needs, or a whole contact card
-   for a test about what EDS makes of one it did not write;
+   or calendar event for a test about what EDS makes of one it did not write;
 2. builds a throwaway EDS installation in a directory under the crate's
    target tmpdir: a scratch `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
    `XDG_CACHE_HOME`, the `.source` keyfiles that describe the account and name
@@ -563,6 +563,57 @@ line for line, and this test is what found it.
   (RFC 5545 §3.8.4.4) while the instance's own `DTSTART` does not.
 
 The read path is left alone for the same reason as the address book's.
+
+### The second calendar leg: an event that came from the server
+
+`retyping_a_place_through_eds_patches_the_entry_the_server_chose`, against
+`tests/functional/cal-edit-client.c` — a second client program, because the two
+ask opposite questions and share no code path worth sharing. Every event in the
+leg above is created through EDS, so its `locations` and `virtualLocations` hold
+exactly what an iCalendar line can state and a round trip has nothing to lose.
+This one starts from an event the *mock* was seeded with before EDS ever
+connected, holding two entries a line can only draw part of:
+
+- a `locations` entry with a `name` and a `description`, and
+- a `virtualLocations` entry with a `uri`, a `name` and a `description`,
+
+each under a key only a server would choose. The client waits for the event to
+become gettable, reports what EDS gave it, retypes the `LOCATION` (the field
+Evolution's appointment editor writes) and the `CONFERENCE` value, and saves.
+
+What it asserts, and why each observation is separate:
+
+- **the drawing arrived** — the place on the `LOCATION` line, the address on the
+  `CONFERENCE` line, one of each and no more, and the conference's `LABEL`;
+- **the `X-JMAP-KEY` came back on both lines.** For the conference this is
+  load-bearing: RFC 7986 §5.11 admits several `CONFERENCE` lines, so the mapping
+  finds the server's entry by the key the line carries and by nothing else. For
+  the `LOCATION` it is not — RFC 5545 §3.6.1 allows one, so the save finds the
+  single entry in the server's own map whatever the line says — and it is
+  asserted anyway, so that the day the mapping draws a second place a change in
+  what EDS carries fails here rather than corrupting;
+- **both edits reached the server as patches of the entries they were drawn
+  from**: `locations/<key>/name` and `virtualLocations/<key>/uri`, with the
+  `description` neither line had room for still where the server put it. A save
+  that named either property whole passes every observation above and fails
+  this one, and what it costs the user is a note they never saw;
+- **the entry keys did not move** and the event was not renamed, so the save
+  patched the event rather than replacing it with what one component can state.
+
+Three mutations were run against it, each reddening a different assertion:
+dropping the `X-JMAP-KEY` from the `CONFERENCE` (the key observation);
+ignoring the key when reading the line back, which leaves the drawing intact and
+the save unable to name the entry (the read-back address, because EDS's cache
+hands the old one over); and making the rename replace `locations` rather than
+patch into it (the server-side entry, which comes back without its
+`description`).
+
+Retyping the conference is the one thing here a user of Evolution 3.52 cannot
+do: it has no control for the property, and libical-glib 3.0 does not even name
+it — the generated `ICalPropertyKind` has no `I_CAL_CONFERENCE_PROPERTY`, so the
+client casts the libical C enumerator. That edit is what another client on the
+same account does; the mapping has a path for it, and this is what says the path
+works through real EDS.
 
 ## What the mail test asserts
 

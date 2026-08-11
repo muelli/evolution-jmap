@@ -10,9 +10,17 @@
 //! the other's tests would have caught. Everything here is checked from the
 //! two ends and nothing in between — the client program says what EDS gave a
 //! libecal consumer, the mock says what the backend asked the server for.
+//!
+//! Two legs, and they ask opposite questions, so they run different client
+//! programs. The first creates every event it looks at, which is what a user
+//! making an appointment does; the second starts from an event the *server*
+//! held before EDS ever connected, carrying members no iCalendar line can
+//! state, and asks what survives the round trip out to a component and back
+//! through a save. Only an event nobody here created can ask that.
 
 use jmap_functional::{Session, observations, required_path};
-use jmap_proto::calendars::NDay;
+use jmap_proto::Id;
+use jmap_proto::calendars::{CalendarEvent, NDay};
 
 /// The event the client writes. The summary is passed on its command line
 /// and looked for in the mock's store, so the two ends cannot disagree about
@@ -231,6 +239,112 @@ const ZONED_MOVED_TIME_ZONE: &str = "America/New_York";
 /// `America/New_York` both end the same way, and a series' zone silently
 /// applied to the instance ends in `Europe/Berlin`.
 const ZONED_MOVED_DTSTART: &str = "20260312T080000";
+
+/// The event the second leg starts from — one the *server* holds, which is the
+/// only way to ask the question that leg asks. Every event above is created
+/// through EDS, so its `locations` and `virtualLocations` hold exactly what an
+/// iCalendar line can state and there is nothing for a round trip to lose.
+///
+/// The title is asserted from both ends, so a mix-up cannot pass; the start and
+/// the length are `CalendarEvent::simple`'s shape, since neither is what this
+/// leg is about.
+const PLACED_TITLE: &str = "Design review";
+const PLACED_START: &str = "2026-04-09T10:00:00";
+const PLACED_DURATION: &str = "PT1H";
+
+/// The place that event happens at, under a key only a server would choose, and
+/// with a member no `LOCATION` line has room for.
+///
+/// RFC 8984 §4.2.5's Location holds a `description`, `coordinates`,
+/// `locationTypes` and more besides its `name`; RFC 5545 §3.6.1 gives a `VEVENT`
+/// one line of text. That gap is why the save patches `locations/<key>/name`
+/// rather than replacing the property — and the `description` is what says it
+/// did: a save that replaced `locations` would delete a note the user was never
+/// shown, and this leg would see it gone from the server.
+const PLACED_LOCATION_KEY: &str = "srv-loc";
+const PLACED_LOCATION_NAME: &str = "Room 42";
+const PLACED_LOCATION_DESCRIPTION: &str = "third floor, past the lift";
+
+/// And where it may be joined online, likewise under the server's own key and
+/// likewise holding a `description` the `CONFERENCE` line cannot carry.
+///
+/// This is the entry that makes the `X-JMAP-KEY` load-bearing, and the reason the
+/// leg edits it too. RFC 7986 §5.11 admits several `CONFERENCE` lines, so
+/// `jmap-ical` reads the key off the line and the save patches
+/// `virtualLocations/<key>/uri`; a key EDS dropped between the load and the save
+/// leaves the mapping holding a key it invented, which names no entry on the
+/// server, and the edit reaches nothing. A `LOCATION` cannot ask that — RFC 5545
+/// §3.6.1 allows one, so the save finds the single entry in the server's own map
+/// whatever the line carries.
+///
+/// The `name` rides on the line as a `LABEL`, which is the one parameter here
+/// that says a *standard* parameter came back too — a cache that kept only what
+/// libical has an enum for would answer that one and drop the key.
+const PLACED_CONFERENCE_KEY: &str = "srv-conf";
+const PLACED_CONFERENCE_URI: &str = "https://meet.example/design-review";
+const PLACED_CONFERENCE_NAME: &str = "Video bridge";
+const PLACED_CONFERENCE_DESCRIPTION: &str = "dial in from the lobby phone";
+
+/// The place the user retypes into the appointment editor's Location field. A
+/// different room, so a value half-written shows up as neither.
+const REPLACED_LOCATION_NAME: &str = "Room 7";
+
+/// And the address the event is joined at afterwards. Not something Evolution
+/// 3.52 offers a control for — see `tests/functional/cal-edit-client.c` — so this
+/// is the edit another client on the same account makes; the mapping has a path
+/// for it, and this is what says the path works through real EDS. A different
+/// host as well as a different path, so a URI half-rewritten is neither.
+const REPLACED_CONFERENCE_URI: &str = "https://call.example/rescheduled";
+
+/// Put the event the second leg starts from into the mock's store, and hand back
+/// the id the server filed it under — which is also the `UID` EDS keys its cache
+/// on, since that is what `jmap-ical` writes there.
+///
+/// Seeded straight into the store rather than written through EDS, because the
+/// shape under test is one no iCalendar document can state: an event created
+/// through EDS arrives with a place whose whole content is the name on the line,
+/// leaving nothing for the save to preserve — or to lose.
+fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
+    let account_id = server.account_id();
+    let state = server.state();
+    let mut state = state.lock().expect("mock state lock");
+    let account = state
+        .account_mut(&account_id)
+        .expect("the mock's default account");
+    let calendar = account.seed_calendar("Personal", true);
+
+    let id = account.calendar_events.alloc_id();
+    let mut event = CalendarEvent::simple(calendar, PLACED_TITLE, PLACED_START, PLACED_DURATION);
+    event.id = Some(id.clone());
+    // What a server assigns; the mock's own `CalendarEvent/set` fills the same
+    // shape in, and seeding bypasses it.
+    event.uid = Some(format!("urn:example:event:{}", id.as_str()));
+    event.locations = Some(
+        [(
+            PLACED_LOCATION_KEY.to_owned(),
+            serde_json::json!({
+                "@type": "Location",
+                "name": PLACED_LOCATION_NAME,
+                "description": PLACED_LOCATION_DESCRIPTION,
+            }),
+        )]
+        .into(),
+    );
+    event.virtual_locations = Some(
+        [(
+            PLACED_CONFERENCE_KEY.to_owned(),
+            serde_json::json!({
+                "@type": "VirtualLocation",
+                "uri": PLACED_CONFERENCE_URI,
+                "name": PLACED_CONFERENCE_NAME,
+                "description": PLACED_CONFERENCE_DESCRIPTION,
+            }),
+        )]
+        .into(),
+    );
+    account.calendar_events.seed_with_id(id.clone(), event);
+    id
+}
 
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the
 /// mock's ephemeral port filled in. Kept as a literal here rather than read
@@ -874,5 +988,224 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "the occurrence the user moved into another zone did not reach the \
          server on that zone, so every other client shows it five hours from \
          where it was put: {zoned_recurring:?}"
+    );
+}
+
+#[test]
+fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
+    let client = required_path("JMAP_FUNCTIONAL_CAL_EDIT_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_CAL_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let event_id = seed_placed_event(&server);
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/calendar-replace"));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_calendar_backend(&module);
+
+    let output = session.run(
+        &client,
+        &[
+            "jmap-functional",
+            event_id.as_str(),
+            REPLACED_LOCATION_NAME,
+            REPLACED_CONFERENCE_URI,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect first, for the reason the leg above spells out: a calendar the
+    // backend never opened turns every later failure into a message about the
+    // wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the calendar read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    assert_eq!(
+        seen.get("read-summary"),
+        Some(&PLACED_TITLE),
+        "the event EDS handed back is not the one the mock was seeded with\n{report}"
+    );
+
+    // What a libecal consumer was shown of the server's two places. The values
+    // say the drawing arrived at all; the keys say a save can reach back into the
+    // entry it was drawn from, which is the claim this leg exists for and one no
+    // fixture in `jmap-ical` or `jmap-cal-sync` can make — they supply the
+    // component by hand, so the parameter is there by construction.
+    assert_eq!(
+        seen.get("read-location"),
+        Some(&PLACED_LOCATION_NAME),
+        "the place the server holds did not reach the LOCATION line\n{report}"
+    );
+    // Reported rather than relied on: the save finds the one entry RFC 5545
+    // §3.6.1 lets a `LOCATION` stand for in the server's own map, so a key lost
+    // here would cost nothing yet. It is asserted because the day the mapping
+    // draws a second place — RFC 8984 §4.2.5 allows any number — it will read
+    // this parameter, and a silent change in what EDS carries should fail then
+    // rather than corrupt.
+    assert_eq!(
+        seen.get("read-location-key"),
+        Some(&PLACED_LOCATION_KEY),
+        "EDS did not carry the X-JMAP-KEY the LOCATION went out with\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-locations"),
+        Some(&"1"),
+        "EDS holds a LOCATION line other than the one the mapping wrote\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-conference"),
+        Some(&PLACED_CONFERENCE_URI),
+        "the place the event may be joined at did not reach the CONFERENCE \
+         line\n{report}"
+    );
+    // This one is load-bearing, and it is the observation the leg was written
+    // for: the mapping finds the server's virtual location by the key on the
+    // line, so an edit of the line below reaches the entry only if EDS carried
+    // this parameter through its cache.
+    assert_eq!(
+        seen.get("read-conference-key"),
+        Some(&PLACED_CONFERENCE_KEY),
+        "EDS did not carry the X-JMAP-KEY the CONFERENCE went out with, so no \
+         save can name the entry the server chose\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-conferences"),
+        Some(&"1"),
+        "EDS holds a CONFERENCE line other than the one the mapping wrote\n{report}"
+    );
+    // And the standard parameter beside the invented one, which is a separate
+    // question: RFC 7986 §5.11's LABEL is a parameter libical has an enum for,
+    // and a cache that kept only the parameters it recognises would answer this
+    // one and drop the key above.
+    assert_eq!(
+        seen.get("read-conference-label"),
+        Some(&PLACED_CONFERENCE_NAME),
+        "EDS did not carry the LABEL naming the conference\n{report}"
+    );
+
+    // And what EDS holds after the save: the place the user typed, on the line it
+    // was typed onto, still carrying the key. One line, because a save that
+    // *added* a place would leave two.
+    assert_eq!(
+        seen.get("read-back-location"),
+        Some(&REPLACED_LOCATION_NAME),
+        "the place the user typed did not survive the save\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-location-key"),
+        Some(&PLACED_LOCATION_KEY),
+        "the save left the server's entry under a key nobody chose\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-locations"),
+        Some(&"1"),
+        "the save left the old place on the event beside the new one\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-conference"),
+        Some(&REPLACED_CONFERENCE_URI),
+        "the address the event is joined at did not survive the save\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-conference-key"),
+        Some(&PLACED_CONFERENCE_KEY),
+        "the save refiled the conference under another key\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-conferences"),
+        Some(&"1"),
+        "the save left the old address on the event beside the new one\n{report}"
+    );
+
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "CalendarEvent/set"),
+        "the new place never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let event = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .calendar_events
+        .get(&event_id)
+        .unwrap_or_else(|| panic!("the save removed the event the mock was seeded with"));
+
+    // The whole of the claim, on the server's side: the entry the server chose,
+    // under the key it chose, renamed — and still holding the description the
+    // line had no room for. A save that named `locations` rather than
+    // `locations/<key>/name` passes every assertion above this one and fails
+    // this one, and what it costs the user is a note they never saw and could
+    // not have meant to delete.
+    assert_eq!(
+        event.locations,
+        Some(
+            [(
+                PLACED_LOCATION_KEY.to_owned(),
+                serde_json::json!({
+                    "@type": "Location",
+                    "name": REPLACED_LOCATION_NAME,
+                    "description": PLACED_LOCATION_DESCRIPTION,
+                }),
+            )]
+            .into()
+        ),
+        "the place the user retyped did not reach the server as a patch of the \
+         entry it was drawn from: {event:?}"
+    );
+    // And the entry beside it, which is the half of the leg the round trip can
+    // actually break: the address is the new one, under the key the server chose,
+    // and the `description` and the `name` it never showed are still there. The
+    // mapping found that entry by the `X-JMAP-KEY` and nothing else, so a cache
+    // that dropped the parameter leaves this holding the old address — a change
+    // the user made and every other client keeps missing.
+    assert_eq!(
+        event.virtual_locations,
+        Some(
+            [(
+                PLACED_CONFERENCE_KEY.to_owned(),
+                serde_json::json!({
+                    "@type": "VirtualLocation",
+                    "uri": REPLACED_CONFERENCE_URI,
+                    "name": PLACED_CONFERENCE_NAME,
+                    "description": PLACED_CONFERENCE_DESCRIPTION,
+                }),
+            )]
+            .into()
+        ),
+        "the new address did not reach the server as a patch of the entry the \
+         line was drawn from: {event:?}"
+    );
+    // And the title, which says the save patched the event rather than replacing
+    // it with what the one component EDS handed over could state.
+    assert_eq!(
+        event.title.as_deref(),
+        Some(PLACED_TITLE),
+        "the save renamed the event: {event:?}"
     );
 }
