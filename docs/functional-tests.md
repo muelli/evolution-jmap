@@ -572,41 +572,65 @@ ask opposite questions and share no code path worth sharing. Every event in the
 leg above is created through EDS, so its `locations` and `virtualLocations` hold
 exactly what an iCalendar line can state and a round trip has nothing to lose.
 This one starts from an event the *mock* was seeded with before EDS ever
-connected, holding two entries a line can only draw part of:
+connected, holding entries a line can only draw part of:
 
-- a `locations` entry with a `name` and a `description`, and
-- a `virtualLocations` entry with a `uri`, a `name` and a `description`,
+- a `locations` entry with a `name` and a `description`,
+- a `virtualLocations` entry with a `uri`, a `name` and a `description`, and
+- **two** `links` entries, each with an `href`, a `contentType`, a `size` and a
+  `title`,
 
 each under a key only a server would choose. The client waits for the event to
 become gettable, reports what EDS gave it, retypes the `LOCATION` (the field
-Evolution's appointment editor writes) and the `CONFERENCE` value, and saves.
+Evolution's appointment editor writes) and the `CONFERENCE` value,
+re-addresses one of the two `ATTACH` lines — the one already pointing at a
+given address, which is how a user picks the attachment they meant — and saves.
 
 What it asserts, and why each observation is separate:
 
 - **the drawing arrived** — the place on the `LOCATION` line, the address on the
-  `CONFERENCE` line, one of each and no more, and the conference's `LABEL`;
-- **the `X-JMAP-KEY` came back on both lines.** For the conference this is
+  `CONFERENCE` line, one of each and no more, the conference's `LABEL`, and both
+  `ATTACH` lines with the `FMTTYPE` and `SIZE` standing on each;
+- **the `X-JMAP-KEY` came back on every line.** For the conference this is
   load-bearing: RFC 7986 §5.11 admits several `CONFERENCE` lines, so the mapping
   finds the server's entry by the key the line carries and by nothing else. For
   the `LOCATION` it is not — RFC 5545 §3.6.1 allows one, so the save finds the
   single entry in the server's own map whatever the line says — and it is
   asserted anyway, so that the day the mapping draws a second place a change in
-  what EDS carries fails here rather than corrupting;
-- **both edits reached the server as patches of the entries they were drawn
-  from**: `locations/<key>/name` and `virtualLocations/<key>/uri`, with the
-  `description` neither line had room for still where the server put it. A save
-  that named either property whole passes every observation above and fails
-  this one, and what it costs the user is a note they never saw;
+  what EDS carries fails here rather than corrupting. For the two attachments it
+  is load-bearing *and* the loss corrupts rather than fails, which is why there
+  are two of them: with one resource a save that lost the key still finds the
+  server's only entry, and with two it re-addresses whichever the mapping
+  guessed. `ATTACH` also asks the question in the hardest form, since RFC 5545
+  §3.8.1.1 gives it a value type of its own — libical parses the line into an
+  `icalattach`, so the parameters stand beside a value the library re-made, and
+  the client therefore reads the address back through `i_cal_property_get_attach`
+  rather than as text;
+- **every edit reached the server as a patch of the entry it was drawn from**:
+  `locations/<key>/name`, `virtualLocations/<key>/uri` and `links/<key>/href`,
+  with the `description` and the `title` no line had room for still where the
+  server put them, and the attachment the user never touched still at the address
+  it went out with. A save that named any of the three properties whole passes
+  every observation above and fails this one, and what it costs the user is a
+  note they never saw; a save that reached the wrong `links` entry moves a
+  document nobody asked to move and loses the edit that was made. The
+  `contentType` and the `size` are shown on the line and deliberately never
+  written back — they are the server's description of what it holds, not a field
+  the user was offered;
 - **the entry keys did not move** and the event was not renamed, so the save
   patched the event rather than replacing it with what one component can state.
 
-Three mutations were run against it, each reddening a different assertion:
-dropping the `X-JMAP-KEY` from the `CONFERENCE` (the key observation);
-ignoring the key when reading the line back, which leaves the drawing intact and
-the save unable to name the entry (the read-back address, because EDS's cache
-hands the old one over); and making the rename replace `locations` rather than
-patch into it (the server-side entry, which comes back without its
-`description`).
+Six mutations have been run against it, each reddening a different assertion:
+dropping the `X-JMAP-KEY` from the `CONFERENCE` (the key observation); ignoring
+the key when reading the line back, which leaves the drawing intact and the save
+unable to name the entry (the read-back address, because EDS's cache hands the
+old one over); making the rename replace `locations` rather than patch into it
+(the server-side entry, which comes back without its `description`); patching
+`contentType` alongside `href` (the server-side `links` entry, with the media
+type gone); re-addressing the *first* `ATTACH` instead of the one the user
+picked (the read-back lookup, which finds the untouched document moved and the
+edited one where it was); and replacing `links` whole rather than patching one
+`href` (the server-side pair, which comes back with both `title`s gone while
+every client observation still passes).
 
 Retyping the conference is the one thing here a user of Evolution 3.52 cannot
 do: it has no control for the property, and libical-glib 3.0 does not even name
