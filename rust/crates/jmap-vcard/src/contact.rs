@@ -124,8 +124,7 @@
 //! user can see, measured against libebook-contacts 3.52; the reader takes them
 //! all in anyway, so tags on a line EDS ignores are not lost by a save.
 //!
-//! `media` is the first mapped property whose value is not text, and the first
-//! that crosses in *one direction only*. RFC 9553 §2.6.4 keys the media a card
+//! `media` is the one mapped property whose value is not text. RFC 9553 §2.6.4 keys the media a card
 //! carries and tells a photo, a sound and a logo apart by a `kind` it makes
 //! mandatory; RFC 2426 §3.1.4's `PHOTO` is the picture *of the contact*, which
 //! is what Evolution shows beside the name, so only a photo crosses and the
@@ -141,16 +140,20 @@
 //! bytes as percent-encoded octets rather than base64, since `ENCODING=b` is
 //! the only encoding the line carries ([`photo`]).
 //!
-//! One direction only because nothing here reads a `PHOTO` back into `media`: a
-//! picture the *user* chooses in Evolution does not reach the server yet. That
-//! is safe for the same reason an unmapped property is safe — the save patches
-//! the properties it names, and `media` is not one of them, so the server's
-//! picture is neither deleted nor overwritten — but it is a gap rather than a
-//! decision, and closing it is the save path's work. Whichever way that goes, it
-//! cannot lean on the [`X_JMAP_KEY`]: unlike a `NICKNAME`'s, the key on a
-//! `PHOTO` line does not survive Evolution. EDS rebuilds the line out of the
-//! photo it holds and writes none of the parameters back, exactly as it does for
-//! a date line (measured against libebook-contacts 3.52).
+//! A `PHOTO` line is read back into a `media` entry the same way ([`read_photo`]),
+//! so the picture the *user* chooses in Evolution reaches the server. Only the
+//! two forms above are read, because they are the two EDS's own writer emits;
+//! what a line the reader has to be careful about is spelled out there. The
+//! sounds and logos a card carries have no vCard 3.0 property at all and so come
+//! back from nothing — the save patches around them, as it does around every
+//! other entry the emitter left off.
+//!
+//! What the save cannot lean on is the [`X_JMAP_KEY`]: unlike a `NICKNAME`'s,
+//! the key on a `PHOTO` line does not survive an edit. EDS rebuilds the line out
+//! of the photo it holds and writes none of the parameters back, exactly as it
+//! does for a date line (measured against libebook-contacts 3.52) — so the entry
+//! a chosen picture belongs to is found by pairing rather than by key, which is
+//! `jmap-book-sync`'s `diff_media`.
 
 use std::collections::BTreeMap;
 
@@ -241,6 +244,18 @@ const BASE64_MARKER: &str = ";base64";
 /// The media type prefix a `PHOTO` line's `TYPE` states the remainder of; see
 /// [`image_subtype`].
 const IMAGE_PREFIX: &str = "image/";
+
+/// What EDS puts in a `PHOTO`'s `TYPE` for a picture it holds no media type
+/// for: measured against libebook-contacts 3.52, setting a photo whose
+/// `mime_type` is NULL writes `TYPE="X-EVOLUTION-UNKNOWN"`. It names no image
+/// format, so [`read_photo`] reads it as no media type rather than as
+/// `image/X-EVOLUTION-UNKNOWN`, which would tell the server the bytes are a
+/// format that does not exist.
+const UNKNOWN_TYPE: &str = "X-EVOLUTION-UNKNOWN";
+
+/// The `VALUE` a `PHOTO` line carrying a reference states, rather than the
+/// bytes themselves.
+const URI_VALUE: &str = "uri";
 
 /// The online services EDS keeps a contact's handles for, paired with the
 /// vCard property each is stated on, and spelled as RFC 9553 §2.3.2 invites —
@@ -483,6 +498,40 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
         subtype: image_subtype(media.media_type.as_deref().unwrap_or(stated)),
         base64: BASE64.encode(decoded(payload)?),
     })
+}
+
+/// Whether two media entries state the same `PHOTO` line — the same picture,
+/// however each of them spells it.
+///
+/// What the save compares, for the reason [`online_service_handle`] is what it
+/// compares for a handle: the line is what the user saw, and the entry read back
+/// off it is not the entry that produced it. A `data:` URI may leave its base64
+/// padding off (RFC 4648 §3.2) where the line carries the canonical spelling,
+/// and a media type the URI stated arrives as the entry's own `mediaType`, so
+/// comparing the members would call an untouched picture an edit and rewrite it
+/// on every save. The subtypes are compared case-insensitively, as RFC 2045 §5.1
+/// defines them.
+pub fn same_photo(one: &Media, other: &Media) -> bool {
+    match (photo(one), photo(other)) {
+        (None, None) => true,
+        (Some(Photo::Uri(one)), Some(Photo::Uri(other))) => one == other,
+        (
+            Some(Photo::Inline {
+                subtype: one,
+                base64: ours,
+            }),
+            Some(Photo::Inline {
+                subtype: other,
+                base64: theirs,
+            }),
+        ) => {
+            ours == theirs
+                && one
+                    .unwrap_or_default()
+                    .eq_ignore_ascii_case(other.unwrap_or_default())
+        }
+        _ => false,
+    }
 }
 
 /// What a `PHOTO` line states: the bytes, or where to fetch them.
@@ -1157,6 +1206,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut notes = BTreeMap::new();
     let mut anniversaries = BTreeMap::new();
     let mut links = BTreeMap::new();
+    let mut media = BTreeMap::new();
     let mut online_services = BTreeMap::new();
 
     for property in &properties {
@@ -1245,6 +1295,12 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 }
                 links.insert(entry_key(property, "l", &links), link);
             }
+            "PHOTO" => {
+                let Some(photo) = read_photo(property) else {
+                    continue;
+                };
+                media.insert(entry_key(property, "m", &media), photo);
+            }
             "BDAY" | X_EVOLUTION_ANNIVERSARY => {
                 let Some(anniversary) = read_anniversary(property) else {
                     continue;
@@ -1313,16 +1369,79 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         notes: (!notes.is_empty()).then_some(notes),
         anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
         links: (!links.is_empty()).then_some(links),
-        // The vCard *states* the picture the card carries and never reads one
-        // back: a `PHOTO` line is the one property this mapping writes in one
-        // direction only. Safe for the same reason a property it never mapped
-        // at all is safe — the save patches the properties it names, and
-        // `media` is not one of them.
-        media: None,
+        // Only the pictures — a `PHOTO` line is the one media kind vCard 3.0
+        // states, so the sounds and logos a card carries are read back by
+        // nothing and left to the save to patch around.
+        media: (!media.is_empty()).then_some(media),
         online_services: (!online_services.is_empty()).then_some(online_services),
         keywords: read_keywords(&properties),
         extra: BTreeMap::new(),
     })
+}
+
+/// The media entry a `PHOTO` line states, or `None` for a line naming no
+/// picture at all.
+///
+/// The inverse of the emitter's two forms, and only of those two: `VALUE=uri` is
+/// a picture the card points at, and anything else is a picture it carries,
+/// whose bytes cross as a `data:` URI (RFC 2397) because that is how RFC 9553
+/// §2.6.4 states one. Both are what EDS's own writer emits, measured against
+/// libebook-contacts 3.52 — with the `X-JMAP-KEY` gone from a line the user
+/// edited, which is the save's problem rather than this one's.
+///
+/// The bytes come from [`Property::binary`] where the line carried bytes and
+/// from the value's own where it carried text, since calcard decodes the base64
+/// either way and surfaces bytes only when the result is not a string: an SVG is
+/// a picture whose bytes *are* text. The cost of taking both paths is that a
+/// `PHOTO` line stating neither `VALUE=uri` nor a transfer encoding — a bare
+/// `PHOTO:<uri>`, which EDS reads as no picture at all (measured) — is
+/// indistinguishable here from a picture whose bytes are text, and is read as
+/// the latter. Neither EDS's writer nor this emitter produces such a line.
+///
+/// The media type is built from the `TYPE` parameter rather than taken from
+/// calcard, so that the one rule EDS applies is applied once and in one place:
+/// the parameter states the subtype and the type is `image/` in front of it (see
+/// [`image_subtype`]). [`UNKNOWN_TYPE`] is what EDS writes when it has none, and
+/// names no format, so it reads back as none.
+fn read_photo(property: &Property) -> Option<Media> {
+    let states_a_reference = property
+        .param("VALUE")
+        .is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE));
+    if states_a_reference {
+        let uri = property.text();
+        // A URI line says what the resource is nowhere: EDS writes no `TYPE` on
+        // one and reads none off one, so there is nothing to state.
+        return (!uri.is_empty()).then(|| photo_entry(uri, None));
+    }
+
+    let bytes = match property.binary() {
+        Some(bytes) => bytes.to_vec(),
+        None => property.text().into_bytes(),
+    };
+    if bytes.is_empty() {
+        return None;
+    }
+    let media_type = property
+        .param("TYPE")
+        .filter(|subtype| !subtype.eq_ignore_ascii_case(UNKNOWN_TYPE))
+        .map(|subtype| format!("{IMAGE_PREFIX}{subtype}"));
+    let uri = format!(
+        "{DATA_SCHEME}{}{BASE64_MARKER},{}",
+        media_type.as_deref().unwrap_or_default(),
+        BASE64.encode(&bytes)
+    );
+    Some(photo_entry(uri, media_type))
+}
+
+/// A media entry for a picture of the contact — the one kind a `PHOTO` line
+/// states, so the only kind this side reads back.
+fn photo_entry(uri: String, media_type: Option<String>) -> Media {
+    Media {
+        kind: Some(PHOTO_KIND.to_owned()),
+        uri,
+        media_type,
+        extra: BTreeMap::new(),
+    }
 }
 
 /// The title a `TITLE` or `ROLE` line states, or `None` for a line with no

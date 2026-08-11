@@ -1392,30 +1392,137 @@ fn a_card_with_no_media_states_no_photo() {
     assert!(!vcard.contains("PHOTO"), "{vcard}");
 }
 
-#[test]
-fn a_photo_line_is_stated_but_never_read_back() {
-    // The picture crosses one way only, for now: nothing here reads a `PHOTO`
-    // back into `media`, so a photo the *user* chooses in Evolution does not
-    // reach the server yet. That is safe rather than lossy — the save patches
-    // the properties it names, and `media` is not one of them, so the server's
-    // picture is neither deleted nor overwritten — but it is a gap, and this
-    // test is what will go red when the save path closes it.
-    let card = vcard_to_card(&card_to_vcard(&fixture_card())).expect("parse");
-    assert_eq!(card.media, None);
+/// The one media entry of a card read back from `vcard`.
+fn read_photo(vcard: &str) -> Media {
+    let card = vcard_to_card(vcard).unwrap_or_else(|e| panic!("{vcard}: {e}"));
+    let media = card
+        .media
+        .unwrap_or_else(|| panic!("no media read from {vcard}"));
+    assert_eq!(media.len(), 1, "{media:?}");
+    media.into_values().next().expect("one entry")
+}
 
-    // The forms EDS itself writes parse without error, which is what makes the
-    // gap safe: an `ENCODING=b` line is read as a property whose value this
-    // mapping has no text for, not as a malformed card.
-    for line in [
-        "PHOTO;TYPE=JPEG;ENCODING=b:aGVsbG8tcGhvdG8=",
-        "PHOTO;ENCODING=BASE64;TYPE=PNG:aGVsbG8tcGhvdG8=",
-        "PHOTO;VALUE=uri:https://vera.example/me.png",
-    ] {
+fn photo_line(line: &str) -> Media {
+    read_photo(&format!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n"
+    ))
+}
+
+#[test]
+fn reads_the_inline_photo_line_eds_writes_back_as_a_data_uri() {
+    // The picture the *user* chose in Evolution arrives on the line EDS's own
+    // writer emits — measured against libebook-contacts 3.52, a photo set with
+    // mime type `image/jpeg` is written `PHOTO;TYPE=jpeg;ENCODING=b:…`. It comes
+    // back as RFC 9553 §2.6.4 states a picture a card carries: a `data:` URI
+    // (RFC 2397), with the media type the `TYPE` named.
+    let media = photo_line(&format!("PHOTO;TYPE=jpeg;ENCODING=b:{PAYLOAD}"));
+    assert_eq!(media.kind.as_deref(), Some("photo"));
+    assert_eq!(media.uri, format!("data:image/jpeg;base64,{PAYLOAD}"));
+    assert_eq!(media.media_type.as_deref(), Some("image/jpeg"));
+
+    // `ENCODING=BASE64` is the same encoding spelled the way older exporters
+    // spell it, and EDS reads it (measured), so this side does too.
+    let media = photo_line(&format!("PHOTO;ENCODING=BASE64;TYPE=PNG:{PAYLOAD}"));
+    assert_eq!(media.uri, format!("data:image/PNG;base64,{PAYLOAD}"));
+    assert_eq!(media.media_type.as_deref(), Some("image/PNG"));
+}
+
+#[test]
+fn a_photo_eds_holds_no_media_type_for_reads_back_without_one() {
+    // Measured against libebook-contacts 3.52: a photo whose `mime_type` is
+    // NULL is written `TYPE="X-EVOLUTION-UNKNOWN"`, which names no image format
+    // — reading it as `image/X-EVOLUTION-UNKNOWN` would tell the server the
+    // bytes are a format that does not exist.
+    let media = photo_line(&format!(
+        "PHOTO;TYPE=\"X-EVOLUTION-UNKNOWN\";ENCODING=b:{PAYLOAD}"
+    ));
+    assert_eq!(media.media_type, None);
+    assert_eq!(media.uri, format!("data:;base64,{PAYLOAD}"));
+
+    // And a line carrying no `TYPE` at all, which is what this mapping writes
+    // for bytes that are not an image.
+    let media = photo_line(&format!("PHOTO;ENCODING=b:{PAYLOAD}"));
+    assert_eq!(media.media_type, None);
+    assert_eq!(media.uri, format!("data:;base64,{PAYLOAD}"));
+}
+
+#[test]
+fn reads_a_reference_photo_line_back_as_the_uri_it_names() {
+    let media = photo_line("PHOTO;VALUE=uri:https://vera.example/me.png");
+    assert_eq!(media.kind.as_deref(), Some("photo"));
+    assert_eq!(media.uri, "https://vera.example/me.png");
+    // EDS writes no `TYPE` on a URI line and reads none off one (measured), so
+    // there is nothing here that says what the resource is.
+    assert_eq!(media.media_type, None);
+}
+
+#[test]
+fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
+    // The real case: a PNG signature is not valid UTF-8, so the line's value is
+    // binary rather than text and the reader has to take the decoded bytes. A
+    // picture that *is* text — an SVG — goes through the other path, which the
+    // round-trip tests exercise with their own payload.
+    // `iVBORw0KGgr//g==` is a PNG signature followed by 0xFF 0xFE.
+    let media = photo_line("PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==");
+    assert_eq!(media.uri, "data:image/png;base64,iVBORw0KGgr//g==");
+
+    // Driven the whole way round, so that what comes back is compared against
+    // the bytes that went in rather than against a payload written out by hand.
+    let uri = "data:image/png;base64,iVBORw0KGgr//g==";
+    let vcard = card_to_vcard(&one_photo(uri, None));
+    assert_eq!(read_photo(&vcard).uri, uri, "{vcard}");
+}
+
+#[test]
+fn a_photo_line_states_the_key_its_entry_is_filed_under() {
+    // As every other keyed map's line does, so that an untouched picture is
+    // recognised as the entry it came from. The key only survives a line EDS
+    // merely re-renders — a `set()` rebuilds it and drops the parameters
+    // (measured) — which is why the save path also pairs a keyless photo with
+    // the entry it replaced; see `jmap-book-sync`'s patch module.
+    let card = vcard_to_card(&format!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n\
+         PHOTO;TYPE=jpeg;ENCODING=b:{PAYLOAD}\r\n\
+         PHOTO;X-JMAP-KEY=m9;VALUE=uri:https://vera.example/other.png\r\n\
+         END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let media = card.media.expect("media");
+    assert_eq!(media.len(), 2, "{media:?}");
+    assert_eq!(media["m9"].uri, "https://vera.example/other.png");
+    assert_eq!(
+        media["m1"].uri,
+        format!("data:image/jpeg;base64,{PAYLOAD}"),
+        "a keyless line is filed under an invented key: {media:?}"
+    );
+}
+
+#[test]
+fn a_photo_that_says_nothing_reads_back_as_no_entry() {
+    // An empty value names neither bytes nor a resource, which says no more
+    // than an `EMAIL:` with no address — and `photo()` gives such an entry no
+    // line either, so a card holding one would state it back on every save.
+    for line in ["PHOTO;ENCODING=b:", "PHOTO;VALUE=uri:"] {
         let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
         let card = vcard_to_card(&vcard).unwrap_or_else(|e| panic!("{line}: {e}"));
-        assert_eq!(card.name.expect("name").full.as_deref(), Some("Vera"));
-        assert_eq!(card.media, None);
+        assert_eq!(card.media, None, "{line}");
     }
+}
+
+#[test]
+fn a_photo_survives_the_round_trip_it_is_stated_on() {
+    // Emitted and read back, the fixture's picture is the same picture: the
+    // `data:` URI, the media type and the key all come back. Anything else
+    // would make every save an edit of a photo nobody touched.
+    let card = vcard_to_card(&card_to_vcard(&fixture_card())).expect("parse");
+    let media = card.media.expect("media");
+    let original = fixture_card().media.expect("media");
+    assert_eq!(media["m1"].kind, original["m1"].kind);
+    assert_eq!(media["m1"].uri, original["m1"].uri);
+    assert_eq!(media["m1"].media_type, original["m1"].media_type);
+    // The fixture's `m2` is a logo, which gets no line and so cannot come back.
+    assert_eq!(media.len(), 1, "{media:?}");
 }
 
 fn tagged(tags: &[&str]) -> ContactCard {
