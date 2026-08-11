@@ -66,6 +66,10 @@
     "l1": {"@type": "Link", "uri": "https://vera.example/"},
     "l2": {"@type": "Link", "kind": "contact", "uri": "https://vera.example/write-to-me"}
   },
+  "onlineServices": {
+    "s1": {"@type": "OnlineService", "service": "Jabber", "user": "vera@jabber.example"},
+    "s2": {"@type": "OnlineService", "service": "Mastodon", "uri": "https://social.example/@vera"}
+  },
   "keywords": {
     "hiking": true
   },

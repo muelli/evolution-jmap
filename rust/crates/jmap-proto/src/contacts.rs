@@ -90,6 +90,12 @@ pub struct ContactCard {
     /// Evolution shows the first as the contact's home page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<BTreeMap<String, Link>>,
+    /// The online services the contact is reachable on (RFC 9553 §2.3.2),
+    /// keyed like the other JSContact maps. vCard states each on the `X-` line
+    /// EDS keeps that service's handles on — `X-JABBER`, `X-MATRIX`, … — which
+    /// is what Evolution shows as an instant-messaging address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_services: Option<BTreeMap<String, OnlineService>>,
     /// The tags the contact is filed under (RFC 9553 §2.8.2), an RFC 9553
     /// §1.4.3 Set: the keys are the keywords and every value is `true`. vCard
     /// states the whole set on one `CATEGORIES` line, which is what Evolution's
@@ -398,6 +404,44 @@ pub struct Link {
     /// kinds it must leave alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact OnlineService (RFC 9553 §2.3.2): the contact as one online
+/// service or protocol knows them.
+///
+/// `contexts`, `pref` and `label` are not modeled, for the reason
+/// [`Nickname`]'s are not. The `X-` line EDS keeps a handle on does take a
+/// `TYPE`, but that parameter is the *slot* EDS files the handle in rather than
+/// the entry's contexts — a line without one reaches no field the user can see,
+/// measured against libebook-contacts 3.52 — so the vCard mapping writes it and
+/// reads nothing back off it. All three therefore ride in [`Self::extra`],
+/// where the save path can see the members it is refusing to touch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OnlineService {
+    /// The name of the service or protocol — `Jabber`, `Matrix`, `Skype`.
+    ///
+    /// RFC 9553 §2.3.2 lets it be capitalised as the service itself
+    /// capitalises it and has two names be equal when they match
+    /// case-insensitively, so the mapping compares rather than rewrites the
+    /// spelling the server chose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    /// The name the contact is known by at the service. Free text per RFC 9553
+    /// §2.3.2, and what the vCard line states: Evolution's instant-messaging
+    /// field holds a handle rather than a URI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// The contact's identifier at the service as a URI (RFC 9553 §2.3.2
+    /// requires RFC 3986 §3).
+    ///
+    /// Modeled but never drawn, because reading a handle out of it means
+    /// knowing each service's URI scheme; it is here so that the save path can
+    /// tell an entry that states one from an entry that does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

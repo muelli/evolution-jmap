@@ -91,6 +91,17 @@
  * the server cut off at the comma or carrying a backslash EDS put there. */
 #define TEST_HOMEPAGE "https://dana.example/profile?tags=x-files,ufo"
 
+/* The instant-messaging handle, which EDS keeps on an X-JABBER line and
+ * JSContact keeps as an entry of the `onlineServices` map. Set through the
+ * per-slot field rather than the multi-valued one, because the slot is what
+ * Evolution's contact editor writes and what decides the TYPE the line carries:
+ * a line with no TYPE reaches none of these fields at all, so this is where the
+ * parameter our emitter writes is shown to be the one real EDS reads. The comma
+ * in the handle is the second point — a JSContact `user` is free text, and vCard
+ * gives the comma structural meaning — so a handle arriving at the server cut
+ * off at it, or carrying the backslash EDS wrote, would show up here. */
+#define TEST_IM_HANDLE "dana,scully@jabber.example"
+
 /* The categories the contact is filed under, which EDS keeps as a list on one
  * CATEGORIES line and JSContact keeps as the `keywords` Set. Two of them,
  * because the crossing is a cardinality rather than a value — one line here,
@@ -254,6 +265,7 @@ main (int argc,
 	e_contact_set (contact, E_CONTACT_NOTE, TEST_NOTE);
 	e_contact_set (contact, E_CONTACT_HOMEPAGE_URL, TEST_HOMEPAGE);
 	e_contact_set (contact, E_CONTACT_BIRTH_DATE, &birthday);
+	e_contact_set (contact, E_CONTACT_IM_JABBER_HOME_1, TEST_IM_HANDLE);
 
 	/* Set as the list rather than as the comma-joined E_CONTACT_CATEGORIES
 	 * string, because that string cannot say which comma is a separator:
@@ -310,6 +322,12 @@ main (int argc,
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_NOTE));
 	g_print ("read-back-homepage=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_HOMEPAGE_URL));
+	/* Read out of the same slot it was written to: a handle that reached the
+	 * server but came back on a line without a TYPE would be missing here
+	 * while sitting in the vCard, which is exactly the failure the parameter
+	 * exists to prevent. */
+	g_print ("read-back-jabber=%s\n",
+		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_IM_JABBER_HOME_1));
 
 	/* Structured, so it comes back as a boxed struct rather than a
 	 * string: one report per field, because which field a part of the
