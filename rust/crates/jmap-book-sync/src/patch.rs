@@ -62,8 +62,8 @@ use jmap_proto::contacts::{
 };
 use jmap_vcard::{
     address_label, maps_address_component, maps_context, maps_name_component, maps_phone_feature,
-    states_address, states_email, states_note, states_organization, states_phone, states_title,
-    title_kind,
+    restore_address_components, states_address, states_email, states_note, states_organization,
+    states_phone, states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -318,14 +318,21 @@ fn diff_notes(
 /// edited one is what keeps an invisible component in its place instead of
 /// shuffling it to the end, so that opening a contact and closing it again
 /// writes nothing.
+///
+/// Matching by value only works once the components a single `ADR` field was
+/// built from have been told apart again, which is
+/// [`restore_address_components`]' job: a street name and its house number
+/// come back from the vCard as one street, and would otherwise both read as
+/// deleted and be replaced by their own concatenation.
 fn merge_components(
     current: Option<&[AddressComponent]>,
     edited: Option<&[AddressComponent]>,
 ) -> Option<Vec<AddressComponent>> {
-    let edited = edited?;
+    let current = current.unwrap_or_default();
+    let edited = restore_address_components(current, edited?);
     let mut spare: Vec<&AddressComponent> = edited.iter().collect();
     let mut merged: Vec<AddressComponent> = Vec::new();
-    for component in current.unwrap_or_default() {
+    for component in current {
         let same = |candidate: &&AddressComponent| {
             candidate.kind == component.kind && candidate.value == component.value
         };

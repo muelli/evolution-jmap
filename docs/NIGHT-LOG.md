@@ -17953,3 +17953,105 @@ no longer unexplained, but is now a design question with a hypothesis attached.
 New: the two `TYPE` risks above. The contact list these five sessions worked
 through is now empty — the next contact work has to be chosen rather than
 taken off it.
+
+## 2026-08-11 (hundred-and-seventy-eighth session)
+
+**The house number, which the `ADR` line had been dropping.** This was the
+oldest of the small user-visible holes the last few sessions kept logging and
+not closing: RFC 9553 §2.5.1 lets a card state the street name and the house
+number as two components, and the mapping had a field for `name` and none for
+`number`, so `Hauptstraße` + `1` reached Evolution as `Hauptstraße` and the
+house was simply gone from the address the user reads. That is data loss on a
+property the user *can* see, which is worse than the kinds — `floor`, `room`,
+`landmark` — that are also dropped but have no vCard field to be dropped from.
+The number does have one: RFC 2426 §3.2.1's street address field is free text
+and is where the number belongs.
+
+**The order is the card's, not ours.** The number now shares the street field
+with the street name, written in the order the card lists its components,
+because that order is the only thing that says whether the address reads
+`1 Main Street` or `Hauptstraße 1`. Inventing a rule here — number first,
+number last, number by country — would be wrong for half the world and wrong
+silently; the server said which way round it goes, so the emitter says the
+same. The mechanism is a second table, `JOINED_COMPONENTS`, mapping a kind
+onto the kind whose field it joins, and one resolver, `address_field`, that
+both tables answer through; `maps_address_component` now asks it rather than
+the primary table, so the save path learned in the same edit that `number` is
+a kind the line carries.
+
+**The hard half was the save, and it is a general fix rather than a special
+case.** A field built from two components is read back as one component of the
+field's kind, because nothing in the text `Hauptstraße 1` says where the street
+ends and the number begins and a guess would be wrong constantly. Left there,
+`merge_components` would see the street and the number both missing from the
+edited card, delete them, and add their own concatenation — so opening a
+contact and closing it again would flatten the parts the server had stated
+separately, and take the `phonetic` spelling on the street component with them.
+`restore_address_components` runs first and asks the only question that can be
+answered honestly: does the field still read as those parts joined? If it does,
+they are those parts, unedited, and they go back in the order and shape they
+went out in. If it does not, the user retyped the field, and it stays the one
+component they typed — the parts cannot be recovered, and keeping the old ones
+would leave a house number standing on a street that is no longer there. That
+last case is asserted, not assumed: `retyping_a_street_replaces_the_parts_the_
+server_stated_it_in` seeds `Hauptstraße` + `1` + an invisible `floor`, edits
+the line to `Nebenstraße 2`, and requires the stored components to be the floor
+and the new street and nothing else.
+
+The restore is written per `ADR` field rather than per joined kind, which
+closes a second bug of the same shape that was never logged: two components of
+one kind — a street named on two lines, which the emitter has always joined —
+had exactly the same flattening problem, so every open of such a contact wrote
+a patch. Both are now no-ops, and the existing
+`editing_an_address_keeps_what_the_adr_line_cannot_carry` proves it: its
+untouched-save-sends-nothing assertion now runs against a card whose street
+field is built from two components instead of one.
+
+**What this deliberately does not do.** It does not split a typed street back
+into parts, and it does not add `floor`, `room` or `building` to the line —
+those have no field, and putting them in one would misstate them. A `number`
+edited away in Evolution is a `number` deleted server-side, which is the same
+contract every other mapped component already has.
+
+**Behaviour changed on purpose, so a test changed with it.**
+`an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped`
+asserted the old dropping of `number` as intended behaviour; it now covers
+`floor` alone, and three new tests cover the number — both orders, the
+read-back as one street, and an address that states only a number still
+getting a line rather than being counted invisible and hidden from the save.
+
+**Not verified through real EDS, and there is nothing here that needs it.**
+The functional book leg drives a contact *from* Evolution, so its address
+never carries a separate `number`; the new path is server-to-vCard text and
+vCard-text-to-patch, both of which the mock-backed suites drive end to end.
+EDS sees an ordinary street field either way. Extending the leg with a
+server-seeded address would be worth doing when something EDS-specific is at
+stake; nothing here is.
+
+Tests: 863 in the default set, up 3 from 860 — two new in `jmap-vcard`, one
+new in `jmap-book-sync`, and two existing ones (one in each) whose
+expectations changed with the behaviour.
+
+Verified locally: `cargo test --locked` 863; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all
+--check` and `cargo clippy --all-targets --locked -- -D warnings` clean.
+`ci/checks.sh` still stops at its first step — `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed — so the licence check was done by hand:
+no file was added, every file touched already carries an SPDX header, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run. (`cargo clippy --workspace` also fails on `example-module`'s
+`manual_c_str_literals`, which is pre-existing, outside the gate's default
+member set, and untouched here.)
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the `NameComponent` `phonetic` hole stands; the multi-`NOTE`/
+`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified in real
+Evolution; whether `e_contact_set` preserves an `X-JMAP-KEY` on an attribute
+it rewrites is still unverified; the two `LABEL` `TYPE` risks stand; and the
+`jmap-mail` `transport.rs` hang is still an open design question with a
+lock-order hypothesis attached. Closed: the `ADR` line's missing house number.
