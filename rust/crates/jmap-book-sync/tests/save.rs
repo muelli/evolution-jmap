@@ -969,6 +969,49 @@ fn emptying_one_note_line_of_two_withdraws_that_note_alone() {
 }
 
 #[test]
+fn emptying_the_only_note_line_withdraws_the_property() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // One note, so that emptying the field the user is shown leaves nothing on
+    // the card the mapping can see — the other branch of
+    // `emptying_one_note_line_of_two_withdraws_that_note_alone`. There is no
+    // surviving key to null, so what the save must say is that the property
+    // itself is gone.
+    fixture.patch(
+        &id,
+        json!({"notes": {
+            "n1": {"@type": "Note", "note": "met at FOSDEM", "created": "2026-02-01T09:15:00Z"},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    // The line left standing with no value on it rather than struck off the
+    // card, which is what libebook-contacts 3.52 does with a field the user
+    // emptied — measured on this very shape by `jmap-functional`'s
+    // `clearing_the_only_note_through_eds_withdraws_the_whole_property`, whose
+    // client reports one `NOTE` line and no value on it. The distinction from
+    // `removing_the_note_line_removes_the_note` beside this test is therefore
+    // the input rather than the outcome: that one states a card EDS does not
+    // produce for a cleared field, and this one states the card it does.
+    let edited = vcard.replace(
+        "NOTE;X-JMAP-KEY=n1:met at FOSDEM\r\n",
+        "NOTE;X-JMAP-KEY=n1:\r\n",
+    );
+    assert_ne!(edited, vcard, "the emitter did not write the note: {vcard}");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    // Gone, rather than an empty map: a `notes` still there saying nothing is a
+    // property the server holds for no reason, and the patch that leaves one is
+    // the per-entry withdrawal aimed at a card that had nothing to keep.
+    assert_eq!(
+        fixture.card(&id).notes,
+        None,
+        "clearing the only note did not withdraw the property"
+    );
+}
+
+#[test]
 fn removing_the_note_line_removes_the_note() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
