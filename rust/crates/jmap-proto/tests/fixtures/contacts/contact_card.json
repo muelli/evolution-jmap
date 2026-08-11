@@ -88,6 +88,20 @@
       "uri": "https://vera.example/write-to-me"
     }
   },
+  "onlineServices": {
+    "s1": {
+      "@type": "OnlineService",
+      "service": "Jabber",
+      "user": "vera@jabber.example",
+      "contexts": {"private": true},
+      "pref": 1
+    },
+    "s2": {
+      "@type": "OnlineService",
+      "service": "Mastodon",
+      "uri": "https://social.example/@vera"
+    }
+  },
   "keywords": {
     "hiking": true
   },

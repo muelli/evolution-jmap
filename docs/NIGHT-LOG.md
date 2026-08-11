@@ -18461,3 +18461,144 @@ hypothesis attached. New: a tag whose ends are whitespace is invisible in
 Evolution and freezes the whole set for that card — measured, deliberate, and the
 only case here where an edit the user made is dropped; and an unescaped semicolon
 in a foreign card's `CATEGORIES` is one tag to this mapping and several to EDS.
+
+## 2026-08-11 (hundred-and-eighty-third session)
+
+**The instant-messaging handles, which are the first mapped property vCard 3.0
+has no property for.** RFC 9553 §2.3.2's `onlineServices` names the contact as
+one service knows them. RFC 4770's `IMPP` would state it, but that is vCard 4.0
+and `e_contact_new_from_vcard()` is handed 3.0 — so the line is the `X-` one EDS
+itself keeps a handle on, `X-JABBER` and its nine siblings, and the mapped set is
+exactly the ten services libebook-contacts 3.52 gives per-slot fields to. Every
+property mapped before this one crossed onto a line some RFC defines; this one
+crosses onto a line the *implementation* defines, which is why the whole increment
+rests on measurements rather than on reading.
+
+**The `TYPE` is not the JSContact member it looks like, and that is the whole
+design.** A probe against libebook-contacts 3.52 measured it: `X-JABBER:handle`
+with no `TYPE` reaches `E_CONTACT_IM_JABBER` — the multi-valued field — and *none*
+of `E_CONTACT_IM_JABBER_HOME_1`…`_WORK_3`, which are the fields the contact editor
+shows. So a line without a slot is a handle in the vCard and nowhere the user can
+see. Every line must therefore carry one, whether the entry states a context or
+not, and that forecloses reading the parameter back: a `TYPE=HOME` we wrote for an
+entry that stated nothing would come back as `contexts: {"private": true}` and the
+next save would write that invention to the server. The slot is written *from* the
+entry's `contexts` where they say something — a work handle belongs in the field
+Evolution labels Work — and read back as nothing at all. Hence `OnlineService`
+models no `contexts`, `pref` or `label`: they ride in `extra` as a nickname's do,
+where the save path can see what it is refusing to touch.
+
+Exactly one slot per line, though the probe showed `TYPE=HOME,WORK` is visible in
+both: a handle the user can edit in two fields is a handle with two edits and
+nothing to say which one wins. A service used both ways, or used in a context
+vCard 3.0 cannot spell, lands in `HOME` — which is where EDS puts a handle of its
+own accord, so it is where the user looks first.
+
+**The handle is the `user`, and a `uri`-only entry is invisible on purpose.** RFC
+9553 §2.3.2 asks for either, and only one of them is what Evolution's field holds:
+free text, a handle. Reading a handle out of `xmpp:vera@jabber.example` means
+knowing the URI scheme of every service in the table, and a mapping that guessed
+would write the guess back on the next save. So an entry stating only a `uri` gets
+no line — the same invisibility an address stated only in components vCard has no
+field for already has — and the follow-up this leaves is named: a per-service
+scheme table would let such an entry be shown *and* kept in step, and is the next
+increment for this property rather than something to improvise here.
+
+**The one place a save deletes a member the vCard never showed.** An entry may
+state both, and then the line states the `user` while the `uri` names the same
+identity a second time. Rename the handle and that URI is false — and unrebuildable
+without the scheme table. It is therefore nulled along with the rename, which is
+the judgement `merge_units` already makes about a renamed unit's `sortAs`: a hint
+for the old name is not one for the new. An edit anywhere else on the contact
+leaves it alone, and there is a test for each half.
+
+**A service name is matched wider than the RFC demands, and that is the safe
+direction.** §2.3.2 has two names be equal when they match case-insensitively;
+this mapping also ignores the punctuation inside them, so `Gadu-Gadu`, `GaduGadu`
+and `gadu gadu` are one service. Being wide costs nothing because the comparison
+is only ever used to decide *not* to write: a match the RFC does not demand leaves
+the spelling the server chose alone, while a miss would rename `jabber` to
+`Jabber` on every save. The `service` is still patched for a key that arrived on
+another service's line — nothing Evolution does produces that, since changing the
+service means EDS clearing one field and setting another and losing the key, but
+another client writing the vCard can, and then the line is the truth.
+
+**Two services EDS knows are left out, deliberately.** `X-TWITTER` exists as a
+multi-valued field with no `HOME`/`WORK` slots, so a handle on it is one the
+contact editor cannot place; `X-SIP` is a protocol rather than a service name and
+sits in a field of a different shape (`e_contact_get` on it does not hand back a
+string at all — the probe read rubbish). Both are omissions to revisit with real
+Evolution in front of us, not silent gaps.
+
+**What the line refuses to carry, measured.** The empty handle; a carriage return,
+which `syntax::write` drops as a security property; and ends made of ASCII
+whitespace, because `X-JABBER: vera@a ` reaches the user as `vera@a` while the line
+keeps the spaces — so the next save would rename the handle on the server. Same
+three refusals the `CATEGORIES` line makes, for the same reason, and reusing its
+`edged_with_whitespace`. Unlike `keywords`, refusing here costs only the sight of
+one entry: `onlineServices` is a keyed map, so `diff_entries` keeps an undrawn
+entry by never naming it.
+
+**The separators, and one divergence written down rather than papered over.** A
+JSContact `user` is free text and EDS reads a raw semicolon in this value as the
+end of it — `X-JABBER:a;b@c` hands the user `a` — while honouring `\;` and `\,`
+and re-escaping both on the way out. Our writer escapes both, so a handle holding
+either survives the round trip. calcard, on the reading side, hands an `X-` line's
+value back whole and splits on neither, which agrees with EDS about the comma and
+not about the semicolon: for a foreign card carrying a raw one, Evolution shows the
+first fragment and this mapping reads the whole handle. The text round-trips
+unchanged either way, so the cost is bounded to what is *displayed* for a card no
+client of ours wrote — the same judgement the `NICKNAME`, `URL` and `CATEGORIES`
+semicolons got.
+
+**Verified through real EDS, and the functional leg earned its keep.** The book
+leg sets `E_CONTACT_IM_JABBER_HOME_1` to `dana,scully@jabber.example` — the comma
+is deliberate — and asserts at both ends: that EDS hands the handle back out of
+the same slot, and that the server holds exactly one `onlineServices` entry whose
+`service` is `Jabber` and whose `user` is the handle with its comma intact. The
+mutation that matters was run: with the `TYPE` parameter removed from the emitter,
+`functional-book` fails with `read-back-jabber=(null)` — the handle reaches the
+server, sits in the vCard, and is in none of the fields Evolution shows. That is
+the exact failure the parameter exists to prevent, and it is now on the record
+from real EDS rather than from a probe.
+
+Every other implementation half was mutation-checked too: drawing a `uri`-only
+entry, dropping the whitespace and carriage-return refusals, comparing service
+names strictly, keeping the stale `uri` across a rename, and reading every `X-`
+line as an entry. Each was caught by exactly one test, and each mutation was made
+in a file backed up with `cp` and restored with `cp` — the `git checkout` mistake
+from the last session was not repeated.
+
+Tests: 927 in the default set, up 19 from 908 — eleven new in `jmap-vcard`'s
+mapping, eight in `jmap-book-sync`'s save path. `jmap-proto`'s round-trip test and
+the functional book leg grew assertions rather than tests of their own.
+
+Verified locally: `cargo test --locked` 927; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all --check`
+and `cargo clippy --all-targets --locked -- -D warnings` clean. `ci/checks.sh`
+still stops at its first step — `reuse` is not on this VM and neither `pipx` nor
+`uvx` is installed — so the licence check was done by hand: no file was added,
+every source touched already carries an SPDX header, the two JSON fixtures are
+covered by `REUSE.toml`'s `rust/crates/*/tests/fixtures/**` entry, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the last
+green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification
+in real Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side rest on untested assumptions; the
+`NameComponent` `phonetic` hole stands; the multi-`NOTE`/`ORG`/`TITLE`/
+`NICKNAME`/`URL` "Evolution shows only the first" bet is still unverified in real
+Evolution; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as
+a year alone are still invisible; a tag whose ends are whitespace freezes the whole
+category set for that card; and the `jmap-mail` `transport.rs` hang is still an
+open design question with a lock-order hypothesis attached. New: an
+`onlineServices` entry stated only as a `uri` is invisible in Evolution until a
+per-service URI scheme table exists; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown, and if it does, the move
+loses the entry's `X-JMAP-KEY` and a save would delete and recreate the entry
+rather than patch it — the `rekey_anniversaries` shape would fix that once the
+behaviour is known.

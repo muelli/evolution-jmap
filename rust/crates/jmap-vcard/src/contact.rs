@@ -5,8 +5,9 @@
 //!
 //! The mapped set is deliberately the one the address book backend needs to
 //! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
-//! NOTE, BDAY, URL, CATEGORIES — and no more. Everything else on a card
-//! (preferred languages, online services, …) is *dropped*, which is only safe
+//! NOTE, BDAY, URL, CATEGORIES and the instant-messaging `X-` lines — and no
+//! more. Everything else on a card (preferred languages, the media it carries,
+//! what the contact is spoken to as, …) is *dropped*, which is only safe
 //! because saving goes back to the server as a PatchObject naming the mapped
 //! properties: a property we never mapped is a property we never overwrite.
 //!
@@ -88,6 +89,25 @@
 //! line's value and leaves its parameters alone, and any further `URL` line
 //! passes through untouched.
 //!
+//! `onlineServices` is the one property vCard 3.0 has no line for at all. RFC
+//! 9553 §2.3.2 names the contact as one service or protocol knows them; RFC
+//! 4770's `IMPP` is vCard 4.0, which is not the format
+//! `e_contact_new_from_vcard()` is handed, so the line is the `X-` one EDS
+//! itself keeps a handle on — [`ONLINE_SERVICES`] — and the mapping states only
+//! the ten services libebook-contacts 3.52 gives contact-editor slots to. Which
+//! makes the property lossy in three separate places: a service EDS has no field
+//! for has no line, an entry stating a `uri` and no `user` has none either (see
+//! [`drawn_service`]), and neither has a handle the line would come back from
+//! EDS having renamed.
+//!
+//! Its `TYPE` is also the one parameter here that is *not* the JSContact member
+//! it looks like. It is the slot EDS files the handle in — `HOME` or `WORK`,
+//! measured — and a line carrying none reaches no field the user can see, so
+//! every line must carry one whether the entry states a context or not. It is
+//! therefore written from the entry's `contexts` where they say something and
+//! never read back off the line — which is why [`OnlineService`] models no
+//! `contexts` of its own, and lets them ride in its `extra` as a nickname's do.
+//!
 //! `keywords` is the first mapped property that is a *set* rather than a keyed
 //! map, and the first to cross on one line holding all of it. RFC 9553 §2.8.2
 //! files a card under bare-string tags; RFC 2426 §3.7.1's `CATEGORIES` lists
@@ -106,7 +126,7 @@ use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
-    NameComponent, Nickname, Note, OrgUnit, Organization, Title,
+    NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use serde_json::{Map, Value, json};
 
@@ -173,6 +193,35 @@ const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
 /// RFC 2426 §3.7.1's `CATEGORIES` — the tags EDS reads as
 /// `E_CONTACT_CATEGORY_LIST`, which is Evolution's Categories field.
 const CATEGORIES: &str = "CATEGORIES";
+
+/// The online services EDS keeps a contact's handles for, paired with the
+/// vCard property each is stated on, and spelled as RFC 9553 §2.3.2 invites —
+/// the way the service itself does.
+///
+/// These are exactly the services libebook-contacts 3.52 gives per-slot fields
+/// to (`E_CONTACT_IM_JABBER_HOME_1` and its fifty-nine siblings), which is what
+/// makes a handle on one of them a handle Evolution's contact editor can show
+/// and change. Two of EDS's own instant-messaging fields are deliberately
+/// missing: `X-TWITTER`, which it knows only as a multi-valued field with no
+/// slots to put a handle in, and `X-SIP`, which is not a service name but a
+/// protocol EDS keeps in a field of a different shape.
+const ONLINE_SERVICES: [(&str, &str); 10] = [
+    ("AIM", "X-AIM"),
+    ("Gadu-Gadu", "X-GADUGADU"),
+    ("Google Talk", "X-GOOGLE-TALK"),
+    ("GroupWise", "X-GROUPWISE"),
+    ("ICQ", "X-ICQ"),
+    ("Jabber", "X-JABBER"),
+    ("MSN", "X-MSN"),
+    ("Matrix", "X-MATRIX"),
+    ("Skype", "X-SKYPE"),
+    ("Yahoo", "X-YAHOO"),
+];
+
+/// The slot EDS files a handle in when nothing says otherwise, and the only one
+/// it writes a handle of its own accord into (measured against
+/// libebook-contacts 3.52).
+const DEFAULT_SLOT: &str = "HOME";
 
 /// The line EDS keeps `E_CONTACT_ANNIVERSARY` on — the field Evolution's
 /// contact editor labels "Anniversary".
@@ -303,6 +352,116 @@ pub fn states_link(link: &Link) -> bool {
 /// it is the contact's home page.
 fn maps_link_kind(kind: Option<&str>) -> bool {
     kind.is_none()
+}
+
+/// Whether a handle at an online service reaches the user at all.
+///
+/// Three things have to hold at once, and [`drawn_service`] is where each is
+/// spelled out: the service must be one EDS has a field for, the entry must
+/// state a `user` rather than only a `uri`, and the handle must survive the trip
+/// through EDS unrenamed.
+pub fn states_online_service(service: &OnlineService) -> bool {
+    drawn_service(service).is_some()
+}
+
+/// The vCard property a handle is stated on and the handle itself, or `None` for
+/// an entry with no line — the single point [`states_online_service`] and
+/// [`card_to_vcard`] agree through, so an entry cannot be called visible and
+/// then left out.
+///
+/// An entry has no line when:
+///
+/// - **its service is not one EDS has a field for.** The line *is* the service:
+///   there is no property that states an arbitrary one, and an invented
+///   `X-SIGNAL` would reach nothing the user can see while making the save
+///   believe the entry had been shown. See [`ONLINE_SERVICES`].
+/// - **it states a `uri` and no `user`.** RFC 9553 §2.3.2 asks for either, but
+///   only the `user` is a handle, and the field EDS keeps this on is the handle:
+///   reading one out of `xmpp:vera@jabber.example` means knowing the URI scheme
+///   of every service, and a save would write that guess back. An entry stating
+///   *both* is drawn from its `user`, and the save that renames the handle drops
+///   the `uri` that named the old one — the same thing renaming an organisation
+///   unit does to its `sortAs`.
+/// - **its handle would come back from EDS spelled differently.** The empty
+///   handle says nothing; a carriage return is dropped by [`crate::syntax::write`]
+///   as a security property; and ends made of ASCII whitespace are trimmed by
+///   EDS — measured against libebook-contacts 3.52, where `X-JABBER: vera@a `
+///   reaches the user as `vera@a`. Each would have the next save rename the
+///   handle on the server, which costs more than not showing it. See
+///   [`edged_with_whitespace`].
+fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
+    let property = service_property(service.service.as_deref()?)?;
+    let handle = service.user.as_deref()?;
+    let drawable = !handle.is_empty() && !handle.contains('\r') && !edged_with_whitespace(handle);
+    drawable.then_some((property, handle))
+}
+
+/// The vCard property handles at this service are stated on.
+fn service_property(service: &str) -> Option<&'static str> {
+    let wanted = normalised_service(service);
+    ONLINE_SERVICES
+        .iter()
+        .find(|(name, _)| normalised_service(name) == wanted)
+        .map(|(_, property)| *property)
+}
+
+/// The service a vCard property states handles for, spelled as
+/// [`ONLINE_SERVICES`] spells it — which is what a handle the user has just
+/// typed is filed under, since the line EDS wrote names no service but itself.
+fn service_of(property: &str) -> Option<&'static str> {
+    ONLINE_SERVICES
+        .iter()
+        .find(|(_, mapped)| *mapped == property)
+        .map(|(name, _)| *name)
+}
+
+/// Whether two service names name the same service.
+///
+/// RFC 9553 §2.3.2 requires case-insensitive equality; this is wider, ignoring
+/// the punctuation and spacing inside the name as well, because `Gadu-Gadu`,
+/// `GaduGadu` and `gadu gadu` are one service under three spellings. Being wide
+/// here is the safe direction: the mapping uses this to decide *not* to write,
+/// so a match the RFC does not demand leaves the server's own spelling alone,
+/// while a miss would rename it.
+pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
+    match (one, other) {
+        (Some(one), Some(other)) => normalised_service(one) == normalised_service(other),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// A service name with everything that is not a letter or a digit removed, and
+/// the rest lower-cased.
+fn normalised_service(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The slot a handle goes in: the `TYPE` value EDS reads to decide which of
+/// Evolution's per-context fields shows it.
+///
+/// Chosen from the entry's `contexts`, which is as far as that member crosses:
+/// nothing is read back off the parameter, because every line has to carry one
+/// to be visible at all and reading it would put a context on every entry that
+/// stated none. Exactly one slot per line — a handle wearing both `TYPE`s shows
+/// up in two fields the user can edit independently, and nothing would say which
+/// edit wins — so a service used at work *and* privately, or in a context vCard
+/// 3.0 cannot spell, lands in [`DEFAULT_SLOT`], where the user looks first.
+fn service_slot(service: &OnlineService) -> &'static str {
+    let context = |name: &str| {
+        service
+            .extra
+            .get("contexts")
+            .and_then(|contexts| contexts.get(name))
+            == Some(&Value::Bool(true))
+    };
+    match context("work") && !context("private") {
+        true => "WORK",
+        false => DEFAULT_SLOT,
+    }
 }
 
 /// Whether the tags a card is filed under survive the trip through vCard well
@@ -664,6 +823,20 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         properties.push(Property::new("URL", &link.uri).with_param(X_JMAP_KEY, key));
     }
 
+    // One line per service, on the property EDS keeps that service's handles
+    // on, and always with a slot: a line carrying no `TYPE` reaches none of the
+    // fields Evolution shows.
+    for (key, service) in card.online_services.iter().flatten() {
+        let Some((property, handle)) = drawn_service(service) else {
+            continue;
+        };
+        properties.push(
+            Property::new(property, handle)
+                .with_param(X_JMAP_KEY, key)
+                .with_param("TYPE", service_slot(service)),
+        );
+    }
+
     for (key, anniversary) in card.anniversaries.iter().flatten() {
         let (Some(name), Some(date)) = (
             anniversary_property(&anniversary.kind),
@@ -712,6 +885,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut notes = BTreeMap::new();
     let mut anniversaries = BTreeMap::new();
     let mut links = BTreeMap::new();
+    let mut online_services = BTreeMap::new();
 
     for property in &properties {
         match property.name.as_str() {
@@ -805,7 +979,26 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 anniversaries.insert(entry_key(property, "y", &anniversaries), anniversary);
             }
-            _ => {}
+            // One of the `X-` lines EDS keeps instant-messaging handles on, and
+            // nothing else: a line for a service this mapping does not state is
+            // left where it is rather than read as an entry the server never
+            // had. The `TYPE` is not read — it is the slot, not the contexts.
+            name => {
+                let Some(service) = service_of(name) else {
+                    continue;
+                };
+                let handle = property.text();
+                if handle.is_empty() {
+                    continue;
+                }
+                let entry = OnlineService {
+                    service: Some(service.to_owned()),
+                    user: Some(handle),
+                    uri: None,
+                    extra: BTreeMap::new(),
+                };
+                online_services.insert(entry_key(property, "s", &online_services), entry);
+            }
         }
     }
 
@@ -848,6 +1041,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         notes: (!notes.is_empty()).then_some(notes),
         anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
         links: (!links.is_empty()).then_some(links),
+        online_services: (!online_services.is_empty()).then_some(online_services),
         keywords: read_keywords(&properties),
         extra: BTreeMap::new(),
     })
