@@ -164,6 +164,27 @@ fn contact_card_roundtrip() {
     let keywords = card.keywords.as_ref().expect("keywords");
     assert_eq!(keywords.keys().collect::<Vec<_>>(), ["hiking"]);
     assert!(keywords.values().all(|set| set == &Value::Bool(true)));
+    // `relatedTo` is the one map keyed by the related entity rather than by an
+    // id of whoever wrote the entry: RFC 9553 §2.1.8 makes the key the related
+    // Card's `uid`, and RFC 9555 §2.9.5 puts free text there where the vCard
+    // stated `RELATED;VALUE=text` — which is the only case holding a name a
+    // user could read.
+    let related = card.related_to.as_ref().expect("relatedTo");
+    let spouse = &related["Jean Paul Oldenburg"];
+    let relation = spouse.relation.as_ref().expect("relation");
+    assert_eq!(relation.keys().collect::<Vec<_>>(), ["kin", "spouse"]);
+    assert!(relation.values().all(|set| set == &Value::Bool(true)));
+    // An entity related some other way, named the way §2.1.8 asks for: nothing
+    // on the card says who they are, so no line can show them.
+    assert_eq!(
+        related["urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44"]
+            .relation
+            .as_ref()
+            .expect("relation")
+            .keys()
+            .collect::<Vec<_>>(),
+        ["colleague"]
+    );
     // Unmodeled JSContact properties (preferredLanguages) survive via `extra`.
     assert!(card.extra.contains_key("preferredLanguages"));
 }

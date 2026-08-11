@@ -19871,3 +19871,103 @@ be moved between the Home and Work slots at all is unknown; no test drives a
 what Evolution's contact editor writes for a replaced photo is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-ninety-sixth session)
+
+**The spouse, and the first property whose *key* is what crosses.** Evolution's
+contact editor has a Spouse field on its Personal tab, and it sat empty for every
+JMAP contact, and it is the first such field whose value does not live in the
+JSContact property's value at all. RFC 9553
+§2.1.8's `relatedTo` keys the entities a card relates to and says, in a set of
+types, how each of them relates; the key is the related Card's `uid` and the
+value holds nothing but the relation. So the *name* a Spouse field shows can only
+be the key, and this is the one property here whose entries are told apart by
+something the user can read.
+
+**Which is what RFC 9555 §2.9.5 is for.** §2.1.8 alone would say there is no name
+anywhere — a `uid` is a URN. The companion conversion RFC settles it: a vCard
+`RELATED;VALUE=text:...` becomes an entry keyed by that text, so a key is either
+an identifier or free text, and only the second kind holds a person. That is the
+whole filter on the key side: an entry keyed by a URI gets no line, because a URN
+shown under the heading "Spouse" would be written back as the person's name by
+the next save. `names_a_uri` checks RFC 3986 §3.1's scheme grammar rather than
+looking for a colon, so `Jean Paul: the second` is still a name.
+
+**And the key being the value has a second consequence, measured rather than
+assumed.** Every other keyed map here carries its JSContact key in `X-JMAP-KEY`
+and needs that parameter to survive Evolution. This one writes no key at all —
+there is nothing for the parameter to say that the value does not — so the
+question that shaped the `PHOTO` and the `CALURI` mappings does not arise. What
+does arise instead: a name EDS respells is not a renamed value, it is a
+*different entry*. Ends made of ASCII whitespace are trimmed by EDS, measured
+against libebook-contacts 3.52 exactly as they were for an instant-messaging
+handle, and a carriage return is dropped by `syntax::write` as a security
+property — so each of those, and the empty name, gets no line. `states_spouse` is
+those two filters in one place, and the reader runs it too: a name the emitter
+could not write is not read back off a line either, or the save would create an
+entry the emitter can never draw again.
+
+**One relation type of twenty, and the two near misses stay unmapped.** vCard 3.0
+has no `RELATED` at all — RFC 6350 §6.6.6 is 4.0 — so `X-EVOLUTION-SPOUSE` is not
+a shortcut past a standard line, it is the only line there is;
+`e_contact_vcard_attribute(E_CONTACT_SPOUSE)` is what says it is that one,
+probed against libebook-contacts 3.52 along with `E_CONTACT_MANAGER` and
+`E_CONTACT_ASSISTANT`. Those two are the fields it is tempting to fill, and
+§2.1.8 has no type for either: `agent` is whoever acts on the contact's behalf,
+which is wider than an assistant, and nothing at all means a manager. A name
+written into a field on a guess is the failure this mapping refuses everywhere
+else (a title of a vendor kind, a calendar naming no kind), so they stay empty.
+An entry claiming several types — the fixture's spouse is also `kin` — crosses on
+the strength of `spouse`, and comes back stating only that, because that is all
+the line said; the save has to patch into the set rather than replace it.
+
+**Two mutation checks.** Dropping the key filter reddens four of the five new
+tests, the UID and the whitespace legs included; making the relation test accept
+any relation type at all reddens two, and the fixture's `child` entry is what
+catches it. The remaining test — every line of the name is read, not only the
+first EDS shows the user — is the one that was red before the reader existed.
+
+Tests: 979 in the default set, up from 974.
+
+Verified locally: `cargo test --locked` 979; full `ninja` then `ctest` 14/14, all
+four functional legs included; `cargo fmt --all --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings` and `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` both clean. `ci/checks.sh`
+still stops at its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so
+the licence check was done by hand: no file was added, the five sources touched
+already carry an SPDX header, the two fixtures are covered by `REUSE.toml`'s
+`rust/crates/*/tests/fixtures/**`, and `Cargo.lock` is untouched, so `cargo
+deny`'s answer is the one it gave on the last green run.
+
+**What is still *not* verified, and what is deliberately not here.** The save is
+not: `jmap-book-sync` does not name `relatedTo` in a patch, so a spouse the user
+retypes reaches the cache and stops there. That is the next increment and it is
+not the shape any of the others had — the key is the value, so an edit is not a
+patch to an entry but a *removal and an addition*, and a merge on the relation set
+so the `kin` the line never showed is not deleted along the way. Nothing drives a
+spouse through real EDS either: what is measured here is `EContact` and `EVCard`
+via a throwaway probe, and whether Evolution's editor writes the field with
+`e_contact_set` at all is not something a headless VM can answer. Nor is it known
+what the editor does with a second `X-EVOLUTION-SPOUSE` line, beyond that
+libebook-contacts reads the first and leaves the rest alone.
+
+No milestone tag. New blockers: `jmap-book-sync` cannot save a spouse, and no
+functional leg drives one through real EDS. Unchanged blockers: the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; `example-module` does not
+pass this VM's clippy (1.97) on unmodified master, 26 `manual_c_str_literals`;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty;
+`jmap-ical` emits no `VTIMEZONE` of its own; `links` and `CONFERENCE` on the
+calendar side rest on untested assumptions; the
+multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL`/`PHOTO` "Evolution shows only the
+first" bet is verified for `PHOTO` and still unverified for the rest; the two
+`LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone are
+still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and
+Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped
+and their contact-editor behaviour unmeasured; whether the editor lets a handle
+be moved between the Home and Work slots at all is unknown; no test drives a
+`uri`-only entry through real EDS; a `VALUE=uri` photo's rendering is unmeasured;
+what Evolution's contact editor writes for a replaced photo is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.
