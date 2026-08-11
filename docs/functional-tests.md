@@ -577,19 +577,27 @@ connected, holding entries a line can only draw part of:
 - a `locations` entry with a `name` and a `description`,
 - a `virtualLocations` entry with a `uri`, a `name` and a `description`, and
 - **two** `links` entries, each with an `href`, a `contentType`, a `size` and a
-  `title`,
+  `title`, and
+- a **third** `links` entry carrying the `icon` `rel` and a `display`, which is
+  the same map's other half: RFC 8984 §4.2.7 keeps in one `links` map what
+  iCalendar splits between RFC 5545 §3.8.1.1's `ATTACH` and RFC 7986 §5.10's
+  `IMAGE`, and the `rel` is what tells them apart,
 
 each under a key only a server would choose. The client waits for the event to
 become gettable, reports what EDS gave it, retypes the `LOCATION` (the field
 Evolution's appointment editor writes) and the `CONFERENCE` value,
-re-addresses one of the two `ATTACH` lines — the one already pointing at a
-given address, which is how a user picks the attachment they meant — and saves.
+re-addresses one of the two `ATTACH` lines and the `IMAGE` — each named by the
+address it already carries, which is how a user picks the resource they meant —
+and saves.
 
 What it asserts, and why each observation is separate:
 
 - **the drawing arrived** — the place on the `LOCATION` line, the address on the
-  `CONFERENCE` line, one of each and no more, the conference's `LABEL`, and both
-  `ATTACH` lines with the `FMTTYPE` and `SIZE` standing on each;
+  `CONFERENCE` line, one of each and no more, the conference's `LABEL`, both
+  `ATTACH` lines with the `FMTTYPE` and `SIZE` standing on each, and the one
+  `IMAGE` line with its `FMTTYPE` and its `DISPLAY`. The counts carry the split:
+  two `ATTACH` and one `IMAGE` says the icon link left on the property it belongs
+  on, where a mapping that ignored the `rel` would show three and none;
 - **the `X-JMAP-KEY` came back on every line.** For the conference this is
   load-bearing: RFC 7986 §5.11 admits several `CONFERENCE` lines, so the mapping
   finds the server's entry by the key the line carries and by nothing else. For
@@ -604,7 +612,13 @@ What it asserts, and why each observation is separate:
   §3.8.1.1 gives it a value type of its own — libical parses the line into an
   `icalattach`, so the parameters stand beside a value the library re-made, and
   the client therefore reads the address back through `i_cal_property_get_attach`
-  rather than as text;
+  rather than as text. The `IMAGE` asks it in a *third* shape again: §5.10's
+  grammar makes `VALUE=URI` REQUIRED on the URI alternative, so the mapping writes
+  the parameter, and with it present libical parses the value as a URI rather than
+  as the `icalattach` an `ATTACH` gets — `i_cal_property_get_attach` on such a
+  property reaches into the union as though it were one and **crashes** (measured
+  on libical 3.0.17), which is why the client reads that address as text and
+  re-addresses it through `i_cal_property_set_value_from_string`;
 - **every edit reached the server as a patch of the entry it was drawn from**:
   `locations/<key>/name`, `virtualLocations/<key>/uri` and `links/<key>/href`,
   with the `description` and the `title` no line had room for still where the
@@ -615,11 +629,16 @@ What it asserts, and why each observation is separate:
   document nobody asked to move and loses the edit that was made. The
   `contentType` and the `size` are shown on the line and deliberately never
   written back — they are the server's description of what it holds, not a field
-  the user was offered;
+  the user was offered. The picture makes the same argument one member further:
+  §5.10 admits no `SIZE` on an `IMAGE`, so its `size` was never shown at *all* —
+  a save that wrote back every member it could name would keep the `ATTACH`
+  entries' sizes and delete this one's — and its `rel` and `display` are the
+  server's own too, since the property name is the whole of what the line says
+  about them;
 - **the entry keys did not move** and the event was not renamed, so the save
   patched the event rather than replacing it with what one component can state.
 
-Six mutations have been run against it, each reddening a different assertion:
+Ten mutations have been run against it, each reddening a different assertion:
 dropping the `X-JMAP-KEY` from the `CONFERENCE` (the key observation); ignoring
 the key when reading the line back, which leaves the drawing intact and the save
 unable to name the entry (the read-back address, because EDS's cache hands the
@@ -628,9 +647,16 @@ old one over); making the rename replace `locations` rather than patch into it
 `contentType` alongside `href` (the server-side `links` entry, with the media
 type gone); re-addressing the *first* `ATTACH` instead of the one the user
 picked (the read-back lookup, which finds the untouched document moved and the
-edited one where it was); and replacing `links` whole rather than patching one
+edited one where it was); replacing `links` whole rather than patching one
 `href` (the server-side pair, which comes back with both `title`s gone while
-every client observation still passes).
+every client observation still passes); dropping the `X-JMAP-KEY` from the
+`IMAGE` alone (the read-side picture lookup, which finds no line answering to the
+key); ignoring the `icon` `rel` when drawing, so the picture goes out as a third
+`ATTACH` — with a `SIZE` §5.10 forbids — and the client, finding no `IMAGE` to
+re-address, fails outright; dropping the `DISPLAY` parameter (the picture's
+`display`, and nothing else); and patching the whole `links/<key>` entry rather
+than its `href` (the server-side map, where both edited entries lose the `title`
+and the picture loses its `size` too, while every client observation passes).
 
 Retyping the conference is the one thing here a user of Evolution 3.52 cannot
 do: it has no control for the property, and libical-glib 3.0 does not even name

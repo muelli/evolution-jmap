@@ -3,8 +3,8 @@
  *
  * The second client half of the calendar functional test: an ordinary libecal
  * consumer that opens a calendar, reads an event the *server* already held,
- * retypes the places it happens at and the document it points at, and writes
- * them back.
+ * retypes the places it happens at, the document it points at and the picture
+ * of it, and writes them back.
  *
  * A program of its own rather than a phase of cal-client.c, which creates
  * every event it looks at. The two ask opposite questions. cal-client.c asks
@@ -24,13 +24,14 @@
  *
  *   usage: functional-cal-edit-client <source-uid> <event-uid> <new-location>
  *                                    <new-conference-uri> <old-attach-uri>
- *                                    <new-attach-uri>
+ *                                    <new-attach-uri> <old-image-uri>
+ *                                    <new-image-uri>
  *
- * The attachment to re-address is named by the address it already carries
- * rather than by its position among the ATTACH lines or by the key the mapping
- * put on it: an event holds any number of them (RFC 5545 §3.8.1.1), that is how
- * a user picks the one they meant, and it keeps this program with no notion of
- * what the mapping writes on a line.
+ * The attachment and the picture to re-address are named by the address they
+ * already carry rather than by their position among the lines or by the key the
+ * mapping put on them: an event holds any number of both (RFC 5545 §3.8.1.1,
+ * RFC 7986 §5.10), that is how a user picks the one they meant, and it keeps
+ * this program with no notion of what the mapping writes on a line.
  */
 
 #define LIBICAL_GLIB_UNSTABLE_API 1
@@ -166,6 +167,11 @@ property_count (ICalComponent *component,
  * has no UI for one. */
 #define CONFERENCE_PROPERTY ((ICalPropertyKind) ICAL_CONFERENCE_PROPERTY)
 
+/* The IMAGE property kind, missing from the generated ICalPropertyKind for the
+ * same reason CONFERENCE is: RFC 7986 §5.10 is a decade newer than the enum's
+ * oldest members. The same cast between two spellings of one value applies. */
+#define IMAGE_PROPERTY ((ICalPropertyKind) ICAL_IMAGE_PROPERTY)
+
 /* Report what EDS holds for the two places the mapping draws: the one line of
  * text a LOCATION is, and the CONFERENCE beside it.
  *
@@ -296,6 +302,141 @@ report_resource (const gchar *prefix,
 	}
 }
 
+/* The value of a parameter as it would be written on a line — what follows the
+ * `=` in libical's own rendering of it, or the empty string for a parameter the
+ * component does not carry.
+ *
+ * Needed because libical-glib names no function that turns a parameter's enum
+ * value back into its iCalendar spelling: i_cal_parameter_get_display hands back
+ * an ICalParameterDisplay, and printing the number would tie this program's
+ * output to the enum's layout rather than to what stands on the line. Asking the
+ * library to render the parameter and taking the value off it reports the
+ * spelling a reader of the calendar would see, which is the thing under test.
+ *
+ * The empty string for absent, for the reason x_parameter gives: a parameter EDS
+ * dropped should be an observation the harness asserts on, not a line missing
+ * from the output. */
+static gchar *
+parameter_value (ICalParameter *parameter)
+{
+	gchar *written;
+	const gchar *equals;
+	gchar *value;
+
+	if (!parameter)
+		return g_strdup ("");
+
+	written = i_cal_parameter_as_ical_string (parameter);
+	if (!written)
+		return g_strdup ("");
+
+	equals = strchr (written, '=');
+	value = g_strdup (equals ? equals + 1 : "");
+	g_free (written);
+
+	return value;
+}
+
+/* Report what EDS holds for the pictures *of* the event — every IMAGE line, one
+ * group of observations per line, numbered like report_resource's.
+ *
+ * A third question rather than a variant of the second, because RFC 8984 §4.2.7
+ * keeps in one `links` map what iCalendar splits across two properties: a
+ * document attached to the event is an ATTACH, a picture of it is RFC 7986
+ * §5.10's IMAGE, and jmap-ical tells them apart by the `icon` rel. Reporting them
+ * apart is what says a link the mapping read as an icon left on the property it
+ * belongs on — an event whose picture came back as an ATTACH would pass every
+ * observation report_resource makes.
+ *
+ * The address is read as the value's string form, and here that is not the same
+ * choice report_resource made — it is the only one available. §5.10's grammar
+ * makes VALUE=URI REQUIRED on the URI alternative, so the mapping writes it, and
+ * with the parameter present libical parses the value as an ICAL_URI_VALUE rather
+ * than the ICAL_ATTACH_VALUE an ATTACH gets. i_cal_property_get_attach on such a
+ * property does not return NULL: it reaches into a union as though the URI were
+ * an icalattach and *crashes*. Measured on this VM's libical 3.0.17, and the
+ * reason the two reporters differ.
+ *
+ * DISPLAY goes out beside the key because it is the one member of a JSCalendar
+ * Link with a standard parameter of its own, and because §6.1 requires a reader
+ * meeting a DISPLAY it does not know to show no image at all — so a value the
+ * round trip mangles is worse for the user than one it drops. FMTTYPE joins it;
+ * SIZE does not, since §5.10 admits none on this property. */
+static void
+report_pictures (const gchar *prefix,
+		 ICalComponent *event)
+{
+	ICalProperty *image;
+	guint index = 0;
+
+	g_print ("%s-images=%u\n", prefix, property_count (event, IMAGE_PROPERTY));
+
+	image = i_cal_component_get_first_property (event, IMAGE_PROPERTY);
+	while (image) {
+		ICalProperty *next;
+		ICalParameter *parameter;
+		gchar *value;
+
+		index++;
+
+		value = i_cal_property_get_value_as_string (image);
+		g_print ("%s-image-%u=%s\n", prefix, index, value ? value : "");
+		g_free (value);
+
+		value = x_parameter (image, JMAP_KEY_PARAMETER);
+		g_print ("%s-image-%u-key=%s\n", prefix, index, value);
+		g_free (value);
+
+		parameter = i_cal_property_get_first_parameter (
+			image, I_CAL_FMTTYPE_PARAMETER);
+		g_print ("%s-image-%u-fmttype=%s\n", prefix, index,
+			 parameter ? i_cal_parameter_get_fmttype (parameter) : "");
+		g_clear_object (&parameter);
+
+		parameter = i_cal_property_get_first_parameter (
+			image, I_CAL_DISPLAY_PARAMETER);
+		value = parameter_value (parameter);
+		g_print ("%s-image-%u-display=%s\n", prefix, index, value);
+		g_free (value);
+		g_clear_object (&parameter);
+
+		next = i_cal_component_get_next_property (event, IMAGE_PROPERTY);
+		g_object_unref (image);
+		image = next;
+	}
+}
+
+/* The IMAGE line stating one address, or NULL for a component holding none.
+ *
+ * The twin of attach_pointing_at, and separate from it for the same reason
+ * report_pictures is separate from report_resource: the value must be compared as
+ * a string here, since asking this property for an icalattach crashes. Nothing
+ * here looks at the key either. */
+static ICalProperty *
+image_pointing_at (ICalComponent *event,
+		   const gchar *url)
+{
+	ICalProperty *image;
+
+	image = i_cal_component_get_first_property (event, IMAGE_PROPERTY);
+	while (image) {
+		ICalProperty *next;
+		gchar *value = i_cal_property_get_value_as_string (image);
+		gboolean matches = g_strcmp0 (value, url) == 0;
+
+		g_free (value);
+
+		if (matches)
+			return image;
+
+		next = i_cal_component_get_next_property (event, IMAGE_PROPERTY);
+		g_object_unref (image);
+		image = next;
+	}
+
+	return NULL;
+}
+
 /* The ATTACH line pointing at one address, or NULL for a component holding
  * none.
  *
@@ -372,6 +513,7 @@ main (int argc,
 	ICalComponent *read_back_event;
 	ICalProperty *conference;
 	ICalProperty *attach;
+	ICalProperty *image;
 	ICalAttach *attach_value;
 	const gchar *source_uid;
 	const gchar *event_uid;
@@ -379,11 +521,14 @@ main (int argc,
 	const gchar *new_conference_uri;
 	const gchar *old_attach_uri;
 	const gchar *new_attach_uri;
+	const gchar *old_image_uri;
+	const gchar *new_image_uri;
 
-	if (argc != 7) {
+	if (argc != 9) {
 		g_printerr ("usage: %s <source-uid> <event-uid> <new-location> "
 			    "<new-conference-uri> <old-attach-uri> "
-			    "<new-attach-uri>\n", argv[0]);
+			    "<new-attach-uri> <old-image-uri> "
+			    "<new-image-uri>\n", argv[0]);
 		return 2;
 	}
 
@@ -393,6 +538,8 @@ main (int argc,
 	new_conference_uri = argv[4];
 	old_attach_uri = argv[5];
 	new_attach_uri = argv[6];
+	old_image_uri = argv[7];
+	new_image_uri = argv[8];
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
@@ -440,6 +587,7 @@ main (int argc,
 	g_print ("read-summary=%s\n", i_cal_component_get_summary (event));
 	report_places ("read", event);
 	report_resource ("read", event);
+	report_pictures ("read", event);
 
 	/* The first edit: the user retypes the place, which is what Evolution's
 	 * appointment editor writes into. i_cal_component_set_location replaces
@@ -499,6 +647,28 @@ main (int argc,
 	g_object_unref (attach_value);
 	g_object_unref (attach);
 
+	/* And the fourth: the address of the picture of the event. The other half
+	 * of the same `links` map, and a property of its own — see
+	 * report_pictures. Edited in the same save as the attachment above rather
+	 * than in a run of its own, because a mapping that paired lines with
+	 * entries by counting rather than by the key on them can only be caught
+	 * where both kinds of line are present.
+	 *
+	 * Set through i_cal_property_set_value_from_string, not through the
+	 * icalattach API the ATTACH above uses: with the VALUE=URI the mapping
+	 * writes, this property's value is a URI, and handing it an icalattach
+	 * would be handing it the wrong kind. Setting the value keeps the
+	 * parameters standing beside it, which is what makes this the edit a
+	 * consumer can make. */
+	image = image_pointing_at (event, old_image_uri);
+	if (!image) {
+		g_printerr ("edit-image: the event EDS handed back has no IMAGE "
+			    "stating %s to re-address\n", old_image_uri);
+		return 1;
+	}
+	i_cal_property_set_value_from_string (image, new_image_uri, "URI");
+	g_object_unref (image);
+
 	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
 					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
 		return fail ("modify", error);
@@ -517,6 +687,7 @@ main (int argc,
 
 	report_places ("read-back", read_back_event);
 	report_resource ("read-back", read_back_event);
+	report_pictures ("read-back", read_back_event);
 
 	g_object_unref (read_back_event);
 	g_object_unref (read_back);

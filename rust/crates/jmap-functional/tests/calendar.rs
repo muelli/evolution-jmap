@@ -340,6 +340,48 @@ const PLACED_EDITED_ATTACH_TITLE: &str = "Slides, as presented";
 const PLACED_EDITED_ATTACH_MEDIA_TYPE: &str = "application/vnd.oasis.opendocument.presentation";
 const PLACED_EDITED_ATTACH_SIZE: u64 = 51200;
 
+/// And the picture *of* the event, which is the other half of the same map and a
+/// different iCalendar property.
+///
+/// RFC 8984 §4.2.7 keeps in one `links` map what iCalendar splits in two: a
+/// document attached to the event is RFC 5545 §3.8.1.1's `ATTACH`, and a picture
+/// of it is RFC 7986 §5.10's `IMAGE`. `jmap-ical` tells them apart by the
+/// `icon` `rel` — RFC 8984 §1.4.11's, the relation `display` may be set on — so
+/// this entry carries one and the two above do not.
+///
+/// A separate question from the two `ATTACH` lines, and not a formality. The
+/// property is a decade newer than the enum libical-glib generates its names
+/// from; the mapping writes `VALUE=URI` on it because §5.10's grammar makes the
+/// parameter REQUIRED on that alternative, and *that* is what changes the shape
+/// of the value libical hands back — an `ATTACH` parses into an `icalattach`,
+/// this parses into a URI. Whether the `X-JMAP-KEY` survives EDS's cache on a
+/// property of that shape is not settled by it surviving on the other one.
+///
+/// The `display` is what the picture is *for*, and it exists here because it is
+/// the one member of a Link that crosses into a standard parameter of its own —
+/// RFC 7986 §6.1's `DISPLAY`. A cache that dropped it costs the user nothing
+/// today, since only `href` goes back, but §6.1 requires a reader that meets a
+/// `DISPLAY` it does not know to show *no image at all*, so what the round trip
+/// does to it is worth measuring rather than assuming.
+///
+/// The `size` is here for the opposite reason to the `ATTACH` entries', where it
+/// is shown as a `SIZE` parameter: §5.10 admits no `SIZE` on an `IMAGE`, so this
+/// one has no room on the line at all. It joins the `title` as a member the save
+/// must leave alone because it was never shown — and unlike the `title` it is a
+/// member the *other* two entries do show, so a save that wrote back everything it
+/// could name would lose it from here and keep it there.
+const PLACED_IMAGE_KEY: &str = "srv-img";
+const PLACED_IMAGE_HREF: &str = "https://files.example/design-review/whiteboard.png";
+const PLACED_IMAGE_TITLE: &str = "Whiteboard, at the end";
+const PLACED_IMAGE_MEDIA_TYPE: &str = "image/png";
+const PLACED_IMAGE_SIZE: u64 = 8192;
+/// How the `display` is spelled on each side of the crossing. RFC 8984 §1.4.11
+/// and RFC 7986 §6.1 name the same four intentions in the same words and differ
+/// only in case, so both spellings are stated here and the leg asserts each
+/// against the end that uses it.
+const PLACED_IMAGE_DISPLAY: &str = "graphic";
+const PLACED_IMAGE_DISPLAY_ICAL: &str = "GRAPHIC";
+
 /// The place the user retypes into the appointment editor's Location field. A
 /// different room, so a value half-written shows up as neither.
 const REPLACED_LOCATION_NAME: &str = "Room 7";
@@ -361,6 +403,17 @@ const REPLACED_CONFERENCE_URI: &str = "https://call.example/rescheduled";
 /// they meant, and it keeps the program free of any notion of what the mapping
 /// writes on a line. See `tests/functional/cal-edit-client.c`.
 const REPLACED_ATTACH_HREF: &str = "https://docs.example/design-review/slides-2.odp";
+
+/// And the address of the picture afterwards, which is the same edit made on the
+/// other property.
+///
+/// Made in the same save as the two above rather than in a leg of its own,
+/// because the failure it is aimed at only exists when both properties are on the
+/// event: `jmap-ical` reads `ATTACH` and `IMAGE` into one map and draws them back
+/// out of one map, so a mapping that paired a line with an entry by counting —
+/// rather than by the key on it — mixes the two kinds up only where both are
+/// present. A picture alone would be re-addressed correctly by construction.
+const REPLACED_IMAGE_HREF: &str = "https://pics.example/design-review/whiteboard-2.png";
 
 /// Put the event the second leg starts from into the mock's store, and hand back
 /// the id the server filed it under — which is also the `UID` EDS keys its cache
@@ -410,7 +463,9 @@ fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
     );
     // Two resources rather than one, because that is the shape in which a key
     // lost between the drawing and the save costs the user a document rather
-    // than an edit — see [`PLACED_EDITED_ATTACH_KEY`].
+    // than an edit — see [`PLACED_EDITED_ATTACH_KEY`]. And a third of the other
+    // kind beside them: one map, two iCalendar properties, told apart by the
+    // `icon` `rel` — see [`PLACED_IMAGE_KEY`].
     event.links = Some(
         [
             (
@@ -431,6 +486,18 @@ fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
                     "contentType": PLACED_EDITED_ATTACH_MEDIA_TYPE,
                     "size": PLACED_EDITED_ATTACH_SIZE,
                     "title": PLACED_EDITED_ATTACH_TITLE,
+                }),
+            ),
+            (
+                PLACED_IMAGE_KEY.to_owned(),
+                serde_json::json!({
+                    "@type": "Link",
+                    "href": PLACED_IMAGE_HREF,
+                    "rel": "icon",
+                    "display": PLACED_IMAGE_DISPLAY,
+                    "contentType": PLACED_IMAGE_MEDIA_TYPE,
+                    "size": PLACED_IMAGE_SIZE,
+                    "title": PLACED_IMAGE_TITLE,
                 }),
             ),
         ]
@@ -483,6 +550,43 @@ fn resource<'a>(
         href: at(index, "")?,
         media_type: at(index, "-fmttype")?,
         size: at(index, "-size")?,
+    })
+}
+
+/// What the client reported of one `IMAGE` line: the address it states, the media
+/// type an `FMTTYPE` carries and what RFC 7986 §6.1's `DISPLAY` says the picture
+/// is for.
+///
+/// Compared whole for the reason [`Resource`] is, and shaped differently from it
+/// for two reasons that are facts about the property rather than choices: §5.10
+/// admits no `SIZE` on an `IMAGE`, so there is none to report, and it admits a
+/// `DISPLAY`, which an `ATTACH` has no room for. The address is the string form
+/// of the value here rather than a URL libical parsed out — see
+/// `tests/functional/cal-edit-client.c`, which measured why.
+#[derive(Debug, PartialEq, Eq)]
+struct Picture<'a> {
+    href: &'a str,
+    media_type: &'a str,
+    display: &'a str,
+}
+
+/// The `IMAGE` line the server's entry `key` was drawn onto, as the client
+/// reported it — found by the key and never by position, for the reason
+/// [`resource`] gives.
+fn picture<'a>(seen: &BTreeMap<&'a str, &'a str>, prefix: &str, key: &str) -> Option<Picture<'a>> {
+    let lines: usize = seen
+        .get(format!("{prefix}-images").as_str())?
+        .parse()
+        .ok()?;
+    let at = |index: usize, member: &str| {
+        seen.get(format!("{prefix}-image-{index}{member}").as_str())
+            .copied()
+    };
+    let index = (1..=lines).find(|index| at(*index, "-key") == Some(key))?;
+    Some(Picture {
+        href: at(index, "")?,
+        media_type: at(index, "-fmttype")?,
+        display: at(index, "-display")?,
     })
 }
 
@@ -1162,6 +1266,9 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
             // address it carries — see [`REPLACED_ATTACH_HREF`].
             PLACED_EDITED_ATTACH_HREF,
             REPLACED_ATTACH_HREF,
+            // And the picture, named the same way — by the address it carries.
+            PLACED_IMAGE_HREF,
+            REPLACED_IMAGE_HREF,
         ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1294,6 +1401,31 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
          user re-addressed\n{report}"
     );
 
+    // And the picture beside them, which the same map sent to a different
+    // property. Two claims in one: that a link the mapping read as an icon left on
+    // an `IMAGE` rather than an `ATTACH` — the count above is still two, so the
+    // third entry did not land there — and that the key rode across on a property
+    // whose value libical re-made into something else again. The mapping writes
+    // `VALUE=URI` on this line because RFC 7986 §5.10 demands it, and that is what
+    // makes the value a URI where an `ATTACH`'s is an `icalattach`; a cache that
+    // kept parameters through one shape and not the other shows up here.
+    assert_eq!(
+        seen.get("read-images"),
+        Some(&"1"),
+        "EDS does not hold exactly the one IMAGE line the mapping wrote for the \
+         link the server marked an icon\n{report}"
+    );
+    assert_eq!(
+        picture(&seen, "read", PLACED_IMAGE_KEY),
+        Some(Picture {
+            href: PLACED_IMAGE_HREF,
+            media_type: PLACED_IMAGE_MEDIA_TYPE,
+            display: PLACED_IMAGE_DISPLAY_ICAL,
+        }),
+        "the picture the server holds did not reach an IMAGE line under the key \
+         the server chose\n{report}"
+    );
+
     // And what EDS holds after the save: the place the user typed, on the line it
     // was typed onto, still carrying the key. One line, because a save that
     // *added* a place would leave two.
@@ -1355,6 +1487,26 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
             size: &PLACED_ATTACH_SIZE.to_string(),
         }),
         "the resource the user never touched did not come back as it went out\n{report}"
+    );
+    // And the picture at its new address, still an `IMAGE` and still saying what
+    // it is for. A save that read the re-typed line as a link with no `rel` would
+    // draw it back as an `ATTACH`, which fails the count above and the lookup
+    // here at once.
+    assert_eq!(
+        seen.get("read-back-images"),
+        Some(&"1"),
+        "the save left the old picture on the event beside the new one, or moved \
+         it off the IMAGE property\n{report}"
+    );
+    assert_eq!(
+        picture(&seen, "read-back", PLACED_IMAGE_KEY),
+        Some(Picture {
+            href: REPLACED_IMAGE_HREF,
+            media_type: PLACED_IMAGE_MEDIA_TYPE,
+            display: PLACED_IMAGE_DISPLAY_ICAL,
+        }),
+        "the address of the picture the user re-addressed did not survive the \
+         save, still under the key the server chose\n{report}"
     );
 
     let calls = server.method_calls();
@@ -1451,6 +1603,27 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
                         "contentType": PLACED_EDITED_ATTACH_MEDIA_TYPE,
                         "size": PLACED_EDITED_ATTACH_SIZE,
                         "title": PLACED_EDITED_ATTACH_TITLE,
+                    }),
+                ),
+                // The picture, re-addressed the same way — and with the three
+                // members the `IMAGE` line had no room for still the server's own.
+                // The `size` is the one this entry adds to the argument: RFC 7986
+                // §5.10 admits no `SIZE` on the property, so unlike the two
+                // entries above it was never shown at all, and a save that wrote
+                // back every member it could name would leave it here alone and
+                // delete it. The `rel` is the entry's own too — the property name
+                // is all the line says about it — and losing it would move the
+                // picture to an `ATTACH` for every other client of the account.
+                (
+                    PLACED_IMAGE_KEY.to_owned(),
+                    serde_json::json!({
+                        "@type": "Link",
+                        "href": REPLACED_IMAGE_HREF,
+                        "rel": "icon",
+                        "display": PLACED_IMAGE_DISPLAY,
+                        "contentType": PLACED_IMAGE_MEDIA_TYPE,
+                        "size": PLACED_IMAGE_SIZE,
+                        "title": PLACED_IMAGE_TITLE,
                     }),
                 ),
             ]
