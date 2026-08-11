@@ -57,6 +57,13 @@
 #define TEST_TITLE "Research Scientist"
 #define TEST_ROLE "Project Lead"
 
+/* The free-text note, which EDS keeps on one NOTE line and JSContact keeps
+ * as an entry of the `notes` map. The semicolon and the comma are here on
+ * purpose: they are what vCard gives structural meaning to, and a note is
+ * the one mapped property a user types prose into, so this is where the
+ * escaping is shown to survive the EDS that reads the line back. */
+#define TEST_NOTE "met at FOSDEM; owes me a beer, apparently"
+
 static int
 fail (const gchar *step,
       GError *error)
@@ -165,6 +172,7 @@ main (int argc,
 	e_contact_set (contact, E_CONTACT_ORG_UNIT, TEST_ORG_UNIT);
 	e_contact_set (contact, E_CONTACT_TITLE, TEST_TITLE);
 	e_contact_set (contact, E_CONTACT_ROLE, TEST_ROLE);
+	e_contact_set (contact, E_CONTACT_NOTE, TEST_NOTE);
 
 	address = e_contact_address_new ();
 	address->street = g_strdup (TEST_STREET);
@@ -204,6 +212,8 @@ main (int argc,
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_TITLE));
 	g_print ("read-back-role=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_ROLE));
+	g_print ("read-back-note=%s\n",
+		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_NOTE));
 
 	/* Structured, so it comes back as a boxed struct rather than a
 	 * string: one report per field, because which field a part of the

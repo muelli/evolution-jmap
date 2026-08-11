@@ -4,8 +4,8 @@
 //! JSContact [`ContactCard`] ↔ vCard 3.0.
 //!
 //! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, EMAIL, TEL, ADR, ORG, TITLE, ROLE — and no more.
-//! Everything else on a card (notes, nicknames, anniversaries, …) is
+//! be useful — UID, FN, N, EMAIL, TEL, ADR, ORG, TITLE, ROLE, NOTE — and no
+//! more. Everything else on a card (nicknames, anniversaries, …) is
 //! *dropped*, which is only safe because saving goes back to the server as a
 //! PatchObject naming the mapped properties: a property we never mapped is a
 //! property we never overwrite.
@@ -34,11 +34,18 @@
 //! else about them. An address of nothing but those has no `ADR` line at
 //! all, which makes it invisible, so `addresses` too is a map of which the
 //! vCard states only some entries.
+//!
+//! `notes` is the plainest of them and lossy only around the value: RFC 2426
+//! §3.6.2's `NOTE` is free text, so an entry's own text crosses whole, while
+//! RFC 9553 §2.8.1's `created` and `author` — when the note was written and
+//! by whom — have no component and no parameter to sit in, and so ride along
+//! in the entry's `extra` for the save to patch around. An entry saying
+//! nothing at all gets no line, which is the same invisibility again.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent,
+    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent, Note,
     OrgUnit, Organization, Title,
 };
 use serde_json::{Map, Value};
@@ -142,6 +149,16 @@ pub fn states_address(address: &Address) -> bool {
     address_fields(address).is_some()
 }
 
+/// Whether a note reaches the user at all — whether it says anything a
+/// `NOTE` line could state.
+///
+/// A note is all text, so this is only the empty case; it is a named
+/// predicate anyway, for the same reason [`states_address`] is: the save path
+/// asks the emitter what it wrote rather than deciding again for itself.
+pub fn states_note(note: &Note) -> bool {
+    !note.note.is_empty()
+}
+
 /// Render a contact card as a vCard 3.0 string, ready for
 /// `e_contact_new_from_vcard()`.
 pub fn card_to_vcard(card: &ContactCard) -> String {
@@ -232,6 +249,13 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         properties.push(Property::new(name, &title.name).with_param(X_JMAP_KEY, key));
     }
 
+    for (key, note) in card.notes.iter().flatten() {
+        if !states_note(note) {
+            continue;
+        }
+        properties.push(Property::new("NOTE", &note.note).with_param(X_JMAP_KEY, key));
+    }
+
     syntax::write(&properties)
 }
 
@@ -257,6 +281,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut addresses = BTreeMap::new();
     let mut organizations = BTreeMap::new();
     let mut titles = BTreeMap::new();
+    let mut notes = BTreeMap::new();
 
     for property in &properties {
         match property.name.as_str() {
@@ -304,6 +329,16 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 titles.insert(entry_key(property, "t", &titles), title);
             }
+            "NOTE" => {
+                let note = Note {
+                    note: property.text(),
+                    extra: BTreeMap::new(),
+                };
+                if !states_note(&note) {
+                    continue;
+                }
+                notes.insert(entry_key(property, "n", &notes), note);
+            }
             _ => {}
         }
     }
@@ -322,6 +357,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         addresses: (!addresses.is_empty()).then_some(addresses),
         organizations: (!organizations.is_empty()).then_some(organizations),
         titles: (!titles.is_empty()).then_some(titles),
+        notes: (!notes.is_empty()).then_some(notes),
         extra: BTreeMap::new(),
     })
 }
