@@ -60,6 +60,9 @@
     }
   },
   "nicknames": {
-    "k1": {"name": "Vee"}
+    "k1": {"@type": "Nickname", "name": "Vee"}
+  },
+  "keywords": {
+    "hiking": true
   }
 }

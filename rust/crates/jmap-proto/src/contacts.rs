@@ -51,6 +51,11 @@ pub struct ContactCard {
     pub uid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Name>,
+    /// The names the contact is also known by (RFC 9553 §2.2.2), keyed like
+    /// the other JSContact maps. vCard states each on a `NICKNAME` line of
+    /// its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nicknames: Option<BTreeMap<String, Nickname>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emails: Option<BTreeMap<String, ContactEmail>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,6 +134,25 @@ pub struct Name {
 pub struct NameComponent {
     pub kind: String,
     pub value: String,
+}
+
+/// JSContact Nickname (RFC 9553 §2.2.2): one name the contact is also known
+/// by.
+///
+/// `contexts` and `pref` are not modeled: RFC 2426 §3.1.3's `NICKNAME` takes
+/// none of the parameters that could state either — it has no `TYPE` — and
+/// Evolution's contact editor shows a nickname without a context or a
+/// ranking. Both therefore ride in [`Self::extra`], where the save path can
+/// see the members it is refusing to touch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Nickname {
+    /// The nickname itself. Mandatory per RFC 9553 §2.2.2, and the only part
+    /// of it a `NICKNAME` line has room for.
+    #[serde(default)]
+    pub name: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// JSContact EmailAddress (RFC 9553 §2.3.1).

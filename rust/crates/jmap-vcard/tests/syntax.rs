@@ -92,6 +92,29 @@ fn unescapes_text_values_but_splits_components_first() {
 }
 
 #[test]
+fn a_text_list_value_reads_back_as_the_text_the_line_stated() {
+    // A `text-list` property (RFC 2425 §5.8.4) is parsed as one value per
+    // comma-separated item, so rejoining the items on the `;` that
+    // `Property::text` uses for a structured value would state something the
+    // line never said — `Jim;Jimmie` for a card that wrote `Jim,Jimmie`.
+    let properties = syntax::parse(concat!(
+        "BEGIN:VCARD\r\n",
+        "NICKNAME:Jim,Jimmie\r\n",
+        "CATEGORIES:hiking\\,climbing;indoors\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    assert_eq!(named(&properties, "NICKNAME").text_list(), "Jim,Jimmie");
+    // An escaped comma is part of the item, and a semicolon is not a
+    // separator here at all — both as EDS reads the same line.
+    assert_eq!(
+        named(&properties, "CATEGORIES").text_list(),
+        "hiking,climbing;indoors"
+    );
+}
+
+#[test]
 fn decodes_quoted_printable_values() {
     // `ENCODING=QUOTED-PRINTABLE` is vCard 2.1, but exporters — and the .vcf
     // files users import into Evolution — still emit it, and EVCard decodes
