@@ -273,6 +273,94 @@ fn a_name_the_user_did_not_retype_keeps_how_it_is_pronounced() {
 }
 
 #[test]
+fn a_double_barrelled_given_name_survives_a_save_that_left_it_alone() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Jean Paul Oldenburg", "vera@example.com");
+    // Two components of one kind — RFC 9553 §2.2.1 states a double-barrelled
+    // given name as two `given` components — share the single `N` field their
+    // kind is written into, exactly as a street name and its house number
+    // share theirs.
+    fixture.patch(
+        &id,
+        json!({"name/components": [
+            {"kind": "surname", "value": "Oldenburg"},
+            {"kind": "given", "value": "Jean", "phonetic": "zhon"},
+            {"kind": "given", "value": "Paul", "phonetic": "pol"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("N:Oldenburg;Jean Paul;;;"), "{vcard}");
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a save that changed nothing rewrote the name"
+    );
+    let components = fixture.card(&id).name.unwrap().components.unwrap();
+    let stated: Vec<(&str, &str, Option<&str>)> = components
+        .iter()
+        .map(|component| {
+            (
+                component.kind.as_str(),
+                component.value.as_str(),
+                component
+                    .extra
+                    .get("phonetic")
+                    .and_then(|value| value.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        stated,
+        vec![
+            ("surname", "Oldenburg", None),
+            ("given", "Jean", Some("zhon")),
+            ("given", "Paul", Some("pol")),
+        ],
+        "the two halves of the given name came back as their own concatenation"
+    );
+}
+
+#[test]
+fn retyping_a_double_barrelled_given_name_replaces_the_parts_it_was_built_from() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Jean Paul Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"name/components": [
+            {"kind": "surname", "value": "Oldenburg"},
+            {"kind": "given", "value": "Jean"},
+            {"kind": "given", "value": "Paul"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    // Nothing in `Hans` says which half of `Jean Paul` it replaced, so both are
+    // gone: what must not happen is one of the old halves standing next to the
+    // name the user typed.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("Jean Paul", "Hans");
+    assert_ne!(edited, vcard, "the given name was not on the line: {vcard}");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let components = fixture.card(&id).name.unwrap().components.unwrap();
+    let by_kind: Vec<(&str, &str)> = components
+        .iter()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        by_kind,
+        vec![("surname", "Oldenburg"), ("given", "Hans")],
+        "the name the user retyped did not replace the parts it was built \
+         from: {components:?}"
+    );
+}
+
+#[test]
 fn saving_a_name_back_untouched_does_not_rewrite_its_components() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");

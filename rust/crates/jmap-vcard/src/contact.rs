@@ -299,7 +299,16 @@ fn maps_title_kind(kind: Option<&str>) -> bool {
 /// silently dropped on the way in. The predicates below are that knowledge,
 /// kept next to the tables they answer for.
 pub fn maps_name_component(kind: &str) -> bool {
-    NAME_COMPONENTS.iter().any(|(mapped, _)| *mapped == kind)
+    name_field(kind).is_some()
+}
+
+/// The position in the vCard `N` value a JSContact name component kind is
+/// written into, or `None` for a kind the value has no field for.
+fn name_field(kind: &str) -> Option<usize> {
+    NAME_COMPONENTS
+        .iter()
+        .find(|(mapped, _)| *mapped == kind)
+        .map(|(_, index)| *index)
 }
 
 /// Whether the vCard mapping covers a JSContact `contexts` key.
@@ -1216,40 +1225,86 @@ fn address_fields(address: &Address) -> Option<Vec<String>> {
 /// A field built from several components is read back as one component of the
 /// field's own kind, because nothing in `Hauptstraße 1` says where the street
 /// name ends and the house number begins, and a guess would be wrong in half
-/// the world's addresses. Left at that, opening a contact and closing it again
-/// would flatten the parts the server had stated separately — so the save asks
-/// this first: if the field still reads as the parts joined, it is those
-/// parts, unedited, and they are put back in the order and shape they went out
-/// in. If it does not, the user retyped the field, and it stays the one
-/// component they typed — the parts it was built from cannot be recovered, and
-/// keeping the old ones would leave a house number standing on a street that
-/// is no longer there.
+/// the world's addresses. See [`restore_shared_fields`] for what is then done
+/// about it.
 pub fn restore_address_components(
     current: &[AddressComponent],
     edited: &[AddressComponent],
 ) -> Vec<AddressComponent> {
+    restore_shared_fields(
+        current,
+        edited,
+        ADDRESS_COMPONENTS.map(|(_, index)| index),
+        |component| address_field(&component.kind),
+        |component| component.value.as_str(),
+    )
+}
+
+/// The components an edited `N` value states, with every field that still says
+/// exactly what the server built it from given those parts back.
+///
+/// The `N` value has one field per component kind, so what shares a field here
+/// is two components of the *same* kind: RFC 9553 §2.2.1 states a
+/// double-barrelled given name as two `given` components, and `N`'s second
+/// field holds them both. The treatment is [`restore_shared_fields`]', the same
+/// one an address's street gets.
+pub fn restore_name_components(
+    current: &[NameComponent],
+    edited: &[NameComponent],
+) -> Vec<NameComponent> {
+    restore_shared_fields(
+        current,
+        edited,
+        NAME_COMPONENTS.map(|(_, index)| index),
+        |component| name_field(&component.kind),
+        |component| component.value.as_str(),
+    )
+}
+
+/// The parts a vCard field was built from, told apart again where the field
+/// still reads as those parts joined.
+///
+/// Several components can share one field — a street name and the house number
+/// standing on it, both halves of a double-barrelled given name — and come back
+/// from the vCard as the single component that field's text was written into.
+/// Left at that, opening a contact and closing it again would flatten the parts
+/// the server had stated separately, so a save asks this first: if the field
+/// still reads as the parts joined, it *is* those parts, unedited, and they are
+/// put back in the order and shape they went out in. If it does not, the user
+/// retyped the field, and it stays the one component they typed — the parts it
+/// was built from cannot be recovered, and keeping the old ones would leave a
+/// house number standing on a street that is no longer there, or half an old
+/// first name beside the new one.
+///
+/// `fields` names the positions to look at, `field` says which one a component
+/// is written into, and `value` reads the text a component contributes.
+fn restore_shared_fields<T: Clone>(
+    current: &[T],
+    edited: &[T],
+    fields: impl IntoIterator<Item = usize>,
+    field: impl Fn(&T) -> Option<usize>,
+    value: impl Fn(&T) -> &str,
+) -> Vec<T> {
     let mut restored = edited.to_vec();
-    for (_, index) in ADDRESS_COMPONENTS {
-        let parts: Vec<&AddressComponent> = current
+    for index in fields {
+        let parts: Vec<&T> = current
             .iter()
-            .filter(|component| {
-                address_field(&component.kind) == Some(index) && !component.value.is_empty()
-            })
+            .filter(|part| field(part) == Some(index) && !value(part).is_empty())
             .collect();
         if parts.is_empty() {
             continue;
         }
         let joined = parts
             .iter()
-            .map(|component| component.value.as_str())
+            .map(|part| value(part))
             .collect::<Vec<_>>()
             .join(" ");
         let mut stated = restored
             .iter()
             .enumerate()
-            .filter(|(_, component)| address_field(&component.kind) == Some(index));
+            .filter(|(_, part)| field(part) == Some(index));
         let at = match (stated.next(), stated.next()) {
-            (Some((at, component)), None) if component.value == joined => at,
+            (Some((at, part)), None) if value(part) == joined => at,
             _ => continue,
         };
         restored.splice(at..=at, parts.into_iter().cloned());
@@ -1377,21 +1432,19 @@ fn name_fields(name: &Name) -> Option<Vec<String>> {
     let mut fields = vec![String::new(); 5];
     let mut any = false;
     for component in components {
-        let Some((_, index)) = NAME_COMPONENTS
-            .iter()
-            .find(|(kind, _)| *kind == component.kind)
-        else {
+        let Some(index) = name_field(&component.kind) else {
             continue;
         };
         if component.value.is_empty() {
             continue;
         }
         // Two components of the same kind (a double-barrelled given name)
-        // share one vCard field.
-        if !fields[*index].is_empty() {
-            fields[*index].push(' ');
+        // share one vCard field, and are told apart again on the way back by
+        // `restore_name_components`.
+        if !fields[index].is_empty() {
+            fields[index].push(' ');
         }
-        fields[*index].push_str(&component.value);
+        fields[index].push_str(&component.value);
         any = true;
     }
     any.then_some(fields)
