@@ -85,6 +85,11 @@ pub struct ContactCard {
     /// the wedding day on the line Evolution reads as the anniversary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anniversaries: Option<BTreeMap<String, Anniversary>>,
+    /// The resources the contact points at (RFC 9553 §2.6.3), keyed like the
+    /// other JSContact maps. vCard states each on a `URL` line, of which
+    /// Evolution shows the first as the contact's home page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<BTreeMap<String, Link>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -354,6 +359,33 @@ pub struct Anniversary {
     /// unmapped members (`calendarScale`, the time of day) are still here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<Value>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact Link (RFC 9553 §2.6.3): one resource the contact points at.
+///
+/// `mediaType`, `contexts`, `pref` and `label` are not modeled: vCard 3.0's
+/// `URL` (RFC 2426 §3.6.8) is a bare URI with no parameter for what the
+/// resource is, where it is used, how strongly it is preferred or what to call
+/// it, so all four ride in [`Self::extra`] — where the save path can see the
+/// members it is refusing to touch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Link {
+    /// Where the resource is. Mandatory per RFC 9553 §2.6.3, and the only
+    /// part of a link a `URL` line has room for.
+    #[serde(default)]
+    pub uri: String,
+    /// What kind of link it is — `contact`, a URI for getting in touch, is
+    /// the one kind RFC 9553 §2.6.3 defines, and it has no default.
+    ///
+    /// A link that names no kind is the plain website vCard 3.0's `URL` means
+    /// (RFC 9555 §2.6.3 pairs the two), which is why this is modeled rather
+    /// than carried: the mapping has to be able to tell those apart from the
+    /// kinds it must leave alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
