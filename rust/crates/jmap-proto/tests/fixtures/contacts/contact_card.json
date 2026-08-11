@@ -75,6 +75,19 @@
       "pref": 1
     }
   },
+  "links": {
+    "l1": {
+      "@type": "Link",
+      "uri": "https://vera.example/",
+      "mediaType": "text/html",
+      "pref": 1
+    },
+    "l2": {
+      "@type": "Link",
+      "kind": "contact",
+      "uri": "https://vera.example/write-to-me"
+    }
+  },
   "keywords": {
     "hiking": true
   }

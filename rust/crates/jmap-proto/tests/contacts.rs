@@ -99,6 +99,17 @@ fn contact_card_roundtrip() {
     // path.
     assert!(nicknames["k1"].extra.contains_key("contexts"));
     assert!(nicknames["k1"].extra.contains_key("pref"));
+    let links = card.links.as_ref().unwrap();
+    assert_eq!(links["l1"].uri, "https://vera.example/");
+    assert_eq!(
+        links["l1"].kind, None,
+        "RFC 9553 §2.6.3 gives a Link no default kind, and this one names none"
+    );
+    assert_eq!(links["l2"].kind.as_deref(), Some("contact"));
+    // What a link points at and how strongly it is preferred have no
+    // parameter on a `URL` line, so they too stay visible to the save path.
+    assert!(links["l1"].extra.contains_key("mediaType"));
+    assert!(links["l1"].extra.contains_key("pref"));
     // Unmodeled JSContact properties (keywords) survive via `extra`.
     assert!(card.extra.contains_key("keywords"));
 }

@@ -18255,3 +18255,92 @@ and a birthday stated as a year alone are still invisible; and the `jmap-mail`
 hypothesis attached. New: an unescaped semicolon in a nickname is one name to
 this mapping and two values to EDS, which shows the first — measured, judged
 harmless, and written down here rather than worked around.
+
+## 2026-08-11 (hundred-and-eighty-first session)
+
+**The home page, which Evolution has a field for and JMAP had nowhere to put.**
+RFC 9553 §2.6.3 keys the resources a card points at in `links`; RFC 2426 §3.6.8
+has a `URL` line, and EDS reads the first one as `E_CONTACT_HOMEPAGE_URL` — the
+"Home Page" field in the contact editor's personal-information tab. The two now
+meet. `links` is `titles`' shape: a keyed map of which the vCard states only
+some entries, told apart by `kind`.
+
+**Only a link that names no kind crosses, and that is the decision.** RFC 9553
+defines exactly one kind, `contact` — a URI for *writing to* the person rather
+than a page about them — and allows vendor kinds besides. RFC 9555 §2.6.3 states
+`contact` on vCard 4.0's `CONTACT-URI`, a property the 3.0 reader
+`e_contact_new_from_vcard()` has never heard of, so putting it on a `URL` would
+tell the user it is the home page. It gets no line, like a title of an unmapped
+kind, and the save leaves it alone. The reader never invents a kind either: a
+`URL` states the kind that has no name, so `kind` comes back `None` and a card
+that named none is not rewritten by a save that changed nothing. What also does
+not cross is `mediaType`, `contexts`, `pref` and `label`, for which a bare URI
+has no parameter; they ride in the entry's `extra` as a nickname's do, and the
+patch reaches in at `links/<key>/uri`.
+
+**The key survives, and the probe said so before the code did.** A throwaway C
+probe against libebook-contacts 3.52 measured four things, each of which the
+mapping now rests on: `E_CONTACT_HOMEPAGE_URL` is the *first* `URL` line; a set
+rewrites that line's value in place and leaves its parameters where they were,
+so the `X-JMAP-KEY` comes back and no `rekey_*` pass is needed (the anniversaries
+still need theirs — the difference is whether EDS keeps the line or a structure
+it rebuilds the line from); any further `URL` line passes through untouched with
+its own key; and clearing the field with an empty string leaves the line
+standing with nothing on it (`URL;X-JMAP-KEY=l1:`) rather than removing the
+attribute, so the save has to read an empty line as a deletion — which the
+emitter's "an entry that points nowhere gets no line" rule already makes it do.
+
+**The comma is the risk, and both readers agree about it.** A URI may hold the
+characters a vCard value gives structural meaning to — `?tags=a,b` — and EDS
+escapes them on the way out (`URL:…tags=a\,b`). calcard treats a `URL` as a URI:
+it unescapes `\,` and `\;` but never *splits* on either, so `Property::text` is
+the right accessor and the URI arrives whole. The one divergence is a foreign
+card carrying a *raw* semicolon in a `URL`: EDS reads that as two values and
+shows the first, calcard as one URI. The text round-trips unchanged either way,
+so the only cost is what the user is shown for a card no client of ours wrote —
+the same judgement the nickname's semicolon got.
+
+**Verified through real EDS, not only against the mock.** The functional book leg
+sets `E_CONTACT_HOMEPAGE_URL` to `https://dana.example/profile?tags=x-files,ufo`
+— the comma is the whole point — and asserts at both ends: that EDS hands the URI
+back whole out of its cache, and that the server holds exactly *one* `links`
+entry with that URI and no `kind`. A URI ending at the comma would mean the
+escaping had fallen through between EDS's writer and our reader. Both assertions
+were mutation-checked, and the server-side one separately: a reader that filed
+one `URL` line as two entries keeps the read-back assertion green and fails the
+server one on `left: 2, right: 1`.
+
+Tests: 894 in the default set, up 8 from 886 — five new in `jmap-vcard`'s
+mapping and three in `jmap-book-sync`'s save path. `jmap-proto`'s round-trip
+test grew the `links` assertions rather than a test of its own, since the
+fixture is what it reads. Every new test was red first, and the four
+implementation halves (the kind filter, the reader's visibility check, the
+`uri` patch, and the functional leg) were each mutation-checked.
+
+Verified locally: `cargo test --locked` 894; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all
+--check` and `cargo clippy --all-targets --locked -- -D warnings` clean.
+`ci/checks.sh` still stops at its first step — `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed — so the licence check was done by hand:
+no file was added, every file touched already carries an SPDX header, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run. (`cargo clippy --workspace -- -D warnings` fails on
+`example-module`'s `manual_c_str_literals` warnings — pre-existing, confirmed
+against a clean tree, and outside the gate `ci/checks.sh` defines.)
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the `NameComponent` `phonetic` hole stands; the multi-`NOTE`/
+`ORG`/`TITLE`/`NICKNAME` "Evolution shows only the first" bet is still
+unverified in real Evolution — and a second `URL` line now joins it, on firmer
+ground: the probe shows EDS keeps it, but only Evolution can say whether the
+editor shows it anywhere; the two `LABEL` `TYPE` risks stand; a deathday and a
+birthday stated as a year alone are still invisible; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order
+hypothesis attached. New: an unescaped semicolon in a foreign card's `URL` is
+one URI to this mapping and two values to EDS, which shows the first — measured,
+judged harmless for the same reason the nickname's was, and written down here.

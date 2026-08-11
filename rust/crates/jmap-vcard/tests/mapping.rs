@@ -3,10 +3,10 @@
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
-//! ORG, TITLE, ROLE, NOTE, BDAY.
+//! ORG, TITLE, ROLE, NOTE, BDAY, URL.
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
     NameComponent, Nickname, Note, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{card_to_vcard, vcard_to_card};
@@ -1111,6 +1111,125 @@ fn invents_a_key_for_a_nickname_that_has_none() {
     let nicknames = card.nicknames.expect("nicknames");
     assert_eq!(nicknames["k1"].name, "Vee");
     assert_eq!(nicknames["k7"].name, "Vera the Elder");
+}
+
+fn one_link(key: &str, uri: &str) -> ContactCard {
+    ContactCard {
+        links: Some(
+            [(
+                key.to_owned(),
+                Link {
+                    uri: uri.to_owned(),
+                    ..Link::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+#[test]
+fn maps_links_onto_url_lines() {
+    // RFC 2426 §3.6.8's `URL` is a bare URI with no room for anything else,
+    // so the JSContact key rides in X-JMAP-KEY as it does on an EMAIL — and
+    // EDS rewrites the value of that line in place, leaving the parameter
+    // where it was, verified against libebook-contacts 3.52. Evolution shows
+    // the first `URL` as the contact's home page.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "URL"),
+        "URL;X-JMAP-KEY=l1:https://vera.example/"
+    );
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let links = card.links.expect("links");
+    assert_eq!(links.keys().collect::<Vec<_>>(), vec!["l1"]);
+    assert_eq!(links["l1"].uri, "https://vera.example/");
+    assert_eq!(
+        links["l1"].kind, None,
+        "a `URL` states no kind, and the reader must not invent one"
+    );
+}
+
+#[test]
+fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
+    // The fixture's `l2` is RFC 9553 §2.6.3's one defined kind, `contact`: a
+    // URI for writing to the person rather than a page about them. RFC 9555
+    // §2.6.3 states that on vCard 4.0's `CONTACT-URI`, which the 3.0 reader
+    // EDS gives us has never heard of, and putting it on a `URL` would tell
+    // the user it is the home page. So it gets no line — the same partial
+    // visibility `titles` has — and must therefore be invisible to the save.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(vcard.matches("\r\nURL").count(), 1, "{vcard}");
+    assert!(!vcard.contains("write-to-me"), "{vcard}");
+
+    // And a kind this version has never heard of, which is the same case: the
+    // mapping states the kinds it knows and leaves the rest to the server.
+    let mut card = one_link("l1", "https://vera.example/");
+    card.links.as_mut().expect("links").insert(
+        "l2".to_owned(),
+        Link {
+            uri: "https://vera.example/rss".to_owned(),
+            kind: Some("example.com:feed".to_owned()),
+            ..Link::default()
+        },
+    );
+    let vcard = card_to_vcard(&card);
+    assert_eq!(vcard.matches("\r\nURL").count(), 1, "{vcard}");
+}
+
+#[test]
+fn a_link_that_points_nowhere_is_skipped_in_both_directions() {
+    // The same invisibility every other keyed map has: an entry with no URI
+    // says no more than an `EMAIL:` with no address, gets no line, and must
+    // therefore be invisible to the save as well.
+    assert!(!card_to_vcard(&one_link("l1", "")).contains("\r\nURL"));
+
+    // That empty line is not hypothetical: it is what EDS leaves behind when
+    // the user clears Evolution's Home Page field, measured against
+    // libebook-contacts 3.52, which rewrites the value and keeps the line.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "URL;X-JMAP-KEY=l1:\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+    assert_eq!(card.links, None);
+}
+
+#[test]
+fn a_uri_keeps_the_punctuation_a_vcard_value_gives_meaning_to() {
+    // A URI may hold a comma or a semicolon — a query string listing tags,
+    // say — and a vCard value gives both structural meaning. They are escaped
+    // on the way out, exactly as EDS escapes them, and read back as the URI
+    // that went in; splitting on either would send the server half a URI.
+    let vcard = card_to_vcard(&one_link("l1", "https://vera.example/q?tags=a,b;c"));
+    assert_eq!(
+        line(&vcard, "URL"),
+        "URL;X-JMAP-KEY=l1:https://vera.example/q?tags=a\\,b\\;c"
+    );
+
+    let links = vcard_to_card(&vcard).expect("parse").links.unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links["l1"].uri, "https://vera.example/q?tags=a,b;c");
+}
+
+#[test]
+fn invents_a_key_for_a_link_that_has_none() {
+    // Which is what a home page the user has just typed arrives as: EDS
+    // writes a fresh `URL` line with no parameters on it at all.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "URL:https://vera.example/\r\n",
+        "URL;X-JMAP-KEY=l7:https://vera.example/photos\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let links = card.links.expect("links");
+    assert_eq!(links["l1"].uri, "https://vera.example/");
+    assert_eq!(links["l7"].uri, "https://vera.example/photos");
 }
 
 #[test]
