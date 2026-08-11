@@ -796,6 +796,12 @@ fn in_a_zone_only_the_server_can_name() -> String {
 /// Nothing in `jmap-ical` can check that: calcard is what parses there, and a
 /// definition nobody could build a zone from reads back as text exactly like one
 /// anybody could. This is where libical is available to be asked.
+///
+/// What it cannot ask is what EDS does with the definition afterwards, and the
+/// answer turned out to matter: it gathers it into the calendar's own timezone
+/// store rather than leaving it beside the event, so a consumer resolves the
+/// identifier only by asking the calendar for the zone. `jmap-functional`'s third
+/// calendar leg measures that half.
 #[test]
 fn the_zone_only_the_server_could_name_reaches_eds_and_resolves() {
     let text = in_a_zone_only_the_server_can_name();
