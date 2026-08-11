@@ -24,6 +24,12 @@ const EMAIL: &str = "dana@example.com";
 /// the mapping's own tests can make.
 const ORG: &str = "Acme Ltd";
 const ORG_UNIT: &str = "Research";
+/// The job title and the role, likewise spelled as `book-client.c` spells
+/// them. These are the two halves of JSContact's `titles` map, which vCard
+/// splits across `TITLE` and `ROLE` — so this end of the leg is where the
+/// `kind` that tells them apart is shown to survive real EDS.
+const TITLE: &str = "Research Scientist";
+const ROLE: &str = "Project Lead";
 
 /// The keyfile from `docs/examples/jmap-mock.source`, with the mock's
 /// ephemeral port filled in. Kept as a literal here rather than read from
@@ -157,6 +163,16 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         "the contact EDS handed back lost its department\n{report}"
     );
     assert_eq!(
+        seen.get("read-back-title"),
+        Some(&TITLE),
+        "the contact EDS handed back lost its job title\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-role"),
+        Some(&ROLE),
+        "the contact EDS handed back lost its role\n{report}"
+    );
+    assert_eq!(
         seen.get("contacts-after"),
         Some(&"1"),
         "the added contact is not in the book it was added to\n{report}"
@@ -219,5 +235,31 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
             .map(|units| units.iter().map(|unit| unit.name.as_str()).collect()),
         Some(vec![ORG_UNIT]),
         "{card:?}"
+    );
+    // The TITLE and the ROLE, as the server sees them: two entries of one
+    // `titles` map, and the `kind` is what says which line each came off.
+    let titles = card
+        .titles
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no titles: {card:?}"));
+    // RFC 9553 §2.2.4's default is spelled out here rather than borrowed
+    // from the mapping, so this end states the wire shape it expects instead
+    // of agreeing with the code that produced it.
+    let by_kind: Vec<(&str, &str)> = titles
+        .values()
+        .map(|title| {
+            (
+                title.kind.as_deref().unwrap_or("title"),
+                title.name.as_str(),
+            )
+        })
+        .collect();
+    assert!(
+        by_kind.contains(&("title", TITLE)),
+        "the job title did not reach the server as a title: {by_kind:?}"
+    );
+    assert!(
+        by_kind.contains(&("role", ROLE)),
+        "the role did not reach the server as a role: {by_kind:?}"
     );
 }

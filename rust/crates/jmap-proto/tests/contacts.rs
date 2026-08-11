@@ -61,6 +61,16 @@ fn contact_card_roundtrip() {
             .extra
             .contains_key("sortAs")
     );
+    let titles = card.titles.as_ref().unwrap();
+    assert_eq!(titles["t1"].name, "Research Scientist");
+    assert_eq!(
+        titles["t1"].kind, None,
+        "`title` is RFC 9553 §2.2.4's default kind, and the card does not say it"
+    );
+    assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
+    // Which organisation a title is held at has no room on a TITLE line, so
+    // it too stays visible to the save path.
+    assert!(titles["t2"].extra.contains_key("organizationId"));
     // Unmodeled JSContact properties (notes) survive via `extra`.
     assert!(card.extra.contains_key("notes"));
 }

@@ -299,6 +299,101 @@ fn removing_the_org_line_removes_the_organization() {
 }
 
 #[test]
+fn changing_a_job_title_keeps_which_organisation_it_is_held_at() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A TITLE line is plain text: it has no room for the organisation the
+    // title is held at, so that survives only if the patch reaches in.
+    fixture.patch(
+        &id,
+        json!({"titles": {"t1": {
+            "@type": "Title",
+            "name": "Research Scientist",
+            "organizationId": "o1",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t1:Research Scientist"),
+        "{vcard}"
+    );
+    let edited = vcard.replace("Research Scientist", "Principal Scientist");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let titles = fixture.card(&id).titles.expect("titles");
+    assert_eq!(titles.len(), 1, "patched in place, not re-added");
+    assert_eq!(titles["t1"].name, "Principal Scientist");
+    assert_eq!(
+        titles["t1"].extra.get("organizationId"),
+        Some(&json!("o1")),
+        "a member the TITLE line cannot carry was overwritten"
+    );
+}
+
+#[test]
+fn a_title_of_a_vendor_kind_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // vCard 3.0 has TITLE and ROLE and nothing else, so an entry of a kind
+    // outside RFC 9553 §2.2.4's two is dropped on the way out — and must not
+    // then be deleted by a save that never showed it.
+    fixture.patch(
+        &id,
+        json!({"titles": {"t1": {
+            "@type": "Title",
+            "name": "Knight of the Realm",
+            "kind": "x-honour",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("Knight"), "{vcard}");
+    // The user types a job title into a contact that appears to have none.
+    // The reader counts only the entries it can see, so the key it invents
+    // for this one is `t1` — the key the hidden entry already holds.
+    let edited = vcard.replace("END:VCARD\r\n", "TITLE:Research Scientist\r\nEND:VCARD\r\n");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let titles = fixture.card(&id).titles.expect("titles");
+    assert_eq!(
+        titles["t1"].name, "Knight of the Realm",
+        "an entry the vCard never showed was overwritten: {titles:?}"
+    );
+    assert_eq!(titles["t1"].kind.as_deref(), Some("x-honour"));
+    assert!(
+        titles
+            .values()
+            .any(|title| title.name == "Research Scientist"),
+        "the title the user typed was not saved: {titles:?}"
+    );
+    assert_eq!(titles.len(), 2);
+}
+
+#[test]
+fn removing_the_title_line_removes_the_title() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"titles": {"t1": {"name": "Research Scientist"}}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited: String = vcard
+        .lines()
+        .filter(|line| !line.starts_with("TITLE"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).titles, None);
+}
+
+#[test]
 fn a_save_that_changes_nothing_sends_no_patch() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");

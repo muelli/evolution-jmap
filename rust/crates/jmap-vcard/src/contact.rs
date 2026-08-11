@@ -4,11 +4,11 @@
 //! JSContact [`ContactCard`] ↔ vCard 3.0.
 //!
 //! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, EMAIL, TEL, ORG — and no more. Everything else on
-//! a card (addresses, notes, nicknames, …) is *dropped*, which is only
-//! safe because saving goes back to the server as a PatchObject naming the
-//! mapped properties: a property we never mapped is a property we never
-//! overwrite.
+//! be useful — UID, FN, N, EMAIL, TEL, ORG, TITLE, ROLE — and no more.
+//! Everything else on a card (addresses, notes, nicknames, …) is *dropped*,
+//! which is only safe because saving goes back to the server as a
+//! PatchObject naming the mapped properties: a property we never mapped is a
+//! property we never overwrite.
 //!
 //! `ORG` is the one property whose *value* is a list rather than a field: RFC
 //! 2426 §3.5.5 states the organisation's name and then the units within it,
@@ -17,11 +17,18 @@
 //! the entry's `sortAs` and `contexts`, which `ORG` has no component and no
 //! parameter for — hence the [`X_JMAP_KEY`] this side already writes on an
 //! `EMAIL`, and a save that patches `organizations/<key>/name` in place.
+//!
+//! `titles` is the one property of which only *some* entries cross. RFC 9553
+//! §2.2.4 keeps the job title and the role played in one map, told apart by
+//! `kind`, and allows vendor kinds besides those two; vCard 3.0 has exactly
+//! `TITLE` and `ROLE`. An entry of any other kind is therefore dropped rather
+//! than written on a line that would misstate it — and, as with every other
+//! dropped thing here, the save path must then leave it alone.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{
-    ContactCard, ContactEmail, ContactPhone, Name, NameComponent, OrgUnit, Organization,
+    ContactCard, ContactEmail, ContactPhone, Name, NameComponent, OrgUnit, Organization, Title,
 };
 use serde_json::{Map, Value};
 
@@ -54,6 +61,27 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("pager", "PAGER"),
     ("video", "VIDEO"),
 ];
+
+/// JSContact title `kind` values and the vCard property stating each.
+const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
+
+/// RFC 9553 §2.2.4's default `kind` for a title that names none.
+const DEFAULT_TITLE_KIND: &str = "title";
+
+/// The kind of a JSContact title, with the default filled in.
+///
+/// The save path has to agree with this side about what an unsaid kind
+/// means, or it will patch a `kind` onto every card that left it out.
+pub fn title_kind(kind: Option<&str>) -> &str {
+    kind.unwrap_or(DEFAULT_TITLE_KIND)
+}
+
+/// Whether the vCard mapping covers a JSContact title of this `kind`.
+pub fn maps_title_kind(kind: Option<&str>) -> bool {
+    TITLE_KINDS
+        .iter()
+        .any(|(mapped, _)| *mapped == title_kind(kind))
+}
 
 /// Whether the vCard mapping covers a JSContact `name.components` kind.
 ///
@@ -141,6 +169,19 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         properties.push(Property::structured("ORG", components).with_param(X_JMAP_KEY, key));
     }
 
+    for (key, title) in card.titles.iter().flatten() {
+        if title.name.is_empty() {
+            continue;
+        }
+        let Some((_, name)) = TITLE_KINDS
+            .iter()
+            .find(|(kind, _)| *kind == title_kind(title.kind.as_deref()))
+        else {
+            continue;
+        };
+        properties.push(Property::new(name, &title.name).with_param(X_JMAP_KEY, key));
+    }
+
     syntax::write(&properties)
 }
 
@@ -164,6 +205,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut emails = BTreeMap::new();
     let mut phones = BTreeMap::new();
     let mut organizations = BTreeMap::new();
+    let mut titles = BTreeMap::new();
 
     for property in &properties {
         match property.name.as_str() {
@@ -199,6 +241,12 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 organizations.insert(entry_key(property, "o", &organizations), organization);
             }
+            "TITLE" | "ROLE" => {
+                let Some(title) = read_title(property) else {
+                    continue;
+                };
+                titles.insert(entry_key(property, "t", &titles), title);
+            }
             _ => {}
         }
     }
@@ -215,6 +263,30 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         emails: (!emails.is_empty()).then_some(emails),
         phones: (!phones.is_empty()).then_some(phones),
         organizations: (!organizations.is_empty()).then_some(organizations),
+        titles: (!titles.is_empty()).then_some(titles),
+        extra: BTreeMap::new(),
+    })
+}
+
+/// The title a `TITLE` or `ROLE` line states, or `None` for a line with no
+/// text on it.
+///
+/// The kind is left unsaid when it is the default, so that reading back a
+/// card that never named one produces the card that was there — a save then
+/// has nothing to patch.
+fn read_title(property: &Property) -> Option<Title> {
+    let name = property.text();
+    if name.is_empty() {
+        return None;
+    }
+    let kind = TITLE_KINDS
+        .iter()
+        .find(|(_, mapped)| *mapped == property.name)
+        .map(|(kind, _)| *kind)
+        .filter(|kind| *kind != DEFAULT_TITLE_KIND);
+    Some(Title {
+        name,
+        kind: kind.map(str::to_owned),
         extra: BTreeMap::new(),
     })
 }

@@ -35,6 +35,15 @@
       ]
     }
   },
+  "titles": {
+    "t1": {"@type": "Title", "name": "Research Scientist"},
+    "t2": {
+      "@type": "Title",
+      "name": "Project Lead",
+      "kind": "role",
+      "organizationId": "o1"
+    }
+  },
   "notes": {
     "n1": {"note": "met at FOSDEM"}
   }
