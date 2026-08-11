@@ -20,20 +20,22 @@
  * backends implement. Binding a second surface just to call it from a test
  * would put a layer of our own between EDS and the thing under test.
  *
- * There are nine phases, chosen on the command line, because they need
+ * There are ten phases, chosen on the command line, because they need
  * different books: `write` starts from an empty address book and puts a
  * contact into it, while `edit`, `rename`, `repicture`, `recalendar`,
- * `respouse`, `unspouse`, `renote` and `unnote` each start from one the mock was
- * seeded with before EDS connected — a card that came from the *server*, which is
- * the only way to have EDS read something no vCard this program could write would
- * produce. Those eight differ only in which field the user changes, and that is
- * the whole distinction under test: `edit` touches a field beside the name,
- * `rename` retypes the name itself, `repicture` replaces the photo,
- * `recalendar` retypes the calendar address, `respouse` retypes who the contact
- * is married to, `unspouse` empties that field instead, `renote` retypes the
- * note on a card carrying two of them, and `unnote` empties that field instead.
- * They are modes of one program rather than separate programs because they open
- * the same book the same way and differ only in what they then ask of it.
+ * `respouse`, `unspouse`, `renote`, `unnote` and `rehandle` each start from one
+ * the mock was seeded with before EDS connected — a card that came from the
+ * *server*, which is the only way to have EDS read something no vCard this
+ * program could write would produce. Those nine differ only in which field the
+ * user changes, and that is the whole distinction under test: `edit` touches a
+ * field beside the name, `rename` retypes the name itself, `repicture` replaces
+ * the photo, `recalendar` retypes the calendar address, `respouse` retypes who
+ * the contact is married to, `unspouse` empties that field instead, `renote`
+ * retypes the note on a card carrying two of them, `unnote` empties that field
+ * instead, and `rehandle` retypes an instant-messaging handle the server stated
+ * as a URI. They are modes of one program rather than separate programs because
+ * they open the same book the same way and differ only in what they then ask of
+ * it.
  *
  *   usage: functional-book-client <source-uid> write <full-name> <photo-base64>
  *          functional-book-client <source-uid> edit <contact-uid> <email>
@@ -47,6 +49,7 @@
  *          functional-book-client <source-uid> unspouse <contact-uid>
  *          functional-book-client <source-uid> renote <contact-uid> <note>
  *          functional-book-client <source-uid> unnote <contact-uid>
+ *          functional-book-client <source-uid> rehandle <contact-uid> <handle>
  */
 
 #include <libebook/libebook.h>
@@ -464,6 +467,62 @@ report_note_line_values (const gchar *prefix,
 	g_ptr_array_free (values, TRUE);
 }
 
+/* Report the instant-messaging handle EDS holds for a contact, out of the
+ * per-slot field Evolution's contact editor writes, and two things about the
+ * line underneath it.
+ *
+ * Three observations, because they answer three different questions. The field
+ * is what the user sees, and a handle the server stated as a *URI* reaches it
+ * only if the reader drew the handle out of that URI and put it on a line
+ * wearing the TYPE this field is read off — E_CONTACT_IM_JABBER_HOME_1 is the
+ * HOME slot, so a line with no TYPE, or with the other one, lands somewhere the
+ * user is not looking.
+ *
+ * The count is what the field cannot say: e_contact_get hands back the first
+ * X-JABBER line of the slot and stops, so a set that appended beside the old
+ * line rather than rewriting it reads back correctly here while the card states
+ * two handles — and the mapping, which has only the lines, would then be told
+ * the contact is at that service twice.
+ *
+ * The X-JMAP-KEY is the parameter that says which entry of the server's map the
+ * line came off, and it is there for the reason report_spouse_line is: EDS drops
+ * the parameters when it *rebuilds* a line, which it does for PHOTO, and whether
+ * a set on a synthetic instant-messaging field does the same is a claim about
+ * libebook-contacts that nothing below the daemons can make. Reported rather
+ * than judged — the save works either way, by key or by pairing — and the
+ * consequence is asserted over on the server. */
+static void
+report_im_handle (const gchar *prefix,
+                  EContact *contact)
+{
+	const gchar *handle = e_contact_get_const (contact, E_CONTACT_IM_JABBER_HOME_1);
+	EVCardAttribute *attribute;
+	GList *attributes;
+	GList *key;
+	guint lines = 0;
+
+	g_print ("%s-im-handle=%s\n", prefix, handle ? handle : "");
+
+	for (attributes = e_vcard_get_attributes (E_VCARD (contact));
+	     attributes;
+	     attributes = attributes->next) {
+		const gchar *name = e_vcard_attribute_get_name (attributes->data);
+
+		/* Case-insensitively, as report_notes counts NOTE lines and for
+		 * the same reason: RFC 2426 §5 compares property names that
+		 * way. */
+		if (name && g_ascii_strcasecmp (name, EVC_X_JABBER) == 0)
+			lines++;
+	}
+
+	g_print ("%s-im-handle-lines=%u\n", prefix, lines);
+
+	attribute = e_vcard_get_attribute (E_VCARD (contact), EVC_X_JABBER);
+	key = attribute ? e_vcard_attribute_get_param (attribute, "X-JMAP-KEY") : NULL;
+	g_print ("%s-im-handle-key=%s\n", prefix,
+		 key && key->data ? (const gchar *) key->data : "");
+}
+
 /* The first phase: an empty book, one contact written into it with every
  * mapped property set, and that contact read back. */
 static int
@@ -716,6 +775,10 @@ report_seeded_contact (EContact *contact)
 	/* And the notes, which are the one property of which the card holds more
 	 * than the user is shown — hence the line count beside the field. */
 	report_notes ("read", contact);
+	/* And the instant-messaging handle, which is the one property the server
+	 * can state in a shape the line cannot: a URI the reader has to draw the
+	 * handle out of before any field can show it. */
+	report_im_handle ("read", contact);
 }
 
 /* Save an edited contact and report what EDS holds for it afterwards. Takes
@@ -757,6 +820,7 @@ save_and_report (EBookClient *book,
 	report_calendars ("read-back", read_back);
 	report_spouse ("read-back", read_back);
 	report_notes ("read-back", read_back);
+	report_im_handle ("read-back", read_back);
 	g_object_unref (read_back);
 
 	return 0;
@@ -1062,6 +1126,55 @@ unnote_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
+/* The tenth phase: the user retypes an instant-messaging handle the server
+ * stated as a URI and nothing else.
+ *
+ * The entry is the only mapped property whose *value* the server can state in a
+ * shape no line can carry: RFC 9553 §2.3.2 lets an entry name the contact with a
+ * `user`, a `uri`, or both, and Evolution's instant-messaging fields hold a
+ * handle. So the reader draws the handle out of the URI where the scheme spells
+ * it — `xmpp:` and nothing after it but the JID — and the save writes the edit
+ * back the way it came, rebuilding the URI rather than answering a card shaped
+ * one way with a card shaped another.
+ *
+ * Two halves of that only real EDS can settle. First that the handle drawn out
+ * of the URI reaches the field at all: the reader chooses the slot, so whether
+ * the TYPE it writes is the one E_CONTACT_IM_JABBER_HOME_1 reads is a claim about
+ * libebook-contacts, and a handle in the wrong slot is one the user cannot see.
+ * Second what a set on that field leaves on the card — one line or two, with the
+ * X-JMAP-KEY still on it or without — which decides whether the save can patch
+ * the entry the URI came from or has to pair a keyless line with it. Both are
+ * reported by report_im_handle above; the harness holds the server to the
+ * consequence.
+ *
+ * The per-slot field rather than the multi-valued one, because the slot is what
+ * Evolution's contact editor writes — the same choice the `write` phase makes
+ * when it sets a handle for the first time. */
+static int
+rehandle_phase (EBookClient *book,
+                const gchar *uid,
+                const gchar *handle)
+{
+	EContact *contact;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	report_seeded_contact (contact);
+
+	e_contact_set (contact, E_CONTACT_IM_JABBER_HOME_1, handle);
+
+	/* The card as the save is about to be handed it: what the field reads
+	 * as, how many lines of that name the set left, and whether the key the
+	 * entry was filed under is still on the first of them. */
+	report_im_handle ("retyped", contact);
+
+	return save_and_report (book, contact, uid);
+}
+
 static void
 usage (const gchar *program)
 {
@@ -1073,9 +1186,10 @@ usage (const gchar *program)
 		    "       %s <source-uid> respouse <contact-uid> <spouse>\n"
 		    "       %s <source-uid> unspouse <contact-uid>\n"
 		    "       %s <source-uid> renote <contact-uid> <note>\n"
-		    "       %s <source-uid> unnote <contact-uid>\n",
+		    "       %s <source-uid> unnote <contact-uid>\n"
+		    "       %s <source-uid> rehandle <contact-uid> <handle>\n",
 		    program, program, program, program, program, program, program,
-		    program, program);
+		    program, program, program);
 }
 
 int
@@ -1107,7 +1221,8 @@ main (int argc,
 	      (g_str_equal (phase, "respouse") && argc == 5) ||
 	      (g_str_equal (phase, "unspouse") && argc == 4) ||
 	      (g_str_equal (phase, "renote") && argc == 5) ||
-	      (g_str_equal (phase, "unnote") && argc == 4))) {
+	      (g_str_equal (phase, "unnote") && argc == 4) ||
+	      (g_str_equal (phase, "rehandle") && argc == 5))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -1178,8 +1293,10 @@ main (int argc,
 		status = unspouse_phase (book, argv[3]);
 	else if (g_str_equal (phase, "renote"))
 		status = renote_phase (book, argv[3], argv[4]);
-	else
+	else if (g_str_equal (phase, "unnote"))
 		status = unnote_phase (book, argv[3]);
+	else
+		status = rehandle_phase (book, argv[3], argv[4]);
 
 	g_object_unref (client);
 	g_object_unref (source);
