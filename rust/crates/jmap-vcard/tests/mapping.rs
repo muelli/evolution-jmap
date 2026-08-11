@@ -3,11 +3,11 @@
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, EMAIL, TEL, ADR, LABEL, ORG,
-//! TITLE, ROLE, NOTE.
+//! TITLE, ROLE, NOTE, BDAY.
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent, Note,
-    OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name,
+    NameComponent, Note, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::json;
@@ -781,7 +781,7 @@ fn one_note(key: &str, note: &str) -> ContactCard {
 
 #[test]
 fn maps_notes_onto_note_lines() {
-    // RFC 9553 §2.8.1 keys the notes like every other JSContact map; RFC
+    // RFC 9553 §2.8.3 keys the notes like every other JSContact map; RFC
     // 2426 §3.6.2's NOTE is plain text, so the key rides in X-JMAP-KEY as it
     // does on an EMAIL.
     let vcard = card_to_vcard(&fixture_card());
@@ -839,6 +839,156 @@ fn invents_a_key_for_a_note_that_has_none() {
     assert_eq!(notes.keys().collect::<Vec<_>>(), vec!["n1", "n2"]);
     assert_eq!(notes["n1"].note, "met at FOSDEM");
     assert_eq!(notes["n2"].note, "owes me a beer");
+}
+
+fn one_anniversary(kind: &str, date: serde_json::Value) -> ContactCard {
+    ContactCard {
+        anniversaries: Some(
+            [(
+                "y1".to_owned(),
+                Anniversary {
+                    kind: kind.to_owned(),
+                    date: Some(date),
+                    ..Anniversary::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+#[test]
+fn maps_a_birthday_onto_the_bday_line() {
+    // RFC 9553 §2.8.1 keeps every memorable date in one map, told apart by
+    // `kind`; RFC 2426 §3.1.5's BDAY states the birthday and nothing else.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(line(&vcard, "BDAY"), "BDAY;X-JMAP-KEY=y1:1964-03-27");
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    assert_eq!(anniversaries["y1"].kind, "birth");
+    assert_eq!(
+        anniversaries["y1"].date,
+        Some(json!({"@type": "PartialDate", "year": 1964, "month": 3, "day": 27}))
+    );
+}
+
+#[test]
+fn maps_a_wedding_day_onto_the_line_evolution_reads_as_the_anniversary() {
+    // vCard 3.0 has no property for it — RFC 6474's ANNIVERSARY is vCard 4.0
+    // — and EDS reads E_CONTACT_ANNIVERSARY, the field Evolution's contact
+    // editor labels "Anniversary", off X-EVOLUTION-ANNIVERSARY. Writing the
+    // date anywhere else would keep it out of the only field that shows it.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "X-EVOLUTION-ANNIVERSARY"),
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03"
+    );
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    assert_eq!(anniversaries["y2"].kind, "wedding");
+    assert_eq!(
+        anniversaries["y2"].date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+}
+
+#[test]
+fn an_anniversary_of_a_kind_vcard_has_no_property_for_is_dropped() {
+    // RFC 9553 §2.8.1 also has `death`, which vCard 3.0 states nowhere — RFC
+    // 6474's DEATHDATE is vCard 4.0, and EDS has no field for it. Putting the
+    // date on a BDAY would tell the user it is a birthday.
+    let vcard = card_to_vcard(&one_anniversary(
+        "death",
+        json!({"year": 2019, "month": 10, "day": 15}),
+    ));
+    assert!(!vcard.contains("2019"), "{vcard}");
+    assert!(!vcard.contains("\r\nBDAY"), "{vcard}");
+    assert!(!vcard.contains("ANNIVERSARY"), "{vcard}");
+}
+
+#[test]
+fn a_date_that_names_no_single_day_gets_no_line() {
+    // RFC 9553 §2.8.1's PartialDate may state only a year, or a day in a
+    // month with no year. EDS's e_contact_date_from_string reads anything
+    // short of a whole date as no date at all and hands the contact editor
+    // 1000-01-01 — so a partial date written onto a line would reach the user
+    // as a wrong date, and be saved back as one.
+    for date in [
+        json!({"year": 1964}),
+        json!({"month": 3, "day": 27}),
+        json!({"year": 1964, "month": 3}),
+    ] {
+        let vcard = card_to_vcard(&one_anniversary("birth", date.clone()));
+        assert!(!vcard.contains("\r\nBDAY"), "{date}: {vcard}");
+    }
+}
+
+#[test]
+fn an_anniversary_stated_as_a_point_in_time_crosses_as_the_day_it_names() {
+    // The other shape RFC 9553 §2.8.1 allows. A vCard 3.0 date line states a
+    // day, so the hour is left behind — and, being left behind rather than
+    // mapped, must survive the save untouched.
+    let vcard = card_to_vcard(&one_anniversary(
+        "birth",
+        json!({"@type": "Timestamp", "utc": "1953-10-15T23:10:00Z"}),
+    ));
+    assert_eq!(line(&vcard, "BDAY"), "BDAY;X-JMAP-KEY=y1:1953-10-15");
+}
+
+#[test]
+fn a_date_line_written_without_separators_states_the_same_day() {
+    // ISO 8601's basic form, which EDS parses as readily as the extended one,
+    // so a vCard from elsewhere may well carry it.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "BDAY:19640327\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    assert_eq!(
+        card.anniversaries.expect("anniversaries")["y1"].date,
+        Some(json!({"@type": "PartialDate", "year": 1964, "month": 3, "day": 27}))
+    );
+}
+
+#[test]
+fn a_date_line_that_states_no_day_is_skipped_in_both_directions() {
+    let card = one_anniversary("birth", json!({}));
+    assert!(!card_to_vcard(&card).contains("\r\nBDAY"));
+
+    // Nothing at all, prose, and a date that does not exist. None of them
+    // says which day the user meant, and inventing one would write it to the
+    // server on the next save.
+    for value in ["", "sometime in March", "1964-13-45", "1964-03"] {
+        let back = vcard_to_card(&format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:{value}\r\nEND:VCARD\r\n"
+        ))
+        .expect("parse");
+        assert_eq!(back.anniversaries, None, "BDAY:{value}");
+    }
+}
+
+#[test]
+fn invents_a_key_for_a_date_that_has_none() {
+    // Evolution stores the birthday in a structured field and rebuilds the
+    // line from it, dropping the X-JMAP-KEY this side wrote — so a date that
+    // has just been edited arrives needing a key of its own.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "BDAY:1964-03-27\r\n",
+        "X-EVOLUTION-ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    assert_eq!(anniversaries.keys().collect::<Vec<_>>(), vec!["y1", "y2"]);
+    assert_eq!(anniversaries["y1"].kind, "birth");
+    assert_eq!(anniversaries["y2"].kind, "wedding");
 }
 
 #[test]

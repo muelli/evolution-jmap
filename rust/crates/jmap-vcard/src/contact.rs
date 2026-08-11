@@ -4,8 +4,8 @@
 //! JSContact [`ContactCard`] ↔ vCard 3.0.
 //!
 //! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE —
-//! and no more. Everything else on a card (nicknames, anniversaries, …) is
+//! be useful — UID, FN, N, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE,
+//! BDAY — and no more. Everything else on a card (nicknames, keywords, …) is
 //! *dropped*, which is only safe because saving goes back to the server as a
 //! PatchObject naming the mapped properties: a property we never mapped is a
 //! property we never overwrite.
@@ -43,18 +43,31 @@
 //!
 //! `notes` is the plainest of them and lossy only around the value: RFC 2426
 //! §3.6.2's `NOTE` is free text, so an entry's own text crosses whole, while
-//! RFC 9553 §2.8.1's `created` and `author` — when the note was written and
+//! RFC 9553 §2.8.3's `created` and `author` — when the note was written and
 //! by whom — have no component and no parameter to sit in, and so ride along
 //! in the entry's `extra` for the save to patch around. An entry saying
 //! nothing at all gets no line, which is the same invisibility again.
+//!
+//! `anniversaries` is lossy in its *value*, which is new: RFC 9553 §2.8.1
+//! dates a memorable event either as a `PartialDate`, which may state as
+//! little as a year, or as a `Timestamp`, which states a point in time. A
+//! vCard date line states one calendar day and nothing else, so a date that
+//! names no single day gets no line — not because the line has nowhere to put
+//! it, but because EDS reads anything short of a whole date as *no* date and
+//! would show the user 1000-01-01. A point in time crosses as the day it
+//! falls on, leaving the hour behind for the save to patch around
+//! ([`states_a_point_in_time`]). Of the three kinds, `birth` goes on RFC 2426
+//! §3.1.5's `BDAY` and `wedding` on the line EDS reads `E_CONTACT_ANNIVERSARY`
+//! off; `death` has no line at all, so `anniversaries` too is a map of which
+//! the vCard states only some entries.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent, Note,
-    OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name,
+    NameComponent, Note, OrgUnit, Organization, Title,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::error::VCardError;
 use crate::syntax::{self, Property};
@@ -115,6 +128,22 @@ const JOINED_COMPONENTS: [(&str, &str); 1] = [("number", "name")];
 
 /// JSContact title `kind` values and the vCard property stating each.
 const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
+
+/// The line EDS keeps `E_CONTACT_ANNIVERSARY` on — the field Evolution's
+/// contact editor labels "Anniversary".
+///
+/// vCard 3.0 has no property for a wedding day: RFC 6474's `ANNIVERSARY` is
+/// vCard 4.0, which `e_contact_new_from_vcard()` is not given. Writing the
+/// date on any other line would keep it out of the only field that shows it.
+const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
+
+/// JSContact anniversary `kind` values and the vCard property stating each.
+///
+/// RFC 9553 §2.8.1's third kind, `death`, is missing on purpose: no vCard 3.0
+/// property and no EDS field states it, and putting the date on a `BDAY`
+/// would tell the user it is a birthday.
+const ANNIVERSARY_KINDS: [(&str, &str); 2] =
+    [("birth", "BDAY"), ("wedding", X_EVOLUTION_ANNIVERSARY)];
 
 /// RFC 9553 §2.2.4's default `kind` for a title that names none.
 const DEFAULT_TITLE_KIND: &str = "title";
@@ -231,6 +260,119 @@ pub fn states_organization(organization: &Organization) -> bool {
     organization_components(organization).is_some()
 }
 
+/// Whether an anniversary reaches the user at all: the mapping must have a
+/// property for its `kind` *and* its date must name one calendar day.
+pub fn states_anniversary(anniversary: &Anniversary) -> bool {
+    anniversary_property(&anniversary.kind).is_some() && anniversary_date(anniversary).is_some()
+}
+
+/// The date a vCard line states for an anniversary, or `None` for a date no
+/// single day can be read out of.
+///
+/// This is what the save compares by, rather than the JSON: the two shapes
+/// RFC 9553 §2.8.1 allows can name the same day, so a card whose birthday is
+/// a `Timestamp` must not look edited merely because it came back as the day
+/// the user was shown.
+pub fn anniversary_date(anniversary: &Anniversary) -> Option<String> {
+    let date = anniversary.date.as_ref()?;
+    // A `Timestamp` states a point in time. The day it falls on is read in
+    // UTC, which is the only zone the card names.
+    if let Some(utc) = date.get("utc").and_then(Value::as_str) {
+        return read_day(utc).map(|day| day.text());
+    }
+    let day = Day {
+        year: member(date, "year")?,
+        month: member(date, "month")?,
+        day: member(date, "day")?,
+    };
+    day.is_a_date().then(|| day.text())
+}
+
+/// Whether an anniversary is dated by a point in time (RFC 9553 §2.8.1's
+/// `Timestamp`) rather than by a calendar day (its `PartialDate`).
+///
+/// The save asks because the two are patched differently: a day's members can
+/// be reached into one at a time, leaving whatever else the object carries in
+/// place, while a point in time the user has retyped as a day is a different
+/// kind of object and has to be written whole.
+pub fn states_a_point_in_time(anniversary: &Anniversary) -> bool {
+    anniversary
+        .date
+        .as_ref()
+        .is_some_and(|date| date.get("utc").is_some())
+}
+
+/// The vCard property an anniversary of this `kind` is stated on.
+fn anniversary_property(kind: &str) -> Option<&'static str> {
+    ANNIVERSARY_KINDS
+        .iter()
+        .find(|(mapped, _)| *mapped == kind)
+        .map(|(_, name)| *name)
+}
+
+/// One calendar day: the whole of what a vCard 3.0 date line can state.
+struct Day {
+    year: u32,
+    month: u32,
+    day: u32,
+}
+
+impl Day {
+    /// The day as RFC 2426 §3.1.5 asks for it — ISO 8601's extended form,
+    /// which is also the one `e_contact_date_to_string()` writes back.
+    fn text(&self) -> String {
+        format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
+    }
+
+    /// Whether the numbers name a day of a kind the calendar has. Which
+    /// months are 30 days long is left to the server that stated the date;
+    /// what is refused here is a date no month could have.
+    fn is_a_date(&self) -> bool {
+        (1..=9999).contains(&self.year)
+            && (1..=12).contains(&self.month)
+            && (1..=31).contains(&self.day)
+    }
+
+    /// The day as the `PartialDate` a save writes when the user retyped one.
+    fn json(&self) -> Value {
+        json!({
+            "@type": "PartialDate",
+            "year": self.year,
+            "month": self.month,
+            "day": self.day,
+        })
+    }
+}
+
+/// The day a date line states, or `None` for text that names none.
+///
+/// Both ISO 8601 forms are read — `1964-03-27` and `19640327` — because
+/// `e_contact_date_from_string()` reads both, and so a vCard that has been
+/// through another client may carry either. A time after the date is dropped
+/// rather than refused, for the same reason.
+fn read_day(text: &str) -> Option<Day> {
+    let digits: String = text
+        .split(['T', 't'])
+        .next()?
+        .chars()
+        .filter(|character| *character != '-')
+        .collect();
+    if digits.len() != 8 || !digits.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    let day = Day {
+        year: digits[0..4].parse().ok()?,
+        month: digits[4..6].parse().ok()?,
+        day: digits[6..8].parse().ok()?,
+    };
+    day.is_a_date().then_some(day)
+}
+
+/// One numeric member of a JSContact date object.
+fn member(date: &Value, name: &str) -> Option<u32> {
+    date.get(name)?.as_u64()?.try_into().ok()
+}
+
 /// Render a contact card as a vCard 3.0 string, ready for
 /// `e_contact_new_from_vcard()`.
 pub fn card_to_vcard(card: &ContactCard) -> String {
@@ -338,6 +480,16 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         properties.push(Property::new("NOTE", &note.note).with_param(X_JMAP_KEY, key));
     }
 
+    for (key, anniversary) in card.anniversaries.iter().flatten() {
+        let (Some(name), Some(date)) = (
+            anniversary_property(&anniversary.kind),
+            anniversary_date(anniversary),
+        ) else {
+            continue;
+        };
+        properties.push(Property::new(name, &date).with_param(X_JMAP_KEY, key));
+    }
+
     syntax::write(&properties)
 }
 
@@ -364,6 +516,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut organizations = BTreeMap::new();
     let mut titles = BTreeMap::new();
     let mut notes = BTreeMap::new();
+    let mut anniversaries = BTreeMap::new();
 
     for property in &properties {
         match property.name.as_str() {
@@ -421,6 +574,12 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 }
                 notes.insert(entry_key(property, "n", &notes), note);
             }
+            "BDAY" | X_EVOLUTION_ANNIVERSARY => {
+                let Some(anniversary) = read_anniversary(property) else {
+                    continue;
+                };
+                anniversaries.insert(entry_key(property, "y", &anniversaries), anniversary);
+            }
             _ => {}
         }
     }
@@ -461,6 +620,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         organizations: (!organizations.is_empty()).then_some(organizations),
         titles: (!titles.is_empty()).then_some(titles),
         notes: (!notes.is_empty()).then_some(notes),
+        anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
         extra: BTreeMap::new(),
     })
 }
@@ -484,6 +644,22 @@ fn read_title(property: &Property) -> Option<Title> {
     Some(Title {
         name,
         kind: kind.map(str::to_owned),
+        extra: BTreeMap::new(),
+    })
+}
+
+/// The anniversary a date line states, or `None` for a line no calendar day
+/// can be read out of.
+///
+/// The kind is the line's own: a `BDAY` states a birthday and nothing else,
+/// so unlike a title's it is never guessed at and never left unsaid.
+fn read_anniversary(property: &Property) -> Option<Anniversary> {
+    let (kind, _) = ANNIVERSARY_KINDS
+        .iter()
+        .find(|(_, name)| *name == property.name)?;
+    Some(Anniversary {
+        kind: (*kind).to_owned(),
+        date: Some(read_day(&property.text())?.json()),
         extra: BTreeMap::new(),
     })
 }

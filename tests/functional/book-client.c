@@ -75,6 +75,18 @@
  * escaping is shown to survive the EDS that reads the line back. */
 #define TEST_NOTE "met at FOSDEM; owes me a beer, apparently"
 
+/* The birthday, which EDS keeps in a structured E_CONTACT_BIRTH_DATE field
+ * and JSContact keeps as an `anniversaries` entry dated by a PartialDate.
+ * Set here because the crossing is a change of shape rather than of name —
+ * three numbers on this side, one date line in between, three JSON members
+ * on the other — and because EDS rebuilds that line out of its own field,
+ * dropping the X-JMAP-KEY the mapping writes on it. Whether the date still
+ * arrives as the birthday it is, on the entry it belongs to, is a claim
+ * about real EDS that the mapping's own tests cannot make. */
+#define TEST_BIRTH_YEAR 1964
+#define TEST_BIRTH_MONTH 3
+#define TEST_BIRTH_DAY 27
+
 /* Report one observation whose value has line breaks in it. The harness
  * reads stdout as one `key=value` per line, so a raw newline would end the
  * observation early and lose the rest; only the newlines are rewritten, so
@@ -119,6 +131,9 @@ main (int argc,
 	EContact *read_back = NULL;
 	EContactAddress *address;
 	EContactAddress *read_back_address;
+	EContactDate birthday = { TEST_BIRTH_YEAR, TEST_BIRTH_MONTH, TEST_BIRTH_DAY };
+	EContactDate *read_back_birthday;
+	gchar *read_back_birthday_text;
 	gchar *added_uid = NULL;
 	const gchar *source_uid;
 	const gchar *full_name;
@@ -202,6 +217,7 @@ main (int argc,
 	e_contact_set (contact, E_CONTACT_TITLE, TEST_TITLE);
 	e_contact_set (contact, E_CONTACT_ROLE, TEST_ROLE);
 	e_contact_set (contact, E_CONTACT_NOTE, TEST_NOTE);
+	e_contact_set (contact, E_CONTACT_BIRTH_DATE, &birthday);
 
 	address = e_contact_address_new ();
 	address->street = g_strdup (TEST_STREET);
@@ -259,6 +275,17 @@ main (int argc,
 		 read_back_address && read_back_address->country ? read_back_address->country : "");
 	if (read_back_address)
 		e_contact_address_free (read_back_address);
+
+	/* The birthday, likewise boxed, and reported as the text
+	 * e_contact_date_to_string() writes — which is the same spelling the
+	 * date line carries, so the two ends of this leg compare like with
+	 * like without either of them re-deriving it. */
+	read_back_birthday = e_contact_get (read_back, E_CONTACT_BIRTH_DATE);
+	read_back_birthday_text = read_back_birthday ? e_contact_date_to_string (read_back_birthday) : NULL;
+	g_print ("read-back-birthday=%s\n", read_back_birthday_text ? read_back_birthday_text : "");
+	g_free (read_back_birthday_text);
+	if (read_back_birthday)
+		e_contact_date_free (read_back_birthday);
 
 	/* The LABEL line, which is a field of its own rather than part of the
 	 * boxed address above — and the one observation that has to be

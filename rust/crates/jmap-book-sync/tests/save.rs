@@ -75,9 +75,11 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
         Some(&json!({"k1": {"name": "Vee"}})),
         "an unmapped property was overwritten"
     );
+    let anniversaries = stored.anniversaries.as_ref().expect("anniversaries");
     assert_eq!(
-        stored.extra.get("anniversaries"),
-        Some(&json!({"y1": {"kind": "birth", "date": {"year": 1964}}}))
+        anniversaries["y1"].date,
+        Some(json!({"year": 1964})),
+        "a date the vCard could not state was overwritten"
     );
     let emails = stored.emails.as_ref().unwrap();
     assert_eq!(emails.len(), 1, "patched in place, not re-added");
@@ -765,6 +767,208 @@ fn removing_the_note_line_removes_the_note() {
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     assert_eq!(fixture.card(&id).notes, None);
+}
+
+/// The birthday as EDS hands it back after the user has edited it: the date
+/// line is rebuilt from `E_CONTACT_BIRTH_DATE`, which drops the `X-JMAP-KEY`
+/// this side wrote on it. Verified against libebook-contacts 3.52 — an
+/// untouched line keeps its parameters, a rewritten one does not.
+fn as_evolution_rewrites_it(vcard: &str, day: &str) -> String {
+    let rebuilt: String = vcard
+        .lines()
+        .map(|line| match line.starts_with("BDAY") {
+            true => format!("BDAY:{day}\r\n"),
+            false => format!("{line}\r\n"),
+        })
+        .collect();
+    assert_ne!(rebuilt, vcard, "no BDAY line to rewrite in\n{vcard}");
+    rebuilt
+}
+
+#[test]
+fn editing_a_birthday_patches_the_date_the_server_stated_it_in() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // `place` — where the birth happened — has no room on a date line, so it
+    // survives only if the entry is patched rather than replaced. And the
+    // entry has to be *found* first: Evolution rebuilds the line from its own
+    // field and drops the key, so it is matched by the kind of date it is.
+    fixture.patch(
+        &id,
+        json!({"anniversaries": {"k8": {
+            "@type": "Anniversary",
+            "kind": "birth",
+            "date": {"@type": "PartialDate", "year": 1964, "month": 3, "day": 27},
+            "place": {"full": "Bremen"},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("BDAY;X-JMAP-KEY=k8:1964-03-27"), "{vcard}");
+
+    let edited = as_evolution_rewrites_it(&vcard, "1964-03-28");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let anniversaries = fixture.card(&id).anniversaries.expect("anniversaries");
+    assert_eq!(anniversaries.len(), 1, "patched in place, not re-added");
+    assert_eq!(
+        anniversaries["k8"].date,
+        Some(json!({"@type": "PartialDate", "year": 1964, "month": 3, "day": 28}))
+    );
+    assert_eq!(
+        anniversaries["k8"].extra.get("place"),
+        Some(&json!({"full": "Bremen"})),
+        "a member the date line cannot carry was overwritten"
+    );
+}
+
+#[test]
+fn an_untouched_point_in_time_birthday_keeps_the_hour_it_names() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.8.1 also dates an anniversary by a Timestamp. The line
+    // states the day, so a save must not read the missing hour as an edit —
+    // not even when Evolution has rewritten the line and lost the key.
+    fixture.patch(
+        &id,
+        json!({"anniversaries": {"k8": {
+            "kind": "birth",
+            "date": {"@type": "Timestamp", "utc": "1964-03-27T23:10:00Z"},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("BDAY;X-JMAP-KEY=k8:1964-03-27"), "{vcard}");
+
+    let edited = as_evolution_rewrites_it(&vcard, "1964-03-27");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let anniversaries = fixture.card(&id).anniversaries.expect("anniversaries");
+    assert_eq!(
+        anniversaries["k8"].date,
+        Some(json!({"@type": "Timestamp", "utc": "1964-03-27T23:10:00Z"})),
+        "the point in time was flattened by a save that changed nothing"
+    );
+}
+
+#[test]
+fn retyping_a_point_in_time_birthday_states_the_day_the_user_typed() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"anniversaries": {"k8": {
+            "kind": "birth",
+            "date": {"@type": "Timestamp", "utc": "1964-03-27T23:10:00Z"},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = as_evolution_rewrites_it(&vcard, "1964-03-28");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    // The hour goes with it: the user stated a day, and keeping 23:10 would
+    // be this mapping inventing a time on a date nobody gave one for.
+    let anniversaries = fixture.card(&id).anniversaries.expect("anniversaries");
+    assert_eq!(
+        anniversaries["k8"].date,
+        Some(json!({"@type": "PartialDate", "year": 1964, "month": 3, "day": 28}))
+    );
+}
+
+#[test]
+fn moving_a_date_to_the_anniversary_line_changes_the_kind_it_is_stated_under() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"anniversaries": {"k8": {
+            "kind": "birth",
+            "date": {"year": 1996, "month": 8, "day": 3},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    // A client that keeps the parameters it was given — our own round trip
+    // does — moving the date from the birthday field to the anniversary one.
+    // Evolution itself drops the key here and takes the delete-and-add path
+    // instead; either way the card must stop calling the date a birthday.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "BDAY;X-JMAP-KEY=k8",
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=k8",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let anniversaries = fixture.card(&id).anniversaries.expect("anniversaries");
+    assert_eq!(anniversaries["k8"].kind, "wedding");
+    assert_eq!(
+        anniversaries["k8"].date,
+        Some(json!({"year": 1996, "month": 8, "day": 3})),
+        "the date itself did not change, so it must not have been rewritten"
+    );
+}
+
+#[test]
+fn clearing_the_birthday_removes_the_anniversary() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"anniversaries": {"k8": {
+            "kind": "birth",
+            "date": {"year": 1964, "month": 3, "day": 27},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited: String = vcard
+        .lines()
+        .filter(|line| !line.starts_with("BDAY"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).anniversaries, None);
+}
+
+#[test]
+fn a_date_the_vcard_could_not_state_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A year on its own and a deathday: neither reaches the user, so neither
+    // may be deleted by a save, nor have its key taken by the birthday the
+    // user types.
+    fixture.patch(
+        &id,
+        json!({"anniversaries": {
+            "y1": {"kind": "birth", "date": {"year": 1964}},
+            "y2": {"kind": "death", "date": {"year": 2019, "month": 10, "day": 15}},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("BDAY"), "{vcard}");
+    let edited = vcard.replace("END:VCARD\r\n", "BDAY:1964-03-27\r\nEND:VCARD\r\n");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let anniversaries = fixture.card(&id).anniversaries.expect("anniversaries");
+    assert_eq!(
+        anniversaries["y1"].date,
+        Some(json!({"year": 1964})),
+        "an entry the vCard never showed was overwritten: {anniversaries:?}"
+    );
+    assert_eq!(anniversaries["y2"].kind, "death");
+    assert_eq!(
+        anniversaries.len(),
+        3,
+        "the birthday the user typed was not added: {anniversaries:?}"
+    );
 }
 
 #[test]
