@@ -5,7 +5,7 @@
 //!
 //! The mapped set is deliberately the one the address book backend needs to
 //! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
-//! NOTE, BDAY — and no more. Everything else on a card (keywords, preferred
+//! NOTE, BDAY, URL — and no more. Everything else on a card (keywords, preferred
 //! languages, …) is *dropped*, which is only safe because saving goes back to
 //! the server as a PatchObject naming the mapped properties: a property we
 //! never mapped is a property we never overwrite.
@@ -73,11 +73,25 @@
 //! is rewritten in place with its parameters intact, so the [`X_JMAP_KEY`]
 //! survives the trip through Evolution and the save needs no rekeying. An
 //! entry that names nothing gets no line, which is the same invisibility again.
+//!
+//! `links` is `titles`' shape with a stricter filter: RFC 9553 §2.6.3 keys the
+//! resources a card points at and tells them apart by `kind`, of which it
+//! defines exactly one — `contact`, a URI for writing to the person, which RFC
+//! 9555 §2.6.3 states on vCard 4.0's `CONTACT-URI`. vCard 3.0 has only RFC
+//! 2426 §3.6.8's `URL`, the plain website, so *only* an entry naming no kind
+//! at all crosses; `contact` and any vendor kind get no line rather than one
+//! that would tell the user this is the contact's home page. What also does not
+//! cross is the entry's `mediaType`, `contexts`, `pref` and `label`, for which
+//! a bare URI has no parameter, so they ride in its `extra` as a nickname's do.
+//! The [`X_JMAP_KEY`] survives here too: measured against libebook-contacts
+//! 3.52, `E_CONTACT_HOMEPAGE_URL` is the first `URL` line, a set rewrites that
+//! line's value and leaves its parameters alone, and any further `URL` line
+//! passes through untouched.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
     NameComponent, Nickname, Note, OrgUnit, Organization, Title,
 };
 use serde_json::{Map, Value, json};
@@ -249,6 +263,28 @@ pub fn states_note(note: &Note) -> bool {
 /// `NICKNAME` line could state.
 pub fn states_nickname(nickname: &Nickname) -> bool {
     !nickname.name.is_empty()
+}
+
+/// Whether a link reaches the user at all: it must point somewhere *and* be
+/// of a kind vCard 3.0 has a property for.
+///
+/// As with a title, the kind alone is not the question — a plain link with no
+/// URI has no `URL` line either, and calling it visible would let a save
+/// delete it.
+pub fn states_link(link: &Link) -> bool {
+    !link.uri.is_empty() && maps_link_kind(link.kind.as_deref())
+}
+
+/// Whether the vCard mapping covers a JSContact link of this `kind`.
+///
+/// Only a link that names no kind at all, which is the plain website RFC 2426
+/// §3.6.8's `URL` means. RFC 9553 §2.6.3 defines one kind, `contact` — a URI
+/// for writing to the person — and allows vendor kinds besides; RFC 9555
+/// §2.6.3 states `contact` on vCard 4.0's `CONTACT-URI`, which the 3.0 reader
+/// EDS gives us does not know. Writing either on a `URL` would tell the user
+/// it is the contact's home page.
+fn maps_link_kind(kind: Option<&str>) -> bool {
+    kind.is_none()
 }
 
 /// Whether an email address reaches the user at all. An entry with no
@@ -509,6 +545,13 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         properties.push(Property::new("NOTE", &note.note).with_param(X_JMAP_KEY, key));
     }
 
+    for (key, link) in card.links.iter().flatten() {
+        if !states_link(link) {
+            continue;
+        }
+        properties.push(Property::new("URL", &link.uri).with_param(X_JMAP_KEY, key));
+    }
+
     for (key, anniversary) in card.anniversaries.iter().flatten() {
         let (Some(name), Some(date)) = (
             anniversary_property(&anniversary.kind),
@@ -547,6 +590,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut titles = BTreeMap::new();
     let mut notes = BTreeMap::new();
     let mut anniversaries = BTreeMap::new();
+    let mut links = BTreeMap::new();
 
     for property in &properties {
         match property.name.as_str() {
@@ -619,6 +663,21 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 }
                 notes.insert(entry_key(property, "n", &notes), note);
             }
+            "URL" => {
+                // Read as one value, which is what calcard makes of a URI:
+                // neither the comma nor the semicolon inside it separates
+                // anything, so a query string listing tags arrives as the URI
+                // the line stated rather than as a fragment of it.
+                let link = Link {
+                    uri: property.text(),
+                    kind: None,
+                    extra: BTreeMap::new(),
+                };
+                if !states_link(&link) {
+                    continue;
+                }
+                links.insert(entry_key(property, "l", &links), link);
+            }
             "BDAY" | X_EVOLUTION_ANNIVERSARY => {
                 let Some(anniversary) = read_anniversary(property) else {
                     continue;
@@ -667,6 +726,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         titles: (!titles.is_empty()).then_some(titles),
         notes: (!notes.is_empty()).then_some(notes),
         anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
+        links: (!links.is_empty()).then_some(links),
         extra: BTreeMap::new(),
     })
 }

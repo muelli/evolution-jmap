@@ -83,6 +83,14 @@
  * escaping is shown to survive the EDS that reads the line back. */
 #define TEST_NOTE "met at FOSDEM; owes me a beer, apparently"
 
+/* The home page, which EDS keeps on the first URL line and JSContact keeps as
+ * an entry of the `links` map. The comma in the query string is the point of
+ * this one: a URI may hold the characters a vCard value gives structural
+ * meaning to, and EDS escapes them on the way out — so this is where the URI
+ * the user typed is shown to survive real EDS whole, rather than arriving at
+ * the server cut off at the comma or carrying a backslash EDS put there. */
+#define TEST_HOMEPAGE "https://dana.example/profile?tags=x-files,ufo"
+
 /* The birthday, which EDS keeps in a structured E_CONTACT_BIRTH_DATE field
  * and JSContact keeps as an `anniversaries` entry dated by a PartialDate.
  * Set here because the crossing is a change of shape rather than of name —
@@ -226,6 +234,7 @@ main (int argc,
 	e_contact_set (contact, E_CONTACT_TITLE, TEST_TITLE);
 	e_contact_set (contact, E_CONTACT_ROLE, TEST_ROLE);
 	e_contact_set (contact, E_CONTACT_NOTE, TEST_NOTE);
+	e_contact_set (contact, E_CONTACT_HOMEPAGE_URL, TEST_HOMEPAGE);
 	e_contact_set (contact, E_CONTACT_BIRTH_DATE, &birthday);
 
 	address = e_contact_address_new ();
@@ -271,6 +280,8 @@ main (int argc,
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_ROLE));
 	g_print ("read-back-note=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_NOTE));
+	g_print ("read-back-homepage=%s\n",
+		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_HOMEPAGE_URL));
 
 	/* Structured, so it comes back as a boxed struct rather than a
 	 * string: one report per field, because which field a part of the

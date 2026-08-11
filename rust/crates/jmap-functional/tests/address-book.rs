@@ -58,6 +58,13 @@ const ADDRESS_LABEL: &str = "Hauptstrasse 1\n10115 Berlin\nGermany";
 /// here is that the escaping our emitter applies is the escaping the EDS
 /// reading the line back undoes.
 const NOTE: &str = "met at FOSDEM; owes me a beer, apparently";
+/// The home page, spelled as `book-client.c` spells it. EDS keeps it on the
+/// first `URL` line and JSContact as an entry of the `links` map, and the comma
+/// in the query string is why it is worth a leg of its own: a vCard value gives
+/// the comma structural meaning and EDS escapes it, so this is where the URI is
+/// shown to reach the server as the one the user typed — neither cut off at the
+/// comma nor carrying the backslash EDS wrote.
+const HOMEPAGE: &str = "https://dana.example/profile?tags=x-files,ufo";
 /// The birthday, spelled as `book-client.c` spells it — the text
 /// `e_contact_date_to_string()` writes for the three numbers it sets, which
 /// is also the text the `BDAY` line carries. EDS keeps a birthday in a
@@ -219,6 +226,11 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         seen.get("read-back-note"),
         Some(&NOTE),
         "the contact EDS handed back lost or mangled its note\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-homepage"),
+        Some(&HOMEPAGE),
+        "the contact EDS handed back lost or mangled its home page\n{report}"
     );
     assert_eq!(
         seen.get("read-back-birthday"),
@@ -411,6 +423,19 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         vec![NICKNAME],
         "{card:?}"
     );
+    // The URL line, as the server sees it: exactly one `links` entry holding
+    // the whole URI, of the kind a `URL` states — which is none at all. A URI
+    // ending at the comma would mean the escaping had fallen through between
+    // EDS's writer and our reader, and the server would hold a link pointing
+    // somewhere the user never typed.
+    let links = card
+        .links
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no links: {card:?}"));
+    assert_eq!(links.len(), 1, "{links:?}");
+    let link = links.values().next().expect("one link");
+    assert_eq!(link.uri, HOMEPAGE, "{card:?}");
+    assert_eq!(link.kind, None, "{card:?}");
     // The BDAY line, as the server sees it: one `anniversaries` entry of kind
     // `birth` whose date is the three numbers the client set. Spelled out
     // here rather than borrowed from the mapping, so this end states the wire

@@ -62,6 +62,10 @@
   "nicknames": {
     "k1": {"@type": "Nickname", "name": "Vee"}
   },
+  "links": {
+    "l1": {"@type": "Link", "uri": "https://vera.example/"},
+    "l2": {"@type": "Link", "kind": "contact", "uri": "https://vera.example/write-to-me"}
+  },
   "keywords": {
     "hiking": true
   }

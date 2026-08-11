@@ -5,11 +5,11 @@
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, NICKNAME,
-//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE and the two date lines, and
-//! drops everything else, so a save that sent the parsed card back whole would
-//! silently delete the properties it could not represent — keywords, preferred
-//! languages, online services — none of which the user ever saw, let alone
-//! asked to remove.
+//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL and the two date lines,
+//! and drops everything else, so a save that sent the parsed card back whole
+//! would silently delete the properties it could not represent — keywords,
+//! preferred languages, online services — none of which the user ever saw, let
+//! alone asked to remove.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
 //! that is the subtler half of this module:
@@ -41,6 +41,10 @@
 //!   no parameter for, so the entry is patched by its name alone. Its key does
 //!   survive Evolution, unlike a date's: EDS rewrites the value of that line in
 //!   place and leaves the parameters where they were.
+//! - `links` entries are patched by their URI alone, for the same reason a
+//!   nickname's is: what the resource is and how strongly it is preferred have
+//!   no parameter on a `URL` line. Their key survives Evolution — EDS rewrites
+//!   the value of that line in place and leaves the parameters where they were.
 //! - `anniversaries` entries have no key to be patched by at all: EDS keeps a
 //!   birthday in a structured field and rebuilds the line out of it, dropping
 //!   the `X-JMAP-KEY`, so the entry an edited date belongs to is found by what
@@ -51,8 +55,9 @@
 //!   entries. A title of a `kind` outside `title` and `role` has no vCard
 //!   property; an address with neither an `ADR` field nor a written-out form
 //!   to put on a `LABEL`, an organisation with neither a name nor a unit, an
-//!   email with no address, a phone with no number, a note that says nothing
-//!   and a date naming no single day all have no line to be written on. Each is dropped on the way
+//!   email with no address, a phone with no number, a note that says nothing,
+//!   a date naming no single day and a link of a kind vCard 3.0 cannot state
+//!   all have no line to be written on. Each is dropped on the way
 //!   out and must
 //!   therefore be invisible to the save in both directions — neither deleted
 //!   for being absent from the edited card, nor overwritten by an addition
@@ -68,14 +73,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
     Nickname, Note, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
     maps_phone_feature, restore_address_components, states_a_point_in_time, states_address,
-    states_anniversary, states_email, states_nickname, states_note, states_organization,
-    states_phone, states_title, title_kind,
+    states_anniversary, states_email, states_link, states_nickname, states_note,
+    states_organization, states_phone, states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -108,6 +113,7 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         current.anniversaries.as_ref(),
         edited.anniversaries.as_ref(),
     );
+    diff_links(&mut patch, current.links.as_ref(), edited.links.as_ref());
     patch
 }
 
@@ -347,6 +353,31 @@ fn diff_notes(
             // around rather than through.
             if old.note != new.note {
                 patch.insert(format!("{path}/note"), Value::String(new.note.clone()));
+            }
+        },
+    );
+}
+
+fn diff_links(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Link>>,
+    edited: Option<&BTreeMap<String, Link>>,
+) {
+    diff_entries(
+        patch,
+        "links",
+        current,
+        edited,
+        states_link,
+        |patch, path, old, new| {
+            // Only the URI can have been edited: what the resource is, where
+            // it is used, how strongly it is preferred and what to call it
+            // never reached the vCard, so they are patched around rather than
+            // through. Nor can the `kind` have changed — a `URL` states the
+            // one kind that has no name, and an entry of any other kind has no
+            // line to be edited on.
+            if old.uri != new.uri {
+                patch.insert(format!("{path}/uri"), Value::String(new.uri.clone()));
             }
         },
     );

@@ -858,6 +858,117 @@ fn removing_the_nickname_line_removes_the_nickname() {
     assert_eq!(fixture.card(&id).nicknames, None);
 }
 
+#[test]
+fn editing_a_home_page_keeps_what_the_url_line_cannot_carry() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.6.3 hangs a `mediaType`, a `pref` and a `label` off a link,
+    // and RFC 2426 §3.6.8's URL is a bare URI, so none of them reaches the
+    // vCard. They survive only if the patch reaches in.
+    fixture.patch(
+        &id,
+        json!({"links": {"l1": {
+            "@type": "Link",
+            "uri": "https://vera.example/",
+            "mediaType": "text/html",
+            "pref": 1,
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("URL;X-JMAP-KEY=l1:https://vera.example/"),
+        "{vcard}"
+    );
+
+    // EDS rewrites the value of that line in place and leaves the parameters
+    // where they were, so the key comes back — verified against
+    // libebook-contacts 3.52, where a set on `E_CONTACT_HOMEPAGE_URL` keeps
+    // the `X-JMAP-KEY`.
+    let edited = vcard.replace(
+        "URL;X-JMAP-KEY=l1:https://vera.example/",
+        "URL;X-JMAP-KEY=l1:https://vera.example/new",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let links = fixture.card(&id).links.expect("links");
+    assert_eq!(links.len(), 1, "patched in place, not re-added");
+    assert_eq!(links["l1"].uri, "https://vera.example/new");
+    assert_eq!(
+        links["l1"].extra.get("mediaType"),
+        Some(&json!("text/html")),
+        "a member the URL line cannot carry was overwritten"
+    );
+    assert_eq!(links["l1"].extra.get("pref"), Some(&json!(1)));
+}
+
+#[test]
+fn a_link_for_getting_in_touch_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.6.3's `contact` kind has no vCard 3.0 property, so the entry
+    // gets no line and never reaches the user — and must not then be deleted
+    // by a save, nor have its key taken by the home page the user types.
+    fixture.patch(
+        &id,
+        json!({"links": {"l1": {
+            "@type": "Link",
+            "kind": "contact",
+            "uri": "https://vera.example/write-to-me",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nURL"), "{vcard}");
+    // The reader counts only the entries it can see, so the key it invents for
+    // a URL line with no parameters is `l1` — the key the hidden entry holds.
+    let edited = vcard.replace(
+        "END:VCARD\r\n",
+        "URL:https://vera.example/\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let links = fixture.card(&id).links.expect("links");
+    assert_eq!(
+        links["l1"].uri, "https://vera.example/write-to-me",
+        "an entry the vCard never showed was overwritten: {links:?}"
+    );
+    assert_eq!(links["l1"].kind.as_deref(), Some("contact"));
+    assert!(
+        links
+            .values()
+            .any(|link| link.uri == "https://vera.example/" && link.kind.is_none()),
+        "the home page the user typed was not saved: {links:?}"
+    );
+    assert_eq!(links.len(), 2);
+}
+
+#[test]
+fn clearing_the_home_page_removes_the_link() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"links": {"l1": {"uri": "https://vera.example/"}}}),
+    );
+    let sync = fixture.sync();
+
+    // What EDS leaves behind when the user empties Evolution's Home Page
+    // field: the line stays, with nothing on it. Measured against
+    // libebook-contacts 3.52, which rewrites the value rather than dropping
+    // the attribute — so the save has to read an empty line as a deletion.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "URL;X-JMAP-KEY=l1:https://vera.example/",
+        "URL;X-JMAP-KEY=l1:",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).links, None);
+}
+
 /// The birthday as EDS hands it back after the user has edited it: the date
 /// line is rebuilt from `E_CONTACT_BIRTH_DATE`, which drops the `X-JMAP-KEY`
 /// this side wrote on it. Verified against libebook-contacts 3.52 — an
