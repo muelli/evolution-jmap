@@ -17130,3 +17130,99 @@ surface; and whether Evolution 3.52's appointment editor *shows* a `CONFERENCE`
 at all is unknown here — the mapping is right by the two RFCs and the line is in
 the component EDS stores, but what the user sees needs a real Evolution to
 answer, so nothing about the UI is claimed.
+
+## 2026-08-11 (hundred-and-seventieth session)
+
+**The conference link is now editable, one member at a time.** The previous
+session drew RFC 8984 §4.2.6's `virtualLocations` as `CONFERENCE` lines and
+named the natural next increment: teach the save path to reach
+`virtualLocations/<key>`, the way `locations` is patched in place. That is this
+session. A user who changes the meeting URL, its label, or the ways of taking
+part it offers now has that reach the server — and the `description` sitting
+beside them on the server, which no line has room for, is untouched, because the
+patch names `virtualLocations/v1/uri` and never the property.
+
+**Identity rides on the line, because position cannot carry it.** The property
+differs from `LOCATION` in admitting several lines, so "which entry is this line
+a drawing of?" is a real question where `locations` had only one candidate. The
+answer is the `X-JMAP-KEY` the address book and `LOCATION` already use: the key
+goes out on the line and comes back on it. Position was the tempting
+alternative and is wrong — an editor that drops one line it has no UI for slides
+every later conference onto the wrong entry, and silently swapping two meeting
+URLs is a worse failure than not saving at all. A line that carries no key (any
+other client's component) is read under an invented `v1`, `v2`, … chosen to
+avoid the keys the document already named, so two conferences cannot collapse
+into one map entry; those keys reach the server only on a **create**, where the
+property is written whole and there is no entry to collide with.
+
+**What it deliberately does not do, and why that is not laziness.** Deletion and
+creation of a conference on the *edit* path are both refused. A component that
+names fewer conferences than the server holds does not say who dropped the line:
+Evolution 3.52 has no conference UI, and whether its editor writes back a
+property it does not understand cannot be answered here without a real
+Evolution. Reading the absence as a deletion would destroy a link the user never
+touched; reading it as silence costs only that a deletion made in another client
+comes back on the next sync. The mirror case — a line naming a key the server
+never chose — is refused for the same reason plus a protocol one: RFC 8620 §5.3
+requires every path segment before the last to exist already. Both are covered
+by tests that assert the server's copy is *unchanged*, so the conservatism is
+pinned rather than merely intended. Closing them properly is a session that
+starts by finding out what Evolution's editor actually does with a `CONFERENCE`.
+
+**The gate.** `maps_virtual_locations` joins `maps_locations`/`maps_keywords`:
+if any entry the server holds was drawn in part — nowhere to join, a `features`
+member outside RFC 7986 §6.3's seven, a name no `LABEL` can carry, an empty key
+— the whole property is left alone, including the entry the save really did
+change. A `description` emphatically does *not* trip it: having no room on the
+line is the reason the property is patched into rather than replaced, not a
+reason to refuse the save. One asymmetry worth writing down: a server key
+outside RFC 8984 §1.4.4's `Id` grammar passes the gate but does not survive the
+round trip (the reader treats it as absent, as `read_locations` does, because on
+a create the key is what the server is asked to file the entry under), so the
+baseline holds an invented key for it. That is safe rather than wrong — the diff
+patches a key only if the *server's* map holds it, so such an edit is dropped,
+not misapplied — and the invented-key search skipping keys the document already
+named is what keeps it from aliasing onto a real one.
+
+Tests: five new in `jmap-ical` (one replacing
+`..._is_written_and_never_read_back`, whose contract this session deliberately
+reverses), seven in `jmap-cal-sync`. Red was verified by stubbing the emitter's
+key and the reader back out: eight of the `jmap-ical` conference tests fail, and
+three of the seven save tests — the three positive ones — fail before
+`diff_virtual_locations` exists, while the four conservative ones pass both
+before and after, which is exactly what a test asserting "nothing is written"
+should do. One trap worth naming for the next person editing a component in a
+test: `CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Team room;X-JMAP-KEY=v1:…` is
+over 75 octets, so it is folded, and a `str::replace` against the unfolded
+spelling silently matches nothing and the test passes for the wrong reason.
+There is now an `unfolded()` helper in `save.rs`; the first version of the URI
+test failed for exactly this reason and was right to.
+
+Verified locally: `cargo test --locked` 812, up 11 from 801; `jmap-backend-cal`
+5, `jmap-backend-book` 5, `jmap-backend-collection` 10, `jmap-mail` 28 all
+unchanged; `ctest` 14/14 including all four functional legs after a full
+`ninja`. `cargo fmt --all --check` and `cargo clippy --all-targets --locked --
+-D warnings` clean for the default set and for the five EDS-header crates.
+`ci/checks.sh` again stops at its first step: `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed. Exposure is nil — **no file was added**,
+only edits to five files that already carry SPDX headers — and `Cargo.lock` is
+untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+`cargo doc` warns about the module doc linking private items (`X_JMAP_KEY`,
+`read_virtual_locations`); that is the convention this file already follows for
+`read_duration` and `stated_duration`, so it is not a new kind of dirt.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag many sessions have asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained; and
+`jmap-ical` still emits no `VTIMEZONE` of its own. Retired from the list:
+`virtualLocations` is no longer drawn-but-unwritable. New in its place, and it
+is the same question the previous session left about whether Evolution shows a
+`CONFERENCE` at all, now with teeth: this mapping's edit path assumes
+Evolution's editor **round-trips a property it has no UI for, parameters
+included**. If it does not, nothing is lost — the diff sees no keyed line and
+writes nothing — but nothing is gained either, and the whole surface is
+decorative until someone drives a real Evolution against it. That is the one
+experiment worth running before building anything further on `CONFERENCE`.

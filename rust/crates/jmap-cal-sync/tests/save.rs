@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The write side. The theme throughout is that saving a component must not
-//! destroy what the component could not carry: the mapping keeps fourteen
+//! destroy what the component could not carry: the mapping keeps sixteen
 //! properties of a JSCalendar event and drops the rest, so a save that
 //! replaced properties wholesale would delete data the user never touched and
 //! cannot even see.
@@ -11,7 +11,7 @@ mod common;
 
 use common::Fixture;
 use jmap_proto::calendars::NDay;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// The component Evolution hands to `save_component_sync` for a brand new
 /// appointment: the `UID` is a name the local cache invented, not a server
@@ -245,10 +245,11 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
         "roles": {"attendee": true},
         "participationStatus": "accepted",
     });
-    // And the same again for where the event is joined online: drawn as the
-    // CONFERENCE below, and unwritable because the `description` beside the URI
-    // has no room on the line — a save that replaced the property would delete
-    // it unasked.
+    // And where the event is joined online, which is neither: it is drawn as the
+    // CONFERENCE below *and* editable, but only one member at a time — the
+    // `description` beside the URI has no room on the line, so it survives a
+    // save the way an unmapped property does. Here nothing about it was edited,
+    // so the whole entry has to come back untouched.
     let online = json!({
         "@type": "VirtualLocation",
         "name": "Team room",
@@ -277,7 +278,8 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     );
     assert!(
         icalendar.replace("\r\n ", "").contains(
-            "CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Team room:https://meet.example.com/standup"
+            "CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Team room;X-JMAP-KEY=v1:\
+             https://meet.example.com/standup"
         ),
         "{icalendar}"
     );
@@ -307,6 +309,231 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
             .and_then(|places| places.get("v1")),
         Some(&online),
         "the conference link was rewritten by a save that only changed the title"
+    );
+}
+
+/// A component with its folds undone. RFC 5545 §3.1 splits a content line
+/// longer than 75 octets, and a `CONFERENCE` carrying a label and a key is
+/// longer than that — so an edit expressed as a text substitution has to name
+/// the line the reader sees rather than the first fragment the emitter wrote.
+fn unfolded(icalendar: &str) -> String {
+    icalendar.replace("\r\n ", "")
+}
+
+/// An event with somewhere to join it online, and the sync that serves it.
+fn joined_online(fixture: &Fixture, places: Value) -> (jmap_proto::Id, jmap_cal_sync::CalSync) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"virtualLocations": places}));
+    let sync = fixture.sync();
+    (id, sync)
+}
+
+/// The one virtual location the tests below start from: a link, a name, the
+/// ways of taking part, and a note with no room on the `CONFERENCE` line.
+fn team_room() -> Value {
+    json!({
+        "@type": "VirtualLocation",
+        "name": "Team room",
+        "description": "Ask Vera for the passcode",
+        "uri": "https://meet.example.com/standup",
+        "features": {"video": true},
+    })
+}
+
+#[test]
+fn moving_where_an_event_is_joined_online_patches_the_link_in_place() {
+    // The second property patched *into* rather than replaced, for the reason
+    // `locations` was the first: a VirtualLocation says more than its line does.
+    // Naming `virtualLocations` in the patch would replace the entry whole and
+    // take the description with it, so the save names the one member the user
+    // edited and everything beside it stays as the server had it.
+    let fixture = Fixture::start();
+    let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar.replace(
+        "https://meet.example.com/standup",
+        "https://meet.example.com/standup-2",
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let mut expected = team_room();
+    expected["uri"] = json!("https://meet.example.com/standup-2");
+    assert_eq!(
+        stored.virtual_locations.as_ref().unwrap()["v1"],
+        expected,
+        "only the link the user edited may change"
+    );
+}
+
+#[test]
+fn renaming_a_conference_and_changing_how_it_is_joined_both_arrive() {
+    // The other two members a CONFERENCE shows: RFC 7986 §6.4's LABEL is the
+    // VirtualLocation's `name`, and §6.3's FEATURE its `features`. The set goes
+    // back replaced whole, which is safe exactly because `maps_virtual_locations`
+    // has already refused the save for a set the line could not draw in full.
+    let fixture = Fixture::start();
+    let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar
+        .replace("FEATURE=VIDEO", "FEATURE=AUDIO,PHONE")
+        .replace("LABEL=Team room", "LABEL=Phone bridge");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let mut expected = team_room();
+    expected["name"] = json!("Phone bridge");
+    expected["features"] = json!({"audio": true, "phone": true});
+    assert_eq!(stored.virtual_locations.as_ref().unwrap()["v1"], expected);
+}
+
+#[test]
+fn clearing_a_conferences_name_removes_it_rather_than_naming_it_nothing() {
+    // A LABEL the user deleted is `"virtualLocations/v1/name": null`: RFC 8620
+    // §5.3 removes a property to mean "back to the default", and RFC 8984 §4.2.6
+    // defaults `name` to the empty string. Storing "" instead would be a place
+    // whose name is nothing, which is a different claim.
+    let fixture = Fixture::start();
+    let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar.replace(";LABEL=Team room", "");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let mut expected = team_room();
+    expected.as_object_mut().unwrap().remove("name");
+    assert_eq!(stored.virtual_locations.as_ref().unwrap()["v1"], expected);
+}
+
+#[test]
+fn a_conference_missing_from_the_component_is_left_where_it_is() {
+    // The conservative half of this mapping, and the reason is that a missing
+    // line does not say who removed it. Evolution 3.52 has no UI for a
+    // conference; whether its editor writes back a property it does not
+    // understand is not something this repository can answer without a real
+    // Evolution. Deleting the server's entry on that reading would destroy a
+    // link the user never touched, so a save that names fewer conferences than
+    // the server holds simply says nothing about the ones it does not name.
+    let fixture = Fixture::start();
+    let (id, sync) = joined_online(
+        &fixture,
+        json!({"v1": team_room(), "v2": {
+            "@type": "VirtualLocation",
+            "uri": "tel:+1-555-0100",
+        }}),
+    );
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited: String = icalendar
+        .split_inclusive("\r\n")
+        .filter(|line| !line.contains("tel:+1-555-0100"))
+        .collect();
+    assert_ne!(edited, icalendar, "the line to drop was not found");
+    sync.save_component(
+        &edited.replace("SUMMARY:Standup", "SUMMARY:Standup (short)"),
+        Some(id.as_str()),
+    )
+    .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(
+        stored.virtual_locations.as_ref().unwrap()["v2"],
+        json!({"@type": "VirtualLocation", "uri": "tel:+1-555-0100"}),
+        "a conference the component stopped naming must not be deleted"
+    );
+}
+
+#[test]
+fn a_conference_the_server_does_not_hold_is_not_created_by_a_save() {
+    // The other half of the same caution, and a rule RFC 8620 §5.3 also asks
+    // for: a patch may only reach through objects that already exist. A line
+    // carrying a key the server never chose — or none at all, which is what any
+    // other client's component looks like — is therefore not an entry this save
+    // can name, so it is left for the create path, where the whole property is
+    // written at once.
+    let fixture = Fixture::start();
+    let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar.replace(
+        "END:VEVENT",
+        "CONFERENCE;VALUE=URI;X-JMAP-KEY=v9:tel:+1-555-0100\r\n\
+         CONFERENCE;VALUE=URI:https://meet.example.com/other\r\n\
+         END:VEVENT",
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored
+            .virtual_locations
+            .as_ref()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["v1"],
+        "a save must not file a conference the server has no entry for"
+    );
+}
+
+#[test]
+fn an_event_whose_conference_is_shown_in_part_is_not_patched_at_all() {
+    // The rule every conditionally-mapped property has: a drawing that left
+    // something out is not a drawing the user can have edited. Here it is a way
+    // of taking part outside RFC 7986 §6.3's vocabulary, which the CONFERENCE
+    // line cannot carry — so the whole property is left alone, including the
+    // entry whose URI the save really did change.
+    let fixture = Fixture::start();
+    let mut hologram = team_room();
+    hologram["features"] = json!({"hologram": true});
+    let (id, sync) = joined_online(&fixture, json!({"v1": hologram.clone()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar
+        .replace("meet.example.com/standup", "meet.example.com/standup-2")
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(
+        stored.virtual_locations.as_ref().unwrap()["v1"],
+        hologram,
+        "a property shown in part must not be written back"
+    );
+}
+
+#[test]
+fn a_new_events_conference_reaches_the_server() {
+    // The create path writes the property whole — there is no server entry to
+    // patch into — so a component that already names somewhere to join, which is
+    // what an event copied out of another calendar looks like, arrives with it.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace(
+        "END:VEVENT",
+        "CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Team room:https://meet.example.com/planning\r\n\
+         END:VEVENT",
+    );
+
+    let saved = fixture
+        .sync()
+        .save_component(&icalendar, None)
+        .expect("create");
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(
+        stored.virtual_locations,
+        serde_json::from_value(json!({"v1": {
+            "@type": "VirtualLocation",
+            "uri": "https://meet.example.com/planning",
+            "name": "Team room",
+            "features": {"video": true},
+        }}))
+        .expect("a map of virtual locations")
     );
 }
 
