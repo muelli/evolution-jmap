@@ -10,15 +10,17 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Nine legs, because they need nine books. The first starts empty and writes
-//! a contact into it. The other eight each start from a card the mock was
+//! Ten legs, because they need ten books. The first starts empty and writes
+//! a contact into it. The other nine each start from a card the mock was
 //! seeded with before EDS ever connected — a card from the *server*, holding a
 //! shape no vCard can state, which is the only way to ask what real EDS does to
 //! it — and take the branches a save can take with it: the user edits a field
 //! beside the name, retypes the name itself, picks a new picture, retypes their
 //! calendar address, retypes who they are married to, clears that field
-//! altogether, retypes the note on a card carrying two of them, or clears that
-//! field too.
+//! altogether, retypes the note on a card carrying two of them, clears that
+//! field too, or clears it on a card whose only note it was.
+
+use std::collections::BTreeMap;
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
@@ -794,6 +796,23 @@ const SEEDED_SECOND_NOTE: &str = "do not call before 10:00, ever";
 /// *patched* the entry or replaced it: a replacement would hold the text alone.
 const SEEDED_NOTE_CREATED: &str = "2026-02-01T09:30:00Z";
 
+/// Which of the seeded card's notes the server files on it.
+///
+/// The distinction exists for one leg only, and it is a distinction the save
+/// itself draws: a Notes field the user empties reaches the mapping as a `notes`
+/// map with nothing visible left in it, and what the patch then says depends on
+/// whether the card holds anything the user was *not* shown. With a note behind
+/// the cleared one the entry alone is withdrawn; with nothing behind it the whole
+/// property goes. Two branches, and the one below the fold has no other leg.
+#[derive(Clone, Copy)]
+enum SeededNotes {
+    /// Both notes: the one Evolution's Notes field shows, and the one behind it.
+    Both,
+    /// The first alone — the card on which the field the user empties *is* the
+    /// whole of `notes`.
+    TheShownOneAlone,
+}
+
 /// Put the card both name legs start from into the mock's store, and hand back
 /// the id the server filed it under.
 ///
@@ -802,6 +821,20 @@ const SEEDED_NOTE_CREATED: &str = "2026-02-01T09:30:00Z";
 /// arrive with the given name as a single component, leaving nothing for the
 /// save to put back — or, in the leg that retypes the name, to discard.
 fn seed_double_barrelled_card(server: &jmap_mock::MockServer) -> Id {
+    seed_card(server, SeededNotes::Both)
+}
+
+/// The same card, save that the server filed one note on it rather than two.
+///
+/// Everything else is left exactly as the other legs have it: the point of the
+/// card is that the note the user can see is the only one there is, and a leg
+/// about that must still be able to say the save left the picture, the calendars
+/// and the relations alone.
+fn seed_single_note_card(server: &jmap_mock::MockServer) -> Id {
+    seed_card(server, SeededNotes::TheShownOneAlone)
+}
+
+fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     let account_id = server.account_id();
     let state = server.state();
     let mut state = state.lock().expect("mock state lock");
@@ -889,32 +922,30 @@ fn seed_double_barrelled_card(server: &jmap_mock::MockServer) -> Id {
         .into_iter()
         .collect(),
     );
-    // The two notes, likewise under keys only a server would choose, and
-    // likewise on the card every seeded leg starts from: the only mapped
-    // property of which the user can see one entry and not the other, since the
-    // field Evolution shows is the first line of a name every entry writes a
-    // line of. The `created` is there because no line can carry it — see
-    // [`SEEDED_NOTE_CREATED`].
+    // The notes, likewise under keys only a server would choose, and likewise on
+    // the card every seeded leg starts from: the only mapped property of which
+    // the user can see one entry and not the other, since the field Evolution
+    // shows is the first line of a name every entry writes a line of. The
+    // `created` is there because no line can carry it — see
+    // [`SEEDED_NOTE_CREATED`]. How many of them the card holds is the caller's
+    // choice; see [`SeededNotes`].
     let mut note = Note {
         note: SEEDED_NOTE.to_owned(),
         ..Note::default()
     };
     note.extra
         .insert("created".to_owned(), serde_json::json!(SEEDED_NOTE_CREATED));
-    card.notes = Some(
-        [
-            (SEEDED_NOTE_KEY.to_owned(), note),
-            (
-                SEEDED_SECOND_NOTE_KEY.to_owned(),
-                Note {
-                    note: SEEDED_SECOND_NOTE.to_owned(),
-                    ..Note::default()
-                },
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    );
+    let mut notes: BTreeMap<String, Note> = [(SEEDED_NOTE_KEY.to_owned(), note)].into();
+    if matches!(seeded_notes, SeededNotes::Both) {
+        notes.insert(
+            SEEDED_SECOND_NOTE_KEY.to_owned(),
+            Note {
+                note: SEEDED_SECOND_NOTE.to_owned(),
+                ..Note::default()
+            },
+        );
+    }
+    card.notes = Some(notes);
     account.contact_cards.seed_with_id(id.clone(), card);
     id
 }
@@ -2354,6 +2385,164 @@ fn clearing_the_note_through_eds_withdraws_it_and_keeps_the_one_behind_it() {
     assert_the_seeded_second_note_survived(card);
     // And what nobody touched at all, asserted for the reason the other legs
     // assert them.
+    assert_the_seeded_picture_survived(card);
+    assert_the_seeded_calendars_survived(card);
+    assert_the_seeded_relations_survived(card);
+}
+
+/// The tenth leg: the user empties the Notes field on a card the server filed
+/// **one** note on.
+///
+/// The third and last shape a cleared Notes field can have, and the one no other
+/// leg reaches. The ninth leg clears a note with another behind it, so the save
+/// withdraws the entry the user could see and writes `notes/note-1: null`; here
+/// there is nothing behind it, so what the save must say is that the property
+/// itself is gone — `notes: null`, one patch member rather than one per surviving
+/// key. The mapping draws that line explicitly (it counts what the card hides
+/// before deciding), and until now the branch below the fold was exercised
+/// against fixtures alone.
+///
+/// Two things only real EDS can answer, and this leg is the only place either is
+/// asked of a card holding a single note:
+///
+/// - whether emptying the field leaves the card as a `NOTE` line saying nothing
+///   or with no `NOTE` line at all. Both withdraw the note, since a line saying
+///   nothing is refused on the way in, so the count is reported and the *values*
+///   are what is judged — but which shape EDS produces decides which side of the
+///   mapping does the withdrawing, and it was measured on a two-note card only;
+/// - whether the field is then empty for the user. On the ninth leg's card the
+///   note behind the cleared one takes its place, which reads as a field that
+///   would not clear; here nothing can, so an empty field afterwards is the
+///   observation that says the ninth leg's surprise was the second note and not
+///   a save that refused the withdrawal.
+#[test]
+fn clearing_the_only_note_through_eds_withdraws_the_whole_property() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_single_note_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/address-book-unnote-only"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(&client, &["jmap-functional", "unnote", card_id.as_str()]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // The card the user started from, so the leg says what was cleared rather
+    // than only that nothing is there afterwards — and the count beside it,
+    // which is what makes this card the one under test: a `2` here is the
+    // seeding having put the ninth leg's card in front of the daemons instead,
+    // and every assertion below would then be about the wrong branch.
+    assert_eq!(
+        seen.get("read-note"),
+        Some(&SEEDED_NOTE),
+        "EDS did not read the note off the line the emitter wrote\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-note-lines"),
+        Some(&"1"),
+        "EDS did not hold exactly the one NOTE line the emitter wrote\n{report}"
+    );
+
+    // What the save is handed. The field first, which is the version-robust
+    // half: a card still showing the old text here is the user's clearing never
+    // having happened at all.
+    assert_eq!(
+        seen.get("cleared-note"),
+        Some(&""),
+        "EDS kept a note in the field after it was cleared\n{report}"
+    );
+
+    // Then every `NOTE` value left on the card, and this time there is no note
+    // behind the cleared one for the emptied line to be confused with: nothing
+    // the card says is a note any more. Whether that is a line standing with no
+    // value on it or no line at all is libebook-contacts' business — the
+    // mapping withdraws the note either way — so the values are what is judged
+    // and the count is reported. Measured against libebook-contacts 3.52 the
+    // line stands: `cleared-note-lines` reads 1, which is the shape
+    // `emptying_the_only_note_line_withdraws_the_property` states as its
+    // fixture.
+    let cleared_lines = seen
+        .get("cleared-note-line-values")
+        .unwrap_or_else(|| panic!("the client did not report the card's NOTE lines\n{report}"));
+    assert!(
+        cleared_lines
+            .split(NOTE_LINE_SEPARATOR)
+            .all(|value| value.is_empty()),
+        "clearing the only Notes field left a note on the card: \
+         {cleared_lines:?}\n{report}"
+    );
+
+    // And what EDS holds after the save, out of the cache the backend's
+    // re-rendered card was stored into: no note, and no line to hold one.
+    // Unlike the ninth leg — where the note behind the cleared one surfaced in
+    // the field — the field really is empty here, because there is nothing left
+    // to reveal.
+    assert_eq!(
+        seen.get("read-back-note"),
+        Some(&""),
+        "the cleared Notes field came back filled in\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-note-lines"),
+        Some(&"0"),
+        "the save left a NOTE line on a card that has no notes\n{report}"
+    );
+
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the withdrawal never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    // The other end, and the load-bearing assertion: `notes` gone from the card
+    // altogether. An empty map would be the property still there saying nothing,
+    // and an entry still keyed by the note is the withdrawal never made.
+    assert_eq!(
+        card.notes, None,
+        "clearing the only note did not withdraw the property: {card:?}"
+    );
+    // And what nobody touched at all, asserted for the reason the other legs
+    // assert them — here doubly, since the patch this leg is about names a whole
+    // property rather than one entry of one.
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
