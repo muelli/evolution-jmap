@@ -50,6 +50,17 @@
 #define TEST_CODE "10115"
 #define TEST_COUNTRY "Germany"
 
+/* The same address written out as it would be printed on an envelope, which
+ * EDS keeps on a LABEL line of its own and JSContact keeps as the address's
+ * `full`. Set here because the pairing is what is worth checking on real
+ * EDS: E_CONTACT_ADDRESS_LABEL_WORK is a synthetic field, so EDS rebuilds
+ * the line from the text alone and the X-JMAP-KEY naming the address it
+ * belongs to does not survive — leaving the TYPE as the only thing that says
+ * the label and the ADR above are two views of one address. The newlines are
+ * the second half of the point: they are what makes it a label rather than a
+ * street, and vCard states them escaped. */
+#define TEST_LABEL TEST_STREET "\n" TEST_CODE " " TEST_LOCALITY "\n" TEST_COUNTRY
+
 /* The job title and the role played, which EDS keeps on separate TITLE and
  * ROLE lines and JSContact keeps in one `titles` map told apart by `kind`.
  * Set here so the test says whether the two halves of that map survive a
@@ -63,6 +74,24 @@
  * the one mapped property a user types prose into, so this is where the
  * escaping is shown to survive the EDS that reads the line back. */
 #define TEST_NOTE "met at FOSDEM; owes me a beer, apparently"
+
+/* Report one observation whose value has line breaks in it. The harness
+ * reads stdout as one `key=value` per line, so a raw newline would end the
+ * observation early and lose the rest; only the newlines are rewritten, so
+ * what is asserted on the other side is still the text EDS gave back rather
+ * than some encoding of it. */
+static void
+report_multiline (const gchar *key,
+                  const gchar *value)
+{
+	gchar **lines = g_strsplit (value ? value : "", "\n", -1);
+	gchar *joined = g_strjoinv ("\\n", lines);
+
+	g_print ("%s=%s\n", key, joined);
+
+	g_free (joined);
+	g_strfreev (lines);
+}
 
 static int
 fail (const gchar *step,
@@ -181,6 +210,7 @@ main (int argc,
 	address->country = g_strdup (TEST_COUNTRY);
 	e_contact_set (contact, E_CONTACT_ADDRESS_WORK, address);
 	e_contact_address_free (address);
+	e_contact_set (contact, E_CONTACT_ADDRESS_LABEL_WORK, TEST_LABEL);
 
 	if (!e_book_client_add_contact_sync (book, contact, E_BOOK_OPERATION_FLAG_NONE,
 					     &added_uid, NULL, &error)) {
@@ -229,6 +259,12 @@ main (int argc,
 		 read_back_address && read_back_address->country ? read_back_address->country : "");
 	if (read_back_address)
 		e_contact_address_free (read_back_address);
+
+	/* The LABEL line, which is a field of its own rather than part of the
+	 * boxed address above — and the one observation that has to be
+	 * escaped, because a label is written across several lines. */
+	report_multiline ("read-back-address-label",
+			  e_contact_get_const (read_back, E_CONTACT_ADDRESS_LABEL_WORK));
 	g_object_unref (read_back);
 
 	if (!e_book_client_get_contacts_sync (book, query_string, &contacts, NULL, &error)) {

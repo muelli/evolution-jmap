@@ -80,7 +80,12 @@ fn contact_card_roundtrip() {
     // which writes the component list back whole.
     assert!(components[0].extra.contains_key("phonetic"));
     assert!(address.extra.contains_key("countryCode"));
-    assert!(address.extra.contains_key("full"));
+    // The address written out for an envelope is modeled rather than carried:
+    // vCard states it on a `LABEL` line of its own.
+    assert_eq!(
+        address.full.as_deref(),
+        Some("Hauptstraße 1\n10115 Berlin\nGermany")
+    );
     let notes = card.notes.as_ref().unwrap();
     assert_eq!(notes["n1"].note, "met at FOSDEM");
     // When a note was written and who wrote it have no room on a `NOTE`

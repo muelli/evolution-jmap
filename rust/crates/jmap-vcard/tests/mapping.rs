@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
-//! address book backend needs: UID, FN, N, EMAIL, TEL, ADR, ORG, TITLE,
-//! ROLE, NOTE.
+//! address book backend needs: UID, FN, N, EMAIL, TEL, ADR, LABEL, ORG,
+//! TITLE, ROLE, NOTE.
 
 use jmap_proto::contacts::{
     Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent, Note,
@@ -581,6 +581,119 @@ fn an_address_with_nothing_in_it_is_skipped_in_both_directions() {
 
     let back =
         vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nADR:;;;;;;\r\nEND:VCARD\r\n").expect("parse");
+    assert_eq!(back.addresses, None);
+}
+
+#[test]
+fn maps_the_written_out_address_onto_the_label_property() {
+    // RFC 9553 §2.5.1's `full` is the address as it should be printed on an
+    // envelope, which is exactly what RFC 2426 §3.2.2's `LABEL` states — and
+    // what EDS keeps in E_CONTACT_ADDRESS_LABEL_WORK. The line breaks in it
+    // are the point: they are what makes it a label rather than a street.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "LABEL"),
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK:Hauptstraße 1\\n10115 Berlin\\nGermany"
+    );
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let addresses = card.addresses.expect("addresses");
+    assert_eq!(addresses.keys().collect::<Vec<_>>(), vec!["a1"]);
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("Hauptstraße 1\n10115 Berlin\nGermany"),
+        "the label did not join the address it was written for"
+    );
+}
+
+#[test]
+fn a_label_without_a_key_joins_the_address_of_the_same_type() {
+    // The vCard EDS writes back. E_CONTACT_ADDRESS_LABEL_HOME is one of its
+    // three synthetic fields, so the line is rebuilt from scratch and the
+    // X-JMAP-KEY that named the address is gone. What survives is the TYPE,
+    // which is how RFC 2426 §3.2.2 has a LABEL name the ADR it belongs to,
+    // so that is what the two are paired on.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ADR;TYPE=HOME:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
+        "LABEL;TYPE=HOME:Hauptstraße 1\\n10115 Berlin\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let addresses = card.addresses.as_ref().expect("addresses");
+    assert_eq!(
+        addresses.keys().collect::<Vec<_>>(),
+        vec!["a1"],
+        "the label was read as an address of its own: {addresses:?}"
+    );
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("Hauptstraße 1\n10115 Berlin")
+    );
+    assert_eq!(
+        components_of(&addresses["a1"])[0],
+        ("name", "Hauptstraße 1")
+    );
+
+    let back = vcard_to_card(&card_to_vcard(&card)).expect("parse");
+    assert_eq!(back.addresses, card.addresses);
+}
+
+#[test]
+fn a_label_that_belongs_to_no_address_becomes_one_of_its_own() {
+    // A card may hold a written-out address and no components at all — RFC
+    // 9553 §2.5.1 allows exactly that, "even if the individual address
+    // components are not known". It gets a LABEL line and no ADR, so the key
+    // it is filed under crosses on the LABEL or not at all.
+    let card = one_address(
+        "a2",
+        Address {
+            full: Some("Postfach 42\n10115 Berlin".to_owned()),
+            ..Address::default()
+        },
+    );
+    let vcard = card_to_vcard(&card);
+    assert!(!vcard.contains("\r\nADR"), "{vcard}");
+    assert_eq!(
+        line(&vcard, "LABEL"),
+        "LABEL;X-JMAP-KEY=a2:Postfach 42\\n10115 Berlin"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.addresses, card.addresses);
+
+    // And a label whose TYPE matches no address on the card is not folded
+    // into an unrelated one.
+    let mixed = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ADR;TYPE=HOME:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
+        "LABEL;TYPE=WORK:Acme Ltd\\nBerlin\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+    let addresses = mixed.addresses.expect("addresses");
+    assert_eq!(addresses.keys().collect::<Vec<_>>(), vec!["a1", "a2"]);
+    assert_eq!(addresses["a1"].full, None);
+    assert_eq!(addresses["a2"].full.as_deref(), Some("Acme Ltd\nBerlin"));
+    assert_eq!(addresses["a2"].contexts, Some(json!({"work": true})));
+}
+
+#[test]
+fn an_address_written_out_as_nothing_gets_no_label_line() {
+    let card = one_address(
+        "a1",
+        Address {
+            components: Some(vec![AddressComponent::new("locality", "Berlin")]),
+            full: Some(String::new()),
+            ..Address::default()
+        },
+    );
+    let vcard = card_to_vcard(&card);
+    assert!(!vcard.contains("\r\nLABEL"), "{vcard}");
+
+    let back =
+        vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nLABEL:\r\nEND:VCARD\r\n").expect("parse");
     assert_eq!(back.addresses, None);
 }
 
