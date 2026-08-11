@@ -591,6 +591,27 @@ pub fn states_spouse(key: &str, relation: &Relation) -> bool {
     married(relation) && names_a_person(key)
 }
 
+/// Whether the marriage is all a relation says, so that withdrawing it leaves
+/// nothing of the entry to keep.
+///
+/// The question a save has to answer about the name the user just replaced. The
+/// line stated one thing about that entity — that it is a spouse — so that is the
+/// only thing the save may withdraw: an entry the server also calls `kin` stays,
+/// with the marriage struck off, and an entry that said nothing else goes
+/// altogether rather than lingering as a relation of no stated type, which is
+/// not what emptying the field said. A member this version has never heard of
+/// counts as something else said, for the reason every property here patches
+/// rather than replaces; the `@type` tag does not, because naming the object's
+/// type says nothing about the relation.
+pub fn states_nothing_but_the_marriage(relation: &Relation) -> bool {
+    relation.extra.keys().all(|member| member == "@type")
+        && relation
+            .relation
+            .iter()
+            .flatten()
+            .all(|(kind, _)| kind == SPOUSE_RELATION)
+}
+
 /// Whether a relation states the one type that has a line.
 fn married(relation: &Relation) -> bool {
     relation
