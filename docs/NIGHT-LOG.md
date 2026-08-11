@@ -21112,3 +21112,107 @@ unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
 editor writes for a replaced photo, and into a cleared field, is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-eighth session)
+
+**The other half of the same map, and a different property.** RFC 8984 §4.2.7
+keeps in one `links` map what iCalendar splits in two: a document attached to the
+event is RFC 5545 §3.8.1.1's `ATTACH`, a picture *of* it is RFC 7986 §5.10's
+`IMAGE`, and `jmap-ical` tells them apart by the `icon` `rel`. Every session up to
+this one drove that split through fixtures alone, where a link's `rel` and the
+property it lands on are paired by construction. The seeded event now holds a
+third `links` entry — `rel: icon`, a `display`, a `contentType`, a `size` and a
+`title` — and `cal-edit-client.c` re-addresses it in the same save as the
+attachment.
+
+**`i_cal_property_get_attach` on an `IMAGE;VALUE=URI` segfaults.** The measurement
+of the session, made with a throwaway probe before a line of the leg was written.
+§5.10's grammar makes `VALUE=URI` REQUIRED on the URI alternative, so the mapping
+writes the parameter; with it present libical parses the value as an
+`ICAL_URI_VALUE`, not the `ICAL_ATTACH_VALUE` an `ATTACH` gets, and
+`icalvalue_get_attach` reaches into the union as though it were one. Not NULL — a
+crash, on this VM's libical 3.0.17. So `report_pictures` reads the address as the
+value's string form and the edit goes through
+`i_cal_property_set_value_from_string`, which is *why* the two reporters differ
+rather than a style choice; the comment in the file says so, since the next person
+to unify them would find out the hard way. `IMAGE` is also absent from
+libical-glib's generated `ICalPropertyKind`, exactly as `CONFERENCE` is and for
+the same reason — the property is a decade newer than the enum's oldest members —
+so it gets the same documented cast from the C `ICAL_IMAGE_PROPERTY`.
+
+**The answer is yes.** EDS carries the `X-JMAP-KEY` on an `IMAGE` too, keeps the
+`DISPLAY` beside it, leaves the icon link on the `IMAGE` property (the counts come
+back two and one, not three and none), and the save patches exactly
+`links/srv-img/href` — the picture's `rel`, `display`, `contentType`, `size` and
+`title` all still the server's afterwards.
+
+**The `size` is the member this entry adds to the argument.** `title` has no room
+on any of the three lines, so it made the "patch, don't replace" case already. A
+`SIZE` is different: §5.10 admits none on an `IMAGE` where RFC 8607 §4.1 puts one
+on an `ATTACH`, so this entry's `size` was never shown *at all* while the other
+two entries' were. A save that wrote back every member it could name keeps theirs
+and deletes this one — which is precisely what the fourth mutation below does.
+
+**Reporting the `DISPLAY` without pinning the enum.** libical-glib names no
+function turning `ICalParameterDisplay` back into its iCalendar spelling, and
+printing the integer would tie the leg's output to the enum's layout rather than
+to what stands on the line. `parameter_value` asks the library to render the
+parameter and takes what follows the `=`, so the observation is the spelling a
+reader of the calendar would see.
+
+Mutation checks, four, each reddening a different assertion. Dropping
+`X_JMAP_KEY` from the `IMAGE` branch of `drawn_link` alone fails the read-side
+picture lookup with `None` while both `ATTACH` lookups still pass. Ignoring
+`ICON_REL` sends the picture out as a third `ATTACH` — the printed report shows it
+carrying a `SIZE` §5.10 forbids — and the client, finding no `IMAGE` to
+re-address, exits non-zero. Dropping the `DISPLAY` fails the picture's `display`
+and nothing else. And making `diff_links` patch the whole `links/<key>` entry
+rather than its `href` fails only the server-side map, where both edited entries
+lose their `title` and the picture loses its `size` besides — invisible from the
+client's end, which is why that assertion is written from the server's.
+
+Tests: 1000 in the default set, unchanged — `jmap-functional` is not in
+`default-members`. The `functional-cal` leg count stays at two; the second leg
+grew a third resource and a fourth edit. `docs/functional-tests.md`'s
+second-calendar-leg section now covers the `ATTACH`/`IMAGE` split, the crash, and
+all ten mutations run against that leg to date.
+
+Verified locally: `cargo test --locked` 1000; full `ninja` then `ctest` 14/14 with
+all four functional legs green; `cargo fmt --all --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings`, `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` and `cargo clippy -p
+jmap-functional --all-targets --locked -- -D warnings` all clean. `ci/checks.sh`
+still stops at its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so
+the licence check was done by hand: no file was added, all three files touched
+already carry their SPDX `GPL-3.0-or-later` header, no translatable string is
+introduced so `po/POTFILES.in` is unchanged, and `Cargo.lock` is untouched, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+**What this still does not settle.** The `display` crosses back out of the server
+untouched because only `href` is ever written — nothing here measures what would
+happen if a client *changed* it, and there is no path for that today. A resource
+the user removes remains invisible to the save, and so does one they add through
+Evolution's own attachment control, which writes a `file:` URI the mapping
+deliberately never reads. Whether Evolution 3.52 renders an `IMAGE` at all is
+unmeasured; this leg proves the data survives the round trip, not that a user ever
+sees the picture.
+
+No milestone tag. Removed from the blocker list: no functional leg drives an
+`IMAGE` through real EDS (this one does). Unchanged blockers: the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; `example-module` does not
+pass this VM's clippy (1.97) on unmodified master, 26 `manual_c_str_literals`;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty;
+`jmap-ical` emits no `VTIMEZONE` of its own; an attachment the user removes is
+still invisible to the save; whether Evolution renders an `IMAGE` is unmeasured;
+the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified;
+the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year
+alone are still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ,
+MSN and Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are
+unmapped and their contact-editor behaviour unmeasured; whether the editor lets a
+handle be moved between the Home and Work slots at all is unknown; a `VALUE=uri`
+photo's rendering is unmeasured; what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured; and
+the `jmap-mail` `transport.rs` hang is still an open design question with a
+lock-order hypothesis attached.
