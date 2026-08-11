@@ -17042,3 +17042,91 @@ agrees octet-for-octet with what its `downloadUrl` serves is unknown here and is
 a good thing for the parallel Stalwart track to answer, because a systematic
 disagreement larger than an eighth would make large mail unreadable in exactly
 the way the margin exists to prevent.
+
+## 2026-08-11 (hundred-and-sixty-ninth session)
+
+**Where an event is joined online now reaches the component.** RFC 8984 §4.2.6's
+`virtualLocations` — the conference link, the dial-in number — was named in the
+hundred-and-fifty-somethingth session as untouched and was still dropped; it is
+now drawn as the `CONFERENCE` lines RFC 7986 §5.11 defines, one per entry.
+
+**Why it is a line per entry and not one line.** This is the property that does
+*not* have `LOCATION`'s problem. RFC 5545 §3.6.1 allows one `LOCATION`, which is
+why `drawn_place` shows one place of possibly several and the save path patches
+`locations/<key>/name` in place rather than replacing the property. RFC 7986
+§5.11 says `CONFERENCE` "can be specified multiple times", so a map of three
+virtual locations is three content lines with nothing left out and no key
+riding along in an `X-JMAP-KEY` — the map's own order, so a re-rendering is
+stable, which the save path's baseline diff needs.
+
+**The crossings.** The value is the `uri`, which RFC 8984 §4.2.6 makes the one
+mandatory member of a VirtualLocation and RFC 7986 makes the whole of the line,
+so an entry whose `uri` is missing, is not a string, or is not a URI has nothing
+to write and is dropped — reusing `names_a_uri`, the check the `ATTENDEE`
+address already goes through, which is also what keeps a CR/LF out of a value
+that skips `syntax::escape`. The `name` becomes a `LABEL` (§6.4) and an empty
+one becomes no parameter, since RFC 8984 defaults `name` to the empty string and
+a `LABEL` of nothing would say the place is named nothing; `participant_name`
+was generalised to `stated_name` rather than copied, because a `CN` and a
+`LABEL` want exactly the same answer. `features` becomes `FEATURE` (§6.3), and
+that table is the happiest crossing in this crate so far: RFC 8984 and RFC 7986
+name the same seven ways of taking part — audio, chat, feed, moderator, phone,
+screen, video — in the same words, differing only in case. Written in the
+table's order rather than the Set's, so a re-rendering is stable. `VALUE=URI` is
+written because §5.11's `confparam` makes it REQUIRED — the only parameter in
+this mapping that states what the default already says, and a reader entitled to
+demand it should not have to guess.
+
+**Written and never read back, and the reason is not the guest list's.**
+`participants` is unwritable because changing it means an iTIP message this
+backend does not send. `virtualLocations` is unwritable for the reason
+`locations` is patched in place instead of replaced: a VirtualLocation holds a
+`description` that a `CONFERENCE` line has no room for, and a property a save
+names is replaced whole — so a place read back off the component would delete
+the half of itself the user was never shown. Doing better means patching
+`virtualLocations/<key>` the way `locations` is patched, which is a session of
+its own; until then the property stays out of `MAPPED_PROPERTIES`, so no save
+can name it, and `read_vevent` leaves it `None`. `jmap-proto` grew a typed
+`virtual_locations` field beside `participants`, held as JSON for the same
+reason: a whole `CalendarEvent/get` response is deserialized at once, and one
+server's odd entry must not take the calendar down with it.
+
+Tests: seven new in `jmap-ical`, and the existing
+`editing_an_event_leaves_unmapped_properties_alone` in `jmap-cal-sync` extended
+— it was already the home of "drawn but unwritable", holding the guest list, and
+the conference link now stands beside it: the `CONFERENCE` line appears on the
+loaded component, the `description` does not appear anywhere in it, and a save
+that only changed the title leaves the server's `virtualLocations` byte for
+byte. The red run was two-stage. Compile-red first (the field did not exist).
+Then, with the emitter's loop in `vevent_of` stubbed out but everything else in
+place, five of the seven fail — the two that still pass are the negative ones
+(nothing written), which is what a negative test does, so the discriminating
+half of the suite is the other five.
+
+Verified locally: `cargo test --locked` 801, up 7 from 794; `jmap-backend-cal`
+22 unchanged; `ctest` 14/14 including all four functional legs after a full
+`ninja`. `cargo fmt --all --check` and `cargo clippy --all-targets --locked --
+-D warnings` clean for the default set and for `jmap-backend-cal`,
+`jmap-backend-book`, `jmap-backend-collection`, `jmap-mail` and
+`jmap-functional`. `ci/checks.sh` again stops at its first step: `reuse` is not
+on this VM and neither `pipx` nor `uvx` is installed. Exposure is nil — **no
+file was added**, only edits to four files that already carry SPDX headers — and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours by choice; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag many sessions have asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained; and
+`jmap-ical` still emits no `VTIMEZONE` of its own (`jmap-backend-cal` defines
+the zones on the way out, so nothing EDS sees is short one). New from this
+session: `virtualLocations` is drawn but not editable, and closing that means
+teaching `jmap_cal_sync::patch` to reach `virtualLocations/<key>/uri` and
+`/name` — the second property to be patched into rather than replaced, which is
+the shape `locations` already has and the natural next increment on this
+surface; and whether Evolution 3.52's appointment editor *shows* a `CONFERENCE`
+at all is unknown here — the mapping is right by the two RFCs and the line is in
+the component EDS stores, but what the user sees needs a real Evolution to
+answer, so nothing about the UI is claimed.
