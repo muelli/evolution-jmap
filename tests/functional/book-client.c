@@ -20,21 +20,24 @@
  * backends implement. Binding a second surface just to call it from a test
  * would put a layer of our own between EDS and the thing under test.
  *
- * There are three phases, chosen on the command line, because they need
+ * There are four phases, chosen on the command line, because they need
  * different books: `write` starts from an empty address book and puts a
- * contact into it, while `edit` and `rename` each start from one the mock was
- * seeded with before EDS connected — a card that came from the *server*, which
- * is the only way to have EDS read something no vCard this program could write
- * would produce. Those two differ only in which field the user changes, and
- * that is the whole distinction under test: `edit` touches a field beside the
- * name and `rename` retypes the name itself. They are modes of one program
- * rather than separate programs because they open the same book the same way
- * and differ only in what they then ask of it.
+ * contact into it, while `edit`, `rename` and `repicture` each start from one
+ * the mock was seeded with before EDS connected — a card that came from the
+ * *server*, which is the only way to have EDS read something no vCard this
+ * program could write would produce. Those three differ only in which field the
+ * user changes, and that is the whole distinction under test: `edit` touches a
+ * field beside the name, `rename` retypes the name itself, and `repicture`
+ * replaces the photo. They are modes of one program rather than separate
+ * programs because they open the same book the same way and differ only in what
+ * they then ask of it.
  *
- *   usage: functional-book-client <source-uid> write <full-name>
+ *   usage: functional-book-client <source-uid> write <full-name> <photo-base64>
  *          functional-book-client <source-uid> edit <contact-uid> <email>
  *          functional-book-client <source-uid> rename <contact-uid> \
  *                                 <full-name> <given-name>
+ *          functional-book-client <source-uid> repicture <contact-uid> \
+ *                                 <photo-base64>
  */
 
 #include <libebook/libebook.h>
@@ -142,6 +145,15 @@
 #define TEST_BIRTH_MONTH 3
 #define TEST_BIRTH_DAY 27
 
+/* What the picture this test sets is. The bytes themselves come in on the
+ * command line — they are what is compared on the other side, so they are
+ * spelled once, there — but the media type is set here beside every other
+ * property, because it is what EDS turns into the `TYPE` parameter on the line:
+ * measured against libebook-contacts 3.52, EDS writes the subtype alone
+ * (`TYPE=png`) and rebuilds `image/png` out of it on the way back, and this is
+ * the leg that says our emitter and reader agree with that. */
+#define TEST_PHOTO_MEDIA_TYPE "image/png"
+
 /* How long the `edit` phase waits for the contact the mock was seeded with to
  * become gettable, and how often it asks. EBookMetaBackend answers a get for
  * a contact its cache has never heard of by asking the backend to load it, so
@@ -199,11 +211,77 @@ report_name_fields (const gchar *prefix,
 	g_print ("%s-family-name=%s\n", prefix, family ? family : "");
 }
 
+/* Report the picture EDS holds for a contact.
+ *
+ * Several observations rather than one, because a photo can go wrong in ways
+ * that look alike from the outside. `type` is EDS's own verdict on the line: a
+ * picture the card carries is `inlined`, one it merely points at is `uri`, and a
+ * line EDS could not make either of is no photo at all — which is what the user
+ * would be shown, so it is reported as `absent` rather than by leaving the
+ * observation out.
+ *
+ * A picture read back through a book is expected to be a `uri` one, which is
+ * not what was written and not this program's doing: `EBookMetaBackend` puts
+ * every contact it caches through `store_inline_photos`, which writes the bytes
+ * into a file of its own under the book's cache directory and rewrites the line
+ * to point at it. So the bytes are reported for either kind — read out of the
+ * struct for an inlined photo, and read out of that file for a `file:` URI —
+ * because "did the picture survive" is a question about the bytes and not about
+ * which of the two shapes EDS chose to keep them in. */
+static void
+report_photo (const gchar *prefix,
+              EContact *contact)
+{
+	EContactPhoto *photo = e_contact_get (contact, E_CONTACT_PHOTO);
+	const gchar *uri;
+	gchar *path;
+	gchar *contents = NULL;
+	gsize length = 0;
+	gchar *base64;
+
+	if (!photo) {
+		g_print ("%s-photo-type=absent\n", prefix);
+		return;
+	}
+
+	if (photo->type == E_CONTACT_PHOTO_TYPE_INLINED) {
+		base64 = g_base64_encode (photo->data.inlined.data,
+					  photo->data.inlined.length);
+
+		g_print ("%s-photo-type=inlined\n", prefix);
+		g_print ("%s-photo-media-type=%s\n", prefix,
+			 photo->data.inlined.mime_type ? photo->data.inlined.mime_type : "");
+		g_print ("%s-photo-base64=%s\n", prefix, base64);
+		g_free (base64);
+		e_contact_photo_free (photo);
+		return;
+	}
+
+	uri = photo->data.uri ? photo->data.uri : "";
+	g_print ("%s-photo-type=uri\n", prefix);
+	g_print ("%s-photo-uri=%s\n", prefix, uri);
+
+	/* Followed only for a local file, which is the one kind EDS itself
+	 * writes. A picture the *server* pointed at over the network is a URI
+	 * this program has no business fetching. */
+	path = g_filename_from_uri (uri, NULL, NULL);
+	if (path && g_file_get_contents (path, &contents, &length, NULL)) {
+		base64 = g_base64_encode ((const guchar *) contents, length);
+		g_print ("%s-photo-file-base64=%s\n", prefix, base64);
+		g_free (base64);
+	}
+
+	g_free (contents);
+	g_free (path);
+	e_contact_photo_free (photo);
+}
+
 /* The first phase: an empty book, one contact written into it with every
  * mapped property set, and that contact read back. */
 static int
 write_phase (EBookClient *book,
-             const gchar *full_name)
+             const gchar *full_name,
+             const gchar *photo_base64)
 {
 	GError *error = NULL;
 	EBookQuery *query;
@@ -211,6 +289,9 @@ write_phase (EBookClient *book,
 	GSList *contacts = NULL;
 	EContact *contact;
 	EContact *read_back = NULL;
+	EContactPhoto photo = { 0 };
+	guchar *photo_bytes;
+	gsize photo_length = 0;
 	EContactAddress *address;
 	EContactAddress *read_back_address;
 	EContactDate birthday = { TEST_BIRTH_YEAR, TEST_BIRTH_MONTH, TEST_BIRTH_DAY };
@@ -247,6 +328,19 @@ write_phase (EBookClient *book,
 	e_contact_set (contact, E_CONTACT_HOMEPAGE_URL, TEST_HOMEPAGE);
 	e_contact_set (contact, E_CONTACT_BIRTH_DATE, &birthday);
 	e_contact_set (contact, E_CONTACT_IM_JABBER_HOME_1, TEST_IM_HANDLE);
+
+	/* The picture, inlined: the form Evolution's contact editor writes when
+	 * the user picks an image file, and the only form a media type can be
+	 * read off. Set through the boxed struct because that is the only way to
+	 * state the bytes and what they are together; EDS takes the copies it
+	 * needs, so the decoded bytes are freed as soon as the call returns. */
+	photo_bytes = g_base64_decode (photo_base64, &photo_length);
+	photo.type = E_CONTACT_PHOTO_TYPE_INLINED;
+	photo.data.inlined.mime_type = (gchar *) TEST_PHOTO_MEDIA_TYPE;
+	photo.data.inlined.data = photo_bytes;
+	photo.data.inlined.length = photo_length;
+	e_contact_set (contact, E_CONTACT_PHOTO, &photo);
+	g_free (photo_bytes);
 
 	/* Set as the list rather than as the comma-joined E_CONTACT_CATEGORIES
 	 * string, because that string cannot say which comma is a separator:
@@ -351,6 +445,11 @@ write_phase (EBookClient *book,
 	g_ptr_array_free (category_texts, TRUE);
 	g_list_free_full (read_back_categories, g_free);
 
+	/* The picture, likewise boxed, and out of EDS's own cache: the bytes the
+	 * backend re-rendered onto a `PHOTO` line after the write, read back
+	 * through the field Evolution shows the contact's photo from. */
+	report_photo ("read-back", read_back);
+
 	/* The LABEL line, which is a field of its own rather than part of the
 	 * boxed address above — and the one observation that has to be
 	 * escaped, because a label is written across several lines. */
@@ -412,6 +511,10 @@ report_seeded_contact (EContact *contact)
 	g_print ("read-email=%s\n",
 		 (const gchar *) e_contact_get_const (contact, E_CONTACT_EMAIL_1));
 	report_name_fields ("read", contact);
+	/* The picture the server filed on the card, as EDS read it off the line
+	 * the emitter wrote — the direction the `write` phase cannot ask about,
+	 * where that line came from EDS in the first place. */
+	report_photo ("read", contact);
 }
 
 /* Save an edited contact and report what EDS holds for it afterwards. Takes
@@ -445,6 +548,11 @@ save_and_report (EBookClient *book,
 	g_print ("read-back-email=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_EMAIL_1));
 	report_name_fields ("read-back", read_back);
+	/* What EDS holds for the picture after the save, which for a phase that
+	 * did not touch it is the other half of "the save left it alone": a
+	 * picture the backend rewrote would come back out of the cache changed
+	 * even though nobody asked. */
+	report_photo ("read-back", read_back);
 	g_object_unref (read_back);
 
 	return 0;
@@ -519,13 +627,57 @@ rename_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
+/* The fourth phase: the same seeded card, and the user picks a new picture for
+ * it — the one edit that reaches the photo field itself.
+ *
+ * This is where the picture stops being something the round trip carries and
+ * becomes something the save has to place. `e_contact_set` rewrites the `PHOTO`
+ * line out of the photo it is given and drops the parameters that were on it,
+ * the `X-JMAP-KEY` among them, so the entry the new picture belongs to cannot be
+ * found by its key and has to be paired with the one it replaced. Nothing below
+ * the daemons can say whether that is what really happens: EDS hands a save the
+ * cached card with the picture written back into it, and whether *that* line
+ * keeps its key while a *set* one does not is EDS's behaviour, not ours.
+ *
+ * Inlined, because that is what Evolution's contact editor sets when the user
+ * picks an image file. */
+static int
+repicture_phase (EBookClient *book,
+                 const gchar *uid,
+                 const gchar *photo_base64)
+{
+	EContact *contact;
+	EContactPhoto photo = { 0 };
+	guchar *bytes;
+	gsize length = 0;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	report_seeded_contact (contact);
+
+	bytes = g_base64_decode (photo_base64, &length);
+	photo.type = E_CONTACT_PHOTO_TYPE_INLINED;
+	photo.data.inlined.mime_type = (gchar *) TEST_PHOTO_MEDIA_TYPE;
+	photo.data.inlined.data = bytes;
+	photo.data.inlined.length = length;
+	e_contact_set (contact, E_CONTACT_PHOTO, &photo);
+	g_free (bytes);
+
+	return save_and_report (book, contact, uid);
+}
+
 static void
 usage (const gchar *program)
 {
-	g_printerr ("usage: %s <source-uid> write <full-name>\n"
+	g_printerr ("usage: %s <source-uid> write <full-name> <photo-base64>\n"
 		    "       %s <source-uid> edit <contact-uid> <email>\n"
-		    "       %s <source-uid> rename <contact-uid> <full-name> <given-name>\n",
-		    program, program, program);
+		    "       %s <source-uid> rename <contact-uid> <full-name> <given-name>\n"
+		    "       %s <source-uid> repicture <contact-uid> <photo-base64>\n",
+		    program, program, program, program);
 }
 
 int
@@ -549,9 +701,10 @@ main (int argc,
 	source_uid = argv[1];
 	phase = argv[2];
 
-	if (!((g_str_equal (phase, "write") && argc == 4) ||
+	if (!((g_str_equal (phase, "write") && argc == 5) ||
 	      (g_str_equal (phase, "edit") && argc == 5) ||
-	      (g_str_equal (phase, "rename") && argc == 6))) {
+	      (g_str_equal (phase, "rename") && argc == 6) ||
+	      (g_str_equal (phase, "repicture") && argc == 5))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -607,11 +760,13 @@ main (int argc,
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
 	if (g_str_equal (phase, "write"))
-		status = write_phase (book, argv[3]);
+		status = write_phase (book, argv[3], argv[4]);
 	else if (g_str_equal (phase, "edit"))
 		status = edit_phase (book, argv[3], argv[4]);
-	else
+	else if (g_str_equal (phase, "rename"))
 		status = rename_phase (book, argv[3], argv[4], argv[5]);
+	else
+		status = repicture_phase (book, argv[3], argv[4]);
 
 	g_object_unref (client);
 	g_object_unref (source);

@@ -19562,3 +19562,118 @@ be moved between the Home and Work slots at all is unknown; no test drives a
 `uri`-only entry through real EDS; a `VALUE=uri` photo's rendering is unmeasured;
 and the `jmap-mail` `transport.rs` hang is still an open design question with a
 lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-ninety-third session)
+
+**A contact's photo now crosses real EDS, in every direction a user can push it
+in.** The last two sessions mapped RFC 9553 §2.6.4's `media` onto the `PHOTO`
+line and back, and closed with the honest blocker that no functional leg drove a
+picture through the daemons: what was measured was `EContact` and `EVCard`, not
+`evolution-addressbook-factory`. The book leg now has four phases rather than
+three, and the picture is in all of them — written, read, left alone, replaced.
+
+**EDS does two things to a photo on its own initiative, and both of them are
+findings.** The first assertion written was that a picture put in inlined comes
+back inlined. It went red with a URI:
+
+    read-back-photo-type=uri
+    read-back-photo-uri=file:///…/cache/evolution/addressbook/jmap-functional/PHOTO-28c27031…-14.png
+
+`EBookMetaBackend` puts every contact it caches through `store_inline_photos`,
+which writes the bytes into a file of its own under the book's cache directory
+and rewrites the line to point at it. Nothing in this repository calls that — the
+backend has no photo code at all — so it is EDS's, and it is what *every* meta
+backend's users see. The leg was rewritten to ask the question that survives it:
+the client follows a `file:` URI and reports the bytes at the end of it, so "did
+the picture survive" is asked of the bytes rather than of the shape EDS chose to
+keep them in. The extension is asserted beside them, because it is the only place
+a cached photo still says what it is — EDS names the file after the media type it
+read off the line, so `.png` is `TYPE=png` having crossed.
+
+The second is the one I expected to be a bug and is not. If EDS hands a save the
+cached card with a local `file:` URI on the `PHOTO` line, then a save that takes
+it at face value tells the server the user's picture is a path on this machine —
+data lost, and a local filename leaked to a server. EDS forecloses it:
+`EBookMetaBackend` calls `inline_local_photos` itself before `save_contact_sync`,
+and — unlike `e_contact_set` — it rewrites the line's *value* while leaving the
+parameters, `X-JMAP-KEY` included, where they were. So an edit to a field beside
+the picture leaves the picture matched by its key, and the save patches nothing.
+No production code changed as a result, which is the outcome worth writing down:
+a future reader who notices we never call `inline_local_photos` should know it was
+measured rather than overlooked.
+
+**How that was proven rather than inferred.** Two ways, because a leg that says
+"the picture is unchanged" can pass by the save never having seen it at all. It
+cannot here: `diff_entries` turns an edited map that is empty against a visible
+current one into `"media": null`, a delete — so a save handed a photo-less vCard
+would have emptied the card and the assertion would have named it. And the
+mutation check pointed the other way: with the media pairing removed from
+`diff_media`, the edit leg stays green, which is what says the key survived a save
+nobody asked anything of.
+
+**Hence the fourth phase, which is the one the pairing exists for.** When the
+*user* picks a new picture, the line is written by `e_contact_set`, which rebuilds
+it and drops the parameters — so the new picture reaches the backend with nothing
+on it saying which entry it replaces, and `rekey_keyless` has to pair it with the
+one it replaced. `replacing_the_picture_through_eds_patches_the_entry_it_replaces`
+seeds a card whose picture the *server* filed under `picture-1`, has a libebook
+consumer choose a different PNG, and holds the server to one entry, still under
+`picture-1`, holding the bytes the user picked. Removing the pairing makes exactly
+this leg red, with `left: ["m1"] right: ["picture-1"]` — the picture re-filed under
+a name the reader invented by counting lines, and the server's own key deleted.
+
+**The pictures are real PNGs, and the base64 is spelled once.** Two 69-byte 1×1
+images, a red pixel and a blue one: real because a user's photo is, and because
+their bytes are not valid UTF-8, which is the branch `read_photo` was built for.
+The base64 goes to the client on its command line rather than being written out in
+both languages — the bytes *are* the assertion, so the two ends must not be able
+to disagree about them by a typo — while the media type stays a `#define` beside
+every other property the client sets. The value is long enough that EDS folds the
+line across two, which was the other thing worth exercising through a real writer.
+
+`docs/functional-tests.md` records both EDS behaviours and why the fourth leg
+exists, since a reader who does not know that a cached photo is a file will read
+the leg as asserting the wrong thing.
+
+Tests: 967 in the default set, unchanged — `jmap-functional` is out of
+`default-members`, so this increment lands as a fourth test in the `functional-book`
+ctest leg rather than as new cargo tests.
+
+Verified locally: `cargo test --locked` 967; full `ninja` then `ctest` 14/14,
+including all four functional legs; `cargo fmt --all --check` and `cargo clippy
+--all-targets --locked -- -D warnings` clean. `ci/checks.sh` still stops at its
+first step — no `reuse`, no `pipx`, no `uvx` on this VM — so the licence check was
+done by hand: no file was added, all three files touched already carry an SPDX
+header, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave
+on the last green run.
+
+**What is still *not* verified.** The EDS behaviour is measured for 3.52 on this
+VM and only there — M10's matrix is what would watch it, and this session added two
+more behaviours to the list of things it would watch. Beyond that: the leg drives
+`e-book-client`, not Evolution's contact editor, so what a user actually clicking
+"replace photo" sends is still one inference away — the phase writes what the
+editor is documented to write (an inlined `E_CONTACT_PHOTO`), and no display here
+can confirm the editor does. Whether Evolution *renders* a `VALUE=uri` photo it
+would have to fetch over the network is unchanged and unmeasured; a card holding
+several megabyte-sized pictures still carries them all through EDS's cache and over
+D-Bus; and a card with more than one picture still has only its first editable,
+which is the measurement the pairing rests on and not something this leg exercises.
+
+No milestone tag. Removed from the blocker list: no functional leg drives a photo
+through real EDS. Added: what Evolution's contact editor writes for a replaced
+photo is inferred rather than measured. Unchanged blockers: the calcard directive's
+two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs
+human verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the README;
+`jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links`
+and `CONFERENCE` on the calendar side rest on untested assumptions; the
+multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL`/`PHOTO` "Evolution shows only the first"
+bet is verified for `PHOTO` and still unverified for the rest; the two `LABEL` `TYPE`
+risks stand; a deathday and a birthday stated as a year alone are still invisible;
+the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified
+and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; no test drives a `uri`-only entry
+through real EDS; a `VALUE=uri` photo's rendering is unmeasured; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order hypothesis
+attached.
