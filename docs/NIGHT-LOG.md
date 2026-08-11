@@ -20898,3 +20898,121 @@ unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
 editor writes for a replaced photo, and into a cleared field, is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-sixth session)
+
+**The property libical does not leave as text.** The previous session ended
+saying the next increment here should be a `functional-cal` leg that retypes an
+attachment, and named the reason: whether real EDS's `ECalMetaBackend` cache
+keeps an `X-JMAP-KEY` on an `ATTACH` was *inferred* from the two properties the
+session before it measured — `LOCATION` and `CONFERENCE` — and an `ATTACH` is
+not those. RFC 5545 §3.8.1.1 gives the property a value type of its own, so
+libical parses the line into an `icalattach` and hands a consumer a URL it
+re-built rather than the string the line carried. The parameters then stand
+beside a value the library has re-made, which is exactly the shape in which a
+cache loses one. The seeded event in `calendar.rs` now carries a `links` entry
+too, and `cal-edit-client.c` reads it back, re-addresses it and saves.
+
+**The answer is yes, and it had to be measured to be said.** EDS carries the
+`X-JMAP-KEY` on an `ATTACH` through the meta backend's cache, and the save
+patches `links/<key>/href` onto the entry the server chose. Nothing needed
+fixing; what changed is that the claim is now a measurement rather than an
+extrapolation from two better-behaved properties.
+
+**Read through `icalattach`, not through the string.** `report_resource` asks
+`i_cal_property_get_attach` and then `i_cal_attach_get_url` rather than
+`i_cal_property_get_value_as_string`, and the edit goes back through
+`i_cal_attach_new_from_url` + `i_cal_property_set_attach`. Both are deliberate:
+the URL libical parsed out is what a consumer actually sees, so a value the round
+trip re-spelled shows up as a difference here instead of being hidden by the text
+form, and the edit is the one a consumer can really make. The property is edited
+in place rather than replaced, for the reason the conference is — a fresh
+property would carry no parameters by construction, so replacing it would test
+nothing.
+
+**Three parameters reported, and why not one.** `FMTTYPE` and `SIZE` go out
+beside the key because they are parameters libical *does* have an enum for.
+Reporting all three tells "the cache dropped everything it did not recognise"
+apart from "the cache dropped the line" — the same argument the conference's
+`LABEL` makes, and the reason it is asserted there too. They are also asserted on
+the server side *after* the save, which is a different claim: they were shown to
+the user and are still never written back, because they are the server's
+description of what it holds rather than a field the user was offered.
+
+The `title` plays the part `description` plays for the two places: no room on the
+line at all, so a save that named `links` rather than `links/<key>/href` would
+delete it and this leg would see it gone from the mock's store.
+
+Mutation checks, three, each reddening a different assertion. Dropping
+`X_JMAP_KEY` from `drawn_link` fails `read-attach-key` — and the printed report
+shows the other four observations arriving intact, so the failure is the key and
+not the line. Making `the_servers_own_entry` answer `false` fails
+`read-back-attach`: the patch is dropped, the server keeps the old address, and
+EDS's cache — which the meta backend refills from the server after a save — hands
+the old one back, so the read-back is a real end-to-end check and not a
+re-reading of what the client just wrote. And patching `contentType` alongside
+`href` fails the server-side `links` assertion, printing the entry with the media
+type gone.
+
+**An examination that produced no code.** Before starting this, the blocker the
+previous session recorded against `diff_virtual_locations` — the invented-key
+collision `diff_links` has and it was said to share — was worked through and
+does **not** hold. The collision needs an entry the drawing left out, so that the
+key `read_virtual_locations` invents can land on it; but `diff_virtual_locations`
+bails unless `maps_virtual_locations` is true of the server's own map, and that
+predicate demands `drawn_conference(key, location).is_some()` of *every* entry.
+So every server entry is drawn, every valid server key is therefore in the
+document, the invention avoids all of them, and an invented key — `v` plus
+digits, a valid RFC 8984 §1.4.4 `Id` — cannot equal an invalid server key
+either. `diff_links` has no `maps_links` analogue, which is precisely why the
+collision is reachable there and not here. The blocker is withdrawn below rather
+than fixed; the safety rests on `maps_virtual_locations` and is worth writing
+down because a future increment that relaxed that predicate would open the hole.
+
+Tests: 1000 in the default set, unchanged — `jmap-functional` is not in
+`default-members`. The `functional-cal` leg count stays at two; the second leg
+grew a third property.
+
+Verified locally: `cargo test --locked` 1000; full `ninja` then `ctest` 14/14
+with all four functional legs green; `cargo fmt --all --check` clean; `cargo
+clippy --all-targets --locked -- -D warnings`, `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` and `cargo
+clippy -p jmap-functional --all-targets` all clean. `ci/checks.sh` still stops at
+its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so the licence
+check was done by hand: no file was added, both files touched already carry their
+SPDX `GPL-3.0-or-later` header, no translatable string is introduced so
+`po/POTFILES.in` is unchanged, and `Cargo.lock` is untouched, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+**What this still does not settle.** The seeded event holds **one** `links`
+entry, so the several-`ATTACH` case the key exists for is still fixtures-only —
+and it is the case where a lost key corrupts rather than merely fails, since the
+save would then have to tell two resources apart. An `IMAGE` is not driven at
+all: it is the other half of the map, it carries a `DISPLAY` this leg never
+watches EDS keep, and libical's `IMAGE` handling is not `ATTACH`'s. Nothing here
+observes Evolution's own appointment editor, which attaches files from the user's
+disk as `file:` URIs the mapping deliberately never reads, so what its attachment
+control does to a line pointing at somebody else's server remains unmeasured.
+And a resource the user *removes* is still invisible to the save.
+
+No milestone tag. Removed from the blocker list: no functional leg drives an
+`ATTACH` through real EDS (this one does); and `diff_virtual_locations`'s
+invented-key collision, withdrawn as unreachable for the reason above. Added: no
+functional leg drives an `IMAGE`, or a second `ATTACH`, through real EDS.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has
+no CI job and no GUI tier; M7 still **needs human verification in real
+Evolution**; `example-module` does not pass this VM's clippy (1.97) on unmodified
+master, 26 `manual_c_str_literals`; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the README;
+`jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; an
+attachment the user removes is still invisible to the save; the multi-`ORG`/
+`TITLE` "Evolution shows only the first" bet is still unverified; the two `LABEL`
+`TYPE` risks stand; a deathday and a birthday stated as a year alone are still
+invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; what Evolution's contact editor writes for a replaced
+photo, and into a cleared field, is inferred rather than measured; and the
+`jmap-mail` `transport.rs` hang is still an open design question with a
+lock-order hypothesis attached.
