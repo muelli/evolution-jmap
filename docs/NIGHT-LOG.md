@@ -21016,3 +21016,99 @@ rendering is unmeasured; what Evolution's contact editor writes for a replaced
 photo, and into a cleared field, is inferred rather than measured; and the
 `jmap-mail` `transport.rs` hang is still an open design question with a
 lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-seventh session)
+
+**One attachment could only fail; two can corrupt.** The previous session
+measured that EDS carries an `X-JMAP-KEY` on an `ATTACH` and that the save
+patches `links/<key>/href` — with a single `links` entry on the seeded event.
+That shape cannot ask the question the key exists for. With one resource the save
+finds the server's only entry whatever the line carries, so a key EDS dropped
+costs the edit and nothing else; RFC 5545 §3.8.1.1 admits any number of `ATTACH`
+lines and RFC 8984 §4.2.7 a whole map of Links, and with two the same loss
+re-addresses whichever entry the mapping guessed — a document the user never
+opened moved, and theirs left where it was. The seeded event now holds two
+`links` entries, and `cal-edit-client.c` re-addresses one of them.
+
+**The answer is yes, again measured.** EDS keeps both `ATTACH` lines, each with
+its own key and its own `FMTTYPE` and `SIZE`, and the save patches exactly the
+one entry the user's line was drawn from; the other comes back at the address it
+went out with, and both `title`s — the member no line has room for — are still on
+the server.
+
+**The client picks its line by the address, not by the key or the position.**
+`attach_pointing_at` walks the `ATTACH` properties and matches the URL libical
+parsed out. That is deliberate on both counts: it is how a user picks the
+attachment they meant, and a program that found its line by the `X-JMAP-KEY`
+could not catch the mapping pairing lines with entries wrongly — it would be
+reading the mapping's own answer back to it. The edited entry is the one drawn
+*second* (`srv-att-2` sorts after `srv-att`), so a save that took "the
+attachment" to mean the first line fails rather than passes.
+
+**Reporting every line, and looking them up by key.** `report_resource` no longer
+reports the first `ATTACH`; it walks all of them and numbers the observation
+groups. The number is the client's own counting and means nothing — which of the
+server's entries a line belongs to is what the key beside it says — so the
+harness's new `resource()` helper finds a line by its key and compares the
+address, the media type and the size as one `Resource`. Three separate
+assertions would each be satisfied by the *other* line's value, which is exactly
+the failure being hunted; and looking a line up by position would turn a swap
+into a pass. The order two properties come back in is `ECalMetaBackend`'s
+business and this leg deliberately does not pin it down.
+
+Mutation checks, three, each reddening a different assertion. Re-addressing the
+first `ATTACH` regardless of which one was asked for fails the read-back lookup
+for `srv-att-2`, and the printed report shows the untouched agenda now pointing
+at the slides' new address — the corruption stated in full. Dropping
+`X_JMAP_KEY` from an `ATTACH` in `drawn_link` fails the read-side lookup with
+`None`, since no line answers to the key. And making `diff_links` replace `links`
+whole instead of patching one `href` fails only the server-side pair, which comes
+back with both `title`s gone while every observation the client made still
+passes — the mutation invisible from the client's end, which is why that
+assertion is written from the server's.
+
+Tests: 1000 in the default set, unchanged — `jmap-functional` is not in
+`default-members`. The `functional-cal` leg count stays at two; the second leg
+grew a second resource. `docs/functional-tests.md` was a session behind — it
+still described the two places and no `links` at all — so its second-calendar-leg
+section now covers all three maps and lists the six mutations run against that
+leg to date.
+
+Verified locally: `cargo test --locked` 1000; full `ninja` then `ctest` 14/14
+with all four functional legs green; `cargo fmt --all --check` clean; `cargo
+clippy --all-targets --locked -- -D warnings`, `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` and `cargo
+clippy -p jmap-functional --all-targets --locked -- -D warnings` all clean.
+`ci/checks.sh` still stops at its first step — no `reuse`, no `pipx`, no `uvx` on
+this VM — so the licence check was done by hand: no file was added, all three
+files touched already carry their SPDX `GPL-3.0-or-later` header, no translatable
+string is introduced so `po/POTFILES.in` is unchanged, and `Cargo.lock` is
+untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+
+**What this still does not settle.** Both resources are `ATTACH` lines, so an
+`IMAGE` is still driven by fixtures alone — it is the other half of the same map,
+it carries a `DISPLAY` nothing here watches EDS keep, and libical's `IMAGE`
+handling is not `ATTACH`'s. A resource the user *removes* remains invisible to
+the save, and so does one they *add* through Evolution's own attachment control,
+which writes a `file:` URI the mapping deliberately never reads. Nothing here
+observes what that control does to a line pointing at somebody else's server.
+
+No milestone tag. Removed from the blocker list: no functional leg drives a
+second `ATTACH` through real EDS (this one does). Unchanged blockers: no
+functional leg drives an `IMAGE` through real EDS; the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `example-module` does not pass this VM's clippy
+(1.97) on unmodified master, 26 `manual_c_str_literals`; `docs/MILESTONES.md`
+does not exist, so the M8 tag is still unwritten; the manual-test recipes are
+unlinked from the README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no
+`VTIMEZONE` of its own; an attachment the user removes is still invisible to the
+save; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
+editor writes for a replaced photo, and into a cleared field, is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.
