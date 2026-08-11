@@ -9,7 +9,7 @@
 //! CLASS, LOCATION, CATEGORIES, RRULE, the `VALARM`s that remind the user of the
 //! event, and the instances an EXDATE, an RDATE or a `RECURRENCE-ID` component
 //! names one at a time — and no more. Everything else on an event
-//! (links, virtual locations, …) is *dropped*,
+//! (links, …) is *dropped*,
 //! which is only safe because saving goes back to the server as a PatchObject
 //! naming the mapped properties: a property we never mapped is a property we
 //! never overwrite. See [`MAPPED_PROPERTIES`], [`maps_locations`],
@@ -36,6 +36,15 @@
 //! be this side proposing a value — and, since libical stamps a `DTSTAMP` of its
 //! own onto every component that arrives without one, the value proposed would
 //! be the local clock.
+//!
+//! `CONFERENCE` (RFC 7986 §5.11) joins them: where the event may be joined
+//! online — RFC 8984 §4.2.6's `virtualLocations` — is drawn for the user to read
+//! and never read back, because a VirtualLocation holds a `description` the line
+//! has no room for and a property a save names is replaced whole, so a place
+//! read off the component would delete the part of itself that was never shown.
+//! Doing better means patching `virtualLocations/<key>` in place, the way
+//! `locations` is handled; until then the property is absent from
+//! [`MAPPED_PROPERTIES`] and no save can name it. See [`drawn_conferences`].
 //!
 //! `ORGANIZER` and `ATTENDEE` are written and never read for a heavier reason:
 //! who is invited, and what each of them replied, is *scheduling* state. Moving
@@ -223,6 +232,25 @@ const PARTICIPANT_ROLES: [(&str, &str); 4] = [
     ("informational", "NON-PARTICIPANT"),
     ("optional", "OPT-PARTICIPANT"),
     ("attendee", "REQ-PARTICIPANT"),
+];
+
+/// The ways of taking part in an event held online: RFC 8984 §4.2.6's
+/// `features` and RFC 7986 §6.3's `FEATURE` parameter, which name the same seven
+/// things in the same words and differ only in case. So each crosses to the
+/// other format's spelling of itself, and a value outside the table is dropped
+/// rather than passed through in the other format's clothes.
+///
+/// In this order on the line, whatever order the Set holds them in, so that a
+/// re-rendering is stable — the save path diffs against a re-rendering of what
+/// the server holds.
+const CONFERENCE_FEATURES: [(&str, &str); 7] = [
+    ("audio", "AUDIO"),
+    ("chat", "CHAT"),
+    ("feed", "FEED"),
+    ("moderator", "MODERATOR"),
+    ("phone", "PHONE"),
+    ("screen", "SCREEN"),
+    ("video", "VIDEO"),
 ];
 
 /// What sort of participant it is: RFC 8984 §4.4.6's `kind` and RFC 5545
@@ -598,8 +626,7 @@ fn drawn_participants(event: &CalendarEvent) -> Vec<Property> {
         if owns && !organizer_drawn {
             organizer_drawn = true;
             lines.push(
-                Property::raw("ORGANIZER", address)
-                    .with_params("CN", participant_name(participant)),
+                Property::raw("ORGANIZER", address).with_params("CN", stated_name(participant)),
             );
         }
         if owns && role.is_none() {
@@ -607,7 +634,7 @@ fn drawn_participants(event: &CalendarEvent) -> Vec<Property> {
         }
         lines.push(
             Property::raw("ATTENDEE", address)
-                .with_params("CN", participant_name(participant))
+                .with_params("CN", stated_name(participant))
                 .with_params(
                     "CUTYPE",
                     spelled(&PARTICIPANT_KINDS, participant.get("kind")),
@@ -624,6 +651,61 @@ fn drawn_participants(event: &CalendarEvent) -> Vec<Property> {
         );
     }
     lines
+}
+
+/// The places the event may be joined online at, as the `CONFERENCE` lines a
+/// `VEVENT` states them on — one per entry the document can carry, in the map's
+/// own order so that a document is stable across renderings.
+///
+/// Unlike `LOCATION`, which RFC 5545 §3.6.1 allows once and this mapping
+/// therefore shows one of (see [`drawn_place`]), RFC 7986 §5.11 states that the
+/// property "can be specified multiple times", so a map of several places needs
+/// nothing left out and nothing patched in place.
+fn drawn_conferences(event: &CalendarEvent) -> Vec<Property> {
+    event
+        .virtual_locations
+        .iter()
+        .flatten()
+        .filter_map(|(_, location)| drawn_conference(location))
+        .collect()
+}
+
+/// One `CONFERENCE`, or `None` for a virtual location no line can name.
+///
+/// `VALUE=URI` is written because RFC 7986 §5.11's `confparam` makes it
+/// REQUIRED — the one parameter in this mapping that says nothing the default
+/// would not, and a reader that trusts the grammar is entitled to demand it.
+///
+/// The `uri` is the whole of the line, so a value that is not a URI leaves
+/// nothing to write: RFC 8984 §4.2.6 makes it the one mandatory member of a
+/// VirtualLocation, and a place with none is dropped rather than guessed at.
+/// That is only safe because the property is written and never read back — see
+/// [`read_vevent`], where `virtual_locations` stays `None`.
+fn drawn_conference(location: &Value) -> Option<Property> {
+    let uri = location
+        .get("uri")?
+        .as_str()
+        .filter(|uri| names_a_uri(uri))?;
+    Some(
+        Property::raw("CONFERENCE", uri)
+            .with_param("VALUE", "URI")
+            .with_params("FEATURE", joining_features(location))
+            .with_params("LABEL", stated_name(location)),
+    )
+}
+
+/// The ways of taking part this place offers, in [`CONFERENCE_FEATURES`] order.
+/// The values of a set are `true` (RFC 8984 §1.4.3); anything else says nothing
+/// was set.
+fn joining_features(location: &Value) -> Vec<&'static str> {
+    let features = location.get("features");
+    CONFERENCE_FEATURES
+        .iter()
+        .filter(|(jscalendar, _)| {
+            features.and_then(|features| features.get(jscalendar)) == Some(&Value::Bool(true))
+        })
+        .map(|(_, ical)| *ical)
+        .collect()
 }
 
 /// The address to reach one participant at, or `None` for one no `ATTENDEE`
@@ -661,12 +743,15 @@ fn names_a_uri(value: &str) -> bool {
             .all(|part| part.is_ascii_alphanumeric() || matches!(part, '+' | '-' | '.'))
 }
 
-/// The `name` of one participant, or `None` where it has none to put in a `CN`.
-fn participant_name(participant: &Value) -> Option<&str> {
-    participant
-        .get("name")?
-        .as_str()
-        .filter(|name| !name.is_empty())
+/// The `name` an object states, or `None` where it has none to put in a `CN` or
+/// a `LABEL`.
+///
+/// A name that is empty counts as none: RFC 8984 §4.2.6 defaults a
+/// VirtualLocation's to the empty string, and a parameter carrying it would say
+/// the place is named nothing, where leaving it off says only that the value
+/// speaks for itself.
+fn stated_name(value: &Value) -> Option<&str> {
+    value.get("name")?.as_str().filter(|name| !name.is_empty())
 }
 
 /// Whether a participant states this RFC 8984 §4.4.6 role. The values of a set
@@ -1212,6 +1297,13 @@ fn vevent_of(
         vevent = vevent.with(Property::new("LOCATION", name).with_param(X_JMAP_KEY, key));
     }
 
+    // Where the event may be joined online: a line per place, since RFC 7986
+    // §5.11 admits several where `LOCATION` admits one. Written for the user to
+    // read and never read back — see [`drawn_conferences`].
+    for line in drawn_conferences(event) {
+        vevent = vevent.with(line);
+    }
+
     // The whole set, on one line. An event whose every tag is one this mapping
     // cannot show gets no line at all rather than an empty one, which would state
     // a tag that is the empty string. See [`maps_keywords`].
@@ -1304,6 +1396,9 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         // an override may not name a place ([`OVERRIDE_PROPERTIES`]) — where
         // `keywords` and `alerts` are restated below.
         locations: event.locations.clone(),
+        // Inherited and not restatable, like `participants` below: an occurrence
+        // drawn without them is a meeting with nowhere to join it.
+        virtual_locations: event.virtual_locations.clone(),
         keywords: event.keywords.clone(),
         alerts: event.alerts.clone(),
         // Inherited for the same reason, and not restatable: RFC 8984 §4.4.6's
@@ -1687,6 +1782,14 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         priority: read_priority(vevent),
         privacy: read_privacy(vevent),
         locations: read_locations(vevent),
+        // Drawn onto the document and never read back off it either, for the
+        // reason `locations` is patched in place rather than replaced: a
+        // VirtualLocation holds a `description` (RFC 8984 §4.2.6) that a
+        // `CONFERENCE` line has no room for, and a property this side names in a
+        // save is replaced whole — so a place read back off the component would
+        // delete the part of itself the user was never shown. The property is
+        // not in `MAPPED_PROPERTIES`, so no save can name it.
+        virtual_locations: None,
         keywords: read_keywords(vevent),
         alerts: read_alerts(vevent),
         // Drawn onto the document and never read back off it, like the two

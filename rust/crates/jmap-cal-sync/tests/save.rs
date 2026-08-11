@@ -245,10 +245,22 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
         "roles": {"attendee": true},
         "participationStatus": "accepted",
     });
+    // And the same again for where the event is joined online: drawn as the
+    // CONFERENCE below, and unwritable because the `description` beside the URI
+    // has no room on the line — a save that replaced the property would delete
+    // it unasked.
+    let online = json!({
+        "@type": "VirtualLocation",
+        "name": "Team room",
+        "description": "Ask Vera for the passcode",
+        "uri": "https://meet.example.com/standup",
+        "features": {"video": true},
+    });
     fixture.patch(
         &id,
         json!({
             "participants": {"p1": guest.clone()},
+            "virtualLocations": {"v1": online.clone()},
             "sequence": 3,
         }),
     );
@@ -263,6 +275,13 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
             .contains("ATTENDEE;CN=Vera Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:vera@example.com"),
         "{icalendar}"
     );
+    assert!(
+        icalendar.replace("\r\n ", "").contains(
+            "CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Team room:https://meet.example.com/standup"
+        ),
+        "{icalendar}"
+    );
+    assert!(!icalendar.contains("passcode"), "{icalendar}");
     let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
@@ -280,6 +299,14 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
             .and_then(|guests| guests.get("p1")),
         Some(&guest),
         "the guest list was rewritten by a save that only changed the title"
+    );
+    assert_eq!(
+        stored
+            .virtual_locations
+            .as_ref()
+            .and_then(|places| places.get("v1")),
+        Some(&online),
+        "the conference link was rewritten by a save that only changed the title"
     );
 }
 

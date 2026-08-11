@@ -5305,3 +5305,202 @@ fn an_edited_instance_carries_the_guest_list_of_the_series() {
         "{ics}"
     );
 }
+
+/// An event held online at whatever virtual locations are passed.
+fn held_online(virtual_locations: Value) -> CalendarEvent {
+    CalendarEvent {
+        title: Some("Sprint planning".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        virtual_locations: serde_json::from_value(virtual_locations)
+            .expect("a map of virtual locations"),
+        ..CalendarEvent::default()
+    }
+}
+
+/// One virtual location: somewhere to join the event, a name, and whatever else
+/// is passed.
+fn joined_at(uri: &str, name: &str, rest: Value) -> Value {
+    let mut location = json!({
+        "@type": "VirtualLocation",
+        "name": name,
+        "uri": uri,
+    });
+    for (key, value) in rest.as_object().expect("an object").clone() {
+        location[key] = value;
+    }
+    location
+}
+
+fn conferences(ics: &str) -> Vec<String> {
+    ics.replace("\r\n ", "")
+        .split("\r\n")
+        .filter(|line| line.starts_with("CONFERENCE"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn where_an_event_is_joined_online_is_written_as_a_conference() {
+    // RFC 8984 §4.2.6's `virtualLocations` is a map of VirtualLocations, each a
+    // URI to join the event at with a name and the ways of taking part it
+    // offers; RFC 7986 §5.11 spells one as a CONFERENCE line whose value is that
+    // URI, with the name on a LABEL (§6.4) and the ways on a FEATURE (§6.3).
+    // Unlike LOCATION, the property may be stated more than once, so every entry
+    // of the map is written rather than one of them.
+    let ics = event_to_ical(&held_online(json!({
+        "v1": joined_at("https://meet.example.com/sprint", "Team room", json!({
+            "features": {"video": true, "audio": true},
+        })),
+        "v2": joined_at("tel:+1-555-0100", "Dial-in", json!({
+            "features": {"phone": true},
+        })),
+    })));
+
+    // In the map's own order, so a document is stable across renderings, and the
+    // features in the table's, so a set is too.
+    assert_eq!(
+        conferences(&ics),
+        [
+            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Team room:\
+             https://meet.example.com/sprint",
+            "CONFERENCE;VALUE=URI;FEATURE=PHONE;LABEL=Dial-in:tel:+1-555-0100",
+        ],
+        "{ics}"
+    );
+}
+
+#[test]
+fn a_conference_states_the_value_type_it_is_required_to() {
+    // RFC 7986 §5.11's `confparam` makes `VALUE=URI` REQUIRED on the property —
+    // the one place in this mapping where a parameter is written that says
+    // nothing the default would not. A reader that trusts the grammar is
+    // entitled to demand it.
+    let ics = event_to_ical(&held_online(json!({
+        "v1": joined_at("https://meet.example.com/sprint", "", json!({})),
+    })));
+
+    assert_eq!(
+        conferences(&ics),
+        ["CONFERENCE;VALUE=URI:https://meet.example.com/sprint"],
+        "{ics}"
+    );
+}
+
+#[test]
+fn a_way_of_joining_outside_the_shared_vocabulary_is_left_off() {
+    // The rule every closed vocabulary in this mapping gets. RFC 8984 §4.2.6 and
+    // RFC 7986 §6.3 name the same seven ways of taking part in the same words,
+    // so each crosses to the other format's spelling of itself; a value outside
+    // them is dropped rather than passed through in the other format's clothes,
+    // and the conference still goes on the line — it is the parameter that is
+    // unwritable, not the place.
+    let ics = event_to_ical(&held_online(json!({
+        "v1": joined_at("https://meet.example.com/sprint", "Team room", json!({
+            "features": {
+                "hologram": true,
+                // RFC 8984 §1.4.3 has every value of a Set be true; anything
+                // else says nothing was set.
+                "video": "yes",
+                "screen": true,
+            },
+        })),
+    })));
+
+    assert_eq!(
+        conferences(&ics),
+        ["CONFERENCE;VALUE=URI;FEATURE=SCREEN;LABEL=Team room:https://meet.example.com/sprint"],
+        "{ics}"
+    );
+}
+
+#[test]
+fn a_virtual_location_with_nowhere_to_join_is_left_off() {
+    // A CONFERENCE's value is a URI (RFC 7986 §5.11), and RFC 8984 §4.2.6 makes
+    // `uri` the one mandatory member of a VirtualLocation: there is nothing to
+    // write for a place the server named none for, and inventing one would send
+    // the user somewhere the server never did. So the entry is dropped, like
+    // every other value this mapping cannot spell — which is only safe because
+    // `virtualLocations` is written and never read back.
+    for location in [
+        json!({"@type": "VirtualLocation", "name": "Team room"}),
+        json!({"@type": "VirtualLocation", "uri": ""}),
+        // A bare host is not a URI: RFC 3986 §3.1 wants a scheme.
+        json!({"@type": "VirtualLocation", "uri": "meet.example.com/sprint"}),
+        json!({"@type": "VirtualLocation", "uri": "https:"}),
+        json!({"@type": "VirtualLocation", "uri": 42}),
+        // Whitespace is not in a URI, and a line break would end the content
+        // line and start a property of the server's choosing.
+        json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/the sprint"}),
+        json!({"@type": "VirtualLocation", "uri": "https://x/\r\nSUMMARY:Gone"}),
+        // Not an object at all.
+        json!("https://meet.example.com/sprint"),
+    ] {
+        let ics = event_to_ical(&held_online(json!({"v1": location})));
+
+        assert!(without(&ics, "CONFERENCE"), "{location}: {ics}");
+        assert!(!ics.contains("SUMMARY:Gone"), "{location}: {ics}");
+    }
+}
+
+#[test]
+fn a_virtual_location_with_no_name_carries_no_label() {
+    // RFC 8984 §4.2.6 defaults `name` to the empty string, and a LABEL of
+    // nothing is a parameter that names the place as having no name — where
+    // leaving it off says only that the URI speaks for itself.
+    for location in [
+        json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/sprint"}),
+        json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/sprint", "name": ""}),
+        json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/sprint", "name": 7}),
+    ] {
+        let ics = event_to_ical(&held_online(json!({"v1": location})));
+
+        assert_eq!(
+            conferences(&ics),
+            ["CONFERENCE;VALUE=URI:https://meet.example.com/sprint"],
+            "{location}: {ics}"
+        );
+    }
+}
+
+#[test]
+fn where_an_event_is_joined_online_is_written_and_never_read_back() {
+    // The precedent the guest list sets, for the reason `locations` gives: a
+    // VirtualLocation holds a `description` (RFC 8984 §4.2.6) that a CONFERENCE
+    // line has no room for, and a save replaces a property whole. So a
+    // conference read back off the component would delete the description the
+    // user was never shown — and `virtualLocations` is absent from
+    // MAPPED_PROPERTIES, so no save can name it and the server's own copy cannot
+    // be overwritten from here.
+    let ics = event_to_ical(&held_online(json!({
+        "v1": joined_at("https://meet.example.com/sprint", "Team room", json!({
+            "description": "Ask Bob for the passcode",
+        })),
+    })));
+    let event = ical_to_event(&ics).expect("parse");
+
+    assert!(!ics.contains("passcode"), "{ics}");
+    assert_eq!(event.virtual_locations, None);
+}
+
+#[test]
+fn an_edited_instance_carries_the_conferences_of_the_series() {
+    // The inheritance of RFC 8984 §4.3.4 again: an override may not restate the
+    // virtual locations, so the occurrence's own component states the series' —
+    // an instance drawn without them would show a meeting with nowhere to join
+    // it.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
+    event.virtual_locations = serde_json::from_value(json!({
+        "v1": joined_at("https://meet.example.com/sprint", "Team room", json!({})),
+    }))
+    .expect("a map of virtual locations");
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(
+        conferences(vevent(&ics, 1)),
+        ["CONFERENCE;VALUE=URI;LABEL=Team room:https://meet.example.com/sprint"],
+        "{ics}"
+    );
+}
