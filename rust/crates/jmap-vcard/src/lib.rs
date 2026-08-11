@@ -23,9 +23,9 @@ pub mod syntax;
 
 pub use contact::{
     address_label, anniversary_date, card_to_vcard, maps_address_component, maps_context,
-    maps_keywords, maps_name_component, maps_phone_feature, online_service_handle,
-    online_service_uri, restore_address_components, same_service, states_a_point_in_time,
-    states_address, states_anniversary, states_email, states_link, states_nickname, states_note,
+    maps_name_component, maps_phone_feature, online_service_handle, online_service_uri,
+    restore_address_components, same_service, states_a_point_in_time, states_address,
+    states_anniversary, states_email, states_keyword, states_link, states_nickname, states_note,
     states_online_service, states_organization, states_phone, states_title, title_kind,
     vcard_to_card,
 };

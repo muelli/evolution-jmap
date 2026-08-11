@@ -10,7 +10,7 @@ use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
     NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
-use jmap_vcard::{card_to_vcard, vcard_to_card};
+use jmap_vcard::{card_to_vcard, states_keyword, vcard_to_card};
 use serde_json::{Value, json};
 
 fn fixture_card() -> ContactCard {
@@ -1355,6 +1355,31 @@ fn a_keyword_set_to_anything_but_true_gets_no_line() {
         ..ContactCard::default()
     };
     assert!(!card_to_vcard(&card).contains("\r\nCATEGORIES"));
+}
+
+#[test]
+fn states_keyword_answers_for_the_tag_the_line_left_off() {
+    // The save needs the refusal *per tag*, not for the set: a tag the line
+    // could not carry is one the user never saw and therefore never asked to
+    // lose, so the save writes it back rather than dropping the whole edit. The
+    // predicate is the emitter's own, so what the save calls invisible is what
+    // the emitter actually left off.
+    for tag in ["", "two\rlines", " leading", "trailing ", "\u{b}vertical"] {
+        assert!(
+            !states_keyword(tag, &json!(true)),
+            "the tag {tag:?} was called visible"
+        );
+        assert!(
+            !card_to_vcard(&tagged(&[tag])).contains("\r\nCATEGORIES"),
+            "the tag {tag:?} was drawn"
+        );
+    }
+
+    assert!(states_keyword("hiking", &json!(true)));
+    assert!(states_keyword("two\nlines", &json!(true)));
+    // A value RFC 9553 §1.4.3 does not admit is the one refusal that is about
+    // the value rather than the spelling.
+    assert!(!states_keyword("hiking", &json!(false)));
 }
 
 #[test]
