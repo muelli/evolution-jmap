@@ -5,9 +5,9 @@
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, EMAIL, TEL,
-//! ADR, ORG, TITLE, ROLE and NOTE and drops everything else, so a save that
-//! sent the parsed card back whole would silently delete the properties it
-//! could not represent — nicknames, anniversaries, preferred languages —
+//! ADR, LABEL, ORG, TITLE, ROLE and NOTE and drops everything else, so a save
+//! that sent the parsed card back whole would silently delete the properties
+//! it could not represent — nicknames, anniversaries, preferred languages —
 //! none of which the user ever saw, let alone asked to remove.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
@@ -32,12 +32,17 @@
 //!   a unit that kept its name keeps the members it was carrying, matched by
 //!   that name rather than by position, so that dissolving one department
 //!   does not renumber the sorting hints of the others.
+//! - `addresses` entries cross on two lines rather than one — the `ADR` and
+//!   the `LABEL` that writes the same address out for an envelope — so a
+//!   save reads them back as one entry and patches `addresses/<key>/full`
+//!   beside the components.
 //! - *Every* keyed map is one of which the vCard states only **some**
 //!   entries. A title of a `kind` outside `title` and `role` has no vCard
-//!   property; an address stated only in components `ADR` has no field for,
-//!   an organisation with neither a name nor a unit, an email with no
-//!   address, a phone with no number and a note that says nothing all have
-//!   no line to be written on. Each is dropped on the way out and must
+//!   property; an address with neither an `ADR` field nor a written-out form
+//!   to put on a `LABEL`, an organisation with neither a name nor a unit, an
+//!   email with no address, a phone with no number and a note that says
+//!   nothing all have no line to be written on. Each is dropped on the way
+//!   out and must
 //!   therefore be invisible to the save in both directions — neither deleted
 //!   for being absent from the edited card, nor overwritten by an addition
 //!   whose key the reader invented by counting only the entries it could
@@ -56,8 +61,9 @@ use jmap_proto::contacts::{
     Organization, Title,
 };
 use jmap_vcard::{
-    maps_address_component, maps_context, maps_name_component, maps_phone_feature, states_address,
-    states_email, states_note, states_organization, states_phone, states_title, title_kind,
+    address_label, maps_address_component, maps_context, maps_name_component, maps_phone_feature,
+    states_address, states_email, states_note, states_organization, states_phone, states_title,
+    title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -256,6 +262,16 @@ fn diff_addresses(
                 patch.insert(
                     format!("{path}/components"),
                     components.map_or(Value::Null, |components| json_of(&components)),
+                );
+            }
+            // The `LABEL` line, compared as the emitter sees it: an address
+            // written out as the empty string has no line either, so reading
+            // no label back is not the user having cleared one.
+            let label = address_label(new);
+            if address_label(old) != label {
+                patch.insert(
+                    format!("{path}/full"),
+                    label.map_or(Value::Null, |full| Value::String(full.to_owned())),
                 );
             }
             diff_flags(

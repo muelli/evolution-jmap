@@ -442,10 +442,12 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
     let addresses = stored.addresses.as_ref().expect("addresses");
     assert_eq!(addresses.len(), 1, "patched in place, not re-added");
     let address = &addresses["a1"];
+    // The written-out address does have a line of its own — LABEL — so the
+    // town changes there too: the replacement above edited both lines,
+    // which is what a user retyping an address in Evolution does.
     assert_eq!(
-        address.extra.get("full"),
-        Some(&json!("Hauptstraße 1\n10115 Berlin")),
-        "a member the ADR line cannot carry was overwritten"
+        address.full.as_deref(),
+        Some("Hauptstraße 1\n10115 Potsdam")
     );
     assert_eq!(
         address.extra.get("coordinates"),
@@ -484,13 +486,16 @@ fn an_address_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
         json!({"addresses": {"a1": {
             "@type": "Address",
             "components": [{"@type": "AddressComponent", "kind": "floor", "value": "3"}],
-            "full": "third floor",
+            "coordinates": "geo:52.5,13.4",
         }}}),
     );
     let sync = fixture.sync();
 
     let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
     assert!(!vcard.contains("\r\nADR"), "{vcard}");
+    // Nor a LABEL: the entry says nothing a written-out address could be
+    // built from either, so there is no line of any kind to show it on.
+    assert!(!vcard.contains("\r\nLABEL"), "{vcard}");
     // The reader counts only the entries it can see, so the key it invents
     // for this one is `a1` — the key the hidden entry already holds.
     let edited = vcard.replace(
@@ -501,8 +506,8 @@ fn an_address_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
 
     let addresses = fixture.card(&id).addresses.expect("addresses");
     assert_eq!(
-        addresses["a1"].extra.get("full"),
-        Some(&json!("third floor")),
+        addresses["a1"].extra.get("coordinates"),
+        Some(&json!("geo:52.5,13.4")),
         "an entry the vCard never showed was overwritten: {addresses:?}"
     );
     assert!(
@@ -537,6 +542,92 @@ fn removing_the_adr_line_removes_the_address() {
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     assert_eq!(fixture.card(&id).addresses, None);
+}
+
+#[test]
+fn an_address_stated_only_as_a_label_is_patched_in_place() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.5.1 allows an address whose components are simply not
+    // known, written out in `full` and nowhere else. It gets a LABEL line
+    // and no ADR, so the key it is filed under crosses on the LABEL — and if
+    // it did not, this save would re-add the address instead of editing it,
+    // losing the members no line can carry.
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {
+            "@type": "Address",
+            "contexts": {"private": true},
+            "full": "Postfach 42\n10115 Berlin",
+            "coordinates": "geo:52.5,13.4",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nADR"), "{vcard}");
+    assert!(
+        vcard.contains("LABEL;X-JMAP-KEY=a1;TYPE=HOME:Postfach 42\\n10115 Berlin"),
+        "{vcard}"
+    );
+
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a save that changed nothing rewrote the address"
+    );
+
+    let edited = vcard.replace("Postfach 42", "Postfach 43");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let addresses = fixture.card(&id).addresses.expect("addresses");
+    assert_eq!(addresses.len(), 1, "patched in place, not re-added");
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("Postfach 43\n10115 Berlin")
+    );
+    assert_eq!(
+        addresses["a1"].extra.get("coordinates"),
+        Some(&json!("geo:52.5,13.4")),
+        "a member no line can carry was overwritten"
+    );
+}
+
+#[test]
+fn removing_the_label_line_clears_the_written_out_address() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {
+            "@type": "Address",
+            "components": [{"@type": "AddressComponent", "kind": "locality", "value": "Berlin"}],
+            "full": "10115 Berlin",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited: String = vcard
+        .lines()
+        .filter(|line| !line.starts_with("LABEL"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    // The address itself stays — the user cleared the written-out form, not
+    // the address it was a form of.
+    let addresses = fixture.card(&id).addresses.expect("addresses");
+    assert_eq!(addresses["a1"].full, None);
+    assert_eq!(
+        addresses["a1"]
+            .components
+            .as_ref()
+            .map(|components| components.len()),
+        Some(1)
+    );
 }
 
 #[test]

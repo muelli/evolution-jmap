@@ -227,10 +227,11 @@ pub struct Title {
 
 /// JSContact Address (RFC 9553 §2.5.1): one postal address.
 ///
-/// Only the two members a vCard `ADR` line can carry are modeled. `full`,
-/// `coordinates`, `countryCode`, `timeZone`, `pref` and the rest ride in
-/// [`Self::extra`] — where the save path can see the members it is refusing
-/// to touch, which is the whole reason this is a struct and not a `Value`.
+/// Only the three members a vCard can carry are modeled — the `ADR` line's
+/// components and its `TYPE`, and the `LABEL` line's text. `coordinates`,
+/// `countryCode`, `timeZone`, `pref` and the rest ride in [`Self::extra`] —
+/// where the save path can see the members it is refusing to touch, which is
+/// the whole reason this is a struct and not a `Value`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Address {
@@ -242,6 +243,14 @@ pub struct Address {
     pub components: Option<Vec<AddressComponent>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contexts: Option<Value>,
+    /// The address written out as it should be printed, line breaks and all.
+    ///
+    /// RFC 9553 §2.5.1 has this stand on its own — an address may be stated
+    /// here and nowhere else, "even if the individual address components are
+    /// not known" — which is the same thing RFC 2426 §3.2.2's `LABEL` says,
+    /// and what EDS keeps in its three synthetic address-label fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

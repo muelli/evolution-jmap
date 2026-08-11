@@ -10,8 +10,8 @@
 //! headers, so the mapping stays testable everywhere the workspace builds.
 //!
 //! The mapped property set is the minimal useful one: UID, FN, N, EMAIL,
-//! TEL, ADR, ORG, TITLE, ROLE, NOTE. See [`contact`] for what that costs and
-//! why it is safe.
+//! TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE. See [`contact`] for what that
+//! costs and why it is safe.
 //!
 //! [RFC 9553]: https://www.rfc-editor.org/rfc/rfc9553
 //! [RFC 9610]: https://www.rfc-editor.org/rfc/rfc9610
@@ -21,8 +21,8 @@ pub mod error;
 pub mod syntax;
 
 pub use contact::{
-    card_to_vcard, maps_address_component, maps_context, maps_name_component, maps_phone_feature,
-    states_address, states_email, states_note, states_organization, states_phone, states_title,
-    title_kind, vcard_to_card,
+    address_label, card_to_vcard, maps_address_component, maps_context, maps_name_component,
+    maps_phone_feature, states_address, states_email, states_note, states_organization,
+    states_phone, states_title, title_kind, vcard_to_card,
 };
 pub use error::VCardError;

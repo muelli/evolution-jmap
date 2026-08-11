@@ -17826,3 +17826,130 @@ attribute it rewrites is still unverified. Nothing new opened. The next
 obvious contact work is the `LABEL` property behind Evolution's address-label
 fields, which is now the only item left on the list this and the last four
 sessions have been working through.
+
+## 2026-08-11 (hundred-and-seventy-seventh session)
+
+**The `LABEL` property, the last item on the contact list — found already
+written, and landed only after being verified from scratch.** The working tree
+this session opened on was not clean: nine files held a complete, uncommitted
+`LABEL` ↔ `full` mapping, tests and functional leg included, and no log entry.
+The previous session evidently ended between the last green run and the commit.
+That is not a licence to push it — an increment nobody verified is an increment
+nobody has, whoever typed it — so the first hour went on reading the diff and
+re-running the whole gate against it rather than on new code. It is honest work
+and it is now on master; what follows is the design as the diff states it,
+read back rather than recalled.
+
+**Why an address needs two lines and every other mapped property needs one.**
+RFC 9553 §2.5.1's `full` is the address as it should be printed on an
+envelope, and it stands on its own: an address may be stated there "even if the
+individual address components are not known". vCard 3.0 puts that on `LABEL`
+(RFC 2426 §3.2.2), a property of its own beside `ADR` rather than a field
+inside it, and EDS surfaces it as `E_CONTACT_ADDRESS_LABEL_HOME`/`_WORK`/
+`_OTHER`. So one `addresses` entry can cross on two lines, either of them
+alone, or — when it holds only components vCard has no field for and nothing
+written out — on neither, which is the invisible-entry case the last two
+sessions built `states_address` for. `states_address` now answers for both
+lines, `full` was promoted out of `extra` into a modeled member of `Address`,
+and the save patches `addresses/<key>/full` beside the components.
+
+**Pairing a label back to its address is the whole difficulty, and the
+`X-JMAP-KEY` alone does not do it.** The emitter writes the key on both lines,
+so a card that never leaves this code round-trips on the key. Evolution's does
+leave: the three address-label fields are *synthetic*, so EDS rebuilds the
+`LABEL` line from the text alone and the key we wrote is gone by the time the
+save reads it back. What survives is the `TYPE` — which is how RFC 2426 §3.2.2
+has a label name the `ADR` it is the written-out form of in the first place —
+so `label_entry` falls back to the first as-yet-unlabelled address whose
+contexts match, and only then invents a key. The earlier session that deferred
+this called that fallback "fragile" and was right to; what makes it defensible
+now is that it is checked on real EDS rather than argued about. A label naming
+a key no address holds is taken at its word instead, because that is exactly
+the address stated only in `full`, whose key crosses on the `LABEL` or nowhere.
+
+**Verified through EDS, not only in unit tests.** `book-client.c` sets
+`E_CONTACT_ADDRESS_LABEL_WORK` beside the boxed work address, reports it back
+out of the meta backend's cache, and the Rust half asserts the server holds
+*one* address carrying that text — the assertion that would catch the pairing
+falling through, since a label filed on its own would make two. The label is
+the first observation with line breaks in it, and the harness reads stdout a
+line at a time, so `report_multiline` escapes them and the other end unescapes;
+only the newlines are rewritten, so what is compared is still EDS's own text.
+
+**Risks carried forward, both about `TYPE`.** EDS has three synthetic label
+fields and they are `HOME`, `WORK` and `OTHER`; an address with no contexts
+gets a bare `LABEL` with no `TYPE`, and whether that survives a trip through
+Evolution's editor at all is unverified — the leg exercises `WORK`. And two
+unlabelled addresses of the same `TYPE` pair by first-found, so a card with
+two home addresses and one home label may attach it to the wrong one. Both are
+the price of a fallback that exists because the key does not survive; neither
+is worse than the alternative of filing every saved label as a new address.
+
+**Separately: the `jmap-mail` `tests/transport.rs` hang, seen once before and
+unexplained, reproduced live this session — with a mechanism to go with it.**
+It appeared in the `rust-test-eds` ctest leg, not `rust-test`, and sat for
+eleven minutes before being killed. What the process showed: three threads,
+all in `futex_do_wait`, no socket among its open file descriptors — so a lock
+cycle, not a stalled request. The two running tests were
+`the_transport_i…`/`the_transport_n…` (the names truncate at fifteen
+characters). No `gdb`, `eu-stack` or `/proc/*/syscall` on this VM, so no stack
+was obtainable; the reading below is from the source, and is a **hypothesis,
+not a verified diagnosis**.
+
+`jmap_backend_core::subclass::register` holds its own `REGISTRATION` mutex
+across `g_type_register_static` and `g_type_add_interface_static`. It is
+careful about *its own* re-entrancy — `parent_type()` and `interfaces()` are
+resolved before the lock, with a comment saying why — but the same mutex is
+also taken from *inside* a GObject class initialiser: `JmapTransport::
+class_init` and `JmapStore::class_init` both call `settings_type()`, which is
+`register_static::<JmapSettings>()`. GLib serialises class initialisation with
+a recursive mutex of its own, and `g_type_add_interface_static` takes it too.
+That is a lock-order inversion between two mutexes, one of ours and one of
+GLib's, and it needs exactly two threads: one inside a `class_init` waiting for
+`REGISTRATION`, one holding `REGISTRATION` and waiting to add an interface.
+`JmapSettings` (CamelNetworkSettings) and `JmapStore` (CamelSubscribable) both
+declare interfaces, so both halves are reachable.
+
+It was **not fixed**, deliberately. Every obvious fix fails on the same point:
+per-type locks narrow the window without closing it, and so does swapping the
+mutex for a `Once` — the inversion is not about which primitive serialises the
+registration but about serialising it *at all* while GLib serialises class
+init. Closing it properly means either not excluding at all (handling a lost
+race, which `g_type_register_static` reports as a `g_critical` and a zero
+rather than an abort, and which leaves a window where the loser can see a type
+whose interfaces are not yet attached) or establishing GLib's order first,
+which has no public API. That is a design decision with a real trap in it, and
+guessing at it at the end of a session is how a rare hang becomes a common one.
+Reproduction is also not yet in hand: ten runs of the leg's own command and
+twenty-five of the binary pinned to one CPU with four test threads all passed,
+so the window wants the whole-leg load to open. Written down here as an
+explained blocker rather than an unexplained one.
+
+Tests: 860 in the default set, up 6 from 854 — four in `jmap-vcard`, two in
+`jmap-book-sync` — plus the extended functional leg and the `jmap-proto`
+round-trip, which now asserts `full` as a member instead of as `extra`.
+
+Verified locally: `cargo test --locked` 860; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` (green on the run that counted, having hung on an
+earlier one) and all four functional legs; `cargo fmt --all --check` and
+`cargo clippy --all-targets --locked -- -D warnings` clean. `ci/checks.sh`
+stops at its first step as it has all week: `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed. Exposure is nil — no file was added,
+every file touched already carries an SPDX header — and `Cargo.lock` is
+untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the `NameComponent` `phonetic` hole stands; the `ADR` line's
+missing house number is still visible to the user; the multi-`NOTE`/`ORG`/
+`TITLE` "Evolution shows only the first" bet is still unverified in real
+Evolution; and whether `e_contact_set` preserves an `X-JMAP-KEY` on an
+attribute it rewrites is still unverified. Changed: the `transport.rs` hang is
+no longer unexplained, but is now a design question with a hypothesis attached.
+New: the two `TYPE` risks above. The contact list these five sessions worked
+through is now empty — the next contact work has to be chosen rather than
+taken off it.
