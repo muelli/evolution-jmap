@@ -20472,3 +20472,93 @@ moved between the Home and Work slots at all is unknown; no test drives a
 what Evolution's contact editor writes for a replaced photo, and into a cleared
 field, is inferred rather than measured; and the `jmap-mail` `transport.rs` hang is
 still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-second session)
+
+**The withdrawal with nothing behind it.** The previous session left exactly one
+branch of the notes mapping untested through the daemons, and named it: clearing
+the Notes field on a card whose only note it was. The ninth leg's card carries two
+notes, so the save withdraws the entry the user could see —
+`notes/note-1: null` — and `diff_entries` reaches that path only because the card
+hides something. With nothing behind the cleared note the other side of that `if`
+runs and the patch says `notes: null`, the property whole. This is the tenth
+`functional-book` leg,
+`clearing_the_only_note_through_eds_withdraws_the_whole_property`, driving the
+existing `unnote` phase against a card seeded with one note; beside it the fixture
+that states the same card, `emptying_the_only_note_line_withdraws_the_property` in
+`jmap-book-sync`.
+
+**No new C.** The `unnote` phase already reports everything this branch needs —
+the field, the line count, every `NOTE` value on the card, and the same three
+after the save — so the leg is a seeding variant (`SeededNotes::Both` /
+`TheShownOneAlone`, threaded through what was `seed_double_barrelled_card`) and a
+set of assertions. Nothing about the client program had to change to ask it a
+second question, which is the first time that has been true of a new leg.
+
+**What the daemons actually said.** Measured against libebook-contacts 3.52,
+emptying the only `NOTE` line behaves as it does on a card carrying two:
+`cleared-note-lines=1`, and the one value reported is empty — the line stands with
+nothing on it rather than being struck off, so the withdrawal is the reader's
+(`states_note` refuses a note saying nothing). Asserted are the *values* rather
+than that count, for the ninth leg's reason. After the save `read-back-note` is
+empty and `read-back-note-lines=0`: the field really does clear when there is
+nothing to reveal, which is the observation that says the ninth leg's surprise —
+the hidden note surfacing in the field — was the second note and not a save that
+quietly refused the withdrawal. The server ends with no `notes` at all, asserted
+as `None` rather than as an empty map: a property still there saying nothing is
+what the per-entry path produces when there is nothing left to keep.
+
+**Mutation checks, all re-measured rather than reasoned about.** Collapsing
+`diff_entries`' empty-edited case to the per-key nulls alone (dropping the
+whole-property branch): **this leg alone** of the ten goes red — the only mutation
+so far that no other functional leg catches, though the unit suite catches it ten
+times over, so what the leg adds is still the input rather than the coverage.
+Making `states_note` accept a note that says nothing: this leg and the ninth.
+Three counts in `docs/functional-tests.md` were then re-measured, since the tenth
+leg moves them and one moved differently than incrementing would have said:
+dropping the calendaring lines' `X-JMAP-KEY` reddens eight of the nine seeded legs
+(was seven of eight), dropping the spouse line reddens all ten (was nine), and
+dropping the `NOTE` key reddens **eight of the nine** seeded legs rather than all
+of them — the new leg stays green under it, because a cleared-out property has no
+key for the save to have got wrong. That last one is why the counts are measured:
+incrementing it would have been wrong.
+
+Tests: 988 in the default set (987 + the new fixture; `jmap-functional` is not in
+`default-members`); the `functional-book` leg count goes from nine to ten.
+
+Verified locally: `cargo test --locked` 988; full `ninja` then `ctest` 14/14 with
+all four functional legs; `cargo fmt --all --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings` and `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` both clean. `ci/checks.sh`
+still stops at its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so the
+licence check was done by hand: no file was added, the three sources touched
+already carry an SPDX header, and `Cargo.lock` is untouched, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+**What this still does not settle.** Nothing here observes Evolution's own contact
+editor, so "the editor hands `e_contact_set` the empty string" remains an
+inference about Evolution even though what EDS does with that string is now
+measured on two properties and two card shapes. The `notes` map is now driven
+through every branch a save can take with it *from Evolution's one field* — but a
+card holding more than two notes is untried, and so is any path that would let a
+user reach the notes behind the first, because there is none.
+
+No milestone tag. Removed from the blocker list: clearing the *only* note on a
+card is untested through the daemons. Unchanged blockers: the calcard directive's
+two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs
+human verification in real Evolution**; `example-module` does not pass this VM's
+clippy (1.97) on unmodified master, 26 `manual_c_str_literals`;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty;
+`jmap-ical` emits no `VTIMEZONE` of its own; `links` and `CONFERENCE` on the
+calendar side rest on untested assumptions; the multi-`ORG`/`TITLE` "Evolution
+shows only the first" bet is still unverified; the two `LABEL` `TYPE` risks stand;
+a deathday and a birthday stated as a year alone are still invisible; the
+conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and
+therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their contact-editor
+behaviour unmeasured; whether the editor lets a handle be moved between the Home
+and Work slots at all is unknown; no test drives a `uri`-only entry through real
+EDS; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
+editor writes for a replaced photo, and into a cleared field, is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.
