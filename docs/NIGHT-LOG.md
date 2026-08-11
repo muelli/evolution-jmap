@@ -17442,3 +17442,98 @@ Evolution round-trips. New from this session: the multi-`ORG` risk above, and
 the obvious next contact increments now that the shape is proven — `addresses`
 ↔ `ADR`, `titles` ↔ `TITLE`/`ROLE`, `notes` ↔ `NOTE`, each of which is a keyed
 map patched the same way.
+
+## 2026-08-11 (hundred-and-seventy-third session)
+
+**The contact mapping's second new property, and the first one of which only
+part crosses.** Last session's `organizations` proved the shape; the obvious
+next item on its own list was `titles` ↔ `TITLE`/`ROLE`, which RFC 9553 §2.2.4
+keeps as one keyed map told apart by a `kind` and vCard 3.0 splits across two
+properties (RFC 2426 §§3.5.1, 3.5.2). An entry of kind `title` — the default,
+so also every entry that names no kind — is written as a `TITLE`; one of kind
+`role` as a `ROLE`; both carry the [`X_JMAP_KEY`] the emails and phones
+already do, and a save patches `titles/<key>/name` in place so the
+`organizationId` the line has no room for is left where it is.
+
+**The default kind is left unsaid, deliberately.** Reading a `TITLE` back
+gives `kind: None`, not `Some("title")`, because the two mean the same thing
+to the RFC and only the first round-trips a card that never named a kind. Had
+the reader spelled the default out, every no-op save of such a card would have
+patched a `kind` onto it — a write the user did not ask for, and one that
+would have tripped `a_save_that_changes_nothing_sends_no_patch` the moment the
+fixture grew a title. The two sides agree about what an unsaid kind means
+through one exported function, `jmap_vcard::title_kind`, which the diff uses
+to compare kinds with the default filled in; the only kind change a vCard can
+actually express is a `TITLE` that became a `ROLE` or the reverse.
+
+**RFC 9553 allows vendor kinds, and vCard has nowhere to put one — so this is
+the first mapped property of which the vCard states only *some* entries.**
+Writing a `x-honour` title as a `TITLE` would tell the user it is their job
+title, which it is not, so it is dropped. That makes it invisible, and
+everything this module says about invisible things then applies to it — but
+`diff_entries` was built for maps the vCard states *all* of, and it would have
+destroyed such an entry in three separate ways. `diff_visible_entries` is the
+same function with a visibility predicate and those three holes closed: an
+invisible entry is not nulled for being absent from the edited card; a first
+visible entry is written *into* the property by path rather than replacing it
+whole, because the property does exist server-side however empty it looks from
+here; and — the one that took the most thought — an addition is moved off its
+key when an invisible entry already holds it.
+
+**That last one is a real clobber, not a theoretical one.** The reader invents
+keys by counting the entries it can *see*, so a card whose only title is
+hidden hands the next typed one `t1` — the key the hidden entry holds — and a
+patch to `titles/t1` would replace it. `free_key` moves the addition to
+`t1-2`. Both guards were mutation-checked rather than assumed: disabling the
+predicate and disabling `free_key` each turn
+`a_title_of_a_vendor_kind_survives_a_save_it_was_never_part_of` red, with the
+knight replaced by the scientist in the stored map. Note this hole exists only
+where entries are hidden — `emails`, `phones` and `organizations` state every
+entry, so their invented keys have always seen every key that was taken.
+
+**Verified on real EDS, not only in unit tests.** The M9 layer-1 book leg now
+sets `E_CONTACT_TITLE` and `E_CONTACT_ROLE` through `e-book-client`, reports
+both back out of the meta backend's cache, and the Rust half asserts the
+mock's stored card holds two `titles` entries — one of the default kind
+carrying the job title, one of kind `role` carrying the role. Two EDS fields
+and one JSContact map meeting in the middle is exactly the claim the mapping's
+own tests cannot make. The expected default is spelled out literally at that
+end rather than borrowed from `title_kind`, so the assertion states the wire
+shape instead of agreeing with the code that produced it.
+
+Tests: 835 in the default set, up 7 from 828 — four in `jmap-vcard`, three in
+`jmap-book-sync` — plus the extended functional leg and the `jmap-proto`
+round-trip fixture, which now also pins that a title's `organizationId`
+survives deserialization and that the fixture's own untyped entry reads back
+with no kind. Red was compile-red first (the tests name a
+`ContactCard::titles` that did not exist), then the save tests.
+
+Verified locally: `cargo test --locked` 835; full `ninja` then `ctest` 14/14
+including all four functional legs; `cargo fmt --all --check` and `cargo
+clippy --all-targets --locked -- -D warnings` clean for the default set and
+for the EDS-header crates. `ci/checks.sh` again stops at its first step:
+`reuse` is not on this VM and neither `pipx` nor `uvx` is installed. Exposure
+is nil — no file was added, every file touched already carries an SPDX header
+— and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave
+on the last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is unexplained; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions about what Evolution round-trips; and the multi-`ORG` risk from
+last session stands. New from this session, and the same bet in a new place:
+Evolution's contact editor has one Job Title field and one Role field, so a
+card carrying two `TITLE` lines is one whose second survives only if `EVCard`
+round-trips an attribute it has no field for — and, more pointedly, `EContact`
+reads the *first* `TITLE`, so if a hidden vendor entry ever did reach a line
+the wrong entry would be the one the user edits. It cannot, because vendor
+kinds are dropped; but that is the reason to keep dropping them. Unverified
+here either way: whether `e_contact_set (E_CONTACT_TITLE, …)` preserves the
+`X-JMAP-KEY` parameter on the attribute it rewrites. The functional leg adds a
+contact; it does not edit one. Believed yes, as for `EMAIL`, and worth a
+real-Evolution check. The obvious next contact increments remain `addresses` ↔
+`ADR` and `notes` ↔ `NOTE`.

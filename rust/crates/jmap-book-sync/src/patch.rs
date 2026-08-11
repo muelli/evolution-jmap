@@ -32,15 +32,26 @@
 //!   a unit that kept its name keeps the members it was carrying, matched by
 //!   that name rather than by position, so that dissolving one department
 //!   does not renumber the sorting hints of the others.
+//! - `titles` is a keyed map of which the vCard states only *some* entries:
+//!   one of a `kind` outside `title` and `role` has no vCard property, so it
+//!   is dropped on the way out. It must therefore be invisible to the save
+//!   in both directions — neither deleted for being absent from the edited
+//!   card, nor overwritten by an addition whose key the reader invented by
+//!   counting only the entries it could see. That is what
+//!   [`diff_visible_entries`] is for.
 //!
 //! RFC 8620 §5.3 requires every path segment before the last to exist on the
 //! object already, which is why a property that is absent server-side is
 //! written whole instead of being reached into.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Name, OrgUnit, Organization};
-use jmap_vcard::{maps_context, maps_name_component, maps_phone_feature};
+use jmap_proto::contacts::{
+    ContactCard, ContactEmail, ContactPhone, Name, OrgUnit, Organization, Title,
+};
+use jmap_vcard::{
+    maps_context, maps_name_component, maps_phone_feature, maps_title_kind, title_kind,
+};
 use serde_json::{Map, Value};
 
 /// The patch that turns the card the server holds into the card Evolution
@@ -55,6 +66,7 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         current.organizations.as_ref(),
         edited.organizations.as_ref(),
     );
+    diff_titles(&mut patch, current.titles.as_ref(), edited.titles.as_ref());
     patch
 }
 
@@ -173,6 +185,32 @@ fn diff_organizations(
     );
 }
 
+fn diff_titles(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Title>>,
+    edited: Option<&BTreeMap<String, Title>>,
+) {
+    diff_visible_entries(
+        patch,
+        "titles",
+        current,
+        edited,
+        |title| maps_title_kind(title.kind.as_deref()),
+        |patch, path, old, new| {
+            if old.name != new.name {
+                patch.insert(format!("{path}/name"), Value::String(new.name.clone()));
+            }
+            // Only a TITLE that became a ROLE or the reverse can be seen
+            // here, and the kinds are compared with the default filled in so
+            // that a card which never named one is not made to name it.
+            let kind = title_kind(new.kind.as_deref());
+            if title_kind(old.kind.as_deref()) != kind {
+                patch.insert(format!("{path}/kind"), Value::String(kind.to_owned()));
+            }
+        },
+    );
+}
+
 /// The unit list a save writes: the names the `ORG` line now states, each
 /// keeping whatever the server's unit of that name was carrying besides it.
 ///
@@ -207,31 +245,86 @@ fn diff_entries<T: serde::Serialize>(
     edited: Option<&BTreeMap<String, T>>,
     diff_entry: impl Fn(&mut Map<String, Value>, &str, &T, &T),
 ) {
+    diff_visible_entries(patch, property, current, edited, |_| true, diff_entry)
+}
+
+/// The same, for a keyed map of which the vCard states only some entries.
+///
+/// An entry the predicate calls invisible never reached the user, so the save
+/// must not read an edit into its absence. Three things follow, and each is
+/// a way the plain shape above would destroy it:
+///
+/// - it is never nulled for being missing from the edited card;
+/// - a first visible entry is written *into* the property by path rather than
+///   replacing it, because the property does exist server-side however empty
+///   it looks from here;
+/// - an addition is moved off its key if an invisible entry already holds it.
+///   The reader invents keys by counting the entries it can see, so `t1` for
+///   a title the user just typed can be the key of one it never showed.
+fn diff_visible_entries<T: serde::Serialize>(
+    patch: &mut Map<String, Value>,
+    property: &str,
+    current: Option<&BTreeMap<String, T>>,
+    edited: Option<&BTreeMap<String, T>>,
+    is_visible: impl Fn(&T) -> bool,
+    diff_entry: impl Fn(&mut Map<String, Value>, &str, &T, &T),
+) {
     let empty = BTreeMap::new();
     let current = current.unwrap_or(&empty);
     let edited = edited.unwrap_or(&empty);
+    let visible: BTreeMap<&String, &T> = current
+        .iter()
+        .filter(|(_, entry)| is_visible(entry))
+        .collect();
+    let hides_something = visible.len() < current.len();
 
-    if current.is_empty() {
-        if !edited.is_empty() {
-            patch.insert(property.to_owned(), json_of(edited));
-        }
+    if visible.is_empty() && edited.is_empty() {
+        return;
+    }
+    if visible.is_empty() && !hides_something {
+        patch.insert(property.to_owned(), json_of(edited));
         return;
     }
     if edited.is_empty() {
-        patch.insert(property.to_owned(), Value::Null);
+        if hides_something {
+            for key in visible.keys() {
+                patch.insert(format!("{property}/{}", escape(key)), Value::Null);
+            }
+        } else {
+            patch.insert(property.to_owned(), Value::Null);
+        }
         return;
     }
 
+    let mut taken: BTreeSet<String> = current.keys().cloned().collect();
     for (key, entry) in edited {
-        let path = format!("{property}/{}", escape(key));
-        match current.get(key) {
-            Some(existing) => diff_entry(patch, &path, existing, entry),
-            None => drop(patch.insert(path, json_of(entry))),
+        match visible.get(key) {
+            Some(existing) => {
+                let path = format!("{property}/{}", escape(key));
+                diff_entry(patch, &path, existing, entry);
+            }
+            None => {
+                let key = free_key(key, &taken);
+                patch.insert(format!("{property}/{}", escape(&key)), json_of(entry));
+                taken.insert(key);
+            }
         }
     }
-    for key in current.keys().filter(|key| !edited.contains_key(*key)) {
+    for key in visible.keys().filter(|key| !edited.contains_key(**key)) {
         patch.insert(format!("{property}/{}", escape(key)), Value::Null);
     }
+}
+
+/// The key an added entry is written under: the one it came with, or the
+/// first free variant of it when that is somebody else's.
+fn free_key(wanted: &str, taken: &BTreeSet<String>) -> String {
+    if !taken.contains(wanted) {
+        return wanted.to_owned();
+    }
+    (2..)
+        .map(|index| format!("{wanted}-{index}"))
+        .find(|candidate| !taken.contains(candidate))
+        .expect("an unbounded sequence has a free element")
 }
 
 /// Replace the members of a boolean map this mapping can spell, keep the

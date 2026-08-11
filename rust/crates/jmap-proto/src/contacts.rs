@@ -60,6 +60,11 @@ pub struct ContactCard {
     /// it, which vCard states in one `ORG` line each.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organizations: Option<BTreeMap<String, Organization>>,
+    /// The job titles the contact holds and the roles it plays (RFC 9553
+    /// §2.2.4), keyed like the other JSContact maps. vCard states each on a
+    /// `TITLE` or a `ROLE` line, depending on the entry's `kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titles: Option<BTreeMap<String, Title>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -185,6 +190,29 @@ impl OrgUnit {
             extra: BTreeMap::new(),
         }
     }
+}
+
+/// JSContact Title (RFC 9553 §2.2.4): a job title the contact holds, or a
+/// role it plays.
+///
+/// `organizationId` — which of the card's `organizations` the title is held
+/// at — is not modeled: vCard 3.0's `TITLE` and `ROLE` (RFC 2426 §§3.5.1,
+/// 3.5.2) are plain text with no component and no parameter naming an
+/// organisation, so it rides in [`Self::extra`], where the save path can see
+/// the member it is refusing to touch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Title {
+    #[serde(default)]
+    pub name: String,
+    /// `title` or `role`. Absent means `title`, RFC 9553 §2.2.4's default,
+    /// which this side leaves unsaid rather than writing out — so a card
+    /// that never named a kind is not rewritten by a save that changed
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// `ContactCard/query` filter conditions (RFC 9610 §3.3). Flat conditions
