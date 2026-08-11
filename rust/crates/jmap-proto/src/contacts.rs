@@ -71,10 +71,15 @@ pub struct ContactCard {
     /// the component kinds RFC 9553 allows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub addresses: Option<BTreeMap<String, Address>>,
-    /// The free-text notes kept about the contact (RFC 9553 §2.8.1), keyed
+    /// The free-text notes kept about the contact (RFC 9553 §2.8.3), keyed
     /// like the other JSContact maps. vCard states each on a `NOTE` line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<BTreeMap<String, Note>>,
+    /// The memorable dates of the contact (RFC 9553 §2.8.1), keyed like the
+    /// other JSContact maps. vCard states the birthday on a `BDAY` line and
+    /// the wedding day on the line Evolution reads as the anniversary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anniversaries: Option<BTreeMap<String, Anniversary>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -283,7 +288,7 @@ impl AddressComponent {
     }
 }
 
-/// JSContact Note (RFC 9553 §2.8.1): one free-text note about the contact.
+/// JSContact Note (RFC 9553 §2.8.3): one free-text note about the contact.
 ///
 /// `created` and `author` are not modeled: vCard 3.0's `NOTE` (RFC 2426
 /// §3.6.2) is plain text with no component and no parameter for when a note
@@ -292,10 +297,39 @@ impl AddressComponent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
-    /// The note's text. Mandatory per RFC 9553 §2.8.1, and the only part of
+    /// The note's text. Mandatory per RFC 9553 §2.8.3, and the only part of
     /// a note a `NOTE` line has room for.
     #[serde(default)]
     pub note: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact Anniversary (RFC 9553 §2.8.1): one memorable date.
+///
+/// `place` — where the birth or the wedding happened — is not modeled: a
+/// vCard date line is a date and nothing else, so it rides in [`Self::extra`]
+/// where the save path can see the member it is refusing to touch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Anniversary {
+    /// `birth`, `death` or `wedding`. Mandatory per RFC 9553 §2.8.1, which
+    /// gives it no default — an entry that names none says nothing about
+    /// what its date is the date *of*, and is treated here as a kind no
+    /// vCard property states.
+    #[serde(default)]
+    pub kind: String,
+    /// The date itself, kept as it arrived rather than parsed into a shape
+    /// of our own.
+    ///
+    /// RFC 9553 §2.8.1 allows two: a `PartialDate`, which may state only a
+    /// year or only a month and day, and a `Timestamp`, which states a point
+    /// in time. A vCard line can carry neither shape whole — it states one
+    /// calendar day — so the save patches *into* whichever object the server
+    /// sent rather than replacing it, and that is only possible while its
+    /// unmapped members (`calendarScale`, the time of day) are still here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

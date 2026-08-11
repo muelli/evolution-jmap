@@ -26,7 +26,7 @@
 //! [RFC 2426]: https://www.rfc-editor.org/rfc/rfc2426
 
 use calcard::common::IanaString;
-use calcard::vcard::{VCardEntry, VCardParameterValue, VCardValue};
+use calcard::vcard::{VCardEntry, VCardParameterValue, VCardValue, VCardValueType};
 use calcard::{Entry, Parser};
 
 use crate::error::VCardError;
@@ -224,19 +224,28 @@ fn param_text(value: &VCardParameterValue) -> String {
 
 /// A value as the mapping reads it, or `None` for one it has no text for.
 ///
-/// Only the text forms are surfaced: the mapped property set — UID, FN, N,
-/// EMAIL, TEL and the two `X-JMAP-*` lines — is text throughout, and a card
-/// that also carries a `PHOTO` or a `BDAY` is read for the properties this
-/// crate maps rather than re-emitted. Dropping the value of a property nothing
-/// reads loses nothing: the vCard it came from is EDS's copy and stays as it
-/// is, and a JSContact property this mapping never mapped is one it never
-/// overwrites.
+/// Text and dates are surfaced, which between them cover the mapped property
+/// set — UID, FN, N, EMAIL, TEL, `BDAY` and the `X-` lines. A value of any
+/// other shape belongs to a property nothing here reads (a `PHOTO`'s binary,
+/// a `GEO`'s floats), and dropping it loses nothing: the vCard it came from is
+/// EDS's copy and stays as it is, and a JSContact property this mapping never
+/// mapped is one it never overwrites.
 fn value_text(value: &VCardValue) -> Option<String> {
     match value {
         VCardValue::Text(text) => Some(text.clone()),
         // A comma-separated run inside one `;` component, which the mapping
         // reads as the text it was written as.
         VCardValue::Component(items) => Some(items.join(",")),
+        // A date line, which calcard has already read into its parts. Written
+        // back out as the date text it was, rather than surfaced as parts,
+        // because this layer deals in text and the mapping is what decides
+        // which dates it can carry.
+        VCardValue::PartialDateTime(date) => {
+            let mut text = String::new();
+            date.format_as_vcard(&mut text, &VCardValueType::DateAndOrTime)
+                .ok()?;
+            Some(text)
+        }
         _ => None,
     }
 }

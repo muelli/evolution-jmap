@@ -53,6 +53,16 @@ const ADDRESS_LABEL: &str = "Hauptstrasse 1\n10115 Berlin\nGermany";
 /// here is that the escaping our emitter applies is the escaping the EDS
 /// reading the line back undoes.
 const NOTE: &str = "met at FOSDEM; owes me a beer, apparently";
+/// The birthday, spelled as `book-client.c` spells it — the text
+/// `e_contact_date_to_string()` writes for the three numbers it sets, which
+/// is also the text the `BDAY` line carries. EDS keeps a birthday in a
+/// structured field and rebuilds the line from it, so this is where the one
+/// mapped property whose *value* changes shape on the way across — three
+/// numbers to a date and back — is checked against the EDS that writes it.
+const BIRTHDAY: &str = "1964-03-27";
+const BIRTH_YEAR: u64 = 1964;
+const BIRTH_MONTH: u64 = 3;
+const BIRTH_DAY: u64 = 27;
 
 /// The keyfile from `docs/examples/jmap-mock.source`, with the mock's
 /// ephemeral port filled in. Kept as a literal here rather than read from
@@ -199,6 +209,11 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         seen.get("read-back-note"),
         Some(&NOTE),
         "the contact EDS handed back lost or mangled its note\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-birthday"),
+        Some(&BIRTHDAY),
+        "the contact EDS handed back lost or moved its birthday\n{report}"
     );
     for (field, expected) in [
         ("read-back-street", STREET),
@@ -368,6 +383,27 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
             .map(|note| note.note.as_str())
             .collect::<Vec<_>>(),
         vec![NOTE],
+        "{card:?}"
+    );
+    // The BDAY line, as the server sees it: one `anniversaries` entry of kind
+    // `birth` whose date is the three numbers the client set. Spelled out
+    // here rather than borrowed from the mapping, so this end states the wire
+    // shape it expects instead of agreeing with the code that produced it.
+    let anniversaries = card
+        .anniversaries
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no anniversaries: {card:?}"));
+    assert_eq!(anniversaries.len(), 1, "{anniversaries:?}");
+    let anniversary = anniversaries.values().next().expect("one anniversary");
+    assert_eq!(anniversary.kind, "birth", "{card:?}");
+    assert_eq!(
+        anniversary.date,
+        Some(serde_json::json!({
+            "@type": "PartialDate",
+            "year": BIRTH_YEAR,
+            "month": BIRTH_MONTH,
+            "day": BIRTH_DAY,
+        })),
         "{card:?}"
     );
 }

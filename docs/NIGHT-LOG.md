@@ -18055,3 +18055,107 @@ Evolution; whether `e_contact_set` preserves an `X-JMAP-KEY` on an attribute
 it rewrites is still unverified; the two `LABEL` `TYPE` risks stand; and the
 `jmap-mail` `transport.rs` hang is still an open design question with a
 lock-order hypothesis attached. Closed: the `ADR` line's missing house number.
+
+## 2026-08-11 (hundred-and-seventy-ninth session)
+
+**The birthday, which no vCard we produced had ever carried.** The contact
+list the last five sessions worked through was empty, so this one was chosen
+rather than taken off it: of everything RFC 9553 keeps that this mapping
+dropped, the birthday is the one with a field of its own in Evolution's
+contact editor, sitting empty for every JMAP contact that had one. It now
+crosses on RFC 2426 §3.1.5's `BDAY`, and the wedding day beside it on
+`X-EVOLUTION-ANNIVERSARY` — vCard 3.0 has no property for that one at all
+(RFC 6474's `ANNIVERSARY` is 4.0), and `E_CONTACT_ANNIVERSARY` is what the
+editor's "Anniversary" field reads. RFC 9553's third kind, `death`, has no
+line and no field, so it is dropped like a title of a vendor kind.
+
+**What the value is, and what EDS does with the shapes it is not.** This is
+the first mapped property whose *value* is lossy rather than its members. RFC
+9553 §2.8.1 dates an event either as a `PartialDate`, which may state as
+little as a year, or as a `Timestamp`, which states a point in time; a vCard
+date line states one calendar day. The decision of what to do with the rest
+was not read off the RFC but measured against the EDS on this VM:
+`e_contact_date_from_string()` reads `1985-04-12`, `19850412` and a date-time
+prefix as the day they name, and reads `--04-12`, `1985-04` and `1985` as
+*no date at all* — year 0, month 0, day 0, which `e_contact_date_to_string()`
+then writes back as `1000-01-01`. So a partial date on a line would not be a
+partial date to the user; it would be a wrong one, and the next save would
+write it to the server. A date that names no single day therefore gets no
+line and is invisible, which is the same invisibility `titles`, `addresses`
+and `notes` each learned in their turn. A `Timestamp` crosses as the day it
+falls on in UTC, the only zone the card names.
+
+**The key does not survive, and that is measured too.** Every other keyed map
+crosses with its JSContact key in `X-JMAP-KEY` and comes back wearing it. The
+dates do not: EDS keeps a birthday in a structured field and rebuilds the line
+out of it, and the probe against libebook-contacts 3.52 shows an untouched
+line keeping its parameters and a rewritten one losing them — which also
+settles, for this property at least, the "does `e_contact_set` preserve an
+`X-JMAP-KEY` on an attribute it rewrites" question these logs have carried
+unanswered for weeks. It does not. So `rekey_anniversaries` pairs a keyless
+date with the server's entry of the same kind before the ordinary diff runs,
+which is enough because Evolution has exactly one field per kind: the birthday
+it hands back is the birthday the card already had. An entry whose key *did*
+survive keeps it and is not paired against, so a card carrying two birthdays —
+Evolution shows the first and passes the second through untouched, also
+measured — does not have them swapped by every save.
+
+**Patching into the date rather than over it.** A day is patched member by
+member (`anniversaries/k8/date/day`), so a `calendarScale` — which RFC 9553
+says annotates a date whose numbers stay Gregorian — and any member this
+version has not heard of stay where they are. A point in time cannot be mended
+that way: the user typed a day, and a day is a different kind of object, so it
+replaces the old one whole and the hour is gone. That is stated as a decision
+rather than a regret; keeping 23:10 on a date nobody gave a time for would be
+this mapping inventing one. The comparison that decides whether anything
+changed at all is on the *text the line stated*, not on the JSON, so a
+`Timestamp` the user never touched is not flattened by a save that changed
+nothing.
+
+**A syntax-layer bug the first red test found.** calcard parses `BDAY` into a
+typed `PartialDateTime`, and `syntax::value_text` surfaced only `Text` and
+`Component` — so the line arrived at the mapping with an empty value while
+`X-EVOLUTION-ANNIVERSARY`, being an `X-` property and therefore text, arrived
+fine. The fix renders the parsed date back to its vCard spelling, keeping this
+layer text-in/text-out and leaving the mapping to decide which dates it can
+carry. That the doc comment there used `BDAY` as its example of a property
+nothing reads is a small monument to how these things age.
+
+**Verified through real EDS, not only against the mock.** The functional book
+leg now sets `E_CONTACT_BIRTH_DATE` on the contact it writes and asserts, at
+both ends, that it comes back as the same date out of EDS's cache and reaches
+the server as an `anniversaries` entry of kind `birth` whose `date` is the
+three numbers the client set. The assertion was mutation-checked — a wrong
+expected date fails the leg with the client's own stdout attached — because a
+functional leg that cannot fail is worse than none.
+
+Tests: 877 in the default set, up 14 from 863 — eight new in `jmap-vcard`, six
+new in `jmap-book-sync`, and one existing `jmap-book-sync` test whose
+`anniversaries`-in-`extra` assertion moved to the typed field now that the
+property is modelled. Also corrected: `notes` was cited as RFC 9553 §2.8.1
+throughout, which is `anniversaries`; notes is §2.8.3.
+
+Verified locally: `cargo test --locked` 877; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all
+--check` and `cargo clippy --all-targets --locked -- -D warnings` clean.
+`ci/checks.sh` still stops at its first step — `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed — so the licence check was done by hand:
+no file was added, every file touched already carries an SPDX header, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the `NameComponent` `phonetic` hole stands; the multi-`NOTE`/
+`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified in real
+Evolution; the two `LABEL` `TYPE` risks stand; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order
+hypothesis attached. Closed: whether `e_contact_set` preserves an `X-JMAP-KEY`
+on an attribute it rewrites — it does not, and the date mapping is built on
+that answer rather than around it. New: a deathday, and a birthday stated as a
+year alone, are both invisible to Evolution and stay so; if a user ever wants
+either, it needs an EDS field that does not exist today.

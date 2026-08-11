@@ -5,10 +5,11 @@
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, EMAIL, TEL,
-//! ADR, LABEL, ORG, TITLE, ROLE and NOTE and drops everything else, so a save
-//! that sent the parsed card back whole would silently delete the properties
-//! it could not represent — nicknames, anniversaries, preferred languages —
-//! none of which the user ever saw, let alone asked to remove.
+//! ADR, LABEL, ORG, TITLE, ROLE, NOTE and the two date lines, and drops
+//! everything else, so a save that sent the parsed card back whole would
+//! silently delete the properties it could not represent — nicknames,
+//! keywords, preferred languages — none of which the user ever saw, let alone
+//! asked to remove.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
 //! that is the subtler half of this module:
@@ -36,12 +37,18 @@
 //!   the `LABEL` that writes the same address out for an envelope — so a
 //!   save reads them back as one entry and patches `addresses/<key>/full`
 //!   beside the components.
+//! - `anniversaries` entries have no key to be patched by at all: EDS keeps a
+//!   birthday in a structured field and rebuilds the line out of it, dropping
+//!   the `X-JMAP-KEY`, so the entry an edited date belongs to is found by what
+//!   kind of date it is. The date itself is patched member by member, which
+//!   is what keeps a `calendarScale` — or a point in time the user did not
+//!   touch — from being flattened into the day the line showed.
 //! - *Every* keyed map is one of which the vCard states only **some**
 //!   entries. A title of a `kind` outside `title` and `role` has no vCard
 //!   property; an address with neither an `ADR` field nor a written-out form
 //!   to put on a `LABEL`, an organisation with neither a name nor a unit, an
-//!   email with no address, a phone with no number and a note that says
-//!   nothing all have no line to be written on. Each is dropped on the way
+//!   email with no address, a phone with no number, a note that says nothing
+//!   and a date naming no single day all have no line to be written on. Each is dropped on the way
 //!   out and must
 //!   therefore be invisible to the save in both directions — neither deleted
 //!   for being absent from the edited card, nor overwritten by an addition
@@ -57,13 +64,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, Note, OrgUnit,
-    Organization, Title,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name, Note,
+    OrgUnit, Organization, Title,
 };
 use jmap_vcard::{
-    address_label, maps_address_component, maps_context, maps_name_component, maps_phone_feature,
-    restore_address_components, states_address, states_email, states_note, states_organization,
-    states_phone, states_title, title_kind,
+    address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
+    maps_phone_feature, restore_address_components, states_a_point_in_time, states_address,
+    states_anniversary, states_email, states_note, states_organization, states_phone, states_title,
+    title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -86,6 +94,11 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.addresses.as_ref(),
     );
     diff_notes(&mut patch, current.notes.as_ref(), edited.notes.as_ref());
+    diff_anniversaries(
+        &mut patch,
+        current.anniversaries.as_ref(),
+        edited.anniversaries.as_ref(),
+    );
     patch
 }
 
@@ -306,6 +319,91 @@ fn diff_notes(
             }
         },
     );
+}
+
+fn diff_anniversaries(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Anniversary>>,
+    edited: Option<&BTreeMap<String, Anniversary>>,
+) {
+    let edited = rekey_anniversaries(current, edited);
+    diff_entries(
+        patch,
+        "anniversaries",
+        current,
+        edited.as_ref(),
+        states_anniversary,
+        |patch, path, old, new| {
+            // The line the date is stated on *is* its kind, so this can only
+            // be a birthday that became a wedding day or the reverse.
+            if old.kind != new.kind {
+                patch.insert(format!("{path}/kind"), Value::String(new.kind.clone()));
+            }
+            if anniversary_date(old) == anniversary_date(new) {
+                return;
+            }
+            let Some(date) = new.date.as_ref() else {
+                return;
+            };
+            // A day is patched member by member, so that whatever else the
+            // server hung off the date — a `calendarScale`, a member this
+            // version has never heard of — stays where it is. A point in time
+            // cannot be mended that way: the user typed a day, and a day is a
+            // different kind of object, so it replaces the old one whole.
+            if states_a_point_in_time(old) {
+                patch.insert(format!("{path}/date"), date.clone());
+                return;
+            }
+            for member in ["year", "month", "day"] {
+                let Some(value) = date.get(member) else {
+                    continue;
+                };
+                if old.date.as_ref().and_then(|old| old.get(member)) != Some(value) {
+                    patch.insert(format!("{path}/date/{member}"), value.clone());
+                }
+            }
+        },
+    );
+}
+
+/// The edited anniversaries under the keys the server holds them by.
+///
+/// Every other keyed map crosses with its key in `X-JMAP-KEY` and comes back
+/// wearing it. The dates do not: EDS keeps the birthday in a structured field
+/// and rebuilds the line out of it, dropping the parameters — verified against
+/// libebook-contacts 3.52, where an untouched line keeps them and a rewritten
+/// one does not. So the entry a keyless date belongs to is found by what kind
+/// of date it is, which is enough because Evolution has exactly one field per
+/// kind: the birthday it hands back is the birthday the card already had.
+///
+/// Entries of one kind are paired in order, and an entry whose key *did*
+/// survive keeps it and is not paired against — otherwise a card carrying two
+/// birthdays, of which Evolution shows the first and passes the second
+/// through untouched, would have them swapped by every save.
+fn rekey_anniversaries(
+    current: Option<&BTreeMap<String, Anniversary>>,
+    edited: Option<&BTreeMap<String, Anniversary>>,
+) -> Option<BTreeMap<String, Anniversary>> {
+    let edited = edited?;
+    let empty = BTreeMap::new();
+    let current = current.unwrap_or(&empty);
+    let mut unclaimed: Vec<(&String, &Anniversary)> = current
+        .iter()
+        .filter(|(key, entry)| states_anniversary(entry) && !edited.contains_key(*key))
+        .collect();
+
+    let mut rekeyed = BTreeMap::new();
+    for (key, entry) in edited {
+        let key = match current.contains_key(key) {
+            true => key.clone(),
+            false => match unclaimed.iter().position(|(_, old)| old.kind == entry.kind) {
+                Some(index) => unclaimed.remove(index).0.clone(),
+                None => key.clone(),
+            },
+        };
+        rekeyed.insert(key, entry.clone());
+    }
+    Some(rekeyed)
 }
 
 /// The component list a save writes: what the `ADR` line now states, with
