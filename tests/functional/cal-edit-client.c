@@ -3,7 +3,8 @@
  *
  * The second client half of the calendar functional test: an ordinary libecal
  * consumer that opens a calendar, reads an event the *server* already held,
- * retypes the place it happens at and writes it back.
+ * retypes the places it happens at and the document it points at, and writes
+ * them back.
  *
  * A program of its own rather than a phase of cal-client.c, which creates
  * every event it looks at. The two ask opposite questions. cal-client.c asks
@@ -22,7 +23,7 @@
  * runs this program and reads its output.
  *
  *   usage: functional-cal-edit-client <source-uid> <event-uid> <new-location>
- *                                    <new-conference-uri>
+ *                                    <new-conference-uri> <new-attach-uri>
  */
 
 #define LIBICAL_GLIB_UNSTABLE_API 1
@@ -212,6 +213,66 @@ report_places (const gchar *prefix,
 	}
 }
 
+/* Report what EDS holds for the document the event points at.
+ *
+ * A separate question from the two places above, and the reason is the value
+ * type. A LOCATION and a CONFERENCE are text and a URI, which libical keeps as
+ * the string the line carried; an ATTACH (RFC 5545 §3.8.1.1) has a value type of
+ * its own, so the parser builds an icalattach and the parameters end up standing
+ * beside a value the library re-made. Whether the X-JMAP-KEY survives that, and
+ * survives ECalMetaBackend's cache afterwards, is not settled by the other two
+ * properties surviving it — which is what this leg is for.
+ *
+ * The address is therefore read through i_cal_property_get_attach rather than
+ * i_cal_property_get_value_as_string: it is the URL libical parsed out, not the
+ * text of the line, so a value the round trip re-spelled shows up as a
+ * difference here instead of being hidden by the string form.
+ *
+ * FMTTYPE and SIZE go out beside the key because they are parameters libical
+ * *does* have an enum for. A cache that kept only what it recognised would
+ * answer those two and drop the key, so reporting all three tells "the cache
+ * dropped everything it did not know" apart from "the cache dropped the line".
+ */
+static void
+report_resource (const gchar *prefix,
+		 ICalComponent *event)
+{
+	ICalProperty *attach;
+	ICalParameter *parameter;
+	gchar *key;
+
+	attach = i_cal_component_get_first_property (event, I_CAL_ATTACH_PROPERTY);
+
+	if (attach) {
+		ICalAttach *value = i_cal_property_get_attach (attach);
+		const gchar *url = value ? i_cal_attach_get_url (value) : NULL;
+
+		g_print ("%s-attach=%s\n", prefix, url ? url : "");
+		g_clear_object (&value);
+	} else {
+		g_print ("%s-attach=\n", prefix);
+	}
+
+	key = x_parameter (attach, JMAP_KEY_PARAMETER);
+	g_print ("%s-attach-key=%s\n", prefix, key);
+	g_print ("%s-attaches=%u\n", prefix, property_count (event, I_CAL_ATTACH_PROPERTY));
+	g_free (key);
+
+	parameter = attach ? i_cal_property_get_first_parameter (
+		attach, I_CAL_FMTTYPE_PARAMETER) : NULL;
+	g_print ("%s-attach-fmttype=%s\n", prefix,
+		 parameter ? i_cal_parameter_get_fmttype (parameter) : "");
+	g_clear_object (&parameter);
+
+	parameter = attach ? i_cal_property_get_first_parameter (
+		attach, I_CAL_SIZE_PARAMETER) : NULL;
+	g_print ("%s-attach-size=%s\n", prefix,
+		 parameter ? i_cal_parameter_get_size (parameter) : "");
+	g_clear_object (&parameter);
+
+	g_clear_object (&attach);
+}
+
 /* Ask for one event until EDS has it, or give up. A miss arrives as
  * E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND rather than as a failure of the call, so
  * it is cleared and retried; any other error would be retried too, and the
@@ -253,14 +314,17 @@ main (int argc,
 	ICalComponent *read_back = NULL;
 	ICalComponent *read_back_event;
 	ICalProperty *conference;
+	ICalProperty *attach;
+	ICalAttach *attach_value;
 	const gchar *source_uid;
 	const gchar *event_uid;
 	const gchar *new_location;
 	const gchar *new_conference_uri;
+	const gchar *new_attach_uri;
 
-	if (argc != 5) {
+	if (argc != 6) {
 		g_printerr ("usage: %s <source-uid> <event-uid> <new-location> "
-			    "<new-conference-uri>\n", argv[0]);
+			    "<new-conference-uri> <new-attach-uri>\n", argv[0]);
 		return 2;
 	}
 
@@ -268,6 +332,7 @@ main (int argc,
 	event_uid = argv[2];
 	new_location = argv[3];
 	new_conference_uri = argv[4];
+	new_attach_uri = argv[5];
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
@@ -314,6 +379,7 @@ main (int argc,
 
 	g_print ("read-summary=%s\n", i_cal_component_get_summary (event));
 	report_places ("read", event);
+	report_resource ("read", event);
 
 	/* The first edit: the user retypes the place, which is what Evolution's
 	 * appointment editor writes into. i_cal_component_set_location replaces
@@ -345,6 +411,29 @@ main (int argc,
 	i_cal_property_set_value_from_string (conference, new_conference_uri, "URI");
 	g_object_unref (conference);
 
+	/* And the third: the address of the document the event points at. Like the
+	 * conference this is an edit another client makes rather than one
+	 * Evolution 3.52 offers — its appointment editor attaches files from the
+	 * user's own disk, which is a file: URI the mapping deliberately never
+	 * reads — and like the conference it is the only edit that makes the key
+	 * load-bearing, since RFC 5545 §3.8.1.1 admits any number of ATTACH lines.
+	 *
+	 * Set through the existing property, and through the icalattach API rather
+	 * than as a string, for the same two reasons the conference is: a fresh
+	 * property would carry no parameters by construction, and the value is the
+	 * one libical hands a consumer, so this is the edit a consumer can actually
+	 * make. */
+	attach = i_cal_component_get_first_property (event, I_CAL_ATTACH_PROPERTY);
+	if (!attach) {
+		g_printerr ("edit-attach: the event EDS handed back has no ATTACH to "
+			    "re-address\n");
+		return 1;
+	}
+	attach_value = i_cal_attach_new_from_url (new_attach_uri);
+	i_cal_property_set_attach (attach, attach_value);
+	g_object_unref (attach_value);
+	g_object_unref (attach);
+
 	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
 					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
 		return fail ("modify", error);
@@ -362,6 +451,7 @@ main (int argc,
 	}
 
 	report_places ("read-back", read_back_event);
+	report_resource ("read-back", read_back_event);
 
 	g_object_unref (read_back_event);
 	g_object_unref (read_back);

@@ -285,6 +285,28 @@ const PLACED_CONFERENCE_URI: &str = "https://meet.example/design-review";
 const PLACED_CONFERENCE_NAME: &str = "Video bridge";
 const PLACED_CONFERENCE_DESCRIPTION: &str = "dial in from the lobby phone";
 
+/// And the document the event points at — the third of the three maps the save
+/// patches into, and the one whose line libical does not leave as text.
+///
+/// An `ATTACH` is why this is a separate question from the `CONFERENCE` above.
+/// RFC 5545 §3.8.1.1 gives the property a value type of its own, and libical
+/// parses it into an `icalattach` rather than holding the string: the parameters
+/// ride beside a value the library has re-built, which is exactly the shape in
+/// which a cache loses one. Whether EDS carries the `X-JMAP-KEY` on *this*
+/// property was inferred from the two above until this leg measured it.
+///
+/// The `title` is the member with no room on the line at all, so it plays the
+/// part `description` plays for the two places: a save that replaced `links`
+/// would delete it. The `contentType` and the `size` are shown — an `FMTTYPE`
+/// and a `SIZE` — and still never written back, since they are the server's
+/// description of what it holds rather than a field the user was offered; they
+/// are asserted after the save for that reason, not as decoration.
+const PLACED_ATTACH_KEY: &str = "srv-att";
+const PLACED_ATTACH_HREF: &str = "https://files.example/design-review/agenda.pdf";
+const PLACED_ATTACH_TITLE: &str = "Agenda, with the numbers";
+const PLACED_ATTACH_MEDIA_TYPE: &str = "application/pdf";
+const PLACED_ATTACH_SIZE: u64 = 20480;
+
 /// The place the user retypes into the appointment editor's Location field. A
 /// different room, so a value half-written shows up as neither.
 const REPLACED_LOCATION_NAME: &str = "Room 7";
@@ -295,6 +317,12 @@ const REPLACED_LOCATION_NAME: &str = "Room 7";
 /// for it, and this is what says the path works through real EDS. A different
 /// host as well as a different path, so a URI half-rewritten is neither.
 const REPLACED_CONFERENCE_URI: &str = "https://call.example/rescheduled";
+
+/// And the address of the document afterwards — the edit an attachment can take
+/// through a libecal consumer, since `href` is the one member of a Link this
+/// mapping writes back. A different host as well as a different path, so a URI
+/// half-rewritten is neither.
+const REPLACED_ATTACH_HREF: &str = "https://docs.example/design-review/agenda-2.pdf";
 
 /// Put the event the second leg starts from into the mock's store, and hand back
 /// the id the server filed it under — which is also the `UID` EDS keys its cache
@@ -338,6 +366,19 @@ fn seed_placed_event(server: &jmap_mock::MockServer) -> Id {
                 "uri": PLACED_CONFERENCE_URI,
                 "name": PLACED_CONFERENCE_NAME,
                 "description": PLACED_CONFERENCE_DESCRIPTION,
+            }),
+        )]
+        .into(),
+    );
+    event.links = Some(
+        [(
+            PLACED_ATTACH_KEY.to_owned(),
+            serde_json::json!({
+                "@type": "Link",
+                "href": PLACED_ATTACH_HREF,
+                "contentType": PLACED_ATTACH_MEDIA_TYPE,
+                "size": PLACED_ATTACH_SIZE,
+                "title": PLACED_ATTACH_TITLE,
             }),
         )]
         .into(),
@@ -1018,6 +1059,7 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
             event_id.as_str(),
             REPLACED_LOCATION_NAME,
             REPLACED_CONFERENCE_URI,
+            REPLACED_ATTACH_HREF,
         ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1107,6 +1149,45 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         "EDS did not carry the LABEL naming the conference\n{report}"
     );
 
+    // And the document the event points at, read through libical's own
+    // `icalattach` rather than as a string — see `cal-edit-client.c`. The address
+    // says the drawing arrived; the key says a save can name the entry it came
+    // from, which for a `links` entry is the only way back, since the save
+    // compares the address the server stated against the one on the line.
+    assert_eq!(
+        seen.get("read-attach"),
+        Some(&PLACED_ATTACH_HREF),
+        "the resource the server holds did not reach the ATTACH line\n{report}"
+    );
+    // The observation this half of the leg was written for. `ATTACH` is not a
+    // text property: libical re-builds the value as an `icalattach`, so a cache
+    // that round-tripped the value and dropped what stood beside it would show
+    // up here and nowhere else in this file.
+    assert_eq!(
+        seen.get("read-attach-key"),
+        Some(&PLACED_ATTACH_KEY),
+        "EDS did not carry the X-JMAP-KEY the ATTACH went out with, so no save \
+         can name the entry the server chose\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-attaches"),
+        Some(&"1"),
+        "EDS holds an ATTACH line other than the one the mapping wrote\n{report}"
+    );
+    // The two standard parameters beside the invented one, and the same argument
+    // the conference's LABEL makes: a cache keeping only what libical has an enum
+    // for would answer these and drop the key above.
+    assert_eq!(
+        seen.get("read-attach-fmttype"),
+        Some(&PLACED_ATTACH_MEDIA_TYPE),
+        "EDS did not carry the FMTTYPE stating the resource's media type\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-attach-size"),
+        Some(&PLACED_ATTACH_SIZE.to_string().as_str()),
+        "EDS did not carry the SIZE the server estimated the resource at\n{report}"
+    );
+
     // And what EDS holds after the save: the place the user typed, on the line it
     // was typed onto, still carrying the key. One line, because a save that
     // *added* a place would leave two.
@@ -1139,6 +1220,21 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         seen.get("read-back-conferences"),
         Some(&"1"),
         "the save left the old address on the event beside the new one\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-attach"),
+        Some(&REPLACED_ATTACH_HREF),
+        "the address of the document did not survive the save\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-attach-key"),
+        Some(&PLACED_ATTACH_KEY),
+        "the save refiled the resource under another key\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-attaches"),
+        Some(&"1"),
+        "the save left the old resource on the event beside the new one\n{report}"
     );
 
     let calls = server.method_calls();
@@ -1200,6 +1296,30 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         ),
         "the new address did not reach the server as a patch of the entry the \
          line was drawn from: {event:?}"
+    );
+    // And the resource, which asks the narrowest question of the three: only
+    // `href` goes back. The `title` had no room on the line and would be gone had
+    // the save named `links`; the `contentType` and the `size` were *shown* and
+    // are still the server's own, so a save that wrote them back — reading an
+    // editor's re-typed line as "the media type was cleared" — fails here even
+    // though every observation the client made would still pass.
+    assert_eq!(
+        event.links,
+        Some(
+            [(
+                PLACED_ATTACH_KEY.to_owned(),
+                serde_json::json!({
+                    "@type": "Link",
+                    "href": REPLACED_ATTACH_HREF,
+                    "contentType": PLACED_ATTACH_MEDIA_TYPE,
+                    "size": PLACED_ATTACH_SIZE,
+                    "title": PLACED_ATTACH_TITLE,
+                }),
+            )]
+            .into()
+        ),
+        "the resource the user re-addressed did not reach the server as a patch \
+         of the entry it was drawn from: {event:?}"
     );
     // And the title, which says the save patched the event rather than replacing
     // it with what the one component EDS handed over could state.
