@@ -11,12 +11,15 @@
 //! two ends and nothing in between — the client program says what EDS gave a
 //! libecal consumer, the mock says what the backend asked the server for.
 //!
-//! Two legs, and they ask opposite questions, so they run different client
+//! Three legs, asking different questions, so they run different client
 //! programs. The first creates every event it looks at, which is what a user
 //! making an appointment does; the second starts from an event the *server*
 //! held before EDS ever connected, carrying members no iCalendar line can
 //! state, and asks what survives the round trip out to a component and back
-//! through a save. Only an event nobody here created can ask that.
+//! through a save. Only an event nobody here created can ask that. The third
+//! asks what a zone only the server can name means to a consumer — the instant
+//! it puts an appointment at, before and after the one edit such an event can
+//! be given.
 
 use std::collections::BTreeMap;
 
@@ -495,6 +498,18 @@ const DEFINED_ZONE_TITLE: &str = "Design review";
 const UNDEFINED_ZONE_TITLE: &str = "Design review, nowhere in particular";
 const ZONE_START: &str = "2026-04-09T10:00:00";
 const ZONE_DURATION: &str = "PT1H";
+
+/// What the user retypes over [`DEFINED_ZONE_TITLE`] in the appointment editor —
+/// the one edit an event in a zone only its server can name can be given, since
+/// Evolution offers no way to redefine the zone and this mapping would refuse to
+/// send a redefinition anyway.
+///
+/// A title rather than the clock deliberately: what the save has to leave alone is
+/// the zone, and an edit that restated the start could not tell "the zone survived"
+/// from "the start was re-sent in a way that happened to agree". The user's edit
+/// here has nothing to do with the zone, so anything that happens to the zone is
+/// something the save did on its own.
+const ZONE_RETYPED_TITLE: &str = "Design review, with the numbers";
 
 /// The wall clock EDS should show for both, which is the start above as an
 /// iCalendar `DATE-TIME`.
@@ -1925,12 +1940,25 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
 /// two instants two hours apart. Without it, an EDS that had thrown the definition
 /// away would still be caught — but nothing would say what that costs, and the cost
 /// is `jmap-ical`'s documented fallback rather than a bug.
+///
+/// **And then the user renames the appointment**, which is the other half of the
+/// same question and the reason this leg does not end at the read. A zone that is
+/// resolvable until the first ordinary edit is not resolvable; and this save is the
+/// one place the whole chain of "seen in part, so not written back" decisions can be
+/// checked against what a server actually ends up holding. `jmap-ical` cannot name
+/// this zone in JSCalendar's terms, so `patch::diff` must leave `timeZone` out of the
+/// patch rather than send the identifier it read or clear the property — and the
+/// definition in the server's `timeZones`, which no component EDS hands back even
+/// mentions, must still be there afterwards. Fixtures say those decisions are
+/// coded; only this leg says they hold once EDS, its cache and libical have each had
+/// the component in their hands.
 #[test]
-fn the_zone_only_the_server_can_name_reaches_a_consumer_as_the_instant_it_means() {
+fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
     let client = required_path("JMAP_FUNCTIONAL_CAL_ZONE_CLIENT");
     let module = required_path("JMAP_FUNCTIONAL_CAL_MODULE");
 
     let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
     let (defined, undefined) = seed_zoned_events(&server);
     let port: u16 = server
         .origin()
@@ -1946,7 +1974,12 @@ fn the_zone_only_the_server_can_name_reaches_a_consumer_as_the_instant_it_means(
 
     let output = session.run(
         &client,
-        &["jmap-functional", defined.as_str(), undefined.as_str()],
+        &[
+            "jmap-functional",
+            ZONE_RETYPED_TITLE,
+            defined.as_str(),
+            undefined.as_str(),
+        ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2068,5 +2101,78 @@ fn the_zone_only_the_server_can_name_reaches_a_consumer_as_the_instant_it_means(
         ),
         "a zone that is named nowhere and defined nowhere no longer floats, which \
          is a change in what an unresolvable start costs the user\n{report}"
+    );
+
+    // And what the user sees after renaming the first event: the new title, on an
+    // appointment that has not moved. The wall clock and the identifier say the save
+    // did not restate the start; the pair below says the zone can still be resolved
+    // to the instant the server means, which is the only assertion that would catch
+    // a save that kept the identifier while destroying what defines it.
+    assert_eq!(
+        seen.get("saved-summary"),
+        Some(&ZONE_RETYPED_TITLE),
+        "the title the user retyped did not survive the save\n{report}"
+    );
+    assert_eq!(
+        (
+            seen.get("saved-dtstart"),
+            seen.get("saved-dtstart-tzid"),
+            seen.get("saved-zone-known"),
+            seen.get("saved-zone-utc"),
+        ),
+        (
+            Some(&ZONE_DTSTART),
+            Some(&DEFINED_ZONE),
+            Some(&"1"),
+            Some(&DEFINED_ZONE_DTSTART_UTC),
+        ),
+        "renaming the appointment cost the user the zone it is in: after the save \
+         EDS states another clock, or another identifier, or the calendar can no \
+         longer say what that identifier means\n{report}"
+    );
+
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "CalendarEvent/set"),
+        "the new title never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let event = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .calendar_events
+        .get(&defined)
+        .unwrap_or_else(|| panic!("the save removed the event the mock was seeded with"));
+
+    // The claim on the server's side, and the half no observation of EDS could make:
+    // the title changed, and the two properties that say where in time the event is
+    // are exactly as they were seeded. `timeZone` is the one the mapping read back
+    // off the component and cannot express — sending it would be sending an
+    // iCalendar identifier as a JSCalendar `TimeZoneId`, and clearing it would float
+    // an appointment the user only renamed. `timeZones` is stronger still: no
+    // component EDS handed anyone mentions it, so the only way it could change here
+    // is a save that overwrote what it never saw.
+    assert_eq!(
+        event.title.as_deref(),
+        Some(ZONE_RETYPED_TITLE),
+        "the server does not hold the title the user typed"
+    );
+    assert_eq!(
+        event.time_zone.as_deref(),
+        Some(DEFINED_ZONE),
+        "the save moved the event out of the zone the server named for it"
+    );
+    assert_eq!(
+        event.time_zones,
+        Some([(DEFINED_ZONE.to_owned(), defined_zone())].into()),
+        "the save rewrote or dropped the definition of a zone it never had in \
+         its hands"
+    );
+    assert_eq!(
+        event.start.as_deref(),
+        Some(ZONE_START),
+        "the save restated the wall clock the event starts at"
     );
 }

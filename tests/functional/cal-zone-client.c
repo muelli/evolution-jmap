@@ -1,19 +1,25 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * The third client half of the calendar functional test, and the smallest: an
- * ordinary libecal consumer that opens a calendar, reads events the *server*
- * already held, and reports the one thing it came for — what instant EDS and
- * libical between them say each event starts at, asked twice: of libical alone,
- * and of the calendar itself, which is the path Evolution takes.
+ * The third client half of the calendar functional test: an ordinary libecal
+ * consumer that opens a calendar, reads events the *server* already held, and
+ * reports the one thing it came for — what instant EDS and libical between them
+ * say each event starts at, asked twice: of libical alone, and of the calendar
+ * itself, which is the path Evolution takes. Then it retypes the title of the
+ * first of them and looks again, which asks the same question of the same event
+ * after a save.
  *
  * A program of its own rather than more arguments to cal-edit-client.c, which
- * asks what survives a save. Nothing here is written back, and that is the
- * point: the question is whether the zone an event names can be *resolved* at
- * all, so the program's whole job is to look. Handing cal-edit-client.c an
- * event with no place, no conference and no attachment to retype would mean
- * either weakening what it insists on finding or seeding an event with members
- * this question has no use for.
+ * asks what survives a save of the members no iCalendar line has room for:
+ * handing it an event with no place, no conference and no attachment to retype
+ * would mean either weakening what it insists on finding or seeding an event
+ * with members this question has no use for. The edit here is the *only* one a
+ * user can make to an event in a zone only their server can name — its title —
+ * and it is here because reading and saving are two halves of one question. An
+ * appointment whose zone is resolvable until the first time the user renames it
+ * is not usable, and the half that could not be measured without the other half
+ * in the same run is exactly this one: the cache the read filled is the cache
+ * the save is made against.
  *
  * Several events in one run rather than one per run, because what is being
  * measured is a *contrast*: a zone the server defined against one it only named.
@@ -28,12 +34,13 @@
  * `rust/crates/jmap-functional/tests/calendar.rs`, which seeds the events, runs
  * this program and reads its output.
  *
- *   usage: functional-cal-zone-client <source-uid> <event-uid>...
+ *   usage: functional-cal-zone-client <source-uid> <new-summary> <event-uid>...
  *
  * The observations of the n-th event on the command line are prefixed `event-n`,
  * counting from one. Positional rather than keyed by the UID because the UID is
  * whatever the mock filed the event under, and a key beginning with a digit
- * makes for a poor observation name.
+ * makes for a poor observation name. What the first event looks like after the
+ * save is prefixed `saved`.
  */
 
 #include <libecal/libecal.h>
@@ -200,15 +207,26 @@ main (int argc,
 	ESource *source;
 	EClient *client;
 	ECalClient *cal;
+	ICalComponent *fetched;
+	ICalComponent *event;
+	ICalComponent *read_back = NULL;
+	ICalComponent *read_back_event;
 	const gchar *source_uid;
+	const gchar *new_summary;
+	const gchar *saved_uid;
+	int first;
 	int index;
 
-	if (argc < 3) {
-		g_printerr ("usage: %s <source-uid> <event-uid>...\n", argv[0]);
+	if (argc < 4) {
+		g_printerr ("usage: %s <source-uid> <new-summary> <event-uid>...\n", argv[0]);
 		return 2;
 	}
 
 	source_uid = argv[1];
+	new_summary = argv[2];
+	/* The first event on the command line, and the one the save is made to. */
+	first = 3;
+	saved_uid = argv[first];
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
@@ -240,10 +258,8 @@ main (int argc,
 	cal = E_CAL_CLIENT (client);
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
-	for (index = 2; index < argc; index++) {
-		ICalComponent *fetched;
-		ICalComponent *event;
-		gchar *prefix = g_strdup_printf ("event-%d", index - 1);
+	for (index = first; index < argc; index++) {
+		gchar *prefix = g_strdup_printf ("event-%d", index - first + 1);
 
 		fetched = wait_for_event (cal, argv[index]);
 		if (!fetched) {
@@ -273,6 +289,55 @@ main (int argc,
 		g_object_unref (fetched);
 	}
 
+	/* And the save. The event is asked for again rather than kept from the loop
+	 * above, which costs one call to a cache that certainly holds it by now and
+	 * keeps the loop's job to reporting.
+	 *
+	 * The title is retyped through i_cal_component_set_summary, which replaces the
+	 * value of the SUMMARY already there and leaves everything around it alone —
+	 * so what goes back is the component EDS handed over with one line rewritten,
+	 * which is what Evolution's appointment editor sends. Nothing here touches the
+	 * DTSTART: the point of the save is that an edit which has nothing to do with
+	 * the zone does not cost the user the zone, and an edit that restated the
+	 * clock could not tell the two apart. */
+	fetched = wait_for_event (cal, saved_uid);
+	if (!fetched) {
+		g_printerr ("get-before-modify: EDS no longer has the event %s\n", saved_uid);
+		return 1;
+	}
+
+	event = first_vevent (fetched);
+	if (!event) {
+		g_printerr ("get-before-modify: what EDS handed back for %s holds no "
+			    "VEVENT\n", saved_uid);
+		return 1;
+	}
+
+	i_cal_component_set_summary (event, new_summary);
+
+	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
+					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
+		return fail ("modify", error);
+
+	g_object_unref (event);
+	g_object_unref (fetched);
+
+	if (!e_cal_client_get_object_sync (cal, saved_uid, NULL, &read_back, NULL, &error))
+		return fail ("get-after-modify", error);
+
+	read_back_event = first_vevent (read_back);
+	if (!read_back_event) {
+		g_printerr ("get-after-modify: what EDS handed back holds no VEVENT\n");
+		return 1;
+	}
+
+	g_print ("saved-summary=%s\n", i_cal_component_get_summary (read_back_event));
+	g_print ("saved-definitions=%u\n", definition_count (read_back));
+	functional_report_start ("saved", read_back_event);
+	report_zone_lookup ("saved", cal, read_back_event);
+
+	g_object_unref (read_back_event);
+	g_object_unref (read_back);
 	g_object_unref (client);
 	g_object_unref (source);
 	g_object_unref (registry);
