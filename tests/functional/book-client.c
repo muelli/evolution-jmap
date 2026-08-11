@@ -20,18 +20,19 @@
  * backends implement. Binding a second surface just to call it from a test
  * would put a layer of our own between EDS and the thing under test.
  *
- * There are six phases, chosen on the command line, because they need
+ * There are seven phases, chosen on the command line, because they need
  * different books: `write` starts from an empty address book and puts a
- * contact into it, while `edit`, `rename`, `repicture`, `recalendar` and
- * `respouse` each start from one the mock was seeded with before EDS connected —
- * a card that came from the *server*, which is the only way to have EDS read
- * something no vCard this program could write would produce. Those five differ
- * only in which field the user changes, and that is the whole distinction under
- * test: `edit` touches a field beside the name, `rename` retypes the name
- * itself, `repicture` replaces the photo, `recalendar` retypes the calendar
- * address, and `respouse` retypes who the contact is married to. They are modes
- * of one program rather than separate programs because they open the same book
- * the same way and differ only in what they then ask of it.
+ * contact into it, while `edit`, `rename`, `repicture`, `recalendar`,
+ * `respouse` and `unspouse` each start from one the mock was seeded with before
+ * EDS connected — a card that came from the *server*, which is the only way to
+ * have EDS read something no vCard this program could write would produce. Those
+ * six differ only in which field the user changes, and that is the whole
+ * distinction under test: `edit` touches a field beside the name, `rename`
+ * retypes the name itself, `repicture` replaces the photo, `recalendar` retypes
+ * the calendar address, `respouse` retypes who the contact is married to, and
+ * `unspouse` empties that field instead. They are modes of one program rather
+ * than separate programs because they open the same book the same way and differ
+ * only in what they then ask of it.
  *
  *   usage: functional-book-client <source-uid> write <full-name> <photo-base64>
  *          functional-book-client <source-uid> edit <contact-uid> <email>
@@ -42,6 +43,7 @@
  *          functional-book-client <source-uid> recalendar <contact-uid> \
  *                                 <calendar-uri>
  *          functional-book-client <source-uid> respouse <contact-uid> <spouse>
+ *          functional-book-client <source-uid> unspouse <contact-uid>
  */
 
 #include <libebook/libebook.h>
@@ -333,6 +335,35 @@ report_spouse (const gchar *prefix,
 	const gchar *spouse = e_contact_get_const (contact, E_CONTACT_SPOUSE);
 
 	g_print ("%s-spouse=%s\n", prefix, spouse ? spouse : "");
+}
+
+/* Report the X-EVOLUTION-SPOUSE line itself, which is the one thing about this
+ * property report_spouse above cannot say: e_contact_get reads a line naming
+ * nobody and a card carrying no such line alike, as no spouse.
+ *
+ * Which of those two a cleared field produces is libebook-contacts' business and
+ * is what the `unspouse` phase is here to look at. The mapping withdraws the
+ * marriage either way — a line naming nobody is refused on the way in — so this
+ * is reported rather than judged: the harness holds the *field* to being empty,
+ * which is true whichever EDS does, and reads this to know which it did. */
+static void
+report_spouse_line (const gchar *prefix,
+                    EContact *contact)
+{
+	EVCardAttribute *attribute;
+	gchar *value;
+
+	attribute = e_vcard_get_attribute (E_VCARD (contact), "X-EVOLUTION-SPOUSE");
+	g_print ("%s-spouse-line=%s\n", prefix, attribute ? "present" : "absent");
+
+	if (!attribute)
+		return;
+
+	/* NULL for an attribute holding no value at all, which is a different
+	 * shape from one holding the empty string and worth telling apart. */
+	value = e_vcard_attribute_get_value (attribute);
+	g_print ("%s-spouse-line-value=%s\n", prefix, value ? value : "");
+	g_free (value);
 }
 
 /* The first phase: an empty book, one contact written into it with every
@@ -810,6 +841,45 @@ respouse_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
+/* The seventh phase: the user empties the Spouse field on the same seeded card,
+ * rather than retyping it.
+ *
+ * The other half of `respouse`, and the branch of the save nothing else reaches:
+ * a card handed back to the backend stating no relations at all, where the
+ * marriage has to be withdrawn with nothing put in its place. The brother is
+ * what says the withdrawal was of one entity rather than of the property — he
+ * reaches no line, so a save that answered an emptied field by taking the whole
+ * of `relatedTo` back would delete a relation the user never saw.
+ *
+ * The empty string rather than NULL, because that is what Evolution's contact
+ * editor writes: it hands e_contact_set the text of the entry, and the text of an
+ * entry the user emptied is "". What EDS then does to the line is the one thing
+ * about this path that was inferred rather than measured, so it is reported —
+ * see report_spouse_line. */
+static int
+unspouse_phase (EBookClient *book,
+                const gchar *uid)
+{
+	EContact *contact;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	report_seeded_contact (contact);
+
+	e_contact_set (contact, E_CONTACT_SPOUSE, "");
+
+	/* The card as the save is about to be handed it, before the modify: what
+	 * the field reads as, and what is left of the line it came off. */
+	report_spouse ("cleared", contact);
+	report_spouse_line ("cleared", contact);
+
+	return save_and_report (book, contact, uid);
+}
+
 static void
 usage (const gchar *program)
 {
@@ -818,8 +888,9 @@ usage (const gchar *program)
 		    "       %s <source-uid> rename <contact-uid> <full-name> <given-name>\n"
 		    "       %s <source-uid> repicture <contact-uid> <photo-base64>\n"
 		    "       %s <source-uid> recalendar <contact-uid> <calendar-uri>\n"
-		    "       %s <source-uid> respouse <contact-uid> <spouse>\n",
-		    program, program, program, program, program, program);
+		    "       %s <source-uid> respouse <contact-uid> <spouse>\n"
+		    "       %s <source-uid> unspouse <contact-uid>\n",
+		    program, program, program, program, program, program, program);
 }
 
 int
@@ -848,7 +919,8 @@ main (int argc,
 	      (g_str_equal (phase, "rename") && argc == 6) ||
 	      (g_str_equal (phase, "repicture") && argc == 5) ||
 	      (g_str_equal (phase, "recalendar") && argc == 5) ||
-	      (g_str_equal (phase, "respouse") && argc == 5))) {
+	      (g_str_equal (phase, "respouse") && argc == 5) ||
+	      (g_str_equal (phase, "unspouse") && argc == 4))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -913,8 +985,10 @@ main (int argc,
 		status = repicture_phase (book, argv[3], argv[4]);
 	else if (g_str_equal (phase, "recalendar"))
 		status = recalendar_phase (book, argv[3], argv[4]);
-	else
+	else if (g_str_equal (phase, "respouse"))
 		status = respouse_phase (book, argv[3], argv[4]);
+	else
+		status = unspouse_phase (book, argv[3]);
 
 	g_object_unref (client);
 	g_object_unref (source);

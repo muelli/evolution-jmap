@@ -10,13 +10,14 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Six legs, because they need six books. The first starts empty and writes
-//! a contact into it. The other five each start from a card the mock was
+//! Seven legs, because they need seven books. The first starts empty and writes
+//! a contact into it. The other six each start from a card the mock was
 //! seeded with before EDS ever connected — a card from the *server*, holding a
 //! shape no vCard can state, which is the only way to ask what real EDS does to
 //! it — and take the branches a save can take with it: the user edits a field
 //! beside the name, retypes the name itself, picks a new picture, retypes their
-//! calendar address, or retypes who they are married to.
+//! calendar address, retypes who they are married to, or clears that field
+//! altogether.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
@@ -1788,6 +1789,143 @@ fn retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed() {
         relation_of("spouse"),
         "the name the user typed reached the server as something other than a \
          marriage: {card:?}"
+    );
+    assert_the_seeded_sibling_survived(card);
+    // And what nobody touched at all, asserted for the reason the other legs
+    // assert them.
+    assert_the_seeded_picture_survived(card);
+    assert_the_seeded_calendars_survived(card);
+}
+
+/// The seventh leg: the user *clears* the Spouse field, on the same card the
+/// server relates to two people.
+///
+/// The other half of the marriage, and the one branch of the save that no leg
+/// above reaches: an edited card stating no relations at all. Every other leg
+/// hands the save a `relatedTo` holding something, so the path where the whole
+/// property has gone from the read-back vCard — a withdrawal with nothing to put
+/// in its place — has only ever been driven against fixtures.
+///
+/// Which is also where the fixtures rest on an *inference* the daemons are
+/// needed to settle. `as_evolution_retypes_the_spouse` in `jmap-book-sync`'s
+/// tests assumes clearing the field leaves an empty `X-EVOLUTION-SPOUSE` line
+/// rather than dropping the attribute, by analogy with another field; the save
+/// is written to withdraw the marriage either way — the reader refuses a line
+/// naming nobody — but which one real EDS does was never measured. So the client
+/// reports what it found on the card it is about to hand over, and what it
+/// reported against libebook-contacts 3.52 is the empty line the fixture assumed:
+/// `cleared-spouse-line=present`, `cleared-spouse-line-value=` (empty).
+///
+/// That observation is printed rather than asserted, and the assertion below is
+/// the version-robust half of it: whatever EDS did to the line, the *field*
+/// Evolution shows must read empty. Pinning the attribute's presence instead
+/// would make a legitimate change in a later libebook-contacts look like a bug in
+/// this repository, when both shapes reach the same withdrawal — which is not a
+/// guess either: the same EDS drops the attribute outright when the field is set
+/// to `NULL` rather than to the empty string, and this leg passes unchanged
+/// against that card too.
+///
+/// The brother is again what makes the leg say something: emptying the field
+/// withdraws one marriage, and a save that answered it by taking the property
+/// back — the shape `relatedTo: null` — would delete a relation of a type no
+/// field shows, which the user never saw and cannot have cleared.
+#[test]
+fn clearing_the_spouse_through_eds_withdraws_the_marriage_and_keeps_the_brother() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/address-book-unspouse"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(&client, &["jmap-functional", "unspouse", card_id.as_str()]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // The marriage the card started from, so the leg says what was cleared
+    // rather than only that nothing is there afterwards — a spouse EDS never
+    // read would make every assertion below pass for the wrong reason.
+    assert_eq!(
+        seen.get("read-spouse"),
+        Some(&SEEDED_SPOUSE),
+        "EDS did not read the spouse off the line the emitter wrote\n{report}"
+    );
+
+    // What the save is handed: a card whose Spouse field is empty. This is the
+    // measurement the fixtures could not make — see the comment above — and the
+    // failure it rules out is EDS holding the old name on a line the field no
+    // longer shows, which would reach the server as a marriage nobody withdrew.
+    assert_eq!(
+        seen.get("cleared-spouse"),
+        Some(&""),
+        "EDS kept a spouse on the card after the field was cleared\n{report}"
+    );
+
+    // And what EDS holds after the save, back out of the cache file the
+    // backend's re-rendered card was stored into: still nobody. A name here is
+    // the server having been told to keep the marriage.
+    assert_eq!(
+        seen.get("read-back-spouse"),
+        Some(&""),
+        "the cleared Spouse field came back filled in\n{report}"
+    );
+
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the withdrawal never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    // The other end, and the load-bearing assertion: the brother alone, of the
+    // type he arrived with. No entry keyed by the old spouse — that would be the
+    // marriage never withdrawn — and a `relatedTo` that is present at all, since
+    // the property going with the marriage is the brother going too.
+    let related = card
+        .related_to
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped everyone the card relates to: {card:?}"));
+    assert_eq!(
+        related.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_SIBLING],
+        "clearing the Spouse field did not withdraw exactly the marriage: {card:?}"
     );
     assert_the_seeded_sibling_survived(card);
     // And what nobody touched at all, asserted for the reason the other legs
