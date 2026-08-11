@@ -19042,3 +19042,113 @@ collapse into the single `N` field they share and come back as one component
 carrying their concatenation, which the merge then reads as both having been
 deleted — the `restore_address_components` treatment the street side got, and
 which the name side has never had.
+
+## 2026-08-11 (hundred-and-eighty-eighth session)
+
+**A double-barrelled given name was destroyed by every save, and the last
+session said this hole did not exist.** `restore_address_components` was left
+address-specific one session ago on the stated grounds that "telling a street
+name from its house number has no name-side counterpart". It has one. RFC 9553
+§2.2.1 states a double-barrelled given name as **two `given` components**, and
+`N`'s second field holds one string, so the emitter joins them — `Jean` + `Paul`
+→ `N:Oldenburg;Jean Paul;;;` — and the reader hands back one `given` component
+saying `Jean Paul`. `merge_named` matches by kind *and* value, so both halves
+read as deleted and their own concatenation read as newly typed: a save that
+changed nothing rewrote `name/components` (state 3 → 4, which is what the red
+test failed on), the two components collapsed into one, and each half's
+`phonetic` spelling — carried across only for a component that kept its value —
+went with them. Exactly the bug the street side had had, in the same shape, one
+level over.
+
+**So the restoring step is now shared too, and the argument for sharing is the
+same one that made `merge_named` one function.** `restore_shared_fields` is the
+generic half: given the field positions to look at, a function saying which
+field a part is written into, and one reading the text it contributes, it puts
+the parts back wherever the field still reads as those parts joined. What stays
+per-side is only the table lookup — `address_field` for the seven `ADR` fields
+plus the house number that joins the street's, the new `name_field` for `N`'s
+five. `maps_name_component` and `name_fields` now go through `name_field` as
+well, so there is one place that knows which `N` field a kind lands in rather
+than three spellings of it.
+
+The two sides do share the field for *different reasons*, which is worth
+writing down because it decides what the restore can and cannot recover. On an
+address it is two different *kinds* — `name` and `number` — sharing one field;
+on a name it is two components of **one** kind sharing the field their kind
+owns. The algorithm does not care: it collects the server's parts for a field,
+joins them, and compares. It also means the name side can never see the
+"several kinds in one field" case, and the address side can see both at once.
+
+**When the user retypes the field, the parts stay gone** — the half of the
+behaviour that is easy to get backwards. Nothing in `Hans` says which half of
+`Jean Paul` it replaced, so restoring would leave `Jean` standing next to
+`Hans`, which is the name-side spelling of a house number left standing on a
+street that is no longer there. `retyping_a_double_barrelled_given_name_
+replaces_the_parts_it_was_built_from` pins that, and it was **green before the
+fix** — it is a guard against the new code over-reaching, not the red test.
+
+Mutation-checked, `contact.rs` and `patch.rs` backed up with `cp` and restored
+with `cp` (never `git checkout`). Dropping the `value(part) == joined` guard so
+the parts come back unconditionally: five tests fail, both new ones among them,
+and both address tests — which is the shared code earning its keep, one mutation
+caught on two sides. Joining the parts with `""` instead of `" "`: two, one per
+side. Skipping the restore call in `diff_name` altogether: the red test, as run
+before the fix.
+
+One mutation was **not** caught, and it is not a missing test: splicing the
+restored parts in reverse order changes nothing observable. `merge_named` walks
+the *server's* list and matches by value, so the order the parts sit in inside
+the edited list never reaches the output — the same is true on the address side.
+The docs' "in the order and shape they went out in" is therefore a statement
+about this function's own contract, not something a caller can currently observe;
+a future caller that did not re-order would depend on it.
+
+Tests: 946 in the default set, up 2 from 944, both new in `jmap-book-sync`'s
+save path.
+
+Verified locally: `cargo test --locked` 946; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all
+--check` and `cargo clippy --all-targets --locked -- -D warnings` clean, and
+`cargo clippy -p jmap-backend-book --all-targets --locked` clean for the
+header-needing crate that consumes the changed API. `ci/checks.sh` still stops
+at its first step — `reuse` is not on this VM and neither `pipx` nor `uvx` is
+installed — so the licence check was done by hand: no file was added, all four
+sources touched already carry an SPDX header, and `Cargo.lock` is untouched, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+Two new rustdoc warnings of the class this crate already had sixteen of: the
+public `restore_address_components` and `restore_name_components` each link the
+private `restore_shared_fields` their prose is about. Linking the private helper
+under discussion is `contact.rs`'s deliberate idiom (`ADDRESS_COMPONENTS`,
+`drawn_service`, `SERVICE_SCHEMES`, …), so consistency won over a clean
+`cargo doc`; if that class is ever cleaned up, these go with it.
+
+**What is *not* verified.** The same gap the pronunciation work ended on, now
+carrying more weight: the whole mechanism rests on real EDS handing the `N`
+field back byte-identically, because "the field still reads as the parts joined"
+is a *string* comparison. If EDS normalised the whitespace inside the field —
+collapsing a double space, trimming — a name the user never touched would read
+as retyped and both halves would be replaced by the field's text. The functional
+book leg drives only a *create* through real EDS and has no modify phase, so
+nothing here measures that. The mock-driven tests cover the logic end to end
+(genuine vCard text through the real reader and patch builder); what they cannot
+cover is EDS's own round trip.
+
+No milestone tag. Removed from the blocker list: two name components of one kind
+collapsing into their concatenation. Unchanged blockers: the calcard directive's
+two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs
+human verification in real Evolution**; `docs/MILESTONES.md` does not exist, so
+the M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its
+own; `links` and `CONFERENCE` on the calendar side rest on untested assumptions;
+the multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL` "Evolution shows only the first"
+bet is still unverified in real Evolution; the two `LABEL` `TYPE` risks stand; a
+deathday and a birthday stated as a year alone are still invisible; the
+conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified
+and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; no test drives a `uri`-only
+entry through real EDS; the functional book leg still has no modify phase, so no
+test in this repository proves EDS returns an `N` field value unchanged — and
+two mechanisms now depend on it; and the `jmap-mail` `transport.rs` hang is
+still an open design question with a lock-order hypothesis attached.
