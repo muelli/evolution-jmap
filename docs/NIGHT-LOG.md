@@ -19771,3 +19771,103 @@ be moved between the Home and Work slots at all is unknown; no test drives a
 what Evolution's contact editor writes for a replaced photo is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-ninety-fifth session)
+
+**The calendar and free/busy addresses now cross through real EDS, and the key
+that survives being set is measured rather than probed.** Last session mapped
+JSContact `calendars` onto `CALURI` and `FBURL` and established, with a throwaway
+C program against libebook-contacts 3.52, that a set on
+`E_CONTACT_CALENDAR_URI` or `E_CONTACT_FREEBUSY_URL` rewrites the value of the
+first line of that name in place and leaves its parameters — `X-JMAP-KEY`
+included — where they were. That measurement is what the save path rests on, and
+a probe is not the path Evolution takes. This session puts it on the daemons: a
+fifth `functional-book` leg, and both fields added to the first leg's write.
+
+**The counter-example is the point.** The picture two sessions ago went the other
+way: `e_contact_set` on `E_CONTACT_PHOTO` rebuilds the `PHOTO` line and drops its
+parameters, so a replaced picture arrives keyless and has to be *paired* with the
+one it replaced. A retyped calendar address arrives with its key intact and is
+simply *patched*. Same user gesture — edit a field, save — and opposite
+requirements, decided by whether the field is synthetic or a plain vCard
+attribute. Nothing below the daemons can tell the two apart, which is what makes
+this a functional leg rather than a mapping test.
+
+**Two entries, on lines of different names, because that is the shape that can
+go wrong.** The seeded card now carries `calendar-1` (kind `calendar`, with a
+`pref` no line can carry) and `freebusy-1` (kind `freeBusy`). The `recalendar`
+phase retypes only the Calendar field, and the assertions are: the server still
+holds exactly those two keys; `calendar-1` holds the new URI *and* still holds
+its `pref`, which is what says the save patched rather than replaced; and
+`freebusy-1` is untouched at both ends, which is what says a patch aimed at one
+entry did not land on the map. The free/busy line is also the second line of a
+map whose reader counts per-line keys, so it is where the two counters would
+collide if they shared one.
+
+**Both fields set in the write leg, never one alone.** The two lines are told
+apart by a `kind` neither of them carries, so the failure worth catching is the
+two having *swapped* — a free/busy URI shown to the user as their calendar, in
+the field right next to the real one. That failure is invisible to whichever
+field is asked about on its own, and invisible to a server-side check that only
+counts entries: a mapping that filed both URIs under one kind would still produce
+two entries with the right two URIs. So the client sets both and reads both back
+out of their own fields, and the mock end asserts the (kind, uri) pairs sorted.
+
+**Two mutation checks, because one of them would have been misleading.** Dropping
+`X-JMAP-KEY` from the emitter's two calendaring lines turns all three seeded legs
+red together — `left: ["c1", "c2"] right: ["calendar-1", "freebusy-1"]`, the
+server's own keys deleted and the entries re-added under names the reader invented
+by counting lines. That is the broad claim, and it is broad on purpose: the
+`edit` and `rename` legs now carry `assert_the_seeded_calendars_survived`, so an
+untouched calendar is an invariant of every seeded leg the way an untouched
+picture is. The sharper one: making `diff_calendars` a no-op leaves the other four
+green and reddens only the new leg, and it reddens it at the *client* end first —
+EDS's cache still holds the seeded URI after the save, because the backend
+re-renders the card from what the server now holds. So the leg is sensitive to the
+patch itself and not only to the key.
+
+Tests: 974 in the default set, unchanged — `jmap-functional` is out of
+`default-members`, so this lands as a fifth test in the `functional-book` ctest
+leg rather than as new cargo tests.
+
+Verified locally: `cargo test --locked` 974; full `ninja` then `ctest` 14/14,
+all four functional legs included; `cargo fmt --all --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings` and `cargo clippy -p jmap-functional
+--all-targets --locked -- -D warnings` both clean. `ci/checks.sh` still stops at
+its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so the licence check
+was done by hand: no file was added, all three files touched already carry an SPDX
+header, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave
+on the last green run.
+
+**What is still *not* verified.** The leg drives `e-book-client`, not Evolution's
+contact editor, so what a user clicking in the Calendar field actually sends is
+still one inference away: the phase writes what the editor is documented to write
+(an `e_contact_set` on the field), and no display here can confirm it. Nor does
+anything say whether the editor exposes the Free/Busy field on every contact or
+only some, or whether `ICSCALENDAR` — EDS's third calendaring field, unmapped
+because nothing on a card says an entry belongs there — is one a user can reach.
+A card carrying several `CALURI` lines still has only its first editable; the
+mapping handles the rest by key, and no leg drives that through the daemons. And
+the EDS behaviour measured here is 3.52 on this VM and only there, which is
+M10's job to watch.
+
+No milestone tag. Removed from the blocker list: no functional leg drives a
+calendar address through real EDS. Unchanged blockers: the calcard directive's
+two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs
+human verification in real Evolution**; `example-module` does not pass this VM's
+clippy (1.97) on unmodified master, 26 `manual_c_str_literals`;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty;
+`jmap-ical` emits no `VTIMEZONE` of its own; `links` and `CONFERENCE` on the
+calendar side rest on untested assumptions; the
+multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL`/`PHOTO` "Evolution shows only the
+first" bet is verified for `PHOTO` and still unverified for the rest; the two
+`LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone are
+still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and
+Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped
+and their contact-editor behaviour unmeasured; whether the editor lets a handle
+be moved between the Home and Work slots at all is unknown; no test drives a
+`uri`-only entry through real EDS; a `VALUE=uri` photo's rendering is unmeasured;
+what Evolution's contact editor writes for a replaced photo is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.
