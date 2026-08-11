@@ -89,6 +89,20 @@
       "uri": "https://vera.example/write-to-me"
     }
   },
+  "calendars": {
+    "c1": {
+      "@type": "Calendar",
+      "kind": "calendar",
+      "uri": "https://vera.example/cal/vera.ics",
+      "mediaType": "text/calendar",
+      "pref": 1
+    },
+    "c2": {
+      "@type": "Calendar",
+      "kind": "freeBusy",
+      "uri": "https://vera.example/fb/vera.ifb"
+    }
+  },
   "media": {
     "m1": {
       "@type": "Media",

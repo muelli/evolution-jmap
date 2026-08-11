@@ -3,12 +3,12 @@
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
-//! ORG, TITLE, ROLE, NOTE, BDAY, URL, PHOTO, CATEGORIES and the
+//! ORG, TITLE, ROLE, NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the
 //! instant-messaging `X-` lines.
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Media,
-    Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
+    Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{card_to_vcard, states_keyword, states_media, vcard_to_card};
 use serde_json::{Value, json};
@@ -1210,6 +1210,124 @@ fn invents_a_key_for_a_link_that_has_none() {
     let links = card.links.expect("links");
     assert_eq!(links["l1"].uri, "https://vera.example/");
     assert_eq!(links["l7"].uri, "https://vera.example/photos");
+}
+
+fn one_calendar(key: &str, kind: Option<&str>, uri: &str) -> ContactCard {
+    ContactCard {
+        calendars: Some(
+            [(
+                key.to_owned(),
+                Calendar {
+                    kind: kind.map(str::to_owned),
+                    uri: uri.to_owned(),
+                    ..Calendar::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+#[test]
+fn maps_calendars_onto_the_caluri_and_fburl_lines() {
+    // RFC 9555 §2.13.2 and §2.13.3 pair a Calendar of kind `calendar` with
+    // `CALURI` and one of kind `freeBusy` with `FBURL` — the two lines
+    // libebook-contacts 3.52 gives a field of their own, which Evolution shows
+    // as the contact's Calendar and Free/Busy addresses. Both are bare URIs
+    // with no room for anything else, so the JSContact key rides in
+    // X-JMAP-KEY as it does on a `URL`; measured against that version, a set
+    // rewrites the value of the first line of each name in place and leaves
+    // its parameters — the key included — where they were.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "CALURI"),
+        "CALURI;X-JMAP-KEY=c1:https://vera.example/cal/vera.ics"
+    );
+    assert_eq!(
+        line(&vcard, "FBURL"),
+        "FBURL;X-JMAP-KEY=c2:https://vera.example/fb/vera.ifb"
+    );
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let calendars = card.calendars.expect("calendars");
+    assert_eq!(calendars.keys().collect::<Vec<_>>(), vec!["c1", "c2"]);
+    assert_eq!(calendars["c1"].uri, "https://vera.example/cal/vera.ics");
+    assert_eq!(calendars["c1"].kind.as_deref(), Some("calendar"));
+    assert_eq!(calendars["c2"].uri, "https://vera.example/fb/vera.ifb");
+    assert_eq!(
+        calendars["c2"].kind.as_deref(),
+        Some("freeBusy"),
+        "the line the URI was read off is what says which kind it is"
+    );
+}
+
+#[test]
+fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
+    // The fixture's `c3` names no kind at all. RFC 9553 §2.4.1 makes `kind`
+    // mandatory and gives it no default, so such an entry does not say whether
+    // its URI is a calendar or the free/busy data drawn from one — and the two
+    // are different fields. Guessing either would show the user the URI under a
+    // heading the server never claimed for it, so it gets no line, the same
+    // partial visibility `titles` has, and must be invisible to the save.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(vcard.matches("\r\nCALURI").count(), 1, "{vcard}");
+    assert!(!vcard.contains("nameless"), "{vcard}");
+
+    // And a kind this version has never heard of, which is the same case.
+    let vcard = card_to_vcard(&one_calendar(
+        "c1",
+        Some("example.com:tasks"),
+        "https://vera.example/tasks",
+    ));
+    assert!(!vcard.contains("tasks"), "{vcard}");
+}
+
+#[test]
+fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
+    // The same invisibility every other keyed map has: an entry with no URI
+    // says no more than an `EMAIL:` with no address, gets no line, and must
+    // therefore be invisible to the save as well.
+    let vcard = card_to_vcard(&one_calendar("c1", Some("calendar"), ""));
+    assert!(!vcard.contains("\r\nCALURI"), "{vcard}");
+
+    // That empty line is not hypothetical: it is what EDS leaves behind when
+    // the user clears Evolution's Calendar field, measured against
+    // libebook-contacts 3.52, which rewrites the value and keeps the line.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "CALURI;X-JMAP-KEY=c1:\r\n",
+        "FBURL;X-JMAP-KEY=c2:\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+    assert_eq!(card.calendars, None);
+}
+
+#[test]
+fn invents_a_key_for_a_calendar_that_has_none() {
+    // Which is what an address the user has just typed arrives as: EDS writes
+    // a fresh `CALURI` line with no parameters on it at all, measured against
+    // libebook-contacts 3.52. The two lines are one keyed map, so the keys the
+    // reader invents have to be free of each other's as well as of the ones
+    // the card already carries.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "CALURI:https://vera.example/cal/vera.ics\r\n",
+        "FBURL:https://vera.example/fb/vera.ifb\r\n",
+        "CALURI;X-JMAP-KEY=c7:https://vera.example/cal/team.ics\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let calendars = card.calendars.expect("calendars");
+    assert_eq!(calendars["c1"].uri, "https://vera.example/cal/vera.ics");
+    assert_eq!(calendars["c1"].kind.as_deref(), Some("calendar"));
+    assert_eq!(calendars["c2"].uri, "https://vera.example/fb/vera.ifb");
+    assert_eq!(calendars["c2"].kind.as_deref(), Some("freeBusy"));
+    // The second `CALURI` line is read too, though EDS shows the user only the
+    // first: a line nobody can edit is still one a save must not delete.
+    assert_eq!(calendars["c7"].uri, "https://vera.example/cal/team.ics");
 }
 
 fn one_photo(uri: &str, media_type: Option<&str>) -> ContactCard {

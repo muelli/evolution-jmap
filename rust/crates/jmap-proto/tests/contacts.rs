@@ -118,6 +118,18 @@ fn contact_card_roundtrip() {
     // parameter on a `URL` line, so they too stay visible to the save path.
     assert!(links["l1"].extra.contains_key("mediaType"));
     assert!(links["l1"].extra.contains_key("pref"));
+    let calendars = card.calendars.as_ref().expect("calendars");
+    assert_eq!(calendars["c1"].uri, "https://vera.example/cal/vera.ics");
+    assert_eq!(calendars["c1"].kind.as_deref(), Some("calendar"));
+    assert_eq!(
+        calendars["c2"].kind.as_deref(),
+        Some("freeBusy"),
+        "the kind is the mapping's filter: it says which of the two lines the URI goes on"
+    );
+    // What the resource is and how strongly it is preferred have no parameter
+    // on a `CALURI` line, so they too stay visible to the save path.
+    assert!(calendars["c1"].extra.contains_key("mediaType"));
+    assert!(calendars["c1"].extra.contains_key("pref"));
     let media = card.media.as_ref().expect("media");
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(media["m1"].uri, "data:image/jpeg;base64,aGVsbG8tcGhvdG8=");
