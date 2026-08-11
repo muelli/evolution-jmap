@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
-//! address book backend needs: UID, FN, N, EMAIL, TEL, ORG, TITLE, ROLE.
+//! address book backend needs: UID, FN, N, EMAIL, TEL, ADR, ORG, TITLE,
+//! ROLE.
 
 use jmap_proto::contacts::{
-    ContactCard, ContactEmail, ContactPhone, Name, NameComponent, OrgUnit, Organization, Title,
+    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent,
+    OrgUnit, Organization, Title,
 };
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::json;
@@ -445,6 +447,141 @@ fn invents_a_key_for_a_title_that_has_none() {
     assert_eq!(titles["t1"].kind, None);
     assert_eq!(titles["t2"].name, "Project Lead");
     assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
+}
+
+/// The kinds and values of an address's components, in the order it lists
+/// them.
+fn components_of(address: &Address) -> Vec<(&str, &str)> {
+    address
+        .components
+        .iter()
+        .flatten()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect()
+}
+
+fn one_address(key: &str, address: Address) -> ContactCard {
+    ContactCard {
+        addresses: Some([(key.to_owned(), address)].into()),
+        ..ContactCard::default()
+    }
+}
+
+#[test]
+fn maps_addresses_onto_the_structured_adr_property() {
+    // RFC 2426 §3.2.1's seven fields, in order: post office box, extended
+    // address, street, locality, region, postal code, country.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "ADR"),
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK:;;Hauptstraße 1;Berlin;;10115;Germany"
+    );
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let addresses = card.addresses.expect("addresses");
+    let address = &addresses["a1"];
+    assert_eq!(address.contexts, Some(json!({"work": true})));
+    assert_eq!(
+        components_of(address),
+        vec![
+            ("name", "Hauptstraße 1"),
+            ("locality", "Berlin"),
+            ("postcode", "10115"),
+            ("country", "Germany"),
+        ]
+    );
+}
+
+#[test]
+fn maps_every_field_the_adr_value_has() {
+    // A vCard straight from Evolution carries no X-JMAP-KEY, and fills in
+    // fields the fixture leaves empty.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ADR;TYPE=HOME:PO Box 12;Apt 4;Hauptstraße 1;Berlin;Brandenburg;10115;Germany\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let addresses = card.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.keys().collect::<Vec<_>>(), vec!["a1"]);
+    let address = &addresses["a1"];
+    assert_eq!(address.contexts, Some(json!({"private": true})));
+    assert_eq!(
+        components_of(address),
+        vec![
+            ("postOfficeBox", "PO Box 12"),
+            ("apartment", "Apt 4"),
+            ("name", "Hauptstraße 1"),
+            ("locality", "Berlin"),
+            ("region", "Brandenburg"),
+            ("postcode", "10115"),
+            ("country", "Germany"),
+        ]
+    );
+
+    let back = vcard_to_card(&card_to_vcard(&card)).expect("parse");
+    assert_eq!(back.addresses, card.addresses);
+}
+
+#[test]
+fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
+    // RFC 9553 §2.5.1 has kinds — floor, room, landmark, and the street
+    // `number` on its own — that vCard's seven fields cannot state. Putting
+    // one in a field it does not belong to would misplace it, so it stays
+    // off the line, and an address made of nothing else has no line at all.
+    let card = one_address(
+        "a1",
+        Address {
+            components: Some(vec![
+                AddressComponent::new("name", "Hauptstraße"),
+                AddressComponent::new("number", "1"),
+                AddressComponent::new("floor", "3"),
+            ]),
+            ..Address::default()
+        },
+    );
+    assert_eq!(
+        line(&card_to_vcard(&card), "ADR"),
+        "ADR;X-JMAP-KEY=a1:;;Hauptstraße;;;;"
+    );
+
+    let only_unmapped = one_address(
+        "a1",
+        Address {
+            components: Some(vec![AddressComponent::new("floor", "3")]),
+            ..Address::default()
+        },
+    );
+    assert!(!card_to_vcard(&only_unmapped).contains("\r\nADR"));
+}
+
+#[test]
+fn two_address_components_of_one_kind_share_the_field_they_map_onto() {
+    let card = one_address(
+        "a1",
+        Address {
+            components: Some(vec![
+                AddressComponent::new("name", "Hauptstraße 1"),
+                AddressComponent::new("name", "Hinterhaus"),
+            ]),
+            ..Address::default()
+        },
+    );
+    assert_eq!(
+        line(&card_to_vcard(&card), "ADR"),
+        "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1 Hinterhaus;;;;"
+    );
+}
+
+#[test]
+fn an_address_with_nothing_in_it_is_skipped_in_both_directions() {
+    let card = one_address("a1", Address::default());
+    assert!(!card_to_vcard(&card).contains("\r\nADR"));
+
+    let back =
+        vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nADR:;;;;;;\r\nEND:VCARD\r\n").expect("parse");
+    assert_eq!(back.addresses, None);
 }
 
 #[test]

@@ -30,6 +30,15 @@ const ORG_UNIT: &str = "Research";
 /// `kind` that tells them apart is shown to survive real EDS.
 const TITLE: &str = "Research Scientist";
 const ROLE: &str = "Project Lead";
+/// The postal address, spelled as `book-client.c` spells it. EDS keeps it in
+/// the fields of one `ADR` line and JSContact in a list of named components,
+/// so this is where the positional half of that mapping — which field means
+/// which kind — is checked against the EDS that actually writes the line,
+/// rather than against our own reading of the RFC.
+const STREET: &str = "Hauptstrasse 1";
+const LOCALITY: &str = "Berlin";
+const POSTCODE: &str = "10115";
+const COUNTRY: &str = "Germany";
 
 /// The keyfile from `docs/examples/jmap-mock.source`, with the mock's
 /// ephemeral port filled in. Kept as a literal here rather than read from
@@ -172,6 +181,18 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         Some(&ROLE),
         "the contact EDS handed back lost its role\n{report}"
     );
+    for (field, expected) in [
+        ("read-back-street", STREET),
+        ("read-back-locality", LOCALITY),
+        ("read-back-code", POSTCODE),
+        ("read-back-country", COUNTRY),
+    ] {
+        assert_eq!(
+            seen.get(field),
+            Some(&expected),
+            "the contact EDS handed back lost or misplaced its {field}\n{report}"
+        );
+    }
     assert_eq!(
         seen.get("contacts-after"),
         Some(&"1"),
@@ -261,5 +282,38 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     assert!(
         by_kind.contains(&("role", ROLE)),
         "the role did not reach the server as a role: {by_kind:?}"
+    );
+    // The ADR line, as the server sees it: one `addresses` entry whose
+    // components name what each field of the line meant. The kinds are
+    // spelled out here rather than borrowed from the mapping, so this end
+    // states the wire shape it expects instead of agreeing with the code
+    // that produced it.
+    let address = card
+        .addresses
+        .as_ref()
+        .and_then(|addresses| addresses.values().next())
+        .unwrap_or_else(|| panic!("the card on the server has no address: {card:?}"));
+    let components: Vec<(&str, &str)> = address
+        .components
+        .iter()
+        .flatten()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        components,
+        vec![
+            ("name", STREET),
+            ("locality", LOCALITY),
+            ("postcode", POSTCODE),
+            ("country", COUNTRY),
+        ],
+        "{card:?}"
+    );
+    // EDS wrote TYPE=WORK, because the client set the work address; that is
+    // the `contexts` member on this side.
+    assert_eq!(
+        address.contexts,
+        Some(serde_json::json!({"work": true})),
+        "{card:?}"
     );
 }

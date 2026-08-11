@@ -47,10 +47,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
-    ContactCard, ContactEmail, ContactPhone, Name, OrgUnit, Organization, Title,
+    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, OrgUnit,
+    Organization, Title,
 };
 use jmap_vcard::{
-    maps_context, maps_name_component, maps_phone_feature, maps_title_kind, title_kind,
+    maps_address_component, maps_context, maps_name_component, maps_phone_feature, maps_title_kind,
+    states_address, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -67,6 +69,11 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.organizations.as_ref(),
     );
     diff_titles(&mut patch, current.titles.as_ref(), edited.titles.as_ref());
+    diff_addresses(
+        &mut patch,
+        current.addresses.as_ref(),
+        edited.addresses.as_ref(),
+    );
     patch
 }
 
@@ -209,6 +216,74 @@ fn diff_titles(
             }
         },
     );
+}
+
+fn diff_addresses(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Address>>,
+    edited: Option<&BTreeMap<String, Address>>,
+) {
+    diff_visible_entries(
+        patch,
+        "addresses",
+        current,
+        edited,
+        states_address,
+        |patch, path, old, new| {
+            let components = merge_components(old.components.as_deref(), new.components.as_deref());
+            if old.components.as_deref() != components.as_deref() {
+                patch.insert(
+                    format!("{path}/components"),
+                    components.map_or(Value::Null, |components| json_of(&components)),
+                );
+            }
+            diff_flags(
+                patch,
+                path,
+                "contexts",
+                &old.contexts,
+                &new.contexts,
+                maps_context,
+            );
+        },
+    );
+}
+
+/// The component list a save writes: what the `ADR` line now states, with
+/// everything it had no field for left where it was.
+///
+/// Like [`merge_units`] this is a list with no keys to patch by, so a
+/// component is recognised by what it says — same kind, same value — and one
+/// that still says it keeps the members the line could not carry, its
+/// `phonetic` spelling above all. Walking the server's list rather than the
+/// edited one is what keeps an invisible component in its place instead of
+/// shuffling it to the end, so that opening a contact and closing it again
+/// writes nothing.
+fn merge_components(
+    current: Option<&[AddressComponent]>,
+    edited: Option<&[AddressComponent]>,
+) -> Option<Vec<AddressComponent>> {
+    let edited = edited?;
+    let mut spare: Vec<&AddressComponent> = edited.iter().collect();
+    let mut merged: Vec<AddressComponent> = Vec::new();
+    for component in current.unwrap_or_default() {
+        let same = |candidate: &&AddressComponent| {
+            candidate.kind == component.kind && candidate.value == component.value
+        };
+        match spare.iter().position(same) {
+            // Still on the line, so the server's copy is the one to keep.
+            Some(index) => {
+                spare.remove(index);
+                merged.push(component.clone());
+            }
+            // Gone from the line — which says the user deleted it only if
+            // the line had a field for it in the first place.
+            None if !maps_address_component(&component.kind) => merged.push(component.clone()),
+            None => {}
+        }
+    }
+    merged.extend(spare.into_iter().cloned());
+    (!merged.is_empty()).then_some(merged)
 }
 
 /// The unit list a save writes: the names the `ORG` line now states, each

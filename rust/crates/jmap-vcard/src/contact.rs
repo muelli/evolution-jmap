@@ -4,9 +4,9 @@
 //! JSContact [`ContactCard`] ↔ vCard 3.0.
 //!
 //! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, EMAIL, TEL, ORG, TITLE, ROLE — and no more.
-//! Everything else on a card (addresses, notes, nicknames, …) is *dropped*,
-//! which is only safe because saving goes back to the server as a
+//! be useful — UID, FN, N, EMAIL, TEL, ADR, ORG, TITLE, ROLE — and no more.
+//! Everything else on a card (notes, nicknames, anniversaries, …) is
+//! *dropped*, which is only safe because saving goes back to the server as a
 //! PatchObject naming the mapped properties: a property we never mapped is a
 //! property we never overwrite.
 //!
@@ -24,11 +24,22 @@
 //! `TITLE` and `ROLE`. An entry of any other kind is therefore dropped rather
 //! than written on a line that would misstate it — and, as with every other
 //! dropped thing here, the save path must then leave it alone.
+//!
+//! `addresses` is lossy the same way one level down. RFC 2426 §3.2.1's `ADR`
+//! has seven fields; RFC 9553 §2.5.1 builds an address out of named
+//! components, sixteen kinds of them. Seven of those kinds have a field
+//! ([`ADDRESS_COMPONENTS`]) and cross; the rest — `floor`, `room`, a street
+//! `number` stated apart from its street — have nowhere to go, and are left
+//! off the line rather than written into a field that would say something
+//! else about them. An address of nothing but those has no `ADR` line at
+//! all, which makes it invisible, so `addresses` too is a map of which the
+//! vCard states only some entries.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{
-    ContactCard, ContactEmail, ContactPhone, Name, NameComponent, OrgUnit, Organization, Title,
+    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent,
+    OrgUnit, Organization, Title,
 };
 use serde_json::{Map, Value};
 
@@ -60,6 +71,20 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("mobile", "CELL"),
     ("pager", "PAGER"),
     ("video", "VIDEO"),
+];
+
+/// JSContact address component kinds, paired with their position in the
+/// vCard `ADR` value (RFC 2426 §3.2.1: post office box, extended address,
+/// street, locality, region, postal code, country), listed in that order —
+/// which is the order a reader gives the components it finds.
+const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
+    ("postOfficeBox", 0),
+    ("apartment", 1),
+    ("name", 2),
+    ("locality", 3),
+    ("region", 4),
+    ("postcode", 5),
+    ("country", 6),
 ];
 
 /// JSContact title `kind` values and the vCard property stating each.
@@ -101,6 +126,20 @@ pub fn maps_context(key: &str) -> bool {
 /// Whether the vCard mapping covers a JSContact phone `features` key.
 pub fn maps_phone_feature(key: &str) -> bool {
     PHONE_FEATURES.iter().any(|(mapped, _)| *mapped == key)
+}
+
+/// Whether the vCard mapping covers a JSContact address component kind.
+pub fn maps_address_component(kind: &str) -> bool {
+    ADDRESS_COMPONENTS.iter().any(|(mapped, _)| *mapped == kind)
+}
+
+/// Whether an address reaches the user at all — whether it has anything an
+/// `ADR` line can state.
+///
+/// This is the emitter's own decision, asked of it by name, so that the save
+/// path cannot drift from what [`card_to_vcard`] actually wrote.
+pub fn states_address(address: &Address) -> bool {
+    address_fields(address).is_some()
 }
 
 /// Render a contact card as a vCard 3.0 string, ready for
@@ -162,6 +201,17 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
+    for (key, address) in card.addresses.iter().flatten() {
+        let Some(fields) = address_fields(address) else {
+            continue;
+        };
+        properties.push(
+            Property::structured("ADR", fields)
+                .with_param(X_JMAP_KEY, key)
+                .with_params("TYPE", type_names(&CONTEXTS, address.contexts.as_ref())),
+        );
+    }
+
     for (key, organization) in card.organizations.iter().flatten() {
         let Some(components) = organization_components(organization) else {
             continue;
@@ -204,6 +254,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let name = read_name(&properties);
     let mut emails = BTreeMap::new();
     let mut phones = BTreeMap::new();
+    let mut addresses = BTreeMap::new();
     let mut organizations = BTreeMap::new();
     let mut titles = BTreeMap::new();
 
@@ -235,6 +286,12 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 phones.insert(entry_key(property, "p", &phones), phone);
             }
+            "ADR" => {
+                let Some(address) = read_address(property) else {
+                    continue;
+                };
+                addresses.insert(entry_key(property, "a", &addresses), address);
+            }
             "ORG" => {
                 let Some(organization) = read_organization(property) else {
                     continue;
@@ -262,6 +319,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         name,
         emails: (!emails.is_empty()).then_some(emails),
         phones: (!phones.is_empty()).then_some(phones),
+        addresses: (!addresses.is_empty()).then_some(addresses),
         organizations: (!organizations.is_empty()).then_some(organizations),
         titles: (!titles.is_empty()).then_some(titles),
         extra: BTreeMap::new(),
@@ -287,6 +345,58 @@ fn read_title(property: &Property) -> Option<Title> {
     Some(Title {
         name,
         kind: kind.map(str::to_owned),
+        extra: BTreeMap::new(),
+    })
+}
+
+/// The seven `ADR` fields for an address, or `None` for one with nothing to
+/// put in any of them — an address stated only in components vCard has no
+/// field for, which is then invisible to the user and to the save.
+///
+/// Empty fields are kept: a field's position is what says which part of the
+/// address it is.
+fn address_fields(address: &Address) -> Option<Vec<String>> {
+    let components = address.components.as_ref()?;
+    let mut fields = vec![String::new(); ADDRESS_COMPONENTS.len()];
+    let mut any = false;
+    for component in components {
+        let Some((_, index)) = ADDRESS_COMPONENTS
+            .iter()
+            .find(|(kind, _)| *kind == component.kind)
+        else {
+            continue;
+        };
+        if component.value.is_empty() {
+            continue;
+        }
+        // Two components of the same kind — a street named on two lines —
+        // share the one field vCard gives them.
+        if !fields[*index].is_empty() {
+            fields[*index].push(' ');
+        }
+        fields[*index].push_str(&component.value);
+        any = true;
+    }
+    any.then_some(fields)
+}
+
+/// The address an `ADR` line states, or `None` when every field of it is
+/// empty — the same "nothing was said" an `EMAIL:` with no address is.
+fn read_address(property: &Property) -> Option<Address> {
+    let fields = property.components();
+    let mut components = Vec::new();
+    for (kind, index) in ADDRESS_COMPONENTS {
+        let Some(value) = fields.get(index).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        components.push(AddressComponent::new(kind, value));
+    }
+    if components.is_empty() {
+        return None;
+    }
+    Some(Address {
+        components: Some(components),
+        contexts: read_flags(&CONTEXTS, property),
         extra: BTreeMap::new(),
     })
 }
