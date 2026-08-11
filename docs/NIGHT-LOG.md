@@ -20780,3 +20780,121 @@ slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; what
 Evolution's contact editor writes for a replaced photo, and into a cleared field,
 is inferred rather than measured; and the `jmap-mail` `transport.rs` hang is still
 an open design question with a lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-fifth session)
+
+**The property that was written and never read.** `links` — RFC 8984 §4.2.7,
+what an event points at — was the last of the mapped calendar properties drawn
+onto the component and never read back off it, and the standing blocker said why
+that mattered: an `ATTACH` the user retypes reached nothing. It is now read back
+under the same rule `virtualLocations` follows: the key of the entry a line was
+drawn from rides on it in an `X-JMAP-KEY`, the reader puts back what the line
+showed, and the save patches `links/<key>/href`. `MAPPED_PROPERTIES` goes from
+sixteen to seventeen.
+
+**Only the address goes back, and that is the decision worth recording.** A
+`CONFERENCE` patches three members — `uri`, `name`, `features` — because all
+three are the user's. A link's are not: an `FMTTYPE` and a `SIZE` carry
+`contentType` and `size`, which are the *server's* description of the resource
+(§1.4.11 calls the size an estimate), and an editor rewriting a line without the
+parameters it has no UI for is the ordinary case, not a user clearing a field. So
+they are drawn to be read and left alone on the way back, like `created` and
+`updated`. `rel` is the same: it is the *property name* rather than anything on
+the line — an `IMAGE` is a link whose `rel` is `icon` — so a picture that some
+editor rewrote as a plain `ATTACH` must not become a save that says the resource
+changed kind. `save.rs` pins it:
+`the_media_type_and_size_the_server_stated_are_not_rewritten_by_a_save` drops
+both parameters from the line and demands the entry come back whole.
+
+**A `file:` URI is not read.** It is where Evolution keeps an attachment the user
+added from their own disk. Nobody else's client can fetch it, and the path names
+the user's home directory, so filing it as a Link would put a local path in a
+record every other client of the account reads. Sending the file itself means a
+blob upload this backend does not do. The reader drops such a line, which — since
+a missing entry is never read as a deletion — leaves the server's entry as it is,
+and the create path files a new event without it. Two legs cover it, one per
+direction.
+
+**A collision the conference path also has.** The first draft guarded the save
+with `held.contains_key(key)`, which is what `diff_virtual_locations` does. That
+is not enough, and the mutation check is what showed it. `jmap_ical` invents a
+key for a line whose `X-JMAP-KEY` is not an RFC 8984 §1.4.4 `Id` — a server key
+of `an/agenda`, say — and invents it avoiding only the keys *the document* names.
+An entry the drawing left out never named its key, so the invented key can be
+that entry's. With the weak guard, editing the drawn resource sent
+`links/k1/href` and gave the address to an unrelated, address-less entry while
+losing the edit. So `the_servers_own_entry` compares the address the server
+stated against the one that was drawn — `href` crosses both ways unchanged, so
+that identifies the entry a drawing belongs to — and an edit under a key this
+side invented is dropped instead of guessed at.
+`an_attachment_under_a_key_this_side_invented_is_not_patched_onto_another` is red
+under the weak guard, printing the corrupted entry.
+
+**The same hazard stands, unfixed, in `diff_virtual_locations`** — it uses the
+`contains_key` guard, and a server whose `virtualLocations` key is outside the
+`Id` grammar can collide with the key `read_virtual_locations` invents for an
+entry the drawing left out (one with no `uri`, or a `uri` that is not one). It is
+narrow — it needs both an unusual key and an undrawable entry — but it is the
+same data-corruption path, and it is left for its own increment rather than
+folded into this one. Recorded as a blocker below so it is not lost.
+
+An earlier draft also carried an `is_object()` guard on the server's entry; the
+mutation check retired it as dead code. Only an object can be drawn at all —
+`drawn_link` needs an `href` member — so a non-object entry never reaches the
+baseline, and the test written for it was vacuous. It was replaced by the
+collision test above rather than kept as decoration.
+
+Mutation checks, five in all: dropping the `X-JMAP-KEY` from the `ATTACH`
+drawing fails the save leg (the invented key names no server entry); patching
+`contentType` and `size` alongside `href` fails the metadata leg; the
+`contains_key` guard fails the collision leg; ignoring the `file:` scheme fails
+both local-file legs; reading no `rel` off an `IMAGE` fails the read-back and the
+round-trip legs; and returning an empty map rather than `None` fails the
+"names no resource" leg.
+
+Tests: 1000 in the default set, up from 988 — six new in `jmap-ical` (one old one
+replaced, the one that asserted `links` reads back as nothing), seven in
+`jmap-cal-sync`.
+
+Verified locally: `cargo test --locked` 1000; full `ninja` then `ctest` 14/14
+with all four functional legs green; `cargo fmt --all --check` clean; `cargo
+clippy --all-targets --locked -- -D warnings` and `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean.
+`ci/checks.sh` still stops at its first step — no `reuse`, no `pipx`, no `uvx` on
+this VM — so the licence check was done by hand: no file was added, every file
+touched already carries its SPDX `GPL-3.0-or-later` header, no translatable
+string is introduced so `po/POTFILES.in` is unchanged, and `Cargo.lock` is
+untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+
+**What this still does not settle.** No functional leg carries an `ATTACH`, so
+whether real EDS's `ECalMetaBackend` cache keeps an `X-JMAP-KEY` on *that*
+property is inferred from the two properties the previous session measured
+(`LOCATION` and `CONFERENCE`) rather than measured. libical parses an `ATTACH`
+value into an `icalattach` rather than leaving it text, which is exactly the kind
+of difference that could eat a parameter — the next increment here should be a
+`functional-cal` leg that retypes an attachment. And a resource the user
+*removes* is still invisible to the save: a missing line does not say who dropped
+it, Evolution keeps attachments in a store of its own, and reading absence as a
+deletion without a real Evolution to watch would destroy documents nobody
+touched.
+
+No milestone tag. Removed from the blocker list: `links` on the calendar side is
+no longer written-and-never-read. Added: `diff_virtual_locations` has the
+invented-key collision described above; no functional leg drives an `ATTACH`
+through real EDS. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `example-module` does not pass this VM's clippy
+(1.97) on unmodified master, 26 `manual_c_str_literals`; `docs/MILESTONES.md`
+does not exist, so the M8 tag is still unwritten; the manual-test recipes are
+unlinked from the README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no
+`VTIMEZONE` of its own; an attachment the user removes is still invisible to the
+save; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
+editor writes for a replaced photo, and into a cleared field, is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.
