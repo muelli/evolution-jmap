@@ -59,7 +59,7 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
         &id,
         json!({
             "nicknames": {"k1": {"name": "Vee"}},
-            "notes": {"n1": {"note": "met at FOSDEM"}},
+            "anniversaries": {"y1": {"kind": "birth", "date": {"year": 1964}}},
             "emails/e0/label": "day job",
         }),
     );
@@ -76,8 +76,8 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
         "an unmapped property was overwritten"
     );
     assert_eq!(
-        stored.extra.get("notes"),
-        Some(&json!({"n1": {"note": "met at FOSDEM"}}))
+        stored.extra.get("anniversaries"),
+        Some(&json!({"y1": {"kind": "birth", "date": {"year": 1964}}}))
     );
     let emails = stored.emails.as_ref().unwrap();
     assert_eq!(emails.len(), 1, "patched in place, not re-added");
@@ -537,6 +537,102 @@ fn removing_the_adr_line_removes_the_address() {
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     assert_eq!(fixture.card(&id).addresses, None);
+}
+
+#[test]
+fn editing_a_note_keeps_when_it_was_written_and_by_whom() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.8.1 hangs a timestamp and an author off a note, and a
+    // `NOTE` line (RFC 2426 §3.6.2) is plain text with nowhere to put
+    // either. They survive only if the patch reaches in.
+    fixture.patch(
+        &id,
+        json!({"notes": {"n1": {
+            "@type": "Note",
+            "note": "met at FOSDEM",
+            "created": "2026-02-01T09:15:00Z",
+            "author": {"@type": "Author", "name": "Vera Oldenburg"},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("NOTE;X-JMAP-KEY=n1:met at FOSDEM"),
+        "{vcard}"
+    );
+
+    let edited = vcard.replace("met at FOSDEM", "met at FOSDEM and owes me a beer");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let notes = fixture.card(&id).notes.expect("notes");
+    assert_eq!(notes.len(), 1, "patched in place, not re-added");
+    assert_eq!(notes["n1"].note, "met at FOSDEM and owes me a beer");
+    assert_eq!(
+        notes["n1"].extra.get("created"),
+        Some(&json!("2026-02-01T09:15:00Z")),
+        "a member the NOTE line cannot carry was overwritten"
+    );
+    assert_eq!(
+        notes["n1"].extra.get("author"),
+        Some(&json!({"@type": "Author", "name": "Vera Oldenburg"}))
+    );
+}
+
+#[test]
+fn a_note_with_no_text_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A note that says nothing gets no NOTE line, so it never reaches the
+    // user — and must not then be deleted by a save, nor have its key taken
+    // by the note the user types.
+    fixture.patch(
+        &id,
+        json!({"notes": {"n1": {
+            "@type": "Note",
+            "note": "",
+            "created": "2026-02-01T09:15:00Z",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nNOTE"), "{vcard}");
+    // The reader counts only the entries it can see, so the key it invents
+    // for this one is `n1` — the key the hidden entry already holds.
+    let edited = vcard.replace("END:VCARD\r\n", "NOTE:owes me a beer\r\nEND:VCARD\r\n");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let notes = fixture.card(&id).notes.expect("notes");
+    assert_eq!(
+        notes["n1"].extra.get("created"),
+        Some(&json!("2026-02-01T09:15:00Z")),
+        "an entry the vCard never showed was overwritten: {notes:?}"
+    );
+    assert!(
+        notes.values().any(|note| note.note == "owes me a beer"),
+        "the note the user typed was not saved: {notes:?}"
+    );
+    assert_eq!(notes.len(), 2);
+}
+
+#[test]
+fn removing_the_note_line_removes_the_note() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(&id, json!({"notes": {"n1": {"note": "met at FOSDEM"}}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited: String = vcard
+        .lines()
+        .filter(|line| !line.starts_with("NOTE"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).notes, None);
 }
 
 #[test]

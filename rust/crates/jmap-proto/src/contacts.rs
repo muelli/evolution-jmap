@@ -71,6 +71,10 @@ pub struct ContactCard {
     /// the component kinds RFC 9553 allows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub addresses: Option<BTreeMap<String, Address>>,
+    /// The free-text notes kept about the contact (RFC 9553 §2.8.1), keyed
+    /// like the other JSContact maps. vCard states each on a `NOTE` line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<BTreeMap<String, Note>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -268,6 +272,23 @@ impl AddressComponent {
             extra: BTreeMap::new(),
         }
     }
+}
+
+/// JSContact Note (RFC 9553 §2.8.1): one free-text note about the contact.
+///
+/// `created` and `author` are not modeled: vCard 3.0's `NOTE` (RFC 2426
+/// §3.6.2) is plain text with no component and no parameter for when a note
+/// was written or by whom, so both ride in [`Self::extra`] — where the save
+/// path can see the members it is refusing to touch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Note {
+    /// The note's text. Mandatory per RFC 9553 §2.8.1, and the only part of
+    /// a note a `NOTE` line has room for.
+    #[serde(default)]
+    pub note: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// `ContactCard/query` filter conditions (RFC 9610 §3.3). Flat conditions

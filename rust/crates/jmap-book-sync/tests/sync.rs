@@ -44,7 +44,7 @@ fn the_revision_tracks_the_mapped_content_and_nothing_else() {
 
     // A property the vCard mapping drops: EDS cannot see it change, so
     // re-downloading every card because of it would be pure churn.
-    fixture.patch(&id, json!({"notes": {"n1": {"note": "met at FOSDEM"}}}));
+    fixture.patch(&id, json!({"nicknames": {"k1": {"name": "Vee"}}}));
     assert_eq!(sync.load_contact(id.as_str()).unwrap().revision, before);
 
     // One it carries: the user's employer is on the card they are shown.

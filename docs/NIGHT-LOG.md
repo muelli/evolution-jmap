@@ -17641,3 +17641,114 @@ honest cost of refusing to guess, and the first place where invisibility is
 visible to the user rather than only to the save; and the `LABEL` property
 behind Evolution's address-label fields as the obvious next thing anyone will
 ask for. The remaining contact increment on the old list is `notes` ↔ `NOTE`.
+
+## 2026-08-11 (hundred-and-seventy-fifth session)
+
+**The last item on the contact list the last three sessions kept handing
+forward: `notes` ↔ `NOTE`.** It is the plainest crossing in the mapping and
+the only one where the *value* survives whole. RFC 9553 §2.8.1 keys notes like
+every other JSContact map and gives each a `note` text, a `created` timestamp
+and an `author`; RFC 2426 §3.6.2's `NOTE` is free text with no component and
+no parameter for either of the latter two. So the text crosses, the key rides
+in the `X-JMAP-KEY` every other entry map already uses, and `created`/`author`
+ride in the entry's `extra` where the save can see the members it is refusing
+to touch — `notes/<key>/note` is patched in place, nothing else.
+
+**What made it worth doing carefully is punctuation.** A note is the one
+mapped property a user types prose into, which makes it the one place where
+the characters vCard gives structural meaning to — `;`, `,`, a line break —
+arrive routinely rather than as an attack. `syntax::escape` already spells all
+three (`\;`, `\,`, `\n`) and `fold_into` already drops a raw CR or LF before
+it can end the content line, so nothing new was needed; what was missing was a
+test saying so, and `a_note_keeps_the_line_breaks_and_separators_it_was_
+written_with` is it, asserting the exact line and then the exact text back.
+
+**An empty note is invisible, so it goes through `diff_visible_entries`.** A
+note that says nothing gets no `NOTE` line — the same "nothing was said" an
+`EMAIL:` with no address is — and everything this repository has learned about
+invisible things then applies: it must not be nulled for being absent from the
+edited card, and it must not have its key stolen by a note the user just
+typed, since the reader invents keys by counting only what it could see. The
+predicate is `jmap_vcard::states_note`, which is literally `!note.note.
+is_empty()` asked of the emitter by name, exactly as `states_address` is, so
+the save cannot drift from what was actually written. Both new guards were
+mutation-checked: forcing `states_note` to true turned
+`a_note_with_no_text_survives_a_save_it_was_never_part_of` red, and writing
+the whole entry instead of `{path}/note` turned
+`editing_a_note_keeps_when_it_was_written_and_by_whom` red — one test each,
+which is what a guard earning its place looks like.
+
+**The same hole is still open one property over, and this says so rather than
+fixing it in passing.** `titles` and `emails`/`phones` are skipped by the
+emitter when their text is empty, but their save-side predicates do not know
+that: `maps_title_kind` asks only about the `kind`, and `diff_entries` calls
+every email visible. So a card holding a title with an empty `name`, or an
+email with an empty `address`, has that entry *deleted* by any save that
+touches the card — an entry the user never saw and never asked to remove. It
+is the identical defect this increment avoids for notes, in code this
+increment did not otherwise touch, and the fix is one clause in each
+predicate plus a red test each. Left for its own increment deliberately, and
+written down here so it is a known bug rather than a surprise. (`ORG` and
+`ADR` are already safe: `organization_components` and `states_address` both
+answer for the whole entry.)
+
+**Two existing tests changed meaning honestly.** Both
+`the_revision_tracks_the_mapped_content_and_nothing_else` and
+`editing_a_contact_leaves_unmapped_properties_alone` used `notes` as their
+stand-in for "a property the mapping drops", and `notes` is no longer one, so
+the first went red on its own. That is the test doing its job, not noise: a
+note changing server-side now *does* bump the cache revision and re-download
+the card, which is right, because the user can now see the note. Both moved to
+`nicknames` (and `anniversaries`), which the mapping still drops. The two
+fixtures moved the same way — `nicknames` is now the unmapped property
+`unmodeled_jscontact_properties_are_dropped_not_mangled` watches, and the
+`jmap-proto` fixture's note grew a `created` and an `author` so the round-trip
+pins that both survive deserialization into the new `Note` struct.
+
+**Verified on real EDS, not only in unit tests.** The M9 layer-1 book leg now
+sets `E_CONTACT_NOTE` to `met at FOSDEM; owes me a beer, apparently` — the
+semicolon and the comma are the point — reports it back out of the meta
+backend's cache unmangled, and the Rust half asserts the mock's stored card
+holds exactly one `notes` entry with that text. The second assertion is not
+redundant with the first: the client's read-back comes out of EDS's own cache,
+which would agree with itself even if the line that reached the server had
+been mangled on the way.
+
+**One risk carried forward, of a family this log already knows.** Evolution's contact
+editor has a single Notes field, and a card with two `notes` entries emits two
+`NOTE` lines; `EContact` reads the first. Both are preserved on the server —
+the save patches by key — but only one is shown, and a user editing "the" note
+is editing whichever `EVCard` handed over. Exactly the multi-`ORG` and
+multi-`TITLE` bet, now in a third place, and still unverified in real
+Evolution.
+
+Tests: 850 in the default set, up 7 from 843 — four in `jmap-vcard`, three in
+`jmap-book-sync` — plus the extended functional leg. Red was compile-red first
+(the tests name a `ContactCard::notes` that did not exist), then the three
+save tests and the revision test.
+
+Verified locally: `cargo test --locked` 850; full `ninja` then `ctest` 14/14
+including all four functional legs; `cargo fmt --all --check` and `cargo
+clippy --all-targets --locked -- -D warnings` clean. `ci/checks.sh` again
+stops at its first step: `reuse` is not on this VM and neither `pipx` nor
+`uvx` is installed. Exposure is nil — no file was added, every file touched
+already carries an SPDX header or is covered by `REUSE.toml`'s fixture
+annotation — and `Cargo.lock` is untouched, so `cargo deny`'s answer is the
+one it gave on the last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the once-seen `jmap-mail`
+`tests/transport.rs` hang is unexplained; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the `NameComponent` `phonetic` hole from last session stands; the
+`ADR` line's missing house number is still visible to the user; and whether
+`e_contact_set` preserves an `X-JMAP-KEY` on an attribute it rewrites is still
+unverified, the functional leg adding a contact rather than editing one. New
+from this session: the empty-value deletion hole in `titles`/`emails`/`phones`
+above, and the multi-`NOTE` risk. With `notes` landed, the contact list the
+last three sessions worked through is empty; the next obvious contact work is
+either closing that empty-value hole or the `LABEL` property behind Evolution's
+address-label fields.
