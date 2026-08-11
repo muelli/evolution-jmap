@@ -19449,3 +19449,116 @@ the editor lets a handle be moved between the Home and Work slots at all is
 unknown; no test drives a `uri`-only entry through real EDS; and the `jmap-mail`
 `transport.rs` hang is still an open design question with a lock-order hypothesis
 attached.
+
+## 2026-08-11 (hundred-and-ninety-second session)
+
+**A photo the user chooses in Evolution now reaches the server.** Last session
+mapped RFC 9553 §2.6.4's `media` onto the `PHOTO` line in one direction and left
+`a_photo_line_is_stated_but_never_read_back` behind as the test that would go red
+when the save path closed the gap. It is red, and gone: a `PHOTO` line is read
+back into a `media` entry, and `jmap-book-sync`'s `diff` patches it.
+
+**Measured first, again, and four of the measurements shaped the code.** A
+throwaway C probe against libebook-contacts 3.52 drove `e_contact_set` and
+`e_vcard_to_string` over the cases the save path actually hits:
+
+- A photo whose `mime_type` is NULL is written `TYPE="X-EVOLUTION-UNKNOWN"`.
+  That names no image format, so it reads back as *no* media type; taking it at
+  face value would tell the server the bytes are `image/X-EVOLUTION-UNKNOWN`.
+- `E_CONTACT_PHOTO` reports the **first** `PHOTO` line, a `set` rewrites that
+  line in place and leaves every other one — parameters and `X-JMAP-KEY` and
+  all — exactly where it was, and clearing the field removes that one line only.
+  So a card carrying several pictures has only its first edited, and the rest
+  come back wearing their keys. This is what makes pairing sound: exactly one
+  keyless picture can arrive, and it belongs to the first entry.
+- The rewritten line loses its key, as a date line does. Confirmed rather than
+  assumed.
+- EDS's writer emits the subtype alone (`TYPE=jpeg` for `image/jpeg`), which is
+  the rule the emitter was already built on, now checked from the other side.
+
+**What calcard does with the value, which decided the reader's shape.** calcard
+undoes the transfer encoding and then decides: bytes that are valid UTF-8 become
+`VCardValue::Text`, bytes that are not become `VCardValue::Binary`. It also drops
+the `ENCODING` parameter, so after the parse `PHOTO;ENCODING=b:aGk=` and
+`PHOTO:hi` are the same property. Two consequences, both written down where they
+bite. `syntax.rs` grew `Property::binary()` to carry the decoded bytes that have
+no string — a real JPEG or PNG starts with a byte no UTF-8 sequence may — and
+`read_photo` takes *both* paths, because a picture whose bytes are text is not
+hypothetical: that is an SVG. The cost is that a bare `PHOTO:<uri>`, which EDS
+reads as no picture at all, is indistinguishable here from a picture whose bytes
+are text, and is read as the latter. Neither EDS's writer nor this emitter
+produces such a line, and that is the whole of the argument for accepting it.
+
+**The save compares the line, not the members.** `same_photo` is exported beside
+`states_media` and asks what the `PHOTO` line states, because the entry read back
+off a line is not the entry that produced it: a `data:` URI may have been spelled
+without its base64 padding (RFC 4648 §3.2) where the line carries the canonical
+spelling, and a media type the URI stated arrives as the entry's own `mediaType`.
+Comparing members would rewrite a picture nobody touched on every save. It is
+`online_service_handle`'s judgement applied to a second property. Once the line
+really has changed, both `uri` and `mediaType` go back, since between them they
+are what the new picture *is*.
+
+**`rekey_anniversaries` became `rekey_keyless`, and got stricter on the way.**
+The dates and the pictures are the two maps whose key does not survive an edit,
+and they wanted the same algorithm with a different pairing rule — by kind of
+date, or, for a picture, with whichever comes first. The strictness is new and
+fixes a latent bug the dates had too: the old code treated *any* current key
+matching the edited one as "the key survived", but the reader invents keys by
+counting the entries it can see, so the `m1` it gives a photo can be the key of a
+logo the user was never shown. Now only a key a *visible* entry holds counts as
+having survived; otherwise the entry is paired past the collision.
+`a_logo_survives_a_save_it_was_never_part_of` is that case, and it fails on the
+old rule.
+
+**Verified through real EDS, not only against the mock.** A 300-byte photo whose
+bytes are not UTF-8 was set on an `EContact`, rendered with
+`e_vcard_to_string(EVC_FORMAT_VCARD_30)` — which folds the line across five
+continuations — and the resulting vCard fed to `vcard_to_card`: the entry comes
+back `kind: photo`, `mediaType: image/jpeg`, and 400 characters of base64 equal
+to `g_base64_encode` of the bytes that went in. The line the save tests use as
+"what the editor writes back" is EDS's own output, copied from the probe.
+
+**Mutation-checked.** Dropping the `same_photo` short-circuit, refusing to pair a
+keyless picture, reading `X-EVOLUTION-UNKNOWN` as a media type, and restoring the
+old `contains_key` rekeying each fail exactly one test.
+
+Tests: 967 in the default set, up from 955 — six on the mapping, six on the save.
+
+Verified locally: `cargo test --locked` 967; full `ninja` then `ctest` 14/14,
+including all four functional legs; `cargo fmt --all --check` and `cargo clippy
+--all-targets --locked -- -D warnings` clean. `ci/checks.sh` still stops at its
+first step — no `reuse`, no `pipx`, no `uvx` on this VM — so the licence check
+was done by hand: no file was added, every source touched already carries an SPDX
+header, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it
+gave on the last green run.
+
+**What is still *not* verified.** The EDS behaviour is measured for 3.52 on this
+VM and only there — M10's matrix is what would watch it. Beyond that: no
+functional leg drives a photo through `e-book-client` yet, so what is measured is
+`EContact` and `EVCard`, not Evolution's contact editor — whether the editor
+calls `e_contact_set` on a card whose photo the user did not touch is unknown,
+and if it does the pairing is what carries the save (which is why the pairing is
+tested), but nothing here says it does. Whether Evolution *renders* a `VALUE=uri`
+photo it would have to fetch is still unmeasured, and unchanged from last
+session. And a card holding several megabyte-sized pictures still carries them
+all through EDS's cache and over D-Bus, now in both directions.
+
+No milestone tag. Removed from the blocker list: a photo the user chooses in
+Evolution not reaching the server. Added: no functional leg drives a photo
+through real EDS. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification
+in real Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side rest on untested assumptions; the
+multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL`/`PHOTO` "Evolution shows only the
+first" bet is verified for `PHOTO` and still unverified for the rest; the two
+`LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone are
+still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and
+Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped
+and their contact-editor behaviour unmeasured; whether the editor lets a handle
+be moved between the Home and Work slots at all is unknown; no test drives a
+`uri`-only entry through real EDS; a `VALUE=uri` photo's rendering is unmeasured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a
+lock-order hypothesis attached.

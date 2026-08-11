@@ -2106,3 +2106,198 @@ fn a_key_that_arrived_on_another_services_line_moves_the_service_with_it() {
     assert_eq!(services["s1"].service.as_deref(), Some("Skype"));
     assert_eq!(services["s1"].user.as_deref(), Some("vera.oldenburg"));
 }
+
+/// "hello-photo", standing in for the JPEG a real card carries.
+const PHOTO: &str = "aGVsbG8tcGhvdG8=";
+/// What EDS writes for a picture the user has just chosen: no `X-JMAP-KEY`,
+/// because `e_contact_set` rebuilds the line out of the photo it holds —
+/// measured against libebook-contacts 3.52.
+const CHOSEN: &str = "PHOTO;TYPE=png;ENCODING=b:bmV3LXBob3RvISE=";
+
+/// A card whose picture the server holds, with the members a `PHOTO` line
+/// cannot carry hung off it.
+fn seed_photo(fixture: &Fixture, id: &jmap_proto::Id) {
+    fixture.patch(
+        id,
+        json!({"media": {"m1": {
+            "@type": "Media",
+            "kind": "photo",
+            "uri": format!("data:image/jpeg;base64,{PHOTO}"),
+            "mediaType": "image/jpeg",
+            "pref": 1,
+        }}}),
+    );
+}
+
+#[test]
+fn the_photo_the_user_chose_reaches_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    seed_photo(&fixture, &id);
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains(&format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PHOTO}")),
+        "{vcard}"
+    );
+
+    // The key is gone from the line the editor writes back, so the entry it
+    // replaces is the one the line it replaced belonged to.
+    let edited = vcard.replace(
+        &format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PHOTO}"),
+        CHOSEN,
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let media = fixture.card(&id).media.expect("media");
+    assert_eq!(media.len(), 1, "patched in place, not re-added: {media:?}");
+    assert_eq!(media["m1"].uri, "data:image/png;base64,bmV3LXBob3RvISE=");
+    assert_eq!(media["m1"].media_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        media["m1"].extra.get("pref"),
+        Some(&json!(1)),
+        "a member the PHOTO line cannot carry was overwritten: {media:?}"
+    );
+}
+
+#[test]
+fn a_photo_nobody_touched_is_not_written_back() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Spelled the way a hand-written `data:` URI often is — RFC 4648 §3.2 makes
+    // the padding optional — while the line carries the canonical spelling,
+    // because it is glib's base64 reader that decodes it. So the URI that comes
+    // back is *not* the URI the server holds, and comparing the two would make
+    // every save an edit of a picture nobody chose.
+    let loose = format!("data:image/jpeg;base64,{}", PHOTO.trim_end_matches('='));
+    fixture.patch(
+        &id,
+        json!({"media": {"m1": {"@type": "Media", "kind": "photo", "uri": loose}}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+
+    let media = fixture.card(&id).media.expect("media");
+    assert_eq!(media["m1"].uri, loose, "the save rewrote it: {media:?}");
+    assert_eq!(media["m1"].media_type, None, "{media:?}");
+}
+
+#[test]
+fn removing_the_photo_line_removes_the_picture() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    seed_photo(&fixture, &id);
+    let sync = fixture.sync();
+
+    // Measured against libebook-contacts 3.52: clearing the photo removes the
+    // attribute outright, so no line at all is what the save sees.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited: String = vcard
+        .lines()
+        .filter(|line| !line.starts_with("PHOTO"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).media, None);
+}
+
+#[test]
+fn a_picture_chosen_for_a_contact_that_had_none_is_added() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("PHOTO"), "{vcard}");
+    let edited = vcard.replace("END:VCARD\r\n", &format!("{CHOSEN}\r\nEND:VCARD\r\n"));
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let media = fixture.card(&id).media.expect("media");
+    assert_eq!(media.len(), 1, "{media:?}");
+    let photo = media.values().next().expect("one entry");
+    assert_eq!(photo.kind.as_deref(), Some("photo"));
+    assert_eq!(photo.uri, "data:image/png;base64,bmV3LXBob3RvISE=");
+    assert_eq!(photo.media_type.as_deref(), Some("image/png"));
+}
+
+#[test]
+fn only_the_first_of_several_pictures_is_the_one_the_user_edits() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Measured against libebook-contacts 3.52: `E_CONTACT_PHOTO` reports the
+    // first `PHOTO` line and a `set` replaces that line in place, leaving the
+    // others — parameters and all — where they were. So a card carrying two
+    // pictures comes back with the first rewritten and the second still wearing
+    // its key, and the save must not read the rewrite as both of them changing.
+    fixture.patch(
+        &id,
+        json!({"media": {
+            "m1": {"@type": "Media", "kind": "photo",
+                   "uri": format!("data:image/jpeg;base64,{PHOTO}")},
+            "m9": {"@type": "Media", "kind": "photo",
+                   "uri": "https://vera.example/other.png"},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        &format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PHOTO}"),
+        CHOSEN,
+    );
+    assert!(
+        edited.contains("PHOTO;X-JMAP-KEY=m9;VALUE=uri:https://vera.example/other.png"),
+        "{edited}"
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let media = fixture.card(&id).media.expect("media");
+    assert_eq!(media.len(), 2, "{media:?}");
+    assert_eq!(media["m1"].uri, "data:image/png;base64,bmV3LXBob3RvISE=");
+    assert_eq!(
+        media["m9"].uri, "https://vera.example/other.png",
+        "the picture the user never saw was rewritten: {media:?}"
+    );
+}
+
+#[test]
+fn a_logo_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.6.4 keeps all three kinds of media in one map and only a
+    // photo is the picture Evolution shows, so the logo gets no line — and the
+    // key the reader invents for the one line there is happens to be the logo's.
+    fixture.patch(
+        &id,
+        json!({"media": {
+            "m1": {"@type": "Media", "kind": "logo",
+                   "uri": "https://vera.example/logo.png"},
+            "m2": {"@type": "Media", "kind": "photo",
+                   "uri": format!("data:image/jpeg;base64,{PHOTO}")},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert_eq!(vcard.matches("\r\nPHOTO").count(), 1, "{vcard}");
+    let edited = vcard.replace(
+        &format!("PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:{PHOTO}"),
+        CHOSEN,
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let media = fixture.card(&id).media.expect("media");
+    assert_eq!(
+        media["m1"].uri, "https://vera.example/logo.png",
+        "the logo was overwritten by the photo the user chose: {media:?}"
+    );
+    assert_eq!(
+        media["m2"].uri, "data:image/png;base64,bmV3LXBob3RvISE=",
+        "the picture was re-added rather than patched: {media:?}"
+    );
+    assert_eq!(media.len(), 2, "{media:?}");
+}
