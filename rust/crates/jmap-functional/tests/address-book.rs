@@ -10,21 +10,24 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Ten legs, because they need ten books. The first starts empty and writes
-//! a contact into it. The other nine each start from a card the mock was
+//! Eleven legs, because they need eleven books. The first starts empty and
+//! writes a contact into it. The other ten each start from a card the mock was
 //! seeded with before EDS ever connected — a card from the *server*, holding a
 //! shape no vCard can state, which is the only way to ask what real EDS does to
 //! it — and take the branches a save can take with it: the user edits a field
 //! beside the name, retypes the name itself, picks a new picture, retypes their
 //! calendar address, retypes who they are married to, clears that field
 //! altogether, retypes the note on a card carrying two of them, clears that
-//! field too, or clears it on a card whose only note it was.
+//! field too, clears it on a card whose only note it was, or retypes an
+//! instant-messaging handle the server stated as a URI.
 
 use std::collections::BTreeMap;
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
-use jmap_proto::contacts::{Calendar, ContactCard, Media, Name, NameComponent, Note, Relation};
+use jmap_proto::contacts::{
+    Calendar, ContactCard, Media, Name, NameComponent, Note, OnlineService, Relation,
+};
 
 /// The contact the client writes. One string, passed to the client on its
 /// command line and looked for in the mock's store, so the two ends cannot
@@ -790,6 +793,31 @@ const SEEDED_SECOND_NOTE_KEY: &str = "note-2";
 /// cut off at either — or carrying the backslash EDS wrote — shows up here.
 const SEEDED_NOTE: &str = "met in Ghent; still owes me a beer, apparently";
 const SEEDED_SECOND_NOTE: &str = "do not call before 10:00, ever";
+/// The key the *server* filed the seeded card's instant-messaging handle under,
+/// the service it is at, and — the point of this one — the shape the server
+/// states it in.
+///
+/// RFC 9553 §2.3.2 lets an `onlineServices` entry name the contact with a `user`,
+/// a `uri`, or both, and Evolution's instant-messaging fields hold a handle. So
+/// this entry states **only** the URI: it is the one mapped property whose value
+/// the card cannot carry as it stands, and it reaches the user at all only
+/// because `xmpp:` spells the JID and nothing else, which lets the reader draw
+/// [`SEEDED_SERVICE_HANDLE`] out of [`SEEDED_SERVICE_URI`].
+///
+/// Seeded on the card every seeded leg starts from, because the shape is
+/// invisible from the vCard side in both directions: the line a leg that touches
+/// nothing hands back states a `user`, so a save comparing the *members* rather
+/// than the handle they both spell would rewrite this entry every time the
+/// contact is saved for any reason at all.
+const SEEDED_SERVICE_KEY: &str = "handle-1";
+const SEEDED_SERVICE: &str = "Jabber";
+const SEEDED_SERVICE_HANDLE: &str = "jp@jabber.example";
+const SEEDED_SERVICE_URI: &str = "xmpp:jp@jabber.example";
+/// The handle the user retypes into that field, and the URI the save has to
+/// rebuild around it. A different host as well as a different local part, so a
+/// URI half-rewritten shows up as neither.
+const RETYPED_HANDLE: &str = "jp@xmpp.example";
+const RETYPED_SERVICE_URI: &str = "xmpp:jp@xmpp.example";
 /// When the server says the first note was written. RFC 9553 §2.8.3's `created`
 /// has no `NOTE` component and no parameter to sit in, so it rides in the
 /// entry's `extra` — which makes it the member that says whether a save
@@ -946,6 +974,24 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
         );
     }
     card.notes = Some(notes);
+    // Where the contact is reachable, stated as a URI and nothing else — see
+    // [`SEEDED_SERVICE_KEY`]. One entry rather than two, because unlike the
+    // notes and the relations beside it there is nothing here for a second
+    // entry to say that the first does not: the invisible-to-the-user case
+    // belongs to a service EDS has no field for, which is a fixture's question
+    // and not one that needs the daemons.
+    card.online_services = Some(
+        [(
+            SEEDED_SERVICE_KEY.to_owned(),
+            OnlineService {
+                service: Some(SEEDED_SERVICE.to_owned()),
+                uri: Some(SEEDED_SERVICE_URI.to_owned()),
+                ..OnlineService::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
     account.contact_cards.seed_with_id(id.clone(), card);
     id
 }
@@ -1141,6 +1187,48 @@ fn assert_the_seeded_picture_survived(card: &ContactCard) {
     );
 }
 
+/// Hold the card the server now holds to the instant-messaging handle it was
+/// seeded with — the same URI, at the same service, under the same server-chosen
+/// key, and still stating no `user`.
+///
+/// Shared by the legs that edit something else entirely, and unlike every other
+/// survival assertion beside it, this entry *is* visible to the user: it reaches
+/// a line, and the user could have retyped it. So what it holds the save to is
+/// that an edit somewhere else left the entry where the server put it — same
+/// key, same service, and still stating a `uri` rather than the `user` the line
+/// hands back.
+///
+/// What it does **not** catch, measured rather than reasoned about: a save that
+/// compares an entry's *members* rather than the handle they both spell. That
+/// one writes the URI back with the same text it already had, so every assertion
+/// here still holds and only the card's state on the server moves — a patch, and
+/// a bump, each time the contact is touched for any reason. Catching it takes a
+/// before-and-after on that state, which is
+/// `an_edit_that_left_a_uri_only_handle_alone_writes_nothing` in
+/// `jmap-book-sync`'s fixtures.
+fn assert_the_seeded_service_survived(card: &ContactCard) {
+    let services = card
+        .online_services
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's online services: {card:?}"));
+    assert_eq!(
+        services.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_SERVICE_KEY],
+        "the save re-filed the handle nobody touched: {card:?}"
+    );
+    let service = services.values().next().expect("one online service");
+    assert_eq!(service.service.as_deref(), Some(SEEDED_SERVICE), "{card:?}");
+    assert_eq!(
+        service.uri.as_deref(),
+        Some(SEEDED_SERVICE_URI),
+        "the save rewrote the handle nobody touched: {card:?}"
+    );
+    assert_eq!(
+        service.user, None,
+        "the save answered a card stating a URI with one stating a handle: {card:?}"
+    );
+}
+
 /// The port the mock is listening on, for the keyfile the session is written
 /// with.
 fn mock_port(server: &jmap_mock::MockServer) -> u16 {
@@ -1332,6 +1420,7 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
+    assert_the_seeded_service_survived(card);
 }
 
 /// What the user retypes the given-name field to, and the full name Evolution's
@@ -1489,6 +1578,7 @@ fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
+    assert_the_seeded_service_survived(card);
 }
 
 /// The fourth leg, and the one edit that reaches the picture itself: the user
@@ -1640,6 +1730,7 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
     );
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
+    assert_the_seeded_service_survived(card);
 }
 
 /// What the user retypes the Calendar field to. A URI on a different host from
@@ -1793,6 +1884,7 @@ fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
+    assert_the_seeded_service_survived(card);
 }
 
 /// What the user retypes the Spouse field to. A different person from the one
@@ -1931,6 +2023,7 @@ fn retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed() {
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_notes_survived(card);
+    assert_the_seeded_service_survived(card);
 }
 
 /// The seventh leg: the user *clears* the Spouse field, on the same card the
@@ -2069,6 +2162,7 @@ fn clearing_the_spouse_through_eds_withdraws_the_marriage_and_keeps_the_brother(
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_notes_survived(card);
+    assert_the_seeded_service_survived(card);
 }
 
 /// What the user retypes the Notes field to. Deliberately not a respelling of
@@ -2220,6 +2314,7 @@ fn retyping_the_note_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
+    assert_the_seeded_service_survived(card);
 }
 
 /// What the client joins the card's `NOTE` line values with when it reports
@@ -2388,6 +2483,7 @@ fn clearing_the_note_through_eds_withdraws_it_and_keeps_the_one_behind_it() {
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
+    assert_the_seeded_service_survived(card);
 }
 
 /// The tenth leg: the user empties the Notes field on a card the server filed
@@ -2546,4 +2642,184 @@ fn clearing_the_only_note_through_eds_withdraws_the_whole_property() {
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
+    assert_the_seeded_service_survived(card);
+}
+
+/// The eleventh leg: the user retypes an instant-messaging handle the server
+/// stated as a **URI**, and the save has to write it back in the shape it came
+/// in.
+///
+/// The one mapped property whose value the server can state in a form the card
+/// cannot carry. RFC 9553 §2.3.2 lets an `onlineServices` entry name the contact
+/// with a `user`, a `uri`, or both; Evolution's instant-messaging fields hold a
+/// handle and nothing else. So the entry reaches the user only because `xmpp:`
+/// spells the JID and nothing after it, which lets the reader draw the handle out
+/// of the URI — and the save writes the edit back onto the member it was drawn
+/// from rather than answering a card shaped one way with a card shaped another.
+/// Until now that whole crossing was driven against fixtures, where the vCard is
+/// one this repository wrote.
+///
+/// Three things only real EDS can answer:
+///
+/// - whether the drawn handle reaches the field at all. The reader picks the
+///   slot — `TYPE=HOME` — and `E_CONTACT_IM_JABBER_HOME_1` is the field that slot
+///   feeds, so whether the parameter our emitter writes is the one libebook-contacts
+///   reads a handle back out of is a claim about EDS. A handle in the wrong slot,
+///   or on a line with no `TYPE` at all, is one the user never sees;
+/// - what a set on that field leaves on the card: one `X-JABBER` line or two, and
+///   with the `X-JMAP-KEY` still on it or without. A second line would tell the
+///   mapping — which has only the lines — that the contact is at that service
+///   twice, and a lost key would mean the save could not patch the entry the URI
+///   came from and had to pair a keyless line with it instead. Measured against
+///   libebook-contacts 3.52 the set rewrites the line in place and keeps its
+///   parameters: `retyped-im-handle-lines=1` and `retyped-im-handle-key=handle-1`.
+///   Both are reported rather than asserted, for the reason the spouse line is —
+///   the save reaches the same entry either way, and the assertion below is on
+///   what the *server* ends up holding;
+/// - and, from the nine legs beside this one, that a save which touches something
+///   else entirely leaves the entry in the shape the server chose — the line
+///   hands back a `user` where the server holds a `uri`, so an entry rewritten
+///   into the shape the line states is a card answered with a card it never was.
+///   That is [`assert_the_seeded_service_survived`], which also says what it
+///   cannot see.
+///
+/// Two mutations redden this leg and nothing else in the file: making the save
+/// write the retyped handle onto a `user` instead of rebuilding the URI, and
+/// dropping `xmpp` from the reader's table of schemes, which leaves the handle
+/// undrawn and the field empty. Both are caught by `jmap-book-sync`'s fixtures
+/// too, so what this leg adds is the *input* — the fixtures state the card a
+/// URI-only entry produces, and only the daemons can say EDS produces it.
+#[test]
+fn retyping_a_uri_only_handle_through_eds_writes_the_uri_back() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/address-book-rehandle"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(
+        &client,
+        &[
+            "jmap-functional",
+            "rehandle",
+            card_id.as_str(),
+            RETYPED_HANDLE,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // The first of the three: the handle the server never stated as a handle,
+    // read out of the field Evolution's contact editor shows. This is the whole
+    // of the URI half of the mapping asked of real EDS at once — the scheme was
+    // recognised, the handle was drawn out of it, the line was written with the
+    // `TYPE` this field is read off, and EDS filed it there.
+    assert_eq!(
+        seen.get("read-im-handle"),
+        Some(&SEEDED_SERVICE_HANDLE),
+        "EDS did not read the handle off the line the emitter drew from the \
+         URI\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-im-handle-lines"),
+        Some(&"1"),
+        "EDS did not hold exactly the one X-JABBER line the emitter wrote\n{report}"
+    );
+
+    // And what EDS holds after the save, out of the cache the backend's
+    // re-rendered card was stored into: the handle the user typed, once. Two
+    // joined here would be the card stating the contact is at the service twice.
+    assert_eq!(
+        seen.get("read-back-im-handle"),
+        Some(&RETYPED_HANDLE),
+        "the handle the user typed did not survive the save\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-im-handle-lines"),
+        Some(&"1"),
+        "the save left the old handle on the card beside the new one\n{report}"
+    );
+
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the new handle never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    // The other end, and the load-bearing assertion: the entry the server filed
+    // is still the entry the server filed — same key, same service — and the
+    // handle the user typed went back onto the member it was drawn from. A
+    // `user` here instead would be the save telling the server the contact is
+    // named a way this card never said it was; a second entry would be the
+    // retype read as a handle at a service the contact had not been at.
+    let services = card
+        .online_services
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's online services: {card:?}"));
+    assert_eq!(
+        services.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_SERVICE_KEY],
+        "the handle the user typed was filed beside the entry it replaced: {card:?}"
+    );
+    let service = services.values().next().expect("one online service");
+    assert_eq!(
+        service.service.as_deref(),
+        Some(SEEDED_SERVICE),
+        "the save moved the handle to another service: {card:?}"
+    );
+    assert_eq!(
+        service.uri.as_deref(),
+        Some(RETYPED_SERVICE_URI),
+        "the retyped handle did not go back onto the URI it was drawn from: {card:?}"
+    );
+    assert_eq!(
+        service.user, None,
+        "the save answered a card stating a URI with one stating a handle: {card:?}"
+    );
+
+    // And what nobody touched at all, asserted for the reason the other legs
+    // assert them.
+    assert_the_seeded_picture_survived(card);
+    assert_the_seeded_calendars_survived(card);
+    assert_the_seeded_relations_survived(card);
+    assert_the_seeded_notes_survived(card);
 }

@@ -20562,3 +20562,105 @@ EDS; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
 editor writes for a replaced photo, and into a cleared field, is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-third session)
+
+**The value the card cannot carry.** Every mapped property crossed so far states
+its value in a shape a vCard line can hold. `onlineServices` need not: RFC 9553
+§2.3.2 lets an entry name the contact with a `user`, a `uri`, or both, and
+Evolution's instant-messaging fields hold a handle and nothing else. So an entry
+the server states as `uri: xmpp:jp@jabber.example` reaches the user only because
+the reader knows `xmpp:` is RFC 5122's — its path *is* the JID — and draws the
+handle out of it; and the save must then write an edit back onto the member it
+came from rather than answering a card shaped one way with a card shaped another.
+That whole crossing was fixtures-only, and it was the blocker this session took:
+*no test drives a `uri`-only entry through real EDS*. It now does, as the eleventh
+`functional-book` leg,
+`retyping_a_uri_only_handle_through_eds_writes_the_uri_back`, and as an entry
+seeded on the card **every** seeded leg starts from.
+
+**New C, unlike the last session.** The `rehandle` phase and `report_im_handle`
+are the additions: no existing phase reported an instant-messaging field, and
+without one the leg could not say the drawn handle reached the field the contact
+editor shows. It reports three things — the field, the number of `X-JABBER` lines
+the card carries, and the `X-JMAP-KEY` on the first of them — because they answer
+three different questions and the field alone answers only one. The report is
+wired into `report_seeded_contact` and `save_and_report`, so all ten seeded legs
+now print it.
+
+**What the daemons actually said.** Measured against libebook-contacts 3.52:
+`read-im-handle=jp@jabber.example`, so the `TYPE=HOME` the emitter writes is the
+parameter `E_CONTACT_IM_JABBER_HOME_1` reads a handle back out of — the slot
+claim, in the read direction, which no leg had made. Setting that field rewrites
+the first `X-JABBER` line **in place with its parameters**:
+`retyped-im-handle-lines=1`, `retyped-im-handle-key=handle-1`. So the save patches
+the entry the URI came from by key and never has to pair a keyless line with it,
+which is the `CALURI` behaviour rather than the `PHOTO` one. Both are printed
+rather than asserted, for the reason the spouse line is; what is asserted is the
+server's side — the entry under the key the server chose, at the same service,
+`uri: xmpp:jp@xmpp.example`, `user` absent.
+
+**A claim I wrote and the measurement withdrew.** The first draft of
+`assert_the_seeded_service_survived` said it would catch a save that compared an
+entry's *members* rather than the handle they both spell — the line hands back a
+`user` where the server holds a `uri`, so that comparison calls every save an edit
+of this entry. Running the mutation says otherwise: the rebuilt URI is the URI it
+already had, so every value assertion still holds and only the card's *state* on
+the server moves. The functional legs cannot see that; the fixture can, and does
+(`an_edit_that_left_a_uri_only_handle_alone_writes_nothing` compares the state
+before and after, and it is the one test that goes red). The comment and
+`docs/functional-tests.md` now say so — running the mutation rather than
+reasoning about it is what kept a plausible sentence out of the tree.
+
+**Mutation checks.** Two redden this leg and nothing else in the file: making the
+rename write a `user` instead of rebuilding the URI, and dropping `xmpp` from
+`SERVICE_SCHEMES`, which leaves the handle undrawn and the field empty. Pointing
+`DEFAULT_SLOT` at `WORK` reddens this leg and the write leg together — the read
+and write directions of the same claim. The fixtures catch all three, so what the
+leg adds is the input, as usual.
+
+Three counts in `docs/functional-tests.md` were re-measured rather than
+incremented: dropping the calendaring lines' `X-JMAP-KEY` reddens nine of the ten
+seeded legs (was eight of nine), dropping the spouse line reddens all eleven (was
+ten), and dropping the `NOTE` key reddens nine of the ten seeded legs (was eight
+of nine), the only-note leg still the one that stays green.
+
+Tests: 988 in the default set, unchanged — the fixtures this leg leans on were
+already there, which is what made the blocker a functional-test blocker and not a
+mapping one. The `functional-book` leg count goes from ten to eleven.
+
+Verified locally: `cargo test --locked` 988; full `ninja` then `ctest` 14/14 with
+all four functional legs; `cargo fmt --all --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings` and `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` both clean. `ci/checks.sh`
+still stops at its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so the
+licence check was done by hand: no file was added, the three sources touched
+already carry an SPDX header, and `Cargo.lock` is untouched, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+**What this still does not settle.** Nothing here observes Evolution's own contact
+editor, so which slot the editor writes into remains an inference; the leg says
+only that the `HOME` slot the emitter picks is the field EDS files that line in.
+The scheme table is still three entries, so a `uri`-only entry at any other
+service is still invisible to the user, and the seeded card carries one entry
+rather than two — the invisible-to-the-user case belongs to a service EDS has no
+field for, which is a fixture's question.
+
+No milestone tag. Removed from the blocker list: no test drives a `uri`-only entry
+through real EDS. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification
+in real Evolution**; `example-module` does not pass this VM's clippy (1.97) on
+unmodified master, 26 `manual_c_str_literals`; `docs/MILESTONES.md` does not
+exist, so the M8 tag is still unwritten; the manual-test recipes are unlinked from
+the README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
+editor writes for a replaced photo, and into a cleared field, is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.
