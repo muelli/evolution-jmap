@@ -4,11 +4,12 @@
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
 //! ORG, TITLE, ROLE, NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the
-//! instant-messaging `X-` lines.
+//! `X-` lines EDS keeps instant-messaging handles and the spouse on.
 
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
-    Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
+    Relation, Title,
 };
 use jmap_vcard::{card_to_vcard, states_keyword, states_media, vcard_to_card};
 use serde_json::{Value, json};
@@ -1328,6 +1329,185 @@ fn invents_a_key_for_a_calendar_that_has_none() {
     // The second `CALURI` line is read too, though EDS shows the user only the
     // first: a line nobody can edit is still one a save must not delete.
     assert_eq!(calendars["c7"].uri, "https://vera.example/cal/team.ics");
+}
+
+fn one_relation(key: &str, types: &[&str]) -> ContactCard {
+    ContactCard {
+        related_to: Some(
+            [(
+                key.to_owned(),
+                Relation {
+                    relation: Some(
+                        types
+                            .iter()
+                            .map(|kind| ((*kind).to_owned(), json!(true)))
+                            .collect(),
+                    ),
+                    ..Relation::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+fn spouse_of(vcard: &str) -> Option<String> {
+    let card = vcard_to_card(vcard).expect("parse");
+    let related = card.related_to?;
+    let (key, _) = related.into_iter().next()?;
+    Some(key)
+}
+
+#[test]
+fn maps_a_spouse_onto_the_line_eds_keeps_the_spouse_on() {
+    // RFC 9553 §2.1.8's `relatedTo` states who else an entity is related to,
+    // and of the twenty relation types it lists, `spouse` is the one Evolution
+    // has a field for: `E_CONTACT_SPOUSE`, which libebook-contacts 3.52 keeps
+    // on `X-EVOLUTION-SPOUSE` and the contact editor labels "Spouse". vCard 3.0
+    // has no `RELATED` at all — RFC 6350 §6.6.6 is 4.0 — so the `X-` line is not
+    // a shortcut, it is the only line there is.
+    //
+    // And it carries no X-JMAP-KEY, which every other keyed map here needs:
+    // §2.1.8 keys the map by *who the related entity is*, so the name on the
+    // line is the key, and there is nothing left for a parameter to say.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "X-EVOLUTION-SPOUSE"),
+        "X-EVOLUTION-SPOUSE:Jean Paul Oldenburg"
+    );
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let related = card.related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["Jean Paul Oldenburg"]
+    );
+    let relation = related["Jean Paul Oldenburg"]
+        .relation
+        .as_ref()
+        .expect("relation");
+    assert_eq!(
+        relation.keys().collect::<Vec<_>>(),
+        vec!["spouse"],
+        "the line says the entity is a spouse and nothing else, so the reader \
+         may not claim the `kin` the fixture also states — a save has to patch \
+         into the set rather than replace it"
+    );
+    assert_eq!(relation["spouse"], Value::Bool(true));
+}
+
+#[test]
+fn a_relation_no_eds_field_holds_gets_no_line() {
+    // The fixture's `Nils Oldenburg` is a `child`. Nineteen of RFC 9553
+    // §2.1.8's twenty relation types are like that: no vCard 3.0 property and
+    // no EDS field states them, and putting a name on the spouse line would
+    // tell the user something the card never said. Evolution's Manager and
+    // Assistant fields are the near misses, and §2.1.8 has no type meaning
+    // either — `agent` is whoever acts on the contact's behalf, which is wider
+    // than an assistant, so it stays off the line too.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(vcard.matches("X-EVOLUTION-SPOUSE").count(), 1, "{vcard}");
+    assert!(!vcard.contains("Nils"), "{vcard}");
+
+    // Nor does a relation stating no type at all reach a line: RFC 9555 §2.9.5
+    // reads a `RELATED` line carrying no `TYPE` into exactly that, and an
+    // unspecified relation is not a marriage.
+    let vcard = card_to_vcard(&one_relation("Jean Paul Oldenburg", &[]));
+    assert!(!vcard.contains("SPOUSE"), "{vcard}");
+    let vcard = card_to_vcard(&ContactCard {
+        related_to: Some([("Jean Paul Oldenburg".to_owned(), Relation::default())].into()),
+        ..ContactCard::default()
+    });
+    assert!(!vcard.contains("SPOUSE"), "{vcard}");
+}
+
+#[test]
+fn a_spouse_the_card_names_by_uid_gets_no_line() {
+    // The fixture's third entry is a spouse the way RFC 9553 §2.1.8 asks for
+    // one: keyed by the related Card's `uid`. There is no name in a UID, so the
+    // line would show the user a URN under the heading "Spouse" — and the next
+    // save would write it back as the person's name. RFC 9555 §2.9.5 is what
+    // says the other kind of key exists: a `RELATED;VALUE=text` becomes a key
+    // holding free text, which is the case that holds a name.
+    let vcard = card_to_vcard(&fixture_card());
+    assert!(!vcard.contains("e1f0a1c2"), "{vcard}");
+
+    // Any URI, not just a URN: what disqualifies the key is that it names an
+    // identifier rather than a person.
+    for key in [
+        "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44",
+        "mailto:jean@example.com",
+        "https://vera.example/jean",
+        "XMPP:jean@jabber.example",
+    ] {
+        let vcard = card_to_vcard(&one_relation(key, &["spouse"]));
+        assert!(!vcard.contains("SPOUSE"), "{key}: {vcard}");
+    }
+
+    // A name is not a URI for holding a colon in it, only for holding one after
+    // something that reads as an RFC 3986 §3.1 scheme.
+    let vcard = card_to_vcard(&one_relation("Jean Paul: the second", &["spouse"]));
+    assert!(vcard.contains("SPOUSE"), "{vcard}");
+}
+
+#[test]
+fn a_spouse_whose_name_eds_would_rename_gets_no_line() {
+    // The name is the key, so a name EDS gives back spelled differently is a
+    // *different entry* to the save — it would delete the relation the server
+    // holds and add one under the renamed key. Three spellings do that, all
+    // measured or forced on this side: ends made of ASCII whitespace are
+    // trimmed by EDS, as they are on an instant-messaging handle; a carriage
+    // return is dropped by `syntax::write`; and the empty name says nothing at
+    // all.
+    for key in [" Jean Paul Oldenburg", "Jean Paul Oldenburg\t", ""] {
+        let vcard = card_to_vcard(&one_relation(key, &["spouse"]));
+        assert!(!vcard.contains("SPOUSE"), "[{key}]: {vcard}");
+    }
+    let vcard = card_to_vcard(&one_relation("Jean\rPaul", &["spouse"]));
+    assert!(!vcard.contains("SPOUSE"), "{vcard}");
+
+    // What does survive: a name whose middle holds the whitespace, which is
+    // every name with a space in it.
+    let vcard = card_to_vcard(&one_relation("Jean Paul Oldenburg", &["spouse"]));
+    assert_eq!(spouse_of(&vcard).as_deref(), Some("Jean Paul Oldenburg"));
+}
+
+#[test]
+fn reads_every_spouse_line_and_keys_each_by_its_own_name() {
+    // EDS shows the user the first `X-EVOLUTION-SPOUSE` line and passes any
+    // further one through untouched, measured against libebook-contacts 3.52 —
+    // so a second line is one a save must not delete. And an X-JMAP-KEY on a
+    // line is not the key here: the name is. A line carrying one — from another
+    // client, or from a card this mapping wrote before the key stopped being
+    // written — is read by its text like any other.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "X-EVOLUTION-SPOUSE:Jean Paul Oldenburg\r\n",
+        "X-EVOLUTION-SPOUSE;X-JMAP-KEY=r7:Jeanne Oldenburg\r\n",
+        "X-EVOLUTION-SPOUSE:\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let related = card.related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["Jean Paul Oldenburg", "Jeanne Oldenburg"],
+        "the empty line states no entity, and EDS leaves one behind when the \
+         user clears the field"
+    );
+    for spouse in related.values() {
+        assert_eq!(
+            spouse
+                .relation
+                .as_ref()
+                .expect("relation")
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["spouse"]
+        );
+    }
 }
 
 fn one_photo(uri: &str, media_type: Option<&str>) -> ContactCard {

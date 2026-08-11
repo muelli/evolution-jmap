@@ -134,6 +134,16 @@
   "keywords": {
     "hiking": true
   },
+  "relatedTo": {
+    "Jean Paul Oldenburg": {
+      "@type": "Relation",
+      "relation": {"spouse": true, "kin": true}
+    },
+    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {
+      "@type": "Relation",
+      "relation": {"colleague": true}
+    }
+  },
   "preferredLanguages": {
     "l1": {"@type": "LanguagePref", "language": "de-DE", "pref": 1}
   }

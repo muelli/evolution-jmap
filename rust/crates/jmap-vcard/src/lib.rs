@@ -12,7 +12,8 @@
 //! The mapped property set is the minimal useful one: UID, FN, N, NICKNAME,
 //! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, BDAY, URL, CALURI, FBURL,
 //! PHOTO, CATEGORIES
-//! and the `X-` lines EDS keeps instant-messaging handles on. See [`contact`]
+//! and the `X-` lines EDS keeps instant-messaging handles and the spouse on. See
+//! [`contact`]
 //! for what that costs and why it is safe.
 //!
 //! [RFC 9553]: https://www.rfc-editor.org/rfc/rfc9553
@@ -28,6 +29,6 @@ pub use contact::{
     restore_address_components, restore_name_components, same_photo, same_service,
     states_a_point_in_time, states_address, states_anniversary, states_calendar, states_email,
     states_keyword, states_link, states_media, states_nickname, states_note, states_online_service,
-    states_organization, states_phone, states_title, title_kind, vcard_to_card,
+    states_organization, states_phone, states_spouse, states_title, title_kind, vcard_to_card,
 };
 pub use error::VCardError;
