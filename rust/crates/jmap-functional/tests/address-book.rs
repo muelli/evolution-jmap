@@ -10,17 +10,17 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Five legs, because they need five books. The first starts empty and writes
-//! a contact into it. The other four each start from a card the mock was
+//! Six legs, because they need six books. The first starts empty and writes
+//! a contact into it. The other five each start from a card the mock was
 //! seeded with before EDS ever connected — a card from the *server*, holding a
 //! shape no vCard can state, which is the only way to ask what real EDS does to
 //! it — and take the branches a save can take with it: the user edits a field
-//! beside the name, retypes the name itself, picks a new picture, or retypes
-//! their calendar address.
+//! beside the name, retypes the name itself, picks a new picture, retypes their
+//! calendar address, or retypes who they are married to.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
-use jmap_proto::contacts::{Calendar, ContactCard, Media, Name, NameComponent};
+use jmap_proto::contacts::{Calendar, ContactCard, Media, Name, NameComponent, Relation};
 
 /// The contact the client writes. One string, passed to the client on its
 /// command line and looked for in the mock's store, so the two ends cannot
@@ -85,6 +85,15 @@ const HOMEPAGE: &str = "https://dana.example/profile?tags=x-files,ufo";
 /// the other resource, and the two fields sit next to each other.
 const CALENDAR_URI: &str = "https://dana.example/cal/dana.ics";
 const FREEBUSY_URI: &str = "https://dana.example/fb/dana.ifb";
+/// Who the contact is married to, spelled as `book-client.c` spells it. EDS
+/// keeps it on an `X-EVOLUTION-SPOUSE` line — vCard 3.0 has no `RELATED` — and
+/// JSContact keeps it as the *key* of a `relatedTo` entry stating the type
+/// `spouse`. So this is the one mapped property whose key crosses rather than
+/// its value, and what only real EDS can answer is whether the field
+/// Evolution shows as Spouse is the line the emitter writes, and whether the
+/// name reaches the server as the entry's own key rather than as a value on
+/// some entry keyed by something else.
+const SPOUSE: &str = "Fox Mulder";
 /// The instant-messaging handle the client sets, spelled as `book-client.c`
 /// spells it. EDS keeps it on an `X-JABBER` line and JSContact as an
 /// `onlineServices` entry, and two things about the crossing only real EDS can
@@ -314,6 +323,11 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         seen.get("read-back-freebusy-uri"),
         Some(&FREEBUSY_URI),
         "the contact EDS handed back lost or moved its free/busy address\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-spouse"),
+        Some(&SPOUSE),
+        "the contact EDS handed back lost or respelled its spouse\n{report}"
     );
     assert_eq!(
         seen.get("read-back-birthday"),
@@ -592,6 +606,27 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         ],
         "{card:?}"
     );
+    // The X-EVOLUTION-SPOUSE line, as the server sees it: one `relatedTo`
+    // entry, keyed by the name the user typed and stating that they are married
+    // to them. Both halves matter and neither alone would do — a name that
+    // arrived as a *value* under a key of the mapping's own invention would be
+    // an entity the server has never heard of, and an entry keyed right but
+    // stating no type is RFC 9555 §2.9.5's relation of no kind, which says
+    // nothing about a marriage.
+    let related = card
+        .related_to
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server relates to nobody: {card:?}"));
+    assert_eq!(
+        related.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SPOUSE],
+        "the spouse did not reach the server as the entry's own key: {card:?}"
+    );
+    assert_eq!(
+        related[SPOUSE].relation,
+        Some([("spouse".to_owned(), serde_json::json!(true))].into()),
+        "{card:?}"
+    );
     // The X-JABBER line, as the server sees it: one `onlineServices` entry
     // stating the service and the handle. Asserted at this end too because the
     // client's read-back comes out of EDS's own cache, which would agree with
@@ -725,6 +760,18 @@ const SEEDED_FREEBUSY_URI: &str = "https://oldenburg.example/fb/jp.ifb";
 /// says whether a save *patched* the entry or replaced it: a replacement would
 /// hold the URI and nothing else.
 const SEEDED_CALENDAR_PREF: u64 = 1;
+/// Who the server says the seeded card's owner is married to. A key rather than
+/// a value — RFC 9553 §2.1.8 keys `relatedTo` by the related entity itself — and
+/// free text rather than a `uid`, which is what RFC 9555 §2.9.5 allows and what
+/// makes the name showable on a line at all.
+const SEEDED_SPOUSE: &str = "Marie Oldenburg";
+/// Somebody else the server relates the card to, of a type Evolution has no
+/// field for. The entry is therefore invisible to the user: it reaches no line,
+/// so it cannot have been edited by one, and a save that dropped it dropped
+/// something nobody asked it to. It is the `relatedTo` counterpart of the
+/// `phonetic` beside it, and the reason the map is seeded with two entries
+/// rather than one.
+const SEEDED_SIBLING: &str = "Klaus Oldenburg";
 
 /// Put the card both name legs start from into the mock's store, and hand back
 /// the id the server filed it under.
@@ -809,8 +856,74 @@ fn seed_double_barrelled_card(server: &jmap_mock::MockServer) -> Id {
         .into_iter()
         .collect(),
     );
+    // Who the card relates to: the marriage the spouse line shows, and a brother
+    // no field can show. Seeded on the card every leg starts from because the
+    // pair is what tells a save that withdrew a marriage from one entity apart
+    // from one that emptied the map.
+    card.related_to = Some(
+        [
+            (SEEDED_SPOUSE.to_owned(), relation_of("spouse")),
+            (SEEDED_SIBLING.to_owned(), relation_of("sibling")),
+        ]
+        .into_iter()
+        .collect(),
+    );
     account.contact_cards.seed_with_id(id.clone(), card);
     id
+}
+
+/// A `relatedTo` value stating one relation type, as RFC 9553 §1.4.3's Set:
+/// the type is a key and its value is `true`.
+fn relation_of(kind: &str) -> Relation {
+    Relation {
+        relation: Some([(kind.to_owned(), serde_json::json!(true))].into()),
+        ..Relation::default()
+    }
+}
+
+/// Hold the card the server now holds to the brother it was seeded with — the
+/// entry no line shows, under the key and of the type it arrived with.
+///
+/// Split out from the marriage beside it because the leg that retypes the spouse
+/// leaves this one alone, and that is what it has to prove: the save withdraws a
+/// marriage from the entity the field stopped naming, not every relation the
+/// server holds. The vCard never showed this entry, so a save that dropped it
+/// deleted something the user could not have seen, let alone edited.
+fn assert_the_seeded_sibling_survived(card: &ContactCard) {
+    let related = card
+        .related_to
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped everyone the card relates to: {card:?}"));
+    let sibling = related
+        .get(SEEDED_SIBLING)
+        .unwrap_or_else(|| panic!("the save dropped the brother nobody touched: {card:?}"));
+    assert_eq!(
+        *sibling,
+        relation_of("sibling"),
+        "the save rewrote a relation nobody touched: {card:?}"
+    );
+}
+
+/// Hold the card the server now holds to both relations it was seeded with.
+///
+/// Shared by the legs that edit something else entirely, for the reason
+/// [`assert_the_seeded_calendars_survived`] is: a user who retypes their name
+/// has not remarried, so a save that touched either entry — or re-keyed the
+/// marriage, which is the only way this property *can* be touched — did
+/// something nobody asked for.
+fn assert_the_seeded_relations_survived(card: &ContactCard) {
+    assert_the_seeded_sibling_survived(card);
+    let related = card.related_to.as_ref().expect("relations, just checked");
+    assert_eq!(
+        related.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_SIBLING, SEEDED_SPOUSE],
+        "the save re-keyed a relation nobody touched: {card:?}"
+    );
+    assert_eq!(
+        related[SEEDED_SPOUSE],
+        relation_of("spouse"),
+        "the save rewrote the marriage nobody touched: {card:?}"
+    );
 }
 
 /// Hold the card the server now holds to the free/busy address it was seeded
@@ -1085,6 +1198,7 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
     );
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
+    assert_the_seeded_relations_survived(card);
 }
 
 /// What the user retypes the given-name field to, and the full name Evolution's
@@ -1240,6 +1354,7 @@ fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
     );
     assert_the_seeded_picture_survived(card);
     assert_the_seeded_calendars_survived(card);
+    assert_the_seeded_relations_survived(card);
 }
 
 /// The fourth leg, and the one edit that reaches the picture itself: the user
@@ -1389,6 +1504,7 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
         EDITED_GIVEN_PARTS.map(|(value, _)| value).to_vec(),
         "choosing a picture rewrote the name: {card:?}"
     );
+    assert_the_seeded_relations_survived(card);
 }
 
 /// What the user retypes the Calendar field to. A URI on a different host from
@@ -1540,4 +1656,142 @@ fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
     // And what nobody touched at all: the picture and the name components the
     // `N` line flattened, asserted for the reason the other legs assert them.
     assert_the_seeded_picture_survived(card);
+    assert_the_seeded_relations_survived(card);
+}
+
+/// What the user retypes the Spouse field to. A different person from the one
+/// the server holds — not a respelling of that name — because that is the only
+/// reading the field supports: the name *is* the key, so nothing distinguishes
+/// "this is somebody else" from "this is the same person, spelled right", and
+/// the save takes both as the marriage moving.
+const RETYPED_SPOUSE: &str = "Marianne Oldenburg";
+
+/// The sixth leg: the user retypes who they are married to, on a card the server
+/// relates to two people.
+///
+/// The one mapped property whose *key* is what the line shows, so this is where
+/// real EDS is asked the question no test below the daemons can: whether
+/// `e_contact_set` on `E_CONTACT_SPOUSE` rewrites the one
+/// `X-EVOLUTION-SPOUSE` line in place or leaves the old one standing beside the
+/// new. A second line would reach the server as a second marriage — the card
+/// would say the user is married to both — and the mapping could not tell that
+/// from a card that really did state two, because it has nothing but the lines
+/// to go on.
+///
+/// Two entries rather than one because withdrawing a marriage is not emptying
+/// the map: the brother is of a type no field shows, so a save that took the
+/// whole property back — or replaced it wholesale with what the vCard could
+/// state — would delete a relation the user never saw and could not have
+/// touched.
+#[test]
+fn retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/address-book-respouse"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(
+        &client,
+        &[
+            "jmap-functional",
+            "respouse",
+            card_id.as_str(),
+            RETYPED_SPOUSE,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // What EDS made of the line the emitter wrote — the direction the write leg
+    // cannot ask about, where the line came from EDS in the first place. The
+    // name is the entry's *key* over on the server, so this is where the
+    // crossing from key to value is checked against real EDS: a spouse missing
+    // here is one the user cannot see, whatever the card holds.
+    assert_eq!(
+        seen.get("read-spouse"),
+        Some(&SEEDED_SPOUSE),
+        "EDS did not read the spouse off the line the emitter wrote\n{report}"
+    );
+
+    // And what EDS holds after the save: the name the user typed, once. Two
+    // names joined here would be EDS holding two spouse lines, which is the
+    // failure this leg exists for.
+    assert_eq!(
+        seen.get("read-back-spouse"),
+        Some(&RETYPED_SPOUSE),
+        "the spouse the user typed did not survive the save\n{report}"
+    );
+
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the new spouse never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    // The other end, and the load-bearing assertion: two entries still, the
+    // brother's untouched and the marriage now keyed by the name the user typed.
+    // Three would be the old marriage still standing — the user married to
+    // somebody they stopped naming — and two of which one is the old spouse
+    // would be the save having patched the wrong entry.
+    let related = card
+        .related_to
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped everyone the card relates to: {card:?}"));
+    assert_eq!(
+        related.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_SIBLING, RETYPED_SPOUSE],
+        "the spouse the user typed was filed beside the old one instead of \
+         over them: {card:?}"
+    );
+    assert_eq!(
+        related[RETYPED_SPOUSE],
+        relation_of("spouse"),
+        "the name the user typed reached the server as something other than a \
+         marriage: {card:?}"
+    );
+    assert_the_seeded_sibling_survived(card);
+    // And what nobody touched at all, asserted for the reason the other legs
+    // assert them.
+    assert_the_seeded_picture_survived(card);
+    assert_the_seeded_calendars_survived(card);
 }

@@ -20091,3 +20091,95 @@ moved between the Home and Work slots at all is unknown; no test drives a
 what Evolution's contact editor writes for a replaced photo is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-ninety-eighth session)
+
+**Driving the spouse through real EDS, and the failure the client end cannot
+see.** The last two sessions built the spouse's two halves — the line, then the
+save — and both were measured against fixtures. This is the sixth `functional-book`
+leg, `retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed`, and
+what it asks the daemons is a question none of the earlier legs had to: not
+whether a key survived a set, because this property has no key on the line, but
+whether a set leaves **one** `X-EVOLUTION-SPOUSE` line or two.
+
+That distinction is why the leg is worth its weight. `e_contact_get` hands back
+the value of the *first* line of a name, so a set that appended rather than
+rewriting reads back perfectly at the client end — the user sees the name they
+typed — and reaches the server as a card stating two marriages. The mapping could
+not tell that from a card that genuinely states two, because the lines are all it
+has to go on. So the assertion that catches it is at the other end and nowhere
+else: exactly two `relatedTo` entries after the save, one of them the brother.
+`report_spouse` in `book-client.c` says as much in its comment rather than
+pretending the observation it prints is the whole check. The measurement came
+back the good way — one line, rewritten in place, as `E_CONTACT_SPOUSE` being a
+plain vCard attribute predicted — which is the same answer `recalendar` got and
+the opposite of the synthetic photo field's.
+
+**Two people on the seeded card, and the second is the point.** The card every
+seeded leg starts from now relates to a spouse and to a `sibling`. The brother is
+the `relatedTo` counterpart of the `phonetic` beside it: no field shows him, so
+he reaches no line, so the user cannot have edited him — and a save that took the
+whole property back, or wrote back only what the vCard could state, would delete
+a relation nobody touched. Withdrawing a marriage is not emptying the map, and
+the brother is what tells those apart through the daemons rather than in a unit
+test.
+
+**The other four legs pay for themselves here.** `assert_the_seeded_relations_survived`
+went on to `edit`, `rename`, `repicture` and `recalendar` too, since a user who
+retypes their name has not remarried. That turned out to be the strongest of the
+new assertions: dropping the emitter's spouse line reddens **all six** legs at
+once, four of them because the save then withdraws a marriage the user never
+touched. The map being untouched by an edit elsewhere is a claim about the save
+path, and it now has four independent witnesses.
+
+**Mutation checks.** Replacing `relatedTo` whole instead of patching it: one
+red — the sixth leg, on the brother, and the other four stay green because the
+diff short-circuits when the shown keys agree. Never diffing `relatedTo` at all:
+one red, the sixth, and notably *not* the write leg, since a created card's
+relations come from the vCard reader rather than from the diff. Dropping the
+emitter's `X-EVOLUTION-SPOUSE` line: all six.
+
+**What this still does not settle.** The leg drives a retype, not a *clearing* —
+so `as_evolution_retypes_the_spouse`'s assumption that Evolution leaves an empty
+line rather than dropping the attribute is still an inference, and the
+`relatedTo == None` branch of the save is still exercised only against fixtures.
+Nor does it say what Evolution's contact editor itself writes: the leg sets
+`E_CONTACT_SPOUSE` the way the editor is understood to, which is libebook-contacts
+being driven correctly rather than the editor being observed. A card carrying
+several spouse lines still has only its first reachable through this field, and
+the nineteen relation types with no field remain invisible in both directions —
+the brother proves they survive, not that they can be seen.
+
+Tests: 986 in the default set (unchanged — `jmap-functional` is not in
+`default-members`); the `functional-book` leg count goes from five to six.
+
+Verified locally: `cargo test --locked` 986; full `ninja` then `ctest` 14/14 with
+all four functional legs; `cargo fmt --all --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings` and `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` both clean. `ci/checks.sh`
+still stops at its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so
+the licence check was done by hand: no file was added, the three sources touched
+already carry an SPDX header, and `Cargo.lock` is untouched, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+No milestone tag. Removed from the blocker list: no functional leg drives a
+spouse through real EDS. Added: clearing the Spouse field is still untested
+through the daemons, and what Evolution's own contact editor writes into it is
+inferred rather than observed. Unchanged blockers: the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `example-module` does not pass this VM's clippy
+(1.97) on unmodified master, 26 `manual_c_str_literals`; `docs/MILESTONES.md` does
+not exist, so the M8 tag is still unwritten; the manual-test recipes are unlinked
+from the README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE`
+of its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL`/`PHOTO` "Evolution
+shows only the first" bet is verified for `PHOTO` and still unverified for the
+rest; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as a
+year alone are still invisible; the conventional URI schemes for AIM, Gadu-Gadu,
+ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP`
+are unmapped and their contact-editor behaviour unmeasured; whether the editor
+lets a handle be moved between the Home and Work slots at all is unknown; no test
+drives a `uri`-only entry through real EDS; a `VALUE=uri` photo's rendering is
+unmeasured; what Evolution's contact editor writes for a replaced photo is
+inferred rather than measured; and the `jmap-mail` `transport.rs` hang is still an
+open design question with a lock-order hypothesis attached.
