@@ -7,9 +7,9 @@
 //! SUMMARY, DESCRIPTION, DTSTART (with its time zone, or as a `VALUE=DATE` when
 //! the event is shown without a time), DURATION, STATUS, TRANSP, PRIORITY,
 //! CLASS, LOCATION, CATEGORIES, RRULE, the `VALARM`s that remind the user of the
-//! event, and the instances an EXDATE, an RDATE or a `RECURRENCE-ID` component
-//! names one at a time — and no more. Everything else on an event
-//! (links, …) is *dropped*,
+//! event, the external resources it points at, and the instances an EXDATE, an
+//! RDATE or a `RECURRENCE-ID` component names one at a time — and no more.
+//! Everything else on an event is *dropped*,
 //! which is only safe because saving goes back to the server as a PatchObject
 //! naming the mapped properties: a property we never mapped is a property we
 //! never overwrite. See [`MAPPED_PROPERTIES`], [`maps_locations`],
@@ -45,6 +45,15 @@
 //! drawn from rides on it in an [`X_JMAP_KEY`], and the save patches
 //! `virtualLocations/<key>/uri`. See [`drawn_conferences`],
 //! [`read_virtual_locations`] and [`maps_virtual_locations`].
+//!
+//! What the event points at — RFC 8984 §4.2.7's `links` — is written and never
+//! read back, and crosses as two properties rather than one: a document
+//! attached to the event is an `ATTACH` (RFC 5545 §3.8.1.1), a picture *of* it
+//! is an `IMAGE` (RFC 7986 §5.10), and the [`ICON_REL`] relation is what tells
+//! them apart. A Link holds a `cid`, a `rel` and a `title` no line has room for,
+//! so a save naming the property would delete the half of every resource the
+//! user was never shown; closing that means patching `links/<key>/href` the way
+//! `virtualLocations` is patched. See [`drawn_links`].
 //!
 //! `ORGANIZER` and `ATTENDEE` are written and never read for a heavier reason:
 //! who is invited, and what each of them replied, is *scheduling* state. Moving
@@ -258,6 +267,33 @@ const CONFERENCE_FEATURES: [(&str, &str); 7] = [
     ("screen", "SCREEN"),
     ("video", "VIDEO"),
 ];
+
+/// The `rel` (RFC 8288) that makes a link a picture of the event rather than a
+/// document attached to it — RFC 8984 §1.4.11 lets `display` be set only when
+/// the relation is this one, and it is what sends a link to `IMAGE` (RFC 7986
+/// §5.10) instead of `ATTACH`.
+const ICON_REL: &str = "icon";
+
+/// What a picture of the event is for: RFC 8984 §1.4.11's `display` and RFC 7986
+/// §6.1's `DISPLAY` parameter, which name the same four intentions in the same
+/// words and differ only in case — another crossing where nothing is lost.
+///
+/// A value outside the table is dropped rather than passed through in the other
+/// format's clothes, and dropping it is the *safe* direction here: §6.1 requires
+/// a reader that meets a `DISPLAY` it does not know to show no image at all,
+/// where the absent parameter means its default of `BADGE`.
+const LINK_DISPLAYS: [(&str, &str); 4] = [
+    ("badge", "BADGE"),
+    ("graphic", "GRAPHIC"),
+    ("fullsize", "FULLSIZE"),
+    ("thumbnail", "THUMBNAIL"),
+];
+
+/// The characters RFC 6838 §4.2 admits in a media type's name after the first,
+/// which is what RFC 5545 §3.2.8's `FMTTYPE` is made of. Everything outside
+/// them — a `;` that would start another parameter, a `:` that would end them
+/// all, a space, a line break — makes the type unwritable.
+const RESTRICTED_NAME_CHARS: [char; 9] = ['!', '#', '$', '&', '-', '^', '_', '.', '+'];
 
 /// What sort of participant it is: RFC 8984 §4.4.6's `kind` and RFC 5545
 /// §3.2.3's `CUTYPE`. The two vocabularies say the same four things and differ
@@ -753,6 +789,105 @@ fn joining_features(location: &Value) -> Vec<&'static str> {
         })
         .map(|(_, ical)| *ical)
         .collect()
+}
+
+/// The external resources the event points at, as the lines a `VEVENT` states
+/// them on — one per entry the document can carry, in the map's own order so
+/// that a document is stable across renderings.
+///
+/// Two properties, because RFC 8984 §4.2.7 keeps in one map what iCalendar
+/// splits in two: a document attached to the event is RFC 5545 §3.8.1.1's
+/// `ATTACH`, and a *picture of* the event is RFC 7986 §5.10's `IMAGE`.
+/// [`ICON_REL`] is what tells them apart, since it is the relation RFC 8984
+/// §1.4.11 attaches `display` to. Both admit being stated more than once, so —
+/// as with `CONFERENCE`, and unlike `LOCATION` — nothing is left out.
+fn drawn_links(event: &CalendarEvent) -> Vec<Property> {
+    event
+        .links
+        .iter()
+        .flatten()
+        .filter_map(|(_, link)| drawn_link(link))
+        .collect()
+}
+
+/// One `ATTACH` or `IMAGE`, or `None` for a link no line can name.
+///
+/// The `href` is the whole of the line, so a value that is not a URI leaves
+/// nothing to write: RFC 8984 §1.4.11 makes it the one mandatory member of a
+/// Link, and a resource with no address is dropped rather than guessed at. The
+/// media type and the size are informational (§1.4.11 calls the size an
+/// estimate), so one this mapping cannot spell costs the parameter and not the
+/// resource — the user can still open what the line points at.
+///
+/// No [`X_JMAP_KEY`] rides along, unlike a `LOCATION` or a `CONFERENCE`: the
+/// property is written and never read back, so no save has an entry to name.
+fn drawn_link(link: &Value) -> Option<Property> {
+    let href = link
+        .get("href")?
+        .as_str()
+        .filter(|href| names_a_uri(href))?;
+    let media_type = media_type(link);
+    if link.get("rel").and_then(Value::as_str) == Some(ICON_REL) {
+        // `VALUE=URI` because RFC 7986 §5.10's `image` grammar makes it REQUIRED
+        // on the URI alternative — the same demand §5.11 makes of a
+        // `CONFERENCE`, and the reason both write a parameter that says only
+        // what the default already says.
+        return Some(
+            Property::raw("IMAGE", href)
+                .with_param("VALUE", "URI")
+                .with_params("DISPLAY", spelled(&LINK_DISPLAYS, link.get("display")))
+                .with_params("FMTTYPE", media_type),
+        );
+    }
+    // No `VALUE`: RFC 5545 §3.8.1.1 already makes `URI` the default value type
+    // of an `ATTACH`, and nothing in its grammar demands the parameter be
+    // stated. Also no `DISPLAY` — RFC 7986 §6.1 admits it on `IMAGE` alone, so a
+    // link that asked to be displayed without saying it is an icon is taken at
+    // its `rel`.
+    Some(
+        Property::raw("ATTACH", href)
+            .with_params("FMTTYPE", media_type)
+            .with_params("SIZE", stated_size(link)),
+    )
+}
+
+/// The media type of a linked resource, or `None` when no `FMTTYPE` can carry
+/// it.
+///
+/// RFC 5545 §3.2.8's `fmttypeparam` is a type-name, a `/` and a subtype-name,
+/// each an RFC 6838 §4.2 restricted-name — and nothing else, so a type carrying
+/// media-type parameters of its own (`text/plain; charset=utf-8`) has no
+/// spelling here. Checking the grammar rather than trusting the server is also
+/// what keeps a `;` or a `:` out of a parameter value, and a CR or an LF out of
+/// the line.
+fn media_type(link: &Value) -> Option<&str> {
+    let media_type = link.get("contentType")?.as_str()?;
+    let (name, subtype) = media_type.split_once('/')?;
+    [name, subtype]
+        .iter()
+        .all(|part| restricted_name(part))
+        .then_some(media_type)
+}
+
+/// Whether a string is an RFC 6838 §4.2 restricted-name: an alphanumeric, then
+/// any of the alphanumerics and [`RESTRICTED_NAME_CHARS`]. The length limit the
+/// production also states is not checked — a name of 200 characters is odd, not
+/// dangerous, and refusing it would drop a type a reader would have understood.
+fn restricted_name(name: &str) -> bool {
+    name.starts_with(|first: char| first.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || RESTRICTED_NAME_CHARS.contains(&c))
+}
+
+/// The size of a linked resource in octets, as RFC 8607 §4.1's `SIZE` states it,
+/// or `None` when the server named none this mapping can write.
+///
+/// RFC 8984 §1.4.11 makes `size` an UnsignedInt — the octets the user would
+/// download — so a negative number, a fraction or a string is not one, and
+/// stating it anyway would put a value outside §4.1's `1*DIGIT` on the line.
+fn stated_size(link: &Value) -> Option<String> {
+    Some(link.get("size")?.as_u64()?.to_string())
 }
 
 /// The address to reach one participant at, or `None` for one no `ATTENDEE`
@@ -1351,6 +1486,13 @@ fn vevent_of(
         vevent = vevent.with(line);
     }
 
+    // What the event points at: the agenda as an `ATTACH`, the picture beside
+    // its title as an `IMAGE`. Written for the user to read and never read back
+    // — see [`drawn_links`].
+    for line in drawn_links(event) {
+        vevent = vevent.with(line);
+    }
+
     // The whole set, on one line. An event whose every tag is one this mapping
     // cannot show gets no line at all rather than an empty one, which would state
     // a tag that is the empty string. See [`maps_keywords`].
@@ -1446,6 +1588,9 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         // Inherited and not restatable, like `participants` below: an occurrence
         // drawn without them is a meeting with nowhere to join it.
         virtual_locations: event.virtual_locations.clone(),
+        // Inherited and not restatable for the same reason: an occurrence drawn
+        // without them is a meeting whose agenda has gone missing.
+        links: event.links.clone(),
         keywords: event.keywords.clone(),
         alerts: event.alerts.clone(),
         // Inherited for the same reason, and not restatable: RFC 8984 §4.4.6's
@@ -1845,6 +1990,14 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         // here is what keeps that impossible: the property is not in
         // `MAPPED_PROPERTIES`, so no save can name it.
         participants: None,
+        // Drawn and never read back, for the reason `participants` is minus the
+        // scheduling: a Link (RFC 8984 §1.4.11) holds a `cid`, a `rel` and a
+        // `title` that no `ATTACH` or `IMAGE` line has room for, and a save
+        // naming `links` would replace the property whole — deleting the half of
+        // every resource the user was never shown. The property is not in
+        // `MAPPED_PROPERTIES`, so no save can name it. Doing better means
+        // patching `links/<key>/href` the way `virtualLocations` is patched.
+        links: None,
         recurrence_rules: (!rules.is_empty()).then_some(rules),
         recurrence_overrides: None,
         extra: Default::default(),

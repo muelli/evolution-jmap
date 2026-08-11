@@ -5649,3 +5649,293 @@ fn an_edited_instance_carries_the_conferences_of_the_series() {
         "{ics}"
     );
 }
+
+/// An event pointing at whatever external resources are passed.
+fn points_at(links: Value) -> CalendarEvent {
+    CalendarEvent {
+        title: Some("Sprint planning".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        links: serde_json::from_value(links).expect("a map of links"),
+        ..CalendarEvent::default()
+    }
+}
+
+/// One link: somewhere to fetch the resource from, and whatever else is passed.
+fn fetched_from(href: &str, rest: Value) -> Value {
+    let mut link = json!({"@type": "Link", "href": href});
+    for (key, value) in rest.as_object().expect("an object").clone() {
+        link[key] = value;
+    }
+    link
+}
+
+fn attachments(ics: &str) -> Vec<String> {
+    named_lines(ics, "ATTACH")
+}
+
+fn images(ics: &str) -> Vec<String> {
+    named_lines(ics, "IMAGE")
+}
+
+fn named_lines(ics: &str, name: &str) -> Vec<String> {
+    ics.replace("\r\n ", "")
+        .split("\r\n")
+        .filter(|line| line.starts_with(name))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn an_external_resource_is_written_as_an_attach() {
+    // RFC 8984 §4.2.7's `links` is a map of Links (§1.4.11), each an `href` to
+    // fetch a resource from with the media type and size the server knows for
+    // it; RFC 5545 §3.8.1.1 spells one as an ATTACH line whose value is that
+    // URI, with the type on an FMTTYPE (§3.2.8) and the size on the SIZE
+    // parameter RFC 8607 §4.1 adds. Like CONFERENCE and unlike LOCATION, the
+    // property may be stated more than once, so every entry of the map is
+    // written rather than one of them.
+    let ics = event_to_ical(&points_at(json!({
+        "l1": fetched_from("https://files.example.com/agenda.pdf", json!({
+            "contentType": "application/pdf",
+            "size": 51_200,
+        })),
+        "l2": fetched_from("https://files.example.com/minutes.txt", json!({})),
+    })));
+
+    // In the map's own order, so a document is stable across renderings — which
+    // is what the save path's diff against a re-rendering needs.
+    assert_eq!(
+        attachments(&ics),
+        [
+            "ATTACH;FMTTYPE=application/pdf;SIZE=51200:https://files.example.com/agenda.pdf",
+            "ATTACH:https://files.example.com/minutes.txt",
+        ],
+        "{ics}"
+    );
+    // ATTACH's default value type is already URI (RFC 5545 §3.8.1.1), so no
+    // VALUE parameter is written — unlike CONFERENCE, whose grammar demands one.
+    assert!(!ics.contains("ATTACH;VALUE"), "{ics}");
+}
+
+#[test]
+fn a_link_with_nowhere_to_fetch_it_from_is_left_off() {
+    // An ATTACH's value is a URI, and RFC 8984 §1.4.11 makes `href` the one
+    // mandatory member of a Link: there is nothing to write for a resource the
+    // server named no address for, and inventing one would send the user
+    // somewhere the server never did. So the entry is dropped, like every other
+    // value this mapping cannot spell — which is only safe because `links` is
+    // written and never read back.
+    for link in [
+        json!({"@type": "Link", "title": "The agenda"}),
+        json!({"@type": "Link", "href": ""}),
+        // A bare host is not a URI: RFC 3986 §3.1 wants a scheme.
+        json!({"@type": "Link", "href": "files.example.com/agenda.pdf"}),
+        json!({"@type": "Link", "href": "https:"}),
+        json!({"@type": "Link", "href": 42}),
+        // Whitespace is not in a URI, and a line break would end the content
+        // line and start a property of the server's choosing.
+        json!({"@type": "Link", "href": "https://files.example.com/the agenda.pdf"}),
+        json!({"@type": "Link", "href": "https://x/\r\nSUMMARY:Gone"}),
+        // Not an object at all.
+        json!("https://files.example.com/agenda.pdf"),
+    ] {
+        let ics = event_to_ical(&points_at(json!({"l1": link})));
+
+        assert!(without(&ics, "ATTACH"), "{link}: {ics}");
+        assert!(without(&ics, "IMAGE"), "{link}: {ics}");
+        assert!(!ics.contains("SUMMARY:Gone"), "{link}: {ics}");
+    }
+}
+
+#[test]
+fn a_media_type_no_fmttype_can_carry_is_left_off() {
+    // RFC 5545 §3.2.8's `fmttypeparam` is a type-name and a subtype-name of RFC
+    // 6838's restricted-name, and no more: a media type carrying parameters, or
+    // one whose name holds a character the grammar does not admit, has no
+    // spelling here. It is the parameter that is unwritable, not the resource,
+    // so the attachment still goes on the line — the user can still open it.
+    for content_type in [
+        json!("application"),
+        json!("application/"),
+        json!("/pdf"),
+        json!("text/plain; charset=utf-8"),
+        json!("text/pl:in"),
+        json!("text/pl,in"),
+        json!("text/pl\r\nSUMMARY:Gone"),
+        json!(".ext/plain"),
+        json!(7),
+    ] {
+        let ics = event_to_ical(&points_at(json!({
+            "l1": fetched_from("https://files.example.com/agenda.pdf", json!({
+                "contentType": content_type,
+            })),
+        })));
+
+        assert_eq!(
+            attachments(&ics),
+            ["ATTACH:https://files.example.com/agenda.pdf"],
+            "{content_type}: {ics}"
+        );
+        assert!(!ics.contains("SUMMARY:Gone"), "{content_type}: {ics}");
+    }
+}
+
+#[test]
+fn a_size_that_is_not_a_count_of_octets_is_left_off() {
+    // RFC 8984 §1.4.11 makes `size` an UnsignedInt — a count of the octets the
+    // user would download. A negative number, a fraction or a string is not
+    // one, and stating it anyway would put a SIZE outside RFC 8607 §4.1's
+    // `1*DIGIT` on the line.
+    for size in [
+        json!(-1),
+        json!(51_200.5),
+        json!("51200"),
+        json!(null),
+        json!({"octets": 51_200}),
+    ] {
+        let ics = event_to_ical(&points_at(json!({
+            "l1": fetched_from("https://files.example.com/agenda.pdf", json!({
+                "size": size,
+            })),
+        })));
+
+        assert_eq!(
+            attachments(&ics),
+            ["ATTACH:https://files.example.com/agenda.pdf"],
+            "{size}: {ics}"
+        );
+    }
+}
+
+#[test]
+fn a_link_to_an_icon_is_written_as_an_image() {
+    // RFC 8984 §1.4.11 gives a picture of the event a `rel` of "icon" and a
+    // `display` saying what it is for; RFC 7986 §5.10's IMAGE is that property
+    // in iCalendar, with §6.1's DISPLAY parameter naming the same four
+    // intentions — badge, graphic, fullsize, thumbnail — in the same words,
+    // differing only in case. So an icon is an IMAGE and not an ATTACH: the
+    // picture shown beside a title is not a document the user opens.
+    for (display, drawn) in [
+        ("badge", "BADGE"),
+        ("graphic", "GRAPHIC"),
+        ("fullsize", "FULLSIZE"),
+        ("thumbnail", "THUMBNAIL"),
+        // Read case-insensitively, which is what every closed vocabulary in
+        // this mapping does with the value a server states.
+        ("BADGE", "BADGE"),
+    ] {
+        let ics = event_to_ical(&points_at(json!({
+            "l1": fetched_from("https://files.example.com/party.png", json!({
+                "rel": "icon",
+                "display": display,
+                "contentType": "image/png",
+            })),
+        })));
+
+        // VALUE=URI because RFC 7986 §5.10's `image` grammar makes it REQUIRED
+        // on the URI alternative, the way §5.11 does for a CONFERENCE.
+        assert_eq!(
+            images(&ics),
+            [format!(
+                "IMAGE;VALUE=URI;DISPLAY={drawn};FMTTYPE=image/png:\
+                 https://files.example.com/party.png"
+            )],
+            "{display}: {ics}"
+        );
+        assert!(without(&ics, "ATTACH"), "{display}: {ics}");
+    }
+}
+
+#[test]
+fn an_icon_with_no_way_of_displaying_it_carries_no_display() {
+    // RFC 7986 §6.1 defaults DISPLAY to BADGE and requires a reader to show no
+    // image at all for a value it does not recognise — so a `display` outside
+    // the four both formats share is dropped rather than passed through in the
+    // other format's clothes, which would hide the picture entirely. Leaving
+    // the parameter off says only that the default applies.
+    for display in [json!(null), json!("hologram"), json!(7), json!(["badge"])] {
+        let ics = event_to_ical(&points_at(json!({
+            "l1": fetched_from("https://files.example.com/party.png", json!({
+                "rel": "icon",
+                "display": display,
+            })),
+        })));
+
+        assert_eq!(
+            images(&ics),
+            ["IMAGE;VALUE=URI:https://files.example.com/party.png"],
+            "{display}: {ics}"
+        );
+    }
+}
+
+#[test]
+fn a_link_that_is_not_an_icon_is_an_attachment_however_it_asks_to_be_displayed() {
+    // RFC 8984 §1.4.11 lets `display` be set only when `rel` is "icon", so a
+    // link that says otherwise is one whose author contradicted themselves.
+    // `rel` decides, because it is the property that says what the resource *is*
+    // — and an ATTACH has nowhere to put a DISPLAY anyway (RFC 7986 §6.1 admits
+    // the parameter on IMAGE alone).
+    for rel in [
+        json!(null),
+        json!("enclosure"),
+        json!("describedby"),
+        json!(7),
+    ] {
+        let ics = event_to_ical(&points_at(json!({
+            "l1": fetched_from("https://files.example.com/party.png", json!({
+                "rel": rel,
+                "display": "badge",
+            })),
+        })));
+
+        assert_eq!(
+            attachments(&ics),
+            ["ATTACH:https://files.example.com/party.png"],
+            "{rel}: {ics}"
+        );
+        assert!(without(&ics, "IMAGE"), "{rel}: {ics}");
+    }
+}
+
+#[test]
+fn a_component_that_names_an_attachment_reads_back_no_links() {
+    // Written and never read, like the guest list and for a reason of the same
+    // shape: a Link holds a `cid`, a `rel` and a `title` (RFC 8984 §1.4.11) that
+    // no ATTACH line has room for, and a save naming `links` would replace the
+    // property whole — deleting the half of every resource the user was never
+    // shown. So `links` stays out of `MAPPED_PROPERTIES` and the reader leaves
+    // it empty; a resource added in another client survives, and one Evolution's
+    // editor drops is not read as a deletion.
+    let ics = event_to_ical(&points_at(json!({
+        "l1": fetched_from("https://files.example.com/agenda.pdf", json!({
+            "contentType": "application/pdf",
+        })),
+        "l2": fetched_from("https://files.example.com/party.png", json!({"rel": "icon"})),
+    })));
+
+    let event = ical_to_event(&ics).expect("a calendar");
+    assert_eq!(event.links, None, "{ics}");
+}
+
+#[test]
+fn an_edited_instance_carries_the_links_of_the_series() {
+    // The inheritance of RFC 8984 §4.3.4 again: an override may not restate the
+    // links, so the occurrence's own component states the series' — an instance
+    // drawn without them would show a meeting whose agenda had gone missing.
+    let mut event = recurring_with(json!({"2026-01-29T13:00:00": {"title": "Sprint review"}}));
+    event.links = serde_json::from_value(json!({
+        "l1": fetched_from("https://files.example.com/agenda.pdf", json!({})),
+    }))
+    .expect("a map of links");
+    let ics = event_to_ical(&event);
+
+    assert_eq!(vevents(&ics), 2, "{ics}");
+    assert_eq!(
+        attachments(vevent(&ics, 1)),
+        ["ATTACH:https://files.example.com/agenda.pdf"],
+        "{ics}"
+    );
+}
