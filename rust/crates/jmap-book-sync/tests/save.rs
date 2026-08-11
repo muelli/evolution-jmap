@@ -926,6 +926,49 @@ fn a_note_with_no_text_survives_a_save_it_was_never_part_of() {
 }
 
 #[test]
+fn emptying_one_note_line_of_two_withdraws_that_note_alone() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Two notes, of which Evolution's Notes field shows the user the first —
+    // `E_CONTACT_NOTE` is the first `NOTE` line and stops there. So clearing
+    // that field is an entry withdrawn from a map through a field that cannot
+    // express the map, and the note behind it is not the user's to lose.
+    fixture.patch(
+        &id,
+        json!({"notes": {
+            "n1": {"@type": "Note", "note": "met at FOSDEM", "created": "2026-02-01T09:15:00Z"},
+            "n2": {"@type": "Note", "note": "allergic to cats"},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    // The line left standing with no value on it, rather than struck off the
+    // card. That is what libebook-contacts 3.52 does with a field the user
+    // emptied — measured on the spouse line, and measured on this one by
+    // `jmap-functional`'s `unnote` leg — and it is the shape that could go
+    // wrong here: a note read back as the empty string would be a note the
+    // save *keeps*, spelled as nothing.
+    let edited = vcard.replace(
+        "NOTE;X-JMAP-KEY=n1:met at FOSDEM\r\n",
+        "NOTE;X-JMAP-KEY=n1:\r\n",
+    );
+    assert_ne!(edited, vcard, "the emitter did not write the note: {vcard}");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let notes = fixture
+        .card(&id)
+        .notes
+        .expect("the note behind the cleared one");
+    assert_eq!(
+        notes.keys().collect::<Vec<_>>(),
+        vec!["n2"],
+        "clearing the Notes field did not withdraw exactly the note it showed: {notes:?}"
+    );
+    assert_eq!(notes["n2"].note, "allergic to cats");
+}
+
+#[test]
 fn removing_the_note_line_removes_the_note() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
