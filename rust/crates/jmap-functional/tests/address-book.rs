@@ -65,6 +65,16 @@ const NOTE: &str = "met at FOSDEM; owes me a beer, apparently";
 /// shown to reach the server as the one the user typed — neither cut off at the
 /// comma nor carrying the backslash EDS wrote.
 const HOMEPAGE: &str = "https://dana.example/profile?tags=x-files,ufo";
+/// The two categories the client files the contact under, spelled as
+/// `book-client.c` spells them, and the character it joins them with when it
+/// reports them back. EDS keeps them as a list on one `CATEGORIES` line and
+/// JSContact as the `keywords` Set, so what this end checks is a cardinality
+/// rather than a value: two tags here must be two members there, and the comma
+/// inside the second is what would split one into two if the escaping fell
+/// through anywhere along the path.
+const CATEGORY_ONE: &str = "Friends";
+const CATEGORY_TWO: &str = "beer, in Berlin";
+const CATEGORY_SEPARATOR: &str = "|";
 /// The birthday, spelled as `book-client.c` spells it — the text
 /// `e_contact_date_to_string()` writes for the three numbers it sets, which
 /// is also the text the `BDAY` line carries. EDS keeps a birthday in a
@@ -236,6 +246,15 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         seen.get("read-back-birthday"),
         Some(&BIRTHDAY),
         "the contact EDS handed back lost or moved its birthday\n{report}"
+    );
+    // Both tags, in the order EDS's list holds them, joined as the client
+    // joined them. An extra item here would be a tag that had been split on
+    // its comma; a missing one would be a tag the round trip dropped.
+    let categories = [CATEGORY_ONE, CATEGORY_TWO].join(CATEGORY_SEPARATOR);
+    assert_eq!(
+        seen.get("read-back-categories"),
+        Some(&categories.as_str()),
+        "the contact EDS handed back lost or split its categories\n{report}"
     );
     for (field, expected) in [
         ("read-back-street", STREET),
@@ -436,6 +455,29 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     let link = links.values().next().expect("one link");
     assert_eq!(link.uri, HOMEPAGE, "{card:?}");
     assert_eq!(link.kind, None, "{card:?}");
+    // The CATEGORIES line, as the server sees it: exactly two `keywords`
+    // members, each set to `true`. Three would mean the comma inside the second
+    // tag had been read as RFC 2426 §3.7.1's list separator somewhere along the
+    // way, and the server would have been told the contact is filed under a tag
+    // nobody typed. Asserted at this end too because the client's read-back
+    // comes out of EDS's own cache, which would agree with itself even if the
+    // line that went to the server had been split.
+    let keywords = card
+        .keywords
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no keywords: {card:?}"));
+    assert_eq!(
+        keywords.keys().map(String::as_str).collect::<Vec<_>>(),
+        // Sorted, which is how the map holds them: byte order, so the capital
+        // `F` comes before the lower-case `b` rather than the order the client
+        // set them in.
+        vec![CATEGORY_ONE, CATEGORY_TWO],
+        "{card:?}"
+    );
+    assert!(
+        keywords.values().all(|set| *set == serde_json::json!(true)),
+        "{card:?}"
+    );
     // The BDAY line, as the server sees it: one `anniversaries` entry of kind
     // `birth` whose date is the three numbers the client set. Spelled out
     // here rather than borrowed from the mapping, so this end states the wire

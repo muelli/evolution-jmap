@@ -90,6 +90,18 @@ pub struct ContactCard {
     /// Evolution shows the first as the contact's home page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<BTreeMap<String, Link>>,
+    /// The tags the contact is filed under (RFC 9553 §2.8.2), an RFC 9553
+    /// §1.4.3 Set: the keys are the keywords and every value is `true`. vCard
+    /// states the whole set on one `CATEGORIES` line, which is what Evolution's
+    /// Categories field shows.
+    ///
+    /// The values are left as JSON rather than as `bool` for the reason
+    /// [`crate::calendars::CalendarEvent::keywords`] gives: a server that puts
+    /// something else there must not cost the user the whole address book, so
+    /// the odd entry stays visible as itself and the vCard mapping refuses to
+    /// write the property back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

@@ -91,6 +91,20 @@
  * the server cut off at the comma or carrying a backslash EDS put there. */
 #define TEST_HOMEPAGE "https://dana.example/profile?tags=x-files,ufo"
 
+/* The categories the contact is filed under, which EDS keeps as a list on one
+ * CATEGORIES line and JSContact keeps as the `keywords` Set. Two of them,
+ * because the crossing is a cardinality rather than a value — one line here,
+ * two members there — and the comma inside the second is the point: it is the
+ * character that separates the items, so it decides whether two tags stay two
+ * tags across real EDS, our emitter and the reader. A tag arriving split would
+ * tell the server the contact is filed under three. */
+#define TEST_CATEGORY_ONE "Friends"
+#define TEST_CATEGORY_TWO "beer, in Berlin"
+/* What the two are reported as, joined on a character neither of them holds:
+ * the harness reads stdout as one `key=value` per line and the comma is the
+ * very thing under test, so it cannot also be the delimiter. */
+#define TEST_CATEGORY_SEPARATOR "|"
+
 /* The birthday, which EDS keeps in a structured E_CONTACT_BIRTH_DATE field
  * and JSContact keeps as an `anniversaries` entry dated by a PartialDate.
  * Set here because the crossing is a change of shape rather than of name —
@@ -150,6 +164,10 @@ main (int argc,
 	EContactDate birthday = { TEST_BIRTH_YEAR, TEST_BIRTH_MONTH, TEST_BIRTH_DAY };
 	EContactDate *read_back_birthday;
 	gchar *read_back_birthday_text;
+	GList *categories = NULL;
+	GList *read_back_categories;
+	GPtrArray *category_texts;
+	gchar *read_back_categories_text;
 	gchar *added_uid = NULL;
 	const gchar *source_uid;
 	const gchar *full_name;
@@ -237,6 +255,16 @@ main (int argc,
 	e_contact_set (contact, E_CONTACT_HOMEPAGE_URL, TEST_HOMEPAGE);
 	e_contact_set (contact, E_CONTACT_BIRTH_DATE, &birthday);
 
+	/* Set as the list rather than as the comma-joined E_CONTACT_CATEGORIES
+	 * string, because that string cannot say which comma is a separator:
+	 * EDS splits it and would file TEST_CATEGORY_TWO as two categories
+	 * before this test had begun. The list is also what Evolution's
+	 * Categories dialogue writes. */
+	categories = g_list_append (categories, (gchar *) TEST_CATEGORY_ONE);
+	categories = g_list_append (categories, (gchar *) TEST_CATEGORY_TWO);
+	e_contact_set (contact, E_CONTACT_CATEGORY_LIST, categories);
+	g_list_free (categories);
+
 	address = e_contact_address_new ();
 	address->street = g_strdup (TEST_STREET);
 	address->locality = g_strdup (TEST_LOCALITY);
@@ -308,6 +336,21 @@ main (int argc,
 	g_free (read_back_birthday_text);
 	if (read_back_birthday)
 		e_contact_date_free (read_back_birthday);
+
+	/* The categories, which come back as a list: reported joined, so that
+	 * how many there are is as visible on the other side as what they say.
+	 * A tag that had been split on its comma would show up here as an
+	 * extra item rather than as a mangled one. */
+	read_back_categories = e_contact_get (read_back, E_CONTACT_CATEGORY_LIST);
+	category_texts = g_ptr_array_new ();
+	for (GList *link = read_back_categories; link; link = link->next)
+		g_ptr_array_add (category_texts, link->data);
+	g_ptr_array_add (category_texts, NULL);
+	read_back_categories_text = g_strjoinv (TEST_CATEGORY_SEPARATOR, (gchar **) category_texts->pdata);
+	g_print ("read-back-categories=%s\n", read_back_categories_text);
+	g_free (read_back_categories_text);
+	g_ptr_array_free (category_texts, TRUE);
+	g_list_free_full (read_back_categories, g_free);
 
 	/* The LABEL line, which is a field of its own rather than part of the
 	 * boxed address above — and the one observation that has to be

@@ -5,11 +5,11 @@
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, NICKNAME,
-//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL and the two date lines,
-//! and drops everything else, so a save that sent the parsed card back whole
-//! would silently delete the properties it could not represent — keywords,
-//! preferred languages, online services — none of which the user ever saw, let
-//! alone asked to remove.
+//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, CATEGORIES and the two
+//! date lines, and drops everything else, so a save that sent the parsed card
+//! back whole would silently delete the properties it could not represent —
+//! preferred languages, online services, what the contact is spoken to as —
+//! none of which the user ever saw, let alone asked to remove.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
 //! that is the subtler half of this module:
@@ -51,6 +51,13 @@
 //!   kind of date it is. The date itself is patched member by member, which
 //!   is what keeps a `calendarScale` — or a point in time the user did not
 //!   touch — from being flattened into the day the line showed.
+//! - `keywords` is the one mapped property that is a *set*, and the one that
+//!   goes back **replaced whole**: a tag is a bare string with no key and no
+//!   members, so there is nothing to reach into. That makes a tag the
+//!   `CATEGORIES` line could not carry a tag a save would *delete* rather than
+//!   merely one the user cannot see, so [`maps_keywords`] freezes the whole
+//!   property for such a card — the one place here where the user's edit is
+//!   dropped rather than merged. See [`diff_keywords`].
 //! - *Every* keyed map is one of which the vCard states only **some**
 //!   entries. A title of a `kind` outside `title` and `role` has no vCard
 //!   property; an address with neither an `ADR` field nor a written-out form
@@ -77,9 +84,9 @@ use jmap_proto::contacts::{
     Nickname, Note, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{
-    address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
-    maps_phone_feature, restore_address_components, states_a_point_in_time, states_address,
-    states_anniversary, states_email, states_link, states_nickname, states_note,
+    address_label, anniversary_date, maps_address_component, maps_context, maps_keywords,
+    maps_name_component, maps_phone_feature, restore_address_components, states_a_point_in_time,
+    states_address, states_anniversary, states_email, states_link, states_nickname, states_note,
     states_organization, states_phone, states_title, title_kind,
 };
 use serde_json::{Map, Value};
@@ -114,7 +121,54 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.anniversaries.as_ref(),
     );
     diff_links(&mut patch, current.links.as_ref(), edited.links.as_ref());
+    diff_keywords(&mut patch, current, edited);
     patch
+}
+
+/// The tags the contact is filed under — the one mapped property that goes back
+/// **replaced whole** rather than patched entry by entry.
+///
+/// A `CATEGORIES` line holds the whole set and a JSContact keyword is a bare
+/// string, so there is nothing inside an entry to preserve and no key to reach
+/// into: the line states what was shown, and the difference from it is the set
+/// the user now wants. Clearing the field is `"keywords": null`, which is how a
+/// PatchObject asks for RFC 9553 §2.8.2's default of no tags — an empty map
+/// would be a different thing to store, and is also what EDS does *not* leave
+/// behind: it removes the attribute outright.
+///
+/// [`maps_keywords`] is asked of the server's own set, for the reason the other
+/// properties ask their `states_*` predicate: a tag the `CATEGORIES` line could
+/// not carry was never shown, and replacing the set whole would delete it. The
+/// cost is that the user's edit to the field is dropped for such a card — the
+/// only property here where an edit can be lost rather than merged — which is
+/// the trade a set with no keys forces. The *edited* side needs no such check:
+/// every tag on it was read off a content line, and any string is a keyword RFC
+/// 9553 admits.
+fn diff_keywords(patch: &mut Map<String, Value>, current: &ContactCard, edited: &ContactCard) {
+    let empty = BTreeMap::new();
+    let tags = |card: &ContactCard| {
+        card.keywords
+            .clone()
+            .filter(|keywords| !keywords.is_empty())
+    };
+    if !maps_keywords(current.keywords.as_ref().unwrap_or(&empty)) {
+        return;
+    }
+    // An empty set server-side is compared as no tags, because that is what it
+    // was drawn as: without this a card holding one would be patched to a null
+    // by every save, an edit nobody made.
+    if tags(current) == tags(edited) {
+        return;
+    }
+    patch.insert(
+        "keywords".to_owned(),
+        match tags(edited) {
+            // Serialising a set this crate's own reader built cannot fail: it
+            // holds strings and `true`.
+            Some(tags) => serde_json::to_value(tags).unwrap_or(Value::Null),
+            None => Value::Null,
+        },
+    );
 }
 
 fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Option<&Name>) {
