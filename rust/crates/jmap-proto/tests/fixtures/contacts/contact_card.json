@@ -6,9 +6,10 @@
   "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667",
   "name": {
     "components": [
-      {"kind": "given", "value": "Vera"},
+      {"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
       {"kind": "surname", "value": "Oldenburg"}
     ],
+    "phoneticSystem": "ipa",
     "full": "Vera Oldenburg"
   },
   "emails": {

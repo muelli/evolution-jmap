@@ -91,26 +91,11 @@ fn maps_name_components_onto_the_structured_n_property() {
         name: Some(Name {
             full: Some("Dr. Vera Marie Oldenburg MSc".to_owned()),
             components: Some(vec![
-                NameComponent {
-                    kind: "title".to_owned(),
-                    value: "Dr.".to_owned(),
-                },
-                NameComponent {
-                    kind: "given".to_owned(),
-                    value: "Vera".to_owned(),
-                },
-                NameComponent {
-                    kind: "given2".to_owned(),
-                    value: "Marie".to_owned(),
-                },
-                NameComponent {
-                    kind: "surname".to_owned(),
-                    value: "Oldenburg".to_owned(),
-                },
-                NameComponent {
-                    kind: "credential".to_owned(),
-                    value: "MSc".to_owned(),
-                },
+                NameComponent::new("title", "Dr."),
+                NameComponent::new("given", "Vera"),
+                NameComponent::new("given2", "Marie"),
+                NameComponent::new("surname", "Oldenburg"),
+                NameComponent::new("credential", "MSc"),
             ]),
             ..Name::default()
         }),
@@ -132,14 +117,8 @@ fn derives_the_missing_half_of_the_name() {
     let components = ContactCard {
         name: Some(Name {
             components: Some(vec![
-                NameComponent {
-                    kind: "surname".to_owned(),
-                    value: "Oldenburg".to_owned(),
-                },
-                NameComponent {
-                    kind: "given".to_owned(),
-                    value: "Vera".to_owned(),
-                },
+                NameComponent::new("surname", "Oldenburg"),
+                NameComponent::new("given", "Vera"),
             ]),
             ..Name::default()
         }),

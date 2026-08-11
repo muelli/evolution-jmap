@@ -25,8 +25,13 @@
 //! - `pref` is a rank from 1 to 100 and vCard 3.0 has only a flag. An
 //!   address that was already preferred keeps its rank; the flag can only
 //!   introduce or remove a preference, never renumber one.
-//! - `name.components` can hold kinds the `N` value has no field for, which
-//!   are carried across the replacement.
+//! - `name.components` are a *list* with no keys to patch by, so they go back
+//!   whole and are merged the way an address's components are ([`merge_named`]):
+//!   kinds the `N` value has no field for are carried across the replacement,
+//!   and a component that still says what it said keeps the members that value
+//!   had no field for either — its `phonetic` spelling above all. Their order
+//!   is the server's, so that opening a contact and closing it again writes
+//!   nothing even when the `N` fields state them in another order.
 //! - `organizations` entries hold a `sortAs` and `contexts` the `ORG` line
 //!   has nowhere to put, so the entry is patched member by member
 //!   (`organizations/work/name`) rather than replaced. Its `units` are a
@@ -218,18 +223,16 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
         patch.insert("name/full".to_owned(), value_or_null(edited.full.as_ref()));
     }
 
-    // Components of a kind the `N` value has no field for are not the user's
-    // to have deleted, so they are carried over. Their position among the
-    // mapped ones is not preserved — JSContact only ascribes meaning to the
-    // order when `isOrdered` is set, and the alternative is guessing.
-    let mut merged: Vec<_> = edited.components.clone().unwrap_or_default();
-    merged.extend(
-        current
-            .components
-            .iter()
-            .flatten()
-            .filter(|component| !maps_name_component(&component.kind))
-            .cloned(),
+    // The component list is written back whole — a name has no keys to patch
+    // by — so it is merged the way an address's components are: a component
+    // that still says what it says keeps the members the `N` value had no
+    // field for, its `phonetic` spelling above all, and one of a kind that
+    // value cannot state at all is not the user's to have deleted.
+    let merged = merge_named(
+        current.components.as_deref().unwrap_or_default(),
+        edited.components.as_deref().unwrap_or_default(),
+        |component| (&component.kind, &component.value),
+        maps_name_component,
     );
     let merged = (!merged.is_empty()).then_some(merged);
     if current.components != merged {
@@ -619,15 +622,13 @@ fn rekey_anniversaries(
 /// The component list a save writes: what the `ADR` line now states, with
 /// everything it had no field for left where it was.
 ///
-/// Like [`merge_units`] this is a list with no keys to patch by, so a
-/// component is recognised by what it says — same kind, same value — and one
-/// that still says it keeps the members the line could not carry, its
-/// `phonetic` spelling above all. Walking the server's list rather than the
-/// edited one is what keeps an invisible component in its place instead of
-/// shuffling it to the end, so that opening a contact and closing it again
-/// writes nothing.
+/// Like [`merge_units`] this is a list with no keys to patch by, so it is
+/// [`merge_named`] that does the merging — a component is recognised by what it
+/// says, same kind and same value, and one that still says it keeps the members
+/// the line could not carry, its `phonetic` spelling above all.
 ///
-/// Matching by value only works once the components a single `ADR` field was
+/// What is this side's own is the step before: matching by value only works
+/// once the components a single `ADR` field was
 /// built from have been told apart again, which is
 /// [`restore_address_components`]' job: a street name and its house number
 /// come back from the vCard as one street, and would otherwise both read as
@@ -638,26 +639,48 @@ fn merge_components(
 ) -> Option<Vec<AddressComponent>> {
     let current = current.unwrap_or_default();
     let edited = restore_address_components(current, edited?);
-    let mut spare: Vec<&AddressComponent> = edited.iter().collect();
-    let mut merged: Vec<AddressComponent> = Vec::new();
-    for component in current {
-        let same = |candidate: &&AddressComponent| {
-            candidate.kind == component.kind && candidate.value == component.value
-        };
+    let merged = merge_named(
+        current,
+        &edited,
+        |component| (&component.kind, &component.value),
+        maps_address_component,
+    );
+    (!merged.is_empty()).then_some(merged)
+}
+
+/// Merging a list of named parts — an address's components or a name's — that
+/// the save has to write back whole because there are no keys to patch by.
+///
+/// A part is recognised by what it says, `named` giving the pair that says it,
+/// and one that still says it comes back as the server's own copy so that
+/// whatever the vCard had no field for rides along. Walking the server's list
+/// rather than the edited one keeps an invisible part in its place instead of
+/// shuffling it to the end, so that opening a contact and closing it again
+/// writes nothing; parts the vCard added follow in the order it stated them.
+fn merge_named<T: Clone>(
+    current: &[T],
+    edited: &[T],
+    named: impl Fn(&T) -> (&str, &str),
+    mapped: impl Fn(&str) -> bool,
+) -> Vec<T> {
+    let mut spare: Vec<&T> = edited.iter().collect();
+    let mut merged: Vec<T> = Vec::new();
+    for part in current {
+        let same = |candidate: &&T| named(candidate) == named(part);
         match spare.iter().position(same) {
             // Still on the line, so the server's copy is the one to keep.
             Some(index) => {
                 spare.remove(index);
-                merged.push(component.clone());
+                merged.push(part.clone());
             }
             // Gone from the line — which says the user deleted it only if
             // the line had a field for it in the first place.
-            None if !maps_address_component(&component.kind) => merged.push(component.clone()),
+            None if !mapped(named(part).0) => merged.push(part.clone()),
             None => {}
         }
     }
     merged.extend(spare.into_iter().cloned());
-    (!merged.is_empty()).then_some(merged)
+    merged
 }
 
 /// The unit list a save writes: the names the `ORG` line now states, each
