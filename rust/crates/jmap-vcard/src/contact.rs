@@ -944,7 +944,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
 
     // The whole set on one line, which is all EDS reads, and with no key on it:
     // a tag is its own identity. Empty when every tag the card holds is one the
-    // line cannot carry — see [`maps_keywords`] — and then there is no line,
+    // line cannot carry — see [`states_keyword`] — and then there is no line,
     // exactly as for a card with no tags.
     let tags = drawn_tags(card);
     if !tags.is_empty() {

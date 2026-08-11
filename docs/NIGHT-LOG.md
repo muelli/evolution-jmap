@@ -18810,3 +18810,105 @@ are unmapped and their contact-editor behaviour unmeasured; whether the editor
 lets a handle be moved between the Home and Work slots at all is unknown; no test
 drives a `uri`-only entry through real EDS; and the `jmap-mail` `transport.rs`
 hang is still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-eighty-sixth session)
+
+**The blocker the last session opened as it closed its own, closed: an event's
+whole tag set is no longer frozen by one tag the `CATEGORIES` line cannot
+carry.** This is the previous increment transposed from `jmap-book-sync` onto
+`jmap-cal-sync`, and the transposition is exact where it can be: `keywords` is
+the one mapped property that is a *set* rather than a keyed map, a set goes back
+replaced whole, and so a tag left off the component was a tag the next save
+would delete. The old answer was to write nothing at all for the property, which
+protected the invisible tag by throwing away the user's edit to the field —
+every save of such an event silently lost the tag they just typed. The new
+answer is the one a set allows: the tags the component could *not* show are
+carried onto the set the save writes, so the set that goes back is the set the
+user edited with the invisible tags still in it.
+
+**The one wrinkle the transposition had, and how it was decided.** The calendar
+save diffs against a *baseline* — the server's event put through the same round
+trip, which is by construction what Evolution was shown — where the book side
+diffs against the server's card directly. So there were two questions and they
+take different sides. *Did the user change anything?* stays on the baseline,
+because a difference from what they were shown is what an edit is; that is the
+crate's whole idiom and dropping it would have every save rewriting properties
+the round trip merely respells. *Which tags must be carried?* has to be asked of
+the event the **server** holds, because those tags are precisely the ones the
+baseline does not hold — it is the one place this property cannot use the
+baseline at all. Keeping the baseline for the first question also preserves,
+untouched, the existing "an empty set server-side draws no line and so compares
+as no tags" behaviour, which on the book side needed an explicit normalisation.
+
+**Both collision decisions are the book side's, for the same reasons.** A tag
+whose value is not `true` is carried back exactly as the server stated it, RFC
+8984 §1.4.3 notwithstanding: it is the server's own word, and correcting it here
+would be this mapping inventing a change nobody asked for. And where both sides
+name the same tag, the user's value wins — they typed it into a field that means
+nothing but "filed under", so they mean it set. Merging the other way would take
+the tag the user just typed and quietly write the server's `false` back over it.
+
+**`maps_keywords` is gone from `jmap-ical` and `maps_keyword` is what replaced
+it.** The all-or-nothing question had exactly one caller and only the freeze to
+ask for; what the save needs now is the per-tag predicate the emitter was already
+filtering by, which is what `drawn_tag` privately was. Making that one the public
+name means what the save calls invisible is, by construction, what the emitter
+left off. The emitter's behaviour is unchanged — the same three refusals — so a
+tag that got no line before gets none now.
+
+**The recurrence-override path is deliberately not changed.** An override that
+restates a tag the line cannot show is still refused whole, by
+`maps_recurrence_override`, and that is not the same bug: an override is itself
+an entry of a keyed map, so the patch has a key to leave unnamed there and the
+"an unshown entry is not the user's to delete" rule is already kept the ordinary
+way. Only the series' set had no key to leave alone. The comment at that site now
+says so, rather than pointing at a rule that has moved.
+
+**Every half of the implementation was mutation-checked**, `patch.rs` backed up
+with `cp` and restored with `cp`. Dropping the carry-back was caught by two
+tests; merging with the server's value winning by one; sending an empty map where
+the null belongs by one; carrying the drawn tags instead of the undrawn by three;
+and removing the baseline early return by four, one of which is this session's
+own no-op guard. No mutation went unnoticed.
+
+One existing test changed its meaning rather than its fixture, deliberately:
+`a_tag_the_component_could_not_show_leaves_the_whole_set_alone` asserted the
+behaviour this session removed. It is now
+`a_tag_the_component_could_not_show_survives_the_set_being_rewritten` and asserts
+strictly more — the tag the user typed lands *and* the tag they never saw is
+still there, with the server's own odd value intact — so nothing it used to
+protect is unprotected. Two stale references to the book side's removed
+`maps_keywords` were fixed in passing, in `jmap-vcard`'s emitter doc and one test
+comment; they pointed at a function that no longer exists in either crate.
+
+Tests: 942 in the default set, up 4 from 938 — one new in `jmap-ical`'s mapping
+for the predicate itself, three net in `jmap-cal-sync`'s save path (three added,
+one renamed in place).
+
+Verified locally: `cargo test --locked` 942; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all --check`
+and `cargo clippy --all-targets --locked -- -D warnings` clean, and
+`cargo clippy -p jmap-backend-cal --all-targets --locked` clean for the
+header-needing crate that consumes the changed API. `ci/checks.sh` still stops at
+its first step — `reuse` is not on this VM and neither `pipx` nor `uvx` is
+installed — so the licence check was done by hand: no file was added, all seven
+sources touched already carry an SPDX header, and `Cargo.lock` is untouched, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Removed from the blocker list: `jmap-cal-sync`'s `CATEGORIES`
+freeze. Unchanged blockers: the calcard directive's two emitters are still ours;
+M9 has no CI job and no GUI tier; M7 still **needs human verification in real
+Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side rest on untested assumptions; the
+`NameComponent` `phonetic` hole stands; the multi-`NOTE`/`ORG`/`TITLE`/
+`NICKNAME`/`URL` "Evolution shows only the first" bet is still unverified in real
+Evolution; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; no test drives a `uri`-only entry through real EDS; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order hypothesis
+attached.
