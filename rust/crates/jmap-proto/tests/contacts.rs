@@ -118,6 +118,18 @@ fn contact_card_roundtrip() {
     // parameter on a `URL` line, so they too stay visible to the save path.
     assert!(links["l1"].extra.contains_key("mediaType"));
     assert!(links["l1"].extra.contains_key("pref"));
+    let media = card.media.as_ref().expect("media");
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].uri, "data:image/jpeg;base64,aGVsbG8tcGhvdG8=");
+    assert_eq!(media["m1"].media_type.as_deref(), Some("image/jpeg"));
+    assert_eq!(
+        media["m2"].kind.as_deref(),
+        Some("logo"),
+        "the kind is the mapping's filter: only a photo is a `PHOTO` line"
+    );
+    // How strongly a picture is preferred, and what to call it, have no
+    // parameter on a `PHOTO` line, so they stay visible to the save path.
+    assert!(media["m1"].extra.contains_key("pref"));
     let services = card.online_services.as_ref().expect("onlineServices");
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
     assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));

@@ -318,6 +318,7 @@ dependencies = [
 name = "evolution-jmap-vcard"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "calcard",
  "evolution-jmap-client",
  "evolution-jmap-mock",
