@@ -20,7 +20,17 @@
  * backends implement. Binding a second surface just to call it from a test
  * would put a layer of our own between EDS and the thing under test.
  *
- *   usage: functional-book-client <source-uid>
+ * There are two phases, chosen on the command line, because they need
+ * different books: `write` starts from an empty address book and puts a
+ * contact into it, while `edit` starts from one the mock was seeded with
+ * before EDS connected — a card that came from the *server*, which is the
+ * only way to have EDS read something no vCard this program could write
+ * would produce. They are two modes of one program rather than two programs
+ * because they open the same book the same way and differ only in what they
+ * then ask of it.
+ *
+ *   usage: functional-book-client <source-uid> write <full-name>
+ *          functional-book-client <source-uid> edit <contact-uid> <email>
  */
 
 #include <libebook/libebook.h>
@@ -128,6 +138,19 @@
 #define TEST_BIRTH_MONTH 3
 #define TEST_BIRTH_DAY 27
 
+/* How long the `edit` phase waits for the contact the mock was seeded with to
+ * become gettable, and how often it asks. EBookMetaBackend answers a get for
+ * a contact its cache has never heard of by asking the backend to load it, so
+ * the first try is expected to succeed — but the backend also schedules a
+ * refresh of its own during the connect, and a get that arrives while that is
+ * still running can be answered out of a cache the refresh has not filled
+ * yet. Polling turns that ordering into a wait rather than a flake. Ten
+ * seconds in total, which is far beyond what a local mock needs and still
+ * well inside the CTest timeout, so a genuinely absent contact fails the test
+ * rather than hanging it. */
+#define EDIT_WAIT_TRIES 200
+#define EDIT_WAIT_INTERVAL_US 50000
+
 /* Report one observation whose value has line breaks in it. The harness
  * reads stdout as one `key=value` per line, so a raw newline would end the
  * observation early and lose the rest; only the newlines are rewritten, so
@@ -156,15 +179,29 @@ fail (const gchar *step,
 	return 1;
 }
 
-int
-main (int argc,
-      char **argv)
+/* Report the parts of the name EDS parsed out of the N line. Both are
+ * synthetic fields: EDS splits the line's fields into them on the way in and
+ * rebuilds the line from them on the way out, so they are what a save hands
+ * back to the backend — and, for the given name, the string a JSContact name
+ * with more than one component of a kind was flattened into. */
+static void
+report_name_fields (const gchar *prefix,
+                    EContact *contact)
+{
+	const gchar *given = e_contact_get_const (contact, E_CONTACT_GIVEN_NAME);
+	const gchar *family = e_contact_get_const (contact, E_CONTACT_FAMILY_NAME);
+
+	g_print ("%s-given-name=%s\n", prefix, given ? given : "");
+	g_print ("%s-family-name=%s\n", prefix, family ? family : "");
+}
+
+/* The first phase: an empty book, one contact written into it with every
+ * mapped property set, and that contact read back. */
+static int
+write_phase (EBookClient *book,
+             const gchar *full_name)
 {
 	GError *error = NULL;
-	ESourceRegistry *registry;
-	ESource *source;
-	EClient *client;
-	EBookClient *book;
 	EBookQuery *query;
 	gchar *query_string;
 	GSList *contacts = NULL;
@@ -180,66 +217,6 @@ main (int argc,
 	GPtrArray *category_texts;
 	gchar *read_back_categories_text;
 	gchar *added_uid = NULL;
-	const gchar *source_uid;
-	const gchar *full_name;
-
-	if (argc != 3) {
-		g_printerr ("usage: %s <source-uid> <full-name>\n", argv[0]);
-		return 2;
-	}
-
-	source_uid = argv[1];
-	full_name = argv[2];
-
-	/* Activates evolution-source-registry on the session bus, which reads
-	 * the scratch sources directory the harness wrote. */
-	registry = e_source_registry_new_sync (NULL, &error);
-	if (!registry)
-		return fail ("registry", error);
-
-	source = e_source_registry_ref_source (registry, source_uid);
-	if (!source) {
-		g_printerr ("registry: no source with UID '%s'\n", source_uid);
-		return 1;
-	}
-
-	/* Activates evolution-addressbook-factory, which is what dlopens
-	 * libebookbackendjmap.so out of EDS_ADDRESS_BOOK_MODULES and picks
-	 * the factory matching the keyfile's BackendName. A failure here is
-	 * usually one of those two steps, not the backend's logic.
-	 *
-	 * (guint32) -1 is EDS's "do not wait for connected". The wait is not
-	 * skipped because the status does not matter — it is asserted, just
-	 * below — but because asking for it here cannot work in a program
-	 * with no main loop, whatever the backend does: see
-	 * connection-status.c. The open itself is synchronous, so everything
-	 * it established is already true on the far side by the time this
-	 * call returns. */
-	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
-	if (!client)
-		return fail ("connect", error);
-
-	book = E_BOOK_CLIENT (client);
-
-	/* EDS's own verdict on the connect, waited for properly. */
-	functional_report_connection_status (source, 10);
-
-	/* Read the properties back over the bus rather than trusting the
-	 * client's cached copy. EClient updates those from D-Bus property
-	 * notifications delivered on a main context, so a program that does
-	 * not run a main loop — this one — would be reading whatever had
-	 * happened to arrive: a race, and one that would have hidden the very
-	 * bug this test was written for. */
-	if (!e_client_retrieve_properties_sync (client, NULL, &error))
-		return fail ("retrieve-properties", error);
-
-	/* Whether the book accepts writes at all. EDS derives this from what
-	 * the backend said during its connect, so a backend that connects
-	 * happily and never says it can be written to gives a book that is
-	 * silently read-only in the UI — which is a state the write below
-	 * would report only as "Permission denied". Reported separately so
-	 * the harness can name the cause rather than the symptom. */
-	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
 	query = e_book_query_any_field_contains ("");
 	query_string = e_book_query_to_string (query);
@@ -388,9 +365,183 @@ main (int argc,
 	g_slist_free_full (contacts, g_object_unref);
 	g_free (added_uid);
 	g_free (query_string);
+
+	return 0;
+}
+
+/* Ask for one contact until EDS has it, or give up. A miss is reported as
+ * E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND rather than as a failure of the call,
+ * so it is cleared and retried; any other error would be retried too, and the
+ * caller says what it was waiting for when the tries run out. */
+static EContact *
+wait_for_contact (EBookClient *book,
+                  const gchar *uid)
+{
+	guint try;
+
+	for (try = 0; try < EDIT_WAIT_TRIES; try++) {
+		EContact *contact = NULL;
+		GError *error = NULL;
+
+		if (e_book_client_get_contact_sync (book, uid, &contact, NULL, &error)) {
+			g_print ("waited-tries=%u\n", try);
+			return contact;
+		}
+
+		g_clear_error (&error);
+		g_usleep (EDIT_WAIT_INTERVAL_US);
+	}
+
+	return NULL;
+}
+
+/* The second phase: a contact that came from the server, edited the way a user
+ * edits one — read what EDS has, change a single field that has nothing to do
+ * with the name, save it back.
+ *
+ * The point is what is *not* touched. A JSContact name can hold several
+ * components of one kind, and the N line has one field per kind, so EDS is
+ * handed those components joined into one string; the backend restores them on
+ * the way back by recognising that the field still reads as its parts joined.
+ * That recognition is a string comparison against the text EDS hands back,
+ * which is exactly what no test below this file can measure. */
+static int
+edit_phase (EBookClient *book,
+            const gchar *uid,
+            const gchar *email)
+{
+	GError *error = NULL;
+	EContact *contact;
+	EContact *read_back = NULL;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	g_print ("read-full-name=%s\n",
+		 (const gchar *) e_contact_get_const (contact, E_CONTACT_FULL_NAME));
+	g_print ("read-email=%s\n",
+		 (const gchar *) e_contact_get_const (contact, E_CONTACT_EMAIL_1));
+	report_name_fields ("read", contact);
+
+	/* The edit itself: one field, and not the name. Whatever the save does
+	 * to the name is therefore something nobody asked for. */
+	e_contact_set (contact, E_CONTACT_EMAIL_1, email);
+
+	if (!e_book_client_modify_contact_sync (book, contact, E_BOOK_OPERATION_FLAG_NONE,
+						NULL, &error)) {
+		g_object_unref (contact);
+		return fail ("modify", error);
+	}
+
+	g_object_unref (contact);
+
+	if (!e_book_client_get_contact_sync (book, uid, &read_back, NULL, &error))
+		return fail ("read-back", error);
+
+	g_print ("read-back-email=%s\n",
+		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_EMAIL_1));
+	report_name_fields ("read-back", read_back);
+	g_object_unref (read_back);
+
+	return 0;
+}
+
+static void
+usage (const gchar *program)
+{
+	g_printerr ("usage: %s <source-uid> write <full-name>\n"
+		    "       %s <source-uid> edit <contact-uid> <email>\n",
+		    program, program);
+}
+
+int
+main (int argc,
+      char **argv)
+{
+	GError *error = NULL;
+	ESourceRegistry *registry;
+	ESource *source;
+	EClient *client;
+	EBookClient *book;
+	const gchar *source_uid;
+	const gchar *phase;
+	int status;
+
+	if (argc < 3) {
+		usage (argv[0]);
+		return 2;
+	}
+
+	source_uid = argv[1];
+	phase = argv[2];
+
+	if (!((g_str_equal (phase, "write") && argc == 4) ||
+	      (g_str_equal (phase, "edit") && argc == 5))) {
+		usage (argv[0]);
+		return 2;
+	}
+
+	/* Activates evolution-source-registry on the session bus, which reads
+	 * the scratch sources directory the harness wrote. */
+	registry = e_source_registry_new_sync (NULL, &error);
+	if (!registry)
+		return fail ("registry", error);
+
+	source = e_source_registry_ref_source (registry, source_uid);
+	if (!source) {
+		g_printerr ("registry: no source with UID '%s'\n", source_uid);
+		return 1;
+	}
+
+	/* Activates evolution-addressbook-factory, which is what dlopens
+	 * libebookbackendjmap.so out of EDS_ADDRESS_BOOK_MODULES and picks
+	 * the factory matching the keyfile's BackendName. A failure here is
+	 * usually one of those two steps, not the backend's logic.
+	 *
+	 * (guint32) -1 is EDS's "do not wait for connected". The wait is not
+	 * skipped because the status does not matter — it is asserted, just
+	 * below — but because asking for it here cannot work in a program
+	 * with no main loop, whatever the backend does: see
+	 * connection-status.c. The open itself is synchronous, so everything
+	 * it established is already true on the far side by the time this
+	 * call returns. */
+	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
+	if (!client)
+		return fail ("connect", error);
+
+	book = E_BOOK_CLIENT (client);
+
+	/* EDS's own verdict on the connect, waited for properly. */
+	functional_report_connection_status (source, 10);
+
+	/* Read the properties back over the bus rather than trusting the
+	 * client's cached copy. EClient updates those from D-Bus property
+	 * notifications delivered on a main context, so a program that does
+	 * not run a main loop — this one — would be reading whatever had
+	 * happened to arrive: a race, and one that would have hidden the very
+	 * bug this test was written for. */
+	if (!e_client_retrieve_properties_sync (client, NULL, &error))
+		return fail ("retrieve-properties", error);
+
+	/* Whether the book accepts writes at all. EDS derives this from what
+	 * the backend said during its connect, so a backend that connects
+	 * happily and never says it can be written to gives a book that is
+	 * silently read-only in the UI — which is a state the write below
+	 * would report only as "Permission denied". Reported separately so
+	 * the harness can name the cause rather than the symptom. */
+	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
+
+	if (g_str_equal (phase, "write"))
+		status = write_phase (book, argv[3]);
+	else
+		status = edit_phase (book, argv[3], argv[4]);
+
 	g_object_unref (client);
 	g_object_unref (source);
 	g_object_unref (registry);
 
-	return 0;
+	return status;
 }
