@@ -3,8 +3,8 @@
  *
  * The second client half of the calendar functional test: an ordinary libecal
  * consumer that opens a calendar, reads an event the *server* already held,
- * retypes the places it happens at, the document it points at and the picture
- * of it, and writes them back.
+ * reports when EDS says it starts, retypes the places it happens at, the
+ * document it points at and the picture of it, and writes them back.
  *
  * A program of its own rather than a phase of cal-client.c, which creates
  * every event it looks at. The two ask opposite questions. cal-client.c asks
@@ -171,6 +171,61 @@ property_count (ICalComponent *component,
  * same reason CONFERENCE is: RFC 7986 §5.10 is a decade newer than the enum's
  * oldest members. The same cast between two spellings of one value applies. */
 #define IMAGE_PROPERTY ((ICalPropertyKind) ICAL_IMAGE_PROPERTY)
+
+/* Report when EDS says the event starts: the value as it stands on the line, the
+ * TZID naming the clock it is on, and the instant a consumer's own clock lands
+ * on.
+ *
+ * Three observations because the mapping states a named zone as a bare TZID and
+ * ships no VTIMEZONE defining it, and each answers a different half of what that
+ * costs. The first two are dtstart_parts in cal-client.c, read off the property so
+ * that what is reported is what EDS *kept* — the wall clock, and the identifier
+ * verbatim, since how an identifier is spelled is libical's business and the
+ * question here is which zone it names.
+ *
+ * The third is the one this program adds, and the only one that says the
+ * identifier means anything: i_cal_component_get_dtstart resolves a TZID the way
+ * any libical consumer does — against the enclosing component's VTIMEZONEs first
+ * and then against the builtin zone table — so converting its answer to UTC is a
+ * consumer asking "when is that, really?". libical does not adjust a *floating*
+ * time it converts, so a zone nothing could resolve reports the wall clock with a
+ * Z stuck on it rather than something this machine's own zone decides: the
+ * failure is the same on every machine, which is what makes it worth asserting.
+ */
+static void
+report_start (const gchar *prefix,
+	      ICalComponent *event)
+{
+	ICalProperty *property;
+	ICalParameter *parameter;
+	ICalTime *start;
+	ICalTime *utc;
+	gchar *value;
+
+	property = i_cal_component_get_first_property (event, I_CAL_DTSTART_PROPERTY);
+	value = property ? i_cal_property_get_value_as_string (property) : NULL;
+	g_print ("%s-dtstart=%s\n", prefix, value ? value : "");
+	g_free (value);
+
+	parameter = property ? i_cal_property_get_first_parameter (
+		property, I_CAL_TZID_PARAMETER) : NULL;
+	g_print ("%s-dtstart-tzid=%s\n", prefix,
+		 parameter ? i_cal_parameter_get_tzid (parameter) : "");
+	g_clear_object (&parameter);
+	g_clear_object (&property);
+
+	/* The UTC zone is libical's own object rather than one built here, so it is
+	 * not unrefed — the same borrowed thing i_cal_timezone_get_builtin_timezone
+	 * hands cal-client.c. */
+	start = i_cal_component_get_dtstart (event);
+	utc = start ? i_cal_time_convert_to_zone (
+		start, i_cal_timezone_get_utc_timezone ()) : NULL;
+	value = utc ? i_cal_time_as_ical_string (utc) : NULL;
+	g_print ("%s-dtstart-utc=%s\n", prefix, value ? value : "");
+	g_free (value);
+	g_clear_object (&utc);
+	g_clear_object (&start);
+}
 
 /* Report what EDS holds for the two places the mapping draws: the one line of
  * text a LOCATION is, and the CONFERENCE beside it.
@@ -585,6 +640,11 @@ main (int argc,
 	}
 
 	g_print ("read-summary=%s\n", i_cal_component_get_summary (event));
+	/* The VEVENT rather than what wrapped it, which is safe because libical
+	 * resolves a TZID against the component *and its parents*: first_vevent
+	 * hands back a child of `fetched` with its parent link intact, so a
+	 * VTIMEZONE standing in the VCALENDAR is still in reach from here. */
+	report_start ("read", event);
 	report_places ("read", event);
 	report_resource ("read", event);
 	report_pictures ("read", event);
@@ -685,6 +745,7 @@ main (int argc,
 		return 1;
 	}
 
+	report_start ("read-back", read_back_event);
 	report_places ("read-back", read_back_event);
 	report_resource ("read-back", read_back_event);
 	report_pictures ("read-back", read_back_event);

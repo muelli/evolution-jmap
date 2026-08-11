@@ -21216,3 +21216,100 @@ photo's rendering is unmeasured; what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured; and
 the `jmap-mail` `transport.rs` hang is still an open design question with a
 lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-ninth session)
+
+**The one place the mapping leans on the reader.** Everything the second calendar
+leg drove through real EDS so far was a map — `locations`, `virtualLocations`,
+`links` — and the seeded event's start was `CalendarEvent::simple`'s `Etc/UTC`,
+which `jmap-ical` draws as RFC 5545 §3.3.5 form 2: a `DTSTART` ending in `Z`,
+naming no identifier and needing no definition of one. The seed now starts in
+`Europe/Berlin`, which is form 3, and there the mapping writes
+`DTSTART;TZID=Europe/Berlin` and **no `VTIMEZONE`**. §3.2.19 has the document
+define what a `TZID` refers to; `dated` declines, because building a definition
+means shipping a zone database this crate has no other use for, and bets that the
+consumer resolves the IANA name itself. That bet was the oldest unmeasured claim in
+the calendar mapping — and unmeasurable below real EDS, since every fixture in
+`jmap-ical` and `jmap-cal-sync` compares text against text, where a zone nobody
+could resolve reads back exactly like one anybody could.
+
+**It holds, and the leg now says so in three observations.** `report_start` in
+`cal-edit-client.c` reports the wall clock off the `DTSTART` line, the `TZID`
+verbatim, and — the one this program adds to `dtstart_parts`' pair — what
+`i_cal_component_get_dtstart` resolves the two to, converted to UTC. EDS keeps the
+identifier exactly as the mapping spelled it, plain `Europe/Berlin` rather than
+re-spelled into the solidus form libical writes for a builtin zone, and a libecal
+consumer lands on `20260409T080000Z` for a 10:00 CEST start. Reported before the
+save and after it, since EDS answers a get out of its own cache.
+
+**Why the instant is the load-bearing one.** libical does not adjust a *floating*
+time it converts — it relabels it — so a start whose zone nothing could resolve
+reports the wall clock with a `Z` stuck on it rather than something the machine's
+own zone decides. The failure is therefore two hours, deterministically, on every
+machine; measured, not reasoned about: the mutation that drops the `TZID` prints
+`20260409T100000Z`.
+
+Two mutations against the mapping, each reddening a different assertion. Dropping
+the `TZID` floats the start and moves the event two hours for the consumer.
+Drawing the identifier in libical's own `/freeassociation.sourceforge.net/Europe/
+Berlin` form reddens the identifier observation *while the instant stays right* —
+libical resolves that form too, through
+`icaltimezone_get_builtin_timezone_from_tzid` — which is worth knowing: the
+spelling and the instant are separate failures, and only the spelling decides
+whether a save can name the zone at all (`names_time_zone` refuses the prefixed
+form).
+
+**The server-side pair is a guard nothing here can redden, and that is the point.**
+`start` and `timeZone` are asserted unchanged on the mock after the save. No
+mutation of this repository reaches it: `jmap_cal_sync::patch` diffs against the
+server's own event put through the same round trip, so a reader that misreads a
+zone misreads it on both sides and patches nothing — the asymmetry the assertion
+needs can only come from the platform, an EDS whose cache normalised a zoned
+`DTSTART` to UTC and handed back a start we never drew. Read from the server rather
+than from the client because such a patch would be invisible in EDS's cache. Said
+plainly in `docs/functional-tests.md` rather than left as an assertion a reader
+would take for a mutation-tested one.
+
+Tests: 1000 in the default set, unchanged — `jmap-functional` is not in
+`default-members`, and this session added no unit test, only observations to a leg.
+The `functional-cal` leg count stays at two.
+
+Verified locally: `cargo test --locked` 1000; full `ninja` then `ctest` 14/14 with
+all four functional legs green; `cargo fmt --all --check` clean; `cargo clippy
+--workspace --exclude example-module --all-targets --locked -- -D warnings` and
+`cargo clippy -p jmap-functional --all-targets --locked -- -D warnings` clean.
+`ci/checks.sh` still stops at its first step — no `reuse`, no `pipx`, no `uvx` on
+this VM — so the licence check was done by hand: no file was added, all four files
+touched already carry their SPDX `GPL-3.0-or-later` header, no translatable string
+is introduced so `po/POTFILES.in` is unchanged, and `Cargo.lock` is untouched, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+**What this still does not settle.** Only a zone libical has builtin data for was
+driven through; a `timeZone` the consumer's database does not name still floats
+silently on its side, which is the same guess this mapping would have to make and
+is not measured. Nothing here says what Evolution's appointment editor *shows* for
+such an event, only what a libecal consumer computes. And the reverse asymmetry —
+a server zone outside RFC 8984 §1.4.9, or a Windows zone name — is still untested
+through real EDS.
+
+No milestone tag. Removed from the blocker list: `jmap-ical` emits no `VTIMEZONE`
+of its own (still true, and now measured to cost the consumer nothing for a builtin
+zone — the entry becomes the narrower one below). Unchanged blockers: the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still
+**needs human verification in real Evolution**; `example-module` does not pass this
+VM's clippy (1.97) on unmodified master, 26 `manual_c_str_literals`;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; a
+zone libical has no builtin data for still floats unmeasured, and no `VTIMEZONE` is
+emitted for it either; an attachment the user removes is still invisible to the
+save; whether Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE`
+"Evolution shows only the first" bet is still unverified; the two `LABEL` `TYPE`
+risks stand; a deathday and a birthday stated as a year alone are still invisible;
+the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified
+and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's rendering
+is unmeasured; what Evolution's contact editor writes for a replaced photo, and
+into a cleared field, is inferred rather than measured; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order hypothesis
+attached.
