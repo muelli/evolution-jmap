@@ -18708,3 +18708,105 @@ attached. Narrowed: a `uri`-only entry is invisible only at a service outside
 MSN and Yahoo are unverified and therefore untabled, so entries stated only as URIs
 at those five services stay invisible; and no test drives a `uri`-only entry
 through real EDS — the functional book leg still exercises only the `user` path.
+
+## 2026-08-11 (hundred-and-eighty-fifth session)
+
+**A blocker carried for several sessions, closed: a tag whose ends are whitespace
+no longer freezes the whole category set for that card.** `keywords` is the one
+mapped property that is a *set* rather than a keyed map, and that difference is
+what made the freeze look necessary. Every other property answers "the vCard never
+showed this entry" by leaving it unnamed in the patch — the entry keeps its key,
+the key is what the save reaches by, and an entry nobody reached is an entry
+nobody touched. A set has no keys. It goes back replaced whole, so a tag left off
+the `CATEGORIES` line was a tag the next save would *delete*, and the previous
+increment protected it the only way it saw: by dropping the user's edit to the
+field entirely, for any card holding one such tag.
+
+**The rule was never "freeze"; it was "an unshown entry is not the user's to
+delete".** A set can keep that rule too — not by leaving something unnamed, but by
+carrying it. `diff_keywords` now composes the set it writes as the tags the vCard
+showed plus the tags it *could not* show, read off the server's own card through
+the emitter's own predicate. The set the save writes is therefore the set the user
+edited, with the invisible tags still in it, and the cost of an unstatable tag
+drops from "this contact's Categories field is read-only forever, silently" to
+"you cannot see or delete this one tag" — which is what the cost is for every
+other property, and what it should always have been here.
+
+**`maps_keywords` is gone from `jmap-vcard` and `states_keyword` is what replaced
+it.** The all-or-nothing question had exactly one caller and only the freeze to
+ask for; what both sides need now is the per-tag predicate the emitter was already
+filtering by, which is a `states_*` predicate like every other one in that family
+and reads as one. The emitter's behaviour is unchanged — the same four refusals,
+for the same measured reasons — so a tag that got no line before gets none now.
+
+**Two decisions inside the merge, both of which a careless implementation gets
+wrong silently.** A tag whose value is not `true` is carried back *exactly as the
+server stated it*, `false` and all. RFC 9553 §1.4.3 says every value of a Set is
+`true`, so such a value is the server contradicting itself — but it is still the
+server's word, and rewriting it here would be this mapping inventing a change
+nobody asked for. If the server rejects its own value coming back, the save fails
+where the user can see it, which is the better of the two bad outcomes. And where
+both sides name the same tag, the *user's* value wins: they typed it into a field
+that means nothing but "filed under", so they mean it set, whatever the server
+had against that name. Merging the other way round would take the tag the user
+just typed and quietly write `false` back over it.
+
+**A no-op save must still name nothing.** The merged set is compared against the
+server's whole set, not against the edited one: for a card whose only difference
+is the tag that was carried back, the two are equal and the property is left out
+of the patch entirely. Writing it back "unchanged" would bump the card's state and
+undo a concurrent edit on another client for no reason. That test drives a save of
+the loaded vCard with nothing modified and asserts the state string did not move.
+
+**Every implementation half was mutation-checked**, `patch.rs` backed up with `cp`
+and restored with `cp`. Dropping the carry-back was caught by four tests; merging
+with the server's value winning by one; never sending the `null` that clears the
+field by one; and comparing the merged set against the edited side rather than the
+server's by four. No mutation went unnoticed, and the two collision decisions each
+have exactly one test standing behind them.
+
+One existing test changed its meaning rather than its fixture, deliberately:
+`a_tag_the_categories_line_cannot_carry_freezes_the_whole_set` asserted the
+behaviour this session removed. It is now
+`a_tag_the_categories_line_cannot_carry_survives_the_set_being_rewritten` and
+asserts strictly more — the tag the user typed lands *and* the tag they never saw
+is still there — so nothing that test used to protect is unprotected.
+
+Tests: 938 in the default set, up 5 from 933 — one new in `jmap-vcard`'s mapping
+for the predicate itself, four net in `jmap-book-sync`'s save path (five added,
+one replaced).
+
+Verified locally: `cargo test --locked` 938; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all --check`
+and `cargo clippy --all-targets --locked -- -D warnings` clean, and
+`cargo clippy -p jmap-backend-book --all-targets` clean for the header-needing
+crate that consumes the changed API. `--workspace` clippy fails on
+`example-module` with 26 `manual_c_str_literals` findings, which reproduce
+unchanged on a stashed tree and are this VM's newer clippy rather than anything
+this session did. `ci/checks.sh` still stops at its first step — `reuse` is not on
+this VM and neither `pipx` nor `uvx` is installed — so the licence check was done
+by hand: no file was added, all five sources touched already carry an SPDX header,
+and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+No milestone tag. Removed from the blocker list: the `CATEGORIES` whitespace
+freeze. New, and it is the mirror of what was just closed: `jmap-cal-sync`'s
+`diff_keywords` still freezes an event's whole tag set for the same reason, on
+`jmap-ical`'s own `maps_keywords`, and the fix is this one transposed — with one
+extra wrinkle, that the calendar diffs against a *baseline* rather than the
+server's card, so which side the unstatable tags are read off needs deciding
+before it is written. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification
+in real Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side rest on untested assumptions; the
+`NameComponent` `phonetic` hole stands; the multi-`NOTE`/`ORG`/`TITLE`/
+`NICKNAME`/`URL` "Evolution shows only the first" bet is still unverified in real
+Evolution; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as
+a year alone are still invisible; the conventional URI schemes for AIM, Gadu-Gadu,
+ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP`
+are unmapped and their contact-editor behaviour unmeasured; whether the editor
+lets a handle be moved between the Home and Work slots at all is unknown; no test
+drives a `uri`-only entry through real EDS; and the `jmap-mail` `transport.rs`
+hang is still an open design question with a lock-order hypothesis attached.
