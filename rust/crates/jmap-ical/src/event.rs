@@ -37,14 +37,14 @@
 //! own onto every component that arrives without one, the value proposed would
 //! be the local clock.
 //!
-//! `CONFERENCE` (RFC 7986 §5.11) joins them: where the event may be joined
-//! online — RFC 8984 §4.2.6's `virtualLocations` — is drawn for the user to read
-//! and never read back, because a VirtualLocation holds a `description` the line
-//! has no room for and a property a save names is replaced whole, so a place
-//! read off the component would delete the part of itself that was never shown.
-//! Doing better means patching `virtualLocations/<key>` in place, the way
-//! `locations` is handled; until then the property is absent from
-//! [`MAPPED_PROPERTIES`] and no save can name it. See [`drawn_conferences`].
+//! Where the event may be joined online — RFC 8984 §4.2.6's `virtualLocations`
+//! — is a `CONFERENCE` line each (RFC 7986 §5.11), and the second property read
+//! back *into* rather than as a whole. A VirtualLocation holds a `description`
+//! the line has no room for, so a save that named the property would delete the
+//! part of a place that was never shown; instead the key of the entry a line was
+//! drawn from rides on it in an [`X_JMAP_KEY`], and the save patches
+//! `virtualLocations/<key>/uri`. See [`drawn_conferences`],
+//! [`read_virtual_locations`] and [`maps_virtual_locations`].
 //!
 //! `ORGANIZER` and `ATTENDEE` are written and never read for a heavier reason:
 //! who is invited, and what each of them replied, is *scheduling* state. Moving
@@ -92,6 +92,12 @@ const X_JMAP_KEY: &str = "X-JMAP-KEY";
 /// Evolution's appointment editor just typed, and no entry exists server-side
 /// for it to name.
 const INVENTED_KEY: &str = "l1";
+
+/// The stem of the `virtualLocations` key invented for a `CONFERENCE` that
+/// carries no [`X_JMAP_KEY`] — another client's line, or one an editor wrote
+/// afresh. Numbered from 1, skipping the keys the document already named, so
+/// that two conferences cannot collapse into one entry of a map.
+const INVENTED_CONFERENCE_KEY: &str = "v";
 
 /// The stem of the `alerts` key invented for a `VALARM` that names no id of its
 /// own — a reminder Evolution's editor has just added, which carries an
@@ -268,14 +274,15 @@ const PARTICIPANT_KINDS: [(&str, &str); 4] = [
 /// The JSCalendar properties this mapping covers, and therefore the only ones
 /// a save may name in a `CalendarEvent/set` update patch.
 ///
-/// Four are covered *conditionally* — see [`maps_locations`], [`maps_alerts`],
-/// [`maps_recurrence_rule`] and [`maps_recurrence_override`], which say when a
-/// save may name them.
+/// Five are covered *conditionally* — see [`maps_locations`],
+/// [`maps_virtual_locations`], [`maps_alerts`], [`maps_recurrence_rule`] and
+/// [`maps_recurrence_override`], which say when a save may name them.
 ///
-/// `locations` is also the one property named *into* rather than replaced: a
-/// save patches `locations/<key>/name`, so the rest of the entry stays. See
-/// [`X_JMAP_KEY`].
-pub const MAPPED_PROPERTIES: [&str; 15] = [
+/// `locations` and `virtualLocations` are also the two properties named *into*
+/// rather than replaced: a save patches `locations/<key>/name` and
+/// `virtualLocations/<key>/uri`, so the rest of the entry stays. See
+/// [`X_JMAP_KEY`], which is how a line says which entry it was drawn from.
+pub const MAPPED_PROPERTIES: [&str; 16] = [
     "title",
     "description",
     "start",
@@ -287,6 +294,7 @@ pub const MAPPED_PROPERTIES: [&str; 15] = [
     "priority",
     "privacy",
     "locations",
+    "virtualLocations",
     "keywords",
     "alerts",
     "recurrenceRules",
@@ -366,6 +374,38 @@ pub fn maps_locations(locations: &BTreeMap<String, Value>) -> bool {
         && !key.is_empty()
         && location.is_object()
         && matches!(location.get("name"), None | Some(Value::String(_)))
+}
+
+/// Whether the places an event may be joined online survive the trip through
+/// iCalendar well enough for a save to name the property.
+///
+/// The same rule as [`maps_locations`] and it answers differently, because
+/// `CONFERENCE` is a better-matched property than `LOCATION`: RFC 7986 §5.11
+/// admits it more than once, so a map of several places is several lines and a
+/// second entry costs nothing. What a save may not do is send a difference from
+/// a drawing that left something out — an entry with nowhere to join, a way of
+/// taking part outside RFC 7986 §6.3's vocabulary, a name no `LABEL` can carry,
+/// or a key no patch path can name.
+///
+/// A `description` is emphatically not such a thing. It has no room on the line
+/// and is *why* the property is patched into rather than replaced: the save
+/// names `virtualLocations/<key>/uri` and the members beside it are untouched.
+pub fn maps_virtual_locations(locations: &BTreeMap<String, Value>) -> bool {
+    locations.iter().all(|(key, location)| {
+        !key.is_empty()
+            && drawn_conference(key, location).is_some()
+            && matches!(location.get("name"), None | Some(Value::String(_)))
+            && match location.get("features") {
+                None => true,
+                Some(Value::Object(features)) => features.iter().all(|(feature, held)| {
+                    held == &Value::Bool(true)
+                        && CONFERENCE_FEATURES
+                            .iter()
+                            .any(|(jscalendar, _)| jscalendar == feature)
+                }),
+                Some(_) => false,
+            }
+    })
 }
 
 /// The place a component shows: the key of the entry it comes from, and the
@@ -666,7 +706,7 @@ fn drawn_conferences(event: &CalendarEvent) -> Vec<Property> {
         .virtual_locations
         .iter()
         .flatten()
-        .filter_map(|(_, location)| drawn_conference(location))
+        .filter_map(|(key, location)| drawn_conference(key, location))
         .collect()
 }
 
@@ -676,12 +716,18 @@ fn drawn_conferences(event: &CalendarEvent) -> Vec<Property> {
 /// REQUIRED — the one parameter in this mapping that says nothing the default
 /// would not, and a reader that trusts the grammar is entitled to demand it.
 ///
+/// [`X_JMAP_KEY`] rides along for the reason it does on a `LOCATION`: an edit
+/// goes back as a patch of `virtualLocations/<key>`, so the line has to say
+/// which entry of the server's map it is a drawing of. Position could not do
+/// that job — an editor that drops a line it has no UI for would slide every
+/// later conference onto the wrong entry.
+///
 /// The `uri` is the whole of the line, so a value that is not a URI leaves
 /// nothing to write: RFC 8984 §4.2.6 makes it the one mandatory member of a
 /// VirtualLocation, and a place with none is dropped rather than guessed at.
-/// That is only safe because the property is written and never read back — see
-/// [`read_vevent`], where `virtual_locations` stays `None`.
-fn drawn_conference(location: &Value) -> Option<Property> {
+/// Such an entry is one the drawing left out, which is what
+/// [`maps_virtual_locations`] refuses a save over.
+fn drawn_conference(key: &str, location: &Value) -> Option<Property> {
     let uri = location
         .get("uri")?
         .as_str()
@@ -690,7 +736,8 @@ fn drawn_conference(location: &Value) -> Option<Property> {
         Property::raw("CONFERENCE", uri)
             .with_param("VALUE", "URI")
             .with_params("FEATURE", joining_features(location))
-            .with_params("LABEL", stated_name(location)),
+            .with_params("LABEL", stated_name(location))
+            .with_param(X_JMAP_KEY, key),
     )
 }
 
@@ -1782,14 +1829,11 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
         priority: read_priority(vevent),
         privacy: read_privacy(vevent),
         locations: read_locations(vevent),
-        // Drawn onto the document and never read back off it either, for the
-        // reason `locations` is patched in place rather than replaced: a
-        // VirtualLocation holds a `description` (RFC 8984 §4.2.6) that a
-        // `CONFERENCE` line has no room for, and a property this side names in a
-        // save is replaced whole — so a place read back off the component would
-        // delete the part of itself the user was never shown. The property is
-        // not in `MAPPED_PROPERTIES`, so no save can name it.
-        virtual_locations: None,
+        // Read back the way `locations` is: what the line showed, under the key
+        // it came out with, so that a save patches `virtualLocations/<key>` and
+        // the `description` (RFC 8984 §4.2.6) the line had no room for stays
+        // where the server put it. See [`read_virtual_locations`].
+        virtual_locations: read_virtual_locations(vevent),
         keywords: read_keywords(vevent),
         alerts: read_alerts(vevent),
         // Drawn onto the document and never read back off it, like the two
@@ -1837,6 +1881,79 @@ fn read_locations(vevent: &Component) -> Option<BTreeMap<String, Value>> {
         .filter(|key| names_map_entry(key))
         .unwrap_or(INVENTED_KEY);
     Some([(key.to_owned(), json!({"@type": "Location", "name": name}))].into())
+}
+
+/// The places the component says the event may be joined online, as a
+/// `virtualLocations` map.
+///
+/// Every `CONFERENCE` is read, since RFC 7986 §5.11 admits the property more
+/// than once — and only what the line shows: the `uri`, the `name` a `LABEL`
+/// carries and the `features` a `FEATURE` does. A `description` is neither
+/// drawn nor read, which is exactly why the save path patches
+/// `virtualLocations/<key>/uri` rather than replacing the property: the members
+/// with no room on the line stay where the server put them.
+///
+/// The key is the one the line came out with — [`X_JMAP_KEY`], so that a save
+/// reaches the server's own entry — or an invented one for a line carrying
+/// none, which is what another client's component looks like. Invented keys
+/// avoid the ones the document already named, because two conferences that
+/// collided on a key would become one. A key that is not an RFC 8984 §1.4.4
+/// `Id` is treated as absent, for the reason [`read_locations`] gives: on a
+/// create the key is what the server is asked to file the entry under, and a
+/// key it rejects costs the whole `CalendarEvent/set`.
+///
+/// A line with nowhere to join — no value, or one that is not a URI — is
+/// dropped rather than read, since RFC 8984 §4.2.6 makes `uri` the one
+/// mandatory member of a VirtualLocation.
+///
+/// `None` rather than an empty map for a component that names none, for the
+/// reason [`read_locations`] gives: the save path reads an edit off a
+/// difference from what was shown, and an empty map would claim the event is
+/// joined nowhere where the component made no claim at all.
+fn read_virtual_locations(vevent: &Component) -> Option<BTreeMap<String, Value>> {
+    let lines = vevent.all("CONFERENCE");
+    let keys: Vec<Option<&str>> = lines
+        .iter()
+        .map(|line| line.param(X_JMAP_KEY).filter(|key| names_map_entry(key)))
+        .collect();
+
+    let mut places = BTreeMap::new();
+    let mut invented = 0;
+    for (line, key) in lines.iter().zip(&keys) {
+        let value = line.raw_value();
+        if !names_a_uri(&value) {
+            continue;
+        }
+        let key = match key {
+            Some(key) => (*key).to_owned(),
+            None => loop {
+                invented += 1;
+                let key = format!("{INVENTED_CONFERENCE_KEY}{invented}");
+                if !keys.contains(&Some(key.as_str())) {
+                    break key;
+                }
+            },
+        };
+        let mut place = json!({"@type": "VirtualLocation", "uri": value});
+        if let Some(name) = line.param("LABEL").filter(|name| !name.is_empty()) {
+            place["name"] = Value::String(name.to_owned());
+        }
+        let features: Map<String, Value> = line
+            .param_values("FEATURE")
+            .into_iter()
+            .filter_map(|feature| {
+                CONFERENCE_FEATURES
+                    .iter()
+                    .find(|(_, ical)| ical.eq_ignore_ascii_case(feature))
+                    .map(|(jscalendar, _)| ((*jscalendar).to_owned(), Value::Bool(true)))
+            })
+            .collect();
+        if !features.is_empty() {
+            place["features"] = Value::Object(features);
+        }
+        places.insert(key, place);
+    }
+    (!places.is_empty()).then_some(places)
 }
 
 /// The tags the component carries, as a JSCalendar `keywords` Set.

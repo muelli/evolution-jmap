@@ -4,7 +4,7 @@
 //! Turning an edited component back into a `CalendarEvent/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a `VEVENT` is a
-//! lossy view of a JSCalendar event. The mapping keeps fifteen properties and
+//! lossy view of a JSCalendar event. The mapping keeps sixteen properties and
 //! drops everything else, so a save that sent the parsed event back whole
 //! would silently delete what it could not represent — participants, links —
 //! neither of which the user ever saw, let alone asked to remove.
@@ -23,13 +23,19 @@
 //! - and a `status` outside the closed vocabulary is not cleared by a save
 //!   that never touched it.
 //!
-//! Six properties need more than the baseline, because for them "no
+//! Seven properties need more than the baseline, because for them "no
 //! difference" is not the whole question:
 //!
 //! - **`locations` is a map of places and the component has one line.** So the
 //!   name is patched *into* the server's own entry rather than the property
-//!   being replaced, which is the one place this module reaches below the top
-//!   level — see [`diff_locations`].
+//!   being replaced, which is one of the two places this module reaches below
+//!   the top level — see [`diff_locations`].
+//! - **`virtualLocations` is a map of places and the component has a line
+//!   each.** Which line stands for which entry is therefore a real question,
+//!   and the answer rides on the line as an `X-JMAP-KEY`; the members the line
+//!   shows are patched into the entry it names, and a line naming an entry the
+//!   server does not hold is neither created nor read as a deletion — see
+//!   [`diff_virtual_locations`].
 //! - **`keywords` is a set, and a set shown in part is not editable.** The
 //!   property goes back replaced whole, which is only safe if every tag the
 //!   server holds reached the `CATEGORIES` line — see [`diff_keywords`].
@@ -71,7 +77,7 @@ use std::collections::BTreeMap;
 
 use jmap_ical::{
     event_to_ical, ical_to_event, maps_alerts, maps_keywords, maps_locations,
-    maps_recurrence_override, maps_recurrence_rule, names_time_zone,
+    maps_recurrence_override, maps_recurrence_rule, maps_virtual_locations, names_time_zone,
 };
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value};
@@ -165,6 +171,7 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     }
 
     diff_locations(&mut patch, current, &baseline, edited);
+    diff_virtual_locations(&mut patch, current, &baseline, edited);
     diff_keywords(&mut patch, current, &baseline, edited);
     diff_alerts(&mut patch, current, &baseline, edited);
     diff_recurrence(&mut patch, current, &baseline, edited);
@@ -251,14 +258,102 @@ fn drawn_name(event: &CalendarEvent) -> Option<&str> {
         .find_map(|(_, place)| place.get("name")?.as_str())
 }
 
-/// The patch path of one place's name. RFC 8620 §5.3 spells a map key as a JSON
+/// The patch path of one place's name.
+fn name_of(key: &str) -> String {
+    format!("locations/{}/name", escaped(key))
+}
+
+/// A map key as a patch path segment. RFC 8620 §5.3 spells one as a JSON
 /// pointer segment, so a `~` or a `/` in a key the server chose is escaped
 /// (RFC 6901 §3) rather than read as structure.
-fn name_of(key: &str) -> String {
-    format!(
-        "locations/{}/name",
-        key.replace('~', "~0").replace('/', "~1")
-    )
+fn escaped(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
+}
+
+/// Where the event may be joined online — the second property patched *into*
+/// rather than replaced, and for the same reason as [`diff_locations`]: RFC 8984
+/// §4.2.6's VirtualLocation holds a `description` that a `CONFERENCE` line has no
+/// room for, so naming `virtualLocations` in a patch would delete a note the user
+/// was never shown. The save names `virtualLocations/<key>/uri`, `/name` and
+/// `/features` — the three members the line does show — one member at a time, and
+/// everything beside them stays as the server had it.
+///
+/// Unlike a `LOCATION` there is a line per entry (RFC 7986 §5.11), so which entry
+/// a line stands for is a real question, and the answer rides on the line: the
+/// key goes out in an `X-JMAP-KEY` and comes back in one. Position could not
+/// answer it — an editor that drops a line it has no UI for would slide every
+/// later conference onto the wrong entry.
+///
+/// Two things this deliberately does **not** do, both because a component that
+/// names a conference the server does not is ambiguous in a way that would cost
+/// data if read wrong:
+///
+/// - **A conference the component stopped naming is left where it is.** A missing
+///   line does not say who removed it. Evolution 3.52 has no UI for a conference,
+///   and whether its editor writes back a property it does not understand is not
+///   something this repository can answer without a real Evolution; reading the
+///   absence as a deletion would destroy a link the user never touched. The cost
+///   of the other reading is only that a deletion made elsewhere comes back on
+///   the next sync.
+/// - **A conference the server does not hold is not created.** RFC 8620 §5.3
+///   requires every path segment before the last to exist already, so an entry
+///   the server never chose a key for cannot be patched into place — and a line
+///   whose key is unknown is as likely to be a rewrite of one of the server's as
+///   a new place. Only the create path, which writes the property whole, files a
+///   conference the server has never seen.
+///
+/// [`maps_virtual_locations`] is asked of the server's own map first, for the
+/// reason every conditionally-mapped property asks it: an entry the line could
+/// not draw in full was not shown, so no difference from the drawing is the
+/// user's to have made.
+fn diff_virtual_locations(
+    patch: &mut Map<String, Value>,
+    current: &CalendarEvent,
+    baseline: &CalendarEvent,
+    edited: &CalendarEvent,
+) {
+    let empty = BTreeMap::new();
+    let places = current.virtual_locations.as_ref().unwrap_or(&empty);
+    if !maps_virtual_locations(places) {
+        return;
+    }
+    let was = baseline.virtual_locations.as_ref().unwrap_or(&empty);
+    let now = edited.virtual_locations.as_ref().unwrap_or(&empty);
+
+    for (key, before) in was {
+        // The key has to be one the *server* chose, not merely one the baseline
+        // carries: a server key outside RFC 8984 §1.4.4's `Id` grammar does not
+        // survive the round trip, so the baseline holds an invented key for it,
+        // and an invented key names no entry to patch.
+        let (Some(after), true) = (now.get(key), places.contains_key(key)) else {
+            continue;
+        };
+        for member in ["uri", "name", "features"] {
+            if before.get(member) == after.get(member) {
+                continue;
+            }
+            match after.get(member) {
+                Some(value) => {
+                    patch.insert(member_of(key, member), value.clone());
+                }
+                // Removing the member is how a PatchObject asks for the RFC 8984
+                // §4.2.6 default — the empty string for `name`, no ways of taking
+                // part for `features`. Never for `uri`, which is the one member a
+                // VirtualLocation is required to have and the whole of the line:
+                // a component that names none is one this crate would not have
+                // read a place off at all.
+                None if member != "uri" => {
+                    patch.insert(member_of(key, member), Value::Null);
+                }
+                None => {}
+            }
+        }
+    }
+}
+
+/// The patch path of one member of one virtual location.
+fn member_of(key: &str, member: &str) -> String {
+    format!("virtualLocations/{}/{member}", escaped(key))
 }
 
 /// The tags the event carries — replaced whole, which is what separates this

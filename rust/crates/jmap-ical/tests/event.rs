@@ -9,7 +9,7 @@
 
 use jmap_ical::{
     ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keywords, maps_locations,
-    maps_recurrence_override, maps_recurrence_rule, names_time_zone,
+    maps_recurrence_override, maps_recurrence_rule, maps_virtual_locations, names_time_zone,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -5363,9 +5363,9 @@ fn where_an_event_is_joined_online_is_written_as_a_conference() {
     assert_eq!(
         conferences(&ics),
         [
-            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Team room:\
+            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Team room;X-JMAP-KEY=v1:\
              https://meet.example.com/sprint",
-            "CONFERENCE;VALUE=URI;FEATURE=PHONE;LABEL=Dial-in:tel:+1-555-0100",
+            "CONFERENCE;VALUE=URI;FEATURE=PHONE;LABEL=Dial-in;X-JMAP-KEY=v2:tel:+1-555-0100",
         ],
         "{ics}"
     );
@@ -5383,7 +5383,7 @@ fn a_conference_states_the_value_type_it_is_required_to() {
 
     assert_eq!(
         conferences(&ics),
-        ["CONFERENCE;VALUE=URI:https://meet.example.com/sprint"],
+        ["CONFERENCE;VALUE=URI;X-JMAP-KEY=v1:https://meet.example.com/sprint"],
         "{ics}"
     );
 }
@@ -5410,7 +5410,9 @@ fn a_way_of_joining_outside_the_shared_vocabulary_is_left_off() {
 
     assert_eq!(
         conferences(&ics),
-        ["CONFERENCE;VALUE=URI;FEATURE=SCREEN;LABEL=Team room:https://meet.example.com/sprint"],
+        [
+            "CONFERENCE;VALUE=URI;FEATURE=SCREEN;LABEL=Team room;X-JMAP-KEY=v1:https://meet.example.com/sprint"
+        ],
         "{ics}"
     );
 }
@@ -5458,30 +5460,173 @@ fn a_virtual_location_with_no_name_carries_no_label() {
 
         assert_eq!(
             conferences(&ics),
-            ["CONFERENCE;VALUE=URI:https://meet.example.com/sprint"],
+            ["CONFERENCE;VALUE=URI;X-JMAP-KEY=v1:https://meet.example.com/sprint"],
             "{location}: {ics}"
         );
     }
 }
 
 #[test]
-fn where_an_event_is_joined_online_is_written_and_never_read_back() {
-    // The precedent the guest list sets, for the reason `locations` gives: a
-    // VirtualLocation holds a `description` (RFC 8984 §4.2.6) that a CONFERENCE
-    // line has no room for, and a save replaces a property whole. So a
-    // conference read back off the component would delete the description the
-    // user was never shown — and `virtualLocations` is absent from
-    // MAPPED_PROPERTIES, so no save can name it and the server's own copy cannot
-    // be overwritten from here.
+fn where_an_event_is_joined_online_is_read_back_off_the_line() {
+    // What a CONFERENCE line shows — the URI, the LABEL, the FEATUREs — reads
+    // back, and nothing else does: a VirtualLocation's `description` (RFC 8984
+    // §4.2.6) has no room on the line, so it is neither drawn nor read. That is
+    // safe only because the save path names `virtualLocations/<key>/...` rather
+    // than the property, which is why the key rides out and back on the line.
     let ics = event_to_ical(&held_online(json!({
         "v1": joined_at("https://meet.example.com/sprint", "Team room", json!({
             "description": "Ask Bob for the passcode",
+            "features": {"video": true},
         })),
     })));
     let event = ical_to_event(&ics).expect("parse");
 
     assert!(!ics.contains("passcode"), "{ics}");
+    assert_eq!(
+        event.virtual_locations,
+        serde_json::from_value(json!({
+            "v1": {
+                "@type": "VirtualLocation",
+                "uri": "https://meet.example.com/sprint",
+                "name": "Team room",
+                "features": {"video": true},
+            },
+        }))
+        .expect("a map of virtual locations"),
+        "{ics}"
+    );
+}
+
+#[test]
+fn a_conference_carries_the_key_of_the_entry_it_came_from() {
+    // The LOCATION precedent (X-JMAP-KEY), for the same reason: an edit reaches
+    // the server as a patch of `virtualLocations/<key>`, so the line has to say
+    // which entry of the server's map it is a drawing of. Position could not:
+    // an editor that drops a line it has no UI for would slide every later
+    // conference onto the wrong entry.
+    let ics = event_to_ical(&held_online(json!({
+        "v1": joined_at("https://meet.example.com/sprint", "", json!({})),
+        "v2": joined_at("tel:+1-555-0100", "", json!({})),
+    })));
+
+    assert_eq!(
+        conferences(&ics),
+        [
+            "CONFERENCE;VALUE=URI;X-JMAP-KEY=v1:https://meet.example.com/sprint",
+            "CONFERENCE;VALUE=URI;X-JMAP-KEY=v2:tel:+1-555-0100",
+        ],
+        "{ics}"
+    );
+}
+
+#[test]
+fn a_conference_with_no_key_is_read_under_an_invented_one() {
+    // What another client's component looks like, and what Evolution would write
+    // if it ever grew a UI for this. A key is still needed — `virtualLocations`
+    // is a map — so one is invented per line, avoiding the keys already taken so
+    // that two conferences cannot collapse into one. The save path only ever
+    // patches keys the *server* holds, so an invented key can create an entry on
+    // a create and reaches nothing on an edit.
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:x\r\n\
+DTSTART:20260115T130000Z\r\n\
+CONFERENCE;VALUE=URI:https://meet.example.com/one\r\n\
+CONFERENCE;VALUE=URI;X-JMAP-KEY=v1:https://meet.example.com/two\r\n\
+CONFERENCE;VALUE=URI:tel:+1-555-0100\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+
+    let places = event.virtual_locations.expect("virtual locations");
+    assert_eq!(
+        places.keys().collect::<Vec<_>>(),
+        ["v1", "v2", "v3"],
+        "{places:?}"
+    );
+    assert_eq!(
+        places["v1"].get("uri").and_then(Value::as_str),
+        Some("https://meet.example.com/two"),
+        "the line that named a key keeps it"
+    );
+    assert_eq!(
+        places["v2"].get("uri").and_then(Value::as_str),
+        Some("https://meet.example.com/one")
+    );
+    assert_eq!(
+        places["v3"].get("uri").and_then(Value::as_str),
+        Some("tel:+1-555-0100")
+    );
+}
+
+#[test]
+fn a_component_that_names_no_conference_reads_back_none() {
+    // `None` rather than an empty map, for the reason every other read gives:
+    // the save path reads an edit off a difference from what was shown, and an
+    // empty map would claim the event is joined nowhere where the component made
+    // no claim at all.
+    let event = ical_to_event(&event_to_ical(&held_online(json!({})))).expect("parse");
+
     assert_eq!(event.virtual_locations, None);
+}
+
+#[test]
+fn a_conference_shown_in_part_is_not_the_users_to_have_edited() {
+    // The rule `maps_locations` and `maps_keywords` already state, applied one
+    // property along: an entry the line could not draw whole was not shown, so
+    // no difference from the drawing may be sent for the property at all.
+    for (editable, places) in [
+        (true, json!({})),
+        (
+            true,
+            json!({"v1": joined_at("https://meet.example.com/x", "Team room", json!({
+                // The member with no room on the line is exactly what patching
+                // in place exists to preserve, so it does not block a save.
+                "description": "Ask Bob for the passcode",
+                "features": {"video": true},
+            }))}),
+        ),
+        // Nothing to join at, so nothing was drawn.
+        (
+            false,
+            json!({"v1": {"@type": "VirtualLocation", "uri": "meet.example.com"}}),
+        ),
+        // A way of taking part outside RFC 7986 §6.3's vocabulary: the line is
+        // drawn without it, so the entry is shown in part.
+        (
+            false,
+            json!({"v1": joined_at("https://meet.example.com/x", "", json!({
+                "features": {"hologram": true},
+            }))}),
+        ),
+        (
+            false,
+            json!({"v1": joined_at("https://meet.example.com/x", "", json!({
+                "features": {"video": "yes"},
+            }))}),
+        ),
+        // A name a LABEL cannot carry.
+        (
+            false,
+            json!({"v1": {"@type": "VirtualLocation", "uri": "https://x/y", "name": 7}}),
+        ),
+        // A key no patch path can name.
+        (
+            false,
+            json!({"": joined_at("https://meet.example.com/x", "", json!({}))}),
+        ),
+    ] {
+        let event = held_online(places.clone());
+
+        assert_eq!(
+            maps_virtual_locations(
+                event
+                    .virtual_locations
+                    .as_ref()
+                    .unwrap_or(&Default::default())
+            ),
+            editable,
+            "{places}"
+        );
+    }
 }
 
 #[test]
@@ -5500,7 +5645,7 @@ fn an_edited_instance_carries_the_conferences_of_the_series() {
     assert_eq!(vevents(&ics), 2, "{ics}");
     assert_eq!(
         conferences(vevent(&ics, 1)),
-        ["CONFERENCE;VALUE=URI;LABEL=Team room:https://meet.example.com/sprint"],
+        ["CONFERENCE;VALUE=URI;LABEL=Team room;X-JMAP-KEY=v1:https://meet.example.com/sprint"],
         "{ics}"
     );
 }
