@@ -10,16 +10,16 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Three legs, because they need three books. The first starts empty and writes
-//! a contact into it. The second and third each start from a card the mock was
+//! Four legs, because they need four books. The first starts empty and writes
+//! a contact into it. The other three each start from a card the mock was
 //! seeded with before EDS ever connected — a card from the *server*, holding a
 //! shape no vCard can state, which is the only way to ask what real EDS does to
-//! it — and take the two branches the save can take with it: the user edits a
-//! field beside the name, or retypes the name itself.
+//! it — and take the branches a save can take with it: the user edits a field
+//! beside the name, retypes the name itself, or picks a new picture.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
-use jmap_proto::contacts::{ContactCard, Name, NameComponent};
+use jmap_proto::contacts::{ContactCard, Media, Name, NameComponent};
 
 /// The contact the client writes. One string, passed to the client on its
 /// command line and looked for in the mock's store, so the two ends cannot
@@ -106,6 +106,31 @@ const BIRTHDAY: &str = "1964-03-27";
 const BIRTH_YEAR: u64 = 1964;
 const BIRTH_MONTH: u64 = 3;
 const BIRTH_DAY: u64 = 27;
+/// The picture of the contact, as the bytes of a real 69-byte PNG — a 1×1 red
+/// pixel — spelled once, here, and handed to the client on its command line
+/// rather than written out in both languages: the bytes are the assertion, so
+/// the two ends must not be able to disagree about them by a typo.
+///
+/// A *real* image because that is what a user's photo is, and because the bytes
+/// of one are the case the mapping had to be built around: they are not valid
+/// UTF-8, so calcard hands them back as binary rather than as text, and the
+/// slash in the base64 below is there to be carried through a `data:` URI
+/// untouched. The value is long enough that EDS folds the `PHOTO` line across
+/// two, which is the other half of what only a real EDS can be asked about.
+const PHOTO_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+/// What the picture is, spelled as `book-client.c` spells it. EDS writes the
+/// subtype alone on the line (`TYPE=png`, measured against libebook-contacts
+/// 3.52) and rebuilds `image/png` when it reads one back, so this is the one
+/// place where "the parameter our emitter writes is the media type EDS means"
+/// is checked from both ends instead of against a probe.
+const PHOTO_MEDIA_TYPE: &str = "image/png";
+/// The picture the user picks instead, in the leg that replaces one: a second
+/// real PNG, the same 1×1 pixel painted a different colour. Different bytes from
+/// [`PHOTO_BASE64`] and the same length, so a save that wrote the old picture
+/// back cannot pass by accident and neither can one that truncated the new.
+const REPLACEMENT_PHOTO_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC";
 
 /// The keyfile from `docs/examples/jmap-mock.source`, with the mock's
 /// ephemeral port filled in. Kept as a literal here rather than read from
@@ -161,7 +186,10 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     session.write_source("jmap-functional", &keyfile(port));
     session.stage_address_book_backend(&module);
 
-    let output = session.run(&client, &["jmap-functional", "write", FULL_NAME]);
+    let output = session.run(
+        &client,
+        &["jmap-functional", "write", FULL_NAME, PHOTO_BASE64],
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
@@ -297,6 +325,39 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
             "the contact EDS handed back lost or misplaced its {field}\n{report}"
         );
     }
+    // The picture, out of EDS's own cache — and *not* as the bytes that went
+    // in: `EBookMetaBackend` puts every contact it caches through
+    // `store_inline_photos`, which writes the picture into a file under the
+    // book's cache directory and leaves the line pointing at it. So what a
+    // libebook consumer reads back is a `file:` URI, whatever it wrote, and the
+    // question is whether the bytes at the end of it are the ones it wrote.
+    assert_eq!(
+        seen.get("read-back-photo-type"),
+        Some(&"uri"),
+        "EDS did not cache the picture the way a meta backend caches one\n{report}"
+    );
+    let cached_photo = seen
+        .get("read-back-photo-uri")
+        .unwrap_or_else(|| panic!("the client reported no picture\n{report}"));
+    assert!(
+        cached_photo.starts_with("file://"),
+        "EDS pointed the picture somewhere other than at its own cache: \
+         {cached_photo}\n{report}"
+    );
+    // The extension EDS chose, which is the only place a cached photo still
+    // says what it is: it comes from the media type EDS read off the line, so a
+    // picture whose `TYPE` had fallen through would be filed under some other
+    // suffix and be one Evolution loads by guessing.
+    assert!(
+        cached_photo.ends_with(".png"),
+        "EDS did not file the picture as the kind of image it is: \
+         {cached_photo}\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-photo-file-base64"),
+        Some(&PHOTO_BASE64),
+        "the picture EDS cached is not the one that went in\n{report}"
+    );
     // The client escapes this one observation's line breaks, since the report
     // is read a line at a time.
     let escaped_label = ADDRESS_LABEL.replace('\n', "\\n");
@@ -522,6 +583,33 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         keywords.values().all(|set| *set == serde_json::json!(true)),
         "{card:?}"
     );
+    // The PHOTO line, as the server sees it: one `media` entry of kind `photo`
+    // whose URI carries the bytes themselves. Asserted at this end too because
+    // the client's read-back comes out of EDS's own cache, which would agree
+    // with itself about a picture that had reached the server truncated at the
+    // fold, or with the base64 EDS wrote re-encoded into something else.
+    //
+    // The URI is spelled out rather than borrowed from the mapping, so this end
+    // states the wire shape it expects: RFC 2397's `data:` with the media type
+    // in front of the payload, which is where a server that has never seen a
+    // vCard reads what the bytes are.
+    let media = card
+        .media
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no media: {card:?}"));
+    assert_eq!(media.len(), 1, "{media:?}");
+    let picture = media.values().next().expect("one media entry");
+    assert_eq!(picture.kind.as_deref(), Some("photo"), "{card:?}");
+    assert_eq!(
+        picture.media_type.as_deref(),
+        Some(PHOTO_MEDIA_TYPE),
+        "{card:?}"
+    );
+    assert_eq!(
+        picture.uri,
+        format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
+        "{card:?}"
+    );
     // The BDAY line, as the server sees it: one `anniversaries` entry of kind
     // `birth` whose date is the three numbers the client set. Spelled out
     // here rather than borrowed from the mapping, so this end states the wire
@@ -567,6 +655,17 @@ const EDITED_FULL_NAME: &str = "Jean Paul Oldenburg";
 /// name: whatever the save then does to the name is something nobody asked for.
 const EDITED_EMAIL_BEFORE: &str = "jp@example.com";
 const EDITED_EMAIL_AFTER: &str = "jp@example.org";
+/// The key the *server* filed the seeded card's picture under. Nothing like a
+/// key the reader invents, which counts entries off the vCard (`m1`, `m2`, …),
+/// so a picture still filed under this one after a save is a picture that was
+/// paired with the line it came off rather than re-added under a new name.
+///
+/// This is the half of the picture's mapping that no test below the daemons can
+/// make a claim about: EDS rewrites the `PHOTO` line — dropping the key with
+/// it — whenever the photo field is *set*, so whether a save has to put the key
+/// back at all depends on what real EDS does to a card whose picture the user
+/// never touched.
+const SEEDED_PHOTO_KEY: &str = "picture-1";
 
 /// Put the card both name legs start from into the mock's store, and hand back
 /// the id the server filed it under.
@@ -604,8 +703,58 @@ fn seed_double_barrelled_card(server: &jmap_mock::MockServer) -> Id {
         components: Some(components),
         ..Name::default()
     });
+    // A picture the user has, under a key only a server would choose. Seeded on
+    // the card both name legs start from because it is a property of the same
+    // kind as the pronunciations beside it: the user edits neither, so the save
+    // must hand it back exactly as it arrived — and unlike a `phonetic`, this
+    // one is a property the user *can* see, so EDS puts it on the far side of
+    // the round trip whether the mapping wants it there or not.
+    card.media = Some(
+        [(
+            SEEDED_PHOTO_KEY.to_owned(),
+            Media {
+                kind: Some("photo".to_owned()),
+                uri: format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
+                media_type: Some(PHOTO_MEDIA_TYPE.to_owned()),
+                ..Media::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
     account.contact_cards.seed_with_id(id.clone(), card);
     id
+}
+
+/// Hold the card the server now holds to the picture it was seeded with — the
+/// same bytes, of the same kind, under the same server-chosen key.
+///
+/// Shared by both name legs because the claim is the same in each and is about
+/// neither name: a user who edits one field, or retypes another, has not touched
+/// the picture, so a save that re-filed it under a key of its own making — or
+/// re-encoded the bytes, or dropped it — did something nobody asked for.
+fn assert_the_seeded_picture_survived(card: &ContactCard) {
+    let media = card
+        .media
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's picture: {card:?}"));
+    assert_eq!(
+        media.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_PHOTO_KEY],
+        "the save re-filed the picture nobody touched: {card:?}"
+    );
+    let picture = media.values().next().expect("one media entry");
+    assert_eq!(picture.kind.as_deref(), Some("photo"), "{card:?}");
+    assert_eq!(
+        picture.media_type.as_deref(),
+        Some(PHOTO_MEDIA_TYPE),
+        "{card:?}"
+    );
+    assert_eq!(
+        picture.uri,
+        format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
+        "the save rewrote the picture nobody touched: {card:?}"
+    );
 }
 
 /// The port the mock is listening on, for the keyfile the session is written
@@ -685,6 +834,34 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
         seen.get("read-family-name"),
         Some(&EDITED_SURNAME),
         "EDS did not hand back the surname the emitter wrote\n{report}"
+    );
+    // And what EDS made of the `PHOTO` line the backend wrote, which is the
+    // direction the write leg cannot check: there the line came from EDS in the
+    // first place, while this one the emitter wrote — `X-JMAP-KEY` in front of
+    // the parameters EDS puts there itself, and the bytes of a `data:` URI
+    // decoded back out. A picture the user is not shown is a picture Evolution
+    // would offer to replace with nothing.
+    //
+    // A `file:` URI again, for the reason the write leg spells out, and the
+    // `.png` is what says the media type the emitter stated survived: EDS names
+    // the file it caches a picture in after what it decided the picture is.
+    assert_eq!(
+        seen.get("read-photo-type"),
+        Some(&"uri"),
+        "EDS did not read the picture off the line the emitter wrote\n{report}"
+    );
+    let seeded_photo = seen
+        .get("read-photo-uri")
+        .unwrap_or_else(|| panic!("the client reported no picture\n{report}"));
+    assert!(
+        seeded_photo.starts_with("file://") && seeded_photo.ends_with(".png"),
+        "EDS did not cache the seeded picture as the kind of image it is: \
+         {seeded_photo}\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-photo-file-base64"),
+        Some(&PHOTO_BASE64),
+        "EDS did not read back the bytes the emitter wrote\n{report}"
     );
 
     // And after the save: the edit took, and EDS's own view of the name is
@@ -767,6 +944,7 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
         vec![EDITED_EMAIL_AFTER],
         "{card:?}"
     );
+    assert_the_seeded_picture_survived(card);
 }
 
 /// What the user retypes the given-name field to, and the full name Evolution's
@@ -919,5 +1097,155 @@ fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
             .collect::<Vec<_>>(),
         vec![EDITED_EMAIL_BEFORE],
         "{card:?}"
+    );
+    assert_the_seeded_picture_survived(card);
+}
+
+/// The fourth leg, and the one edit that reaches the picture itself: the user
+/// picks a new photo for the card the server filed under a key of its own.
+///
+/// The claim is where the new picture lands, not that it arrives. EDS rewrites
+/// the `PHOTO` line out of the photo field whenever that field is *set*, and
+/// drops the parameters it had — the `X-JMAP-KEY` among them — so the new
+/// picture reaches the backend with nothing on it that says which entry it
+/// replaces. If the save took that at face value the server would end up holding
+/// two pictures: the old one under its own key and the new one under a name the
+/// reader invented by counting lines. What has to happen instead is that the
+/// keyless picture is paired with the one it replaced and patched over it.
+///
+/// Why this needs real daemons: an untouched picture keeps its key, because the
+/// line EDS writes back into a cached card is not a `set` — measured here, by
+/// [`an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened`] passing with
+/// the pairing removed. A *set* one does not. Which of the two a save is handed
+/// is EDS's decision, and this is the leg that makes it.
+#[test]
+fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/address-book-repicture"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(
+        &client,
+        &[
+            "jmap-functional",
+            "repicture",
+            card_id.as_str(),
+            REPLACEMENT_PHOTO_BASE64,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // The picture the card started from, so that the leg says what was replaced
+    // rather than only what replaced it.
+    assert_eq!(
+        seen.get("read-photo-file-base64"),
+        Some(&PHOTO_BASE64),
+        "the card EDS handed back is not the seeded one\n{report}"
+    );
+    // And what EDS holds afterwards: the new picture, back out of the cache
+    // file the backend's re-rendered card was stored into. This is the whole
+    // round trip in one observation — chosen in a libebook consumer, sent to the
+    // server, read back off what the server now holds.
+    assert_eq!(
+        seen.get("read-back-photo-file-base64"),
+        Some(&REPLACEMENT_PHOTO_BASE64),
+        "the picture the user chose is not the one EDS ended up with\n{report}"
+    );
+    // The name is not part of this edit, and is asserted for the same reason the
+    // `edit` leg asserts it: a save that rewrote it did something nobody asked.
+    assert_eq!(
+        seen.get("read-back-given-name"),
+        Some(&EDITED_GIVEN_FIELD),
+        "the save changed the given name nobody edited\n{report}"
+    );
+
+    // The other end, and the load-bearing assertion: one picture, under the key
+    // the *server* chose, holding the bytes the user picked. A second entry here
+    // — or this one still holding the old picture beside a new `m1` — is the
+    // pairing having fallen through.
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the new picture never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    let media = card
+        .media
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's picture: {card:?}"));
+    assert_eq!(
+        media.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_PHOTO_KEY],
+        "the new picture was filed beside the old one instead of over it: {card:?}"
+    );
+    let picture = media.values().next().expect("one media entry");
+    assert_eq!(picture.kind.as_deref(), Some("photo"), "{card:?}");
+    assert_eq!(
+        picture.media_type.as_deref(),
+        Some(PHOTO_MEDIA_TYPE),
+        "{card:?}"
+    );
+    assert_eq!(
+        picture.uri,
+        format!("data:{PHOTO_MEDIA_TYPE};base64,{REPLACEMENT_PHOTO_BASE64}"),
+        "the picture the user chose did not reach the server: {card:?}"
+    );
+    // And what nobody touched, at this end too: the name components the `N`
+    // line flattened, and the email address.
+    let components = card
+        .name
+        .as_ref()
+        .and_then(|name| name.components.as_ref())
+        .unwrap_or_else(|| panic!("the card on the server lost its name: {card:?}"));
+    assert_eq!(
+        components
+            .iter()
+            .filter(|component| component.kind == "given")
+            .map(|component| component.value.as_str())
+            .collect::<Vec<_>>(),
+        EDITED_GIVEN_PARTS.map(|(value, _)| value).to_vec(),
+        "choosing a picture rewrote the name: {card:?}"
     );
 }
