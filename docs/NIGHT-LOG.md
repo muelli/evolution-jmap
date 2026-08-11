@@ -21313,3 +21313,138 @@ is unmeasured; what Evolution's contact editor writes for a replaced photo, and
 into a cleared field, is inferred rather than measured; and the `jmap-mail`
 `transport.rs` hang is still an open design question with a lock-order hypothesis
 attached.
+
+## 2026-08-11 (two-hundred-and-tenth session)
+
+**The zone the reader cannot look up.** Yesterday's leg measured what a `TZID` an
+IANA database names costs the consumer: nothing, because libical resolves
+`Europe/Berlin` out of its builtin table and `jmap-backend-cal` puts that
+definition into the object EDS caches. The other form of RFC 8984 §1.4.9's
+`TimeZoneId` had no such fallback. A custom identifier — one beginning with a
+solidus, which the event defines in its own `timeZones` (§4.7.2) and nowhere else
+— resolves in no database anywhere, and the mapping drew it onto the `DTSTART`
+and defined nothing beside it. libical then *floats* the start: not an error, not
+a fallback to the machine's zone, just a wall clock time nobody can place, an hour
+or two from where the server put it, deterministically and silently.
+
+That identifier is not a corner. It is what a JMAP server has to invent for the
+zone an Exchange or Outlook invitation carries its own `VTIMEZONE` for, so it is
+what arrives on any account that holds a meeting somebody organised in Outlook.
+
+**So the drawing defines it.** `jmap_proto::calendars::CalendarEvent` gains
+`time_zones`, held as JSON for the reason `locations` is — a TimeZone carries
+`aliases`, a `validUntil`, a `url` and two arrays of transition rules, of which a
+`VTIMEZONE` holds a part — and `jmap_ical`'s `drawn_time_zone` writes the
+definition into the `VCALENDAR` ahead of the events that refer to it. Which
+identifiers get one falls straight out of `names_time_zone` used the other way
+round: the zones this crate cannot *name* are exactly the ones it has to
+*define*. A zone that has a name is left to the reader, because libical's database
+is a better description of a zone than whatever a server managed to state about
+it, and because defining it here would collide with the definition the marshalling
+already copies in.
+
+**One definition is enough, and that is not an assumption.** The other `TZID`s a
+document carries are an instance's own, and `maps_override_field` admits only a
+value `names_time_zone` accepts as an override's `timeZone` — so no `TZID` but the
+series' can be a custom identifier. The first draft collected zones across the
+series and its instances and deduplicated them; reading the override rule
+withdrew that as dead code, and the test that would have driven it now asserts the
+constraint instead: an override naming a custom zone is drawn at the series' zone,
+and the document defines one zone, not two.
+
+**Where the mapping refuses.** A definition is drawn whole or not at all. Every
+observance of a zone describes the offset between the transitions the others name,
+so a `VTIMEZONE` missing one is not a narrowed description of the zone — it is a
+different zone, and an event in it is at a different instant. Half a definition is
+worse than none: none leaves the reader floating the event, which is visibly
+wrong, where half of one is confidently wrong by an hour. The same for a
+`recurrenceRules` entry no `RRULE` can spell, which would draw a transition that
+happens once where the zone moves every year. A definition stating no observance
+at all is not drawn either — RFC 5545 §3.6.5 requires one, and libical refusing
+the `VTIMEZONE` would cost the whole object rather than only the zone.
+
+**Two ambiguities the RFC leaves, both answered by accepting either.** §4.7.2
+types the map as `Id[TimeZone]` while §1.4.9 puts the solidus on the identifier
+and §1.4.4's `Id` grammar has no solidus in it, so where the prefix lives is
+genuinely unsettled; the lookup asks for the key verbatim and again without the
+prefix, since a zone left undefined because the server chose the other reading is
+a silent hour. And an offset is `±hhmm[ss]` in RFC 5545 §3.3.14 while JSON in the
+wild puts colons in it: both are read, and what is written is iCalendar's, down to
+dropping the seconds when there are none. `-0000` is refused, which §3.3.14 picks
+out by name — the sign says which side of UTC the zone is on and there is no
+negative zero.
+
+**What libical says, which is the half calcard cannot answer.** Two tests in
+`jmap-backend-cal/tests/marshal.rs` put the object the mapping renders through the
+EDS-facing marshalling and ask libical to resolve the identifier out of it. The
+first draft asked only whether it resolved, and a mutation showed that claim to be
+nearly empty: libical builds a zone out of a `VTIMEZONE` whose observances have
+lost their `DTSTART` just as happily. So the test now reads back the definition
+libical *built the zone from* — `i_cal_timezone_get_component`, which the
+allowlist already had — and holds every line of it: both observances, the offsets
+on either side of each, the rules and the names. The object is also handed over
+byte for byte, because the zone is already defined and there is nothing for the
+marshalling to add.
+
+**Mutation checks.** Five, each reddening a different assertion: drawing the
+observance's start as anything but a `DTSTART` fails the libical test (and only
+after it was strengthened — the substring form of the assertion passed an
+`X-DTSTART`, which is how the weakness was found); drawing a definition in part
+rather than refusing it fails the all-or-nothing test; accepting `-0000` fails the
+offset test; defining a zone that has an IANA name fails the "left to the reader"
+test; and the exact-text assertion on the drawn `VTIMEZONE` covers the rules and
+names themselves.
+
+Tests: 1012 in the default set, up from 1000 — twelve in `jmap-ical` — plus two in
+`jmap-backend-cal`, which is out of `default-members` and runs under `ctest`.
+
+Verified locally: `cargo test --locked` 1012; `cargo test -p jmap-backend-cal` 109;
+full `ninja` then `ctest` 14/14 with all four functional legs green; `cargo fmt
+--all --check` clean; `cargo clippy --workspace --exclude example-module
+--all-targets --locked -- -D warnings` and `cargo clippy -p jmap-functional
+--all-targets --locked -- -D warnings` clean; `cargo doc -p evolution-jmap-ical`
+warns exactly the 39 times it warns on unmodified master, so no rustdoc dirt was
+added. `ci/checks.sh` still stops at its first step — no `reuse`, no `pipx`, no
+`uvx` on this VM — so the licence check was done by hand: no file was added, all
+five files touched already carry their SPDX `GPL-3.0-or-later` header, no
+translatable string is introduced so `po/POTFILES.in` is unchanged, and
+`Cargo.lock` gains one line for a dev-dependency edge (`serde_json`, already in
+the graph) rather than a new crate, so `cargo deny`'s answer is the one it gave on
+the last green run.
+
+**What this still does not settle.** libical accepts the definition and keeps
+every line of it — but *what instant a consumer computes* for an event in a custom
+zone is still unmeasured, because the conversion needs `i_cal_time_*`, which
+`eds-sys` deliberately does not bind. The measurement that would settle it is a
+functional leg: `cal-edit-client.c` already reports the resolved UTC instant off a
+`DTSTART`, and a seeded event in a custom zone would hold it to 08:00Z for a 10:00
+CEST start the way the builtin-zone leg does. That is the next session's work, and
+until it exists this is "libical built the zone we described", not "the appointment
+is where the server put it". Nothing is read back from a `VTIMEZONE` into
+`timeZones` either — a zone definition is the server's, not something Evolution
+offers to edit — so a document another client wrote a custom zone into still names
+a zone the save cannot send, which is the existing refusal and unchanged. And an
+identifier that is neither an IANA name nor defined by the event still floats, as
+before.
+
+No milestone tag. Removed from the blocker list: `jmap-ical` emits no `VTIMEZONE`
+of its own (it now emits the one kind no reader could otherwise resolve).
+Unchanged blockers, with one narrowed: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification
+in real Evolution**; `example-module` does not pass this VM's clippy (1.97) on
+unmodified master, 26 `manual_c_str_literals`; `docs/MILESTONES.md` does not exist,
+so the M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; the instant a consumer computes for a
+custom zone is unmeasured through real EDS, and a zone that is neither named nor
+defined still floats unmeasured; an attachment the user removes is still invisible
+to the save; whether Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/
+`TITLE` "Evolution shows only the first" bet is still unverified; the two `LABEL`
+`TYPE` risks stand; a deathday and a birthday stated as a year alone are still
+invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are
+unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's rendering
+is unmeasured; what Evolution's contact editor writes for a replaced photo, and
+into a cleared field, is inferred rather than measured; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order hypothesis
+attached.
