@@ -60,6 +60,14 @@
     }
   },
   "notes": {
-    "n1": {"note": "met at FOSDEM"}
+    "n1": {
+      "@type": "Note",
+      "note": "met at FOSDEM",
+      "created": "2026-02-01T09:15:00Z",
+      "author": {"@type": "Author", "name": "Vera Oldenburg"}
+    }
+  },
+  "nicknames": {
+    "k1": {"@type": "Nickname", "name": "Vee"}
   }
 }

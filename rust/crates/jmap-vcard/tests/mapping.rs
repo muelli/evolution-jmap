@@ -3,10 +3,10 @@
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
 //! address book backend needs: UID, FN, N, EMAIL, TEL, ADR, ORG, TITLE,
-//! ROLE.
+//! ROLE, NOTE.
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent,
+    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, NameComponent, Note,
     OrgUnit, Organization, Title,
 };
 use jmap_vcard::{card_to_vcard, vcard_to_card};
@@ -584,14 +584,92 @@ fn an_address_with_nothing_in_it_is_skipped_in_both_directions() {
     assert_eq!(back.addresses, None);
 }
 
+fn one_note(key: &str, note: &str) -> ContactCard {
+    ContactCard {
+        notes: Some(
+            [(
+                key.to_owned(),
+                Note {
+                    note: note.to_owned(),
+                    ..Note::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+#[test]
+fn maps_notes_onto_note_lines() {
+    // RFC 9553 §2.8.1 keys the notes like every other JSContact map; RFC
+    // 2426 §3.6.2's NOTE is plain text, so the key rides in X-JMAP-KEY as it
+    // does on an EMAIL.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(line(&vcard, "NOTE"), "NOTE;X-JMAP-KEY=n1:met at FOSDEM");
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let notes = card.notes.expect("notes");
+    assert_eq!(notes.keys().collect::<Vec<_>>(), vec!["n1"]);
+    assert_eq!(notes["n1"].note, "met at FOSDEM");
+}
+
+#[test]
+fn a_note_keeps_the_line_breaks_and_separators_it_was_written_with() {
+    // A note is the one mapped property that routinely holds prose, so the
+    // characters vCard gives structural meaning to are exactly the ones a
+    // user types into it.
+    let card = one_note("n1", "met at FOSDEM;\nbuys the next round, apparently");
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "NOTE"),
+        "NOTE;X-JMAP-KEY=n1:met at FOSDEM\\;\\nbuys the next round\\, apparently"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(
+        back.notes.expect("notes")["n1"].note,
+        "met at FOSDEM;\nbuys the next round, apparently",
+        "a note came back as something other than what was written"
+    );
+}
+
+#[test]
+fn a_note_with_no_text_is_skipped_in_both_directions() {
+    let card = one_note("n1", "");
+    assert!(!card_to_vcard(&card).contains("\r\nNOTE"));
+
+    let back =
+        vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nNOTE:\r\nEND:VCARD\r\n").expect("parse");
+    assert_eq!(back.notes, None);
+}
+
+#[test]
+fn invents_a_key_for_a_note_that_has_none() {
+    // Evolution has one Notes field per contact and writes no X-JMAP-KEY,
+    // so a note it typed arrives needing a key of its own.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "NOTE:met at FOSDEM\r\n",
+        "NOTE;X-JMAP-KEY=n1:owes me a beer\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let notes = card.notes.expect("notes");
+    assert_eq!(notes.keys().collect::<Vec<_>>(), vec!["n1", "n2"]);
+    assert_eq!(notes["n1"].note, "met at FOSDEM");
+    assert_eq!(notes["n2"].note, "owes me a beer");
+}
+
 #[test]
 fn unmodeled_jscontact_properties_are_dropped_not_mangled() {
-    // `notes` has no place in the minimal vCard set. Dropping it is safe
+    // `nicknames` has no place in the minimal vCard set. Dropping it is safe
     // only because saving goes through a PatchObject that touches the mapped
     // properties alone — this test pins that expectation down.
     let vcard = card_to_vcard(&fixture_card());
-    assert!(!vcard.contains("FOSDEM"), "{vcard}");
-    assert!(!vcard.contains("notes"), "{vcard}");
+    assert!(!vcard.contains("Vee"), "{vcard}");
+    assert!(!vcard.contains("nicknames"), "{vcard}");
     assert!(vcard_to_card(&vcard).expect("parse").extra.is_empty());
 }
 

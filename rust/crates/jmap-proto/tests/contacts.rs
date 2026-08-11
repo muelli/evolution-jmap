@@ -81,6 +81,12 @@ fn contact_card_roundtrip() {
     assert!(components[0].extra.contains_key("phonetic"));
     assert!(address.extra.contains_key("countryCode"));
     assert!(address.extra.contains_key("full"));
-    // Unmodeled JSContact properties (notes) survive via `extra`.
-    assert!(card.extra.contains_key("notes"));
+    let notes = card.notes.as_ref().unwrap();
+    assert_eq!(notes["n1"].note, "met at FOSDEM");
+    // When a note was written and who wrote it have no room on a `NOTE`
+    // line, so they too stay visible to the save path.
+    assert!(notes["n1"].extra.contains_key("created"));
+    assert!(notes["n1"].extra.contains_key("author"));
+    // Unmodeled JSContact properties (nicknames) survive via `extra`.
+    assert!(card.extra.contains_key("nicknames"));
 }

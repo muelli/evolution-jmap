@@ -4,11 +4,11 @@
 //! Turning an edited vCard back into a `ContactCard/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
-//! lossy view of a JSContact card. The mapping keeps UID, FN, N, EMAIL, TEL
-//! and ORG and drops everything else, so a save that sent the parsed card
-//! back whole would silently delete the properties it could not represent —
-//! addresses, notes, nicknames — none of which the user ever saw, let
-//! alone asked to remove.
+//! lossy view of a JSContact card. The mapping keeps UID, FN, N, EMAIL, TEL,
+//! ADR, ORG, TITLE, ROLE and NOTE and drops everything else, so a save that
+//! sent the parsed card back whole would silently delete the properties it
+//! could not represent — nicknames, anniversaries, preferred languages —
+//! none of which the user ever saw, let alone asked to remove.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
 //! that is the subtler half of this module:
@@ -38,7 +38,9 @@
 //!   in both directions — neither deleted for being absent from the edited
 //!   card, nor overwritten by an addition whose key the reader invented by
 //!   counting only the entries it could see. That is what
-//!   [`diff_visible_entries`] is for.
+//!   [`diff_visible_entries`] is for. `addresses` and `notes` are the same
+//!   shape, hiding an address stated only in components `ADR` has no field
+//!   for and a note that says nothing at all.
 //!
 //! RFC 8620 §5.3 requires every path segment before the last to exist on the
 //! object already, which is why a property that is absent server-side is
@@ -47,12 +49,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, OrgUnit,
+    Address, AddressComponent, ContactCard, ContactEmail, ContactPhone, Name, Note, OrgUnit,
     Organization, Title,
 };
 use jmap_vcard::{
     maps_address_component, maps_context, maps_name_component, maps_phone_feature, maps_title_kind,
-    states_address, title_kind,
+    states_address, states_note, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -74,6 +76,7 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         current.addresses.as_ref(),
         edited.addresses.as_ref(),
     );
+    diff_notes(&mut patch, current.notes.as_ref(), edited.notes.as_ref());
     patch
 }
 
@@ -245,6 +248,28 @@ fn diff_addresses(
                 &new.contexts,
                 maps_context,
             );
+        },
+    );
+}
+
+fn diff_notes(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Note>>,
+    edited: Option<&BTreeMap<String, Note>>,
+) {
+    diff_visible_entries(
+        patch,
+        "notes",
+        current,
+        edited,
+        states_note,
+        |patch, path, old, new| {
+            // Only the text can have been edited: when the note was written
+            // and by whom never reached the vCard, so they are patched
+            // around rather than through.
+            if old.note != new.note {
+                patch.insert(format!("{path}/note"), Value::String(new.note.clone()));
+            }
         },
     );
 }

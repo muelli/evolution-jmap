@@ -39,6 +39,12 @@ const STREET: &str = "Hauptstrasse 1";
 const LOCALITY: &str = "Berlin";
 const POSTCODE: &str = "10115";
 const COUNTRY: &str = "Germany";
+/// The free-text note, spelled as `book-client.c` spells it. The semicolon
+/// and the comma in it are the point: vCard gives both structural meaning,
+/// and this is the one mapped property that holds prose, so what is checked
+/// here is that the escaping our emitter applies is the escaping the EDS
+/// reading the line back undoes.
+const NOTE: &str = "met at FOSDEM; owes me a beer, apparently";
 
 /// The keyfile from `docs/examples/jmap-mock.source`, with the mock's
 /// ephemeral port filled in. Kept as a literal here rather than read from
@@ -181,6 +187,11 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         Some(&ROLE),
         "the contact EDS handed back lost its role\n{report}"
     );
+    assert_eq!(
+        seen.get("read-back-note"),
+        Some(&NOTE),
+        "the contact EDS handed back lost or mangled its note\n{report}"
+    );
     for (field, expected) in [
         ("read-back-street", STREET),
         ("read-back-locality", LOCALITY),
@@ -314,6 +325,23 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     assert_eq!(
         address.contexts,
         Some(serde_json::json!({"work": true})),
+        "{card:?}"
+    );
+    // The NOTE line, as the server sees it: one `notes` entry holding the
+    // text the user typed, punctuation and all. Asserted at this end too
+    // because the client's read-back comes out of EDS's own cache, which
+    // would agree with itself even if the line that went to the server had
+    // been mangled on the way.
+    let notes = card
+        .notes
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no notes: {card:?}"));
+    assert_eq!(
+        notes
+            .values()
+            .map(|note| note.note.as_str())
+            .collect::<Vec<_>>(),
+        vec![NOTE],
         "{card:?}"
     );
 }
