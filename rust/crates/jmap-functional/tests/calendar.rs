@@ -446,6 +446,160 @@ const REPLACED_ATTACH_HREF: &str = "https://docs.example/design-review/slides-2.
 /// present. A picture alone would be re-addressed correctly by construction.
 const REPLACED_IMAGE_HREF: &str = "https://pics.example/design-review/whiteboard-2.png";
 
+/// The zone the third leg's first event is in: an identifier no database names,
+/// which the event carries its own RFC 8984 §4.7.2 definition for.
+///
+/// This is the other half of what [`PLACED_ZONE`] measures, and the half the
+/// mapping cannot lean on the consumer for. §1.4.9 lets a `TimeZoneId` be either
+/// an IANA name or a custom identifier beginning with a solidus that the event's
+/// own `timeZones` defines — the second is what a server invents for the zone an
+/// Exchange or Outlook invitation carries its own `VTIMEZONE` for, so it arrives
+/// on any account holding a meeting somebody organised there. Nothing outside
+/// that server can look the identifier up, so the definition travelling with the
+/// event is the only thing that says what the zone is, and `jmap-ical` draws it
+/// as a `VTIMEZONE` in the document.
+///
+/// The tail is `Europe-Berlin` and not `Europe/Berlin` on purpose: libical's
+/// `icaltimezone_get_builtin_timezone` looks a location up in its own table, so an
+/// identifier whose tail *was* an IANA location could resolve out of the table and
+/// the leg would pass without the definition being read at all.
+const DEFINED_ZONE: &str = "/example.com/Europe-Berlin";
+
+/// And the zone the third leg's second event is in: an identifier no database
+/// names either, and one the event defines **nothing** for.
+///
+/// The contrast the leg exists for, and the case with no good answer. `jmap-ical`
+/// draws it as a bare `TZID` naming a zone nobody can resolve, because the
+/// alternatives are worse: dropping the parameter states an event in no zone at
+/// all, and inventing UTC states one at an instant the server never named. So a
+/// consumer floats it, and the appointment lands at the wall clock in whatever
+/// zone the consumer treats a floating time as. That is the documented cost of the
+/// fallback in `jmap-ical`'s `dated`, and this leg is where it stops being
+/// documented and starts being measured.
+///
+/// A second `example.com` zone rather than a reuse of [`DEFINED_ZONE`] under a
+/// second event, because the two events travel in one refresh: the same identifier
+/// would let the definition one event carries answer for the other, which is a
+/// pass this leg has not earned.
+const UNDEFINED_ZONE: &str = "/example.com/Somewhere-Else";
+
+/// What both of the third leg's events are called, and when they start.
+///
+/// The same wall clock deliberately: with the starts equal, the whole difference
+/// between the instants the two events resolve to is the difference between a zone
+/// that was defined and one that was not. The date is inside CEST, so the defined
+/// zone's second observance applies and the offset is two hours — a definition
+/// libical read only the standard half of would land an hour out, which a
+/// one-observance zone could not distinguish.
+const DEFINED_ZONE_TITLE: &str = "Design review";
+const UNDEFINED_ZONE_TITLE: &str = "Design review, nowhere in particular";
+const ZONE_START: &str = "2026-04-09T10:00:00";
+const ZONE_DURATION: &str = "PT1H";
+
+/// The wall clock EDS should show for both, which is the start above as an
+/// iCalendar `DATE-TIME`.
+const ZONE_DTSTART: &str = "20260409T100000";
+
+/// The instant the defined zone puts that wall clock at, which is the number this
+/// leg exists for: the zone's `DAYLIGHT` observance applies on 2026-04-09, so
+/// 10:00 local is 08:00 UTC. Nothing but a reader of the definition the server sent
+/// can arrive at it — no zone database holds [`DEFINED_ZONE`], and a definition
+/// read only in part would land an hour out.
+const DEFINED_ZONE_DTSTART_UTC: &str = "20260409T080000Z";
+
+/// And what a reader that could not resolve the identifier lands on instead: the
+/// wall clock with a `Z` stamped on it. libical does not adjust a floating time it
+/// converts, so this is the same on every machine — two hours from where the server
+/// put the appointment, and silently.
+///
+/// Both events report it from `i_cal_component_get_dtstart`, and that is not a
+/// failure of either: EDS does not hand a `VTIMEZONE` back beside the event (see
+/// the leg), so libical alone has nothing to resolve a custom identifier against.
+/// For the undefined event it is also the *final* answer, because there is nothing
+/// anywhere that says what its zone is.
+const FLOATING_DTSTART_UTC: &str = "20260409T100000Z";
+
+/// The RFC 8984 §4.7.2 definition the server sends for [`DEFINED_ZONE`]: Central
+/// European Time, stated the way a server converting an invitation's `VTIMEZONE`
+/// would state it.
+///
+/// Both observances, because a zone that moves is only described by both: the
+/// offset a transition moves *from* is the one the other transition moved *to*.
+/// Each carries the yearly rule that repeats it, so the zone applies to a date
+/// half a century after the observance dates itself — which is what makes a 2026
+/// event resolvable out of a 1970 definition at all — and a `TZNAME`, which is
+/// what a reader shows for the offset.
+fn defined_zone() -> serde_json::Value {
+    serde_json::json!({
+        "@type": "TimeZone",
+        "tzId": DEFINED_ZONE,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CEST": true},
+        }],
+    })
+}
+
+/// Put the third leg's two events into the mock's store — one in a zone the event
+/// defines, one in a zone nothing defines — and hand back the ids the server filed
+/// them under, in that order.
+///
+/// Both in one calendar and one seeding, because the leg reads them in one run:
+/// one connect, one refresh, one cache. Two runs would share the session's XDG
+/// directories and so the meta backend's cache, which the harness deliberately
+/// starts empty.
+///
+/// Seeded straight into the store rather than written through EDS for a reason
+/// stronger than [`seed_placed_event`]'s: `jmap-cal-sync` never *writes*
+/// `timeZones`, so no event created through Evolution can carry one. A zone only
+/// the server can name reaches this backend only from a server.
+fn seed_zoned_events(server: &jmap_mock::MockServer) -> (Id, Id) {
+    let account_id = server.account_id();
+    let state = server.state();
+    let mut state = state.lock().expect("mock state lock");
+    let account = state
+        .account_mut(&account_id)
+        .expect("the mock's default account");
+    let calendar = account.seed_calendar("Personal", true);
+
+    let mut seed = |title: &str, zone: &str, definition: Option<serde_json::Value>| {
+        let id = account.calendar_events.alloc_id();
+        let mut event = CalendarEvent::simple(calendar.clone(), title, ZONE_START, ZONE_DURATION);
+        event.id = Some(id.clone());
+        event.uid = Some(format!("urn:example:event:{}", id.as_str()));
+        event.time_zone = Some(zone.to_owned());
+        event.time_zones = definition.map(|definition| [(zone.to_owned(), definition)].into());
+        account.calendar_events.seed_with_id(id.clone(), event);
+        id
+    };
+
+    let defined = seed(DEFINED_ZONE_TITLE, DEFINED_ZONE, Some(defined_zone()));
+    let undefined = seed(UNDEFINED_ZONE_TITLE, UNDEFINED_ZONE, None);
+    (defined, undefined)
+}
+
 /// Put the event the second leg starts from into the mock's store, and hand back
 /// the id the server filed it under — which is also the `UID` EDS keys its cache
 /// on, since that is what `jmap-ical` writes there.
@@ -1734,5 +1888,185 @@ fn retyping_a_place_through_eds_patches_the_entry_the_server_chose() {
         (event.start.as_deref(), event.time_zone.as_deref()),
         (Some(PLACED_START), Some(PLACED_ZONE)),
         "the save restated when the event starts: {event:?}"
+    );
+}
+
+/// The third calendar leg: does the zone a *server* named mean anything to a
+/// libecal consumer?
+///
+/// The second leg answers that for an IANA name, where `jmap-ical` ships no
+/// definition and leans on libical's builtin table. This one answers it for the
+/// identifier that table cannot hold — RFC 8984 §1.4.9's custom `TimeZoneId`,
+/// which only the event's own `timeZones` says anything about. Two things have to
+/// be true for such an event to be shown at the right hour: `jmap-ical` has to draw
+/// a `VTIMEZONE` libical accepts, and everything between it and the consumer —
+/// `jmap-backend-cal`'s marshalling, `ECalMetaBackend`, the D-Bus hop — has to keep
+/// the definition where the consumer can reach it.
+///
+/// Neither can be measured below this file. `jmap-ical`'s own tests compare text
+/// against text, where a definition nobody could build a zone from reads back
+/// exactly like one anybody could; `jmap-backend-cal`'s marshalling tests ask
+/// libical directly, which settles the drawing but not what EDS does with it after.
+/// Only a consumer reading the event back out of EDS asks both at once.
+///
+/// **And where the consumer has to look is the thing this leg measured.** EDS does
+/// *not* hand the `VTIMEZONE` back beside the event: `ECalMetaBackend` gathers the
+/// definitions out of what the backend gave it into the calendar's own timezone
+/// store, and `e_cal_client_get_object_sync` answers with the component alone. So a
+/// consumer that asks libical to resolve the `TZID` — against the component's own
+/// definitions and then the builtin table — resolves nothing and floats the start,
+/// and one that asks the *calendar* for the zone gets it. That is why Evolution's
+/// recurrence and alarm machinery takes a zone-lookup callback, and it is not
+/// something this repository can choose; the leg asserts both answers, so a change
+/// in either is visible.
+///
+/// A second event beside it, in a zone that is named nowhere and defined nowhere,
+/// because the interesting number is a *difference*: one wall clock, two zones,
+/// two instants two hours apart. Without it, an EDS that had thrown the definition
+/// away would still be caught — but nothing would say what that costs, and the cost
+/// is `jmap-ical`'s documented fallback rather than a bug.
+#[test]
+fn the_zone_only_the_server_can_name_reaches_a_consumer_as_the_instant_it_means() {
+    let client = required_path("JMAP_FUNCTIONAL_CAL_ZONE_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_CAL_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let (defined, undefined) = seed_zoned_events(&server);
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/calendar-zone"));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_calendar_backend(&module);
+
+    let output = session.run(
+        &client,
+        &["jmap-functional", defined.as_str(), undefined.as_str()],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect first, for the reason the legs above spell out: a calendar the
+    // backend never opened turns every later failure into a message about the
+    // wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // Which event is which. The client is told two UIDs and reports against
+    // positions, so a leg that had them the other way round would assert the
+    // undefined zone's floating instant against the defined zone's event and pass
+    // — this is what keeps the two apart.
+    assert_eq!(
+        (seen.get("event-1-summary"), seen.get("event-2-summary")),
+        (Some(&DEFINED_ZONE_TITLE), Some(&UNDEFINED_ZONE_TITLE)),
+        "the events EDS handed back are not the two the mock was seeded with, in \
+         the order they were asked for\n{report}"
+    );
+
+    // The event in the zone the server defined. The wall clock says the drawing
+    // arrived, and the identifier says EDS kept the zone the server chose rather
+    // than normalising it into something else — which is also what a save has to
+    // read back for the zone to survive one.
+    assert_eq!(
+        seen.get("event-1-dtstart"),
+        Some(&ZONE_DTSTART),
+        "the wall clock the server holds did not reach the DTSTART line\n{report}"
+    );
+    assert_eq!(
+        seen.get("event-1-dtstart-tzid"),
+        Some(&DEFINED_ZONE),
+        "EDS does not name the server's own zone on the DTSTART it handed back\n{report}"
+    );
+    // And the claim: a consumer resolved an identifier no zone database holds, and
+    // landed on the instant the server means. It can only have done that out of the
+    // definition the event carried, so this one assertion covers the whole path —
+    // `timeZones` read off the wire, drawn as a `VTIMEZONE` libical accepts, kept
+    // through the marshalling and `ECalMetaBackend`, and answered over D-Bus.
+    assert_eq!(
+        (seen.get("event-1-zone-known"), seen.get("event-1-zone-utc")),
+        (Some(&"1"), Some(&DEFINED_ZONE_DTSTART_UTC)),
+        "the calendar could not resolve the zone only the server can name, or \
+         resolved it to another instant than the one the server means: the \
+         definition the event carried is the only thing that says what this zone \
+         is, so this is where a VTIMEZONE that was lost, or that libical would not \
+         read whole, shows up\n{report}"
+    );
+    // Where it is *not* reachable, which is the fact about the platform this leg
+    // pinned down. EDS gathers the definitions into the calendar's timezone store
+    // and answers a get with the component alone, so libical — asked to resolve the
+    // `TZID` against the component and then its builtin table — finds nothing and
+    // floats the start. Asserted rather than left unsaid because a consumer written
+    // the obvious way is two hours out, which is worth having on the record.
+    assert_eq!(
+        seen.get("event-1-definitions"),
+        Some(&"0"),
+        "EDS now hands the VTIMEZONE back beside the event, which is more than it \
+         used to and means a plain libical consumer resolves the zone too\n{report}"
+    );
+    assert_eq!(
+        seen.get("event-1-dtstart-utc"),
+        Some(&FLOATING_DTSTART_UTC),
+        "libical alone no longer floats a start in a zone only the server can \
+         name, so what a consumer that does not ask the calendar sees has \
+         changed\n{report}"
+    );
+
+    // And the event in the zone nothing defines, which is the same four
+    // observations and one different answer. The wall clock and the identifier
+    // arrive exactly as above — the mapping states the zone it was given, since
+    // dropping the parameter would say "no zone at all" and inventing UTC would
+    // say the wrong instant.
+    assert_eq!(
+        seen.get("event-2-dtstart"),
+        Some(&ZONE_DTSTART),
+        "the wall clock the server holds did not reach the second DTSTART \
+         line\n{report}"
+    );
+    assert_eq!(
+        seen.get("event-2-dtstart-tzid"),
+        Some(&UNDEFINED_ZONE),
+        "EDS does not name the zone the server chose on the second DTSTART: a \
+         zone the mapping cannot resolve is still the zone a save has to send \
+         back\n{report}"
+    );
+    assert_eq!(
+        seen.get("event-2-definitions"),
+        Some(&"0"),
+        "something defined a zone the server said nothing about\n{report}"
+    );
+    // The cost, stated as a number. Nothing anywhere says what this zone is, so
+    // the calendar cannot answer for it either and both routes float the start —
+    // the appointment is two hours from where the server put it, identically on
+    // every machine. That is `jmap-ical`'s documented fallback and the best it can
+    // do with what the server sent; the day a server sends better, or this
+    // repository does better with it, these are the assertions that say so.
+    assert_eq!(
+        (
+            seen.get("event-2-zone-known"),
+            seen.get("event-2-zone-utc"),
+            seen.get("event-2-dtstart-utc"),
+        ),
+        (
+            Some(&"0"),
+            Some(&FLOATING_DTSTART_UTC),
+            Some(&FLOATING_DTSTART_UTC)
+        ),
+        "a zone that is named nowhere and defined nowhere no longer floats, which \
+         is a change in what an unresolvable start costs the user\n{report}"
     );
 }

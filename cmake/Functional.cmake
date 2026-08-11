@@ -74,14 +74,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-book-client PRIVATE ${LIBEBOOK_LIBRARIES})
 	target_link_directories(functional-book-client PRIVATE ${LIBEBOOK_LIBRARY_DIRS})
 
-	# Two calendar clients rather than one program with a phase argument,
-	# because they ask opposite questions: cal-client.c creates every event it
-	# looks at, cal-edit-client.c reads one the server already held and saves
-	# it back. See the header of the latter.
-	foreach(_client cal cal-edit)
+	# Three calendar clients rather than one program with a phase argument,
+	# because they ask different questions: cal-client.c creates every event it
+	# looks at, cal-edit-client.c reads one the server already held and saves it
+	# back, and cal-zone-client.c reads without saving, to ask only what instant
+	# an event's zone resolves to. See the header of each.
+	#
+	# event-start.c holds the one function that reports the instant a start
+	# resolves to, so that a difference between what two of these programs answer
+	# is a difference in the event rather than in how it was measured. It is
+	# compiled into all three because that keeps this a single loop; cal-client.c
+	# does not call it, and an unreferenced function costs nothing here.
+	foreach(_client cal cal-edit cal-zone)
 		add_executable(functional-${_client}-client
 			tests/functional/${_client}-client.c
-			tests/functional/connection-status.c)
+			tests/functional/connection-status.c
+			tests/functional/event-start.c)
 		target_include_directories(functional-${_client}-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
 		target_compile_options(functional-${_client}-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
 		target_link_libraries(functional-${_client}-client PRIVATE ${LIBECAL_LIBRARIES})
@@ -153,7 +161,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		LABELS functional
 		TIMEOUT 300
 		ENVIRONMENT
-			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_EDIT_CLIENT=$<TARGET_FILE:functional-cal-edit-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_EDIT_CLIENT=$<TARGET_FILE:functional-cal-edit-client>;JMAP_FUNCTIONAL_CAL_ZONE_CLIENT=$<TARGET_FILE:functional-cal-zone-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# The mail leg needs a third path the other two do not: the `.urls` file,

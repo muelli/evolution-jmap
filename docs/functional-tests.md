@@ -698,6 +698,82 @@ client casts the libical C enumerator. That edit is what another client on the
 same account does; the mapping has a path for it, and this is what says the path
 works through real EDS.
 
+### The third calendar leg: the zone only the server can name
+
+`the_zone_only_the_server_can_name_reaches_a_consumer_as_the_instant_it_means`,
+against `tests/functional/cal-zone-client.c` — a third client program, and the
+smallest, because it writes nothing. The two legs above ask what reaches the
+server; this one asks a single question about what reaches the *user*: is the
+appointment shown at the hour the server put it at?
+
+RFC 8984 §1.4.9 lets an event's `timeZone` be either an IANA name or a custom
+identifier beginning with a solidus **that the event's own `timeZones` (§4.7.2)
+defines** — the second is what a server invents for a zone no database names, such
+as the one an Outlook invitation carries its own `VTIMEZONE` for, so it arrives on
+any account holding a meeting somebody organised there. The leg seeds two events at
+the same wall clock, 10:00 on 2026-04-09, and gives them different zones:
+
+- one in `/example.com/Europe-Berlin`, with a full §4.7.2 definition — both
+  observances, the offsets on either side of each, the yearly rule that repeats
+  them and a `TZNAME`; and
+- one in `/example.com/Somewhere-Else`, with **no** definition at all, which is
+  what a server sends when it has a zone it cannot describe.
+
+The tail of the first identifier is `Europe-Berlin` and not `Europe/Berlin` on
+purpose: libical looks a location up in its own table, so an identifier whose tail
+*was* an IANA location could resolve out of the table and the leg would pass
+without the definition being read. Both are seeded straight into the mock rather
+than written through EDS, and here that is not a convenience — `jmap-cal-sync`
+never writes `timeZones`, so no event created in Evolution can carry one. A zone
+only a server can name reaches this backend only from a server.
+
+For each event the client reports the wall clock on the `DTSTART`, the `TZID`
+verbatim, how many `VTIMEZONE`s stand beside the event, and the instant the start
+means — asked **twice**, which is what this leg discovered and the reason it is a
+program of its own:
+
+- `i_cal_component_get_dtstart`, which resolves a `TZID` the way libical does: the
+  enclosing component's own definitions first, then the builtin table. For a custom
+  identifier that finds nothing, and libical does not adjust a floating time it
+  converts, so the start reports the wall clock with a `Z` stamped on it — **10:00
+  UTC, two hours from where the server put it**, identically on every machine.
+- `e_cal_client_get_timezone_sync`, which asks the *calendar* for the zone. This is
+  where the definition is: `ECalMetaBackend` gathers the `VTIMEZONE`s out of what
+  the backend gave it into the calendar's own timezone store, and
+  `e_cal_client_get_object_sync` then answers with the component **alone** — the
+  observation count is `0`, for both events and for the builtin-zone event of the
+  leg above. So a consumer written the obvious way is two hours out, and one that
+  asks the calendar lands on **08:00 UTC**, the instant the server means. That is
+  why Evolution's recurrence and alarm machinery takes a zone-lookup callback, and
+  it is not something this repository chooses.
+
+What it asserts: for the defined zone, that the wall clock and the identifier
+arrived unchanged, that the calendar knows the zone and resolves the start to
+08:00Z — one assertion covering the whole path, since nothing but a reader of the
+definition the event carried can arrive at that number — and, separately, that
+libical alone still floats it and that EDS still hands back no `VTIMEZONE`, so a
+change in either is visible rather than silent. For the undefined zone, that the
+`TZID` is still stated (dropping it would say "no zone at all" and inventing UTC
+would say the wrong instant, so the mapping states what it was given), that neither
+route can resolve it, and that the start therefore floats to 10:00Z. That last
+number is nobody's idea of correct; it is `jmap-ical`'s documented fallback, and
+the assertion is what will fail on the day a server sends better or this repository
+does better with it.
+
+Three mutations have been run against it: never drawing the `VTIMEZONE`, which
+leaves the calendar unable to name the zone and both routes floating; drawing only
+the `STANDARD` observance, which is the "half a definition is worse than none"
+case made concrete — libical builds a zone from it happily and resolves the start
+to **09:00Z**, confidently one hour out, which is exactly why the mapping draws a
+definition whole or not at all; and swapping the two events on the command line,
+which reddens the summary check that keeps the floating assertions off the defined
+event.
+
+`tests/functional/event-start.c` holds the function both this program and
+`cal-edit-client.c` report the instant through. Shared rather than copied because
+the two legs exist to be compared: a difference between their answers should be a
+difference in the event, not in how it was measured.
+
 ## What the mail test asserts
 
 `rust/crates/jmap-functional/tests/mail.rs`, against

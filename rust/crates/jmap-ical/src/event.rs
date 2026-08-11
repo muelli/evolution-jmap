@@ -1386,6 +1386,13 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
 /// So the identifiers this crate cannot name are exactly the ones it defines,
 /// which is [`names_time_zone`] used the other way round.
 ///
+/// Measured end to end, not assumed: `jmap-functional`'s third calendar leg seeds
+/// such an event on the mock and holds a libecal consumer to the instant the server
+/// means, two hours from where a floating start would land. What it also measured is
+/// where the definition ends up — EDS gathers it into the calendar's own timezone
+/// store rather than handing it back beside the event, so only a consumer that asks
+/// the calendar for the zone resolves the identifier.
+///
 /// One definition is all a document ever needs, however many components it holds.
 /// The `TZID`s on it are the series' zone and — for an instance that moved into
 /// one of its own — the instance's, and [`maps_override_field`] admits only a
@@ -1911,7 +1918,9 @@ fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> 
         // floating one would land. A zone with no name to resolve is defined in
         // the document instead where the event says what it is (see
         // [`drawn_time_zone`]); one that is neither still falls back to floating
-        // on the consumer's side, which is the same guess we would have to make.
+        // on the consumer's side, which is the same guess we would have to make —
+        // measured too, in the same leg, as an appointment two hours from where
+        // the server put it.
         (false, Some(zone)) => Property::raw(name, &join(&String::clone)).with_param("TZID", zone),
         // Form 1, floating. Inventing UTC here would move the event.
         (false, None) => Property::raw(name, &join(&String::clone)),
