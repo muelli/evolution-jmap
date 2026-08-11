@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
-//! address book backend needs: UID, FN, N, EMAIL, TEL, ORG.
+//! address book backend needs: UID, FN, N, EMAIL, TEL, ORG, TITLE, ROLE.
 
 use jmap_proto::contacts::{
-    ContactCard, ContactEmail, ContactPhone, Name, NameComponent, OrgUnit, Organization,
+    ContactCard, ContactEmail, ContactPhone, Name, NameComponent, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::json;
@@ -363,6 +363,88 @@ fn invents_a_key_for_an_organization_that_has_none() {
         organizations["o1"].units,
         Some(vec![OrgUnit::new("Research")])
     );
+}
+
+#[test]
+fn maps_titles_onto_title_and_role_by_their_kind() {
+    // RFC 9553 §2.2.4 holds the job title and the role played in one map,
+    // told apart by `kind`; vCard 3.0 has a property for each (RFC 2426
+    // §§3.5.1–3.5.2).
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(
+        line(&vcard, "TITLE"),
+        "TITLE;X-JMAP-KEY=t1:Research Scientist"
+    );
+    assert_eq!(line(&vcard, "ROLE"), "ROLE;X-JMAP-KEY=t2:Project Lead");
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let titles = card.titles.expect("titles");
+    assert_eq!(titles["t1"].name, "Research Scientist");
+    assert_eq!(
+        titles["t1"].kind, None,
+        "`title` is the default kind, so the card leaves it unsaid"
+    );
+    assert_eq!(titles["t2"].name, "Project Lead");
+    assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
+}
+
+#[test]
+fn a_title_of_a_kind_vcard_has_no_property_for_is_dropped() {
+    // RFC 9553 §2.2.4 allows vendor kinds besides `title` and `role`, and
+    // vCard 3.0 has nowhere to put one. Writing it as a TITLE would tell the
+    // user it is their job title, which it is not.
+    let card = ContactCard {
+        titles: Some(
+            [(
+                "t1".to_owned(),
+                Title {
+                    name: "Knight of the Realm".to_owned(),
+                    kind: Some("x-honour".to_owned()),
+                    ..Title::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(!vcard.contains("Knight"), "{vcard}");
+    assert!(!vcard.contains("\r\nTITLE"), "{vcard}");
+    assert!(!vcard.contains("\r\nROLE"), "{vcard}");
+}
+
+#[test]
+fn a_title_with_no_name_is_skipped_in_both_directions() {
+    let card = ContactCard {
+        titles: Some([("t1".to_owned(), Title::default())].into()),
+        ..ContactCard::default()
+    };
+    assert!(!card_to_vcard(&card).contains("\r\nTITLE"));
+
+    let back =
+        vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nTITLE:\r\nEND:VCARD\r\n").expect("parse");
+    assert_eq!(back.titles, None);
+}
+
+#[test]
+fn invents_a_key_for_a_title_that_has_none() {
+    // A vCard straight from Evolution carries no X-JMAP-KEY, and its two
+    // separate fields land in one JSContact map.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "TITLE:Research Scientist\r\n",
+        "ROLE:Project Lead\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let titles = card.titles.expect("titles");
+    assert_eq!(titles.keys().collect::<Vec<_>>(), vec!["t1", "t2"]);
+    assert_eq!(titles["t1"].name, "Research Scientist");
+    assert_eq!(titles["t1"].kind, None);
+    assert_eq!(titles["t2"].name, "Project Lead");
+    assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
 }
 
 #[test]

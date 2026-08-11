@@ -28,6 +28,10 @@
   "organizations": {
     "o1": {"name": "Example GmbH"}
   },
+  "titles": {
+    "t1": {"@type": "Title", "name": "Research Scientist"},
+    "t2": {"@type": "Title", "name": "Project Lead", "kind": "role"}
+  },
   "notes": {
     "n1": {"note": "met at FOSDEM"}
   }
