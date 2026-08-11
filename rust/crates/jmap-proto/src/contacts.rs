@@ -119,6 +119,13 @@ pub struct ContactCard {
     /// write the property back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<BTreeMap<String, Value>>,
+    /// The other entities this one relates to (RFC 9553 §2.1.8), keyed — unlike
+    /// every other JSContact map here — by *who the related entity is* rather
+    /// than by an id of whoever wrote the entry. vCard 3.0 states none of the
+    /// relations; the one Evolution has a field for is the spouse, on the `X-`
+    /// line EDS keeps `E_CONTACT_SPOUSE` on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_to: Option<BTreeMap<String, Relation>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -532,6 +539,33 @@ pub struct OnlineService {
     /// not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact Relation (RFC 9553 §2.1.8): how one related entity relates to
+/// the contact.
+///
+/// The entity itself is the map key over in [`ContactCard::related_to`] — RFC
+/// 9553 §2.1.8 makes it the related Card's `uid`, and RFC 9555 §2.9.5 puts free
+/// text there for a vCard `RELATED;VALUE=text`, which is the case that holds a
+/// name a user could read. So a Relation object carries no identity of its own
+/// and there is nothing else on it to model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Relation {
+    /// The relation types the entity stands in, an RFC 9553 §1.4.3 Set: the
+    /// keys are the types — `spouse`, `child`, `colleague`, … — and every value
+    /// is `true`. An empty set, which RFC 9555 §2.9.5's example produces from a
+    /// `RELATED` line carrying no `TYPE`, means the relation is unspecified.
+    ///
+    /// The values are left as JSON rather than as `bool` for the reason
+    /// [`ContactCard::keywords`] gives: a whole `ContactCard/get` response is
+    /// deserialized at once, so a server answering `{"spouse": 1}` for one card
+    /// must not cost the user the whole address book. The odd entry stays
+    /// visible as itself and the vCard mapping refuses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

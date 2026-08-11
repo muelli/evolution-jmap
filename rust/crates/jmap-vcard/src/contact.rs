@@ -5,8 +5,8 @@
 //!
 //! The mapped set is deliberately the one the address book backend needs to
 //! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
-//! NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the instant-messaging
-//! `X-` lines —
+//! NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the `X-` lines EDS
+//! keeps instant-messaging handles and the spouse on —
 //! and no more. Everything else on a card (preferred languages, the crypto keys
 //! it lists, what the contact is spoken to as, …) is *dropped*, which is only
 //! safe because saving goes back to the server as a PatchObject naming the
@@ -173,6 +173,26 @@
 //! does for a date line (measured against libebook-contacts 3.52) — so the entry
 //! a chosen picture belongs to is found by pairing rather than by key, which is
 //! `jmap-book-sync`'s `diff_media`.
+//!
+//! `relatedTo` is the one property whose *key* is what crosses. RFC 9553 §2.1.8
+//! keys the entities a card relates to by the related Card's `uid` and says how
+//! each relates in a set of types; vCard 3.0 has no `RELATED` — RFC 6350 §6.6.6
+//! is 4.0 — and of the twenty types, `spouse` is the one Evolution has a field
+//! for, on the line EDS keeps `E_CONTACT_SPOUSE` on
+//! ([`X_EVOLUTION_SPOUSE`]). The value on that line is the person's *name*, and
+//! the only place a name can be is the key: RFC 9555 §2.9.5 is what says a key
+//! may hold free text rather than an identifier, since that is what a vCard
+//! `RELATED;VALUE=text` becomes. So an entry keyed by a URI has no line — a URN
+//! shown under the heading "Spouse" would be written back as the person's name by
+//! the next save — and neither has one keyed by a name EDS would respell, which
+//! for this property is not merely a rename but a *different entry*. See
+//! [`states_spouse`].
+//!
+//! Which also makes it the one property that carries no [`X_JMAP_KEY`]: there is
+//! nothing for the parameter to say that the value does not. The reader takes the
+//! key off the line's own text, so nothing is invented and no key has to survive
+//! Evolution — but a marriage the user retypes arrives under a key the server
+//! never had, which is the save's problem rather than this layer's.
 
 use std::collections::BTreeMap;
 
@@ -180,7 +200,8 @@ use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as BASE64, STANDARD_NO_PAD as BASE64_UNPADDED};
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
-    Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
+    Relation, Title,
 };
 use serde_json::{Map, Value, json};
 
@@ -355,6 +376,25 @@ const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
 const ANNIVERSARY_KINDS: [(&str, &str); 2] =
     [("birth", "BDAY"), ("wedding", X_EVOLUTION_ANNIVERSARY)];
 
+/// The line EDS keeps `E_CONTACT_SPOUSE` on — the field Evolution's contact
+/// editor labels "Spouse".
+///
+/// vCard 3.0 has no property for a relation at all: RFC 6350 §6.6.6's `RELATED`
+/// is vCard 4.0, which `e_contact_new_from_vcard()` is not given. So this is not
+/// a shortcut past a standard line, it is the only line there is — and it is the
+/// one EDS reads the field off and writes it back onto, measured against
+/// libebook-contacts 3.52.
+const X_EVOLUTION_SPOUSE: &str = "X-EVOLUTION-SPOUSE";
+
+/// The one RFC 9553 §2.1.8 relation type this mapping states.
+///
+/// Nineteen of the twenty are missing on purpose: no vCard 3.0 property and no
+/// EDS field states them, and a name on the spouse line would tell the user
+/// something the card never said. Evolution's Manager and Assistant fields are
+/// the near misses and have no type either — §2.1.8's `agent` is whoever acts on
+/// the contact's behalf, which is wider than an assistant.
+const SPOUSE_RELATION: &str = "spouse";
+
 /// JSContact calendar `kind` values and the vCard property stating each.
 ///
 /// RFC 9555 §2.13.2 and §2.13.3 pair them: `calendar` with RFC 6350 §6.9.3's
@@ -523,6 +563,67 @@ fn calendar_kind(property: &str) -> Option<&'static str> {
         .iter()
         .find(|(_, name)| *name == property)
         .map(|(kind, _)| *kind)
+}
+
+/// Whether a related entity reaches the user at all, `key` being the entry's
+/// own — which is here the entity itself rather than an id of whoever wrote the
+/// entry.
+///
+/// Two things have to hold at once:
+///
+/// - **the relation must say `spouse`.** It is the one type of the twenty RFC
+///   9553 §2.1.8 lists that Evolution has a field for; see [`SPOUSE_RELATION`].
+///   An entry stating several types still crosses on the strength of that one,
+///   and an entry stating none — which RFC 9555 §2.9.5 reads a `RELATED` line
+///   carrying no `TYPE` into — states no marriage and gets no line.
+/// - **the key must be a name EDS gives back unchanged.** RFC 9553 §2.1.8 keys
+///   the map by the related Card's `uid`, and RFC 9555 §2.9.5 puts free text
+///   there where the vCard stated a `RELATED;VALUE=text` — so a key that names a
+///   URI holds an identifier, not a person, and writing it on the line would
+///   show the user a URN under the heading "Spouse" and have the next save write
+///   it back as the person's name. And because the key *is* the value here, a
+///   name EDS respells is a *different entry* to the save: it would delete the
+///   relation the server holds and add one under the new key. The empty name,
+///   ends made of ASCII whitespace — trimmed by EDS, measured against
+///   libebook-contacts 3.52, as they are on an instant-messaging handle — and a
+///   carriage return, dropped by [`crate::syntax::write`], are each that case.
+pub fn states_spouse(key: &str, relation: &Relation) -> bool {
+    married(relation) && names_a_person(key)
+}
+
+/// Whether a relation states the one type that has a line.
+fn married(relation: &Relation) -> bool {
+    relation
+        .relation
+        .as_ref()
+        .and_then(|types| types.get(SPOUSE_RELATION))
+        == Some(&Value::Bool(true))
+}
+
+/// Whether a `relatedTo` key is a name a line can show the user and a save can
+/// read back out unchanged.
+fn names_a_person(key: &str) -> bool {
+    !key.is_empty() && !names_a_uri(key) && !edged_with_whitespace(key) && !key.contains('\r')
+}
+
+/// Whether a value is a URI rather than free text, by RFC 3986 §3.1's grammar
+/// for the scheme: an ASCII letter, then letters, digits, `+`, `-` and `.`, then
+/// the colon.
+///
+/// Checking the grammar rather than looking for a colon is what keeps a name
+/// from being mistaken for an identifier: `Jean Paul: the second` holds a colon
+/// and no scheme.
+fn names_a_uri(value: &str) -> bool {
+    let Some((scheme, _)) = value.split_once(':') else {
+        return false;
+    };
+    let mut characters = scheme.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+        })
 }
 
 /// Whether a media entry reaches the user at all: it must be a photo, and the
@@ -1246,6 +1347,19 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         properties.push(Property::new(name, &date).with_param(X_JMAP_KEY, key));
     }
 
+    // The spouse, on the line EDS keeps that field on — and with no key on it,
+    // which no other keyed map here can do: RFC 9553 §2.1.8 keys `relatedTo` by
+    // the related entity, so the name on the line *is* the entry's key and there
+    // is nothing left for an X-JMAP-KEY to say. Every other relation, and every
+    // entity named by a UID rather than by name, gets no line: see
+    // [`states_spouse`].
+    for (key, relation) in card.related_to.iter().flatten() {
+        if !states_spouse(key, relation) {
+            continue;
+        }
+        properties.push(Property::new(X_EVOLUTION_SPOUSE, key));
+    }
+
     // The whole set on one line, which is all EDS reads, and with no key on it:
     // a tag is its own identity. Empty when every tag the card holds is one the
     // line cannot carry — see [`states_keyword`] — and then there is no line,
@@ -1287,6 +1401,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut calendars = BTreeMap::new();
     let mut media = BTreeMap::new();
     let mut online_services = BTreeMap::new();
+    let mut related_to = BTreeMap::new();
 
     for property in &properties {
         match property.name.as_str() {
@@ -1395,6 +1510,17 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 media.insert(entry_key(property, "m", &media), photo);
             }
+            // Every line of the name, not only the first EDS shows the user: a
+            // relation nobody can edit is still one a save must not delete. The
+            // key is the line's own text, so nothing is invented and an
+            // X-JMAP-KEY, if some other client wrote one, is not read.
+            X_EVOLUTION_SPOUSE => {
+                let (key, relation) = spouse_named(property);
+                if !states_spouse(&key, &relation) {
+                    continue;
+                }
+                related_to.insert(key, relation);
+            }
             "BDAY" | X_EVOLUTION_ANNIVERSARY => {
                 let Some(anniversary) = read_anniversary(property) else {
                     continue;
@@ -1470,6 +1596,10 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         media: (!media.is_empty()).then_some(media),
         online_services: (!online_services.is_empty()).then_some(online_services),
         keywords: read_keywords(&properties),
+        // Only the marriages: `spouse` is the one relation type with a line, so
+        // every other entity the card relates to is read back by nothing and
+        // left to the save to patch around.
+        related_to: (!related_to.is_empty()).then_some(related_to),
         extra: BTreeMap::new(),
     })
 }
@@ -1560,6 +1690,21 @@ fn read_title(property: &Property) -> Option<Title> {
         kind: kind.map(str::to_owned),
         extra: BTreeMap::new(),
     })
+}
+
+/// The `relatedTo` entry a spouse line states: the name it holds, and the
+/// marriage that is all the line says about it.
+///
+/// Returned as a pair rather than filtered here, so that [`states_spouse`] is
+/// the single point this and [`card_to_vcard`] agree through — a name that could
+/// not be written on the line is not read back off one either, or the save would
+/// create an entry the emitter can never draw again.
+fn spouse_named(property: &Property) -> (String, Relation) {
+    let relation = Relation {
+        relation: Some([(SPOUSE_RELATION.to_owned(), Value::Bool(true))].into()),
+        extra: BTreeMap::new(),
+    };
+    (property.text(), relation)
 }
 
 /// The anniversary a date line states, or `None` for a line no calendar day
