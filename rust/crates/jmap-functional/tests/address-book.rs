@@ -9,8 +9,14 @@
 //! client program says what EDS gave a libebook consumer, the mock says what
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
+//!
+//! Two legs, because they need two books. The first starts empty and writes a
+//! contact into it. The second starts from a card the mock was seeded with
+//! before EDS ever connected — a card from the *server*, holding a shape no
+//! vCard can state, which is the only way to ask what real EDS does to it.
 
 use jmap_functional::{Session, observations, required_path};
+use jmap_proto::contacts::{ContactCard, Name, NameComponent};
 
 /// The contact the client writes. One string, passed to the client on its
 /// command line and looked for in the mock's store, so the two ends cannot
@@ -152,7 +158,7 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
     session.write_source("jmap-functional", &keyfile(port));
     session.stage_address_book_backend(&module);
 
-    let output = session.run(&client, &["jmap-functional", FULL_NAME]);
+    let output = session.run(&client, &["jmap-functional", "write", FULL_NAME]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
@@ -532,6 +538,219 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
             "month": BIRTH_MONTH,
             "day": BIRTH_DAY,
         })),
+        "{card:?}"
+    );
+}
+
+/// The name the second leg is about: a double-barrelled given name, which RFC
+/// 9553 §2.2.1 states as **two** `given` components. The vCard `N` value has
+/// one field per kind, so the emitter joins them with a space and EDS is handed
+/// `N:Oldenburg;Jean Paul;;;` — one string where the server holds two parts.
+const EDITED_SURNAME: &str = "Oldenburg";
+/// The two halves, each with the pronunciation the server keeps for it. A
+/// `phonetic` has no `N` field at all, so it is the part of the card that is
+/// invisible to the user and therefore cannot have been edited by one: it is
+/// gone only if the save deleted it.
+const EDITED_GIVEN_PARTS: [(&str, &str); 2] = [("Jean", "zhon"), ("Paul", "pol")];
+/// What EDS is expected to hand back for the given name: the two parts joined,
+/// byte for byte as the emitter wrote them. This is the load-bearing claim of
+/// the leg — the backend puts the components back by recognising that the field
+/// still reads as its parts joined, which is a *string* comparison against this
+/// text. If EDS normalised the whitespace in it, a name nobody touched would
+/// read as retyped and both halves would be replaced by the field's text.
+const EDITED_GIVEN_FIELD: &str = "Jean Paul";
+const EDITED_FULL_NAME: &str = "Jean Paul Oldenburg";
+/// The one field the user edits, before and after. Deliberately not part of the
+/// name: whatever the save then does to the name is something nobody asked for.
+const EDITED_EMAIL_BEFORE: &str = "jp@example.com";
+const EDITED_EMAIL_AFTER: &str = "jp@example.org";
+
+#[test]
+fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    // Seeded straight into the mock's store rather than written through EDS,
+    // because the shape under test is one no vCard can state: a card created
+    // through EDS would arrive with the given name as a single component,
+    // leaving nothing for the save to put back.
+    let card_id = {
+        let state = server.state();
+        let mut state = state.lock().expect("mock state lock");
+        let account = state
+            .account_mut(&account_id)
+            .expect("the mock's default account");
+        let book = account.seed_address_book("Personal", true);
+
+        let mut components = vec![NameComponent::new("surname", EDITED_SURNAME)];
+        for (value, phonetic) in EDITED_GIVEN_PARTS {
+            let mut component = NameComponent::new("given", value);
+            component
+                .extra
+                .insert("phonetic".to_owned(), serde_json::json!(phonetic));
+            components.push(component);
+        }
+
+        let id = account.contact_cards.alloc_id();
+        let mut card = ContactCard::simple(book, EDITED_FULL_NAME, EDITED_EMAIL_BEFORE);
+        card.id = Some(id.clone());
+        // What a server assigns; the mock's own `ContactCard/set` fills the
+        // same shape in, and seeding bypasses it.
+        card.uid = Some(format!("urn:example:card:{}", id.as_str()));
+        card.name = Some(Name {
+            full: Some(EDITED_FULL_NAME.to_owned()),
+            components: Some(components),
+            ..Name::default()
+        });
+        account.contact_cards.seed_with_id(id.clone(), card);
+        id
+    };
+
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/address-book-edit"));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    // The contact is named to the client by its JMAP id, which is what the
+    // backend hands EDS as the vCard `UID`.
+    let output = session.run(
+        &client,
+        &[
+            "jmap-functional",
+            "edit",
+            card_id.as_str(),
+            EDITED_EMAIL_AFTER,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // What EDS made of the `N` line the backend wrote: the two components
+    // joined into the single field their kind owns.
+    assert_eq!(
+        seen.get("read-full-name"),
+        Some(&EDITED_FULL_NAME),
+        "the contact EDS handed back is not the seeded one\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-given-name"),
+        Some(&EDITED_GIVEN_FIELD),
+        "EDS did not hand back the given name the emitter wrote\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-family-name"),
+        Some(&EDITED_SURNAME),
+        "EDS did not hand back the surname the emitter wrote\n{report}"
+    );
+
+    // And after the save: the edit took, and EDS's own view of the name is
+    // still the text it started from rather than something the save rewrote.
+    assert_eq!(
+        seen.get("read-back-email"),
+        Some(&EDITED_EMAIL_AFTER),
+        "the edit did not reach EDS's cache\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-given-name"),
+        Some(&EDITED_GIVEN_FIELD),
+        "the save changed the given name nobody edited\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-family-name"),
+        Some(&EDITED_SURNAME),
+        "the save changed the surname nobody edited\n{report}"
+    );
+
+    // The other end: the card the server now holds. The name components are
+    // the whole point — both halves, in the order they went out in, each still
+    // carrying the pronunciation the `N` line had no room for.
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the edit never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    let components = card
+        .name
+        .as_ref()
+        .and_then(|name| name.components.as_ref())
+        .unwrap_or_else(|| panic!("the card on the server lost its name: {card:?}"));
+    let stated: Vec<(&str, &str, Option<&str>)> = components
+        .iter()
+        .map(|component| {
+            (
+                component.kind.as_str(),
+                component.value.as_str(),
+                component
+                    .extra
+                    .get("phonetic")
+                    .and_then(|phonetic| phonetic.as_str()),
+            )
+        })
+        .collect();
+    let mut expected: Vec<(&str, &str, Option<&str>)> = vec![("surname", EDITED_SURNAME, None)];
+    for (value, phonetic) in EDITED_GIVEN_PARTS {
+        expected.push(("given", value, Some(phonetic)));
+    }
+    assert_eq!(
+        stated, expected,
+        "an edit to the email address rewrote the name: {card:?}"
+    );
+    assert_eq!(
+        card.name.as_ref().and_then(|name| name.full.as_deref()),
+        Some(EDITED_FULL_NAME),
+        "{card:?}"
+    );
+    // And the edit itself, at this end: patched in place, not re-added.
+    let emails = card
+        .emails
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server lost its email: {card:?}"));
+    assert_eq!(
+        emails
+            .values()
+            .map(|email| email.address.as_str())
+            .collect::<Vec<_>>(),
+        vec![EDITED_EMAIL_AFTER],
         "{card:?}"
     );
 }
