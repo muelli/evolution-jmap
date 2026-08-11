@@ -21573,3 +21573,114 @@ between the Home and Work slots at all is unknown; a `VALUE=uri` photo's renderi
 is unmeasured; what Evolution's contact editor writes for a replaced photo, and into
 a cleared field, is inferred rather than measured; and the `jmap-mail` `transport.rs`
 hang is still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-11 (two-hundred-and-twelfth session)
+
+**The other half of the custom zone: what a save costs it.** Last session measured
+the instant a consumer computes for an event in a zone only its server can name —
+08:00Z out of the calendar's own timezone store, 10:00Z if the consumer asks libical
+alone — and closed by naming the half it had not measured: a save. A zone that is
+resolvable until the first time the user renames the appointment is not resolvable,
+and the whole chain of "seen in part, so not written back" decisions that keeps it
+resolvable — `jmap-ical` reading an unnameable `TZID` back *unchanged* rather than as
+nothing, `patch::diff` leaving `timeZone` out of the patch rather than sending an
+iCalendar identifier or clearing the property, and `timeZones` never being written at
+all — was measured only by fixtures, where every one of those decisions is a
+comparison of text against text.
+
+**One edit, because there is only one.** `cal-zone-client.c` now retypes the
+`SUMMARY` of the first event it was given, saves it with
+`e_cal_client_modify_object_sync`, and reports the same observations again under
+`saved`. The title is the *only* edit an event in a custom zone can be given here:
+Evolution offers no control for redefining a zone, and this mapping would refuse to
+send a redefinition if it did. That is also what makes it the right edit — it has
+nothing to do with the zone, so anything that happens to the zone is something the
+save did on its own. An edit that restated the clock could not tell "the zone
+survived" from "the start was re-sent in a way that happened to agree".
+
+The save lives in this program rather than in `cal-edit-client.c` for the reason
+that program exists: it insists on finding a place, a conference and an attachment
+to retype, and this event has none. It lives in the *same run* as the read, and not
+in a second leg, because the cache the read filled is the cache the save is made
+against — a second run would share the session's XDG directories and so the meta
+backend's cache, which the harness deliberately starts empty. The header's old
+claim that the program writes nothing "and that is the point" is gone; the point was
+never the not-writing, it was that reading and saving are two halves of one
+question.
+
+**It went green on the first run, so the work was the mutations.** Two, and between
+them they say which end each assertion belongs to.
+
+Adding `"timeZones": null` to the patch — the shape of a save that writes back
+everything the mapping knows about, which is not everything the server holds —
+reddens the server-side assertion **only**. Within one session the consumer still
+resolves the zone to 08:00Z, because `ECalMetaBackend` gathered the definition into
+the calendar's timezone store during the first read and `e_cal_client_get_timezone_sync`
+answers out of *that*, not out of anything the server still holds. So destroying a
+server-side definition is invisible from the client until a cache is filled fresh —
+which is exactly why this leg asserts the mock's own `timeZones` rather than
+inferring it from what EDS says.
+
+Clearing the zone the mapping cannot name — `timeZone: null`, the plausible reading
+of "we cannot express it, so it is nothing" — reddens the consumer's pair
+immediately and loudly: the `TZID` is gone from the `DTSTART`, the calendar can no
+longer name a zone for it, and the appointment the user only *renamed* floats to
+10:00Z. Two hours, from a rename. That is the bug the guard in `patch::diff` exists
+for, and now it is measured from the side the user is on.
+
+A third mutation was tried and is worth recording as a *non*-finding: making
+`jmap-ical`'s `zone_of` drop an unnameable `TZID` instead of handing it back
+changes nothing at all. `patch::diff` builds its baseline by putting the server's
+own event through the same round trip, so a reader that misreads a zone misreads it
+identically on both sides and the diff comes out empty. The guard against that class
+of change is the pair of server-side assertions, not a mutation of the reader.
+
+**No production code changed.** This is a measurement of behaviour that was already
+right; the increment is that it is now pinned down through real EDS rather than
+argued for in doc comments. `docs/functional-tests.md`'s section on the third
+calendar leg is rewritten to match, including the two mutation results above, and
+`calendar.rs`'s module doc no longer says the file holds two legs.
+
+Tests: 1012 in the default set, unchanged — the work is in `jmap-functional`, which
+runs under `ctest`, where the calendar leg's third test grew a save.
+
+Verified locally: full `ninja`, then `ctest -L functional` 4/4 green, and the C
+build emits no warning; `cargo test --locked` 1012; `cargo fmt --all --check`
+clean; `cargo clippy --workspace --exclude example-module --all-targets --locked --
+-D warnings` and `cargo clippy -p jmap-functional --all-targets --locked -- -D
+warnings` clean. `ci/checks.sh` still stops at its first step on this VM — no
+`reuse`, no `pipx`, no `uvx` — so the licence check was done by hand: no file is
+added, and the four touched files (`tests/functional/cal-zone-client.c`,
+`rust/crates/jmap-functional/tests/calendar.rs`, `cmake/Functional.cmake`,
+`docs/functional-tests.md`) each carry an SPDX `GPL-3.0-or-later` header. No
+translatable string is introduced; `Cargo.lock` is unchanged, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+**What this still does not settle.** An edit to the *clock* of an event in a custom
+zone is still unmeasured through real EDS: the mapping sends `start` and withholds
+`timeZone`, which is right on paper, but what EDS's cache does to a `DTEND` beside a
+`DTSTART` it cannot resolve is not something fixtures can answer. Nothing is read
+back from a `VTIMEZONE` into `timeZones`, so a document another client wrote a
+custom zone into still names a zone the save cannot send — unchanged, and now the
+only unmeasured direction of the custom-zone story. And whether Evolution's own
+views put such an event at 10:00 Berlin time remains inference: the leg proves the
+zone is reachable by the API Evolution's machinery uses, not that every screen in
+Evolution uses it.
+
+No milestone tag. Removed from the blocker list: a save made to an event in a custom
+zone is measured through real EDS. Unchanged blockers: the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `example-module` does not pass this VM's clippy
+(1.97) on unmodified master, 26 `manual_c_str_literals`; `docs/MILESTONES.md` does
+not exist, so the M8 tag is still unwritten; the manual-test recipes are unlinked
+from the README; `jmap-mail`'s rustdoc is dirty; an attachment the user removes is
+still invisible to the save; whether Evolution renders an `IMAGE` is unmeasured; the
+multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified; the two
+`LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone are
+still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's rendering is
+unmeasured; what Evolution's contact editor writes for a replaced photo, and into a
+cleared field, is inferred rather than measured; and the `jmap-mail` `transport.rs`
+hang is still an open design question with a lock-order hypothesis attached.

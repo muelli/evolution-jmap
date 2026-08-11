@@ -700,11 +700,13 @@ works through real EDS.
 
 ### The third calendar leg: the zone only the server can name
 
-`the_zone_only_the_server_can_name_reaches_a_consumer_as_the_instant_it_means`,
-against `tests/functional/cal-zone-client.c` — a third client program, and the
-smallest, because it writes nothing. The two legs above ask what reaches the
-server; this one asks a single question about what reaches the *user*: is the
-appointment shown at the hour the server put it at?
+`the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move`,
+against `tests/functional/cal-zone-client.c` — a third client program. The two
+legs above ask what reaches the server; this one starts from the other end, with a
+question about what reaches the *user*: is the appointment shown at the hour the
+server put it at? And then, once that is answered, it renames the appointment and
+asks it again — because a zone that is resolvable until the first ordinary edit is
+not resolvable.
 
 RFC 8984 §1.4.9 lets an event's `timeZone` be either an IANA name or a custom
 identifier beginning with a solidus **that the event's own `timeZones` (§4.7.2)
@@ -760,9 +762,43 @@ number is nobody's idea of correct; it is `jmap-ical`'s documented fallback, and
 the assertion is what will fail on the day a server sends better or this repository
 does better with it.
 
-Three mutations have been run against it: never drawing the `VTIMEZONE`, which
-leaves the calendar unable to name the zone and both routes floating; drawing only
-the `STANDARD` observance, which is the "half a definition is worse than none"
+**And then the user renames the appointment.** Retyping the `SUMMARY` of the
+defined-zone event and saving it is the only edit such an event can be given —
+Evolution offers no way to redefine a zone, and this mapping would refuse to send a
+redefinition — and it is deliberately an edit with nothing to do with the zone, so
+anything that happens to the zone is something the save did on its own. A start the
+user restated could not tell "the zone survived" from "the clock was re-sent in a
+way that happened to agree".
+
+What the save asserts, from both ends:
+
+- **What the user sees.** The new title, on an appointment that has not moved: the
+  wall clock and the `TZID` unchanged, and the calendar still resolving that
+  identifier to 08:00Z.
+- **What the server holds.** The title the user typed, and — untouched — the
+  `timeZone` and the whole of the `timeZones` definition. `jmap_cal_sync::patch`
+  cannot express this zone in JSCalendar's terms, so it must leave `timeZone` out of
+  the patch rather than send the iCalendar identifier it read or clear the property;
+  and `timeZones` is stronger still, since no component EDS handed anyone even
+  mentions it, so the only way it could change is a save overwriting what it never
+  saw.
+
+Two mutations were run against the save, and between them they say which end each
+assertion belongs to. Adding `"timeZones": null` to the patch — the shape of a save
+that writes back everything the mapping knows about, which is not everything the
+server holds — reddens the server-side assertion **only**: within one session the
+consumer still resolves the zone, because `ECalMetaBackend` gathered it into the
+calendar's timezone store during the first read and answers out of that store, so
+the loss is invisible to the client until a cache is filled fresh. And clearing the
+zone the mapping cannot name — `timeZone: null`, the plausible reading of "we cannot
+express it, so it is nothing" — reddens the consumer's pair immediately: the
+`TZID` is gone from the `DTSTART`, the calendar can no longer name a zone, and the
+appointment the user only renamed floats to 10:00Z, two hours from where it was.
+That is the bug this guard exists for, seen from the user's side.
+
+Three earlier mutations stand behind the read half: never drawing the `VTIMEZONE`,
+which leaves the calendar unable to name the zone and both routes floating; drawing
+only the `STANDARD` observance, which is the "half a definition is worse than none"
 case made concrete — libical builds a zone from it happily and resolves the start
 to **09:00Z**, confidently one hour out, which is exactly why the mapping draws a
 definition whole or not at all; and swapping the two events on the command line,
