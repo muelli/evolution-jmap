@@ -20,17 +20,21 @@
  * backends implement. Binding a second surface just to call it from a test
  * would put a layer of our own between EDS and the thing under test.
  *
- * There are two phases, chosen on the command line, because they need
+ * There are three phases, chosen on the command line, because they need
  * different books: `write` starts from an empty address book and puts a
- * contact into it, while `edit` starts from one the mock was seeded with
- * before EDS connected — a card that came from the *server*, which is the
- * only way to have EDS read something no vCard this program could write
- * would produce. They are two modes of one program rather than two programs
- * because they open the same book the same way and differ only in what they
- * then ask of it.
+ * contact into it, while `edit` and `rename` each start from one the mock was
+ * seeded with before EDS connected — a card that came from the *server*, which
+ * is the only way to have EDS read something no vCard this program could write
+ * would produce. Those two differ only in which field the user changes, and
+ * that is the whole distinction under test: `edit` touches a field beside the
+ * name and `rename` retypes the name itself. They are modes of one program
+ * rather than separate programs because they open the same book the same way
+ * and differ only in what they then ask of it.
  *
  *   usage: functional-book-client <source-uid> write <full-name>
  *          functional-book-client <source-uid> edit <contact-uid> <email>
+ *          functional-book-client <source-uid> rename <contact-uid> \
+ *                                 <full-name> <given-name>
  */
 
 #include <libebook/libebook.h>
@@ -395,6 +399,57 @@ wait_for_contact (EBookClient *book,
 	return NULL;
 }
 
+/* What EDS made of the card the mock was seeded with, before anything is
+ * changed. The name fields are the load-bearing ones: they are the text the
+ * backend's save compares against to decide whether the user retyped a field,
+ * so a phase that did not report them could not say what that comparison was
+ * given. */
+static void
+report_seeded_contact (EContact *contact)
+{
+	g_print ("read-full-name=%s\n",
+		 (const gchar *) e_contact_get_const (contact, E_CONTACT_FULL_NAME));
+	g_print ("read-email=%s\n",
+		 (const gchar *) e_contact_get_const (contact, E_CONTACT_EMAIL_1));
+	report_name_fields ("read", contact);
+}
+
+/* Save an edited contact and report what EDS holds for it afterwards. Takes
+ * ownership of `contact`, so a phase can end on this call.
+ *
+ * The read-back is a fresh get rather than the contact just handed over,
+ * because what is wanted is EDS's own copy — the vCard the backend re-rendered
+ * after the save and EDS put back in its cache — not the one this program
+ * filled in. */
+static int
+save_and_report (EBookClient *book,
+                 EContact *contact,
+                 const gchar *uid)
+{
+	GError *error = NULL;
+	EContact *read_back = NULL;
+
+	if (!e_book_client_modify_contact_sync (book, contact, E_BOOK_OPERATION_FLAG_NONE,
+						NULL, &error)) {
+		g_object_unref (contact);
+		return fail ("modify", error);
+	}
+
+	g_object_unref (contact);
+
+	if (!e_book_client_get_contact_sync (book, uid, &read_back, NULL, &error))
+		return fail ("read-back", error);
+
+	g_print ("read-back-full-name=%s\n",
+		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_FULL_NAME));
+	g_print ("read-back-email=%s\n",
+		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_EMAIL_1));
+	report_name_fields ("read-back", read_back);
+	g_object_unref (read_back);
+
+	return 0;
+}
+
 /* The second phase: a contact that came from the server, edited the way a user
  * edits one — read what EDS has, change a single field that has nothing to do
  * with the name, save it back.
@@ -410,9 +465,7 @@ edit_phase (EBookClient *book,
             const gchar *uid,
             const gchar *email)
 {
-	GError *error = NULL;
 	EContact *contact;
-	EContact *read_back = NULL;
 
 	contact = wait_for_contact (book, uid);
 	if (!contact) {
@@ -420,41 +473,59 @@ edit_phase (EBookClient *book,
 		return 1;
 	}
 
-	g_print ("read-full-name=%s\n",
-		 (const gchar *) e_contact_get_const (contact, E_CONTACT_FULL_NAME));
-	g_print ("read-email=%s\n",
-		 (const gchar *) e_contact_get_const (contact, E_CONTACT_EMAIL_1));
-	report_name_fields ("read", contact);
+	report_seeded_contact (contact);
 
 	/* The edit itself: one field, and not the name. Whatever the save does
 	 * to the name is therefore something nobody asked for. */
 	e_contact_set (contact, E_CONTACT_EMAIL_1, email);
 
-	if (!e_book_client_modify_contact_sync (book, contact, E_BOOK_OPERATION_FLAG_NONE,
-						NULL, &error)) {
-		g_object_unref (contact);
-		return fail ("modify", error);
+	return save_and_report (book, contact, uid);
+}
+
+/* The third phase: the other half of `edit`, on the same seeded card. Here the
+ * user *does* retype the name — the one field that holds both halves of the
+ * double-barrelled given name — and the parts the server stated separately are
+ * the ones that must NOT come back.
+ *
+ * Nothing in the text the user typed says which half it replaced, so the two
+ * old parts are gone and the field states one component. That is the branch the
+ * `edit` phase cannot reach, and reaching it through real EDS is the point: EDS
+ * rebuilds the N line out of its own synthetic fields, so the string the save
+ * compares against is EDS's rendering of what the user typed rather than
+ * anything this repository wrote.
+ *
+ * Both fields are set because both are what Evolution's contact editor writes:
+ * the given-name field is the edit, and the FN line it keeps in step with it is
+ * a separate attribute that would otherwise still spell the old name. */
+static int
+rename_phase (EBookClient *book,
+              const gchar *uid,
+              const gchar *full_name,
+              const gchar *given_name)
+{
+	EContact *contact;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
 	}
 
-	g_object_unref (contact);
+	report_seeded_contact (contact);
 
-	if (!e_book_client_get_contact_sync (book, uid, &read_back, NULL, &error))
-		return fail ("read-back", error);
+	e_contact_set (contact, E_CONTACT_GIVEN_NAME, given_name);
+	e_contact_set (contact, E_CONTACT_FULL_NAME, full_name);
 
-	g_print ("read-back-email=%s\n",
-		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_EMAIL_1));
-	report_name_fields ("read-back", read_back);
-	g_object_unref (read_back);
-
-	return 0;
+	return save_and_report (book, contact, uid);
 }
 
 static void
 usage (const gchar *program)
 {
 	g_printerr ("usage: %s <source-uid> write <full-name>\n"
-		    "       %s <source-uid> edit <contact-uid> <email>\n",
-		    program, program);
+		    "       %s <source-uid> edit <contact-uid> <email>\n"
+		    "       %s <source-uid> rename <contact-uid> <full-name> <given-name>\n",
+		    program, program, program);
 }
 
 int
@@ -479,7 +550,8 @@ main (int argc,
 	phase = argv[2];
 
 	if (!((g_str_equal (phase, "write") && argc == 4) ||
-	      (g_str_equal (phase, "edit") && argc == 5))) {
+	      (g_str_equal (phase, "edit") && argc == 5) ||
+	      (g_str_equal (phase, "rename") && argc == 6))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -536,8 +608,10 @@ main (int argc,
 
 	if (g_str_equal (phase, "write"))
 		status = write_phase (book, argv[3]);
-	else
+	else if (g_str_equal (phase, "edit"))
 		status = edit_phase (book, argv[3], argv[4]);
+	else
+		status = rename_phase (book, argv[3], argv[4], argv[5]);
 
 	g_object_unref (client);
 	g_object_unref (source);
