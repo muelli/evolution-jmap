@@ -10,7 +10,7 @@
 //! message dragged out of another account — is bytes, and an import is how it
 //! arrives unaltered. It is what `append_message_sync` will be.
 
-use jmap_client::{Client, Credentials, Error};
+use jmap_client::{Client, Credentials, Error, limits};
 use jmap_mock::MockServer;
 use jmap_proto::error::set;
 use jmap_proto::mail::{EmailImport, EmailImportRequest, email_import_error, keyword, role};
@@ -212,6 +212,7 @@ fn an_imported_message_downloads_as_the_bytes_it_went_up_as() {
             &fixture.account_id,
             imported.blob_id.as_ref().unwrap(),
             "message.eml",
+            limits::MAX_BLOB_BYTES,
         )
         .unwrap();
     assert_eq!(String::from_utf8(source).unwrap(), MESSAGE);

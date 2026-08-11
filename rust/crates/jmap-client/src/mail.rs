@@ -760,11 +760,21 @@ impl Client {
     ///
     /// Every substituted value is percent-encoded — see [`crate::url`] for why
     /// that matters when the values are the server's own.
+    ///
+    /// `max_bytes` is how many octets of answer the caller will take, and it is
+    /// a parameter rather than a constant because the good number is the
+    /// account's: `Email/get` reports each message's `size`, RFC 8621 §4.1.1
+    /// defines that as the octets this download returns, and a caller holding
+    /// that row already knows what it is about to receive. A caller with no
+    /// such number passes [`crate::limits::MAX_BLOB_BYTES`]. Exactly
+    /// `max_bytes` arrives; more is [`Error::ResponseTooLarge`], with the body
+    /// abandoned at the ceiling rather than buffered and then judged.
     pub fn download_blob(
         &self,
         account_id: &Id,
         blob_id: &Id,
         name: &str,
+        max_bytes: u64,
     ) -> Result<Vec<u8>, Error> {
         let url = self
             .session()
@@ -773,7 +783,7 @@ impl Client {
             .replace("{blobId}", &encode_template_value(blob_id.as_str()))
             .replace("{name}", &encode_template_value(name))
             .replace("{type}", &encode_template_value("application/octet-stream"));
-        let response = self.execute(HttpMethod::Get, &url, None)?;
+        let response = self.execute_within(HttpMethod::Get, &url, None, None, max_bytes)?;
         Ok(response.body)
     }
 }

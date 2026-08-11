@@ -205,10 +205,22 @@ place. Close them like any other work — red test first, then fix.
   `accountId` end to end. The alternative the report offered — a grammar
   check in `Id`'s constructor — was not taken: it constrains ids the RFC
   allows, and encoding is what §6.2 actually asks for.
-- **F15 (from AUDIT-FFI-20260810) — `jmap-client/src/transport.rs:203`**:
-  see the report for the specific recommendation; action or record why
-  not when the transport is next touched (the libsoup transport for the
-  EDS integration is the natural moment).
+- ~~**F15 (from AUDIT-FFI-20260810) — every response is capped at 10 MiB by a
+  limit nobody here chose.**~~ **Closed 2026-08-11.** `HttpRequest` now carries
+  `max_response_bytes`, every caller states one, and `UreqTransport` applies it
+  rather than letting `ureq`'s `read_to_vec` impose its own `MAX_BODY_SIZE`.
+  The numbers are `jmap-client/src/limits.rs`'s, with their reasoning written
+  down: a JSON answer is held to `MAX_API_RESPONSE_BYTES`, and a blob download
+  to what its caller asks for — for mail, the row's own `size` widened by
+  `jmap_mail_sync::download_ceiling`, so the bound is the account's rather than
+  a constant this repository guessed, with `MAX_BLOB_BYTES` as the fallback for
+  a server that reports no size. Over the ceiling is
+  `Error::ResponseTooLarge`, abandoned at the limit rather than buffered and
+  then judged. `jmap-client/tests/response_size.rs` and
+  `jmap-mail-sync/tests/source.rs` drive an 11 MiB message end to end, the
+  refusal, and the boundary — `ureq`'s limiting reader fails on the read
+  *after* the last octet allowed, so a body of exactly the ceiling needs a
+  limit one higher.
 
 ## Integration testing (parallel track)
 Once M3 exists: gated CI job + local recipe against a real

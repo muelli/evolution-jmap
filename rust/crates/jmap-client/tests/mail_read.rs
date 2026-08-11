@@ -3,7 +3,7 @@
 
 //! Receiving email: query + fetch, attachments.
 
-use jmap_client::{Client, Credentials};
+use jmap_client::{Client, Credentials, limits};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::mail::{EmailQueryFilter, role};
 use jmap_proto::methods::Comparator;
@@ -123,6 +123,7 @@ fn receive_email_attachment_blob_download() {
             &account_id,
             attachment.blob_id.as_ref().unwrap(),
             "report.pdf",
+            limits::MAX_BLOB_BYTES,
         )
         .unwrap();
     assert_eq!(downloaded, attachment_bytes);

@@ -16927,3 +16927,118 @@ and `jmap-ical` itself still emits no `VTIMEZONE`, which is fine while every
 reader of its text goes through this backend, but means the crate's own rendering
 is not a conforming object on its own — the natural home for that is the calcard
 migration, which has a builder for it.
+
+## 2026-08-11 (hundred-and-sixty-eighth session)
+
+**F15 closed.** The number that decided how large a message this provider could
+open was `ureq`'s, and it is now this repository's — written down, per request,
+and tested.
+
+**What was actually wrong.** `UreqTransport::execute` read every response with
+`Body::read_to_vec()`, which is documented and implemented as
+`with_config().limit(MAX_BODY_SIZE).read_to_vec()` with `MAX_BODY_SIZE` = 10
+MiB. So the ceiling on the session document, on every answer from `apiUrl`, and
+on every blob download was a constant in a dependency. It failed closed —
+`ureq`'s limiting reader errors rather than short-reading, so nothing was ever
+truncated — which is why the audit filed it `info`. It was still absurd next to
+the trouble this crate goes to over the limits that *are* in the protocol
+(`maxSizeUpload` in `upload_blob`, `maxSizeRequest` in `api_call`,
+`maxCallsInRequest`, each with its own error variant and tests), and at 10 MiB
+one photo attachment was the largest message an account could read.
+
+**Where the number comes from now.** `HttpRequest` grew
+`max_response_bytes`, with no default: a transport is handed the ceiling rather
+than choosing one, and a caller cannot forget to think about it because the
+struct will not build. Two kinds of answer, two ways of getting the number:
+
+- A JSON answer is bounded by the *question*, which the client already bounds
+  twice (it refuses its own request over `maxSizeRequest`, and the server bounds
+  `maxObjectsInGet`). No protocol number bounds the answer — RFC 8620 §2 has no
+  counterpart to `maxSizeRequest` for a response, which is exactly why one had
+  to be chosen here. `limits::MAX_API_RESPONSE_BYTES` is set far above any batch
+  the client builds; its job is a server that answers a small question with an
+  endless body, not tuning.
+- A blob download is bounded by the *account*. `Email/get` reports each
+  message's `size`, RFC 8621 §4.1.1 defines that as the octets the `blobId`
+  refers to — the download's own length — and `SOURCE_PROPERTIES` now asks for
+  it, riding the `Email/get` that had to be made anyway to learn the `blobId`,
+  so it costs no round trip. `download_ceiling` widens it by an eighth plus 64
+  KiB and that margin is the one judgement call in the change: a server storing
+  bare-LF and serving CRLF adds an octet per line, its `size` may count the
+  stored form, and refusing such a message would turn a server's rounding into
+  mail the user cannot open. An eighth is generous cover (a mail line averages
+  well over eight octets) and the flat term keeps the margin meaningful for a
+  short message. A row with no `size` gives nothing to be proportional to and
+  gets `MAX_BLOB_BYTES`.
+
+**The boundary, which is a real trap.** `ureq`'s `LimitReader` errors when the
+allowance is exhausted *and another read is attempted*, not when an octet
+overruns — so `.limit(n)` rejects a body of exactly `n`: the last read consumes
+the allowance and the read that would have returned end-of-file finds none. The
+transport therefore asks for `max_response_bytes + 1`, which makes the field
+mean "this many octets are fine". That is the only reading a caller sizing a
+ceiling from a blob's own `size` can use, and it was measured, not reasoned
+about: with `.limit(max)` the exactly-at-the-ceiling test fails.
+
+Over the ceiling is `TransportError::ResponseTooLarge { limit }` →
+`Error::ResponseTooLarge { limit }` rather than a `Transport(String)` a caller
+would have to match on. Only the limit, because the size is unknown — the body
+was abandoned at the ceiling, which is the point of having one. Separate from
+`Transport` because retrying does not mend it, and separate from `TooLarge` /
+`RequestTooLarge` because those refuse something about to be *sent*.
+
+Tests: seven, and the red run was done three ways rather than assumed. Compile-
+red first (the field and the parameter did not exist). Then, with
+`read_to_vec()` put back, `a_blob_larger_than_the_dependency_default_arrives_
+whole` and `a_body_over_the_ceiling_is_refused_by_the_number_it_passed` both
+fail — so the 10 MiB claim is measured here and not merely read out of `ureq`'s
+source. Then, with `.limit(max)` instead of `max + 1`,
+`a_body_of_exactly_the_ceiling_arrives` fails on its own — so the off-by-one
+guard is discriminating rather than decorative. At the mail layer,
+`a_message_larger_than_ten_mebibytes_is_readable` is the fix where a user would
+feel it, and `a_row_that_understates_its_size_bounds_the_download_to_what_it_
+said` is its discriminating half: without it, any constant large enough would
+pass the first. Four unit tests pin `download_ceiling` — above the size it is
+given, below `MAX_BLOB_BYTES` for a small row (so it stays the account's number
+rather than becoming a constant), the fallback, and saturation.
+
+Verified locally: `cargo test --locked` 794, up 11 from 783; `jmap-mail` 413,
+`jmap-backend-cal` 107, `jmap-backend-book` 65, `jmap-backend-collection` 130,
+all unchanged; `ctest` 14/14 including all four functional legs after a full
+`ninja`. `cargo fmt --all --check` and `cargo clippy --all-targets --locked --
+-D warnings` clean for the default set and for the four header crates.
+`ci/checks.sh` again stops at its first step: `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed. Two files were added —
+`rust/crates/jmap-client/src/limits.rs` and
+`rust/crates/jmap-client/tests/response_size.rs` — both carrying the
+`GPL-3.0-or-later` SPDX header, and `REUSE.toml` needs no annotation for either
+(they are ordinary Rust sources under `rust/crates/`, not one of the annotated
+paths). `Cargo.lock` is untouched — no dependency changed — so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+Housekeeping: the VM was at 100% disk when this session started building
+(`/dev/root` 58G, 63M free), which failed a link with `No space left on
+device`. `rust/target/debug` was 25G of it, mostly stale test binaries with
+debuginfo; `cargo clean --profile dev` freed 23.2 GiB and everything was rebuilt
+from scratch. Worth knowing for the next session that finds a build failing for
+no reason: check `df` before believing the compiler.
+
+No milestone tag. **Closed this session:** F15, the last open recommendation
+from `AUDIT-FFI-20260810`; both F14 and F15 are now struck through in the
+roadmap, so the "open audit recommendations" list is empty until the next
+re-audit. Unchanged blockers: the calcard directive's two emitters are still
+ours by choice; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist yet, so
+the M8 tag many sessions have asked for is still unwritten; the manual-test
+recipes are unlinked from the README; `jmap-mail`'s rustdoc is dirty; the
+once-seen `jmap-mail` `tests/transport.rs` hang is still unexplained; and
+`jmap-ical` still emits no `VTIMEZONE` of its own. New from this session: the
+two constants in `limits.rs` are bounds on *one* buffered body and not a memory
+budget — a provider synchronising several folders at once holds several, and
+nothing anywhere bounds the sum, which is the honest next question if memory
+ever becomes the complaint; and `download_ceiling`'s margin has been reasoned
+about but never measured against a real server, so whether Stalwart's `size`
+agrees octet-for-octet with what its `downloadUrl` serves is unknown here and is
+a good thing for the parallel Stalwart track to answer, because a systematic
+disagreement larger than an eighth would make large mail unreadable in exactly
+the way the margin exists to prevent.

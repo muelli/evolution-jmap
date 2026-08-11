@@ -13,6 +13,7 @@ use jmap_proto::session::{self, Session};
 use serde_json::Value;
 
 use crate::error::Error;
+use crate::limits;
 use crate::transport::{
     CancelFlag, HttpMethod, HttpRequest, HttpResponse, Transport, TransportError,
 };
@@ -276,6 +277,8 @@ impl Client {
         crate::transport::observed().or_else(|| self.cancel.clone())
     }
 
+    /// A request whose answer is JSON this client parses, held to
+    /// [`limits::MAX_API_RESPONSE_BYTES`].
     pub(crate) fn execute(
         &self,
         method: HttpMethod,
@@ -285,12 +288,40 @@ impl Client {
         self.execute_with_content_type(method, url, body, body.map(|_| "application/json"))
     }
 
+    /// As [`Self::execute`], for a request whose body is not JSON. The
+    /// *response* still is — an upload answers with a blob descriptor — so the
+    /// ceiling is the same one.
     pub(crate) fn execute_with_content_type(
         &self,
         method: HttpMethod,
         url: &str,
         body: Option<&[u8]>,
         content_type: Option<&str>,
+    ) -> Result<HttpResponse, Error> {
+        self.execute_within(
+            method,
+            url,
+            body,
+            content_type,
+            limits::MAX_API_RESPONSE_BYTES,
+        )
+    }
+
+    /// The one that actually makes the request, and the only place a ceiling
+    /// is put on an answer.
+    ///
+    /// `max_response_bytes` is a caller's number rather than a default because
+    /// the two kinds of answer this client reads have nothing in common: a JSON
+    /// response is bounded by the question that was asked, and a blob download
+    /// is bounded by what the account said the blob weighs. See
+    /// [`crate::limits`].
+    pub(crate) fn execute_within(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        body: Option<&[u8]>,
+        content_type: Option<&str>,
+        max_response_bytes: u64,
     ) -> Result<HttpResponse, Error> {
         let cancel = self.cancel_for_request();
         if cancel.as_ref().is_some_and(CancelFlag::is_cancelled) {
@@ -314,10 +345,12 @@ impl Client {
                 headers: &headers,
                 body,
                 cancel: cancel.as_ref(),
+                max_response_bytes,
             })
             .map_err(|error| match error {
                 TransportError::Cancelled => Error::Cancelled,
                 TransportError::Failed(message) => Error::Transport(message),
+                TransportError::ResponseTooLarge { limit } => Error::ResponseTooLarge { limit },
             })?;
 
         if !(200..300).contains(&response.status) {

@@ -40,7 +40,9 @@ pub use error::SyncError;
 pub use folder::{FolderInfo, FolderRole, FolderTree};
 pub use keywords::{KeywordChange, Keywords};
 pub use mailboxes::Filing;
-pub use message::{MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES};
+pub use message::{
+    MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES, download_ceiling,
+};
 pub use send::{Outgoing, OutgoingMailboxes};
 
 /// What a folder-list refresh found.
@@ -402,6 +404,11 @@ impl MailSync {
         let blob_id = email.blob_id.ok_or_else(|| {
             SyncError::protocol(format!("Email/get returned {uid} without a blobId"))
         })?;
+        // How many octets to take is the account's answer, not a constant of
+        // ours: the row just fetched says how long the message is. See
+        // [`download_ceiling`] for the margin, and `jmap_client::limits` for
+        // why any ceiling has to be stated at all.
+        let ceiling = download_ceiling(email.size);
 
         // The `{name}` of the download template is a filename suggestion for a
         // browser saving the response; nothing reads it back, and the uid is
@@ -409,7 +416,7 @@ impl MailSync {
         // an id to URL-safe characters.
         Ok(self
             .client
-            .download_blob(&self.account_id, &blob_id, uid.as_str())?)
+            .download_blob(&self.account_id, &blob_id, uid.as_str(), ceiling)?)
     }
 
     /// Puts one message's keyword change on the server — the write half of
