@@ -19677,3 +19677,97 @@ between the Home and Work slots at all is unknown; no test drives a `uri`-only e
 through real EDS; a `VALUE=uri` photo's rendering is unmeasured; and the `jmap-mail`
 `transport.rs` hang is still an open design question with a lock-order hypothesis
 attached.
+
+## 2026-08-11 (hundred-and-ninety-fourth session)
+
+**The contact's calendar and free/busy addresses now cross, in both
+directions.** RFC 9553 §2.4.1's `calendars` is the JSContact property for the
+calendaring resources of a person — a calendar of theirs, or the free/busy data
+drawn from one — and RFC 9555 §2.13.2 and §2.13.3 state those two on vCard's
+`CALURI` and `FBURL`. libebook-contacts 3.52 keeps `E_CONTACT_CALENDAR_URI` and
+`E_CONTACT_FREEBUSY_URL` on exactly those lines, which is what Evolution shows
+as the Calendar and Free/Busy fields, so the property that had been riding
+untouched in `extra` now reaches the user and comes back.
+
+**`kind` picks the line rather than deciding whether there is one, which is new
+here.** Every earlier `kind` in this mapping was a filter: a title of a kind
+outside `title`/`role` is dropped, a link of any kind at all is dropped, a
+medium that is not a photo is dropped. A calendar's kind chooses *between* two
+lines instead — `calendar` onto `CALURI`, `freeBusy` onto `FBURL` — and is
+therefore also what the reader recovers from the line's own name, since neither
+line carries a parameter saying which it is. The filter is still there for what
+is left over: RFC 9553 makes `kind` mandatory and gives it no default, so an
+entry naming none, or naming a vendor kind, gets no line. Guessing would put a
+URI under a heading the server never claimed for it, and the two headings sit
+next to each other in front of the user. EDS's third calendaring field,
+`ICSCALENDAR`, is unmapped for the mirror-image reason: nothing on a card says
+an entry belongs there rather than on the `CALURI` beside it.
+
+**What EDS does to these lines, measured rather than assumed** (throwaway C
+against libebook-contacts 3.52, the same way the `URL` behaviour was
+established). A set on either field rewrites the value of the *first* line of
+that name in place and leaves every parameter — `X-JMAP-KEY` included — where
+it was; a second line of the same name passes through untouched. So the key
+survives Evolution, as a `URL`'s does and unlike a date's or a photo's, and the
+save needs no pairing: it patches `calendars/<key>/uri` and nothing else. Also
+measured, and the reason the clearing test asserts what it does: `e_contact_set`
+to the empty string keeps the line with an empty value, while a set to `NULL`
+drops the line outright. Both forms have to read as a deletion, and both do —
+one through the emitter's own "an entry with no URI has no line" rule, one
+through the entry simply being absent.
+
+Seven tests: four in `jmap-vcard` (the two lines and their keys; an entry of no
+stated kind and of a vendor kind getting no line; an empty line and an empty URI
+skipped in both directions; the keys the reader invents, which the two line names
+share one counter for) and three in `jmap-book-sync` (an edit that keeps the
+`mediaType` and `pref` the line cannot carry; an entry of no stated kind
+surviving a save it was never part of, key intact, while the address the user
+typed lands beside it; clearing the Free/Busy field deleting the entry). The
+mutation check: with `states_calendar` replaced by "everything is visible", the
+invisible-entry test goes red and the other two stay green, which is what says
+the predicate is load-bearing rather than decorative.
+
+Tests: 974 in the default set, up from 967. Verified locally: `cargo test
+--locked` 974; full `ninja` then `ctest` 14/14, functional legs included; `cargo
+fmt --all --check` clean; `cargo clippy --workspace --exclude example-module
+--all-targets --locked -- -D warnings` clean. The exclusion is not this
+increment's: `example-module` fails 26 `manual_c_str_literals` lints under this
+VM's clippy (1.97) on unmodified master too — confirmed by stashing the change
+and re-running — so it is a toolchain-drift finding against a crate this session
+did not touch, not a regression. `ci/checks.sh` still stops at its first step
+(no `reuse`, no `pipx`, no `uvx` here), so the licence check was done by hand: no
+file was added, all nine files touched already carry an SPDX header, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+**What is still *not* verified.** No functional leg drives a calendar address
+through real EDS — what is measured is `EContact` and `EVCard`, as it was for the
+photo two sessions ago before the leg was written. That is the natural next
+increment for this property, and it is where "the contact editor writes what I
+think it writes" would stop being an inference: everything above about
+`X-JMAP-KEY` surviving is a libebook-contacts fact, and whether Evolution's
+editor sets these fields with `e_contact_set` at all is not something a headless
+VM can answer. Nor is it known whether the editor exposes the Free/Busy field on
+every contact or only some. And a card carrying several `CALURI` lines has only
+its first editable, which the mapping handles by key but no test drives through
+the daemons.
+
+No milestone tag. Added to the blocker list: no functional leg drives a calendar
+address through real EDS; `example-module` does not pass this VM's clippy.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has
+no CI job and no GUI tier; M7 still **needs human verification in real
+Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side rest on untested assumptions; the
+multi-`NOTE`/`ORG`/`TITLE`/`NICKNAME`/`URL`/`PHOTO` "Evolution shows only the
+first" bet is verified for `PHOTO` and still unverified for the rest; the two
+`LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone are
+still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and
+Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped
+and their contact-editor behaviour unmeasured; whether the editor lets a handle
+be moved between the Home and Work slots at all is unknown; no test drives a
+`uri`-only entry through real EDS; a `VALUE=uri` photo's rendering is unmeasured;
+what Evolution's contact editor writes for a replaced photo is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.
