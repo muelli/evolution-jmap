@@ -187,7 +187,7 @@ ordering worth waiting out rather than flaking on.
 
 ### The picture: what a meta backend does to a photo behind the backend's back
 
-The contact's photo crosses all ten book legs, and it is the one property where
+The contact's photo crosses all eleven book legs, and it is the one property where
 EDS does something to the data on its own initiative — which is why it needs real
 daemons rather than a fixture. Two facts, both measured here against EDS 3.52,
 and neither of them anything this repository asks for:
@@ -247,7 +247,7 @@ server filed under `calendar-1` and `freebusy-1`:
 The first book leg covers the other direction: a contact written through
 `e_book_client_add_contact_sync` with both fields set reaches the server as two
 `calendars` entries of kind `calendar` and `freeBusy`. Drop the `X-JMAP-KEY`
-from the emitter's two lines and eight of the nine seeded legs go red together —
+from the emitter's two lines and nine of the ten seeded legs go red together —
 every one that asserts the map survived an edit elsewhere — with the server's
 entries deleted and re-added under the `c1`/`c2` the reader invents by counting
 lines.
@@ -286,9 +286,9 @@ spouse and a brother:
 
 The first book leg covers the other direction: a contact written through
 `e_book_client_add_contact_sync` with the Spouse field set reaches the server as
-one `relatedTo` entry, keyed by the name and stating `spouse`. The other seven
+one `relatedTo` entry, keyed by the name and stating `spouse`. The other eight
 seeded legs assert the whole `relatedTo` map is untouched by an edit elsewhere,
-so dropping the spouse line from the emitter turns all ten legs red at once.
+so dropping the spouse line from the emitter turns all eleven legs red at once.
 
 ### Clearing that field: the withdrawal with nothing to put in its place
 
@@ -361,11 +361,11 @@ What the leg asserts, on the seeded card the server filed two notes on under
   entry — and `note-2` untouched.
 
 The other legs assert the whole `notes` map is untouched by an edit elsewhere, so
-dropping the `X-JMAP-KEY` from the emitter's `NOTE` line turns eight of the nine
+dropping the `X-JMAP-KEY` from the emitter's `NOTE` line turns nine of the ten
 seeded legs red at once, with the server's notes deleted and re-added under the
-`n1`/`n2` the reader invents by counting lines. The ninth is the tenth leg below:
-it clears the only note there is, so the property goes back whole and there is no
-key for the save to have got wrong.
+`n1`/`n2` the reader invents by counting lines. The one that does not is the
+tenth leg below: it clears the only note there is, so the property goes back
+whole and there is no key for the save to have got wrong.
 
 What this leg does **not** add is a mutation only it catches: stop `diff_notes`
 patching the text and it goes red, but so does the fixture test that models the
@@ -431,7 +431,7 @@ with a note behind the cleared one, the entry alone is withdrawn
 (`notes/note-1: null`, the ninth leg); with nothing behind it, the property itself
 is gone (`notes: null`). Two branches of `diff_entries`, and until this leg the
 one below the fold had no test through the daemons at all — drop it and this leg
-is the only one of the ten that goes red.
+is the only one of the eleven that goes red.
 
 Measured against libebook-contacts 3.52 on this card, the emptied line behaves as
 it does on the other: `e_contact_set (contact, E_CONTACT_NOTE, "")` leaves one
@@ -460,6 +460,57 @@ The fixture beside it is `emptying_the_only_note_line_withdraws_the_property` in
 `removing_the_note_line_removes_the_note` next to it in exactly one way — the
 input: that one strikes the `NOTE` line off the card, which is not what EDS does
 to a field the user emptied, and this one empties it, which is.
+
+### The URI-only handle: a value the card cannot carry as it stands
+
+The eleventh leg
+(`retyping_a_uri_only_handle_through_eds_writes_the_uri_back`) is about the one
+mapped property whose *value* the server can state in a form no vCard line can.
+RFC 9553 §2.3.2 lets an `onlineServices` entry name the contact with a `user`, a
+`uri`, or both; Evolution's instant-messaging fields hold a handle and nothing
+else. So the seeded card carries an entry stating **only**
+`uri: xmpp:jp@jabber.example`, and it reaches the user at all because `xmpp:` is
+RFC 5122's — its path is the JID and nothing besides — which lets the reader draw
+the handle out of it. What the save then must do is write the edit back onto the
+member it came from: rebuilding the URI, rather than answering a card shaped one
+way with a card shaped another.
+
+Three things only real EDS can answer:
+
+- **the drawn handle reaches the field the user looks at.** The reader picks the
+  slot — `TYPE=HOME` — and `E_CONTACT_IM_JABBER_HOME_1` is the field that slot
+  feeds. Whether the parameter our emitter writes is the one libebook-contacts
+  reads a handle back out of is a claim about EDS, and a handle in the wrong
+  slot, or on a line with no `TYPE`, is one nobody sees. Measured:
+  `read-im-handle=jp@jabber.example`. Point `DEFAULT_SLOT` at `WORK` and this leg
+  and the first go red together;
+- **what a set on that field leaves on the card.** Measured against
+  libebook-contacts 3.52, `e_contact_set` rewrites the value of the first
+  `X-JABBER` line in place and keeps its parameters:
+  `retyped-im-handle-lines=1`, `retyped-im-handle-key=handle-1`. So the save can
+  patch the entry the URI came from by key, rather than having to pair a keyless
+  line with it as it does for a replaced photo. Both observations are printed
+  rather than asserted — the save reaches the same entry either way — and what is
+  asserted is the consequence on the server;
+- **the entry survives an edit elsewhere unchanged.** The other nine seeded legs
+  assert that (`assert_the_seeded_service_survived`), and the reason it is worth
+  asserting is that the line hands back a `user` where the server holds a `uri`:
+  an entry rewritten into the shape the line states would be a card answered with
+  a card it never was.
+
+What the leg asserts beyond the read: the server ends up with the entry under
+**the key it chose**, at the same service, holding `uri: xmpp:jp@xmpp.example`
+and no `user` at all. Two mutations redden this leg and nothing else in the
+file — writing the retyped handle onto a `user` instead of rebuilding the URI,
+and dropping `xmpp` from the reader's table of schemes — but `jmap-book-sync`'s
+fixtures catch both, so what the leg adds is the *input*.
+
+What it does **not** catch, measured rather than assumed: a save that compares an
+entry's members rather than the handle they both spell. That writes the URI back
+with the text it already had, so every assertion here still holds and only the
+card's state on the server moves. Catching it takes a before-and-after on that
+state, which is `an_edit_that_left_a_uri_only_handle_alone_writes_nothing` in the
+fixtures.
 
 ## What the calendar test asserts
 
