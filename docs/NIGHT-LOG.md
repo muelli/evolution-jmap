@@ -20277,3 +20277,98 @@ EDS; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
 editor writes for a replaced photo is inferred rather than measured; and the
 `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
+
+## 2026-08-11 (two-hundredth session)
+
+**The note behind the note.** Every mapped property so far has been one the user
+either sees whole or does not see at all. `notes` is neither: Evolution's Notes
+field is `E_CONTACT_NOTE`, which is the *first* `NOTE` line and stops there, while
+every JSContact `notes` entry writes a line of its own. So a card the server filed
+two notes on shows the user one, with the other sitting behind it and nothing in
+the UI saying it is there — and until tonight, what a save did to the hidden one
+had only ever been driven against fixtures whose *premise* nothing measured. This
+is the eighth `functional-book` leg,
+`retyping_the_note_through_eds_patches_the_entry_it_replaces`, and the `renote`
+phase it drives.
+
+**What the daemons actually said.** Measured against libebook-contacts 3.52,
+`e_contact_set` on a plain vCard attribute rewrites the value of the **first line
+of that name in place**, keeps that line's parameters — the `X-JMAP-KEY` among
+them, which comes back quoted because the key holds a hyphen — and leaves every
+further line of the same name standing. So `NOTE` behaves like `CALURI` and not
+like `PHOTO`: the retyped note is patched by key, and the note behind it is
+neither rewritten nor deleted. `read-note-lines=2` before the set,
+`retyped-note-lines=2` after it, both asserted rather than printed, because
+neither number is a version-dependent spelling of the same thing — a `1` is the
+user's edit silently deleting a note they were never shown, and a `3` is a note
+nobody typed reaching the server.
+
+The count exists because the field cannot give it. `e_contact_get` hands back the
+first `NOTE` line whatever else is on the card, so both failures read back
+perfectly at the client end; the same blindness the spouse leg met, and answered
+the same way — count the lines here, judge them in the harness.
+
+A separate probe, taken before the leg was designed rather than after: the same
+in-place rewrite holds for `URL` and `NICKNAME` on a card carrying two lines of
+each. Not asserted anywhere — a probe is not a test — but it is why the mapping's
+one-line-per-entry decision for those two is now believed rather than assumed.
+
+**Mutation checks.** Dropping the `X-JMAP-KEY` from the emitter's `NOTE` line:
+all seven seeded legs red, the write leg green — the seeded notes are deleted and
+re-added under the `n1`/`n2` the reader invents by counting lines, and every
+seeded leg now asserts the map survived. Stopping `diff_notes` patching the text:
+this leg alone among the eight. That last one is also red in the unit suite
+(`editing_a_note_keeps_when_it_was_written_and_by_whom`), which is the honest
+framing of what the leg adds: not a mutation only it catches, but the *input* —
+the fixture states the card a retyped Notes field produces, and only the daemons
+can say EDS produces it.
+
+Two stale counts in `docs/functional-tests.md` were corrected while the leg was
+being written, each re-measured rather than incremented: dropping the calendar
+lines' key reddens six of the seven seeded legs (the doc said three), and dropping
+the spouse line reddens all eight (the doc said seven, which was right for seven
+legs).
+
+Tests: 986 in the default set (unchanged — `jmap-functional` is not in
+`default-members`); the `functional-book` leg count goes from seven to eight.
+
+Verified locally: `cargo test --locked` 986; full `ninja` then `ctest` 14/14 with
+all four functional legs; `cargo fmt --all --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings` and `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` both clean. `ci/checks.sh`
+still stops at its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so the
+licence check was done by hand: no file was added, the three sources touched
+already carry an SPDX header, and `Cargo.lock` is untouched, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+**What this still does not settle.** The leg drives a *retype*, not a clearing: a
+save handed a card whose only `NOTE` line was emptied is still exercised against
+fixtures alone, and what EDS leaves on the card when the Notes field is emptied is
+unmeasured — the spouse answer (attribute present, no value) is an analogy, which
+is exactly the analogy the previous session had to go and measure. Nothing here
+observes Evolution's own contact editor either, so "the editor writes what
+`e_contact_set` was handed" remains an inference about Evolution. And the second
+note is still invisible to the user in both directions: the leg proves it survives,
+not that anyone can reach it.
+
+No milestone tag. Removed from the blocker list: the multi-`NOTE` "Evolution shows
+only the first" bet is unverified — it is now measured, and `URL` and `NICKNAME`
+are probed though not asserted. Added: clearing the Notes field is untested through
+the daemons, and what EDS leaves on the line when it is emptied is an inference.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**;
+`example-module` does not pass this VM's clippy (1.97) on unmodified master, 26
+`manual_c_str_literals`; `docs/MILESTONES.md` does not exist, so the M8 tag is
+still unwritten; the manual-test recipes are unlinked from the README;
+`jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own;
+`links` and `CONFERENCE` on the calendar side rest on untested assumptions; the
+multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified; the
+two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone
+are still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and
+Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped
+and their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; no test drives a
+`uri`-only entry through real EDS; a `VALUE=uri` photo's rendering is unmeasured;
+what Evolution's contact editor writes for a replaced photo, and into a cleared
+field, is inferred rather than measured; and the `jmap-mail` `transport.rs` hang is
+still an open design question with a lock-order hypothesis attached.

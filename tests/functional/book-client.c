@@ -20,17 +20,18 @@
  * backends implement. Binding a second surface just to call it from a test
  * would put a layer of our own between EDS and the thing under test.
  *
- * There are seven phases, chosen on the command line, because they need
+ * There are eight phases, chosen on the command line, because they need
  * different books: `write` starts from an empty address book and puts a
  * contact into it, while `edit`, `rename`, `repicture`, `recalendar`,
- * `respouse` and `unspouse` each start from one the mock was seeded with before
- * EDS connected — a card that came from the *server*, which is the only way to
- * have EDS read something no vCard this program could write would produce. Those
- * six differ only in which field the user changes, and that is the whole
- * distinction under test: `edit` touches a field beside the name, `rename`
- * retypes the name itself, `repicture` replaces the photo, `recalendar` retypes
- * the calendar address, `respouse` retypes who the contact is married to, and
- * `unspouse` empties that field instead. They are modes of one program rather
+ * `respouse`, `unspouse` and `renote` each start from one the mock was seeded
+ * with before EDS connected — a card that came from the *server*, which is the
+ * only way to have EDS read something no vCard this program could write would
+ * produce. Those seven differ only in which field the user changes, and that is
+ * the whole distinction under test: `edit` touches a field beside the name,
+ * `rename` retypes the name itself, `repicture` replaces the photo,
+ * `recalendar` retypes the calendar address, `respouse` retypes who the contact
+ * is married to, `unspouse` empties that field instead, and `renote` retypes the
+ * note on a card carrying two of them. They are modes of one program rather
  * than separate programs because they open the same book the same way and differ
  * only in what they then ask of it.
  *
@@ -44,6 +45,7 @@
  *                                 <calendar-uri>
  *          functional-book-client <source-uid> respouse <contact-uid> <spouse>
  *          functional-book-client <source-uid> unspouse <contact-uid>
+ *          functional-book-client <source-uid> renote <contact-uid> <note>
  */
 
 #include <libebook/libebook.h>
@@ -366,6 +368,43 @@ report_spouse_line (const gchar *prefix,
 	g_free (value);
 }
 
+/* Report the note EDS holds for a contact, and how many NOTE lines the card
+ * carries.
+ *
+ * The count is the observation the field cannot give, and the reason this
+ * function exists at all: e_contact_get hands back the value of the *first* NOTE
+ * line, so a card holding one note and a card holding five read alike here — and
+ * a set that replaced every line of the name, or appended beside the first,
+ * reads back correctly while the card underneath says something else. The
+ * harness holds it to a number; this end only counts.
+ *
+ * An unset field is reported as the empty string rather than left out, so a leg
+ * can say the contact has no note. */
+static void
+report_notes (const gchar *prefix,
+              EContact *contact)
+{
+	const gchar *note = e_contact_get_const (contact, E_CONTACT_NOTE);
+	GList *attribute;
+	guint lines = 0;
+
+	g_print ("%s-note=%s\n", prefix, note ? note : "");
+
+	for (attribute = e_vcard_get_attributes (E_VCARD (contact));
+	     attribute;
+	     attribute = attribute->next) {
+		const gchar *name = e_vcard_attribute_get_name (attribute->data);
+
+		/* Case-insensitively, because that is what RFC 2426 §5 says a
+		 * property name is compared as — a card whose lines came back
+		 * spelled `Note` would otherwise be counted as carrying none. */
+		if (name && g_ascii_strcasecmp (name, EVC_NOTE) == 0)
+			lines++;
+	}
+
+	g_print ("%s-note-lines=%u\n", prefix, lines);
+}
+
 /* The first phase: an empty book, one contact written into it with every
  * mapped property set, and that contact read back. */
 static int
@@ -615,6 +654,9 @@ report_seeded_contact (EContact *contact)
 	 * itself. */
 	report_calendars ("read", contact);
 	report_spouse ("read", contact);
+	/* And the notes, which are the one property of which the card holds more
+	 * than the user is shown — hence the line count beside the field. */
+	report_notes ("read", contact);
 }
 
 /* Save an edited contact and report what EDS holds for it afterwards. Takes
@@ -655,6 +697,7 @@ save_and_report (EBookClient *book,
 	report_photo ("read-back", read_back);
 	report_calendars ("read-back", read_back);
 	report_spouse ("read-back", read_back);
+	report_notes ("read-back", read_back);
 	g_object_unref (read_back);
 
 	return 0;
@@ -880,6 +923,45 @@ unspouse_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
+/* The eighth phase: the user retypes their note, on a card the server filed two
+ * notes on.
+ *
+ * The one property of which Evolution shows the user *part of a map* and lets
+ * them edit it anyway: E_CONTACT_NOTE is the first NOTE line, and every `notes`
+ * entry writes a line, so the second note sits behind the field with nothing in
+ * the UI saying it is there. What the daemons are asked is therefore two
+ * questions at once, and neither can be answered from below them — whether a set
+ * rewrites the first line in place with its parameters (the X-JMAP-KEY that says
+ * which entry this is) still on it, and whether the second line is still on the
+ * card afterwards. A set that took every line of the name with it would make a
+ * user editing their note delete one they were never shown.
+ *
+ * Only the note is set. Everything else the seeded card carries is what says a
+ * patch aimed at one entry did not land on the map. */
+static int
+renote_phase (EBookClient *book,
+              const gchar *uid,
+              const gchar *note)
+{
+	EContact *contact;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	report_seeded_contact (contact);
+
+	e_contact_set (contact, E_CONTACT_NOTE, note);
+
+	/* The card as the save is about to be handed it, before the modify: what
+	 * the field reads as, and how many lines of that name the set left. */
+	report_notes ("retyped", contact);
+
+	return save_and_report (book, contact, uid);
+}
+
 static void
 usage (const gchar *program)
 {
@@ -889,8 +971,10 @@ usage (const gchar *program)
 		    "       %s <source-uid> repicture <contact-uid> <photo-base64>\n"
 		    "       %s <source-uid> recalendar <contact-uid> <calendar-uri>\n"
 		    "       %s <source-uid> respouse <contact-uid> <spouse>\n"
-		    "       %s <source-uid> unspouse <contact-uid>\n",
-		    program, program, program, program, program, program, program);
+		    "       %s <source-uid> unspouse <contact-uid>\n"
+		    "       %s <source-uid> renote <contact-uid> <note>\n",
+		    program, program, program, program, program, program, program,
+		    program);
 }
 
 int
@@ -920,7 +1004,8 @@ main (int argc,
 	      (g_str_equal (phase, "repicture") && argc == 5) ||
 	      (g_str_equal (phase, "recalendar") && argc == 5) ||
 	      (g_str_equal (phase, "respouse") && argc == 5) ||
-	      (g_str_equal (phase, "unspouse") && argc == 4))) {
+	      (g_str_equal (phase, "unspouse") && argc == 4) ||
+	      (g_str_equal (phase, "renote") && argc == 5))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -987,8 +1072,10 @@ main (int argc,
 		status = recalendar_phase (book, argv[3], argv[4]);
 	else if (g_str_equal (phase, "respouse"))
 		status = respouse_phase (book, argv[3], argv[4]);
-	else
+	else if (g_str_equal (phase, "unspouse"))
 		status = unspouse_phase (book, argv[3]);
+	else
+		status = renote_phase (book, argv[3], argv[4]);
 
 	g_object_unref (client);
 	g_object_unref (source);
