@@ -31,7 +31,11 @@
 //!   and a component that still says what it said keeps the members that value
 //!   had no field for either — its `phonetic` spelling above all. Their order
 //!   is the server's, so that opening a contact and closing it again writes
-//!   nothing even when the `N` fields state them in another order.
+//!   nothing even when the `N` fields state them in another order. And as with
+//!   an address, matching by value first needs the components that shared one
+//!   field told apart again: both halves of a double-barrelled given name are
+//!   written into `N`'s second field and come back as one component holding
+//!   them both.
 //! - `organizations` entries hold a `sortAs` and `contexts` the `ORG` line
 //!   has nowhere to put, so the entry is patched member by member
 //!   (`organizations/work/name`) rather than replaced. Its `units` are a
@@ -102,9 +106,9 @@ use jmap_proto::contacts::{
 use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
     maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
-    same_service, states_a_point_in_time, states_address, states_anniversary, states_email,
-    states_keyword, states_link, states_nickname, states_note, states_online_service,
-    states_organization, states_phone, states_title, title_kind,
+    restore_name_components, same_service, states_a_point_in_time, states_address,
+    states_anniversary, states_email, states_keyword, states_link, states_nickname, states_note,
+    states_online_service, states_organization, states_phone, states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -227,10 +231,18 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
     // by — so it is merged the way an address's components are: a component
     // that still says what it says keeps the members the `N` value had no
     // field for, its `phonetic` spelling above all, and one of a kind that
-    // value cannot state at all is not the user's to have deleted.
+    // value cannot state at all is not the user's to have deleted. And as
+    // there, the matching by value only works once the components that shared
+    // one `N` field have been told apart again — a double-barrelled given name
+    // comes back as one component holding both halves, and would otherwise read
+    // as both halves deleted and replaced by their own concatenation.
+    let current_components = current.components.as_deref().unwrap_or_default();
     let merged = merge_named(
-        current.components.as_deref().unwrap_or_default(),
-        edited.components.as_deref().unwrap_or_default(),
+        current_components,
+        &restore_name_components(
+            current_components,
+            edited.components.as_deref().unwrap_or_default(),
+        ),
         |component| (&component.kind, &component.value),
         maps_name_component,
     );
