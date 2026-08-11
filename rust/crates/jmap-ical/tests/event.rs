@@ -5084,6 +5084,415 @@ fn a_time_zone_is_a_name_or_it_is_not_one() {
     }
 }
 
+/// The identifier of a zone no database names — RFC 8984 §1.4.9's other form,
+/// which MUST begin with a solidus and which the event itself defines. It is
+/// what an Exchange invitation's own `VTIMEZONE` becomes when a server converts
+/// the invitation to JSCalendar, so it is what arrives from a JMAP account that
+/// holds one.
+const CUSTOM_TZID: &str = "/example.com/Europe-Berlin";
+
+/// The definition of [`CUSTOM_TZID`] as RFC 8984 §4.7.2 spells one: central
+/// Europe, with the two observances it moves between and the rule that says
+/// when.
+fn custom_zone() -> Value {
+    json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CEST": true},
+        }],
+    })
+}
+
+/// The `VTIMEZONE` [`custom_zone`] has to be drawn as, and the whole of it: the
+/// two observances, the offsets on either side of each, the rule that repeats
+/// them and the names a reader shows.
+const CUSTOM_DEFINITION: &str = "BEGIN:VTIMEZONE\r\n\
+     TZID:/example.com/Europe-Berlin\r\n\
+     BEGIN:STANDARD\r\n\
+     DTSTART:19701025T030000\r\n\
+     TZOFFSETFROM:+0200\r\n\
+     TZOFFSETTO:+0100\r\n\
+     RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+     TZNAME:CET\r\n\
+     END:STANDARD\r\n\
+     BEGIN:DAYLIGHT\r\n\
+     DTSTART:19700329T020000\r\n\
+     TZOFFSETFROM:+0100\r\n\
+     TZOFFSETTO:+0200\r\n\
+     RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+     TZNAME:CEST\r\n\
+     END:DAYLIGHT\r\n\
+     END:VTIMEZONE\r\n";
+
+/// An event at 13:00 in `zone`, carrying `definitions` as its RFC 8984 §4.7.2
+/// `timeZones`.
+fn defining(zone: &str, definitions: Value) -> CalendarEvent {
+    CalendarEvent {
+        id: Some("E9".into()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some(zone.to_owned()),
+        duration: Some("PT1H".to_owned()),
+        time_zones: serde_json::from_value(definitions).expect("a map of time zones"),
+        ..CalendarEvent::default()
+    }
+}
+
+/// A zone the reader cannot look up has to be defined in the document that
+/// refers to it, and RFC 8984 §4.7.2 is where the definition comes from.
+///
+/// This is the one `TZID` the mapping cannot lean on the consumer for. An IANA
+/// name libical resolves out of its builtin table; a custom identifier resolves
+/// nowhere, so a `DTSTART` naming one and defining nothing is a wall-clock time
+/// in no particular zone — libical floats it and the appointment lands hours
+/// from where the server put it.
+#[test]
+fn a_custom_zone_the_event_defines_is_defined_in_the_document() {
+    let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()})));
+
+    assert_eq!(
+        line(vevent(&ics, 0), "DTSTART"),
+        format!("DTSTART;TZID={CUSTOM_TZID}:20260115T130000"),
+        "{ics}"
+    );
+    assert!(
+        ics.contains(CUSTOM_DEFINITION),
+        "the zone the event names is not defined as it was given: {ics}"
+    );
+    // RFC 5545 §3.6's `icalbody` grammar puts the components in no particular
+    // order, but a reader that resolves a `TZID` as it walks wants the
+    // definition first, and it is what every emitter writes.
+    assert!(
+        ics.find("BEGIN:VTIMEZONE") < ics.find("BEGIN:VEVENT"),
+        "the definition follows the event that refers to it: {ics}"
+    );
+}
+
+/// The identifier survives the round trip as itself, which is what makes the
+/// save path leave it alone: [`names_time_zone`] refuses a custom identifier, so
+/// `patch::diff` never sends one — the zone stays the server's, definition and
+/// all.
+#[test]
+fn a_custom_zone_is_read_back_as_the_identifier_it_was_drawn_with() {
+    let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()})));
+
+    let back = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(back.time_zone.as_deref(), Some(CUSTOM_TZID));
+    assert_eq!(back.start.as_deref(), Some("2026-01-15T13:00:00"));
+    // The definitions are the server's own and no save writes them back, so
+    // nothing reads them off the document either — see `read_vevent`.
+    assert_eq!(back.time_zones, None);
+}
+
+/// A definition keyed without the solidus RFC 8984 §1.4.9 requires of the
+/// identifier still defines the zone. §4.7.2 types the map as `Id[TimeZone]` and
+/// §1.4.4's `Id` grammar has no solidus in it, so the two readings of where the
+/// prefix lives are both in the document; a zone left undefined because the
+/// server chose the other one would be a silent hour.
+#[test]
+fn a_definition_keyed_without_the_solidus_defines_the_zone_too() {
+    let ics = event_to_ical(&defining(
+        CUSTOM_TZID,
+        json!({"example.com/Europe-Berlin": custom_zone()}),
+    ));
+
+    assert!(ics.contains(CUSTOM_DEFINITION), "{ics}");
+}
+
+/// A zone that has a name needs no definition from us: libical resolves an IANA
+/// name out of its builtin table, `jmap-backend-cal` puts *that* definition in
+/// the object EDS caches, and a database is a better description of a zone than
+/// whatever a server was able to state about it.
+#[test]
+fn a_zone_with_a_name_of_its_own_is_left_to_the_reader() {
+    let ics = event_to_ical(&defining(
+        "Europe/Berlin",
+        json!({"Europe/Berlin": custom_zone()}),
+    ));
+
+    assert!(
+        without(&ics, "BEGIN:VTIMEZONE"),
+        "a name the reader can look up was defined anyway: {ics}"
+    );
+    assert_eq!(
+        line(&ics, "DTSTART"),
+        "DTSTART;TZID=Europe/Berlin:20260115T130000"
+    );
+}
+
+/// A custom identifier the event defines nothing for is drawn as it came and
+/// left undefined — the state everything was in before this existed. The value
+/// has to reach the component either way: the save path tells a zone this
+/// mapping cannot name from no zone at all, and reading the first as the second
+/// would clear the server's zone on an edit that never touched it.
+#[test]
+fn a_custom_zone_with_no_definition_is_named_and_left_undefined() {
+    for definitions in [
+        json!(null),
+        json!({"/example.com/Elsewhere": custom_zone()}),
+    ] {
+        let ics = event_to_ical(&defining(CUSTOM_TZID, definitions));
+
+        assert!(without(&ics, "BEGIN:VTIMEZONE"), "{ics}");
+        assert_eq!(
+            line(vevent(&ics, 0), "DTSTART"),
+            format!("DTSTART;TZID={CUSTOM_TZID}:20260115T130000")
+        );
+    }
+}
+
+/// A definition with a part this mapping cannot draw is not drawn in part.
+///
+/// Every observance of a zone describes the offsets between the transitions the
+/// others name, so a `VTIMEZONE` missing one is not a narrowed description of the
+/// zone — it is a different zone, and an event in it is at a different instant.
+/// Half a definition is therefore worse than none: none leaves the reader
+/// floating the event, which is visibly wrong, where half of one is confidently
+/// wrong by an hour.
+#[test]
+fn a_definition_this_mapping_cannot_draw_whole_is_not_drawn_at_all() {
+    let unmappable = [
+        // No offset to move to, which RFC 5545 §3.6.5 makes REQUIRED of every
+        // observance — and without it there is nothing to say what the zone is.
+        json!({"start": "1970-10-25T03:00:00", "offsetFrom": "+0200"}),
+        // An offset that is not one.
+        json!({
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "an hour or so",
+        }),
+        // A start that names no instant.
+        json!({
+            "start": "1970-10-25",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+        }),
+        // A rule with no frequency has no `RRULE` spelling at all, so the
+        // observance would be drawn as happening once — the transition stops
+        // repeating and every date after 1970 is in the other observance.
+        json!({
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRules": [{"@type": "RecurrenceRule", "interval": 1}],
+        }),
+    ];
+
+    for rule in unmappable {
+        let mut zone = custom_zone();
+        zone["standard"] = json!([rule]);
+        let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: zone})));
+
+        assert!(
+            without(&ics, "BEGIN:VTIMEZONE"),
+            "a zone was defined from a rule that cannot be drawn: {ics}"
+        );
+    }
+}
+
+/// A zone with no observance in it is no definition: RFC 5545 §3.6.5 requires at
+/// least one `STANDARD` or `DAYLIGHT` subcomponent, and libical refuses a
+/// `VTIMEZONE` without one — which would cost the whole object, not just the
+/// zone.
+#[test]
+fn a_zone_stating_no_observance_is_not_drawn() {
+    for zone in [
+        json!({"@type": "TimeZone", "tzId": CUSTOM_TZID}),
+        json!({"@type": "TimeZone", "tzId": CUSTOM_TZID, "standard": []}),
+        json!("Europe/Berlin"),
+    ] {
+        let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: zone})));
+
+        assert!(without(&ics, "BEGIN:VTIMEZONE"), "{ics}");
+    }
+}
+
+/// A zone with one observance and no rule is a zone that never moves — most of
+/// the world — and is drawn with the one it has.
+#[test]
+fn a_zone_that_never_changes_is_drawn_with_the_one_observance_it_has() {
+    let zone = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-01-01T00:00:00",
+            "offsetFrom": "+05:45",
+            "offsetTo": "+05:45",
+            "names": {"+0545": true},
+        }],
+    });
+    let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: zone})));
+
+    assert!(
+        ics.contains(
+            "BEGIN:VTIMEZONE\r\n\
+             TZID:/example.com/Europe-Berlin\r\n\
+             BEGIN:STANDARD\r\n\
+             DTSTART:19700101T000000\r\n\
+             TZOFFSETFROM:+0545\r\n\
+             TZOFFSETTO:+0545\r\n\
+             TZNAME:+0545\r\n\
+             END:STANDARD\r\n\
+             END:VTIMEZONE\r\n"
+        ),
+        "{ics}"
+    );
+}
+
+/// The offsets are the one place the two formats may spell the same thing
+/// differently. RFC 5545 §3.3.14's UTC-OFFSET is `±hhmm[ss]` with no separators;
+/// RFC 8984 §4.7.2 states the same value and the JSON forms in the wild put
+/// colons in it. Both are read, and what is written is iCalendar's.
+#[test]
+fn an_offset_is_drawn_the_way_icalendar_spells_one() {
+    for (stated, drawn) in [
+        ("+0200", "+0200"),
+        ("+02:00", "+0200"),
+        ("-0330", "-0330"),
+        ("-03:30", "-0330"),
+        ("+0000", "+0000"),
+        // Seconds, which historical offsets carry and §3.3.14 admits.
+        ("+00:53:28", "+005328"),
+        ("+005328", "+005328"),
+        // A whole number of minutes keeps the short form, whichever way the
+        // server stated it.
+        ("+020000", "+0200"),
+    ] {
+        let zone = json!({
+            "@type": "TimeZone",
+            "standard": [{
+                "start": "1970-01-01T00:00:00",
+                "offsetFrom": stated,
+                "offsetTo": stated,
+            }],
+        });
+        let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: zone})));
+
+        assert!(
+            ics.contains(&format!("TZOFFSETFROM:{drawn}\r\nTZOFFSETTO:{drawn}\r\n")),
+            "{stated} was not drawn as {drawn}: {ics}"
+        );
+    }
+}
+
+/// And a value that is not an offset defines no zone. `-0000` is the one the
+/// grammar picks out by name: RFC 5545 §3.3.14 forbids it, because the sign is
+/// what says which side of UTC the zone is on and there is no negative zero.
+#[test]
+fn a_value_that_is_no_offset_defines_no_zone() {
+    for stated in [
+        "-0000",
+        "-000000",
+        "0200",
+        "+2",
+        "+2:00",
+        "+2400",
+        "+0260",
+        "+00:53:61",
+        "+02:00:00:00",
+        "",
+        "+02 00",
+    ] {
+        let zone = json!({
+            "@type": "TimeZone",
+            "standard": [{
+                "start": "1970-01-01T00:00:00",
+                "offsetFrom": "+0200",
+                "offsetTo": stated,
+            }],
+        });
+        let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: zone})));
+
+        assert!(
+            without(&ics, "BEGIN:VTIMEZONE"),
+            "{stated:?} was drawn as an offset: {ics}"
+        );
+    }
+}
+
+/// One definition is all a document needs, however many components it holds: the
+/// only `TZID` that can be a custom identifier is the series'.
+///
+/// An override may restate `timeZone`, but `maps_override_field` admits only a
+/// value `names_time_zone` accepts, so an instance moved into a custom zone is
+/// drawn at the series' zone instead — the same refusal that keeps a save from
+/// sending a `recurrenceOverrides` map the server would reject. Which is just as
+/// well, since a second copy of one `VTIMEZONE` is a duplicate `TZID` in one
+/// object, and two of them would be two definitions of the same zone.
+#[test]
+fn an_instance_names_no_zone_the_series_did_not() {
+    let event = CalendarEvent {
+        recurrence_rules: Some(vec![RecurrenceRule {
+            frequency: "daily".to_owned(),
+            ..RecurrenceRule::default()
+        }]),
+        recurrence_overrides: serde_json::from_value(json!({
+            "2026-01-16T13:00:00": {"timeZone": "/example.com/Elsewhere", "title": "Moved"},
+        }))
+        .expect("a map of overrides"),
+        ..defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}))
+    };
+
+    let ics = event_to_ical(&event);
+
+    assert_eq!(
+        ics.matches("BEGIN:VTIMEZONE").count(),
+        1,
+        "the document defines a zone twice, or one it does not name: {ics}"
+    );
+    assert!(ics.contains(&format!("TZID:{CUSTOM_TZID}\r\n")), "{ics}");
+    assert_eq!(
+        line(vevent(&ics, 1), "DTSTART"),
+        format!("DTSTART;TZID={CUSTOM_TZID}:20260116T130000"),
+        "the instance was drawn in a zone the document does not define: {ics}"
+    );
+}
+
+/// An all-day event names no zone at all — its `DTSTART` is a date, which RFC
+/// 5545 §3.2.19 gives no `TZID` to carry one on — so there is nothing to define.
+#[test]
+fn an_event_written_as_a_date_defines_no_zone() {
+    let event = CalendarEvent {
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        time_zone: None,
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        time_zones: serde_json::from_value(json!({CUSTOM_TZID: custom_zone()}))
+            .expect("a map of time zones"),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&event);
+
+    assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
+    assert!(without(&ics, "BEGIN:VTIMEZONE"), "{ics}");
+}
+
 #[test]
 fn the_fixture_survives_a_round_trip() {
     let event = ical_to_event(&event_to_ical(&fixture_event())).expect("parse");
