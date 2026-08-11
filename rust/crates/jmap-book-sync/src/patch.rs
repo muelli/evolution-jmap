@@ -5,20 +5,12 @@
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, NICKNAME,
-//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, CATEGORIES, the
+//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, PHOTO, CATEGORIES, the
 //! instant-messaging `X-` lines and the two date lines, and drops everything
 //! else, so a save that sent the parsed card back whole would silently delete
 //! the properties it could not represent — preferred languages, what the
 //! contact is spoken to as, the crypto keys a card lists — none of which the
 //! user ever saw, let alone asked to remove.
-//!
-//! The picture a card carries is a third case: the vCard *states* it on a
-//! `PHOTO` line, so the user does see it, but nothing reads that line back, so
-//! `media` reaches this module absent from both cards and is left alone. Which
-//! is right until a save can carry the photo the user chose — and when it can,
-//! the entry it patches cannot be found by its key, because EDS rebuilds a
-//! `PHOTO` line out of the photo it holds and drops the parameters, as it does
-//! for a date line.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
 //! that is the subtler half of this module:
@@ -63,6 +55,10 @@
 //!   nickname's is: what the resource is and how strongly it is preferred have
 //!   no parameter on a `URL` line. Their key survives Evolution — EDS rewrites
 //!   the value of that line in place and leaves the parameters where they were.
+//! - `media` entries have no surviving key either, and are patched by what the
+//!   `PHOTO` line states rather than by their members — a picture read back off
+//!   a line is not the entry that produced it. Only the first of them is ever
+//!   the one the user edited. See [`diff_media`].
 //! - `anniversaries` entries have no key to be patched by at all: EDS keeps a
 //!   birthday in a structured field and rebuilds the line out of it, dropping
 //!   the `X-JMAP-KEY`, so the entry an edited date belongs to is found by what
@@ -108,15 +104,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Name,
-    Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Link, Media,
+    Name, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
     maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
-    restore_name_components, same_service, states_a_point_in_time, states_address,
-    states_anniversary, states_email, states_keyword, states_link, states_nickname, states_note,
-    states_online_service, states_organization, states_phone, states_title, title_kind,
+    restore_name_components, same_photo, same_service, states_a_point_in_time, states_address,
+    states_anniversary, states_email, states_keyword, states_link, states_media, states_nickname,
+    states_note, states_online_service, states_organization, states_phone, states_title,
+    title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -150,6 +147,7 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.anniversaries.as_ref(),
     );
     diff_links(&mut patch, current.links.as_ref(), edited.links.as_ref());
+    diff_media(&mut patch, current.media.as_ref(), edited.media.as_ref());
     diff_online_services(
         &mut patch,
         current.online_services.as_ref(),
@@ -491,6 +489,59 @@ fn diff_links(
     );
 }
 
+/// The picture of the contact, which is the one media kind a vCard 3.0 `PHOTO`
+/// line states and therefore the one an Evolution user can change.
+///
+/// Two things here are the `PHOTO` line's own. First, the entry a chosen picture
+/// belongs to cannot be found by its key: EDS rebuilds the line out of the photo
+/// it holds and drops the parameters, as it does for a date — so a keyless
+/// picture is paired with the one it replaced ([`rekey_keyless`]), which is
+/// enough because Evolution edits exactly one of them. Measured against
+/// libebook-contacts 3.52: `E_CONTACT_PHOTO` reports the *first* `PHOTO` line,
+/// a `set` rewrites that line in place and leaves the rest — keys and all —
+/// where they were, and clearing the field removes that one line only. So a card
+/// carrying several pictures has only its first edited, and the others come back
+/// wearing their keys and are matched by them.
+///
+/// Second, what changed is asked of the *line* rather than of the members
+/// ([`same_photo`]): the entry read back off a line is not the entry that
+/// produced it — a `data:` URI may have been spelled without its base64 padding,
+/// and a media type it stated arrives as the entry's own `mediaType` — so
+/// comparing members would rewrite a picture nobody touched on every save.
+/// Once the line really has changed, both members go back, because between them
+/// they are what the new picture *is*.
+fn diff_media(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Media>>,
+    edited: Option<&BTreeMap<String, Media>>,
+) {
+    let edited = rekey_keyless(current, edited, states_media, |_, _| true);
+    diff_entries(
+        patch,
+        "media",
+        current,
+        edited.as_ref(),
+        states_media,
+        |patch, path, old, new| {
+            // The line the picture is stated on *is* its kind — a `PHOTO` is the
+            // photo — so a sound or a logo cannot arrive here, and `kind` has
+            // nothing to be patched to.
+            if same_photo(old, new) {
+                return;
+            }
+            if old.uri != new.uri {
+                patch.insert(format!("{path}/uri"), Value::String(new.uri.clone()));
+            }
+            if old.media_type != new.media_type {
+                patch.insert(
+                    format!("{path}/mediaType"),
+                    value_or_null(new.media_type.as_ref()),
+                );
+            }
+        },
+    );
+}
+
 fn diff_online_services(
     patch: &mut Map<String, Value>,
     current: Option<&BTreeMap<String, OnlineService>>,
@@ -559,7 +610,12 @@ fn diff_anniversaries(
     current: Option<&BTreeMap<String, Anniversary>>,
     edited: Option<&BTreeMap<String, Anniversary>>,
 ) {
-    let edited = rekey_anniversaries(current, edited);
+    // The entry a keyless date belongs to is found by what kind of date it is,
+    // which is enough because Evolution has exactly one field per kind: the
+    // birthday it hands back is the birthday the card already had.
+    let edited = rekey_keyless(current, edited, states_anniversary, |old, new| {
+        old.kind == new.kind
+    });
     diff_entries(
         patch,
         "anniversaries",
@@ -599,37 +655,49 @@ fn diff_anniversaries(
     );
 }
 
-/// The edited anniversaries under the keys the server holds them by.
+/// The edited entries of a keyed map whose key does not survive Evolution, under
+/// the keys the server holds them by.
 ///
-/// Every other keyed map crosses with its key in `X-JMAP-KEY` and comes back
-/// wearing it. The dates do not: EDS keeps the birthday in a structured field
-/// and rebuilds the line out of it, dropping the parameters — verified against
-/// libebook-contacts 3.52, where an untouched line keeps them and a rewritten
-/// one does not. So the entry a keyless date belongs to is found by what kind
-/// of date it is, which is enough because Evolution has exactly one field per
-/// kind: the birthday it hands back is the birthday the card already had.
+/// Most mapped maps cross with their key in `X-JMAP-KEY` and come back wearing
+/// it. Two do not — the dates and the pictures — because EDS keeps each in a
+/// structured field and rebuilds the line out of what it holds, dropping the
+/// parameters: verified against libebook-contacts 3.52, where an untouched line
+/// keeps them and a rewritten one does not. So a keyless entry is paired with an
+/// entry the server holds that `pairs_with` accepts — by what kind of date it is,
+/// or, for a picture, with whichever comes first, since Evolution edits the first
+/// `PHOTO` line and no other.
 ///
-/// Entries of one kind are paired in order, and an entry whose key *did*
-/// survive keeps it and is not paired against — otherwise a card carrying two
-/// birthdays, of which Evolution shows the first and passes the second
-/// through untouched, would have them swapped by every save.
-fn rekey_anniversaries(
-    current: Option<&BTreeMap<String, Anniversary>>,
-    edited: Option<&BTreeMap<String, Anniversary>>,
-) -> Option<BTreeMap<String, Anniversary>> {
+/// Candidates are paired in order, and an entry whose key *did* survive keeps it
+/// and is not paired against — otherwise a card carrying two birthdays, of which
+/// Evolution shows the first and passes the second through untouched, would have
+/// them swapped by every save.
+///
+/// Only *visible* entries are candidates, and a key an invisible entry holds is
+/// not treated as surviving: the reader invents keys by counting the entries it
+/// can see, so the key it gives a picture can be the key of a logo the user was
+/// never shown. Pairing past that collision keeps the edit on the entry it
+/// belongs to; [`diff_entries`] is what then keeps the invisible entry's key from
+/// being taken.
+fn rekey_keyless<T: Clone>(
+    current: Option<&BTreeMap<String, T>>,
+    edited: Option<&BTreeMap<String, T>>,
+    is_visible: impl Fn(&T) -> bool,
+    pairs_with: impl Fn(&T, &T) -> bool,
+) -> Option<BTreeMap<String, T>> {
     let edited = edited?;
     let empty = BTreeMap::new();
     let current = current.unwrap_or(&empty);
-    let mut unclaimed: Vec<(&String, &Anniversary)> = current
+    let survived = |key: &String| current.get(key).is_some_and(&is_visible);
+    let mut unclaimed: Vec<(&String, &T)> = current
         .iter()
-        .filter(|(key, entry)| states_anniversary(entry) && !edited.contains_key(*key))
+        .filter(|(key, entry)| is_visible(entry) && !edited.contains_key(*key))
         .collect();
 
     let mut rekeyed = BTreeMap::new();
     for (key, entry) in edited {
-        let key = match current.contains_key(key) {
+        let key = match survived(key) {
             true => key.clone(),
-            false => match unclaimed.iter().position(|(_, old)| old.kind == entry.kind) {
+            false => match unclaimed.iter().position(|(_, old)| pairs_with(old, entry)) {
                 Some(index) => unclaimed.remove(index).0.clone(),
                 None => key.clone(),
             },

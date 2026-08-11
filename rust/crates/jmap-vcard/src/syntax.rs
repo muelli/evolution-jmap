@@ -49,6 +49,9 @@ pub struct Property {
     /// The parts of the value, separated by [`Self::separator`] on the wire; a
     /// plain property has one.
     values: Vec<String>,
+    /// The value of a line whose bytes are not text, already decoded — see
+    /// [`Self::binary`]. Empty for everything this crate writes.
+    binary: Option<Vec<u8>>,
     /// The character that separates the values when the line is written: `;`
     /// for a structured value, `,` for a `text-list`. A reader does not need
     /// it — calcard has already split the value by whichever one its property's
@@ -71,6 +74,7 @@ impl Property {
             name: name.to_ascii_uppercase(),
             params: Vec::new(),
             values: vec![value.to_owned()],
+            binary: None,
             separator: COMPONENT,
         }
     }
@@ -90,6 +94,7 @@ impl Property {
                 .into_iter()
                 .map(|component| component.as_ref().to_owned())
                 .collect(),
+            binary: None,
             separator: COMPONENT,
         }
     }
@@ -160,6 +165,18 @@ impl Property {
     /// The value split into its `;`-separated components.
     pub fn components(&self) -> Vec<String> {
         self.values.clone()
+    }
+
+    /// The value of a line carrying bytes rather than text — a `PHOTO` under
+    /// `ENCODING=b` — with the transfer encoding already undone.
+    ///
+    /// `None` where the value *is* text, which for such a line means the bytes
+    /// happened to be valid UTF-8: calcard decodes the base64 either way and
+    /// surfaces bytes only when they are not a string. A picture that is text —
+    /// an SVG — therefore arrives through [`Self::text`], and a reader of a line
+    /// that may carry either has to take both paths.
+    pub fn binary(&self) -> Option<&[u8]> {
+        self.binary.as_deref()
     }
 
     /// The items of a `text-list` property (RFC 2425 §5.8.4), one per
@@ -259,6 +276,10 @@ fn from_entry(entry: &VCardEntry) -> Property {
             })
             .collect(),
         values: entry.values.iter().filter_map(value_text).collect(),
+        binary: entry.values.iter().find_map(|value| match value {
+            VCardValue::Binary(data) => Some(data.data.clone()),
+            _ => None,
+        }),
         // A parsed property is read, never written back out — the mapping
         // builds the vCard it emits from scratch — so this only has to be
         // something: the values are already split.
@@ -290,12 +311,14 @@ fn param_text(value: &VCardParameterValue) -> String {
 
 /// A value as the mapping reads it, or `None` for one it has no text for.
 ///
-/// Text and dates are surfaced, which between them cover the mapped property
-/// set — UID, FN, N, EMAIL, TEL, `BDAY` and the `X-` lines. A value of any
-/// other shape belongs to a property nothing here reads (a `PHOTO`'s binary,
-/// a `GEO`'s floats), and dropping it loses nothing: the vCard it came from is
-/// EDS's copy and stays as it is, and a JSContact property this mapping never
-/// mapped is one it never overwrites.
+/// Text and dates are surfaced, which between them cover every mapped property
+/// whose value is text — UID, FN, N, EMAIL, TEL, `BDAY` and the `X-` lines. A
+/// `PHOTO`'s bytes are the one mapped value that is not, and they are carried
+/// beside these by [`Property::binary`] rather than turned into a string. A
+/// value of any other shape belongs to a property nothing here reads (a `GEO`'s
+/// floats), and dropping it loses nothing: the vCard it came from is EDS's copy
+/// and stays as it is, and a JSContact property this mapping never mapped is one
+/// it never overwrites.
 fn value_text(value: &VCardValue) -> Option<String> {
     match value {
         VCardValue::Text(text) => Some(text.clone()),
