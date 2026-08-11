@@ -187,7 +187,7 @@ ordering worth waiting out rather than flaking on.
 
 ### The picture: what a meta backend does to a photo behind the backend's back
 
-The contact's photo crosses all six book legs, and it is the one property where
+The contact's photo crosses all seven book legs, and it is the one property where
 EDS does something to the data on its own initiative — which is why it needs real
 daemons rather than a fixture. Two facts, both measured here against EDS 3.52,
 and neither of them anything this repository asks for:
@@ -287,7 +287,42 @@ The first book leg covers the other direction: a contact written through
 `e_book_client_add_contact_sync` with the Spouse field set reaches the server as
 one `relatedTo` entry, keyed by the name and stating `spouse`. The other four
 seeded legs assert the whole `relatedTo` map is untouched by an edit elsewhere,
-so dropping the spouse line from the emitter turns all six legs red at once.
+so dropping the spouse line from the emitter turns all seven legs red at once.
+
+### Clearing that field: the withdrawal with nothing to put in its place
+
+The seventh leg
+(`clearing_the_spouse_through_eds_withdraws_the_marriage_and_keeps_the_brother`)
+is the other half of the sixth, and it reaches the one branch of the save no
+other leg can: an edited card stating **no** relations at all. Every leg above
+hands the save a `relatedTo` holding something, so a withdrawal with nothing
+claimed in its place had only ever been driven against fixtures.
+
+It also settles a question those fixtures could only assume. What EDS does to
+the line when the field is emptied was inferred by analogy with another field;
+here the client reports it, and against libebook-contacts 3.52 the answer is
+that `e_contact_set (contact, E_CONTACT_SPOUSE, "")` — the empty string, which is
+what Evolution's contact editor hands over for an entry the user emptied — leaves
+the attribute in place holding no value, while `NULL` removes it outright. The
+mapping withdraws the marriage either way, because the reader refuses a line
+naming nobody, and the leg passes against both cards; so the observation is
+*printed* and the assertion is the version-robust one — whatever became of the
+line, the field Evolution shows must read empty.
+
+What the leg asserts, on the same seeded card:
+
+- the marriage the card started from was read by EDS, so the clearing is of
+  something that was there;
+- the server ends up relating the card to the **brother alone** — the marriage
+  withdrawn, and the property still present rather than taken back whole. Drop
+  the guard in `diff_related_to` that distinguishes "every entry was a marriage"
+  from "one of them was" (`withdrawn.len() == current.len()`) and the save
+  answers an emptied field with `relatedTo: null`, deleting a relation of a type
+  no field shows: this leg goes red, and so does the fixture test that models
+  the same edit (`clearing_the_spouse_field_keeps_a_relation_the_line_never_showed`
+  in `jmap-book-sync`). What the leg adds over that fixture is the input — the
+  fixture *states* the card a cleared field produces, and only the daemons can
+  say EDS produces it.
 
 ## What the calendar test asserts
 
