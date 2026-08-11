@@ -1714,6 +1714,12 @@ fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> 
         // Form 3. libical resolves an IANA name from its built-in zone table, so
         // no VTIMEZONE is emitted; a zone it does not know falls back to
         // floating on its side, which is the same guess we would have to make.
+        // RFC 5545 §3.2.19 has the document define what a `TZID` refers to, so
+        // this is the one place the mapping leans on the consumer instead — and
+        // it is measured rather than assumed: `jmap-functional`'s second calendar
+        // leg reads such a start back through real EDS and holds a libecal
+        // consumer to the instant it means, two hours from where a floating one
+        // would land.
         (false, Some(zone)) => Property::raw(name, &join(&String::clone)).with_param("TZID", zone),
         // Form 1, floating. Inventing UTC here would move the event.
         (false, None) => Property::raw(name, &join(&String::clone)),

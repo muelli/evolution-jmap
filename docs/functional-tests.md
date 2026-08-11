@@ -583,12 +583,17 @@ connected, holding entries a line can only draw part of:
   iCalendar splits between RFC 5545 §3.8.1.1's `ATTACH` and RFC 7986 §5.10's
   `IMAGE`, and the `rel` is what tells them apart,
 
-each under a key only a server would choose. The client waits for the event to
-become gettable, reports what EDS gave it, retypes the `LOCATION` (the field
-Evolution's appointment editor writes) and the `CONFERENCE` value,
-re-addresses one of the two `ATTACH` lines and the `IMAGE` — each named by the
-address it already carries, which is how a user picks the resource they meant —
-and saves.
+each under a key only a server would choose. The event also **starts in a named
+zone** rather than in UTC, which is the one thing here that is not about a map:
+`jmap-ical` draws a UTC start as a `DTSTART` ending in `Z`, naming no identifier,
+but a named zone goes out as `DTSTART;TZID=Europe/Berlin` with **no `VTIMEZONE`**
+defining it — RFC 5545 §3.2.19 has the document define what a `TZID` refers to,
+and the mapping leans on the consumer's zone database instead, having none of its
+own to build one from. The client waits for the event to become gettable, reports
+what EDS gave it, retypes the `LOCATION` (the field Evolution's appointment editor
+writes) and the `CONFERENCE` value, re-addresses one of the two `ATTACH` lines and
+the `IMAGE` — each named by the address it already carries, which is how a user
+picks the resource they meant — and saves.
 
 What it asserts, and why each observation is separate:
 
@@ -636,7 +641,21 @@ What it asserts, and why each observation is separate:
   server's own too, since the property name is the whole of what the line says
   about them;
 - **the entry keys did not move** and the event was not renamed, so the save
-  patched the event rather than replacing it with what one component can state.
+  patched the event rather than replacing it with what one component can state;
+- **the start means the instant the server means.** Three observations, before the
+  save and after it: the wall clock on the `DTSTART` line, the `TZID` verbatim, and
+  what a libecal consumer resolves the two to, converted to UTC. The third is the
+  one no fixture can make — `jmap-ical`'s and `jmap-cal-sync`'s own tests compare
+  text against text, where a zone nobody could resolve reads back exactly like one
+  anybody could, so only a real consumer says whether shipping no `VTIMEZONE` costs
+  the user anything. It does not: EDS keeps the identifier as the mapping spelled
+  it, and libical resolves `Europe/Berlin` out of its builtin table, landing on
+  08:00 UTC for a 10:00 CEST start. A start that quietly floated would report
+  10:00 UTC — two hours off, and identically on every machine, since libical does
+  not adjust a floating time it converts. The pair from the server's end says the
+  save did not *restate* the start: `start` and `timeZone` are still what the mock
+  was seeded with, so an edit the user made to a picture did not also move the
+  appointment for every other client of the account.
 
 Ten mutations have been run against it, each reddening a different assertion:
 dropping the `X-JMAP-KEY` from the `CONFERENCE` (the key observation); ignoring
@@ -656,7 +675,21 @@ key); ignoring the `icon` `rel` when drawing, so the picture goes out as a third
 re-address, fails outright; dropping the `DISPLAY` parameter (the picture's
 `display`, and nothing else); and patching the whole `links/<key>` entry rather
 than its `href` (the server-side map, where both edited entries lose the `title`
-and the picture loses its `size` too, while every client observation passes).
+and the picture loses its `size` too, while every client observation passes); and
+two against the zone — drawing the start with no `TZID` at all, which floats it and
+moves the event two hours for the consumer, and drawing the `TZID` in the
+solidus-prefixed form libical uses for a builtin zone
+(`/freeassociation.sourceforge.net/Europe/Berlin`), which reddens the identifier
+observation while the instant stays right, since libical resolves that form too.
+
+The server-side start assertion is the one guard here that no mutation of this
+repository can redden, and deliberately so: `jmap_cal_sync::patch` diffs against
+the server's own event put through the same round trip, so a reader that misreads a
+zone misreads it on both sides and patches nothing. What it guards against is the
+platform changing under us — an EDS whose cache normalised a zoned `DTSTART` to
+UTC would send a `start` and a `timeZone` nobody edited — and it is read from the
+server rather than from the client because EDS answers a get out of its own cache,
+where such a patch would be invisible.
 
 Retyping the conference is the one thing here a user of Evolution 3.52 cannot
 do: it has no control for the property, and libical-glib 3.0 does not even name
