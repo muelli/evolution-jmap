@@ -8,7 +8,7 @@
 //! their own carrying a RECURRENCE-ID.
 
 use jmap_ical::{
-    ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keywords, maps_locations,
+    ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, maps_virtual_locations, names_time_zone,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
@@ -1457,7 +1457,7 @@ fn the_tags_an_event_carries_are_the_categories() {
         event.keywords,
         "the tags survive the round trip"
     );
-    assert!(maps_keywords(event.keywords.as_ref().unwrap()));
+    assert!(maps_keyword("offsite", &json!(true)));
 }
 
 #[test]
@@ -1473,7 +1473,7 @@ fn a_tag_is_escaped_as_text_rather_than_read_as_the_separator() {
         "CATEGORIES:Berlin\\, offsite\\; 2026"
     );
     assert_eq!(ical_to_event(&ics).expect("parse").keywords, event.keywords);
-    assert!(maps_keywords(event.keywords.as_ref().unwrap()));
+    assert!(maps_keyword("Berlin, offsite; 2026", &json!(true)));
 }
 
 #[test]
@@ -1525,9 +1525,10 @@ fn a_tag_the_component_cannot_show_is_flagged_rather_than_drawn() {
             "CATEGORIES:offsite",
             "{set} was drawn"
         );
+        assert!(!maps_keyword("odd", &set), "{set} was called shown");
         assert!(
-            !maps_keywords(event.keywords.as_ref().unwrap()),
-            "{set} was called covered"
+            maps_keyword("offsite", &json!(true)),
+            "the tag beside it was called unshown"
         );
     }
 }
@@ -1542,7 +1543,7 @@ fn an_empty_tag_is_flagged_rather_than_drawn() {
         content_line(&event_to_ical(&event), "CATEGORIES"),
         "CATEGORIES:offsite"
     );
-    assert!(!maps_keywords(event.keywords.as_ref().unwrap()));
+    assert!(!maps_keyword("", &json!(true)));
 }
 
 #[test]
@@ -1554,13 +1555,13 @@ fn a_tag_carrying_a_carriage_return_is_flagged_rather_than_drawn() {
     // survives.
     let event = tagged([("off\rsite", json!(true))]);
     assert!(without(&event_to_ical(&event), "CATEGORIES"), "{event:?}");
-    assert!(!maps_keywords(event.keywords.as_ref().unwrap()));
+    assert!(!maps_keyword("off\rsite", &json!(true)));
 
     let event = tagged([("off\nsite", json!(true))]);
     let ics = event_to_ical(&event);
     assert_eq!(content_line(&ics, "CATEGORIES"), "CATEGORIES:off\\nsite");
     assert_eq!(ical_to_event(&ics).expect("parse").keywords, event.keywords);
-    assert!(maps_keywords(event.keywords.as_ref().unwrap()));
+    assert!(maps_keyword("off\nsite", &json!(true)));
 }
 
 #[test]
@@ -1570,7 +1571,38 @@ fn an_event_whose_every_tag_is_undrawable_carries_no_categories() {
     let event = tagged([("", json!(true))]);
 
     assert!(without(&event_to_ical(&event), "CATEGORIES"), "{event:?}");
-    assert!(!maps_keywords(event.keywords.as_ref().unwrap()));
+    assert!(!maps_keyword("", &json!(true)));
+}
+
+#[test]
+fn maps_keyword_answers_for_the_tag_the_line_left_off() {
+    // The save needs the refusal *per tag*, not for the set: a tag the line could
+    // not carry is one the user never saw and therefore never asked to lose, so
+    // the save writes it back rather than dropping the whole edit. The predicate
+    // is the emitter's own, so what the save calls invisible is what the emitter
+    // actually left off — and a set holding one such tag still states the rest.
+    for (tag, set) in [
+        ("", json!(true)),
+        ("two\rlines", json!(true)),
+        ("odd", json!(false)),
+        ("odd", json!("yes")),
+        ("odd", json!(null)),
+    ] {
+        assert!(
+            !maps_keyword(tag, &set),
+            "the tag {tag:?} set to {set} was called shown"
+        );
+        let event = tagged([(tag, set.clone()), ("offsite", json!(true))]);
+        assert_eq!(
+            content_line(&event_to_ical(&event), "CATEGORIES"),
+            "CATEGORIES:offsite",
+            "the tag {tag:?} set to {set} was drawn, or the one beside it was not"
+        );
+    }
+
+    assert!(maps_keyword("offsite", &json!(true)));
+    // A line feed is not a carriage return: it has an escape and survives.
+    assert!(maps_keyword("two\nlines", &json!(true)));
 }
 
 #[test]
@@ -5570,7 +5602,7 @@ fn a_component_that_names_no_conference_reads_back_none() {
 
 #[test]
 fn a_conference_shown_in_part_is_not_the_users_to_have_edited() {
-    // The rule `maps_locations` and `maps_keywords` already state, applied one
+    // The rule `maps_locations` and `maps_keyword` already state, applied one
     // property along: an entry the line could not draw whole was not shown, so
     // no difference from the drawing may be sent for the property at all.
     for (editable, places) in [

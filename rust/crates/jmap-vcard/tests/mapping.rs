@@ -1305,7 +1305,7 @@ fn a_tag_holding_the_separators_is_escaped_and_comes_back_whole() {
 fn a_tag_no_categories_line_can_carry_gets_no_line() {
     // The same partial visibility every keyed map has, one type over: the set
     // is drawn *whole*, so a tag the line cannot state is a tag the next save
-    // would delete — which is why `maps_keywords` exists and why these tags are
+    // would delete — which is why `states_keyword` exists and why these tags are
     // left off rather than mangled onto the line.
     //
     // The empty tag, because an empty item reads back as no tag at all. A tag

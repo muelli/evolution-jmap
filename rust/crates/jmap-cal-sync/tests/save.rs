@@ -2321,14 +2321,16 @@ fn clearing_every_tag_removes_the_property() {
 }
 
 #[test]
-fn a_tag_the_component_could_not_show_leaves_the_whole_set_alone() {
+fn a_tag_the_component_could_not_show_survives_the_set_being_rewritten() {
     // RFC 8984 §1.4.3 has every value of a Set be `true`; this server said
-    // otherwise, so the tag never reached the CATEGORIES line — and a set shown
-    // in part is not the user's to have edited. The property goes back replaced
-    // whole, so writing it would delete the entry the user never saw.
+    // otherwise, so the tag never reached the CATEGORIES line. The property goes
+    // back replaced whole, so a save that wrote only what the line showed would
+    // delete the tag the user never saw — and one that refused to write at all
+    // would drop the edit they did make. The tag is carried onto the set
+    // instead, exactly as the server stated it: an unshown tag is not the
+    // user's to delete, and its odd value is the server's word to keep.
     let fixture = Fixture::start();
-    let keywords = json!({"offsite": true, "odd": "yes"});
-    let (id, icalendar) = tagged(&fixture, keywords.clone());
+    let (id, icalendar) = tagged(&fixture, json!({"offsite": true, "odd": "yes"}));
     assert_eq!(
         icalendar
             .lines()
@@ -2349,13 +2351,96 @@ fn a_tag_the_component_could_not_show_leaves_the_whole_set_alone() {
     let stored = fixture.event(&id);
     assert_eq!(
         stored.keywords,
-        Some(serde_json::from_value(keywords).unwrap()),
-        "a property shown in part must not be written back"
+        Some(
+            [
+                ("odd".to_owned(), json!("yes")),
+                ("offsite".to_owned(), json!(true)),
+                ("travel".to_owned(), json!(true)),
+            ]
+            .into()
+        ),
+        "the tag the user typed was dropped, or the one they never saw was"
     );
     assert_eq!(
         stored.title.as_deref(),
         Some("Standup (short)"),
         "the edit the user made must still arrive"
+    );
+}
+
+#[test]
+fn clearing_every_tag_leaves_the_tag_nobody_saw_behind() {
+    // Emptying the field deletes the tags it showed and nothing else. A `null`
+    // here would delete the tag that had no line to be shown on, which is the
+    // one thing the user cannot have meant by clearing a field it was not in.
+    let fixture = Fixture::start();
+    let (id, icalendar) = tagged(&fixture, json!({"offsite": true, "odd": "yes"}));
+
+    let edited = icalendar.replace("CATEGORIES:offsite\r\n", "");
+    assert!(!edited.contains("CATEGORIES"), "{edited}");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(
+        fixture.event(&id).keywords,
+        Some([("odd".to_owned(), json!("yes"))].into())
+    );
+}
+
+#[test]
+fn typing_a_tag_the_server_had_set_to_something_else_sets_it() {
+    // The one place the two sides name the same tag. The user's word wins: they
+    // typed it into a field that says nothing but "filed under", so they mean it
+    // set, whatever the server had against that name before. Carrying the
+    // server's value back over it would take the tag the user just typed and
+    // quietly unset it.
+    let fixture = Fixture::start();
+    let (id, icalendar) = tagged(&fixture, json!({"offsite": false}));
+    assert!(!icalendar.contains("CATEGORIES"), "{icalendar}");
+
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup\r\nCATEGORIES:offsite");
+    fixture
+        .sync()
+        .save_component(&edited, Some(id.as_str()))
+        .unwrap();
+
+    assert_eq!(
+        fixture.event(&id).keywords,
+        Some([("offsite".to_owned(), json!(true))].into())
+    );
+}
+
+#[test]
+fn a_set_holding_a_tag_with_no_line_is_not_an_edit_waiting_to_happen() {
+    // The tag put back is the tag that was already there, so the set the save
+    // would write is the set the server holds — and a patch naming it would undo
+    // a concurrent edit on another client for no reason at all. The property
+    // must be left unnamed, not merely written back unchanged.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"keywords": {"offsite": true, "odd": "yes"}}));
+    let sync = fixture.sync();
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_component(&icalendar, Some(id.as_str())).unwrap();
+    let (state_after, _) = sync.list_existing().unwrap();
+
+    assert_eq!(
+        fixture.event(&id).keywords,
+        Some(
+            [
+                ("odd".to_owned(), json!("yes")),
+                ("offsite".to_owned(), json!(true)),
+            ]
+            .into()
+        )
+    );
+    assert_eq!(
+        state_after, state_before,
+        "a save with nothing to say about tags rewrote them anyway"
     );
 }
 

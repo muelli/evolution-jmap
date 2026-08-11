@@ -13,7 +13,7 @@
 //! which is only safe because saving goes back to the server as a PatchObject
 //! naming the mapped properties: a property we never mapped is a property we
 //! never overwrite. See [`MAPPED_PROPERTIES`], [`maps_locations`],
-//! [`maps_keywords`], [`maps_alerts`], [`maps_recurrence_rule`] and
+//! [`maps_keyword`], [`maps_alerts`], [`maps_recurrence_rule`] and
 //! [`maps_recurrence_override`], which are that knowledge in machine-readable
 //! form.
 //!
@@ -470,17 +470,20 @@ fn place_name(location: &Value) -> Option<&str> {
         .filter(|name| !name.is_empty())
 }
 
-/// Whether the tags an event carries survive the trip through iCalendar, and so
-/// whether a save may name `keywords`.
+/// Whether one tag of `keywords` goes on the `CATEGORIES` line, and so whether
+/// the user ever saw it.
 ///
-/// This is the first mapped property that is a *set* rather than a scalar or a
-/// map read in part, and it is the easy case: RFC 5545 §3.8.1.2's `CATEGORIES`
-/// is a list of TEXT values and an RFC 8984 §4.2.9 keyword is a bare string, so
-/// every tag fits on the line and the property goes back replaced whole — no
-/// patching into it, as `locations` needs.
+/// This is the one mapped property that is a *set* rather than a scalar or a map
+/// of objects: RFC 5545 §3.8.1.2's `CATEGORIES` is a list of TEXT values and an
+/// RFC 8984 §4.2.9 keyword is a bare string, so there is nothing inside an entry
+/// to preserve and no key to patch by — the property goes back replaced whole,
+/// unlike `locations`, which is patched into.
 ///
-/// What is refused is a tag [`drawn_tags`] leaves off, because the property being
-/// replaced whole is exactly what makes an undrawn tag a *deleted* tag:
+/// Being replaced whole is what makes this question a per-*tag* one. A tag the
+/// line could not carry is not merely unseen but absent from what the user
+/// edited, so the save has to write it back by hand rather than read its absence
+/// as a deletion; asking about the set as a whole could only answer "then write
+/// nothing at all", which drops the edit the user did make. What is refused:
 ///
 /// - **A value that is not `true`.** RFC 8984 §1.4.3 has every value of a Set be
 ///   `true`; drawing anything else would say the tag is set where the server said
@@ -492,16 +495,9 @@ fn place_name(location: &Value) -> Option<&str> {
 ///   tidiness — so the tag would come back spelled differently and a save would
 ///   rename it. A line feed is not this case: it has an escape and survives.
 ///
-/// An event with no tags at all passes: there is nothing to lose, and a
-/// `CATEGORIES` the user just typed is a set to write.
-pub fn maps_keywords(keywords: &BTreeMap<String, Value>) -> bool {
-    keywords.iter().all(|(tag, set)| drawn_tag(tag, set))
-}
-
-/// Whether one entry of `keywords` goes on the `CATEGORIES` line. The single
-/// point [`maps_keywords`] and [`drawn_tags`] agree through, so a tag cannot be
-/// called covered and then left off.
-fn drawn_tag(tag: &str, set: &Value) -> bool {
+/// The single point the save and [`drawn_tags`] agree through, so a tag cannot be
+/// called shown and then left off the line.
+pub fn maps_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true) && !tag.is_empty() && !tag.contains('\r')
 }
 
@@ -513,7 +509,7 @@ fn drawn_tags(event: &CalendarEvent) -> Vec<&str> {
         .keywords
         .iter()
         .flatten()
-        .filter(|(tag, set)| drawn_tag(tag, set))
+        .filter(|(tag, set)| maps_keyword(tag, set))
         .map(|(tag, _)| tag.as_str())
         .collect()
 }
@@ -542,7 +538,7 @@ fn drawn_tags(event: &CalendarEvent) -> Vec<&str> {
 /// - **A key no `UID` can carry back**, since the key is what a replaced map
 ///   states its entries under; see [`names_map_entry`].
 ///
-/// Taken as the whole event rather than the map, unlike [`maps_keywords`],
+/// Taken as the whole event rather than one entry, unlike [`maps_keyword`],
 /// because a second property decides this one: RFC 8984 §4.5.1's
 /// `useDefaultAlerts` says the `alerts` property is *ignored* and the user's own
 /// default reminders fire instead. Drawing them would show reminders that never
@@ -1226,15 +1222,15 @@ fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> boo
         "privacy" => value.is_null() || value.as_str().is_some_and(known_privacy),
         // The one restated property that is a set. Its `CATEGORIES` line is drawn
         // whole, so a tag the line cannot show is a tag the next save deletes from
-        // this occurrence — the same rule [`maps_keywords`] applies to the series,
-        // asked of the same [`drawn_tag`]. A null is the instance filed under
+        // this occurrence — the same [`maps_keyword`] the series is drawn by, asked
+        // of every tag rather than carried back. A null is the instance filed under
         // nothing, which the component says by carrying no line; the *empty* set is
         // refused, because it is written the same way and would come back as that
         // null, which is a different patch — the `title: ""` case one type over.
         "keywords" => {
             value.is_null()
                 || value.as_object().is_some_and(|tags| {
-                    !tags.is_empty() && tags.iter().all(|(tag, set)| drawn_tag(tag, set))
+                    !tags.is_empty() && tags.iter().all(|(tag, set)| maps_keyword(tag, set))
                 })
         }
         // The set one component down, and the one property the *series* has a say
@@ -1495,7 +1491,7 @@ fn vevent_of(
 
     // The whole set, on one line. An event whose every tag is one this mapping
     // cannot show gets no line at all rather than an empty one, which would state
-    // a tag that is the empty string. See [`maps_keywords`].
+    // a tag that is the empty string. See [`maps_keyword`].
     let tags = drawn_tags(event);
     if !tags.is_empty() {
         vevent = vevent.with(Property::list("CATEGORIES", tags));
