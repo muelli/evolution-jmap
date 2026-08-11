@@ -185,6 +185,37 @@ paragraph above declines to race with. The loop is there because the connect
 also schedules that refresh, and a get arriving mid-refresh is the kind of
 ordering worth waiting out rather than flaking on.
 
+### The picture: what a meta backend does to a photo behind the backend's back
+
+The contact's photo crosses all four book legs, and it is the one property where
+EDS does something to the data on its own initiative — which is why it needs real
+daemons rather than a fixture. Two facts, both measured here against EDS 3.52,
+and neither of them anything this repository asks for:
+
+- **A cached photo is a file, not bytes.** `EBookMetaBackend` puts every contact
+  it caches through `store_inline_photos`: the picture is written into
+  `…/cache/evolution/addressbook/<uid>/PHOTO-<hash>-<n>.png` and the `PHOTO` line
+  is rewritten to point at it. So a libebook consumer that writes an inlined
+  photo reads back a `file:` URI, and the legs assert the bytes at the end of it
+  rather than the shape EDS chose to keep them in. The extension is the only
+  place a cached photo still says what it is, so it is asserted too: it comes
+  from the media type EDS read off the line.
+- **EDS undoes that before a save, and quietly keeps the key.** The backend never
+  calls `inline_local_photos`; `EBookMetaBackend` does, before it calls
+  `save_contact_sync`, and it rewrites the line's *value* while leaving its
+  parameters — the `X-JMAP-KEY` included — in place. That is why an edit to some
+  other field does not disturb the picture: the entry is still found by its key.
+
+The consequence is the fourth leg
+(`replacing_the_picture_through_eds_patches_the_entry_it_replaces`). When the
+*user* picks a new photo, the line is written by `e_contact_set` instead, which
+drops the parameters — so the new picture arrives with nothing on it saying which
+entry it replaces, and the save has to pair it with the one it replaced
+(`rekey_keyless` in `jmap-book-sync`). Remove that pairing and this leg is the
+only test in the tree that goes red: the server ends up holding the picture under
+a key the reader invented by counting lines, and the one it was filed under
+deleted.
+
 ## What the calendar test asserts
 
 `rust/crates/jmap-functional/tests/calendar.rs`, against
