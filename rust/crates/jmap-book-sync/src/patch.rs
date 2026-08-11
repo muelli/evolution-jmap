@@ -7,7 +7,8 @@
 //! lossy view of a JSContact card. The mapping keeps UID, FN, N, NICKNAME,
 //! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE, URL, CALURI, FBURL, PHOTO,
 //! CATEGORIES, the
-//! instant-messaging `X-` lines and the two date lines, and drops everything
+//! instant-messaging `X-` lines, the spouse line and the two date lines, and
+//! drops everything
 //! else, so a save that sent the parsed card back whole would silently delete
 //! the properties it could not represent — preferred languages, what the
 //! contact is spoken to as, the crypto keys a card lists — none of which the
@@ -80,6 +81,13 @@
 //!   on whichever of the two it was drawn from. Where it cannot, the `uri` that
 //!   named the replaced handle is *dropped*: see [`diff_online_services`], the
 //!   one place here where a save removes a member the vCard never showed.
+//! - `relatedTo` is the one mapped property keyed by *who the entry is about*
+//!   rather than by an id of whoever wrote it, so it is the one whose key the
+//!   line shows the user: there is nothing on the entry to patch, and an edit is
+//!   a marriage withdrawn from one entity and claimed of another. Both halves
+//!   reach into the relation *set* rather than replacing the entry, so that a
+//!   relation the line never stated survives either way. See
+//!   [`diff_related_to`].
 //! - `keywords` is the one mapped property that is a *set*, and the one that
 //!   goes back **replaced whole**: a tag is a bare string with no key and no
 //!   members, so there is nothing to reach into. A tag the `CATEGORIES` line
@@ -112,17 +120,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
-    Link, Media, Name, Nickname, Note, OnlineService, OrgUnit, Organization, Title,
+    Link, Media, Name, Nickname, Note, OnlineService, OrgUnit, Organization, Relation, Title,
 };
 use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
     maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
     restore_name_components, same_photo, same_service, states_a_point_in_time, states_address,
     states_anniversary, states_calendar, states_email, states_keyword, states_link, states_media,
-    states_nickname, states_note, states_online_service, states_organization, states_phone,
-    states_title, title_kind,
+    states_nickname, states_note, states_nothing_but_the_marriage, states_online_service,
+    states_organization, states_phone, states_spouse, states_title, title_kind,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 /// The patch that turns the card the server holds into the card Evolution
 /// just saved. Empty when the edit changed nothing this mapping can see.
@@ -165,8 +173,110 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         current.online_services.as_ref(),
         edited.online_services.as_ref(),
     );
+    diff_related_to(
+        &mut patch,
+        current.related_to.as_ref(),
+        edited.related_to.as_ref(),
+    );
     diff_keywords(&mut patch, current, edited);
     patch
+}
+
+/// Who else the contact is related to — the one mapped property whose *key* is
+/// what the line shows, and so the one where an edit is not a change to an entry
+/// but a withdrawal and a claim.
+///
+/// RFC 9553 §2.1.8 keys `relatedTo` by the related entity itself, and RFC 9555
+/// §2.9.5 is what allows that key to be a person's name rather than a `uid`. So
+/// there is nothing on the entry to patch: a name the user respells names another
+/// entity, and the line said exactly one thing about the old one — that it is a
+/// spouse. That one thing is all the save may withdraw:
+///
+/// - a name gone from the field loses the marriage, and the entry with it when
+///   the marriage was all it said ([`states_nothing_but_the_marriage`]). Where the
+///   server also called that entity `kin`, the entry stays and only the marriage
+///   is struck off — the `kin` was never on the line and is not the user's to have
+///   deleted.
+/// - a name arrived in the field *gains* the marriage. If the card already relates
+///   to somebody of that name, that is the same entity — the key says so — so the
+///   type is added to the set rather than replacing it, and a relation the user
+///   cannot see survives being married.
+///
+/// Which also means this property needs no [`diff_entries`]: there are no keys
+/// this side invented for the reader to collide with. A name is a name on both
+/// sides, and an entry the vCard never showed is either keyed by something no
+/// field can produce — a URI — or is the very entity the user just named.
+fn diff_related_to(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Relation>>,
+    edited: Option<&BTreeMap<String, Relation>>,
+) {
+    let empty = BTreeMap::new();
+    let current = current.unwrap_or(&empty);
+    let shown = spouses(current);
+    let wanted = spouses(edited.unwrap_or(&empty));
+    if shown.keys().eq(wanted.keys()) {
+        return;
+    }
+
+    // RFC 8620 §5.3 requires every path segment before the last to exist on the
+    // object already, and a card relating to nobody has no `relatedTo` to reach
+    // into, so the property is written whole. Nothing is lost by that: there are
+    // no entries to keep.
+    if current.is_empty() {
+        patch.insert("relatedTo".to_owned(), json_of(&wanted));
+        return;
+    }
+
+    let withdrawn: Vec<(&&String, &&Relation)> = shown
+        .iter()
+        .filter(|(key, _)| !wanted.contains_key(**key))
+        .collect();
+    let dropped = |relation: &Relation| states_nothing_but_the_marriage(relation);
+    // Every entry the card holds was a marriage, and the field now names none:
+    // the property goes rather than being left as the empty map, which is a
+    // different thing to store than §2.1.8's default of no relations.
+    if wanted.is_empty()
+        && withdrawn.len() == current.len()
+        && withdrawn.iter().all(|(_, relation)| dropped(relation))
+    {
+        patch.insert("relatedTo".to_owned(), Value::Null);
+        return;
+    }
+
+    for (key, relation) in withdrawn {
+        let path = format!("relatedTo/{}", escape(key));
+        match dropped(relation) {
+            true => drop(patch.insert(path, Value::Null)),
+            false => drop(patch.insert(format!("{path}/relation/spouse"), Value::Null)),
+        }
+    }
+    for (key, relation) in wanted.iter().filter(|(key, _)| !shown.contains_key(**key)) {
+        let path = format!("relatedTo/{}", escape(key));
+        match current.get(*key) {
+            // The same entity, said one more thing about.
+            Some(existing) => {
+                // §5.3 again: the set has to be there to be added to, and an
+                // entry stating no type at all — RFC 9555 §2.9.5 reads a
+                // `RELATED` line carrying no `TYPE` into exactly that — has no
+                // `relation` member for a path to end in.
+                match existing.relation.is_some() {
+                    true => patch.insert(format!("{path}/relation/spouse"), Value::Bool(true)),
+                    false => patch.insert(format!("{path}/relation"), json!({"spouse": true})),
+                };
+            }
+            None => drop(patch.insert(path, json_of(relation))),
+        }
+    }
+}
+
+/// The entries of a `relatedTo` map that reach the spouse line, in the order the
+/// map holds them.
+fn spouses(entries: &BTreeMap<String, Relation>) -> BTreeMap<&String, &Relation> {
+    entries
+        .iter()
+        .filter(|(key, relation)| states_spouse(key, relation))
+        .collect()
 }
 
 /// The tags the contact is filed under — the one mapped property that goes back

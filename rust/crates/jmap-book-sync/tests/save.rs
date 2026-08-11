@@ -2420,3 +2420,285 @@ fn a_logo_survives_a_save_it_was_never_part_of() {
     );
     assert_eq!(media.len(), 2, "{media:?}");
 }
+
+/// The spouse line as EDS hands it back after the user has typed in the field:
+/// `e_contact_set(E_CONTACT_SPOUSE, …)` rewrites the value of the first line of
+/// that name in place. The empty name is what clearing the field leaves — a set
+/// to the empty string keeps the line with nothing on it, and only a set to NULL
+/// drops the line outright, measured against libebook-contacts 3.52 as it was
+/// for the Free/Busy field.
+fn as_evolution_retypes_the_spouse(vcard: &str, name: &str) -> String {
+    let mut rewritten = false;
+    let rebuilt: String = vcard
+        .lines()
+        .map(
+            |line| match !rewritten && line.starts_with("X-EVOLUTION-SPOUSE") {
+                true => {
+                    rewritten = true;
+                    format!("X-EVOLUTION-SPOUSE:{name}\r\n")
+                }
+                false => format!("{line}\r\n"),
+            },
+        )
+        .collect();
+    assert!(rewritten, "no spouse line to rewrite in\n{vcard}");
+    rebuilt
+}
+
+#[test]
+fn retyping_a_spouse_withdraws_the_marriage_and_keeps_what_else_was_said() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.1.8 keys `relatedTo` by the related entity itself, so the
+    // name on the line *is* the entry's key: a name the user respells is not a
+    // renamed value, it is another entry. What the line stated about the old one
+    // was the marriage and nothing else — the `kin` it never showed is not the
+    // user's to have deleted.
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"Jean Paul Oldenburg": {
+            "@type": "Relation",
+            "relation": {"spouse": true, "kin": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-EVOLUTION-SPOUSE:Jean Paul Oldenburg"),
+        "{vcard}"
+    );
+
+    let edited = as_evolution_retypes_the_spouse(&vcard, "Jean-Paul Oldenburg");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["Jean Paul Oldenburg", "Jean-Paul Oldenburg"],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["Jean Paul Oldenburg"].relation,
+        Some([("kin".to_owned(), json!(true))].into()),
+        "the relation the line never showed went with the marriage: {related:?}"
+    );
+    assert_eq!(
+        related["Jean Paul Oldenburg"].extra.get("@type"),
+        Some(&json!("Relation")),
+        "the entry was replaced rather than patched"
+    );
+    assert_eq!(
+        related["Jean-Paul Oldenburg"].relation,
+        Some([("spouse".to_owned(), json!(true))].into()),
+        "the name the user typed is a spouse and nothing more: {related:?}"
+    );
+}
+
+#[test]
+fn retyping_a_spouse_who_was_nothing_else_leaves_no_entry_behind() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The common case: the entry said the marriage and no more, so withdrawing
+    // it leaves nothing worth keeping and the whole entry goes. Beside it, a
+    // spouse the card names the way §2.1.8 asks — by the related Card's `uid`,
+    // which gets no line because a URN under the heading "Spouse" is not a
+    // person — and which the save therefore may not touch either.
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {
+            "Jean Paul Oldenburg": {"relation": {"spouse": true}},
+            "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {"relation": {"spouse": true}},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert_eq!(vcard.matches("X-EVOLUTION-SPOUSE").count(), 1, "{vcard}");
+
+    let edited = as_evolution_retypes_the_spouse(&vcard, "Jean-Paul Oldenburg");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec![
+            "Jean-Paul Oldenburg",
+            "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44"
+        ],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44"].relation,
+        Some([("spouse".to_owned(), json!(true))].into()),
+        "an entry the vCard never showed was rewritten: {related:?}"
+    );
+}
+
+#[test]
+fn clearing_the_spouse_field_removes_the_relation() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The `@type` tag says what the object is, not anything about the relation,
+    // so an entry wearing it and the marriage still has nothing left once the
+    // marriage is withdrawn — the same judgement the calendar side makes about a
+    // location that named nothing but its name.
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"Jean Paul Oldenburg": {
+            "@type": "Relation",
+            "relation": {"spouse": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = as_evolution_retypes_the_spouse(&vcard, "");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    // The property goes rather than being left as an empty map: that is what
+    // RFC 9553 §2.1.8's default of no relations is stated as.
+    assert_eq!(fixture.card(&id).related_to, None);
+}
+
+#[test]
+fn clearing_the_spouse_field_keeps_a_relation_the_line_never_showed() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Nineteen of the twenty relation types have no field in Evolution, so a
+    // child is an entry the user was never shown — and emptying the Spouse
+    // field says nothing about it.
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {
+            "Jean Paul Oldenburg": {"relation": {"spouse": true}},
+            "Nils Oldenburg": {"relation": {"child": true}},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = as_evolution_retypes_the_spouse(&vcard, "");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(related.keys().collect::<Vec<_>>(), vec!["Nils Oldenburg"]);
+    assert_eq!(
+        related["Nils Oldenburg"].relation,
+        Some([("child".to_owned(), json!(true))].into())
+    );
+}
+
+#[test]
+fn a_spouse_the_card_already_relates_to_gains_the_marriage() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The key being the person is what makes this a merge rather than an
+    // addition: typing a name the card already relates to is saying one more
+    // thing about that entry, not naming a second one.
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"Jean Paul Oldenburg": {
+            "@type": "Relation",
+            "relation": {"kin": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("SPOUSE"), "{vcard}");
+    let edited = vcard.replace(
+        "END:VCARD\r\n",
+        "X-EVOLUTION-SPOUSE:Jean Paul Oldenburg\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["Jean Paul Oldenburg"],
+        "the same person was named twice: {related:?}"
+    );
+    assert_eq!(
+        related["Jean Paul Oldenburg"].relation,
+        Some(
+            [
+                ("kin".to_owned(), json!(true)),
+                ("spouse".to_owned(), json!(true))
+            ]
+            .into()
+        ),
+        "the relation set was replaced rather than added to: {related:?}"
+    );
+}
+
+#[test]
+fn the_spouse_the_user_types_reaches_a_card_that_relates_to_nobody() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    // RFC 8620 §5.3 wants every path segment before the last to exist on the
+    // object already, and a card relating to nobody has no `relatedTo` for a
+    // path to reach into, so the property is written whole. (This mock creates
+    // intermediate objects on demand; a server holding to §5.3 would not.)
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "END:VCARD\r\n",
+        "X-EVOLUTION-SPOUSE:Jean Paul Oldenburg\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["Jean Paul Oldenburg"]
+    );
+    assert_eq!(
+        related["Jean Paul Oldenburg"].relation,
+        Some([("spouse".to_owned(), json!(true))].into())
+    );
+}
+
+#[test]
+fn a_spouse_whose_name_holds_a_pointer_character_is_patched_under_that_name() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A key this side did not choose: `relatedTo` is keyed by a person's name,
+    // and RFC 6901 §3's `/` and `~` mean something inside a patch path. Unescaped
+    // they would send the withdrawal into an object nobody named — and, on the
+    // other side of the edit, file the new spouse under a name split in two.
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"Anne/Marie Oldenburg": {
+            "relation": {"spouse": true, "kin": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-EVOLUTION-SPOUSE:Anne/Marie Oldenburg"),
+        "{vcard}"
+    );
+
+    let edited = as_evolution_retypes_the_spouse(&vcard, "Jo~Ann Oldenburg");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["Anne/Marie Oldenburg", "Jo~Ann Oldenburg"],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["Anne/Marie Oldenburg"].relation,
+        Some([("kin".to_owned(), json!(true))].into()),
+        "{related:?}"
+    );
+    assert_eq!(
+        related["Jo~Ann Oldenburg"].relation,
+        Some([("spouse".to_owned(), json!(true))].into()),
+        "{related:?}"
+    );
+}
