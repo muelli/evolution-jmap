@@ -187,7 +187,7 @@ ordering worth waiting out rather than flaking on.
 
 ### The picture: what a meta backend does to a photo behind the backend's back
 
-The contact's photo crosses all five book legs, and it is the one property where
+The contact's photo crosses all six book legs, and it is the one property where
 EDS does something to the data on its own initiative — which is why it needs real
 daemons rather than a fixture. Two facts, both measured here against EDS 3.52,
 and neither of them anything this repository asks for:
@@ -250,6 +250,44 @@ The first book leg covers the other direction: a contact written through
 from the emitter's two lines and the three seeded legs all go red together, with
 the server's entries deleted and re-added under the `c1`/`c2` the reader invents
 by counting lines.
+
+### The spouse: the one property whose *key* is what the user sees
+
+Every other mapped property crosses as a value under a key one side or the other
+chose. `X-EVOLUTION-SPOUSE` — vCard 3.0 has no `RELATED` — crosses as the **key**
+of a JSContact `relatedTo` entry, because RFC 9553 §2.1.8 keys that map by the
+related entity itself and RFC 9555 §2.9.5 is what lets the key be free text
+rather than a `uid`. So the name on the line *is* the entry's name, and retyping
+the field is not an edit to an entry: it is a marriage withdrawn from one entity
+and claimed of another. The sixth leg
+(`retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed`) is where
+that meets real daemons.
+
+What only real EDS can answer here is a *cardinality*, and it is invisible at the
+client end: `e_contact_get` hands back the first `X-EVOLUTION-SPOUSE` line's
+value, so a set that appended a second line rather than rewriting the first reads
+back correctly and reaches the server as a card stating **two** marriages — which
+the mapping cannot tell from a card that really does state two, since the lines
+are all it has. The assertion that catches it is on the server's side of the
+path: exactly two `relatedTo` entries after the save.
+
+What the leg asserts, on the seeded card the server relates to two people — a
+spouse and a brother:
+
+- EDS reads the spouse off the line the emitter wrote, which is the key-to-value
+  crossing checked against real EDS rather than against a fixture;
+- retyping the field leaves the server holding the marriage under the name the
+  user typed and nothing under the name they stopped typing;
+- the **brother** — related as `sibling`, a type Evolution has no field for, so an
+  entry that reaches no line and the user could not have edited — is untouched.
+  That is what says the save withdrew one marriage rather than writing back
+  whatever the vCard could state.
+
+The first book leg covers the other direction: a contact written through
+`e_book_client_add_contact_sync` with the Spouse field set reaches the server as
+one `relatedTo` entry, keyed by the name and stating `spouse`. The other four
+seeded legs assert the whole `relatedTo` map is untouched by an edit elsewhere,
+so dropping the spouse line from the emitter turns all six legs red at once.
 
 ## What the calendar test asserts
 
