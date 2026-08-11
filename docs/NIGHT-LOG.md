@@ -18159,3 +18159,99 @@ on an attribute it rewrites — it does not, and the date mapping is built on
 that answer rather than around it. New: a deathday, and a birthday stated as a
 year alone, are both invisible to Evolution and stay so; if a user ever wants
 either, it needs an EDS field that does not exist today.
+
+## 2026-08-11 (hundred-and-eightieth session)
+
+**The nickname, which the mapping had been using as its example of a dropped
+property.** `nicknames` was what the mapping's "unmodeled properties are
+dropped, not mangled" test and the revision test both pointed at when they
+wanted a property no vCard we produce can carry — and it was the wrong example, because RFC 2426
+§3.1.3 has a `NICKNAME` line and Evolution's contact editor has a Nickname
+field sitting empty for every JMAP contact that had one. It now crosses, and
+`keywords` inherits the job of being the property nothing reads.
+
+**What is modelled and what rides along.** `Nickname` keeps its `name` and
+nothing else: a `NICKNAME` line takes no `TYPE`, so RFC 9553 §2.2.2's
+`contexts` has no parameter to sit in, and vCard 3.0 has no ranking for its
+`pref`. Both therefore ride in the entry's `extra` for the save to patch
+around, which is `Note`'s shape exactly. Evolution shows no context and no
+ranking for a nickname either, so nothing is lost that the user could see.
+
+**The cardinality was the decision, and EDS settled it.** RFC 2426 states the
+nicknames as *one* comma-separated list, which would leave RFC 9553's keyed
+entries with nowhere to carry a key each. Measured against libebook-contacts
+3.52 instead: EDS does not read the value as a list at all — it hands the whole
+value back as one string, splits on an unescaped *semicolon* rather than a
+comma, honours `\,` and `\;` alike, and re-escapes both on the way out. So a
+list on one line would have reached the contact editor as a single nickname
+with commas in it. Each entry gets a line of its own, as `NOTE` and `TITLE`
+already do, and keeps its `X-JMAP-KEY`.
+
+**The key survives here, unlike a date's.** The same probe answered the
+question the birthday session had to work around: `e_contact_set` on
+`E_CONTACT_NICKNAME` rewrites the *value* of the existing attribute and leaves
+its parameters where they were, so the key comes back and the save patches
+`nicknames/<key>/name` in place. No `rekey_*` pass is needed on this property —
+worth stating, because the anniversaries needed one and the difference is not
+about EDS being inconsistent but about whether the field EDS keeps is the line
+or a structure it rebuilds the line from.
+
+**A syntax-layer bug the comma test found.** calcard parses a `text-list`
+property — `NICKNAME`, `CATEGORIES` — as one value per comma-separated item,
+splitting on an unescaped comma and never on a semicolon. `Property::text`
+rejoins values on `;`, which is right for a structured value and wrong here: a
+card carrying `NICKNAME:Jim,Jimmie` arrived at the mapping as the nickname
+`Jim;Jimmie`, a string the line never stated, and the next save would have
+written it to the server. `Property::text_list` rejoins on the comma instead,
+which is also what EDS makes of the same line. Which of the two kinds a
+property is belongs to the mapping, so it is a second method rather than a rule
+applied to every value in the syntax layer.
+
+Two behaviours diverge from EDS and are left as they are, deliberately. An
+unescaped semicolon in a foreign card's `NICKNAME` is one nickname to calcard
+and two values to EDS, of which its field shows the first; since EDS re-emits
+both, the text comes back unchanged and a save that touched nothing writes
+nothing, so the only cost is what the user is shown for a card no client of
+ours wrote. And Evolution shows only the first `NICKNAME` line, passing the
+rest through untouched — the same unverified-in-real-Evolution bet `NOTE`,
+`ORG` and `TITLE` already rest on.
+
+**Verified through real EDS, not only against the mock.** The functional book
+leg sets `E_CONTACT_NICKNAME` to `Vee, the tall one` — the comma is the whole
+point — and asserts at both ends: that EDS hands the nickname back whole out of
+its cache, and that the server holds exactly *one* `nicknames` entry with that
+text. Two entries there would mean the comma had been read as RFC 2426's list
+separator somewhere along the path. Both assertions were mutation-checked, each
+failing on a wrong expectation with the client's stdout attached.
+
+Tests: 886 in the default set, up 9 from 877 — six new in `jmap-vcard` (five in
+the mapping, one in the syntax layer) and three new in `jmap-book-sync`. Four
+existing tests changed with the behaviour: the two that used `nicknames` as
+their example of an unmapped property now use `keywords`, `jmap-proto`'s
+round-trip asserts the typed field and the members riding in `extra`, and
+`jmap-book-sync`'s revision test now names a property the vCard really does
+drop.
+
+Verified locally: `cargo test --locked` 886; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all
+--check` and `cargo clippy --all-targets --locked -- -D warnings` clean.
+`ci/checks.sh` still stops at its first step — `reuse` is not on this VM and
+neither `pipx` nor `uvx` is installed — so the licence check was done by hand:
+no file was added, every file touched already carries an SPDX header, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+No milestone tag. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `docs/MILESTONES.md` does not exist, so the
+M8 tag is still unwritten; the manual-test recipes are unlinked from the
+README; `jmap-mail`'s rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of
+its own; `links` and `CONFERENCE` on the calendar side rest on untested
+assumptions; the `NameComponent` `phonetic` hole stands; the multi-`NOTE`/
+`ORG`/`TITLE`/`NICKNAME` "Evolution shows only the first" bet is still
+unverified in real Evolution; the two `LABEL` `TYPE` risks stand; a deathday
+and a birthday stated as a year alone are still invisible; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order
+hypothesis attached. New: an unescaped semicolon in a nickname is one name to
+this mapping and two values to EDS, which shows the first — measured, judged
+harmless, and written down here rather than worked around.

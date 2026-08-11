@@ -17,6 +17,11 @@ use jmap_functional::{Session, observations, required_path};
 /// disagree about it by a typo.
 const FULL_NAME: &str = "Dana Scully";
 const EMAIL: &str = "dana@example.com";
+/// The nickname, spelled as `book-client.c` spells it. The comma is the
+/// point: RFC 2426 §3.1.3 states the nicknames as a comma-separated list, so
+/// this is where "one nickname stays one nickname" is checked against the EDS
+/// that writes the line — a split would reach the server as two entries.
+const NICKNAME: &str = "Vee, the tall one";
 /// The employer and department the client sets, spelled as `book-client.c`
 /// spells them. Together they are one `ORG` line, which is what makes them
 /// worth asserting here: whether EDS's two fields and JSContact's
@@ -194,6 +199,11 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         seen.get("read-back-org-unit"),
         Some(&ORG_UNIT),
         "the contact EDS handed back lost its department\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-nickname"),
+        Some(&NICKNAME),
+        "the contact EDS handed back lost or split its nickname\n{report}"
     );
     assert_eq!(
         seen.get("read-back-title"),
@@ -383,6 +393,22 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
             .map(|note| note.note.as_str())
             .collect::<Vec<_>>(),
         vec![NOTE],
+        "{card:?}"
+    );
+    // The NICKNAME line, as the server sees it: exactly one `nicknames` entry
+    // holding the whole text, comma included. Two entries here would mean the
+    // comma had been read as RFC 2426 §3.1.3's list separator somewhere along
+    // the way, and the server would have been told the user has two nicknames.
+    let nicknames = card
+        .nicknames
+        .as_ref()
+        .unwrap_or_else(|| panic!("the card on the server has no nicknames: {card:?}"));
+    assert_eq!(
+        nicknames
+            .values()
+            .map(|nickname| nickname.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![NICKNAME],
         "{card:?}"
     );
     // The BDAY line, as the server sees it: one `anniversaries` entry of kind

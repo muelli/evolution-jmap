@@ -4,11 +4,11 @@
 //! Turning an edited vCard back into a `ContactCard/set` PatchObject.
 //!
 //! The whole point of patching rather than replacing is that a vCard is a
-//! lossy view of a JSContact card. The mapping keeps UID, FN, N, EMAIL, TEL,
-//! ADR, LABEL, ORG, TITLE, ROLE, NOTE and the two date lines, and drops
-//! everything else, so a save that sent the parsed card back whole would
-//! silently delete the properties it could not represent — nicknames,
-//! keywords, preferred languages — none of which the user ever saw, let alone
+//! lossy view of a JSContact card. The mapping keeps UID, FN, N, NICKNAME,
+//! EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE and the two date lines, and
+//! drops everything else, so a save that sent the parsed card back whole would
+//! silently delete the properties it could not represent — keywords, preferred
+//! languages, online services — none of which the user ever saw, let alone
 //! asked to remove.
 //!
 //! The same lossiness recurs *inside* the properties that are mapped, and
@@ -37,6 +37,10 @@
 //!   the `LABEL` that writes the same address out for an envelope — so a
 //!   save reads them back as one entry and patches `addresses/<key>/full`
 //!   beside the components.
+//! - `nicknames` entries carry a `contexts` and a `pref` a `NICKNAME` line has
+//!   no parameter for, so the entry is patched by its name alone. Its key does
+//!   survive Evolution, unlike a date's: EDS rewrites the value of that line in
+//!   place and leaves the parameters where they were.
 //! - `anniversaries` entries have no key to be patched by at all: EDS keeps a
 //!   birthday in a structured field and rebuilds the line out of it, dropping
 //!   the `X-JMAP-KEY`, so the entry an edited date belongs to is found by what
@@ -64,14 +68,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::contacts::{
-    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name, Note,
-    OrgUnit, Organization, Title,
+    Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name,
+    Nickname, Note, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
     maps_phone_feature, restore_address_components, states_a_point_in_time, states_address,
-    states_anniversary, states_email, states_note, states_organization, states_phone, states_title,
-    title_kind,
+    states_anniversary, states_email, states_nickname, states_note, states_organization,
+    states_phone, states_title, title_kind,
 };
 use serde_json::{Map, Value};
 
@@ -80,6 +84,11 @@ use serde_json::{Map, Value};
 pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
     let mut patch = Map::new();
     diff_name(&mut patch, current.name.as_ref(), edited.name.as_ref());
+    diff_nicknames(
+        &mut patch,
+        current.nicknames.as_ref(),
+        edited.nicknames.as_ref(),
+    );
     diff_emails(&mut patch, current.emails.as_ref(), edited.emails.as_ref());
     diff_phones(&mut patch, current.phones.as_ref(), edited.phones.as_ref());
     diff_organizations(
@@ -138,6 +147,28 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
             merged.map_or(Value::Null, |components| json_of(&components)),
         );
     }
+}
+
+fn diff_nicknames(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, Nickname>>,
+    edited: Option<&BTreeMap<String, Nickname>>,
+) {
+    diff_entries(
+        patch,
+        "nicknames",
+        current,
+        edited,
+        states_nickname,
+        |patch, path, old, new| {
+            // Only the name can have been edited: the context the nickname is
+            // used in and how strongly it is preferred never reached the
+            // vCard, so they are patched around rather than through.
+            if old.name != new.name {
+                patch.insert(format!("{path}/name"), Value::String(new.name.clone()));
+            }
+        },
+    );
 }
 
 fn diff_emails(

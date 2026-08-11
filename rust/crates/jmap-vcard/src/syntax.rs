@@ -107,6 +107,24 @@ impl Property {
         self.values.join(";")
     }
 
+    /// The value of a `text-list` property (RFC 2425 §5.8.4) as text: the
+    /// items rejoined on the comma that separated them.
+    ///
+    /// calcard reads such a property — `NICKNAME`, `CATEGORIES` — as one value
+    /// per list item, splitting on an unescaped comma and never on a
+    /// semicolon, so [`Self::text`] would rejoin them on a semicolon and state
+    /// something the line never said. Which of the two kinds a property is
+    /// belongs to the mapping rather than to this layer, so this is a second
+    /// method instead of a rule applied to every value here.
+    ///
+    /// Rejoining rather than surfacing the items is also what EDS does with
+    /// the same line: measured against libebook-contacts 3.52, it hands the
+    /// whole value back as one string, honours an escaped comma and an escaped
+    /// semicolon, and re-escapes both on the way out.
+    pub fn text_list(&self) -> String {
+        self.values.join(",")
+    }
+
     /// The value split into its `;`-separated components.
     pub fn components(&self) -> Vec<String> {
         self.values.clone()

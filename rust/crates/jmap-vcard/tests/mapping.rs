@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
-//! address book backend needs: UID, FN, N, EMAIL, TEL, ADR, LABEL, ORG,
-//! TITLE, ROLE, NOTE, BDAY.
+//! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
+//! ORG, TITLE, ROLE, NOTE, BDAY.
 
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name,
-    NameComponent, Note, OrgUnit, Organization, Title,
+    NameComponent, Nickname, Note, OrgUnit, Organization, Title,
 };
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::json;
@@ -991,14 +991,136 @@ fn invents_a_key_for_a_date_that_has_none() {
     assert_eq!(anniversaries["y2"].kind, "wedding");
 }
 
+fn one_nickname(key: &str, name: &str) -> ContactCard {
+    ContactCard {
+        nicknames: Some(
+            [(
+                key.to_owned(),
+                Nickname {
+                    name: name.to_owned(),
+                    ..Nickname::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    }
+}
+
+#[test]
+fn maps_nicknames_onto_nickname_lines() {
+    // RFC 9553 §2.2.2 keys the nicknames like every other JSContact map; RFC
+    // 2426 §3.1.3's NICKNAME is text, so the key rides in X-JMAP-KEY as it
+    // does on an EMAIL — and unlike a date line, EDS rewrites the value in
+    // place and leaves the parameter alone, so the key comes back.
+    let vcard = card_to_vcard(&fixture_card());
+    assert_eq!(line(&vcard, "NICKNAME"), "NICKNAME;X-JMAP-KEY=k1:Vee");
+
+    let card = vcard_to_card(&vcard).expect("parse");
+    let nicknames = card.nicknames.expect("nicknames");
+    assert_eq!(nicknames.keys().collect::<Vec<_>>(), vec!["k1"]);
+    assert_eq!(nicknames["k1"].name, "Vee");
+}
+
+#[test]
+fn each_nickname_gets_a_line_of_its_own() {
+    // RFC 2426 §3.1.3 states the nicknames as one comma-separated list, which
+    // would leave the entries with no key each and nowhere to carry one. EDS
+    // does not read the value as a list anyway — verified against
+    // libebook-contacts 3.52, which hands the whole value back as one string
+    // and escapes a comma inside it — so a list on one line would reach the
+    // user as a single nickname with commas in it.
+    let mut card = one_nickname("k1", "Vee");
+    card.nicknames.as_mut().expect("nicknames").insert(
+        "k2".to_owned(),
+        Nickname {
+            name: "Vera the Elder".to_owned(),
+            ..Nickname::default()
+        },
+    );
+    let vcard = card_to_vcard(&card);
+
+    assert_eq!(
+        vcard.matches("\r\nNICKNAME").count(),
+        2,
+        "one line each, not one list: {vcard}"
+    );
+    let nicknames = vcard_to_card(&vcard).expect("parse").nicknames.unwrap();
+    assert_eq!(nicknames["k1"].name, "Vee");
+    assert_eq!(nicknames["k2"].name, "Vera the Elder");
+}
+
+#[test]
+fn a_nickname_that_reads_as_a_list_is_still_one_nickname() {
+    // The other side of the same decision. A comma in the value is escaped on
+    // the way out, exactly as EDS escapes it, and read back as the text it
+    // was — never split into two entries the server would then be told about.
+    let vcard = card_to_vcard(&one_nickname("k1", "Jim, the tall one"));
+    assert_eq!(
+        line(&vcard, "NICKNAME"),
+        "NICKNAME;X-JMAP-KEY=k1:Jim\\, the tall one"
+    );
+
+    let nicknames = vcard_to_card(&vcard).expect("parse").nicknames.unwrap();
+    assert_eq!(nicknames.len(), 1);
+    assert_eq!(nicknames["k1"].name, "Jim, the tall one");
+
+    // And an *unescaped* comma, which is what a vCard from some other client
+    // carries when it does mean RFC 2426 §3.1.3's list. It is read as the one
+    // text it says rather than as two entries — which is not a shrug at the
+    // RFC but agreement with EDS, whose own reader hands the whole value back
+    // as one string and re-escapes the comma on the way out. Splitting here
+    // would tell the server about a nickname EDS will never show.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "NICKNAME:Jim,Jimmie\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+    let nicknames = card.nicknames.expect("nicknames");
+    assert_eq!(nicknames.len(), 1);
+    assert_eq!(nicknames["k1"].name, "Jim,Jimmie");
+}
+
+#[test]
+fn a_nickname_that_names_nothing_is_skipped_in_both_directions() {
+    // The same invisibility every other keyed map has: an entry with no name
+    // says no more than an `EMAIL:` with no address, gets no line, and must
+    // therefore be invisible to the save as well.
+    assert!(!card_to_vcard(&one_nickname("k1", "")).contains("\r\nNICKNAME"));
+
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "NICKNAME:\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+    assert_eq!(card.nicknames, None);
+}
+
+#[test]
+fn invents_a_key_for_a_nickname_that_has_none() {
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "NICKNAME:Vee\r\n",
+        "NICKNAME;X-JMAP-KEY=k7:Vera the Elder\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+
+    let nicknames = card.nicknames.expect("nicknames");
+    assert_eq!(nicknames["k1"].name, "Vee");
+    assert_eq!(nicknames["k7"].name, "Vera the Elder");
+}
+
 #[test]
 fn unmodeled_jscontact_properties_are_dropped_not_mangled() {
-    // `nicknames` has no place in the minimal vCard set. Dropping it is safe
+    // `keywords` has no place in the minimal vCard set. Dropping it is safe
     // only because saving goes through a PatchObject that touches the mapped
     // properties alone — this test pins that expectation down.
     let vcard = card_to_vcard(&fixture_card());
-    assert!(!vcard.contains("Vee"), "{vcard}");
-    assert!(!vcard.contains("nicknames"), "{vcard}");
+    assert!(!vcard.contains("hiking"), "{vcard}");
+    assert!(!vcard.contains("keywords"), "{vcard}");
     assert!(vcard_to_card(&vcard).expect("parse").extra.is_empty());
 }
 
