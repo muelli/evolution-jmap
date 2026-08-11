@@ -10,14 +10,15 @@
 //! the backend asked the server for. Neither end knows about the other, so
 //! an assertion that holds on both is a claim about the whole path.
 //!
-//! Eight legs, because they need eight books. The first starts empty and writes
-//! a contact into it. The other seven each start from a card the mock was
+//! Nine legs, because they need nine books. The first starts empty and writes
+//! a contact into it. The other eight each start from a card the mock was
 //! seeded with before EDS ever connected — a card from the *server*, holding a
 //! shape no vCard can state, which is the only way to ask what real EDS does to
 //! it — and take the branches a save can take with it: the user edits a field
 //! beside the name, retypes the name itself, picks a new picture, retypes their
 //! calendar address, retypes who they are married to, clears that field
-//! altogether, or retypes the note on a card carrying two of them.
+//! altogether, retypes the note on a card carrying two of them, or clears that
+//! field too.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
@@ -2181,6 +2182,174 @@ fn retyping_the_note_through_eds_patches_the_entry_it_replaces() {
         note.extra.get("created"),
         Some(&serde_json::json!(SEEDED_NOTE_CREATED)),
         "the save replaced the entry instead of patching it: {card:?}"
+    );
+    assert_the_seeded_second_note_survived(card);
+    // And what nobody touched at all, asserted for the reason the other legs
+    // assert them.
+    assert_the_seeded_picture_survived(card);
+    assert_the_seeded_calendars_survived(card);
+    assert_the_seeded_relations_survived(card);
+}
+
+/// What the client joins the card's `NOTE` line values with when it reports
+/// them. A character neither seeded note holds, and not one vCard gives
+/// structural meaning to — the semicolon and the comma are the very things the
+/// notes carry to be checked, so neither of them can also be the delimiter.
+const NOTE_LINE_SEPARATOR: &str = "|";
+
+/// The ninth leg: the user **empties** the Notes field on a card the server
+/// filed two notes on.
+///
+/// The other half of [`retyping_the_note_through_eds_patches_the_entry_it_replaces`],
+/// and the branch of the save no other leg reaches: an entry withdrawn from a
+/// map through a field that cannot express the map. The note behind it is what
+/// says the withdrawal was of the entry the user could see rather than of the
+/// property — it reaches a line of its own, so a save that answered an emptied
+/// field by taking the whole of `notes` back would delete a note nobody was ever
+/// shown, let alone asked to lose.
+///
+/// The empty string rather than NULL, because that is what Evolution's contact
+/// editor writes: it hands `e_contact_set` the text of the field, and the text of
+/// a field the user emptied is `""`. What EDS then leaves on the card is the
+/// measurement this leg exists for, and it is reported rather than judged — the
+/// spouse leg found libebook-contacts 3.52 leaves the *attribute* standing with
+/// no value on it, and whether a `NOTE` behaves the same way is that leg's answer
+/// about another property, not this one's. Either shape withdraws the note, since
+/// a line saying nothing is refused on the way in; what is asserted is therefore
+/// what is true of both — the field reads empty, and the only `NOTE` value left
+/// on the card is the note the user never saw.
+#[test]
+fn clearing_the_note_through_eds_withdraws_it_and_keeps_the_one_behind_it() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_double_barrelled_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/address-book-unnote"));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(&client, &["jmap-functional", "unnote", card_id.as_str()]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // The card the user started from, so the leg says what was cleared rather
+    // than only that nothing is there afterwards: the note the field showed, and
+    // the two lines behind it that the field cannot count.
+    assert_eq!(
+        seen.get("read-note"),
+        Some(&SEEDED_NOTE),
+        "EDS did not read the note off the first line the emitter wrote\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-note-lines"),
+        Some(&"2"),
+        "EDS did not keep both of the emitter's NOTE lines on the card\n{report}"
+    );
+
+    // What the save is handed. The field first, which is the version-robust
+    // half: a card still showing the old text here is the user's clearing never
+    // having happened at all.
+    assert_eq!(
+        seen.get("cleared-note"),
+        Some(&""),
+        "EDS kept a note in the field after it was cleared\n{report}"
+    );
+
+    // Then every `NOTE` value left on that card, which is what the field cannot
+    // say — it reads the first line whatever else is there, so it shows the
+    // note behind the cleared one and the card underneath alike. Only the
+    // values that say something are compared, because whether the emptied line
+    // is struck off or left standing with nothing on it is libebook-contacts'
+    // business and the mapping withdraws the note either way. Measured against
+    // libebook-contacts 3.52 it is the latter: `cleared-note-lines` reads 2, so
+    // the card handed to the save states a note that says nothing — which is
+    // the same shape the spouse leg found, and the shape
+    // `emptying_one_note_line_of_two_withdraws_that_note_alone` states as its
+    // fixture.
+    let cleared_lines = seen
+        .get("cleared-note-line-values")
+        .unwrap_or_else(|| panic!("the client did not report the card's NOTE lines\n{report}"));
+    assert_eq!(
+        cleared_lines
+            .split(NOTE_LINE_SEPARATOR)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>(),
+        vec![SEEDED_SECOND_NOTE],
+        "clearing the Notes field did not leave exactly the note behind it \
+         standing\n{report}"
+    );
+
+    // And what EDS holds after the save, out of the cache the backend's
+    // re-rendered card was stored into: one line, and it is the note the user
+    // was never shown. Clearing the field therefore *reveals* the note behind
+    // it rather than emptying the field — surprising, and correct: the field is
+    // the first `NOTE` line, and after the withdrawal that is the second note.
+    // Asserted because the alternative readings are both failures — the old
+    // text here is the withdrawal never reaching the server, and an empty field
+    // is the second note gone with the first.
+    assert_eq!(
+        seen.get("read-back-note"),
+        Some(&SEEDED_SECOND_NOTE),
+        "the note behind the cleared one did not come back in its place\n{report}"
+    );
+    assert_eq!(
+        seen.get("read-back-note-lines"),
+        Some(&"1"),
+        "the save left the card holding a number of notes nobody asked for\n{report}"
+    );
+
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the withdrawal never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let card = state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .contact_cards
+        .get(&card_id)
+        .expect("the seeded card is still there");
+
+    // The other end, and the load-bearing assertion: the second note alone,
+    // under the key the *server* chose. A `notes` that is absent entirely is the
+    // save having answered an emptied field by taking the property back, and an
+    // entry still keyed by the first note is the withdrawal never made.
+    let notes = card
+        .notes
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's notes: {card:?}"));
+    assert_eq!(
+        notes.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_SECOND_NOTE_KEY],
+        "clearing the Notes field did not withdraw exactly the note it showed: {card:?}"
     );
     assert_the_seeded_second_note_survived(card);
     // And what nobody touched at all, asserted for the reason the other legs

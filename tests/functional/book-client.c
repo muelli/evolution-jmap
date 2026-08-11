@@ -20,20 +20,20 @@
  * backends implement. Binding a second surface just to call it from a test
  * would put a layer of our own between EDS and the thing under test.
  *
- * There are eight phases, chosen on the command line, because they need
+ * There are nine phases, chosen on the command line, because they need
  * different books: `write` starts from an empty address book and puts a
  * contact into it, while `edit`, `rename`, `repicture`, `recalendar`,
- * `respouse`, `unspouse` and `renote` each start from one the mock was seeded
- * with before EDS connected — a card that came from the *server*, which is the
- * only way to have EDS read something no vCard this program could write would
- * produce. Those seven differ only in which field the user changes, and that is
+ * `respouse`, `unspouse`, `renote` and `unnote` each start from one the mock was
+ * seeded with before EDS connected — a card that came from the *server*, which is
+ * the only way to have EDS read something no vCard this program could write would
+ * produce. Those eight differ only in which field the user changes, and that is
  * the whole distinction under test: `edit` touches a field beside the name,
  * `rename` retypes the name itself, `repicture` replaces the photo,
  * `recalendar` retypes the calendar address, `respouse` retypes who the contact
- * is married to, `unspouse` empties that field instead, and `renote` retypes the
- * note on a card carrying two of them. They are modes of one program rather
- * than separate programs because they open the same book the same way and differ
- * only in what they then ask of it.
+ * is married to, `unspouse` empties that field instead, `renote` retypes the
+ * note on a card carrying two of them, and `unnote` empties that field instead.
+ * They are modes of one program rather than separate programs because they open
+ * the same book the same way and differ only in what they then ask of it.
  *
  *   usage: functional-book-client <source-uid> write <full-name> <photo-base64>
  *          functional-book-client <source-uid> edit <contact-uid> <email>
@@ -46,6 +46,7 @@
  *          functional-book-client <source-uid> respouse <contact-uid> <spouse>
  *          functional-book-client <source-uid> unspouse <contact-uid>
  *          functional-book-client <source-uid> renote <contact-uid> <note>
+ *          functional-book-client <source-uid> unnote <contact-uid>
  */
 
 #include <libebook/libebook.h>
@@ -180,6 +181,13 @@
  * (`TYPE=png`) and rebuilds `image/png` out of it on the way back, and this is
  * the leg that says our emitter and reader agree with that. */
 #define TEST_PHOTO_MEDIA_TYPE "image/png"
+
+/* What the NOTE line values are reported joined on. The harness reads stdout as
+ * one `key=value` per line and splits this observation itself, so the character
+ * has to be one neither note holds — and not one vCard gives structural meaning
+ * to either, since the semicolon and the comma inside the notes are exactly what
+ * the seeded card carries them to check. */
+#define TEST_NOTE_LINE_SEPARATOR "|"
 
 /* How long the `edit` phase waits for the contact the mock was seeded with to
  * become gettable, and how often it asks. EBookMetaBackend answers a get for
@@ -403,6 +411,57 @@ report_notes (const gchar *prefix,
 	}
 
 	g_print ("%s-note-lines=%u\n", prefix, lines);
+}
+
+/* Report what every NOTE line on the card says, joined on a character none of
+ * them holds.
+ *
+ * The counterpart of report_spouse_line above, and there for the same reason:
+ * e_contact_get reads the first line of the name and stops, so a card whose
+ * first note was emptied and a card whose second note was deleted read alike
+ * through the field. The count beside it cannot tell those two apart either —
+ * both leave one line saying something — so the `unnote` phase reports the
+ * values themselves and lets the harness say which line is which.
+ *
+ * Reported rather than judged, as the spouse line is: whether an emptied line is
+ * struck off the card or left standing with no value on it is libebook-contacts'
+ * business, so an attribute holding nothing at all is reported as the empty
+ * string and the harness compares only the values that say something. */
+static void
+report_note_line_values (const gchar *prefix,
+                         EContact *contact)
+{
+	GPtrArray *values = g_ptr_array_new_with_free_func (g_free);
+	GList *attribute;
+	gchar *joined;
+	gchar *key;
+
+	for (attribute = e_vcard_get_attributes (E_VCARD (contact));
+	     attribute;
+	     attribute = attribute->next) {
+		const gchar *name = e_vcard_attribute_get_name (attribute->data);
+		gchar *value;
+
+		if (!name || g_ascii_strcasecmp (name, EVC_NOTE) != 0)
+			continue;
+
+		/* NULL for an attribute holding no value at all, which is a
+		 * different shape from one holding the empty string — and the
+		 * shape a cleared field is expected to leave behind. */
+		value = e_vcard_attribute_get_value (attribute->data);
+		g_ptr_array_add (values, value ? value : g_strdup (""));
+	}
+
+	g_ptr_array_add (values, NULL);
+	joined = g_strjoinv (TEST_NOTE_LINE_SEPARATOR, (gchar **) values->pdata);
+	key = g_strconcat (prefix, "-note-line-values", NULL);
+	/* Escaped, because a note is the one mapped property a user types prose
+	 * into and prose can hold a line break. */
+	report_multiline (key, joined);
+
+	g_free (key);
+	g_free (joined);
+	g_ptr_array_free (values, TRUE);
 }
 
 /* The first phase: an empty book, one contact written into it with every
@@ -962,6 +1021,47 @@ renote_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
+/* The ninth phase: the user empties the Notes field on the same seeded card,
+ * rather than retyping it.
+ *
+ * The other half of `renote`, and the branch of the save nothing else reaches: an
+ * entry withdrawn from a map through a field that cannot express the map. The
+ * note behind it is what says the withdrawal was of the entry the user could see
+ * rather than of the property — it has a line of its own, so a save that answered
+ * an emptied field by taking the whole of `notes` back would delete a note nobody
+ * was ever shown.
+ *
+ * The empty string rather than NULL, because that is what Evolution's contact
+ * editor writes: it hands e_contact_set the text of the field, and the text of a
+ * field the user emptied is "". What EDS leaves on the card is then reported
+ * twice over — the field, and every NOTE value the card still carries — because
+ * the field alone cannot tell the note that was cleared from the note behind it:
+ * see report_note_line_values. */
+static int
+unnote_phase (EBookClient *book,
+              const gchar *uid)
+{
+	EContact *contact;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	report_seeded_contact (contact);
+
+	e_contact_set (contact, E_CONTACT_NOTE, "");
+
+	/* The card as the save is about to be handed it: what the field reads
+	 * as, how many lines of that name are left, and what each of them
+	 * says. */
+	report_notes ("cleared", contact);
+	report_note_line_values ("cleared", contact);
+
+	return save_and_report (book, contact, uid);
+}
+
 static void
 usage (const gchar *program)
 {
@@ -972,9 +1072,10 @@ usage (const gchar *program)
 		    "       %s <source-uid> recalendar <contact-uid> <calendar-uri>\n"
 		    "       %s <source-uid> respouse <contact-uid> <spouse>\n"
 		    "       %s <source-uid> unspouse <contact-uid>\n"
-		    "       %s <source-uid> renote <contact-uid> <note>\n",
+		    "       %s <source-uid> renote <contact-uid> <note>\n"
+		    "       %s <source-uid> unnote <contact-uid>\n",
 		    program, program, program, program, program, program, program,
-		    program);
+		    program, program);
 }
 
 int
@@ -1005,7 +1106,8 @@ main (int argc,
 	      (g_str_equal (phase, "recalendar") && argc == 5) ||
 	      (g_str_equal (phase, "respouse") && argc == 5) ||
 	      (g_str_equal (phase, "unspouse") && argc == 4) ||
-	      (g_str_equal (phase, "renote") && argc == 5))) {
+	      (g_str_equal (phase, "renote") && argc == 5) ||
+	      (g_str_equal (phase, "unnote") && argc == 4))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -1074,8 +1176,10 @@ main (int argc,
 		status = respouse_phase (book, argv[3], argv[4]);
 	else if (g_str_equal (phase, "unspouse"))
 		status = unspouse_phase (book, argv[3]);
-	else
+	else if (g_str_equal (phase, "renote"))
 		status = renote_phase (book, argv[3], argv[4]);
+	else
+		status = unnote_phase (book, argv[3]);
 
 	g_object_unref (client);
 	g_object_unref (source);
