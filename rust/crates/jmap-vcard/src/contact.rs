@@ -4,11 +4,11 @@
 //! JSContact [`ContactCard`] ↔ vCard 3.0.
 //!
 //! The mapped set is deliberately the one the address book backend needs to
-//! be useful — UID, FN, N, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE, NOTE,
-//! BDAY — and no more. Everything else on a card (nicknames, keywords, …) is
-//! *dropped*, which is only safe because saving goes back to the server as a
-//! PatchObject naming the mapped properties: a property we never mapped is a
-//! property we never overwrite.
+//! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
+//! NOTE, BDAY — and no more. Everything else on a card (keywords, preferred
+//! languages, …) is *dropped*, which is only safe because saving goes back to
+//! the server as a PatchObject naming the mapped properties: a property we
+//! never mapped is a property we never overwrite.
 //!
 //! `ORG` is the one property whose *value* is a list rather than a field: RFC
 //! 2426 §3.5.5 states the organisation's name and then the units within it,
@@ -60,12 +60,25 @@
 //! §3.1.5's `BDAY` and `wedding` on the line EDS reads `E_CONTACT_ANNIVERSARY`
 //! off; `death` has no line at all, so `anniversaries` too is a map of which
 //! the vCard states only some entries.
+//!
+//! `nicknames` is the one property whose vCard *cardinality* is the decision.
+//! RFC 2426 §3.1.3 states the nicknames as one comma-separated list on a
+//! single `NICKNAME` line, which would leave RFC 9553 §2.2.2's keyed entries
+//! with nowhere to carry a key each — so an entry gets a line of its own
+//! instead, as `NOTE` and `TITLE` already do. That is also what EDS does with
+//! the value: measured against libebook-contacts 3.52, it hands the whole
+//! value back as one string rather than splitting it on commas, and escapes a
+//! comma the user typed, so a list on one line would reach the contact editor
+//! as a single nickname with commas in it. Unlike a date line, the `NICKNAME`
+//! is rewritten in place with its parameters intact, so the [`X_JMAP_KEY`]
+//! survives the trip through Evolution and the save needs no rekeying. An
+//! entry that names nothing gets no line, which is the same invisibility again.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, ContactCard, ContactEmail, ContactPhone, Name,
-    NameComponent, Note, OrgUnit, Organization, Title,
+    NameComponent, Nickname, Note, OrgUnit, Organization, Title,
 };
 use serde_json::{Map, Value, json};
 
@@ -230,6 +243,12 @@ pub fn address_label(address: &Address) -> Option<&str> {
 /// `NOTE` line could state.
 pub fn states_note(note: &Note) -> bool {
     !note.note.is_empty()
+}
+
+/// Whether a nickname reaches the user at all — whether it names anything a
+/// `NICKNAME` line could state.
+pub fn states_nickname(nickname: &Nickname) -> bool {
+    !nickname.name.is_empty()
 }
 
 /// Whether an email address reaches the user at all. An entry with no
@@ -403,6 +422,16 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
+    // One line per entry rather than RFC 2426 §3.1.3's comma-separated list,
+    // so that each keeps its JSContact key — and because EDS reads the value
+    // as one string either way.
+    for (key, nickname) in card.nicknames.iter().flatten() {
+        if !states_nickname(nickname) {
+            continue;
+        }
+        properties.push(Property::new("NICKNAME", &nickname.name).with_param(X_JMAP_KEY, key));
+    }
+
     for (key, email) in card.emails.iter().flatten() {
         if !states_email(email) {
             continue;
@@ -510,6 +539,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     };
 
     let name = read_name(&properties);
+    let mut nicknames = BTreeMap::new();
     let mut emails = BTreeMap::new();
     let mut phones = BTreeMap::new();
     let mut addresses = BTreeMap::new();
@@ -520,6 +550,21 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 
     for property in &properties {
         match property.name.as_str() {
+            "NICKNAME" => {
+                // Read as a `text-list` value, because that is what RFC 2426
+                // §3.1.3 makes it and what calcard parses it as: a comma the
+                // card left unescaped is part of the nickname here, exactly as
+                // it is to EDS, rather than a separator that would file the
+                // rest of the line as a second nickname.
+                let nickname = Nickname {
+                    name: property.text_list(),
+                    extra: BTreeMap::new(),
+                };
+                if !states_nickname(&nickname) {
+                    continue;
+                }
+                nicknames.insert(entry_key(property, "k", &nicknames), nickname);
+            }
             "EMAIL" => {
                 let address = property.text();
                 if address.is_empty() {
@@ -614,6 +659,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         version: Some("1.0".to_owned()),
         uid: text(X_JMAP_UID),
         name,
+        nicknames: (!nicknames.is_empty()).then_some(nicknames),
         emails: (!emails.is_empty()).then_some(emails),
         phones: (!phones.is_empty()).then_some(phones),
         addresses: (!addresses.is_empty()).then_some(addresses),

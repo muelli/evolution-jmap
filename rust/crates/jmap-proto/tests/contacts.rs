@@ -92,6 +92,13 @@ fn contact_card_roundtrip() {
     // line, so they too stay visible to the save path.
     assert!(notes["n1"].extra.contains_key("created"));
     assert!(notes["n1"].extra.contains_key("author"));
-    // Unmodeled JSContact properties (nicknames) survive via `extra`.
-    assert!(card.extra.contains_key("nicknames"));
+    let nicknames = card.nicknames.as_ref().unwrap();
+    assert_eq!(nicknames["k1"].name, "Vee");
+    // The context a nickname is used in and how strongly it is preferred have
+    // no parameter on a `NICKNAME` line, so they too stay visible to the save
+    // path.
+    assert!(nicknames["k1"].extra.contains_key("contexts"));
+    assert!(nicknames["k1"].extra.contains_key("pref"));
+    // Unmodeled JSContact properties (keywords) survive via `extra`.
+    assert!(card.extra.contains_key("keywords"));
 }

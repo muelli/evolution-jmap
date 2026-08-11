@@ -58,7 +58,7 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
     fixture.patch(
         &id,
         json!({
-            "nicknames": {"k1": {"name": "Vee"}},
+            "keywords": {"hiking": true},
             "anniversaries": {"y1": {"kind": "birth", "date": {"year": 1964}}},
             "emails/e0/label": "day job",
         }),
@@ -71,8 +71,8 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
 
     let stored = fixture.card(&id);
     assert_eq!(
-        stored.extra.get("nicknames"),
-        Some(&json!({"k1": {"name": "Vee"}})),
+        stored.extra.get("keywords"),
+        Some(&json!({"hiking": true})),
         "an unmapped property was overwritten"
     );
     let anniversaries = stored.anniversaries.as_ref().expect("anniversaries");
@@ -767,6 +767,95 @@ fn removing_the_note_line_removes_the_note() {
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     assert_eq!(fixture.card(&id).notes, None);
+}
+
+#[test]
+fn editing_a_nickname_keeps_the_context_and_ranking_the_line_cannot_carry() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // RFC 9553 §2.2.2 hangs a `contexts` and a `pref` off a nickname, and RFC
+    // 2426 §3.1.3's NICKNAME takes no TYPE and no ranking, so neither reaches
+    // the vCard. They survive only if the patch reaches in.
+    fixture.patch(
+        &id,
+        json!({"nicknames": {"k1": {
+            "@type": "Nickname",
+            "name": "Vee",
+            "contexts": {"private": true},
+            "pref": 1,
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("NICKNAME;X-JMAP-KEY=k1:Vee"), "{vcard}");
+
+    let edited = vcard.replace(
+        "NICKNAME;X-JMAP-KEY=k1:Vee",
+        "NICKNAME;X-JMAP-KEY=k1:Vee-Vee",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let nicknames = fixture.card(&id).nicknames.expect("nicknames");
+    assert_eq!(nicknames.len(), 1, "patched in place, not re-added");
+    assert_eq!(nicknames["k1"].name, "Vee-Vee");
+    assert_eq!(
+        nicknames["k1"].extra.get("contexts"),
+        Some(&json!({"private": true})),
+        "a member the NICKNAME line cannot carry was overwritten"
+    );
+    assert_eq!(nicknames["k1"].extra.get("pref"), Some(&json!(1)));
+}
+
+#[test]
+fn a_nickname_with_no_name_survives_a_save_it_was_never_part_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // An entry that names nothing gets no NICKNAME line, so it never reaches
+    // the user — and must not then be deleted by a save, nor have its key
+    // taken by the nickname the user types.
+    fixture.patch(
+        &id,
+        json!({"nicknames": {"k1": {"@type": "Nickname", "name": "", "pref": 1}}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nNICKNAME"), "{vcard}");
+    // The reader counts only the entries it can see, so the key it invents
+    // for this one is `k1` — the key the hidden entry already holds.
+    let edited = vcard.replace("END:VCARD\r\n", "NICKNAME:Vee\r\nEND:VCARD\r\n");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let nicknames = fixture.card(&id).nicknames.expect("nicknames");
+    assert_eq!(
+        nicknames["k1"].extra.get("pref"),
+        Some(&json!(1)),
+        "an entry the vCard never showed was overwritten: {nicknames:?}"
+    );
+    assert!(
+        nicknames.values().any(|nickname| nickname.name == "Vee"),
+        "the nickname the user typed was not saved: {nicknames:?}"
+    );
+    assert_eq!(nicknames.len(), 2);
+}
+
+#[test]
+fn removing_the_nickname_line_removes_the_nickname() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(&id, json!({"nicknames": {"k1": {"name": "Vee"}}}));
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited: String = vcard
+        .lines()
+        .filter(|line| !line.starts_with("NICKNAME"))
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).nicknames, None);
 }
 
 /// The birthday as EDS hands it back after the user has edited it: the date

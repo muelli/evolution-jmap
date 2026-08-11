@@ -68,6 +68,14 @@
     }
   },
   "nicknames": {
-    "k1": {"@type": "Nickname", "name": "Vee"}
+    "k1": {
+      "@type": "Nickname",
+      "name": "Vee",
+      "contexts": {"private": true},
+      "pref": 1
+    }
+  },
+  "keywords": {
+    "hiking": true
   }
 }
