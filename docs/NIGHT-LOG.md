@@ -19248,3 +19248,94 @@ contact-editor behaviour unmeasured; whether the editor lets a handle be moved
 between the Home and Work slots at all is unknown; no test drives a `uri`-only
 entry through real EDS; and the `jmap-mail` `transport.rs` hang is still an open
 design question with a lock-order hypothesis attached.
+
+## 2026-08-11 (hundred-and-ninetieth session)
+
+**The other branch of the name restore is now measured through real EDS: when
+the user retypes the name, the parts the server stated separately are gone.**
+Last session closed the "nobody touched the name" half — real EDS hands the `N`
+field back byte-identically, so the restore's string comparison is a checked
+premise. Its mirror was still untested outside the mock: the branch taken when
+that comparison *fails*, where `Jean` and `Paul` must be replaced by the `Hans`
+the user typed rather than quietly reinstated beside it. Green on the mock side
+since `retyping_a_double_barrelled_given_name_replaces_the_parts_it_was_built_from`,
+but that test edits the vCard by string replacement — it never asks EDS to
+rebuild the `N` line out of its own fields, which is where the text the
+comparison is *given* actually comes from.
+
+The functional book leg now has a third test on the same seeded card: a given
+name held as two `given` components, each with a `phonetic`. The client reads
+what EDS made of it, sets `E_CONTACT_GIVEN_NAME` to `Hans` and
+`E_CONTACT_FULL_NAME` to `Hans Oldenburg` — both, because both are what the
+contact editor writes and `FN` is a separate attribute that would otherwise
+still spell the old name — saves, and the Rust side asserts the server's
+`name/components` are exactly `[surname Oldenburg, given Hans]`: one component,
+and no pronunciations, because a `phonetic` for `Jean` is not one for `Hans`.
+
+**Mutation-checked.** Dropping the `value(part) == joined` guard in
+`restore_shared_fields` — so the restore fires whether or not the field was
+retyped — makes the new leg fail through the whole real stack with
+`read-back-given-name=Jean Paul`: the name the user typed is thrown away and the
+server's two halves come back. The other two legs stay green, which is the
+point; the preceding leg cannot see this because it never retypes anything.
+
+**Where the weight sits, and it is not where last session's was.** There the
+read-back observations caught nothing — EDS's cache holds the vCard the backend
+re-rendered, and one collapsed component renders the same `N` field as two
+joined ones, so only the server-side assertion was load-bearing. Here it is the
+reverse for the *text*: this save changes what the given-name field says, and
+the re-rendered card carries that change, so `read-back-given-name` catches any
+text-level regression on its own. What the server assertion still adds is the
+structure the field provably cannot show — that there is exactly *one* `given`
+component rather than one plus an empty second, and that the two `phonetic`
+members are gone. Both kept, for the two different failures they see.
+
+`book-client.c` grew a `rename` phase beside `write` and `edit`, and the two
+seeded-card phases now share `report_seeded_contact()` and
+`save_and_report()`: they differ only in which field the user changes, which is
+the whole distinction under test, so anything else being different between them
+would be noise. `save_and_report()` also reports `read-back-full-name`, which
+the `edit` phase did not — harmless there and necessary here. On the Rust side
+the forty lines of seeding moved into `seed_double_barrelled_card()` rather than
+being copied. No new CMake target and no new environment variable: the third
+test is another `#[test]` in the same binary, under the same `functional-book`
+CTest entry.
+
+Tests: 946 in the default set, unchanged — the new test is in `jmap-functional`,
+which is outside `default-members` and runs under CTest.
+
+Verified locally: `cargo test --locked` 946; full `ninja` then `ctest` 14/14,
+including all four functional legs, with `functional-book` now running three
+tests rather than two; `cargo fmt --all --check` and `cargo clippy --all-targets
+--locked -- -D warnings` clean, plus `cargo clippy -p jmap-functional
+--all-targets --locked` for the crate outside the default set. `ci/checks.sh`
+still stops at its first step — no `reuse`, no `pipx`, no `uvx` on this VM — so
+the licence check was done by hand: no file was added, both sources touched
+already carry an SPDX header, and `Cargo.lock` is untouched, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+**What is still *not* verified.** As with the preceding leg, the claim is
+measured for EDS 3.52 on this VM and only there — M10's version matrix is what
+would watch it. And the rename is driven through `e_contact_set()` on the
+synthetic given-name field, which is what the contact editor does to that field
+but is not the editor: nothing here says the editor writes `FN` in step with it
+the way this test assumes, only that the save does the right thing when it does.
+
+No milestone tag. Removed from the blocker list: no functional test driving a
+save that edits the `N` field itself through real EDS. Unchanged blockers: the
+calcard directive's two emitters are still ours; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; the
+manual-test recipes are unlinked from the README; `jmap-mail`'s rustdoc is
+dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and `CONFERENCE` on
+the calendar side rest on untested assumptions; the multi-`NOTE`/`ORG`/`TITLE`/
+`NICKNAME`/`URL` "Evolution shows only the first" bet is still unverified in
+real Evolution; the two `LABEL` `TYPE` risks stand; a deathday and a birthday
+stated as a year alone are still invisible; the conventional URI schemes for
+AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled;
+`X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour
+unmeasured; whether the editor lets a handle be moved between the Home and Work
+slots at all is unknown; no test drives a `uri`-only entry through real EDS; a
+contact's photo (RFC 9553's `media`) is mapped nowhere, so Evolution shows none;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a
+lock-order hypothesis attached.
