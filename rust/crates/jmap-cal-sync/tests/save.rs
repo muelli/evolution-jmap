@@ -257,10 +257,11 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
         "uri": "https://meet.example.com/standup",
         "features": {"video": true},
     });
-    // And what the event points at, which is the guest list's case again: it is
-    // drawn as the ATTACH below and may not be written back, because a Link's
-    // `title` (RFC 8984 §1.4.11) has no room on the line and a save naming
-    // `links` replaces the property whole.
+    // And what the event points at, which is the conference's case again: the
+    // ATTACH below is drawn *and* editable, but only the address on it — a
+    // Link's `title` (RFC 8984 §1.4.11) has no room on the line, and the media
+    // type and size are the server's own description of the resource. Nothing
+    // about it was edited here, so the whole entry has to come back untouched.
     let agenda = json!({
         "@type": "Link",
         "href": "https://files.example.com/standup.pdf",
@@ -297,7 +298,8 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     );
     assert!(
         icalendar.replace("\r\n ", "").contains(
-            "ATTACH;FMTTYPE=application/pdf;SIZE=51200:https://files.example.com/standup.pdf"
+            "ATTACH;FMTTYPE=application/pdf;SIZE=51200;X-JMAP-KEY=l1:\
+             https://files.example.com/standup.pdf"
         ),
         "{icalendar}"
     );
@@ -562,6 +564,243 @@ fn a_new_events_conference_reaches_the_server() {
         }}))
         .expect("a map of virtual locations")
     );
+}
+
+/// An event pointing at whatever external resources are passed, and the sync
+/// that serves it.
+fn points_at(fixture: &Fixture, links: Value) -> (jmap_proto::Id, jmap_cal_sync::CalSync) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"links": links}));
+    (id, fixture.sync())
+}
+
+/// The one link the tests below start from: an address, the media type and size
+/// the server knows for it, and the two members no `ATTACH` line has room for.
+fn agenda() -> Value {
+    json!({
+        "@type": "Link",
+        "href": "https://files.example.com/standup.pdf",
+        "contentType": "application/pdf",
+        "size": 51_200,
+        "cid": "agenda@example.com",
+        "title": "What we said we would do",
+    })
+}
+
+#[test]
+fn moving_an_attachment_patches_the_entry_the_server_chose() {
+    // The third property patched *into* rather than replaced, for the reason the
+    // other two are: a Link (RFC 8984 §1.4.11) holds a `cid`, a `rel` and a
+    // `title` that no ATTACH line has room for, so naming `links` in the patch
+    // would delete half of a resource the user was never shown. The save names
+    // `links/<key>/href` under the key the line was drawn with, and everything
+    // beside it stays as the server had it.
+    let fixture = Fixture::start();
+    let (id, sync) = points_at(&fixture, json!({"l1": agenda()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar.replace("standup.pdf", "standup-final.pdf");
+    assert_ne!(edited, icalendar, "the line to edit was not found");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let mut expected = agenda();
+    expected["href"] = json!("https://files.example.com/standup-final.pdf");
+    assert_eq!(
+        stored.links.as_ref().unwrap()["l1"],
+        expected,
+        "only the address the user edited may change"
+    );
+}
+
+#[test]
+fn the_media_type_and_size_the_server_stated_are_not_rewritten_by_a_save() {
+    // `href` is the only member of a Link a save ever names, and this is why:
+    // `contentType` and `size` are the *server's* description of the resource —
+    // §1.4.11 calls the size an estimate — not a field the user was offered. An
+    // editor that rewrites the line without the parameters it has no UI for is
+    // the ordinary case, and reading that as "the user cleared the media type"
+    // would delete what the server knows on the first save of an unrelated edit.
+    let fixture = Fixture::start();
+    let (id, sync) = points_at(&fixture, json!({"l1": agenda()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar
+        .replace(";FMTTYPE=application/pdf", "")
+        .replace(";SIZE=51200", "")
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(
+        stored.links.as_ref().unwrap()["l1"],
+        agenda(),
+        "a save must not rewrite what the server knows about a resource"
+    );
+}
+
+#[test]
+fn an_attachment_missing_from_the_component_is_left_where_it_is() {
+    // The same caution a missing CONFERENCE gets, and for the same reason: a
+    // line that is gone does not say who removed it. Evolution's editor keeps
+    // attachments in a store of its own and writes what it kept, so a component
+    // that names fewer resources than the server holds is as likely to be an
+    // editor that dropped a line it had no URI for as a user who removed the
+    // file. Reading it as a deletion would destroy a document nobody touched;
+    // the cost of the other reading is that a removal made elsewhere comes back
+    // on the next sync.
+    let fixture = Fixture::start();
+    let minutes = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/minutes.txt",
+    });
+    let (id, sync) = points_at(&fixture, json!({"l1": agenda(), "l2": minutes.clone()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited: String = icalendar
+        .split_inclusive("\r\n")
+        .filter(|line| !line.contains("minutes.txt"))
+        .collect();
+    assert_ne!(edited, icalendar, "the line to drop was not found");
+    sync.save_component(
+        &edited.replace("SUMMARY:Standup", "SUMMARY:Standup (short)"),
+        Some(id.as_str()),
+    )
+    .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(
+        stored.links.as_ref().unwrap()["l2"],
+        minutes,
+        "a resource the component stopped naming must not be deleted"
+    );
+}
+
+#[test]
+fn a_resource_the_server_does_not_hold_is_not_created_by_a_save() {
+    // RFC 8620 §5.3 lets a patch reach only through objects that already exist,
+    // so a line carrying a key the server never chose — or none at all, which is
+    // what another client's component looks like — names no entry this save can
+    // patch. Creating one instead is not available either: a resource the user
+    // added is a file to upload as a blob, not an address the server can fetch.
+    let fixture = Fixture::start();
+    let (id, sync) = points_at(&fixture, json!({"l1": agenda()}));
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar.replace(
+        "END:VEVENT",
+        "ATTACH;X-JMAP-KEY=l9:https://files.example.com/minutes.txt\r\n\
+         ATTACH:https://files.example.com/slides.pdf\r\n\
+         END:VEVENT",
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.links.as_ref().unwrap().keys().collect::<Vec<_>>(),
+        ["l1"],
+        "a save must not file a resource the server has no entry for"
+    );
+}
+
+#[test]
+fn an_attachment_under_a_key_this_side_invented_is_not_patched_onto_another() {
+    // A key outside RFC 8984 §1.4.4's `Id` grammar cannot ride on the line, so
+    // the drawing of that entry reads back under an invented key — and an
+    // invented key avoids only the keys the *document* names, so it can collide
+    // with a key the server holds for an entry the drawing left out. Here it
+    // does: `k1` is a resource with no address to draw. Patching `links/k1/href`
+    // would give that entry the address of the agenda the user edited and lose
+    // the edit itself, so the address the server stated is checked against the
+    // one that was drawn, and an edit under a key this side invented is dropped.
+    let fixture = Fixture::start();
+    let addressless = json!({
+        "@type": "Link",
+        "title": "Whatever it was we could not link to",
+    });
+    let drawn = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/standup.pdf",
+        "title": "What we said we would do",
+    });
+    let (id, sync) = points_at(
+        &fixture,
+        json!({"k1": addressless.clone(), "an/agenda": drawn.clone()}),
+    );
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar
+        .replace("standup.pdf", "standup-final.pdf")
+        .replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    assert_ne!(edited, icalendar, "the line to edit was not found");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    let links = stored.links.as_ref().unwrap();
+    assert_eq!(
+        links["k1"], addressless,
+        "another entry was patched instead"
+    );
+    assert_eq!(
+        links["an/agenda"], drawn,
+        "an edit under a key this side invented must be dropped, not guessed at"
+    );
+}
+
+#[test]
+fn a_new_events_attachment_reaches_the_server() {
+    // The create path writes the property whole — there is no server entry to
+    // patch into — so a component that already points somewhere, which is what
+    // an event copied out of another calendar looks like, arrives with it.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace(
+        "END:VEVENT",
+        "ATTACH;FMTTYPE=application/pdf;SIZE=51200:https://files.example.com/planning.pdf\r\n\
+         END:VEVENT",
+    );
+
+    let saved = fixture
+        .sync()
+        .save_component(&icalendar, None)
+        .expect("create");
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(
+        stored.links,
+        serde_json::from_value(json!({"k1": {
+            "@type": "Link",
+            "href": "https://files.example.com/planning.pdf",
+            "contentType": "application/pdf",
+            "size": 51_200,
+        }}))
+        .expect("a map of links")
+    );
+}
+
+#[test]
+fn a_new_events_local_attachment_is_not_sent_to_the_server() {
+    // Where Evolution keeps a file the user attached: a `file:` URI into its own
+    // store. It is not an address anybody else could fetch, and the path names
+    // the user's home directory — so it is not filed as a Link, and the event is
+    // created without it. Sending the file means uploading it as a blob, which
+    // this backend does not do yet.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace(
+        "END:VEVENT",
+        "ATTACH:file:///home/vera/.local/share/evolution/calendar/planning.pdf\r\n\
+         END:VEVENT",
+    );
+
+    let saved = fixture
+        .sync()
+        .save_component(&icalendar, None)
+        .expect("create");
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(stored.links, None);
 }
 
 #[test]

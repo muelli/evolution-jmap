@@ -151,12 +151,13 @@ pub struct CalendarEvent {
     /// picture shown beside the title.
     ///
     /// Left as JSON, for the reason [`Self::virtual_locations`] is: a Link (RFC
-    /// 8984 §1.4.11) holds a `cid`, a `rel`, a `display` and a `title` besides
-    /// the `href`, `contentType` and `size` that iCalendar's `ATTACH` (RFC 5545
-    /// §3.8.1.1) and `IMAGE` (RFC 7986 §5.10) have room for. The mapping draws
-    /// the resources and never reads them back, so nothing here has to model the
-    /// rest; holding them as values keeps one server's unusual link from failing
-    /// a `CalendarEvent/get` and taking every event in the calendar with it.
+    /// 8984 §1.4.11) holds a `cid` and a `title` besides the `href`,
+    /// `contentType`, `size`, `rel` and `display` that iCalendar's `ATTACH` (RFC
+    /// 5545 §3.8.1.1) and `IMAGE` (RFC 7986 §5.10) have room for. The mapping
+    /// reads back only what it drew and a save patches one member of an entry, so
+    /// nothing here has to model the rest; holding them as values keeps one
+    /// server's unusual link from failing a `CalendarEvent/get` and taking every
+    /// event in the calendar with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<BTreeMap<String, Value>>,
     /// The tags the event carries (RFC 8984 §4.2.9), an RFC 8984 §1.4.3 Set:
