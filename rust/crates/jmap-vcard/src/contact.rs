@@ -96,7 +96,8 @@
 //! itself keeps a handle on — [`ONLINE_SERVICES`] — and the mapping states only
 //! the ten services libebook-contacts 3.52 gives contact-editor slots to. Which
 //! makes the property lossy in three separate places: a service EDS has no field
-//! for has no line, an entry stating a `uri` and no `user` has none either (see
+//! for has no line, an entry stating a `uri` and no `user` has one only where
+//! [`SERVICE_SCHEMES`] says the URI holds the handle and nothing else (see
 //! [`drawn_service`]), and neither has a handle the line would come back from
 //! EDS having renamed.
 //!
@@ -216,6 +217,40 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("Matrix", "X-MATRIX"),
     ("Skype", "X-SKYPE"),
     ("Yahoo", "X-YAHOO"),
+];
+
+/// The URI scheme each service states its handles under, for the services whose
+/// scheme names the handle *literally* — `xmpp:vera@jabber.example` is the JID
+/// `vera@jabber.example` with a prefix and nothing else.
+///
+/// This is what lets an entry stating only a `uri` (RFC 9553 §2.3.2 asks for
+/// either that or a `user`) reach the free-text field EDS keeps handles in:
+/// without it the handle would have to be guessed out of the URI, and the guess
+/// would be written back on the next save.
+///
+/// Deliberately shorter than [`ONLINE_SERVICES`], because a scheme is only
+/// listed here where its scheme-specific part *is* the handle:
+///
+/// - `xmpp` is RFC 5122 §2.1's, whose path is a JID. Google Talk ran on XMPP,
+///   so its handles are JIDs too, and one scheme serves both.
+/// - `skype` is the scheme Skype's own links use, where the bare form
+///   `skype:<name>` is the Skype Name and the rest is a query telling the client
+///   what to do with it — which [`plain_handle`] refuses.
+/// - `matrix` is left out: RFC-registered, but it states an identifier as
+///   `u/vera:matrix.example` rather than as the `@vera:matrix.example` the field
+///   holds, so reading one means rewriting it and writing one means the reverse.
+/// - AIM, Gadu-Gadu, ICQ, MSN and Yahoo each had a conventional scheme that this
+///   table does not yet name, because none was verified here against the IANA
+///   registry. That omission costs exactly what it cost before this table
+///   existed — a `uri`-only entry at one of them stays invisible — and adding
+///   one is a line of table plus a test.
+///
+/// Getting a scheme *wrong* is bounded the same way: a URI whose scheme does not
+/// match is not drawn, which is the behaviour of every service missing here.
+const SERVICE_SCHEMES: [(&str, &str); 3] = [
+    ("Google Talk", "xmpp"),
+    ("Jabber", "xmpp"),
+    ("Skype", "skype"),
 ];
 
 /// The slot EDS files a handle in when nothing says otherwise, and the only one
@@ -358,8 +393,8 @@ fn maps_link_kind(kind: Option<&str>) -> bool {
 ///
 /// Three things have to hold at once, and [`drawn_service`] is where each is
 /// spelled out: the service must be one EDS has a field for, the entry must
-/// state a `user` rather than only a `uri`, and the handle must survive the trip
-/// through EDS unrenamed.
+/// state a handle — as a `user`, or as a `uri` this side can read one out of —
+/// and that handle must survive the trip through EDS unrenamed.
 pub fn states_online_service(service: &OnlineService) -> bool {
     drawn_service(service).is_some()
 }
@@ -375,13 +410,12 @@ pub fn states_online_service(service: &OnlineService) -> bool {
 ///   there is no property that states an arbitrary one, and an invented
 ///   `X-SIGNAL` would reach nothing the user can see while making the save
 ///   believe the entry had been shown. See [`ONLINE_SERVICES`].
-/// - **it states a `uri` and no `user`.** RFC 9553 §2.3.2 asks for either, but
-///   only the `user` is a handle, and the field EDS keeps this on is the handle:
-///   reading one out of `xmpp:vera@jabber.example` means knowing the URI scheme
-///   of every service, and a save would write that guess back. An entry stating
-///   *both* is drawn from its `user`, and the save that renames the handle drops
-///   the `uri` that named the old one — the same thing renaming an organisation
-///   unit does to its `sortAs`.
+/// - **it states no handle.** RFC 9553 §2.3.2 asks for a `user` or a `uri`, and
+///   only the first is a handle, which is what the EDS field holds. An entry
+///   stating only a URI is drawn when [`SERVICE_SCHEMES`] says what its scheme
+///   means and the URI states the handle and nothing besides — see
+///   [`online_service_handle`] — and left invisible otherwise, because the
+///   alternative is guessing at a handle and then writing the guess back.
 /// - **its handle would come back from EDS spelled differently.** The empty
 ///   handle says nothing; a carriage return is dropped by [`crate::syntax::write`]
 ///   as a security property; and ends made of ASCII whitespace are trimmed by
@@ -391,9 +425,76 @@ pub fn states_online_service(service: &OnlineService) -> bool {
 ///   [`edged_with_whitespace`].
 fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     let property = service_property(service.service.as_deref()?)?;
-    let handle = service.user.as_deref()?;
+    let handle = online_service_handle(service)?;
     let drawable = !handle.is_empty() && !handle.contains('\r') && !edged_with_whitespace(handle);
     drawable.then_some((property, handle))
+}
+
+/// The handle a line states for an entry: its `user`, or — for an entry that
+/// names none — the one its `uri` spells out.
+///
+/// The `user` wins where both are there: it is what the service calls the
+/// contact, while the URI is a second way of saying the same thing, and the
+/// field the line reaches holds the first.
+///
+/// The save path compares *this* rather than the `user` on either side, because
+/// the vCard states only the handle: an entry that arrived as a URI comes back
+/// as a `user` saying the same thing, and calling that an edit would rewrite the
+/// entry every time the contact is touched.
+pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
+    match service.user.as_deref() {
+        Some(user) => Some(user),
+        None => handle_in_uri(service.service.as_deref()?, service.uri.as_deref()?),
+    }
+}
+
+/// The handle inside a service's URI, for a URI that states one and nothing
+/// else.
+fn handle_in_uri<'a>(service: &str, uri: &'a str) -> Option<&'a str> {
+    let scheme = service_scheme(service)?;
+    let (stated, handle) = uri.split_once(':')?;
+    // Case-insensitively, as RFC 3986 §3.1 requires of a scheme.
+    (stated.eq_ignore_ascii_case(scheme) && plain_handle(handle)).then_some(handle)
+}
+
+/// The URI a service would state a handle under, or `None` when there is no
+/// scheme for the service or no URI that would say just this handle.
+///
+/// The save path's other half: the entry the server stated as a URI is patched
+/// as one, rather than answered with a `user` it never had. `None` is not a
+/// failure — it means the rename has to change the entry's shape, which is
+/// always allowed and never wrong, only less faithful.
+pub fn online_service_uri(service: &str, handle: &str) -> Option<String> {
+    let scheme = service_scheme(service)?;
+    plain_handle(handle).then(|| format!("{scheme}:{handle}"))
+}
+
+/// Whether a URI's scheme-specific part is a bare handle.
+///
+/// A path, a query, a fragment or a percent-encoding means the URI says more
+/// than who the contact is — `skype:echo123?call` names an action, and
+/// `xmpp:vera%40jabber.example` states a handle this side would have to decode
+/// and the next save would have to re-encode. Whitespace is out for the reason
+/// it is out of a `user`: a URI cannot hold it, so a handle carrying one has no
+/// URI to go back into.
+///
+/// Used in both directions, so that a handle read out of a URI is exactly a
+/// handle that can be written back into one.
+fn plain_handle(handle: &str) -> bool {
+    !handle.is_empty()
+        && !handle.contains(['/', '?', '#', '%'])
+        && !handle
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+}
+
+/// The URI scheme handles at this service are stated under.
+fn service_scheme(service: &str) -> Option<&'static str> {
+    let wanted = normalised_service(service);
+    SERVICE_SCHEMES
+        .iter()
+        .find(|(name, _)| normalised_service(name) == wanted)
+        .map(|(_, scheme)| *scheme)
 }
 
 /// The vCard property handles at this service are stated on.
