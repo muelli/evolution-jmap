@@ -134,6 +134,18 @@ pub struct CalendarEvent {
     /// if it can see what else is in there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locations: Option<BTreeMap<String, Value>>,
+    /// The places the event may be joined online at (RFC 8984 §4.2.6), keyed by
+    /// an id of whoever wrote them — the conference link and the number to dial.
+    ///
+    /// Left as JSON, for the reason [`Self::participants`] is: a VirtualLocation
+    /// holds a `description` and a set of `features` besides the `uri` and the
+    /// `name`, and iCalendar spells the part of that it shares on a `CONFERENCE`
+    /// line (RFC 7986 §5.11) and its parameters. The mapping draws the places
+    /// and never reads them back, so nothing here has to model the rest; holding
+    /// them as values keeps one server's unusual entry from failing a
+    /// `CalendarEvent/get` and taking every event in the calendar with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_locations: Option<BTreeMap<String, Value>>,
     /// The tags the event carries (RFC 8984 §4.2.9), an RFC 8984 §1.4.3 Set:
     /// the keys are the keywords and every value is `true`.
     ///
