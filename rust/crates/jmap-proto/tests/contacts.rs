@@ -43,9 +43,17 @@ fn contact_card_roundtrip() {
         card.name.as_ref().unwrap().full.as_deref(),
         Some("Vera Oldenburg")
     );
-    let components = card.name.as_ref().unwrap().components.as_ref().unwrap();
+    let name = card.name.as_ref().unwrap();
+    let components = name.components.as_ref().unwrap();
     assert_eq!(components[0].kind, "given");
     assert_eq!(components[0].value, "Vera");
+    // How a name is pronounced has no field in the vCard `N` value and no
+    // parameter beside it, and the save path writes the component list back
+    // whole — so, exactly as for an address component, it has to stay visible
+    // to the save rather than being deserialized away. The system that
+    // spelling is written in sits on the name itself and rides along there.
+    assert!(components[0].extra.contains_key("phonetic"));
+    assert!(name.extra.contains_key("phoneticSystem"));
     assert_eq!(
         card.emails.as_ref().unwrap()["work"].address,
         "vera@example.com"

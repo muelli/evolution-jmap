@@ -18912,3 +18912,133 @@ the editor lets a handle be moved between the Home and Work slots at all is
 unknown; no test drives a `uri`-only entry through real EDS; and the `jmap-mail`
 `transport.rs` hang is still an open design question with a lock-order hypothesis
 attached.
+
+## 2026-08-11 (hundred-and-eighty-seventh session)
+
+**The `NameComponent` `phonetic` hole, on the blocker list since the name
+mapping was written, is closed — and closing it exposed a second bug in the
+same eight lines.** RFC 9553 §2.2.1 lets a name component carry a `phonetic`
+spelling beside its value, saying how the name is pronounced. `jmap-proto`'s
+`NameComponent` modelled `kind` and `value` and nothing else, so that spelling
+was dropped at *deserialize* — and because the save writes `name/components`
+back whole, a member dropped on the way in is a member **deleted** on the way
+out. Every save of a contact whose card carried a pronunciation destroyed it,
+silently, for a field Evolution never showed the user. `AddressComponent` had
+had this right all along (its own doc comment even said "unlike
+`NameComponent`", which is how the hole got onto the list); the fix is to give
+the name component the same flattened `extra` and then re-attach it in the
+merge.
+
+**The second bug: opening a contact and closing it again rewrote its name.**
+Once the extras were carried, the *only* remaining difference between what the
+server held and what a no-op save wrote was the **order** of the components —
+and the old merge built its list as "the edited ones, then the unmapped ones",
+which is the vCard's order (`N`'s reading order), not the server's. A card whose
+components the server states as surname-then-given therefore got a
+`name/components` patch on every save that changed nothing, bumping the account
+state and waking every other client. `saving_a_name_back_untouched_does_not_
+rewrite_its_components` was red before the fix on exactly that: state 3 → 4 with
+no edit. The address side had had this right too, for the reason its doc gives —
+walk the *server's* list, so an invisible part stays in its place rather than
+being shuffled to the end — and it had a no-op guard test; the name side had
+neither.
+
+**So the two merges are now one function, `merge_named`.** Both are "a list of
+named parts with no keys to patch by": recognise a part by what it says (kind
+and value), give back the server's own copy for one that still says it so the
+invisible members ride along, keep a part of a kind the line cannot state at
+all, and append what the vCard added. `merge_components` is now that call plus
+`restore_address_components`, which stays address-specific — telling a street
+name from its house number has no name-side counterpart. Rather than transposing
+twenty subtle lines onto a second type, which is how the two sides drifted apart
+in the first place.
+
+**Why matching is by kind *and* value, not kind alone.** A pronunciation is of
+the name that was there. If the user retypes the surname, keeping the old
+`phonetic` would tell the server that "Oldenburg-Meier" is pronounced
+"OL-den-boork" — inventing a claim nobody made. So a component whose value
+changed keeps nothing, and the test asserts both halves: the given name the user
+left alone still carries its spelling, and the surname they retyped carries none.
+Matching by kind alone was mutation-checked and four tests catch it.
+
+One existing test changed its asserted **order**, deliberately:
+`editing_the_structured_name_replaces_only_the_mapped_components` listed
+`title, given, surname, generation` and now lists `given, generation, title,
+surname` — the server's order for what survived, the vCard's for what it added.
+Its substance is untouched and still asserted exactly: one surname and not two,
+the unmapped `generation` carried across, the whole list pinned rather than a
+subset. The new order is the *reason* the no-op test passes, and the comment now
+says so and points at it.
+
+Every half was mutation-checked, `patch.rs` and `contacts.rs` backed up with
+`cp` and restored with `cp` (never `git checkout` — the rule from the session
+that lost a file that way). Six mutations, all caught: `extra` not deserialized
+(`#[serde(skip)]`) fails the proto round-trip *and* the save test; keeping the
+edited copy on a match rather than the server's, one test; matching by kind
+alone, four; walking the edited list instead of the server's, five, including
+both no-op guards; dropping the unmapped-kind carry-over, three; never appending
+what the vCard added, four. Nothing went unnoticed.
+
+The proto fixture now carries the pronunciation, so `contact_card_roundtrip` —
+which asserts byte-for-byte JSON equality through the typed model — is the red
+test for the modelling half, and it fails on a dropped member without anyone
+writing an assertion per member. `phoneticSystem` went on the name itself in the
+same fixture: that one already survived, in `Name`'s `extra`, and now has a test
+saying so.
+
+Tests: 944 in the default set, up 2 from 942 — both new in `jmap-book-sync`'s
+save path (the pronunciation and the no-op guard); `jmap-proto`'s round-trip
+grew assertions rather than a test of its own.
+
+Verified locally: `cargo test --locked` 944; full `ninja` then `ctest` 14/14,
+including `rust-test-eds` and all four functional legs; `cargo fmt --all
+--check` and `cargo clippy --all-targets --locked -- -D warnings` clean, and
+`cargo clippy -p jmap-backend-book --all-targets --locked` clean for the
+header-needing crate that consumes the changed API. `ci/checks.sh` still stops
+at its first step — `reuse` is not on this VM and neither `pipx` nor `uvx` is
+installed — so the licence check was done by hand: no file was added, all six
+sources touched already carry an SPDX header, the changed JSON fixture is
+covered by `REUSE.toml`'s `rust/crates/*/tests/fixtures/**` entry, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+One new rustdoc warning, stated rather than glossed: the module doc's
+`[`merge_named`]` links a private item, which is a fourth of exactly the class
+`jmap-book-sync` already had three of (`diff_entries`, `diff_keywords`,
+`diff_online_services`). Linking the private helper the prose is about is this
+file's deliberate idiom, so consistency won over a clean `cargo doc`; if that
+class is ever cleaned up, this link is cleaned up with it.
+
+**What is *not* verified, precisely.** The functional book leg drives a *create*
+through real EDS and has no modify-an-existing-server-card phase, so nothing here
+proves that real EDS hands the `N` field values back byte-identically. If it
+normalised one, our kind-and-value match would miss and the pronunciation would
+drop exactly as if the user had retyped the name — silent, and invisible to every
+test in this repo. The mock-driven save tests cover the logic end to end
+(genuine vCard text through the real reader and patch builder); what they cannot
+cover is EDS's own round trip. Closing that needs a modify phase in the
+functional leg's C client, which is its own increment.
+
+No milestone tag. Removed from the blocker list: the `NameComponent` `phonetic`
+hole. Unchanged blockers: the calcard directive's two emitters are still ours;
+M9 has no CI job and no GUI tier; M7 still **needs human verification in real
+Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; the manual-test recipes are unlinked from the README; `jmap-mail`'s
+rustdoc is dirty; `jmap-ical` emits no `VTIMEZONE` of its own; `links` and
+`CONFERENCE` on the calendar side rest on untested assumptions; the multi-`NOTE`/
+`ORG`/`TITLE`/`NICKNAME`/`URL` "Evolution shows only the first" bet is still
+unverified in real Evolution; the two `LABEL` `TYPE` risks stand; a deathday and
+a birthday stated as a year alone are still invisible; the conventional URI
+schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore
+untabled; `X-TWITTER` and `X-SIP` are unmapped and their contact-editor
+behaviour unmeasured; whether the editor lets a handle be moved between the Home
+and Work slots at all is unknown; no test drives a `uri`-only entry through real
+EDS; and the `jmap-mail` `transport.rs` hang is still an open design question
+with a lock-order hypothesis attached. New: the functional book leg has no
+modify phase, so no test in this repository proves EDS returns an `N` field
+value unchanged — and a name mapping that now depends on that has no guard for
+it; and two name components of one kind (a double-barrelled given name) still
+collapse into the single `N` field they share and come back as one component
+carrying their concatenation, which the merge then reads as both having been
+deleted — the `restore_address_components` treatment the street side got, and
+which the name side has never had.
