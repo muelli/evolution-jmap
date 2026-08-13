@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Create a spot-instance GitHub Actions runner VM on GCP for the Antigravity Agent.
+# Create a spot-instance GCP VM for the Antigravity Agent.
 #
 # Usage:
-#   RUNNER_TOKEN=<token> ./create-agy-runner.sh
+#   ./create-agy-runner.sh
 #
 
 set -euo pipefail
@@ -13,10 +13,8 @@ set -euo pipefail
 NAME=${NAME:-gha-agy-runner-1}
 ZONE=${ZONE:-europe-west1-b}
 MACHINE=${MACHINE:-c2d-standard-8}
-REPO=${REPO:-muelli/evolution-jmap}
 IDLE_MINUTES=${IDLE_MINUTES:-15}
 IMAGE_FAMILY=${IMAGE_FAMILY:-ubuntu-2404-lts-amd64}
-: "${RUNNER_TOKEN:?set RUNNER_TOKEN (repo settings → Actions → Runners → New self-hosted runner)}"
 
 STARTUP=$(mktemp)
 trap 'rm -f "$STARTUP"' EXIT
@@ -29,9 +27,7 @@ cat > /usr/local/bin/idle-watchdog <<'WATCHDOG'
 #!/bin/bash
 STAMP=/run/runner-last-active
 [ -f "\$STAMP" ] || touch "\$STAMP"
-if pgrep -f Runner.Worker > /dev/null \
-   || [ -n "\$(who)" ] \
-   || pgrep -f "agy " > /dev/null; then
+if [ -n "\$(who)" ] || pgrep -f "agy " > /dev/null; then
     touch "\$STAMP"
 fi
 if [ "\$(awk '{printf "%d", \$1}' /proc/uptime)" -gt 86400 ]; then
@@ -39,7 +35,7 @@ if [ "\$(awk '{printf "%d", \$1}' /proc/uptime)" -gt 86400 ]; then
     /sbin/shutdown -h now
 fi
 if [ \$(( \$(date +%s) - \$(stat -c %Y "\$STAMP") )) -gt \$(( ${IDLE_MINUTES} * 60 )) ]; then
-    logger "idle-watchdog: idle ${IDLE_MINUTES} minutes (no session, login, or CI job), shutting down"
+    logger "idle-watchdog: idle ${IDLE_MINUTES} minutes (no session or login), shutting down"
     /sbin/shutdown -h now
 fi
 WATCHDOG
@@ -62,14 +58,7 @@ sudo -u runner bash -c '
     curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
     # Note: Install agy globally (assuming npm is the distribution method)
     # sudo npm install -g @google/antigravity-cli || true
-    
-    mkdir -p actions-runner && cd actions-runner
-    VER=\$(curl -s https://api.github.com/repos/actions/runner/releases/latest | jq -r .tag_name | tr -d v)
-    curl -sL "https://github.com/actions/runner/releases/download/v\${VER}/actions-runner-linux-x64-\${VER}.tar.gz" | tar xz
-    ./config.sh --unattended --url "https://github.com/${REPO}" --token "${RUNNER_TOKEN}" \
-        --name "\$(hostname)" --labels self-hosted,gcp,linux,x64,agy
 '
-(cd /home/runner/actions-runner && ./svc.sh install runner && ./svc.sh start)
 EOF
 
 gcloud compute instances create "$NAME" \
@@ -84,4 +73,4 @@ gcloud compute instances create "$NAME" \
     --metadata-from-file=startup-script="$STARTUP"
 
 echo
-echo "Agy Runner VM created."
+echo "Agy Agent VM created."
