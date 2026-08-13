@@ -2,7 +2,7 @@ Autonomous night session. Repo: ~/evolution-jmap (cwd).
 
 Task: read docs/ROADMAP.md, docs/NIGHT-LOG.md (if present), git log --oneline -15. 
 1. Dependency Analysis: Treat ROADMAP.md as a dependency graph (e.g. M3, M4, M5 can be built in parallel after M2). Identify all currently unblocked and incomplete milestones.
-2. Claiming: Select ONE unblocked task. Before writing code, append a lock entry to `docs/NIGHT-LOG.md` (e.g., "Claiming M3 increment: [description]") and `git push` it. If the push fails, another agent claimed it; pull, rebase, and pick a different unblocked task.
+2. Claiming: Select ONE unblocked task. Before writing code, append a lock entry to `docs/NIGHT-LOG.md` (e.g., "Claiming M3 increment: [description]") and `git push` it. If the push fails, another agent claimed it; pull, rebase, and pick a different unblocked task. **Deadlock handling**: If a task was claimed more than 24 hours ago (check git log for the lock commit timestamp) and shows no subsequent progress, consider the lock expired and claim it.
 3. Execution: Implement ONE focused increment (~30-90 min of work): TDD, red test first, then green.
 
 Hard rules (ROADMAP "Rules for autonomous work sessions" applies in full):
