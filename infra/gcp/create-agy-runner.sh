@@ -56,6 +56,7 @@ sudo -u runner bash -c '
     set -eux
     cd ~
     curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    git clone https://github.com/${REPO}.git
     # Note: Install agy globally (assuming npm is the distribution method)
     # sudo npm install -g @google/antigravity-cli || true
 '
