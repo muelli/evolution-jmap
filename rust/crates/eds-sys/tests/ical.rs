@@ -328,3 +328,243 @@ fn icalproperty_attach_and_image_modification_and_parameter_preservation() {
         g_object_unref(calendar.cast());
     }
 }
+
+/// Probing `ECalComponent` classification, transparency, and status properties:
+/// `e_cal_component_get_classification` maps `CLASS:CONFIDENTIAL` to `E_CAL_COMPONENT_CLASS_CONFIDENTIAL`,
+/// `e_cal_component_get_transparency` maps `TRANSP:TRANSPARENT` to `E_CAL_COMPONENT_TRANSP_TRANSPARENT`,
+/// and `e_cal_component_get_status` maps `STATUS:CONFIRMED` to `I_CAL_STATUS_CONFIRMED`.
+/// Setting values in place modifies the component, and setting NONE clears them.
+#[test]
+fn ecalcomponent_classification_transparency_and_status_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Planning\r\n\
+         DTSTART:20260810T070000Z\r\n\
+         CLASS:CONFIDENTIAL\r\n\
+         TRANSP:TRANSPARENT\r\n\
+         STATUS:CONFIRMED\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // Getters
+        assert_eq!(
+            e_cal_component_get_classification(comp),
+            E_CAL_COMPONENT_CLASS_CONFIDENTIAL
+        );
+        assert_eq!(
+            e_cal_component_get_transparency(comp),
+            E_CAL_COMPONENT_TRANSP_TRANSPARENT
+        );
+        assert_eq!(e_cal_component_get_status(comp), I_CAL_STATUS_CONFIRMED);
+
+        // Modify in place
+        e_cal_component_set_classification(comp, E_CAL_COMPONENT_CLASS_PRIVATE);
+        assert_eq!(
+            e_cal_component_get_classification(comp),
+            E_CAL_COMPONENT_CLASS_PRIVATE
+        );
+
+        e_cal_component_set_transparency(comp, E_CAL_COMPONENT_TRANSP_OPAQUE);
+        assert_eq!(
+            e_cal_component_get_transparency(comp),
+            E_CAL_COMPONENT_TRANSP_OPAQUE
+        );
+
+        e_cal_component_set_status(comp, I_CAL_STATUS_TENTATIVE);
+        assert_eq!(e_cal_component_get_status(comp), I_CAL_STATUS_TENTATIVE);
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            rendered.contains("CLASS:PRIVATE"),
+            "modified class missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("TRANSP:OPAQUE"),
+            "modified transp missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("STATUS:TENTATIVE"),
+            "modified status missing: {rendered}"
+        );
+
+        // Clear fields by setting NONE
+        e_cal_component_set_classification(comp, E_CAL_COMPONENT_CLASS_NONE);
+        assert_eq!(
+            e_cal_component_get_classification(comp),
+            E_CAL_COMPONENT_CLASS_NONE
+        );
+
+        e_cal_component_set_transparency(comp, E_CAL_COMPONENT_TRANSP_NONE);
+        assert_eq!(
+            e_cal_component_get_transparency(comp),
+            E_CAL_COMPONENT_TRANSP_NONE
+        );
+
+        e_cal_component_set_status(comp, I_CAL_STATUS_NONE);
+        assert_eq!(e_cal_component_get_status(comp), I_CAL_STATUS_NONE);
+
+        let inner_cleared = e_cal_component_get_icalcomponent(comp);
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner_cleared));
+        assert!(
+            !cleared_rendered.contains("CLASS:"),
+            "cleared class still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("TRANSP:"),
+            "cleared transp still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("STATUS:"),
+            "cleared status still present: {cleared_rendered}"
+        );
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}
+
+/// Probing `ECalComponent` categories, location, URL, and summary accessors:
+/// `e_cal_component_get_categories` returns a comma-separated string,
+/// `e_cal_component_get_categories_list` returns individual category tokens,
+/// `e_cal_component_get_location` and `e_cal_component_get_url` return their respective strings,
+/// and `e_cal_component_get_summary` returns the structured `ECalComponentText`.
+#[test]
+fn ecalcomponent_categories_location_url_and_descriptions_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Sprint Planning\r\n\
+         DTSTART:20260810T070000Z\r\n\
+         CATEGORIES:offsite,planning\r\n\
+         LOCATION:Room 42\r\n\
+         URL:https://meet.example.com/planning\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // Categories string accessor
+        let categories_raw = e_cal_component_get_categories(comp);
+        assert!(!categories_raw.is_null());
+        let categories_str = CStr::from_ptr(categories_raw).to_str().unwrap();
+        assert_eq!(categories_str, "offsite,planning");
+
+        // Categories list accessor
+        let cat_list = e_cal_component_get_categories_list(comp);
+        assert!(!cat_list.is_null());
+        assert_eq!(g_slist_length(cat_list), 2);
+        let cat1 = CStr::from_ptr((*cat_list).data as *const gchar)
+            .to_str()
+            .unwrap();
+        assert_eq!(cat1, "offsite");
+        let cat2_node = (*cat_list).next;
+        assert!(!cat2_node.is_null());
+        let cat2 = CStr::from_ptr((*cat2_node).data as *const gchar)
+            .to_str()
+            .unwrap();
+        assert_eq!(cat2, "planning");
+
+        unsafe extern "C" fn free_gchar(ptr: *mut std::ffi::c_void) {
+            unsafe { g_free(ptr) };
+        }
+        g_slist_free_full(cat_list, Some(free_gchar));
+
+        // Location accessor
+        let loc_raw = e_cal_component_get_location(comp);
+        assert!(!loc_raw.is_null());
+        assert_eq!(CStr::from_ptr(loc_raw).to_str().unwrap(), "Room 42");
+
+        // URL accessor
+        let url_raw = e_cal_component_get_url(comp);
+        assert!(!url_raw.is_null());
+        assert_eq!(
+            CStr::from_ptr(url_raw).to_str().unwrap(),
+            "https://meet.example.com/planning"
+        );
+
+        // Summary text accessor
+        let summary_text = e_cal_component_get_summary(comp);
+        assert!(!summary_text.is_null());
+        let summary_val = e_cal_component_text_get_value(summary_text);
+        assert!(!summary_val.is_null());
+        assert_eq!(
+            CStr::from_ptr(summary_val).to_str().unwrap(),
+            "Sprint Planning"
+        );
+        e_cal_component_text_free(summary_text.cast());
+
+        // Modifying location and URL in place
+        let new_loc = text("Conference Hall A");
+        e_cal_component_set_location(comp, new_loc.as_ptr());
+        let new_url = text("https://meet.example.com/hall-a");
+        e_cal_component_set_url(comp, new_url.as_ptr());
+
+        // Modifying categories
+        let new_cats = text("work,engineering");
+        e_cal_component_set_categories(comp, new_cats.as_ptr());
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            rendered.contains("LOCATION:Conference Hall A"),
+            "modified location missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("URL:https://meet.example.com/hall-a"),
+            "modified url missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("CATEGORIES:work,engineering"),
+            "modified categories missing: {rendered}"
+        );
+
+        // Clearing categories, location, and url via NULL
+        e_cal_component_set_categories(comp, std::ptr::null());
+        e_cal_component_set_location(comp, std::ptr::null());
+        e_cal_component_set_url(comp, std::ptr::null());
+
+        let inner_cleared = e_cal_component_get_icalcomponent(comp);
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner_cleared));
+        assert!(
+            !cleared_rendered.contains("CATEGORIES:"),
+            "cleared categories still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("LOCATION:"),
+            "cleared location still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("URL:"),
+            "cleared url still present: {cleared_rendered}"
+        );
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}
