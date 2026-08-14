@@ -4475,3 +4475,131 @@ fn clearing_descriptions_and_comments_patches_server_fields() {
     let alerts = stored.alerts.expect("alerts");
     assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
 }
+
+#[test]
+fn cancelling_an_event_reaches_the_server_as_cancelled_status() {
+    // An organiser marks an event as cancelled: Evolution removes the
+    // `STATUS:CONFIRMED` line and writes `STATUS:CANCELLED`. The server must
+    // learn the new state and must not lose the description or location that
+    // were already on the event.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Offsite Workshop", "2026-03-10T09:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "status": "confirmed",
+            "description": "Full-day offsite session",
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": "Conference Centre"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(loaded.contains("STATUS:CONFIRMED\r\n"), "{loaded}");
+
+    // Simulate what Evolution does when the user marks the event cancelled.
+    let edited = loaded.replace("STATUS:CONFIRMED\r\n", "STATUS:CANCELLED\r\n");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.status.as_deref(),
+        Some("cancelled"),
+        "cancelled status did not reach the server"
+    );
+    assert_eq!(
+        stored.description.as_deref(),
+        Some("Full-day offsite session"),
+        "description was wiped by the save"
+    );
+    let locs = stored.locations.expect("locations");
+    assert_eq!(
+        locs["loc1"]["name"],
+        json!("Conference Centre"),
+        "location was wiped by the save"
+    );
+}
+
+#[test]
+fn clearing_status_removes_it_from_the_server() {
+    // The user undoes a tentative mark: Evolution drops the `STATUS` line
+    // entirely. The server's `status` must become absent (null patch).
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Uncertain Meeting", "2026-03-12T14:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "status": "tentative",
+            "keywords": {"planning": true},
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(loaded.contains("STATUS:TENTATIVE\r\n"), "{loaded}");
+
+    // Drop the STATUS line.
+    let edited: String = loaded
+        .lines()
+        .filter(|l| !l.starts_with("STATUS"))
+        .map(|l| format!("{l}\r\n"))
+        .collect();
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.status, None, "status was not cleared on the server");
+    // The keyword the user never touched must survive.
+    let kws = stored.keywords.expect("keywords");
+    assert!(kws.contains_key("planning"), "keyword was lost: {kws:?}");
+}
+
+#[test]
+fn clearing_privacy_removes_the_classification_from_the_server() {
+    // The user removes the Classification setting: Evolution drops the
+    // `CLASS` line. The server's `privacy` must become absent (null patch),
+    // reverting to the RFC 8984 default of `public`.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Strategic Review", "2026-03-15T11:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "privacy": "secret",
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M"
+                    },
+                    "action": "display"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(loaded.contains("CLASS:CONFIDENTIAL\r\n"), "{loaded}");
+
+    // Drop the CLASS line (the user cleared the Classification field).
+    let edited: String = loaded
+        .lines()
+        .filter(|l| !l.starts_with("CLASS"))
+        .map(|l| format!("{l}\r\n"))
+        .collect();
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.privacy, None,
+        "privacy was not cleared on the server"
+    );
+    // The alert the user never touched must survive.
+    let alerts = stored.alerts.expect("alerts");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
+}
