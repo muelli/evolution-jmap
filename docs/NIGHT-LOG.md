@@ -22846,3 +22846,6 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-fortieth session)
+
+Claiming Camel MIME part, multipart container, and transfer encoding EDS verification, along with multipart serialization and attachment import verification in jmap-mail and jmap-mail-sync.
