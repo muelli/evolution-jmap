@@ -3853,3 +3853,119 @@ fn clearing_location_and_categories_generates_targeted_null_patches() {
         json!("https://files.example.com/agenda.pdf")
     );
 }
+
+#[test]
+fn editing_priority_preserves_unmodeled_participants_and_geo_coordinates() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "priority": 1,
+            "participants": {
+                "alice": {
+                    "@type": "Participant",
+                    "name": "Alice Example",
+                    "sendTo": {"imip": "mailto:alice@example.com"},
+                    "roles": {"owner": true, "chair": true},
+                    "participationStatus": "accepted"
+                },
+                "bob": {
+                    "@type": "Participant",
+                    "name": "Bob Example",
+                    "sendTo": {"imip": "mailto:bob@example.com"},
+                    "roles": {"attendee": true},
+                    "participationStatus": "declined"
+                }
+            },
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": "Room 42",
+                    "coordinates": "geo:52.520008,13.404954"
+                }
+            },
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/agenda.pdf"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = loaded.replace("PRIORITY:1\r\n", "PRIORITY:5\r\n");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.priority, Some(5));
+
+    // Participants are preserved intact
+    let parts = stored.participants.expect("participants");
+    assert_eq!(parts["alice"]["name"], json!("Alice Example"));
+    assert_eq!(parts["alice"]["roles"]["chair"], json!(true));
+    assert_eq!(parts["bob"]["participationStatus"], json!("declined"));
+
+    // Locations and links are preserved intact
+    let locs = stored.locations.expect("locations");
+    assert_eq!(locs["loc1"]["name"], json!("Room 42"));
+    assert_eq!(
+        locs["loc1"]["coordinates"],
+        json!("geo:52.520008,13.404954")
+    );
+    let links = stored.links.expect("links");
+    assert_eq!(
+        links["l1"]["href"],
+        json!("https://files.example.com/agenda.pdf")
+    );
+}
+
+#[test]
+fn editing_unrelated_field_preserves_participants_priority_and_geo_locations() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "priority": 3,
+            "participants": {
+                "alice": {
+                    "@type": "Participant",
+                    "name": "Alice Example",
+                    "sendTo": {"imip": "mailto:alice@example.com"},
+                    "roles": {"owner": true}
+                }
+            },
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": "Conference Hall A",
+                    "coordinates": "geo:48.8566,2.3522"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = loaded.replace(
+        "SUMMARY:Sprint Planning\r\n",
+        "SUMMARY:Sprint Planning v2\r\n",
+    );
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title, Some("Sprint Planning v2".to_owned()));
+    assert_eq!(stored.priority, Some(3));
+
+    let parts = stored.participants.expect("participants");
+    assert_eq!(parts["alice"]["name"], json!("Alice Example"));
+
+    let locs = stored.locations.expect("locations");
+    assert_eq!(locs["loc1"]["name"], json!("Conference Hall A"));
+    assert_eq!(locs["loc1"]["coordinates"], json!("geo:48.8566,2.3522"));
+}
