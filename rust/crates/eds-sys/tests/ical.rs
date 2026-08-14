@@ -1003,3 +1003,182 @@ fn ecalcomponent_alarm_handling_and_properties_in_eds() {
         g_object_unref(calendar.cast());
     }
 }
+
+/// Probing `ECalComponent` recurrence properties (RRULE, EXDATE, RECURRENCE-ID):
+/// `e_cal_component_has_recurrences` and `e_cal_component_has_rrules` indicate whether recurrence rules exist,
+/// `e_cal_component_get_rrules` extracts recurrence rules as a `GSList` of `ICalRecurrence *`,
+/// `e_cal_component_has_exdates` and `e_cal_component_get_exdates` extract exception dates as `ECalComponentDateTime *`,
+/// `e_cal_component_get_recurid_as_string` extracts the recurrence identifier string,
+/// and setting NULL on setters clears `RRULE`, `EXDATE`, and `RECURRENCE-ID` from the component.
+#[test]
+fn ecalcomponent_recurrence_rules_exdates_and_recurid_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Recurring Standup\r\n\
+         DTSTART:20260810T090000Z\r\n\
+         RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=10\r\n\
+         EXDATE:20260824T090000Z\r\n\
+         RECURRENCE-ID:20260810T090000Z\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // Checks
+        assert_eq!(e_cal_component_has_recurrences(comp), 1);
+        assert_eq!(e_cal_component_has_rrules(comp), 1);
+        assert_eq!(e_cal_component_has_exdates(comp), 1);
+
+        // Recurrence ID
+        let recurid_str = e_cal_component_get_recurid_as_string(comp);
+        assert!(!recurid_str.is_null());
+        assert_eq!(
+            CStr::from_ptr(recurid_str).to_str().unwrap(),
+            "20260810T090000Z"
+        );
+        g_free(recurid_str.cast());
+
+        // RRULE list
+        let rrules = e_cal_component_get_rrules(comp);
+        assert!(!rrules.is_null());
+        assert_eq!(g_slist_length(rrules), 1);
+
+        let recur = (*rrules).data as *mut ICalRecurrence;
+        assert!(!recur.is_null());
+        assert_eq!(i_cal_recurrence_get_freq(recur), I_CAL_WEEKLY_RECURRENCE);
+        assert_eq!(i_cal_recurrence_get_interval(recur), 2);
+        assert_eq!(i_cal_recurrence_get_count(recur), 10);
+
+        unsafe extern "C" fn unref_obj(ptr: *mut std::ffi::c_void) {
+            unsafe { g_object_unref(ptr.cast()) };
+        }
+        g_slist_free_full(rrules, Some(unref_obj));
+
+        // EXDATE list
+        let exdates = e_cal_component_get_exdates(comp);
+        assert!(!exdates.is_null());
+        assert_eq!(g_slist_length(exdates), 1);
+        let ex_dt = (*exdates).data as *mut ECalComponentDateTime;
+        assert!(!ex_dt.is_null());
+        let ex_time = e_cal_component_datetime_get_value(ex_dt);
+        assert!(!ex_time.is_null());
+        assert_eq!(i_cal_time_get_year(ex_time), 2026);
+        assert_eq!(i_cal_time_get_month(ex_time), 8);
+        assert_eq!(i_cal_time_get_day(ex_time), 24);
+
+        g_slist_free_full(exdates, Some(e_cal_component_datetime_free));
+
+        // Modify in place: set a new rule with INTERVAL=1, COUNT=5
+        let new_recur = i_cal_recurrence_new();
+        i_cal_recurrence_set_freq(new_recur, I_CAL_DAILY_RECURRENCE);
+        i_cal_recurrence_set_interval(new_recur, 1);
+        i_cal_recurrence_set_count(new_recur, 5);
+
+        let new_list = g_slist_append(std::ptr::null_mut(), new_recur.cast());
+        e_cal_component_set_rrules(comp, new_list);
+        g_slist_free_full(new_list, Some(unref_obj));
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            rendered.contains("RRULE:FREQ=DAILY;COUNT=5"),
+            "modified rrule missing: {rendered}"
+        );
+
+        // Clear RRULE, EXDATE, RECURRENCE-ID
+        e_cal_component_set_rrules(comp, std::ptr::null());
+        e_cal_component_set_exdates(comp, std::ptr::null());
+        e_cal_component_set_recurid(comp, std::ptr::null());
+
+        assert_eq!(e_cal_component_has_rrules(comp), 0);
+        assert_eq!(e_cal_component_has_exdates(comp), 0);
+        assert_eq!(e_cal_component_has_recurrences(comp), 0);
+
+        let inner_cleared = e_cal_component_get_icalcomponent(comp);
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner_cleared));
+        assert!(
+            !cleared_rendered.contains("RRULE:"),
+            "cleared rrule still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("EXDATE:"),
+            "cleared exdate still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("RECURRENCE-ID:"),
+            "cleared recurid still present: {cleared_rendered}"
+        );
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}
+
+/// Probing `ICalRecurrence` string parsing, serialization, and `ICalProperty` integration:
+/// `i_cal_recurrence_new_from_string` constructs an `ICalRecurrence` from an RRULE value string,
+/// frequency, interval, and until getters inspect properties,
+/// `i_cal_recurrence_to_string` serializes back to standard RRULE format,
+/// and `i_cal_property_new_rrule` creates a property attached to an `ICalComponent`.
+#[test]
+fn icalrecurrence_properties_and_string_roundtrips() {
+    let rrule_str = text("FREQ=MONTHLY;INTERVAL=3;UNTIL=20261231T235959Z");
+    unsafe {
+        let recur = i_cal_recurrence_new_from_string(rrule_str.as_ptr());
+        assert!(!recur.is_null());
+
+        assert_eq!(i_cal_recurrence_get_freq(recur), I_CAL_MONTHLY_RECURRENCE);
+        assert_eq!(i_cal_recurrence_get_interval(recur), 3);
+
+        let until_time = i_cal_recurrence_get_until(recur);
+        assert!(!until_time.is_null());
+        assert_eq!(i_cal_time_get_year(until_time), 2026);
+        assert_eq!(i_cal_time_get_month(until_time), 12);
+        assert_eq!(i_cal_time_get_day(until_time), 31);
+
+        let serialized = take_string(i_cal_recurrence_to_string(recur));
+        assert!(serialized.contains("FREQ=MONTHLY"), "{serialized}");
+        assert!(serialized.contains("INTERVAL=3"), "{serialized}");
+        assert!(
+            serialized.contains("UNTIL=20261231T235959Z"),
+            "{serialized}"
+        );
+
+        // Create an ICalProperty and attach to a VEVENT
+        let prop = i_cal_property_new_rrule(recur);
+        assert!(!prop.is_null());
+
+        let vevent = i_cal_component_new(I_CAL_VEVENT_COMPONENT);
+        assert!(!vevent.is_null());
+        i_cal_component_take_property(vevent, prop);
+
+        let rendered = take_string(i_cal_component_as_ical_string(vevent));
+        assert!(rendered.contains("RRULE:"), "missing RRULE: {rendered}");
+        assert!(
+            rendered.contains("FREQ=MONTHLY"),
+            "missing FREQ: {rendered}"
+        );
+        assert!(
+            rendered.contains("INTERVAL=3"),
+            "missing INTERVAL: {rendered}"
+        );
+        assert!(
+            rendered.contains("UNTIL=20261231T235959Z"),
+            "missing UNTIL: {rendered}"
+        );
+
+        g_object_unref(vevent.cast());
+        g_object_unref(recur.cast());
+    }
+}

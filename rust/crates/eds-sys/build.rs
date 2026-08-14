@@ -216,6 +216,8 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "i_cal_geo_.*",
     "i_cal_duration_.*",
     "i_cal_time_.*",
+    "i_cal_recurrence_.*",
+    "i_cal_recur_.*",
     "i_cal_property_.*",
     "i_cal_parameter_.*",
     "e_cal_component_.*",

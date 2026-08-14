@@ -4117,3 +4117,125 @@ fn removing_all_alerts_generates_targeted_null_patch() {
     let parts = stored.participants.expect("participants");
     assert_eq!(parts["alice"]["name"], json!("Alice Example"));
 }
+
+#[test]
+fn editing_recurring_event_summary_preserves_recurrence_rules_and_overrides() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "weekly",
+                "interval": 2,
+                "count": 10
+            }],
+            "recurrenceOverrides": {
+                "2026-01-29T13:00:00": {
+                    "title": "Sprint Review & Retro",
+                    "status": "confirmed"
+                },
+                "2026-02-12T13:00:00": {
+                    "excluded": true
+                }
+            },
+            "virtualLocations": {
+                "v1": {
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/planning",
+                    "name": "Planning Room"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Modify SUMMARY on the master VEVENT
+    let edited = loaded.replacen(
+        "SUMMARY:Sprint Planning\r\n",
+        "SUMMARY:Weekly Sprint Planning\r\n",
+        1,
+    );
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Weekly Sprint Planning"));
+
+    let rules = stored.recurrence_rules.expect("rules");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].interval, Some(2));
+    assert_eq!(rules[0].count, Some(10));
+
+    let overrides = stored.recurrence_overrides.expect("overrides");
+    assert_eq!(
+        overrides["2026-01-29T13:00:00"]["title"],
+        json!("Sprint Review & Retro")
+    );
+    assert_eq!(overrides["2026-02-12T13:00:00"]["excluded"], json!(true));
+
+    let vlocs = stored.virtual_locations.expect("virtual locations");
+    assert_eq!(
+        vlocs["v1"]["uri"],
+        json!("https://meet.example.com/planning")
+    );
+}
+
+#[test]
+fn clearing_exdates_and_overrides_patches_server_recurrence_map() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Daily Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "daily",
+                "interval": 1,
+                "count": 5
+            }],
+            "recurrenceOverrides": {
+                "2026-01-17T09:00:00": {
+                    "excluded": true
+                }
+            },
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT10M"
+                    },
+                    "action": "display"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Remove EXDATE line
+    let exdate_line = loaded
+        .lines()
+        .find(|l| l.starts_with("EXDATE"))
+        .expect("EXDATE line");
+    let edited = loaded.replace(&format!("{exdate_line}\r\n"), "");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Daily Standup"));
+    assert_eq!(stored.recurrence_overrides, None);
+
+    let rules = stored.recurrence_rules.expect("rules");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].frequency, "daily");
+
+    let alerts = stored.alerts.expect("alerts");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT10M"));
+}
