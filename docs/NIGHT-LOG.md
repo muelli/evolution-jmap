@@ -22071,3 +22071,6 @@ writes for a replaced photo, and into a cleared field, is inferred rather than m
 and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-twentieth session)
+
+Claiming M3 increment: verify multi-ORG, multi-TITLE, and multi-ROLE field semantics, preservation, and EDS behavior.
