@@ -22674,7 +22674,37 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirty-fifth session)
 
-**Claiming increment:** calendar component types (`ECalComponentVType`), cloning and string serialization (`e_cal_component_get_as_string`, `e_cal_component_clone`, `e_cal_component_is_instance`), geographic coordinates (`ICalGeo`), and task completion/sequence semantics EDS verification, roundtrip fidelity in `jmap-ical`, and preservation across `jmap-cal-sync`.
+**Verifying calendar component types (`ECalComponentVType`), cloning and string serialization (`e_cal_component_get_as_string`, `e_cal_component_clone`, `e_cal_component_is_instance`), geographic coordinates (`ICalGeo`), and task completion/sequence semantics EDS verification, roundtrip fidelity in `jmap-ical`, and preservation across `jmap-cal-sync`.**
+This session measures EDS 3.52 `ECalComponent` component types (`ECalComponentVType`: `E_CAL_COMPONENT_EVENT`, `E_CAL_COMPONENT_TODO`, `E_CAL_COMPONENT_JOURNAL`), instance check (`e_cal_component_is_instance`), string serialization (`e_cal_component_get_as_string`), deep cloning (`e_cal_component_clone`), geographic coordinates (`e_cal_component_get_geo`, `i_cal_geo_get_lat`, `i_cal_geo_get_lon`, `e_cal_component_set_geo`), task completion (`e_cal_component_get_percent_complete`, `e_cal_component_set_percent_complete`), priority (`e_cal_component_get_priority`, `e_cal_component_set_priority`), and sequence (`e_cal_component_get_sequence`, `e_cal_component_set_sequence`), adds location/coordinate and priority/privacy/status roundtrip tests in `jmap-ical`, and verifies location and priority editing and clearing with unmodeled coordinates, description, virtual locations, links, and alerts preservation in `jmap-cal-sync`.
+
+**EDS 3.52 `ECalComponent` type, clone, serialization, geo, and task completion measurement:**
+- Probed `libecal` 3.52 and `libical-glib` for component type, serialization, cloning, geo, and task progress:
+  - `e_cal_component_get_vtype` correctly identifies `E_CAL_COMPONENT_EVENT`, `E_CAL_COMPONENT_TODO`, and `E_CAL_COMPONENT_JOURNAL`.
+  - `e_cal_component_is_instance` returns 0 for master components and 1 for recurrence overrides (`RECURRENCE-ID`).
+  - `e_cal_component_get_as_string` serializes the component to an allocated string.
+  - `e_cal_component_clone` produces a separate deep copy of the `ECalComponent` instance.
+  - `e_cal_component_get_geo` extracts `ICalGeo *` with `i_cal_geo_get_lat` and `i_cal_geo_get_lon`.
+  - `e_cal_component_set_geo` updates coordinates in place and setting `NULL` cleanly removes the `GEO:` line from the serialized iCalendar.
+  - `e_cal_component_get_percent_complete` and `e_cal_component_set_percent_complete` manipulate `PERCENT-COMPLETE` on tasks.
+  - `e_cal_component_get_priority` / `e_cal_component_set_priority` and `e_cal_component_get_sequence` / `e_cal_component_set_sequence` manage priority and revision sequences.
+- In `rust/crates/eds-sys/tests/ical.rs`:
+  - Added `ecalcomponent_vtypes_cloning_and_string_serialization_in_eds`: verifies component type detection, instance checks, string serialization, and deep cloning with UID preservation.
+  - Added `ecalcomponent_geo_coordinates_and_task_completion_in_eds`: verifies coordinate extraction, in-place modification, NULL clearing, priority, sequence, and task percent-complete operations.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-ical/tests/event.rs`:
+  - Added `maps_location_with_special_characters_and_coordinates_safely`: verifies that location strings with escaped characters and keys roundtrip faithfully to `LOCATION` lines and back into JSCalendar `locations`.
+  - Added `maps_priority_privacy_and_status_combinations_faithfully`: verifies that combinations of priority, privacy, status, and free-busy status roundtrip accurately.
+- In `jmap-cal-sync/tests/save.rs`:
+  - Added `editing_location_and_priority_preserves_unmodeled_event_fields`: verifies that editing location name and priority produces targeted patches while preserving unmodeled location coordinates, description, virtualLocations, links, and alerts intact on the server.
+  - Added `clearing_location_and_priority_patches_server_fields`: verifies that removing `LOCATION` and `PRIORITY` lines cleanly sends deletion patches while keeping description and keywords intact.
+
+Tests: 1100 in the default set (up 4: 252 in `jmap-ical/tests/event.rs`, 136 in `jmap-cal-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/ical.rs` (21 in file, 67 across crate) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1100 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-thirty-sixth session)
 
