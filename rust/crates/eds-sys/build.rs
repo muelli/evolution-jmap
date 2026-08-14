@@ -213,6 +213,7 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // definition carries the identifier the properties actually use rather than
     // libical's own.
     "i_cal_attach_.*",
+    "i_cal_geo_.*",
     "i_cal_property_.*",
     "i_cal_parameter_.*",
     "e_cal_component_.*",
