@@ -22895,4 +22895,48 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-forty-first session)
 
-Claiming Camel content type (`CamelContentType`), content disposition (`CamelContentDisposition`), header address/date utilities, and `CamelMimeMessage` attachment/reply-to verification in EDS 3.52, along with RFC 5322 date/header and attachment detection tests in `jmap-mail` and `jmap-mail-sync`.
+**Verifying Camel content type (`CamelContentType`), content disposition (`CamelContentDisposition`), header address parsing (`CamelHeaderAddress`), header date/Message-ID utilities, and `CamelMimeMessage` attachment/reply-to operations in EDS 3.52, Message-ID and Date retrieval in `jmap-mail`, and structured address and wire Message-ID extraction in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel structured content type APIs (`camel_content_type_new`, `camel_content_type_decode`, `camel_content_type_ref`, `camel_content_type_unref`, `camel_content_type_set_param`, `camel_content_type_param`, `camel_content_type_is`, `camel_content_type_format`, `camel_content_type_simple`), content disposition APIs (`camel_content_disposition_decode`, `camel_content_disposition_ref`, `camel_content_disposition_unref`, `camel_content_disposition_format`, `camel_content_disposition_is_attachment`), header address parsing and formatting (`camel_header_address_decode`, `camel_header_address_list_format`, `camel_header_address_list_encode`, `camel_header_address_list_clear`), header date and Message-ID utilities (`camel_header_decode_date`, `camel_header_format_date`, `camel_header_msgid_decode`, `camel_transfer_encoding_from_string`), and `CamelMimeMessage` operations (`camel_mime_message_set_message_id`, `camel_mime_message_get_message_id`, `camel_mime_message_set_reply_to`, `camel_mime_message_get_reply_to`, `camel_mime_message_has_attachment`, `camel_mime_message_get_part_by_content_id`). In addition, it verifies Message-ID and Date header retrieval on opened messages in `jmap-mail`, and structured address, preview, and dual-timestamp summary extraction in `jmap-mail-sync`.
+
+**EDS 3.52 Camel content type, disposition, header address, and message utility measurement:**
+- Probed `camel-1.2` 3.52 for MIME content types, dispositions, header address lists, and message headers:
+  - `CamelContentType`:
+    - Allowlisted `"CamelContentType.*"` and `"camel_content_type_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified `camel_content_type_new` and wildcard matching with `camel_content_type_is` (`text/plain`, `text/*`, `image/*`).
+    - Verified parameter manipulation (`camel_content_type_set_param`, `camel_content_type_param` for `charset` and `format`).
+    - Verified quoted parameter formatting with `camel_content_type_format` and media type simplification with `camel_content_type_simple`.
+    - Verified header string parsing with `camel_content_type_decode` and memory management with `camel_content_type_unref`.
+  - `CamelContentDisposition`:
+    - Allowlisted `"CamelContentDisposition.*"` and `"camel_content_disposition_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified `camel_content_disposition_decode` on attachment headers, formatting with `camel_content_disposition_format`, and attachment verification with `camel_content_disposition_is_attachment`.
+  - `CamelHeaderAddress`:
+    - Allowlisted `"CamelHeaderAddress.*"`, `"camel_header_address_.*"`, and `"camel_header_mailbox_decode"` in `rust/crates/eds-sys/build.rs`.
+    - Verified RFC 5322 multi-address decoding with `camel_header_address_decode`, node traversal (`next`, `type` `CAMEL_HEADER_ADDRESS_NAME`, `name`, `v.addr`), address list formatting with `camel_header_address_list_format`, encoding with `camel_header_address_list_encode`, and teardown with `camel_header_address_list_clear`.
+  - Header Date, Message-ID & Encoding Utilities:
+    - Allowlisted `"camel_header_.*"` and `"camel_transfer_encoding_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified `camel_header_decode_date` and `camel_header_format_date` RFC 5322 date conversions.
+    - Verified angle-bracket unwrapping in `camel_header_msgid_decode`.
+    - Verified string parsing for transfer encodings with `camel_transfer_encoding_from_string` across `base64`, `quoted-printable`, and `7bit`.
+  - `CamelMimeMessage` Attachment & Content-ID Lookup:
+    - Verified setting and retrieving `Message-ID` and `Reply-To` (`camel_mime_message_set_reply_to`, `camel_mime_message_get_reply_to`).
+    - Verified attachment detection with `camel_mime_message_has_attachment` before and after attaching multipart content.
+    - Verified part lookup by identifier with `camel_mime_message_get_part_by_content_id`.
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_content_type_creation_parameters_and_matching_in_eds`: verifies structured content type creation, parameter reading/writing, matching, and formatting.
+  - Added `camel_content_disposition_attachment_parsing_in_eds`: verifies content disposition decoding, formatting, and attachment checking.
+  - Added `camel_header_address_mailbox_decoding_and_formatting_in_eds`: verifies address list parsing, node field extraction, formatting, and encoding.
+  - Added `camel_header_date_and_msgid_utilities_in_eds`: verifies header date parsing/formatting, message ID unwrapping, and transfer encoding name parsing.
+  - Added `camel_mime_message_attachment_and_reply_to_in_eds`: verifies message ID, reply-to, attachment detection, and Content-ID part lookup.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/message.rs`:
+  - Added `an_opened_message_provides_message_id_and_date`: verifies that opened messages retrieved via `camel_folder_get_message_sync` expose unbracketed `Message-ID` (`E1@mock.invalid`) and decoded epoch seconds `Date` timestamps via Camel accessors.
+- In `rust/crates/jmap-mail-sync/tests/summary.rs`:
+  - Added `summary_extracts_structured_addresses_and_message_id_cleanly`: verifies that message summaries extract structured from/to/cc addresses, preview text, wire `Message-ID` headers, and dual sent_at/received_at epoch timestamps correctly.
+
+Tests: 1108 in the default set (up 1: 20 in `jmap-mail-sync/tests/summary.rs`), plus 1 new test in `jmap-mail/tests/message.rs` (8 in file, 338 across crate), 5 new tests in `eds-sys/tests/camel.rs` (32 in file, 87 across crate), and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1108 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
