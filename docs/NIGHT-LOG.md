@@ -22527,4 +22527,41 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirty-first session)
 
-**Claiming increment:** telephone synthetic slot fields, email fields, and manager/assistant/anniversary EDS verification, roundtrip fidelity in `jmap-vcard`, and targeted preservation across `jmap-book-sync`.
+**Verifying telephone synthetic slot fields, email fields, manager/assistant/file-as semantics in EDS, roundtrip fidelity in `jmap-vcard`, and preservation across book sync.**
+This session measures EDS 3.52 `EContact` field properties and vCard line behaviors for telephone synthetic fields (`E_CONTACT_FIRST_PHONE_ID` 16 ..= `E_CONTACT_LAST_PHONE_ID` 34), email fields (`E_CONTACT_FIRST_EMAIL_ID` 8 ..= `E_CONTACT_LAST_EMAIL_ID` 11), attribute lists (`E_CONTACT_TEL` 119, `E_CONTACT_EMAIL` 97), manager (`E_CONTACT_MANAGER`), assistant (`E_CONTACT_ASSISTANT`), and file-as (`E_CONTACT_FILE_AS`), adds multiple-entry and preference (`PREF`) roundtrip tests in `jmap-vcard`, implements `pref` modeling and patching for `ContactPhone` in `jmap-proto`, `jmap-vcard`, and `jmap-book-sync`, and verifies field editing, unmodeled property preservation, and clearing across `jmap-book-sync`.
+
+**EDS 3.52 `EContact` telephone, email, and relationship field measurement:**
+- Probed `libebook-contacts` 3.52 for telephone, email, and relationship field properties:
+  - Synthetic phone fields 16..=34 (`assistant_phone`, `business_phone`, `business_phone_2`, `business_fax`, `callback_phone`, `car_phone`, `company_phone`, `home_phone`, `home_phone_2`, `home_fax`, `isdn_phone`, `mobile_phone`, `other_phone`, `other_fax`, `pager`, `primary_phone`, `radio`, `telex`, `tty`) are string fields (`e_contact_field_is_string == 1`).
+  - Synthetic email fields 8..=11 (`email_1`, `email_2`, `email_3`, `email_4`) are string fields (`e_contact_field_is_string == 1`).
+  - Attribute list fields `E_CONTACT_TEL` (119, field name `"phone"`) and `E_CONTACT_EMAIL` (97, field name `"email"`) have `e_contact_field_is_string == 0` and return `GList *` of allocated `gchar *` strings with type `e_contact_attr_list_get_type()`.
+  - Relationship and metadata fields `E_CONTACT_MANAGER` (40, `"manager"`), `E_CONTACT_ASSISTANT` (41, `"assistant"`), `E_CONTACT_FILE_AS` (2, `"file_as"`), and `E_CONTACT_MAILER` (12, `"mailer"`) are string fields (`e_contact_field_is_string == 1`).
+  - `e_contact_field_id_from_vcard` maps `"TEL"` to `E_CONTACT_TEL` (119), `"EMAIL"` to `E_CONTACT_EMAIL` (97), `"X-EVOLUTION-MANAGER"` to `E_CONTACT_MANAGER` (40), `"X-EVOLUTION-ASSISTANT"` to `E_CONTACT_ASSISTANT` (41), `"X-EVOLUTION-FILE-AS"` to `E_CONTACT_FILE_AS` (2), and `"MAILER"` to `E_CONTACT_MAILER` (12).
+  - `e_contact_get_const` retrieves synthetic slot phone numbers (`E_CONTACT_PHONE_BUSINESS`, `E_CONTACT_PHONE_HOME`, `E_CONTACT_PHONE_MOBILE`, `E_CONTACT_PHONE_BUSINESS_FAX`, `E_CONTACT_PHONE_PAGER`), email addresses (`E_CONTACT_EMAIL_1`, `E_CONTACT_EMAIL_2`), manager, assistant, and file-as.
+  - In-place modification via `e_contact_set` updates synthetic phone, email, and manager slots while preserving secondary lines, other phone slots, and `X-JMAP-KEY` parameters in `e_vcard_to_string`.
+  - Setting synthetic fields to `NULL` cleanly removes the targeted lines from the serialized vCard while preserving remaining entries.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `contact_telephone_and_email_field_properties`: verifies string vs attribute list classifications, field names, and vCard property ID mappings.
+  - Added `telephone_and_email_synthetic_slots_and_modification_behavior_in_eds`: verifies multi-field parsing, attribute list iteration and freeing, in-place slot modification, `X-JMAP-KEY` parameter survival, and line deletion upon clearing.
+
+**Mapping, proto, and sync verification across workspace:**
+- In `jmap-proto/src/contacts.rs`:
+  - Added `pub pref: Option<u32>` to `ContactPhone` (RFC 9553 §2.3.3).
+- In `jmap-vcard/src/contact.rs`:
+  - Serialized `PREF` on `TEL` lines when `phone.pref.is_some()`.
+  - Deserialized `property.has_type("PREF")` into `pref: Some(1)` on `ContactPhone`.
+- In `jmap-book-sync/src/patch.rs`:
+  - Added `diff_pref` to `diff_phones` to calculate targeted preference patches on phone entries.
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `maps_phones_with_multiple_types_features_and_pref_faithfully`: verifies that multiple phone entries with work/home contexts, voice/fax/cell/pager/video features, and `pref` roundtrip faithfully to `TEL` lines with `X-JMAP-KEY` and back into JSContact `phones`.
+  - Added `maps_emails_with_multiple_contexts_and_pref_faithfully`: verifies that multiple email entries with work/home contexts, addresses, and `pref` roundtrip faithfully to `EMAIL` lines with `X-JMAP-KEY` and back into JSContact `emails`.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `editing_phones_and_emails_preserves_unmodeled_contact_fields`: verifies that editing phone numbers, phone preferences, and email addresses produces targeted patches on `phones/<key>/number`, `phones/<key>/pref`, and `emails/<key>/address` while preserving unmodeled `preferredLanguages`, `personalInfo`, `cryptoKeys`, and `onlineServices` intact on the server.
+  - Added `clearing_phones_and_emails_patches_server_fields`: verifies that removing all `TEL` and `EMAIL` lines sends clean deletion patches to the server while keeping nicknames and notes intact.
+
+Tests: 1082 in the default set (up 4: 126 in `jmap-vcard/tests/mapping.rs`, 100 in `jmap-book-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/contacts.rs` (16 in file, 61 across crate) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1082 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.

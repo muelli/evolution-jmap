@@ -467,6 +467,7 @@ fn diff_phones(
                 &new.features,
                 maps_phone_feature,
             );
+            diff_pref(patch, path, old.pref, new.pref);
         },
     );
 }
