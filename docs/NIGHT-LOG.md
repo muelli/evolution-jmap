@@ -22123,3 +22123,8 @@ is unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's cont
 writes for a replaced photo, and into a cleared field, is inferred rather than measured;
 and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
+
+## 2026-08-14 (two-hundred-and-twenty-first session)
+
+Claiming M3 increment: verify address LABEL TYPE semantics, synthetic field behavior in EDS, and address preservation.
+
