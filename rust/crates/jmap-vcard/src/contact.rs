@@ -1249,6 +1249,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
         let mut types = type_names(&CONTEXTS, phone.contexts.as_ref());
         types.extend(type_names(&PHONE_FEATURES, phone.features.as_ref()));
+        if phone.pref.is_some() {
+            types.push("PREF");
+        }
         properties.push(
             Property::new("TEL", &phone.number)
                 .with_param(X_JMAP_KEY, key)
@@ -1465,6 +1468,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     number,
                     contexts: read_flags(&CONTEXTS, property),
                     features: read_flags(&PHONE_FEATURES, property),
+                    pref: property.has_type("PREF").then_some(1),
                     ..ContactPhone::default()
                 };
                 phones.insert(entry_key(property, "p", &phones), phone);
