@@ -196,3 +196,33 @@ fn a_name_with_a_nul_in_it_does_not_truncate_the_folder() {
         g_object_unref(folder.cast());
     }
 }
+
+/// A nested subfolder hierarchy retains full paths, display names, and mailbox ids.
+#[test]
+fn folder_properties_and_custom_subfolder_nesting() {
+    let account = Account::open();
+    let subfolder_info = FolderInfo {
+        id: Id::new("MbxSub99"),
+        path: "Archive/2026/Q1".to_owned(),
+        display_name: "Q1".to_owned(),
+        role: None,
+        total: 15,
+        unread: 3,
+        subscribed: true,
+        children: Vec::new(),
+    };
+    let folder = folder_of(&account, &subfolder_info);
+
+    // SAFETY: `folder` is a live folder this test owns.
+    unsafe {
+        assert_eq!(name(camel_folder_get_full_name(folder)), "Archive/2026/Q1");
+        assert_eq!(name(camel_folder_get_display_name(folder)), "Q1");
+        assert_eq!(
+            camel_folder_get_parent_store(folder).cast::<CamelStore>(),
+            account.store
+        );
+        let jmap = JmapFolder::borrow(folder).expect("a folder of ours");
+        assert_eq!(jmap.mailbox(), Some(&Id::new("MbxSub99")));
+        g_object_unref(folder.cast());
+    }
+}

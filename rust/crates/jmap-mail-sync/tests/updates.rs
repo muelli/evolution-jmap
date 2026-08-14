@@ -579,3 +579,69 @@ fn messages_the_delta_only_reports_gone_do_not_count_toward_the_bound() {
         "destroyed messages counted as messages to fetch: {calls:?}"
     );
 }
+
+/// A complex delta with a combination of delivered messages, flag/keyword updates,
+/// moved messages (in/out), and destroyed messages across multiple mailboxes.
+#[test]
+fn mixed_delta_batches_with_concurrent_additions_removals_and_flag_updates() {
+    let fixture = Fixture::start();
+    let (inbox, archive) = fixture.edit(|account| {
+        (
+            account.seed_mailbox("Inbox", Some(role::INBOX)),
+            account.seed_mailbox("Archive", Some(role::ARCHIVE)),
+        )
+    });
+    let kept = fixture.seed(&inbox, "Kept Message", 8);
+    let flagged = fixture.seed(&inbox, "Flagged Message", 9);
+    let moved_out = fixture.seed(&inbox, "Moved Out", 10);
+    let doomed = fixture.seed(&inbox, "Doomed Message", 11);
+    let sync = fixture.sync();
+    let (state, held) = sync.messages(&inbox).unwrap();
+    assert_eq!(held.len(), 4);
+
+    // 1. Deliver a new email to inbox
+    let delivered =
+        fixture.edit(|account| account.deliver_email(Fixture::message(&inbox, "New Arrival", 12)));
+
+    // 2. Mark flagged message as seen + flagged
+    let unread = Keywords::new(&MessageFlags::default(), &[]);
+    let seen_flagged = Keywords::new(
+        &MessageFlags {
+            seen: true,
+            flagged: true,
+            ..MessageFlags::default()
+        },
+        &[],
+    );
+    fixture
+        .sync()
+        .set_keywords(&flagged, &KeywordChange::between(&unread, &seen_flagged))
+        .unwrap();
+
+    // 3. Move moved_out to archive
+    fixture
+        .sync()
+        .file_message(&moved_out, &Filing::moved(inbox.clone(), archive.clone()))
+        .unwrap();
+
+    // 4. Destroy doomed message
+    assert!(fixture.edit(|account| account.destroy_email(&doomed)));
+
+    // 5. Query delta
+    let (_, present, absent) = changed(sync.messages_since(&inbox, &state, held.len()).unwrap());
+
+    // Verify present contains new delivery and updated flagged message
+    let present_uids = uids(&present);
+    assert!(present_uids.contains(&&delivered));
+    assert!(present_uids.contains(&&flagged));
+    assert!(!present_uids.contains(&&kept));
+
+    let flagged_row = present.iter().find(|m| m.uid == flagged).unwrap();
+    assert!(flagged_row.flags.seen);
+    assert!(flagged_row.flags.flagged);
+
+    // Verify absent contains moved_out and doomed
+    assert!(absent.contains(&moved_out));
+    assert!(absent.contains(&doomed));
+    assert!(!absent.contains(&kept));
+}

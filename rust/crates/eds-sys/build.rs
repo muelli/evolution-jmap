@@ -373,6 +373,7 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_settings_.*",
     "camel_network_settings_.*",
     "camel_offline_settings_.*",
+    "camel_url_.*",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,
