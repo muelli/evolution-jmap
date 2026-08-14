@@ -22678,6 +22678,23 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirty-sixth session)
 
-**Claiming increment:** `jmap-cal-sync` save tests for `STATUS:CANCELLED` (cancelling an event reaches the server as `"cancelled"`), clearing `STATUS` removes it, and clearing `CLASS` removes `privacy` — the two mapped-property-clearing scenarios that the existing save test suite does not yet cover.
+**Verifying that `jmap-cal-sync` correctly clears `STATUS` and `CLASS` via null patches and correctly accepts `STATUS:CANCELLED`.**
 
+The previous sessions have tested setting and changing `status`, `privacy`, and `freeBusyStatus`, but the suite had no tests for the corresponding clearing paths — dropping the `STATUS` or `CLASS` line entirely, or replacing `STATUS:CONFIRMED` with `STATUS:CANCELLED`. The `patch.rs` diff logic handles these via the generic `set()` helper that emits `null` when the edited value is `None`, but this was exercised only by the `freeBusyStatus` clearing in `clearing_priority_and_freebusy_patches_server_fields`. Adding explicit tests for `status` and `privacy` makes the coverage symmetrical and provides a regression harness.
+
+**Dependency analysis:** M1–M6 and M8 are COMPLETE. The 235th session is mid-flight on EDS `ECalComponentVType`/geo/task-completion measurement — lock entry committed at 16:39 UTC, fewer than 20 minutes ahead. Session 236 therefore picked a different, orthogonal area of the test matrix.
+
+**Work done in `jmap-cal-sync/tests/save.rs`:**
+- Added `cancelling_an_event_reaches_the_server_as_cancelled_status`: seeds a `confirmed` event with a description and a location, replaces `STATUS:CONFIRMED` with `STATUS:CANCELLED`, saves via `save_component`, and asserts the server's `status` is `"cancelled"` while description and location survive intact.
+- Added `clearing_status_removes_it_from_the_server`: seeds a `tentative` event with a keyword, drops the `STATUS` line entirely, saves, and asserts `status` is `None` on the server while the keyword survives.
+- Added `clearing_privacy_removes_the_classification_from_the_server`: seeds a `secret` event with an alert, drops the `CLASS:CONFIDENTIAL` line entirely, saves, and asserts `privacy` is `None` on the server while the alert survives.
+
+All three tests are driven against `jmap-mockd` via the existing `Fixture` harness; no EDS headers needed.
+
+Tests: 1096 in the default set (up 3: the three new tests in `jmap-cal-sync/tests/save.rs`).
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1096 tests, and `cargo deny check`) — run with the 235th session's unformatted working-tree changes stashed so the fmt check is clean against HEAD.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
