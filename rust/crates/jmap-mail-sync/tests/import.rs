@@ -306,3 +306,44 @@ fn a_message_over_the_accounts_upload_limit_is_not_imported() {
         "a refused import still uploaded the message"
     );
 }
+
+#[test]
+fn importing_a_message_with_multiple_recipients_and_custom_headers_preserves_summary() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+
+    let message_bytes = b"From: Alice <alice@example.com>\r\n\
+To: Bob <bob@example.com>, \"Doe, Charlie\" <charlie@example.org>\r\n\
+Cc: Dana <dana@example.net>\r\n\
+Subject: Multi-recipient sync test\r\n\
+Message-ID: <multi-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 14:00:00 +0000\r\n\
+\r\n\
+Detailed test body.\r\n";
+
+    let flags = MessageFlags {
+        seen: true,
+        ..MessageFlags::default()
+    };
+    let tags = vec!["$label1".to_string()];
+    let keywords = Keywords::new(&flags, &tags);
+
+    let uid = fixture
+        .sync()
+        .import_message(&inbox, message_bytes.to_vec(), &keywords, None)
+        .expect("the message is imported");
+
+    let row = only(fixture.listing(&inbox));
+    assert_eq!(row.uid, uid);
+    assert_eq!(row.subject.as_deref(), Some("Multi-recipient sync test"));
+    assert_eq!(row.message_id.as_deref(), Some("multi-2026@example.com"));
+    assert_eq!(row.from.len(), 1);
+    assert_eq!(row.from[0].email, "alice@example.com");
+    assert_eq!(row.to.len(), 2);
+    assert_eq!(row.to[0].email, "bob@example.com");
+    assert_eq!(row.to[1].email, "charlie@example.org");
+    assert_eq!(row.cc.len(), 1);
+    assert_eq!(row.cc[0].email, "dana@example.net");
+    assert!(row.flags.seen);
+    assert!(row.tags.contains(&"$label1".to_string()));
+}

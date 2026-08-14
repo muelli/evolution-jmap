@@ -487,3 +487,290 @@ fn registering_a_provider_does_not_write_back_into_the_struct() {
          handing it out as a shared &'static is no longer sound"
     );
 }
+
+/// Probing `CamelInternetAddress` creation, multiple recipient formatting, index inspection,
+/// cloning, removal, and cleanup in EDS 3.52.
+#[test]
+fn camel_internet_address_formatting_and_lifecycle_in_eds() {
+    unsafe {
+        let addr = camel_internet_address_new();
+        assert!(!addr.is_null());
+        assert_eq!(camel_address_length(addr.cast()), 0);
+
+        let formatted_empty = camel_address_format(addr.cast());
+        if !formatted_empty.is_null() {
+            glib_sys::g_free(formatted_empty.cast());
+        }
+
+        // Add 3 addresses (camel_internet_address_add returns 0-based insertion index)
+        let added1 = camel_internet_address_add(
+            addr,
+            c"Alice Smith".as_ptr(),
+            c"alice@example.com".as_ptr(),
+        );
+        assert_eq!(added1, 0);
+
+        let added2 =
+            camel_internet_address_add(addr, c"Doe, Bob".as_ptr(), c"bob@example.com".as_ptr());
+        assert_eq!(added2, 1);
+
+        let added3 =
+            camel_internet_address_add(addr, std::ptr::null(), c"carol@example.org".as_ptr());
+        assert_eq!(added3, 2);
+
+        assert_eq!(camel_address_length(addr.cast()), 3);
+
+        // Inspect index 0
+        let mut name_ptr: *const gchar = std::ptr::null();
+        let mut email_ptr: *const gchar = std::ptr::null();
+        let res0 = camel_internet_address_get(addr, 0, &mut name_ptr, &mut email_ptr);
+        assert_ne!(res0, glib_sys::GFALSE);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(name_ptr).to_str().unwrap(),
+            "Alice Smith"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(email_ptr).to_str().unwrap(),
+            "alice@example.com"
+        );
+
+        // Inspect index 1
+        let res1 = camel_internet_address_get(addr, 1, &mut name_ptr, &mut email_ptr);
+        assert_ne!(res1, glib_sys::GFALSE);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(name_ptr).to_str().unwrap(),
+            "Doe, Bob"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(email_ptr).to_str().unwrap(),
+            "bob@example.com"
+        );
+
+        // Inspect index 2 (NULL name)
+        let res2 = camel_internet_address_get(addr, 2, &mut name_ptr, &mut email_ptr);
+        assert_ne!(res2, glib_sys::GFALSE);
+        assert!(
+            name_ptr.is_null()
+                || std::ffi::CStr::from_ptr(name_ptr)
+                    .to_str()
+                    .unwrap()
+                    .is_empty()
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(email_ptr).to_str().unwrap(),
+            "carol@example.org"
+        );
+
+        // Format into RFC 5322 text
+        let formatted = camel_address_format(addr.cast());
+        assert!(!formatted.is_null());
+        let formatted_str = std::ffi::CStr::from_ptr(formatted).to_str().unwrap();
+        assert!(
+            formatted_str.contains("Alice Smith") || formatted_str.contains("alice@example.com")
+        );
+        assert!(formatted_str.contains("bob@example.com"));
+        assert!(formatted_str.contains("carol@example.org"));
+        glib_sys::g_free(formatted.cast());
+
+        // Clone
+        let cloned = camel_address_new_clone(addr.cast());
+        assert!(!cloned.is_null());
+        assert_eq!(camel_address_length(cloned), 3);
+
+        // Remove index 1 from original
+        camel_address_remove(addr.cast(), 1);
+        assert_eq!(camel_address_length(addr.cast()), 2);
+        assert_eq!(camel_address_length(cloned), 3);
+
+        gobject_sys::g_object_unref(cloned.cast());
+        gobject_sys::g_object_unref(addr.cast());
+    }
+}
+
+/// Probing `CamelMimeMessage` parsing, header inspection (Subject, From, Message-ID, Date),
+/// medium content access, and in-place header mutation in EDS 3.52.
+#[test]
+fn camel_mime_message_construction_and_header_access_in_eds() {
+    let msg_bytes = b"From: Alice Smith <alice@example.com>\r\n\
+To: Bob Doe <bob@example.com>\r\n\
+Subject: Project Update\r\n\
+Message-ID: <update-2026@example.com>\r\n\
+Date: Thu, 15 Jan 2026 12:00:00 +0000\r\n\
+\r\n\
+Hello Bob,\r\n\
+Here is the project update.\r\n";
+
+    unsafe {
+        let msg = camel_mime_message_new();
+        assert!(!msg.is_null());
+
+        let mut error: *mut glib_sys::GError = std::ptr::null_mut();
+        let parsed = camel_data_wrapper_construct_from_data_sync(
+            msg.cast::<CamelDataWrapper>(),
+            msg_bytes.as_ptr().cast(),
+            msg_bytes.len() as glib_sys::gssize,
+            std::ptr::null_mut(),
+            &mut error,
+        );
+        assert_ne!(parsed, glib_sys::GFALSE);
+        assert!(error.is_null());
+
+        // Inspect Subject
+        let subject = camel_mime_message_get_subject(msg);
+        assert!(!subject.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(subject).to_str().unwrap(),
+            "Project Update"
+        );
+
+        // Inspect Message-ID (Camel strips surrounding angle brackets)
+        let msg_id = camel_mime_message_get_message_id(msg);
+        assert!(!msg_id.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(msg_id).to_str().unwrap(),
+            "update-2026@example.com"
+        );
+
+        // Inspect From
+        let from_addr = camel_mime_message_get_from(msg);
+        assert!(!from_addr.is_null());
+        assert_eq!(camel_address_length(from_addr.cast()), 1);
+
+        let mut from_name: *const gchar = std::ptr::null();
+        let mut from_email: *const gchar = std::ptr::null();
+        let get_res = camel_internet_address_get(from_addr, 0, &mut from_name, &mut from_email);
+        assert_ne!(get_res, glib_sys::GFALSE);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(from_name).to_str().unwrap(),
+            "Alice Smith"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(from_email).to_str().unwrap(),
+            "alice@example.com"
+        );
+
+        // Date
+        let mut offset: glib_sys::gint = 0;
+        let date_ts = camel_mime_message_get_date(msg, &mut offset);
+        assert!(date_ts > 0);
+
+        // Content wrapper
+        let content = camel_medium_get_content(msg.cast::<CamelMedium>());
+        assert!(!content.is_null());
+
+        // In-place modification of subject
+        camel_mime_message_set_subject(msg, c"Revised Project Update".as_ptr());
+        let updated_subj = camel_mime_message_get_subject(msg);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(updated_subj).to_str().unwrap(),
+            "Revised Project Update"
+        );
+
+        gobject_sys::g_object_unref(msg.cast());
+    }
+}
+
+/// Probing `CamelNamedFlags` user labels / keywords and summary `bdata` encoding in EDS 3.52.
+#[test]
+fn camel_named_flags_and_bdata_encoding_in_eds() {
+    unsafe {
+        // 1. CamelNamedFlags
+        let flags = camel_named_flags_new();
+        assert!(!flags.is_null());
+        assert_eq!(camel_named_flags_get_length(flags), 0);
+
+        camel_named_flags_insert(flags, c"\\Seen".as_ptr());
+        camel_named_flags_insert(flags, c"\\Flagged".as_ptr());
+        camel_named_flags_insert(flags, c"$label1".as_ptr());
+        camel_named_flags_insert(flags, c"custom_tag".as_ptr());
+
+        assert_eq!(camel_named_flags_get_length(flags), 4);
+        assert_ne!(camel_named_flags_contains(flags, c"\\Seen".as_ptr()), 0);
+        assert_ne!(camel_named_flags_contains(flags, c"$label1".as_ptr()), 0);
+        assert_eq!(camel_named_flags_contains(flags, c"\\Draft".as_ptr()), 0);
+
+        let copy = camel_named_flags_copy(flags);
+        assert!(!copy.is_null());
+        assert_ne!(camel_named_flags_equal(flags, copy), 0);
+
+        camel_named_flags_remove(flags, c"$label1".as_ptr());
+        assert_eq!(camel_named_flags_get_length(flags), 3);
+        assert_eq!(camel_named_flags_contains(flags, c"$label1".as_ptr()), 0);
+        assert_eq!(camel_named_flags_equal(flags, copy), 0);
+
+        camel_named_flags_free(copy);
+        camel_named_flags_free(flags);
+
+        // 2. camel_util_bdata
+        let gstr = glib_sys::g_string_new(c"".as_ptr());
+        assert!(!gstr.is_null());
+
+        camel_util_bdata_put_string(gstr, c"test_keyword".as_ptr());
+        camel_util_bdata_put_number(gstr, 42);
+        camel_util_bdata_put_string(gstr, c"state_v1".as_ptr());
+
+        let mut read_ptr: *mut gchar = (*gstr).str;
+        let s1 = camel_util_bdata_get_string(&mut read_ptr, std::ptr::null());
+        assert!(!s1.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(s1).to_str().unwrap(),
+            "test_keyword"
+        );
+        glib_sys::g_free(s1.cast());
+
+        let num = camel_util_bdata_get_number(&mut read_ptr, 0);
+        assert_eq!(num, 42);
+
+        let s2 = camel_util_bdata_get_string(&mut read_ptr, std::ptr::null());
+        assert!(!s2.is_null());
+        assert_eq!(std::ffi::CStr::from_ptr(s2).to_str().unwrap(), "state_v1");
+        glib_sys::g_free(s2.cast());
+
+        glib_sys::g_string_free(gstr, 1);
+    }
+}
+
+/// Probing `CamelDataCache` disk cache directory path, file naming, and removal in EDS 3.52.
+#[test]
+fn camel_data_cache_operations_in_eds() {
+    unsafe {
+        let mut tmp_error: *mut glib_sys::GError = std::ptr::null_mut();
+        let tmp_dir_raw =
+            glib_sys::g_dir_make_tmp(c"eds-test-cache-XXXXXX".as_ptr(), &mut tmp_error);
+        assert!(!tmp_dir_raw.is_null(), "g_dir_make_tmp failed");
+        assert!(tmp_error.is_null());
+
+        let mut error: *mut glib_sys::GError = std::ptr::null_mut();
+        let cache = camel_data_cache_new(tmp_dir_raw, &mut error);
+        assert!(!cache.is_null());
+        assert!(error.is_null());
+
+        let cached_path = camel_data_cache_get_path(cache);
+        assert!(!cached_path.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(cached_path).to_str().unwrap(),
+            std::ffi::CStr::from_ptr(tmp_dir_raw).to_str().unwrap()
+        );
+
+        let fn_ptr =
+            camel_data_cache_get_filename(cache, c"cache_folder".as_ptr(), c"blob-100".as_ptr());
+        assert!(!fn_ptr.is_null());
+        let fn_str = std::ffi::CStr::from_ptr(fn_ptr).to_str().unwrap();
+        assert!(fn_str.contains("cache_folder"));
+        assert!(fn_str.contains("blob-100"));
+        glib_sys::g_free(fn_ptr.cast());
+
+        let _ = camel_data_cache_remove(
+            cache,
+            c"cache_folder".as_ptr(),
+            c"blob-100".as_ptr(),
+            &mut error,
+        );
+        if !error.is_null() {
+            glib_sys::g_error_free(error);
+        }
+
+        gobject_sys::g_object_unref(cache.cast());
+        glib_sys::g_free(tmp_dir_raw.cast());
+    }
+}
