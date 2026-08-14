@@ -22459,4 +22459,6 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-twenty-ninth session)
 
+Claiming M4 increment: verify calendar date-time, duration, all-day date, and timezone semantics in EDS, roundtrip fidelity in jmap-ical, and datetime/timezone preservation across sync.
