@@ -14,10 +14,21 @@ PROMPT_FILE="$HOME/evolution-jmap/infra/night-shift/night-prompt.md"
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
 
+# Parse "Resets in 1h39m50s" (or "39m50s", "50s") into seconds.
+parse_reset_seconds() {
+    local str="$1"
+    local hours=0 mins=0 secs=0
+    [[ "$str" =~ ([0-9]+)h ]] && hours="${BASH_REMATCH[1]}"
+    [[ "$str" =~ ([0-9]+)m ]] && mins="${BASH_REMATCH[1]}"
+    [[ "$str" =~ ([0-9]+)s ]] && secs="${BASH_REMATCH[1]}"
+    echo $(( hours * 3600 + mins * 60 + secs ))
+}
+
 log "=== agy night shift starting ==="
 
 AVAILABLE_MODELS=($(agy models </dev/null | grep -v "Fetching" | awk '{print $1}'))
 CURRENT_MODEL_INDEX=-1 # -1 means use the CLI default model
+QUOTA_RESET_SECONDS=3600 # fallback sleep if we can't parse the reset time
 consecutive_noop=0
 while true; do
     git pull --rebase --quiet >> "$LOG" 2>&1 || true
@@ -47,6 +58,12 @@ while true; do
     if grep -qiE "Individual quota reached|usage limit|quota exceeded|resource exhausted|rate limit" "$out"; then
         log "Quota error detected in output."
         quota_hit=1
+        # Try to parse the reset time from the message, e.g. "Resets in 1h39m50s."
+        reset_str=$(grep -oiE "Resets in [0-9hms]+" "$out" | head -1 | awk '{print $3}')
+        if [ -n "$reset_str" ]; then
+            QUOTA_RESET_SECONDS=$(parse_reset_seconds "$reset_str")
+            log "Quota resets in ${QUOTA_RESET_SECONDS}s (parsed from: $reset_str)."
+        fi
     fi
     rm -f "$out"
 
@@ -57,8 +74,13 @@ while true; do
             consecutive_noop=0  # reset so drain detection doesn't fire prematurely
             continue
         else
-            log "Usage limit reached for ALL fallback models. Exiting so VM naps."
-            exit 0
+            # All models exhausted — sleep until the earliest quota resets, then try again.
+            sleep_secs=$(( QUOTA_RESET_SECONDS + 60 ))
+            log "All models hit quota. Sleeping ${sleep_secs}s until quota resets, then retrying default model."
+            sleep "$sleep_secs"
+            CURRENT_MODEL_INDEX=-1
+            consecutive_noop=0
+            continue
         fi
     fi
 
