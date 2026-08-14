@@ -1900,3 +1900,232 @@ fn camel_stream_filter_pipeline_in_eds() {
         gobject_sys::g_object_unref(mem_stream.cast());
     }
 }
+
+/// Probing `CamelMimeParser` streaming, step states, header extraction, and content-type parsing in EDS 3.52.
+#[test]
+fn camel_mime_parser_streaming_and_header_scanning_in_eds() {
+    let raw_email = b"From: Alice <alice@example.com>\r\n\
+To: Bob <bob@example.com>\r\n\
+Subject: Parser Step Verification\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+Body content line 1\r\n\
+Body content line 2\r\n";
+
+    unsafe {
+        let parser = camel_mime_parser_new();
+        assert!(!parser.is_null());
+
+        let gbytes = glib_sys::g_bytes_new_static(raw_email.as_ptr().cast(), raw_email.len());
+        assert!(!gbytes.is_null());
+
+        camel_mime_parser_init_with_bytes(parser, gbytes);
+
+        // Step 1: initial -> header
+        let mut buf_ptr: *mut gchar = std::ptr::null_mut();
+        let mut buf_len: gsize = 0;
+        let state1 = camel_mime_parser_step(parser, &mut buf_ptr, &mut buf_len);
+        assert_eq!(state1, CAMEL_MIME_PARSER_STATE_HEADER);
+
+        // Inspect header (includes leading space after header colon)
+        let mut offset: glib_sys::gint = 0;
+        let subj = camel_mime_parser_header(parser, c"Subject".as_ptr(), &mut offset);
+        assert!(!subj.is_null());
+        let subj_str = std::ffi::CStr::from_ptr(subj).to_str().unwrap();
+        assert_eq!(subj_str.trim(), "Parser Step Verification");
+
+        let ct = camel_mime_parser_content_type(parser);
+        assert!(!ct.is_null());
+        assert_eq!(
+            camel_content_type_is(ct, c"text".as_ptr(), c"plain".as_ptr()),
+            glib_sys::GTRUE
+        );
+
+        // Step 2: header -> body
+        let state2 = camel_mime_parser_step(parser, &mut buf_ptr, &mut buf_len);
+        assert_eq!(state2, CAMEL_MIME_PARSER_STATE_BODY);
+
+        // Step 3: body -> body end
+        let state3 = camel_mime_parser_step(parser, &mut buf_ptr, &mut buf_len);
+        assert_eq!(state3, CAMEL_MIME_PARSER_STATE_BODY_END);
+
+        // Step 4: body end -> EOF
+        let state4 = camel_mime_parser_step(parser, &mut buf_ptr, &mut buf_len);
+        assert_eq!(state4, CAMEL_MIME_PARSER_STATE_EOF);
+
+        glib_sys::g_bytes_unref(gbytes);
+        gobject_sys::g_object_unref(parser.cast());
+    }
+}
+
+/// Probing `CamelTrie` case-insensitive and case-sensitive multi-pattern search in EDS 3.52.
+#[test]
+fn camel_trie_multi_pattern_search_in_eds() {
+    unsafe {
+        let trie = camel_trie_new(glib_sys::GTRUE);
+        assert!(!trie.is_null());
+
+        camel_trie_add(trie, c"$seen".as_ptr(), 101);
+        camel_trie_add(trie, c"$flagged".as_ptr(), 102);
+        camel_trie_add(trie, c"$answered".as_ptr(), 103);
+        camel_trie_add(trie, c"urgent".as_ptr(), 104);
+
+        let text = b"Headers include: $SEEN, and urgent review flag";
+        let mut matched_id: glib_sys::gint = 0;
+
+        // Search first match ($SEEN -> 101)
+        let match1 = camel_trie_search(trie, text.as_ptr().cast(), text.len(), &mut matched_id);
+        assert!(!match1.is_null());
+        assert_eq!(matched_id, 101);
+
+        // Advance past matched pattern and search next match (urgent -> 104)
+        let offset = match1.offset_from(text.as_ptr().cast()) as usize + 5;
+        let remaining = &text[offset..];
+        let match2 = camel_trie_search(
+            trie,
+            remaining.as_ptr().cast(),
+            remaining.len(),
+            &mut matched_id,
+        );
+        assert!(!match2.is_null());
+        assert_eq!(matched_id, 104);
+
+        camel_trie_free(trie);
+    }
+}
+
+/// Probing `CamelUIDCache` creation, caching, querying, and serialization in EDS 3.52.
+#[test]
+fn camel_uid_cache_operations_in_eds() {
+    unsafe {
+        let mut tmp_error: *mut glib_sys::GError = std::ptr::null_mut();
+        let tmp_dir_raw =
+            glib_sys::g_dir_make_tmp(c"eds-uid-cache-XXXXXX".as_ptr(), &mut tmp_error);
+        assert!(!tmp_dir_raw.is_null());
+        assert!(tmp_error.is_null());
+
+        let cache_path = format!(
+            "{}/uids.cache\0",
+            std::ffi::CStr::from_ptr(tmp_dir_raw).to_str().unwrap()
+        );
+
+        let cache = camel_uid_cache_new(cache_path.as_ptr().cast());
+        assert!(!cache.is_null());
+
+        camel_uid_cache_save_uid(cache, c"UID-1001".as_ptr());
+        camel_uid_cache_save_uid(cache, c"UID-1002".as_ptr());
+
+        // Prepare query array containing both old and new UIDs
+        let query_array = glib_sys::g_ptr_array_new();
+        glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1001".as_ptr()).cast());
+        glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1002".as_ptr()).cast());
+        glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1003".as_ptr()).cast());
+        glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1004".as_ptr()).cast());
+
+        let new_uids = camel_uid_cache_get_new_uids(cache, query_array.cast());
+        assert!(!new_uids.is_null());
+        assert_eq!((*new_uids).len, 2);
+
+        let u1 = *(*new_uids).pdata as *const gchar;
+        let u2 = *(*new_uids).pdata.add(1) as *const gchar;
+        let s1 = std::ffi::CStr::from_ptr(u1).to_str().unwrap();
+        let s2 = std::ffi::CStr::from_ptr(u2).to_str().unwrap();
+        assert_eq!(s1, "UID-1003");
+        assert_eq!(s2, "UID-1004");
+
+        camel_uid_cache_free_uids(new_uids);
+        glib_sys::g_ptr_array_free(query_array, glib_sys::GTRUE);
+
+        assert_eq!(camel_uid_cache_save(cache), glib_sys::GTRUE);
+        camel_uid_cache_destroy(cache);
+        glib_sys::g_free(tmp_dir_raw.cast());
+    }
+}
+
+/// Probing `CamelCharset` character set resolution, stepwise detection, and ISO mapping in EDS 3.52.
+#[test]
+fn camel_charset_detection_and_iso_to_windows_in_eds() {
+    unsafe {
+        // Pure ASCII text returns NULL from camel_charset_best (no non-ASCII encoding needed)
+        let ascii_text = c"Simple ASCII content for testing";
+        let best_ascii = camel_charset_best(ascii_text.as_ptr(), 32);
+        assert!(best_ascii.is_null());
+
+        // UTF-8 multi-byte sequence returns UTF-8 or compatible charset
+        let utf8_sample = c"Umlaut \xc3\xa4\xc3\xb6\xc3\xbc detection";
+        let best_utf8 = camel_charset_best(utf8_sample.as_ptr(), 22);
+        assert!(!best_utf8.is_null());
+        assert!(
+            std::ffi::CStr::from_ptr(best_utf8)
+                .to_str()
+                .unwrap()
+                .contains("UTF-8")
+                || std::ffi::CStr::from_ptr(best_utf8)
+                    .to_str()
+                    .unwrap()
+                    .contains("ISO-8859")
+        );
+
+        let win_charset = camel_charset_iso_to_windows(c"iso-8859-1".as_ptr());
+        assert!(!win_charset.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(win_charset).to_str().unwrap(),
+            "windows-cp1252"
+        );
+
+        let mut cc = std::mem::zeroed::<CamelCharset>();
+        camel_charset_init(&mut cc);
+        camel_charset_step(&mut cc, utf8_sample.as_ptr(), 22);
+        let best_name = camel_charset_best_name(&mut cc);
+        assert!(!best_name.is_null());
+        assert!(
+            std::ffi::CStr::from_ptr(best_name)
+                .to_str()
+                .unwrap()
+                .contains("UTF-8")
+                || std::ffi::CStr::from_ptr(best_name)
+                    .to_str()
+                    .unwrap()
+                    .contains("ISO-8859")
+        );
+    }
+}
+
+/// Probing `CamelMimeFilterPreview`, `CamelMimeFilterCanon`, and `camel_text_to_html` in EDS 3.52.
+#[test]
+fn camel_mime_filter_preview_and_html_conversions_in_eds() {
+    unsafe {
+        // 1. Preview filter limit getter / setter
+        let prev = camel_mime_filter_preview_new(100);
+        assert!(!prev.is_null());
+        assert_eq!(camel_mime_filter_preview_get_limit(prev.cast()), 100);
+        camel_mime_filter_preview_set_limit(prev.cast(), 200);
+        assert_eq!(camel_mime_filter_preview_get_limit(prev.cast()), 200);
+        gobject_sys::g_object_unref(prev.cast());
+
+        // 2. Canon filter
+        let canon = camel_mime_filter_canon_new(
+            CAMEL_MIME_FILTER_CANON_CRLF | CAMEL_MIME_FILTER_CANON_STRIP,
+        );
+        assert!(!canon.is_null());
+        gobject_sys::g_object_unref(canon.cast());
+
+        // 3. Text to HTML utility conversion
+        let text_input = c"Visit https://example.com/portal for update\nLine 2";
+        let html_out = camel_text_to_html(
+            text_input.as_ptr(),
+            CAMEL_MIME_FILTER_TOHTML_CONVERT_NL
+                | CAMEL_MIME_FILTER_TOHTML_CONVERT_URLS
+                | CAMEL_MIME_FILTER_TOHTML_CONVERT_SPACES,
+            0,
+        );
+        assert!(!html_out.is_null());
+        let html_str = std::ffi::CStr::from_ptr(html_out).to_str().unwrap();
+        assert!(
+            html_str
+                .contains("<a href=\"https://example.com/portal\">https://example.com/portal</a>")
+        );
+        assert!(html_str.contains("<br>"));
+        glib_sys::g_free(html_out.cast());
+    }
+}

@@ -295,6 +295,26 @@ fn camel_layouts_match_the_gtype_system() {
         CamelMimeFilterLinewrap,
         CamelMimeFilterLinewrapClass
     );
+    assert_layout!(
+        camel_mime_parser_get_type,
+        CamelMimeParser,
+        CamelMimeParserClass
+    );
+    assert_layout!(
+        camel_mime_filter_preview_get_type,
+        CamelMimeFilterPreview,
+        CamelMimeFilterPreviewClass
+    );
+    assert_layout!(
+        camel_mime_filter_canon_get_type,
+        CamelMimeFilterCanon,
+        CamelMimeFilterCanonClass
+    );
+    assert_layout!(
+        camel_mime_filter_tohtml_get_type,
+        CamelMimeFilterToHTML,
+        CamelMimeFilterToHTMLClass
+    );
 }
 
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the
