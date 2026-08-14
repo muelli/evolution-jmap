@@ -36,8 +36,8 @@ use eds_sys::{
     camel_address_format, camel_data_wrapper_decode_to_output_stream_sync,
     camel_folder_error_quark, camel_folder_free_uids, camel_folder_get_message_sync,
     camel_folder_get_uids, camel_folder_refresh_info_sync, camel_medium_get_content,
-    camel_mime_message_get_from, camel_mime_message_get_subject, camel_service_error_quark,
-    camel_store_get_folder_sync,
+    camel_mime_message_get_date, camel_mime_message_get_from, camel_mime_message_get_message_id,
+    camel_mime_message_get_subject, camel_service_error_quark, camel_store_get_folder_sync,
 };
 use gio_sys::{
     GMemoryOutputStream, GOutputStream, g_memory_output_stream_get_data,
@@ -446,5 +446,31 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
 
     drop(opened);
     // SAFETY: the one reference this test took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// An opened message provides access to its Message-ID and Date headers parsed by Camel.
+#[test]
+fn an_opened_message_provides_message_id_and_date() {
+    let (_server, _account, folder) = with_one_message();
+    let uid = the_one_uid(folder);
+
+    let opened = Opened::of(folder, &uid);
+    let message = opened.expect_message();
+
+    unsafe {
+        let msg_id = camel_mime_message_get_message_id(message);
+        assert!(!msg_id.is_null());
+        let msg_id_str = CStr::from_ptr(msg_id).to_str().unwrap();
+        assert_eq!(msg_id_str, "E1@mock.invalid");
+
+        let mut offset: glib_sys::gint = 0;
+        let date = camel_mime_message_get_date(message, &mut offset);
+        // "2026-01-01T09:00:00Z" is 1767258000
+        assert_eq!(date, 1_767_258_000);
+        assert_eq!(offset, 0);
+    }
+
+    drop(opened);
     unsafe { g_object_unref(folder.cast()) };
 }
