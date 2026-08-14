@@ -26,8 +26,8 @@ use std::collections::BTreeMap;
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
 use jmap_proto::contacts::{
-    Anniversary, Calendar, ContactCard, Media, Name, NameComponent, Note, OnlineService, OrgUnit,
-    Organization, Relation, Title,
+    Address, AddressComponent, Anniversary, Calendar, ContactCard, Media, Name, NameComponent,
+    Note, OnlineService, OrgUnit, Organization, Relation, Title,
 };
 
 /// The contact the client writes. One string, passed to the client on its
@@ -861,6 +861,20 @@ const SEEDED_SECOND_TITLE_NAME: &str = "Director of Engineering";
 const SEEDED_ROLE_NAME: &str = "Lead Investigator";
 const SEEDED_SECOND_ROLE_NAME: &str = "Project Manager";
 
+const SEEDED_WORK_ADDR_KEY: &str = "addr-work-1";
+const SEEDED_WORK_STREET: &str = "Hauptstrasse 1";
+const SEEDED_WORK_LOCALITY: &str = "Berlin";
+const SEEDED_WORK_POSTCODE: &str = "10115";
+const SEEDED_WORK_COUNTRY: &str = "Germany";
+const SEEDED_WORK_LABEL: &str = "Hauptstrasse 1\n10115 Berlin\nGermany";
+
+const SEEDED_HOME_ADDR_KEY: &str = "addr-home-1";
+const SEEDED_HOME_STREET: &str = "Heimweg 2";
+const SEEDED_HOME_LOCALITY: &str = "Muenchen";
+const SEEDED_HOME_POSTCODE: &str = "80331";
+const SEEDED_HOME_COUNTRY: &str = "Germany";
+const SEEDED_HOME_LABEL: &str = "Heimweg 2\n80331 Muenchen\nGermany";
+
 /// Which of the seeded card's notes the server files on it.
 ///
 /// The distinction exists for one leg only, and it is a distinction the save
@@ -1126,6 +1140,40 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
                     name: SEEDED_SECOND_ROLE_NAME.to_owned(),
                     kind: Some("role".to_owned()),
                     ..Title::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    card.addresses = Some(
+        [
+            (
+                SEEDED_WORK_ADDR_KEY.to_owned(),
+                Address {
+                    contexts: Some(serde_json::json!({"work": true})),
+                    components: Some(vec![
+                        AddressComponent::new("name", SEEDED_WORK_STREET),
+                        AddressComponent::new("locality", SEEDED_WORK_LOCALITY),
+                        AddressComponent::new("postcode", SEEDED_WORK_POSTCODE),
+                        AddressComponent::new("country", SEEDED_WORK_COUNTRY),
+                    ]),
+                    full: Some(SEEDED_WORK_LABEL.to_owned()),
+                    ..Address::default()
+                },
+            ),
+            (
+                SEEDED_HOME_ADDR_KEY.to_owned(),
+                Address {
+                    contexts: Some(serde_json::json!({"private": true})),
+                    components: Some(vec![
+                        AddressComponent::new("name", SEEDED_HOME_STREET),
+                        AddressComponent::new("locality", SEEDED_HOME_LOCALITY),
+                        AddressComponent::new("postcode", SEEDED_HOME_POSTCODE),
+                        AddressComponent::new("country", SEEDED_HOME_COUNTRY),
+                    ]),
+                    full: Some(SEEDED_HOME_LABEL.to_owned()),
+                    ..Address::default()
                 },
             ),
         ]
@@ -1491,6 +1539,30 @@ fn assert_the_seeded_organizations_and_titles_survived(card: &ContactCard) {
     assert_eq!(titles[SEEDED_SECOND_ROLE_KEY].kind.as_deref(), Some("role"));
 }
 
+/// Hold the card the server now holds to all multiple addresses and labels it was seeded with.
+///
+/// A save that touched unrelated fields must leave both addresses (work and home), their
+/// structured components, and their full labels intact on the server.
+fn assert_the_seeded_addresses_survived(card: &ContactCard) {
+    let addresses = card
+        .addresses
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's addresses: {card:?}"));
+    assert_eq!(
+        addresses.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_HOME_ADDR_KEY, SEEDED_WORK_ADDR_KEY],
+        "the save re-keyed or dropped an address: {card:?}"
+    );
+    assert_eq!(
+        addresses[SEEDED_WORK_ADDR_KEY].full.as_deref(),
+        Some(SEEDED_WORK_LABEL)
+    );
+    assert_eq!(
+        addresses[SEEDED_HOME_ADDR_KEY].full.as_deref(),
+        Some(SEEDED_HOME_LABEL)
+    );
+}
+
 /// The port the mock is listening on, for the keyfile the session is written
 /// with.
 fn mock_port(server: &jmap_mock::MockServer) -> u16 {
@@ -1685,6 +1757,7 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// What the user retypes the given-name field to, and the full name Evolution's
@@ -1845,6 +1918,7 @@ fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// The fourth leg, and the one edit that reaches the picture itself: the user
@@ -1999,6 +2073,7 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// What the user retypes the Calendar field to. A URI on a different host from
@@ -2155,6 +2230,7 @@ fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// What the user retypes the Spouse field to. A different person from the one
@@ -2296,6 +2372,7 @@ fn retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed() {
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// The seventh leg: the user *clears* the Spouse field, on the same card the
@@ -2437,6 +2514,7 @@ fn clearing_the_spouse_through_eds_withdraws_the_marriage_and_keeps_the_brother(
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// What the user retypes the Notes field to. Deliberately not a respelling of
@@ -2591,6 +2669,7 @@ fn retyping_the_note_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// What the client joins the card's `NOTE` line values with when it reports
@@ -2762,6 +2841,7 @@ fn clearing_the_note_through_eds_withdraws_it_and_keeps_the_one_behind_it() {
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// The tenth leg: the user empties the Notes field on a card the server filed
@@ -2923,6 +3003,7 @@ fn clearing_the_only_note_through_eds_withdraws_the_whole_property() {
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
 
 /// The eleventh leg: the user retypes an instant-messaging handle the server
@@ -3104,4 +3185,5 @@ fn retyping_a_uri_only_handle_through_eds_writes_the_uri_back() {
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_anniversaries_survived(card);
     assert_the_seeded_organizations_and_titles_survived(card);
+    assert_the_seeded_addresses_survived(card);
 }
