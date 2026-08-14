@@ -21777,5 +21777,58 @@ attached.
 
 ## 2026-08-14 (two-hundred-and-fifteenth session)
 
-Claiming M3 increment: map Gadu-Gadu gg URI scheme, verify round-trips and diffs, and test through real EDS.
+**Mapping Gadu-Gadu's `gg` URI scheme and verifying IM URI round-trips.**
+This session resolves part of the standing blocker on unverified instant messaging
+URI schemes by verifying the IANA registration for Gadu-Gadu (`gg`) and adding it
+to `SERVICE_SCHEMES` in `jmap-vcard`, alongside test-first round-trip and diff
+coverage in `jmap-book-sync`.
+
+**IANA registration and syntax verification.**
+- `gg` is registered in IANA as a provisional URI scheme (RFC 7595 / IANA template
+  `gg:<userid>`) where the scheme-specific part is the bare user identification
+  number (UIN, e.g. `gg:12345678`).
+- Adding `("Gadu-Gadu", "gg")` to `SERVICE_SCHEMES` enables `card_to_vcard` to
+  draw a URI-only Gadu-Gadu entry onto `X-GADUGADU;X-JMAP-KEY=s1;TYPE=HOME:12345678`,
+  allowing EDS to surface the handle in `E_CONTACT_IM_GADUGADU_HOME_1`.
+- When reading vCard data back, `vcard_to_card` maps `X-GADUGADU` lines to
+  `onlineServices` entries under the normalized service name "Gadu-Gadu", and
+  `jmap-book-sync`'s `diff_online_services` preserves or reconstructs the `gg:` URI
+  on edits.
+- Investigation into the remaining unverified services (AIM, ICQ, MSN, Yahoo) confirms
+  that AIM, MSN, and Yahoo conventionally employ action/query parameter formats
+  (`aim:goim?screenname=...`, `msnim:chat?contact=...`, `ymsgr:sendim?...`) which
+  `plain_handle` safely rejects due to query/path delimiters, and ICQ lacks a standalone
+  registered IANA scheme.
+
+**TDD and Mutation checks.**
+- Red tests added first in `jmap-vcard` (`a_uri_only_gadu_gadu_entry_is_drawn_as_x_gadugadu`,
+  `a_gadu_gadu_uri_that_says_more_than_a_handle_gets_no_line`) and `jmap-book-sync`
+  (`renaming_a_gadu_gadu_handle_the_uri_alone_stated_rewrites_that_uri`), failing as
+  expected before `SERVICE_SCHEMES` was updated.
+- Mutations tested: removing `("Gadu-Gadu", "gg")` fails both tests immediately; changing
+  the scheme fails handle extraction; dropping the delimiter refusals in `plain_handle`
+  fails the URI-with-query rejection test.
+
+Tests: 1014 in the default set (up 2: 105 in `jmap-vcard/tests/mapping.rs`, 83 in
+`jmap-book-sync/tests/save.rs`).
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1014 tests,
+`cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and
+`cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: Gadu-Gadu URI scheme is now verified and
+tabled. Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as
+a year alone are still invisible; the conventional URI schemes for AIM, ICQ, MSN and Yahoo
+remain untabled; `X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour
+unmeasured; whether the editor lets a handle be moved between the Home and Work slots at all
+is unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact editor
+writes for a replaced photo, and into a cleared field, is inferred rather than measured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.
 
