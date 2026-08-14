@@ -568,3 +568,251 @@ fn ecalcomponent_categories_location_url_and_descriptions_in_eds() {
         g_object_unref(calendar.cast());
     }
 }
+
+/// Probing `ECalComponent` organizer and attendee accessors:
+/// `e_cal_component_get_organizer` returns an `ECalComponentOrganizer *`,
+/// with value, CN, SENT-BY, and LANGUAGE accessors;
+/// `e_cal_component_get_attendees` returns a `GSList` of `ECalComponentAttendee *`,
+/// with value, CN, CUTYPE, ROLE, PARTSTAT, and RSVP accessors;
+/// `e_cal_component_set_organizer` and `e_cal_component_set_attendees` support in-place
+/// modification and NULL clearing.
+#[test]
+fn ecalcomponent_organizer_and_attendees_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Architecture Review\r\n\
+         DTSTART:20260810T100000Z\r\n\
+         ORGANIZER;CN=Alice Smith;SENT-BY=\"mailto:sec@example.com\";LANGUAGE=en:mailto:alice@example.com\r\n\
+         ATTENDEE;CN=Bob Jones;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:bob@example.com\r\n\
+         ATTENDEE;CN=Carol Danvers;ROLE=OPT-PARTICIPANT;PARTSTAT=TENTATIVE:mailto:carol@example.com\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // Organizer accessors
+        let organizer = e_cal_component_get_organizer(comp);
+        assert!(!organizer.is_null());
+        let org_val = e_cal_component_organizer_get_value(organizer);
+        assert!(!org_val.is_null());
+        assert_eq!(
+            CStr::from_ptr(org_val).to_str().unwrap(),
+            "mailto:alice@example.com"
+        );
+        let org_cn = e_cal_component_organizer_get_cn(organizer);
+        assert!(!org_cn.is_null());
+        assert_eq!(CStr::from_ptr(org_cn).to_str().unwrap(), "Alice Smith");
+        let org_sentby = e_cal_component_organizer_get_sentby(organizer);
+        assert!(!org_sentby.is_null());
+        assert_eq!(
+            CStr::from_ptr(org_sentby).to_str().unwrap(),
+            "mailto:sec@example.com"
+        );
+        let org_lang = e_cal_component_organizer_get_language(organizer);
+        assert!(!org_lang.is_null());
+        assert_eq!(CStr::from_ptr(org_lang).to_str().unwrap(), "en");
+
+        // Attendee accessors
+        let attendees = e_cal_component_get_attendees(comp);
+        assert!(!attendees.is_null());
+        assert_eq!(g_slist_length(attendees), 2);
+
+        let att1 = (*attendees).data as *mut ECalComponentAttendee;
+        assert!(!att1.is_null());
+        let att1_val = e_cal_component_attendee_get_value(att1);
+        assert!(!att1_val.is_null());
+        assert_eq!(
+            CStr::from_ptr(att1_val).to_str().unwrap(),
+            "mailto:bob@example.com"
+        );
+        let att1_cn = e_cal_component_attendee_get_cn(att1);
+        assert!(!att1_cn.is_null());
+        assert_eq!(CStr::from_ptr(att1_cn).to_str().unwrap(), "Bob Jones");
+        assert_eq!(
+            e_cal_component_attendee_get_partstat(att1),
+            I_CAL_PARTSTAT_ACCEPTED
+        );
+        assert_eq!(
+            e_cal_component_attendee_get_role(att1),
+            I_CAL_ROLE_REQPARTICIPANT
+        );
+        assert_eq!(e_cal_component_attendee_get_rsvp(att1), 1);
+        assert_eq!(
+            e_cal_component_attendee_get_cutype(att1),
+            I_CAL_CUTYPE_INDIVIDUAL
+        );
+
+        let att2_node = (*attendees).next;
+        assert!(!att2_node.is_null());
+        let att2 = (*att2_node).data as *mut ECalComponentAttendee;
+        assert!(!att2.is_null());
+        let att2_val = e_cal_component_attendee_get_value(att2);
+        assert!(!att2_val.is_null());
+        assert_eq!(
+            CStr::from_ptr(att2_val).to_str().unwrap(),
+            "mailto:carol@example.com"
+        );
+        let att2_cn = e_cal_component_attendee_get_cn(att2);
+        assert!(!att2_cn.is_null());
+        assert_eq!(CStr::from_ptr(att2_cn).to_str().unwrap(), "Carol Danvers");
+        assert_eq!(
+            e_cal_component_attendee_get_partstat(att2),
+            I_CAL_PARTSTAT_TENTATIVE
+        );
+        assert_eq!(
+            e_cal_component_attendee_get_role(att2),
+            I_CAL_ROLE_OPTPARTICIPANT
+        );
+
+        // Modify organizer CN in place
+        let new_cn = text("Alice Wonderland");
+        e_cal_component_organizer_set_cn(organizer, new_cn.as_ptr());
+        e_cal_component_set_organizer(comp, organizer);
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            rendered.contains("ORGANIZER;CN=Alice Wonderland"),
+            "modified organizer missing: {rendered}"
+        );
+
+        e_cal_component_organizer_free(organizer.cast());
+        unsafe extern "C" fn free_attendee(ptr: *mut std::ffi::c_void) {
+            unsafe { e_cal_component_attendee_free(ptr.cast()) };
+        }
+        g_slist_free_full(attendees, Some(free_attendee));
+
+        // Clear organizer and attendees via NULL
+        e_cal_component_set_organizer(comp, std::ptr::null());
+        e_cal_component_set_attendees(comp, std::ptr::null());
+
+        let inner_cleared = e_cal_component_get_icalcomponent(comp);
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner_cleared));
+        assert!(
+            !cleared_rendered.contains("ORGANIZER:"),
+            "cleared organizer still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("ATTENDEE:"),
+            "cleared attendees still present: {cleared_rendered}"
+        );
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}
+
+/// Probing `ECalComponent` priority, sequence, percent complete, and GEO coordinates:
+/// `e_cal_component_get_priority` returns an integer (1..9, or 0 when unset),
+/// `e_cal_component_get_sequence` returns sequence >= 0,
+/// `e_cal_component_get_percent_complete` returns 0..100 (-1 when unset),
+/// `e_cal_component_get_geo` returns `ICalGeo *` with latitude/longitude.
+#[test]
+fn ecalcomponent_priority_sequence_percent_complete_and_geo_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Launch Readiness\r\n\
+         DTSTART:20260810T140000Z\r\n\
+         PRIORITY:1\r\n\
+         SEQUENCE:3\r\n\
+         PERCENT-COMPLETE:75\r\n\
+         GEO:52.520008;13.404954\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // Field getters
+        assert_eq!(e_cal_component_get_priority(comp), 1);
+        assert_eq!(e_cal_component_get_sequence(comp), 3);
+        assert_eq!(e_cal_component_get_percent_complete(comp), 75);
+
+        let geo = e_cal_component_get_geo(comp);
+        assert!(!geo.is_null());
+        let lat = i_cal_geo_get_lat(geo);
+        let lon = i_cal_geo_get_lon(geo);
+        assert!((lat - 52.520008).abs() < 1e-5);
+        assert!((lon - 13.404954).abs() < 1e-5);
+        g_object_unref(geo.cast());
+
+        // Modifying in place
+        e_cal_component_set_priority(comp, 5);
+        e_cal_component_set_sequence(comp, 4);
+        e_cal_component_set_percent_complete(comp, 100);
+
+        let new_geo = i_cal_geo_new(48.8566, 2.3522);
+        assert!(!new_geo.is_null());
+        e_cal_component_set_geo(comp, new_geo);
+        g_object_unref(new_geo.cast());
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            rendered.contains("PRIORITY:5"),
+            "modified priority missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("SEQUENCE:4"),
+            "modified sequence missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("PERCENT-COMPLETE:100"),
+            "modified percent missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("GEO:48.8566"),
+            "modified geo missing: {rendered}"
+        );
+
+        // Clearing via -1 / -1 / NULL
+        e_cal_component_set_priority(comp, -1);
+        e_cal_component_set_percent_complete(comp, -1);
+        e_cal_component_set_geo(comp, std::ptr::null());
+
+        assert_eq!(e_cal_component_get_priority(comp), -1);
+        assert_eq!(e_cal_component_get_percent_complete(comp), -1);
+        assert!(e_cal_component_get_geo(comp).is_null());
+
+        let inner_cleared = e_cal_component_get_icalcomponent(comp);
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner_cleared));
+        assert!(
+            !cleared_rendered.contains("PRIORITY:"),
+            "cleared priority still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("PERCENT-COMPLETE:"),
+            "cleared percent still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("GEO:"),
+            "cleared geo still present: {cleared_rendered}"
+        );
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}

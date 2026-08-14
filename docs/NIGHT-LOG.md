@@ -22358,4 +22358,35 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-twenty-sixth session)
 
-Claiming M4 increment: verify calendar organizer, attendee, priority, sequence, and GEO property semantics and in-place modification in EDS, roundtrip fidelity in jmap-ical, and preservation across sync.
+**Verifying calendar organizer, attendee, priority, sequence, percent-complete, and GEO coordinate property semantics in EDS, round-trip fidelity in `jmap-ical`, and preservation across sync.**
+This session measures EDS 3.52 `ECalComponentOrganizer`, `ECalComponentAttendee`, `ICalGeo`, priority, sequence, and percent-complete behavior in `eds-sys`, adds multi-participant role/status and priority/GEO roundtrip tests in `jmap-ical`, and verifies priority and location editing with unmodeled participant and coordinate preservation in `jmap-cal-sync`.
+
+**EDS 3.52 `ECalComponentOrganizer`, `ECalComponentAttendee`, and property measurement:**
+- Probed `libecal-2.0` and `libical-glib` for organizer, attendee, priority, sequence, and GEO coordinates behaviors:
+  - `e_cal_component_get_organizer` returns `ECalComponentOrganizer *`, with `e_cal_component_organizer_get_value`, `get_cn`, `get_sentby`, and `get_language` accessors. `e_cal_component_organizer_set_cn` modifies CN in place, and `e_cal_component_set_organizer(comp, NULL)` clears the `ORGANIZER:` line.
+  - `e_cal_component_get_attendees` returns a `GSList` of `ECalComponentAttendee *`, with `e_cal_component_attendee_get_value`, `get_cn`, `get_cutype`, `get_role`, `get_partstat`, and `get_rsvp` accessors. `e_cal_component_set_attendees(comp, NULL)` clears all `ATTENDEE:` lines.
+  - `e_cal_component_get_priority` returns an integer (1..9, or 0/`PRIORITY:0`, with -1 clearing `PRIORITY:` in EDS component).
+  - `e_cal_component_get_sequence` returns sequence >= 0, and `e_cal_component_set_sequence` modifies it in place.
+  - `e_cal_component_get_percent_complete` returns 0..100 (-1 clears `PERCENT-COMPLETE:`).
+  - `e_cal_component_get_geo` returns `ICalGeo *`, with `i_cal_geo_get_lat` and `i_cal_geo_get_lon`. `e_cal_component_set_geo` sets new `ICalGeo`, and setting NULL removes `GEO:`.
+- In `rust/crates/eds-sys/build.rs`:
+  - Allowlisted `i_cal_geo_.*` functions.
+- In `rust/crates/eds-sys/tests/ical.rs`:
+  - Added `ecalcomponent_organizer_and_attendees_in_eds`: verifies organizer and attendee accessors, CN modification, and NULL clearing.
+  - Added `ecalcomponent_priority_sequence_percent_complete_and_geo_in_eds`: verifies priority, sequence, percent complete, and GEO coordinates accessors, in-place modification, and clearing via -1 / NULL.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-ical/tests/event.rs`:
+  - Added `event_with_chair_and_multiple_participants_emits_accurate_attendees_and_organizer`: verifies owner, chair, attendee, optional, and non-participant roles with accepted, declined, and tentative statuses emit accurate RFC 5545 `ORGANIZER` and `ATTENDEE` lines.
+  - Added `event_with_priority_and_geo_coordinates_roundtrips_faithfully`: verifies that an event carrying priority and a Location with coordinates roundtrips faithfully to iCalendar `PRIORITY` and `LOCATION` with `X-JMAP-KEY`.
+- In `jmap-cal-sync/tests/save.rs`:
+  - Added `editing_priority_preserves_unmodeled_participants_and_geo_coordinates`: verifies that modifying priority produces a targeted patch while preserving unmodeled participants, locations with coordinates, and links intact on the server.
+  - Added `editing_unrelated_field_preserves_participants_priority_and_geo_locations`: verifies that modifying summary preserves participant lists, priority, and location coordinates intact.
+
+Tests: 1059 in the default set (up 4: 242 in `jmap-ical/tests/event.rs`, 122 in `jmap-cal-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/ical.rs` (12 total) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1059 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+

@@ -6723,3 +6723,79 @@ fn event_with_custom_privacy_and_freebusy_drops_unmodeled_lines_gracefully() {
     assert_eq!(parsed.privacy, None);
     assert_eq!(parsed.free_busy_status, None);
 }
+
+#[test]
+fn event_with_chair_and_multiple_participants_emits_accurate_attendees_and_organizer() {
+    let ics = event_to_ical(&attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice Owner", json!({
+            "roles": {"owner": true, "chair": true, "attendee": true},
+            "participationStatus": "accepted",
+        })),
+        "bob": guest("mailto:bob@example.com", "Bob Engineer", json!({
+            "roles": {"attendee": true},
+            "participationStatus": "declined",
+        })),
+        "carol": guest("mailto:carol@example.com", "Carol Observer", json!({
+            "roles": {"informational": true},
+            "participationStatus": "tentative",
+        })),
+    })));
+
+    assert_eq!(
+        content_line(&ics, "ORGANIZER"),
+        "ORGANIZER;CN=Alice Owner:mailto:alice@example.com",
+        "{ics}"
+    );
+
+    let attendees: Vec<String> = ics
+        .replace("\r\n ", "")
+        .split("\r\n")
+        .filter(|line| line.starts_with("ATTENDEE"))
+        .map(str::to_owned)
+        .collect();
+
+    assert_eq!(
+        attendees,
+        [
+            "ATTENDEE;CN=Alice Owner;ROLE=CHAIR;PARTSTAT=ACCEPTED:mailto:alice@example.com",
+            "ATTENDEE;CN=Bob Engineer;ROLE=REQ-PARTICIPANT;PARTSTAT=DECLINED:mailto:bob@example.com",
+            "ATTENDEE;CN=Carol Observer;ROLE=NON-PARTICIPANT;PARTSTAT=TENTATIVE:mailto:carol@example.com",
+        ],
+        "{ics}"
+    );
+}
+
+#[test]
+fn event_with_priority_and_geo_coordinates_roundtrips_faithfully() {
+    let mut event = CalendarEvent {
+        title: Some("Global Standup".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        priority: Some(1),
+        ..CalendarEvent::default()
+    };
+    event.locations = Some(
+        [(
+            "loc1".to_owned(),
+            json!({
+                "@type": "Location",
+                "name": "Berlin HQ",
+                "coordinates": "geo:52.520008,13.404954",
+            }),
+        )]
+        .into(),
+    );
+
+    let ics = event_to_ical(&event);
+    assert_eq!(content_line(&ics, "PRIORITY"), "PRIORITY:1");
+    assert_eq!(
+        content_line(&ics, "LOCATION"),
+        "LOCATION;X-JMAP-KEY=loc1:Berlin HQ"
+    );
+
+    let parsed = ical_to_event(&ics).expect("parse");
+    assert_eq!(parsed.priority, Some(1));
+    let locs = parsed.locations.expect("locations");
+    assert_eq!(locs["loc1"]["name"], json!("Berlin HQ"));
+}
