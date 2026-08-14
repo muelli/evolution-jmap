@@ -22848,4 +22848,48 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-fortieth session)
 
-Claiming Camel MIME part, multipart container, and transfer encoding EDS verification, along with multipart serialization and attachment import verification in jmap-mail and jmap-mail-sync.
+**Verifying Camel MIME part (`CamelMimePart`), multipart container (`CamelMultipart`), and transfer encoding (`CamelTransferEncoding`) in EDS, multipart CRLF serialization in `jmap-mail`, and multipart import with attachment mapping in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel MIME part operations (`camel_mime_part_new`, `camel_mime_part_set_description`, `camel_mime_part_get_description`, `camel_mime_part_set_disposition`, `camel_mime_part_get_disposition`, `camel_mime_part_set_filename`, `camel_mime_part_get_filename`, `camel_mime_part_set_content_id`, `camel_mime_part_get_content_id`, `camel_mime_part_set_content_location`, `camel_mime_part_get_content_location`, `camel_mime_part_set_encoding`, `camel_mime_part_get_encoding`, `camel_mime_part_set_content`), `CamelMultipart` multi-part container operations (`camel_multipart_new`, `camel_multipart_set_boundary`, `camel_multipart_get_boundary`, `camel_multipart_set_preface`, `camel_multipart_get_preface`, `camel_multipart_set_postface`, `camel_multipart_get_postface`, `camel_multipart_add_part`, `camel_multipart_get_part`, `camel_multipart_get_number`), and `CamelTransferEncoding` enum constants (`CAMEL_TRANSFER_ENCODING_DEFAULT` 0, `7BIT` 1, `8BIT` 2, `BASE64` 3, `QUOTEDPRINTABLE` 4, `BINARY` 5, `UUENCODE` 6, `CAMEL_TRANSFER_NUM_ENCODINGS` 7) and `CAMEL_MAX_PREVIEW_LENGTH` (256). In addition, it verifies multipart/mixed and multipart/alternative RFC 5322 CRLF message serialization and roundtripping in `jmap-mail`, and multipart message import and attachment summary extraction in `jmap-mail-sync`.
+
+**EDS 3.52 Camel MIME part, multipart, and transfer encoding measurement:**
+- Probed `camel-1.2` 3.52 for MIME part, multipart, and transfer encoding behaviors:
+  - `CamelMimePart`:
+    - Allowlisted `"camel_mime_part_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified `camel_mime_part_set_description` and `camel_mime_part_get_description`.
+    - Verified `camel_mime_part_set_disposition` and `camel_mime_part_get_disposition` (e.g. `attachment`).
+    - Verified `camel_mime_part_set_filename` and `camel_mime_part_get_filename`.
+    - Verified `camel_mime_part_set_content_id` and `camel_mime_part_get_content_id` (Camel expects an unbracketed ID and wraps it in `Content-ID: <...>`, returning the inner identifier).
+    - Verified `camel_mime_part_set_content_location` and `camel_mime_part_get_content_location`.
+    - Verified `camel_mime_part_set_encoding` and `camel_mime_part_get_encoding` across `BASE64` and `QUOTEDPRINTABLE`.
+    - Verified `camel_mime_part_set_content` and medium content retrieval with `camel_data_wrapper_get_mime_type`.
+  - `CamelMultipart`:
+    - Allowlisted `"CamelMultipart.*"` and `"camel_multipart_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMultipart` and `CamelMultipartClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified `camel_multipart_set_boundary` and `camel_multipart_get_boundary`.
+    - Verified `camel_multipart_set_preface` / `get_preface` and `camel_multipart_set_postface` / `get_postface`.
+    - Verified `camel_multipart_add_part`, `camel_multipart_get_part` by index, and `camel_multipart_get_number` counting.
+    - Verified attaching a multipart container to a `CamelMimeMessage` via `camel_medium_set_content`.
+  - `CamelTransferEncoding` & Preview Constants:
+    - Allowlisted `"CamelTransferEncoding"` and `"CAMEL_MAX_PREVIEW_LENGTH"` in `rust/crates/eds-sys/build.rs`.
+    - Verified enum values: `DEFAULT` (0), `7BIT` (1), `8BIT` (2), `BASE64` (3), `QUOTEDPRINTABLE` (4), `BINARY` (5), `UUENCODE` (6), `NUM_ENCODINGS` (7), and `CAMEL_MAX_PREVIEW_LENGTH` (256).
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_mime_part_headers_disposition_and_encoding_in_eds`: verifies MIME part metadata, disposition, filenames, content IDs, encodings, and content setting.
+  - Added `camel_multipart_container_and_part_management_in_eds`: verifies multipart container allocation, custom boundaries, preface/postface headers, multi-part addition, and indexing.
+  - Added `camel_transfer_encoding_constants_in_eds`: verifies transfer encoding enum values and max preview length.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/mime.rs`:
+  - Added `multipart_mixed_message_with_pdf_attachment_serializes_with_crlf_and_parses_back_intact`: verifies that multipart messages with attachments serialize with CRLF line endings across all boundary lines and headers without bare LFs or double CRs, and roundtrip cleanly.
+  - Added `multipart_alternative_message_with_html_and_plain_text_preserves_structure`: verifies that alternative HTML and plain text bodies preserve MIME parts without losing line formatting.
+- In `rust/crates/jmap-mail-sync/tests/import.rs`:
+  - Added `importing_a_multipart_message_with_attachment_and_html_alternate_preserves_content`: verifies that importing a multipart/mixed message containing multipart/alternative text/HTML and an application/pdf attachment succeeds, correctly indexes headers and size, and preserves the payload byte-for-byte.
+- In `rust/crates/jmap-mail-sync/tests/summary.rs`:
+  - Added `summary_with_attachments_and_forwarded_flag_retains_all_attributes`: verifies that `has_attachment = true`, forwarded flags, seen flags, and user keywords are all preserved on the summary row.
+
+Tests: 1107 in the default set (up 2: 19 in `jmap-mail-sync/tests/import.rs`, 19 in `jmap-mail-sync/tests/summary.rs`), plus 2 new tests in `jmap-mail/tests/mime.rs` (8 in file, 337 across crate), 3 new tests in `eds-sys/tests/camel.rs` (27 in file, 82 across crate), 1 new layout assertion in `eds-sys/tests/layout.rs`, and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1107 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
