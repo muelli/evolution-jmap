@@ -14,6 +14,9 @@ PROMPT_FILE="$HOME/evolution-jmap/infra/night-shift/night-prompt.md"
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
 
+# Log every exit so it's obvious where the driver terminated.
+trap 'log "=== agy night shift exiting (exit=$?, line=$LINENO) ==="' EXIT
+
 # Parse "Resets in 1h39m50s" (or "39m50s", "50s") into seconds.
 parse_reset_seconds() {
     local str="$1"
