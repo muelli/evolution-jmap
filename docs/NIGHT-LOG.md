@@ -21684,3 +21684,8 @@ between the Home and Work slots at all is unknown; a `VALUE=uri` photo's renderi
 unmeasured; what Evolution's contact editor writes for a replaced photo, and into a
 cleared field, is inferred rather than measured; and the `jmap-mail` `transport.rs`
 hang is still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-14 (two-hundred-and-thirteenth session)
+
+Claiming: fix example-module clippy manual_c_str_literals warnings and link manual test recipes in README.
+
