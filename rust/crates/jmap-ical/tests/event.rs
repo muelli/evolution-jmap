@@ -6555,3 +6555,76 @@ fn an_edited_instance_carries_the_links_of_the_series() {
         "{ics}"
     );
 }
+
+#[test]
+fn multiple_attachments_and_images_roundtrip_with_fmttype_size_and_display() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:multi-link-1\r\n\
+SUMMARY:Multi Link Event\r\n\
+DTSTART:20260115T130000Z\r\n\
+ATTACH;FMTTYPE=application/pdf;SIZE=51200;X-JMAP-KEY=l1:https://files.example.com/agenda.pdf\r\n\
+ATTACH;FMTTYPE=text/plain;SIZE=1024;X-JMAP-KEY=l2:https://files.example.com/notes.txt\r\n\
+IMAGE;VALUE=URI;DISPLAY=BADGE;X-JMAP-KEY=img1:https://files.example.com/logo.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("a calendar");
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 3, "{links:?}");
+    assert_eq!(
+        links["l1"]["href"],
+        json!("https://files.example.com/agenda.pdf")
+    );
+    assert_eq!(links["l1"]["contentType"], json!("application/pdf"));
+    assert_eq!(links["l1"]["size"], json!(51_200));
+    assert_eq!(
+        links["l2"]["href"],
+        json!("https://files.example.com/notes.txt")
+    );
+    assert_eq!(links["l2"]["contentType"], json!("text/plain"));
+    assert_eq!(links["l2"]["size"], json!(1024));
+    assert_eq!(
+        links["img1"]["href"],
+        json!("https://files.example.com/logo.png")
+    );
+    assert_eq!(links["img1"]["rel"], json!("icon"));
+    assert_eq!(links["img1"]["display"], json!("badge"));
+
+    let rendered = event_to_ical(&event);
+    assert_eq!(
+        attachments(&rendered),
+        [
+            "ATTACH;FMTTYPE=application/pdf;SIZE=51200;X-JMAP-KEY=l1:https://files.example.com/agenda.pdf",
+            "ATTACH;FMTTYPE=text/plain;SIZE=1024;X-JMAP-KEY=l2:https://files.example.com/notes.txt",
+        ],
+        "{rendered}"
+    );
+    assert_eq!(
+        images(&rendered),
+        ["IMAGE;VALUE=URI;DISPLAY=BADGE;X-JMAP-KEY=img1:https://files.example.com/logo.png"],
+        "{rendered}"
+    );
+}
+
+#[test]
+fn reading_vevent_with_omitted_attachment_yields_only_present_links() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+BEGIN:VEVENT\r\n\
+UID:planning-1\r\n\
+DTSTART:20260115T130000Z\r\n\
+ATTACH;X-JMAP-KEY=l1:https://files.example.com/retained.pdf\r\n\
+IMAGE;VALUE=URI;DISPLAY=GRAPHIC;X-JMAP-KEY=img1:https://files.example.com/banner.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("a calendar");
+    let links = event.links.expect("links");
+    assert_eq!(links.len(), 2, "{links:?}");
+    assert!(links.contains_key("l1"));
+    assert!(links.contains_key("img1"));
+    assert_eq!(links["img1"]["display"], json!("graphic"));
+}

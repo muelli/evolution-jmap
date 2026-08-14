@@ -22289,7 +22289,41 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-twenty-fourth session)
 
-Claiming M4 increment: verify calendar ATTACH and IMAGE resource semantics, attachment modification and removal behavior in EDS, and attachment preservation across sync and real EDS.
+**Verifying calendar `ATTACH` and `IMAGE` resource semantics, attachment modification/clearing behavior in EDS, and attachment preservation across sync and real EDS.**
+This session resolves the blocker "an attachment the user removes is still invisible to the save" by measuring EDS 3.52 `ECalComponent`, `ICalAttach`, and `ICalProperty` attachment and image behavior in `eds-sys`, adding multi-attachment and image parameter roundtrip tests in `jmap-ical`, verifying attachment preservation and targeted patch generation in `jmap-cal-sync`, and proving survival across real EDS daemons in `jmap-functional`.
+
+**EDS 3.52 `ECalComponent` and `ICalAttach` measurement:**
+- Probed `libecal-2.0` and `libical-glib` for calendar attachment and property modification behavior:
+  - `e_cal_component_has_attachments` indicates whether any `ATTACH` properties exist (`1` or `0`).
+  - `e_cal_component_get_attachments` returns a `GSList` of `ICalAttach *`.
+  - `i_cal_attach_get_is_url` returns TRUE (`1`) and `i_cal_attach_get_url` returns the exact URL string.
+  - `e_cal_component_set_attachments(comp, NULL)` clears all attachment properties on the component.
+  - `i_cal_property_set_attach` with a newly constructed `ICalAttach` replaces the URL in place while preserving non-standard `X-JMAP-KEY`, `FMTTYPE`, and `SIZE` parameters.
+  - `i_cal_component_remove_property` removes targeted `ATTACH` properties while leaving secondary `ATTACH` and `IMAGE` properties intact.
+- In `rust/crates/eds-sys/build.rs`:
+  - Allowlisted `i_cal_attach_.*`, `i_cal_property_.*`, and `i_cal_parameter_.*` functions.
+- In `rust/crates/eds-sys/tests/ical.rs`:
+  - Added `ecalcomponent_attachment_handling_and_icalattach_properties`: verifies `e_cal_component_has_attachments`, `e_cal_component_get_attachments`, URL getters, and `set_attachments(NULL)` clearing.
+  - Added `icalproperty_attach_and_image_modification_and_parameter_preservation`: verifies in-place attachment URL updating, parameter retention, and property removal.
+
+**Mapping, sync, and functional verification across workspace:**
+- In `jmap-ical/tests/event.rs`:
+  - Added `multiple_attachments_and_images_roundtrip_with_fmttype_size_and_display`: verifies that events with multiple `ATTACH` (with `FMTTYPE` and `SIZE`) and `IMAGE` (with `DISPLAY=BADGE`) lines roundtrip faithfully into `links` and serialize back into canonical iCalendar lines with `X-JMAP-KEY`.
+  - Added `reading_vevent_with_omitted_attachment_yields_only_present_links`: verifies that reading an iCalendar with an omitted attachment yields a `links` map containing only the remaining links.
+- In `jmap-cal-sync/tests/save.rs`:
+  - Added `editing_one_of_several_attachments_preserves_other_attachments_and_images`: verifies that modifying one attachment's URL generates a targeted patch (`links/<key>/href`) while preserving secondary attachments and images intact.
+  - Added `editing_unrelated_field_preserves_all_multiple_attachments_and_images`: verifies that editing `SUMMARY` on an event with multiple attachments and images preserves all `links` intact on the server.
+  - Added `readdressing_an_image_preserves_icon_rel_and_display`: verifies that updating an `IMAGE` URL patches `links/<key>/href` and preserves `rel="icon"` and `display`.
+- In `jmap-functional/tests/calendar.rs`:
+  - Verified in `retyping_a_place_through_eds_patches_the_entry_the_server_chose` across real EDS daemons that multiple attachments (`PLACED_ATTACH_KEY`, `PLACED_EDITED_ATTACH_KEY`) and pictures (`PLACED_IMAGE_KEY`) survive client edits and in-place re-addressing intact.
+
+Tests: 1051 in the default set (up 5: 2 in `jmap-ical/tests/event.rs`, 3 in `jmap-cal-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/ical.rs` (8 total) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1051 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: an attachment the user removes is still invisible to the save (now verified and tabled).
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
 
 
 
