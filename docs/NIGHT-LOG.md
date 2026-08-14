@@ -21687,5 +21687,45 @@ hang is still an open design question with a lock-order hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-thirteenth session)
 
-Claiming: fix example-module clippy manual_c_str_literals warnings and link manual test recipes in README.
+**Modernizing `example-module` FFI literals and connecting manual-test recipes.**
+This session resolves two long-standing papercuts from the blocker list: the 26
+`manual_c_str_literals` clippy warnings in `example-module` under Rust 1.97 / 2024
+edition, and the unlinked manual-test recipes in `README.md`.
 
+**C string literals on Rust 1.97.** `example-module` constructed nul-terminated
+C strings with `b"...\0".as_ptr() as *const c_char`. In the 2024 edition / Rust 1.97,
+clippy's `manual_c_str_literals` lint flags these as anti-patterns in favor of `c"..."`
+literals. All action names, stock IDs, menu labels, tooltips, gettext package
+identifiers, signal names, private data keys, and GObject type names in
+`msg_composer_extension.rs` and `shell_view_extension.rs` now use standard `c"..."`
+literals (`&CStr`), cleanly removing all 26 warnings. As a result,
+`cargo clippy --workspace --all-targets --locked -- -D warnings` now runs cleanly
+across the entire repository.
+
+**Linking all manual test recipes in README.** `README.md` previously only linked
+`docs/manual-test-book-backend.md`. It now links all four manual-test recipes
+side-by-side: address book (`docs/manual-test-book-backend.md`), calendar
+(`docs/manual-test-cal-backend.md`), mail (`docs/manual-test-mail-provider.md`), and
+collection (`docs/manual-test-collection-backend.md`).
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1012 tests,
+and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green
+including all 4 functional test legs and Debian packaging tests.
+
+No milestone tag. Removed from the blocker list: `example-module` does not pass clippy
+(1.97) on unmodified master, 26 `manual_c_str_literals`; the manual-test recipes are
+unlinked from the README. Unchanged blockers: the calcard directive's two emitters are
+still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in
+real Evolution**; `docs/MILESTONES.md` does not exist, so the M8 tag is still
+unwritten; `jmap-mail`'s rustdoc is dirty; an attachment the user removes is still
+invisible to the save; whether Evolution renders an `IMAGE` is unmeasured; the
+multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified; the two
+`LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone are
+still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's rendering is
+unmeasured; what Evolution's contact editor writes for a replaced photo, and into a
+cleared field, is inferred rather than measured; and the `jmap-mail` `transport.rs`
+hang is still an open design question with a lock-order hypothesis attached.

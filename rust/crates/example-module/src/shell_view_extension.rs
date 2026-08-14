@@ -5,6 +5,7 @@
 //! extension adds view-specific menu/toolbar items; when it goes inactive they
 //! are removed again.
 
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -20,7 +21,7 @@ static PARENT_CLASS: AtomicUsize = AtomicUsize::new(0);
 
 // ── Per-instance private data ─────────────────────────────────────────────────
 
-const PRIV_KEY: &[u8] = b"m-shell-view-ext-priv\0";
+const PRIV_KEY: &CStr = c"m-shell-view-ext-priv";
 
 /// Rust-managed per-instance data, attached via `g_object_set_data_full`.
 struct Private {
@@ -45,7 +46,7 @@ unsafe extern "C" fn free_private(ptr: *mut c_void) {
 /// `obj` must be a live `MShellViewExtension` instance with private data
 /// already attached.
 unsafe fn get_private(obj: *mut ffi::GObject) -> &'static mut Private {
-    let ptr = ffi::g_object_get_data(obj, PRIV_KEY.as_ptr() as *const c_char);
+    let ptr = ffi::g_object_get_data(obj, PRIV_KEY.as_ptr());
     debug_assert!(!ptr.is_null(), "MShellViewExtension: private data is null");
     &mut *(ptr as *mut Private)
 }
@@ -89,7 +90,7 @@ const CALENDAR_UI_DEF: &str = "\
 </popup>\
 \0";
 
-const GETTEXT_PACKAGE: &[u8] = b"example-module\0";
+const GETTEXT_PACKAGE: &CStr = c"example-module";
 
 // ── Action callbacks ──────────────────────────────────────────────────────────
 
@@ -144,31 +145,30 @@ unsafe fn init_view_ui(
 
     if ffi::g_type_is_a(view_gtype, ffi::e_mail_shell_view_get_type()) != 0 {
         // ── Mail view ─────────────────────────────────────────────────────────
-        let action_group =
-            ffi::e_shell_window_get_action_group(shell_window, b"mail\0".as_ptr() as *const c_char);
+        let action_group = ffi::e_shell_window_get_action_group(shell_window, c"mail".as_ptr());
 
         let entries: [ffi::GtkActionEntry; 2] = [
             ffi::GtkActionEntry {
-                name: b"my-mail-ui-folder-action\0".as_ptr() as *const c_char,
-                stock_id: b"folder-new\0".as_ptr() as *const c_char,
-                label: b"M_y Maildir Folder Action...\0".as_ptr() as *const c_char,
+                name: c"my-mail-ui-folder-action".as_ptr(),
+                stock_id: c"folder-new".as_ptr(),
+                label: c"M_y Maildir Folder Action...".as_ptr(),
                 accelerator: std::ptr::null(),
-                tooltip: b"My Maildir Folder Action\0".as_ptr() as *const c_char,
+                tooltip: c"My Maildir Folder Action".as_ptr(),
                 callback: Some(action_mail_folder_cb),
             },
             ffi::GtkActionEntry {
-                name: b"my-mail-ui-message-action\0".as_ptr() as *const c_char,
-                stock_id: b"document-new\0".as_ptr() as *const c_char,
-                label: b"M_y Message Action...\0".as_ptr() as *const c_char,
+                name: c"my-mail-ui-message-action".as_ptr(),
+                stock_id: c"document-new".as_ptr(),
+                label: c"M_y Message Action...".as_ptr(),
                 accelerator: std::ptr::null(),
-                tooltip: b"My Message Action\0".as_ptr() as *const c_char,
+                tooltip: c"My Message Action".as_ptr(),
                 callback: Some(action_mail_message_cb),
             },
         ];
 
         ffi::e_action_group_add_actions_localized(
             action_group,
-            GETTEXT_PACKAGE.as_ptr() as *const c_char,
+            GETTEXT_PACKAGE.as_ptr(),
             entries.as_ptr(),
             entries.len() as c_uint,
             shell_view as *mut c_void,
@@ -177,33 +177,30 @@ unsafe fn init_view_ui(
         Some(MAIL_UI_DEF)
     } else if ffi::g_type_is_a(view_gtype, ffi::e_cal_shell_view_get_type()) != 0 {
         // ── Calendar view ─────────────────────────────────────────────────────
-        let action_group = ffi::e_shell_window_get_action_group(
-            shell_window,
-            b"calendar\0".as_ptr() as *const c_char,
-        );
+        let action_group = ffi::e_shell_window_get_action_group(shell_window, c"calendar".as_ptr());
 
         let entries: [ffi::GtkActionEntry; 2] = [
             ffi::GtkActionEntry {
-                name: b"my-calendar-ui-event-action\0".as_ptr() as *const c_char,
-                stock_id: b"folder-new\0".as_ptr() as *const c_char,
-                label: b"M_y Event Action...\0".as_ptr() as *const c_char,
+                name: c"my-calendar-ui-event-action".as_ptr(),
+                stock_id: c"folder-new".as_ptr(),
+                label: c"M_y Event Action...".as_ptr(),
                 accelerator: std::ptr::null(),
-                tooltip: b"My Event Action\0".as_ptr() as *const c_char,
+                tooltip: c"My Event Action".as_ptr(),
                 callback: Some(action_calendar_event_cb),
             },
             ffi::GtkActionEntry {
-                name: b"my-calendar-ui-action\0".as_ptr() as *const c_char,
-                stock_id: b"document-new\0".as_ptr() as *const c_char,
-                label: b"M_y Calendar Action...\0".as_ptr() as *const c_char,
+                name: c"my-calendar-ui-action".as_ptr(),
+                stock_id: c"document-new".as_ptr(),
+                label: c"M_y Calendar Action...".as_ptr(),
                 accelerator: std::ptr::null(),
-                tooltip: b"My Calendar Action\0".as_ptr() as *const c_char,
+                tooltip: c"My Calendar Action".as_ptr(),
                 callback: Some(action_calendar_menu_cb),
             },
         ];
 
         ffi::e_action_group_add_actions_localized(
             action_group,
-            GETTEXT_PACKAGE.as_ptr() as *const c_char,
+            GETTEXT_PACKAGE.as_ptr(),
             entries.as_ptr(),
             entries.len() as c_uint,
             shell_view as *mut c_void,
@@ -288,7 +285,7 @@ unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     let cb: unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject) = shell_view_toggled_cb;
     ffi::g_signal_connect_data(
         extensible as *mut c_void,
-        b"toggled\0".as_ptr() as *const c_char,
+        c"toggled".as_ptr(),
         Some(std::mem::transmute::<
             unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject),
             unsafe extern "C" fn(),
@@ -342,7 +339,7 @@ unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
     });
     ffi::g_object_set_data_full(
         obj,
-        PRIV_KEY.as_ptr() as *const c_char,
+        PRIV_KEY.as_ptr(),
         Box::into_raw(priv_data) as *mut c_void,
         Some(free_private),
     );
@@ -378,7 +375,7 @@ pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     let type_id = ffi::g_type_module_register_type(
         type_module,
         parent_type,
-        b"MShellViewExtension\0".as_ptr() as *const c_char,
+        c"MShellViewExtension".as_ptr(),
         &type_info,
         0, // G_TYPE_FLAG_NONE
     );
