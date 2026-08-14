@@ -22811,5 +22811,38 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirty-ninth session)
 
-Claiming Camel URL operations, folder change info batching and concatenation, and Camel error domain quarks EDS verification, along with change tracking and delta batching verification in jmap-mail and jmap-mail-sync.
+**Verifying Camel URL (`CamelURL`), folder change batching (`CamelFolderChangeInfo`), and Camel error domain quarks in EDS, subfolder property retention in `jmap-mail`, and mixed delta batching in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel URL operations (`camel_url_new`, `camel_url_to_string`, `camel_url_set_param`, `camel_url_get_param`, `camel_url_copy`, `camel_url_equal`, `camel_url_hash`, `camel_url_free`), `CamelFolderChangeInfo` multi-event batching & concatenation (`camel_folder_change_info_add_uid`, `camel_folder_change_info_remove_uid`, `camel_folder_change_info_change_uid`, `camel_folder_change_info_recent_uid`, `camel_folder_change_info_cat`, `camel_folder_change_info_clear`, `camel_folder_change_info_get_added_uids`, `camel_folder_change_info_get_removed_uids`, `camel_folder_change_info_get_changed_uids`, `camel_folder_change_info_get_recent_uids`), and Camel error domain quarks (`camel_folder_error_quark`, `camel_service_error_quark`, `camel_store_error_quark`) and error code constants. In addition, it verifies nested subfolder property retention and mailbox ID invariants in `jmap-mail`, and mixed message delta batching across multi-step mutations in `jmap-mail-sync`.
+
+**EDS 3.52 Camel URL, change batching, and error quark measurement:**
+- Probed `camel-1.2` 3.52 for URL, change info concatenation, and error domain behaviors:
+  - `CamelURL`:
+    - Allowlisted `"camel_url_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified `camel_url_new` parsing protocol, user, host, port, path, and semicolon-delimited parameters.
+    - Verified `camel_url_get_param` and `camel_url_set_param` parameter lookups and insertions.
+    - Verified `camel_url_copy` cloning, `camel_url_equal` equality comparison, `camel_url_hash` hashing, and `camel_url_to_string` serialization.
+  - `CamelFolderChangeInfo`:
+    - Verified multi-category UID mutations (added, removed, changed, recent).
+    - Verified `camel_folder_change_info_cat` concatenating separate change info batches without dropping prior entries.
+    - Verified `camel_folder_change_info_clear` resetting change state back to unchanged.
+  - Camel Error Domains & Codes:
+    - Verified that `camel_folder_error_quark()`, `camel_service_error_quark()`, and `camel_store_error_quark()` are non-zero, pairwise distinct from each other, and distinct from `e_client_error_quark()`, `e_book_client_error_quark()`, and `e_cal_client_error_quark()`.
+    - Verified error code values for `CAMEL_FOLDER_ERROR_INVALID` (0), `CAMEL_FOLDER_ERROR_INVALID_STATE` (1), `CAMEL_FOLDER_ERROR_INVALID_UID` (6), `CAMEL_SERVICE_ERROR_INVALID` (0), `CAMEL_SERVICE_ERROR_URL_INVALID` (1), `CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE` (3), `CAMEL_STORE_ERROR_INVALID` (0), `CAMEL_STORE_ERROR_NO_FOLDER` (1).
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_url_lifecycle_and_parameter_operations_in_eds`: verifies URL parsing, parameter inspection/mutation, cloning, equality, hash, string formatting, and cleanup.
+  - Added `camel_folder_change_info_batching_and_concatenation_in_eds`: verifies multi-UID recording, batch concatenation via `camel_folder_change_info_cat`, array access, and clearing.
+  - Added `camel_error_quarks_and_distinct_domains_in_eds`: verifies distinct error quarks and error code constants across Camel folder, service, and store domains.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/folder.rs`:
+  - Added `folder_properties_and_custom_subfolder_nesting`: verifies that nested `CamelJmapFolder` instances faithfully retain full path (`Archive/2026/Q1`), display name (`Q1`), parent store, and mailbox ID (`MbxSub99`).
+- In `rust/crates/jmap-mail-sync/tests/updates.rs`:
+  - Added `mixed_delta_batches_with_concurrent_additions_removals_and_flag_updates`: verifies that complex deltas with concurrent deliveries, keyword updates, moved messages, and destroyed messages are partitioned into `present` (with correct seen/flagged state) and `absent` sets.
+
+Tests: 1105 in the default set (up 1: 18 in `jmap-mail-sync/tests/updates.rs`), plus 1 new test in `jmap-mail/tests/folder.rs` (7 in file, 335 across crate), 3 new tests in `eds-sys/tests/camel.rs` (24 in file, 79 across crate), and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1105 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
