@@ -2958,3 +2958,57 @@ fn slotted_conventional_im_handles_are_patched_correctly() {
     assert_eq!(services["s_msn"].user.as_deref(), Some("bob@example.org"));
     assert_eq!(services["s_yahoo"].user.as_deref(), Some("carol_yahoo_2"));
 }
+
+#[test]
+fn editing_unrelated_field_preserves_year_only_birthday_and_deathday() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "anniversaries": {
+                "y1": {"kind": "birth", "date": {"year": 1964}},
+                "y2": {"kind": "death", "date": {"year": 2019, "month": 10, "day": 15}},
+                "y3": {"kind": "wedding", "date": {"year": 1996, "month": 8, "day": 3}},
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("BDAY"), "{vcard}");
+    assert!(!vcard.contains("death"), "{vcard}");
+    assert!(
+        vcard.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y3:1996-08-03\r\n"),
+        "{vcard}"
+    );
+
+    // Edit the wedding anniversary and add a note
+    let edited = vcard.replace("1996-08-03", "1996-08-04").replace(
+        "END:VCARD\r\n",
+        "NOTE:Preserve unmodeled dates\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    assert_eq!(
+        anniversaries["y1"].date,
+        Some(json!({"year": 1964})),
+        "year-only birthday was mangled: {anniversaries:?}"
+    );
+    assert_eq!(anniversaries["y1"].kind, "birth");
+    assert_eq!(
+        anniversaries["y2"].date,
+        Some(json!({"year": 2019, "month": 10, "day": 15})),
+        "deathday was mangled: {anniversaries:?}"
+    );
+    assert_eq!(anniversaries["y2"].kind, "death");
+    assert_eq!(
+        anniversaries["y3"].date,
+        Some(json!({"year": 1996, "month": 8, "day": 4})),
+        "wedding date was not updated: {anniversaries:?}"
+    );
+    assert_eq!(anniversaries["y3"].kind, "wedding");
+    assert_eq!(anniversaries.len(), 3);
+}
