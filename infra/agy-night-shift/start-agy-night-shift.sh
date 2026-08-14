@@ -47,8 +47,10 @@ while true; do
     log "launching agy in autonomous mode with /goal (model: $current_model_name)"
     
     out=$(mktemp)
+    set +e
     agy $model_arg --dangerously-skip-permissions --print-timeout 8h --print "/goal $(cat "$PROMPT_FILE")" > "$out" 2>&1
     status=$?
+    set -e
     cat "$out" >> "$LOG"
     
     duration=$(( $(date +%s) - start ))
@@ -58,11 +60,11 @@ while true; do
     # Exact message observed from agy: "Error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in Xh Ym Zs."
     # Note: agy exits 0 even on quota errors, so we cannot rely on exit code.
     quota_hit=0
-    if grep -qiE "Individual quota reached|usage limit|quota exceeded|resource exhausted|rate limit" "$out"; then
+    if grep -qiE "Individual quota reached|usage limit|quota exceeded|resource exhausted|rate limit" "$out" 2>/dev/null; then
         log "Quota error detected in output."
         quota_hit=1
         # Try to parse the reset time from the message, e.g. "Resets in 1h39m50s."
-        reset_str=$(grep -oiE "Resets in [0-9hms]+" "$out" | head -1 | awk '{print $3}')
+        reset_str=$(grep -oiE "Resets in [0-9hms]+" "$out" 2>/dev/null | head -1 | awk '{print $3}') || true
         if [ -n "$reset_str" ]; then
             QUOTA_RESET_SECONDS=$(parse_reset_seconds "$reset_str")
             log "Quota resets in ${QUOTA_RESET_SECONDS}s (parsed from: $reset_str)."
