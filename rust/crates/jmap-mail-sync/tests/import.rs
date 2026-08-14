@@ -415,3 +415,65 @@ JVBERi0xLjQKJcfsj6IKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAw\r\n\
         .expect("fetched binary source");
     assert_eq!(fetched_source, multipart_bytes);
 }
+
+#[test]
+fn importing_a_message_with_base64_attachment_and_qp_body_preserves_wire_format() {
+    let fixture = Fixture::start();
+    let archive = fixture.seed_mailbox("Archive");
+
+    let wire_bytes = b"From: Developer <dev@example.org>\r\n\
+To: Reviewer <rev@example.org>\r\n\
+Subject: Patch Submission v2\r\n\
+Message-ID: <patch-v2-2026@example.org>\r\n\
+Date: Fri, 16 Jan 2026 18:15:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"_patch_boundary_002_\"\r\n\
+\r\n\
+--_patch_boundary_002_\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: quoted-printable\r\n\
+\r\n\
+Here is the updated patch for review=\r\n\
+ with revised error quark assertions.\r\n\
+\r\n\
+--_patch_boundary_002_\r\n\
+Content-Type: text/x-patch; name=\"changes.diff\"\r\n\
+Content-Disposition: attachment; filename=\"changes.diff\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+LS0tIGEvc3JjL21haW4ucnMKKysrIGIvc3JjL21haW4ucnMKQEAgLTEsMyArMSwzIEBACi0g\r\n\
+b2xkX2Z1bmMoKTsKKyBuZXdfZnVuYygpOwo=\r\n\
+\r\n\
+--_patch_boundary_002_--\r\n";
+
+    let flags = MessageFlags {
+        seen: true,
+        answered: true,
+        ..MessageFlags::default()
+    };
+    let tags = vec!["patches".to_string(), "reviewed".to_string()];
+    let keywords = Keywords::new(&flags, &tags);
+
+    let uid = fixture
+        .sync()
+        .import_message(&archive, wire_bytes.to_vec(), &keywords, None)
+        .expect("imported patch message");
+
+    let row = only(fixture.listing(&archive));
+    assert_eq!(row.uid, uid);
+    assert_eq!(row.subject.as_deref(), Some("Patch Submission v2"));
+    assert_eq!(row.message_id.as_deref(), Some("patch-v2-2026@example.org"));
+    assert_eq!(row.from.len(), 1);
+    assert_eq!(row.from[0].email, "dev@example.org");
+    assert_eq!(row.size as usize, wire_bytes.len());
+    assert!(row.flags.seen);
+    assert!(row.flags.answered);
+    assert!(row.tags.contains(&"patches".to_string()));
+    assert!(row.tags.contains(&"reviewed".to_string()));
+
+    let read_back = fixture
+        .sync()
+        .message_source(&uid)
+        .expect("readable source");
+    assert_eq!(read_back, wire_bytes);
+}

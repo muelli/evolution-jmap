@@ -358,3 +358,107 @@ Content-Type: text/html; charset=\"utf-8\"\r\n\
     let parsed_again = Message::parsed(&written);
     assert_eq!(parsed_again.subject(), "Alternative format announcement");
 }
+
+/// A message with Quoted-Printable encoded body and custom X-headers serializes with
+/// canonical CRLF line endings and roundtrips without bare LFs.
+#[test]
+fn message_with_quoted_printable_body_and_custom_headers_serializes_with_crlf() {
+    let qp_source = b"From: Alice <alice@example.com>\r\n\
+To: Bob <bob@example.com>\r\n\
+Subject: Quoted Printable Encoding Test\r\n\
+Message-ID: <qp-test-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 16:00:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: quoted-printable\r\n\
+X-Custom-Delivery: priority-high\r\n\
+X-Originating-IP: [192.0.2.1]\r\n\
+\r\n\
+This is a test with soft line breaks=\r\n\
+ and accented characters like caf=C3=A9 and na=C3=AFve.\r\n";
+
+    let message = Message::parsed(qp_source);
+    let written = message.written();
+
+    let text = String::from_utf8(written.clone()).expect("the emitter wrote valid utf-8");
+    assert!(text.contains("Subject: Quoted Printable Encoding Test"));
+    assert!(text.contains("X-Custom-Delivery: priority-high"));
+
+    let bare = written
+        .iter()
+        .enumerate()
+        .filter(|(at, byte)| **byte == b'\n' && (*at == 0 || written[at - 1] != b'\r'))
+        .count();
+    assert_eq!(bare, 0, "found {bare} bare LFs in QP output");
+
+    assert!(
+        !written.windows(3).any(|run| run == b"\r\r\n"),
+        "found spurious double CR in output"
+    );
+
+    let roundtripped = Message::parsed(&written);
+    assert_eq!(roundtripped.subject(), "Quoted Printable Encoding Test");
+}
+
+/// A complex nested multipart message containing multipart/alternative and application/octet-stream
+/// attachments serializes with clean CRLF boundaries and preserves all boundary trees.
+#[test]
+fn message_with_nested_multipart_and_mixed_encodings_preserves_tree_structure() {
+    let nested_source = b"From: Reports <reports@example.com>\r\n\
+To: Team <team@example.com>\r\n\
+Subject: Comprehensive Weekly Audit\r\n\
+Message-ID: <audit-weekly-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 17:30:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"_outer_boundary_888_\"\r\n\
+\r\n\
+--_outer_boundary_888_\r\n\
+Content-Type: multipart/alternative; boundary=\"_inner_alt_888_\"\r\n\
+\r\n\
+--_inner_alt_888_\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: 7bit\r\n\
+\r\n\
+Plain audit summary line.\r\n\
+\r\n\
+--_inner_alt_888_\r\n\
+Content-Type: text/html; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: 7bit\r\n\
+\r\n\
+<strong>Rich audit summary</strong>\r\n\
+\r\n\
+--_inner_alt_888_--\r\n\
+\r\n\
+--_outer_boundary_888_\r\n\
+Content-Type: application/octet-stream; name=\"data.bin\"\r\n\
+Content-Disposition: attachment; filename=\"data.bin\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=\r\n\
+\r\n\
+--_outer_boundary_888_--\r\n";
+
+    let message = Message::parsed(nested_source);
+    let written = message.written();
+
+    let text = String::from_utf8(written.clone()).expect("the emitter wrote valid utf-8");
+    assert!(text.contains("Subject: Comprehensive Weekly Audit"));
+    assert!(text.contains("_outer_boundary_888_"));
+    assert!(text.contains("_inner_alt_888_"));
+    assert!(text.contains("data.bin"));
+
+    let bare = written
+        .iter()
+        .enumerate()
+        .filter(|(at, byte)| **byte == b'\n' && (*at == 0 || written[at - 1] != b'\r'))
+        .count();
+    assert_eq!(bare, 0, "found {bare} bare LFs in nested multipart output");
+
+    assert!(
+        !written.windows(3).any(|run| run == b"\r\r\n"),
+        "found spurious double CR in output"
+    );
+
+    let roundtripped = Message::parsed(&written);
+    assert_eq!(roundtripped.subject(), "Comprehensive Weekly Audit");
+}
