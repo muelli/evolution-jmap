@@ -2857,3 +2857,104 @@ fn unmapped_or_unslotted_services_are_preserved_across_saves() {
         Some("sip:vera@example.com")
     );
 }
+
+#[test]
+fn conventional_im_uri_schemes_are_preserved_across_saves() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s_aim": {"service": "AIM", "uri": "aim:goim?screenname=alice"},
+                "s_msn": {"service": "MSN", "uri": "msnim:chat?contact=bob@example.com"},
+                "s_yahoo": {"service": "Yahoo", "uri": "ymsgr:sendim?carol"},
+                "s_icq": {"service": "ICQ", "uri": "icq:message?uin=12345678"},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    // The vCard loaded by EDS contains none of these action/query URIs as X- lines.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("X-AIM"), "{vcard}");
+    assert!(!vcard.contains("X-MSN"), "{vcard}");
+    assert!(!vcard.contains("X-YAHOO"), "{vcard}");
+    assert!(!vcard.contains("X-ICQ"), "{vcard}");
+
+    // An edit elsewhere on the contact (e.g. email) preserves all four onlineServices intact.
+    let edited = vcard.replace("vera@example.com", "vera@example.org");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(
+        services["s_aim"].uri.as_deref(),
+        Some("aim:goim?screenname=alice")
+    );
+    assert_eq!(services["s_aim"].user, None);
+    assert_eq!(
+        services["s_msn"].uri.as_deref(),
+        Some("msnim:chat?contact=bob@example.com")
+    );
+    assert_eq!(services["s_msn"].user, None);
+    assert_eq!(
+        services["s_yahoo"].uri.as_deref(),
+        Some("ymsgr:sendim?carol")
+    );
+    assert_eq!(services["s_yahoo"].user, None);
+    assert_eq!(
+        services["s_icq"].uri.as_deref(),
+        Some("icq:message?uin=12345678")
+    );
+    assert_eq!(services["s_icq"].user, None);
+}
+
+#[test]
+fn slotted_conventional_im_handles_are_patched_correctly() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s_aim": {"service": "AIM", "user": "alice_aim"},
+                "s_icq": {"service": "ICQ", "user": "12345678"},
+                "s_msn": {"service": "MSN", "user": "bob@example.com"},
+                "s_yahoo": {"service": "Yahoo", "user": "carol_yahoo"},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-AIM;X-JMAP-KEY=s_aim;TYPE=HOME:alice_aim\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("X-ICQ;X-JMAP-KEY=s_icq;TYPE=HOME:12345678\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("X-MSN;X-JMAP-KEY=s_msn;TYPE=HOME:bob@example.com\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("X-YAHOO;X-JMAP-KEY=s_yahoo;TYPE=HOME:carol_yahoo\r\n"),
+        "{vcard}"
+    );
+
+    // Edit handles in vCard
+    let edited = vcard
+        .replace("alice_aim", "alice_aim_2")
+        .replace("12345678", "87654321")
+        .replace("bob@example.com", "bob@example.org")
+        .replace("carol_yahoo", "carol_yahoo_2");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services["s_aim"].user.as_deref(), Some("alice_aim_2"));
+    assert_eq!(services["s_icq"].user.as_deref(), Some("87654321"));
+    assert_eq!(services["s_msn"].user.as_deref(), Some("bob@example.org"));
+    assert_eq!(services["s_yahoo"].user.as_deref(), Some("carol_yahoo_2"));
+}
