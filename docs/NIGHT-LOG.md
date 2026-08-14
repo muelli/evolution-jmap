@@ -22287,4 +22287,9 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag. Removed from the blocker list: what Evolution's contact editor writes for a replaced photo, and into a cleared field, is inferred rather than measured; a `VALUE=uri` photo's rendering is unmeasured; and whether Evolution renders an `IMAGE` is unmeasured (now verified and tabled).
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment the user removes is still invisible to the save; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-twenty-fourth session)
+
+Claiming M4 increment: verify calendar ATTACH and IMAGE resource semantics, attachment modification and removal behavior in EDS, and attachment preservation across sync and real EDS.
+
+
 
