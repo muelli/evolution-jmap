@@ -1448,7 +1448,11 @@ fn assert_the_seeded_service_survived(card: &ContactCard) {
     );
 
     let s2 = &services[SEEDED_SKYPE_SERVICE_KEY];
-    assert_eq!(s2.service.as_deref(), Some(SEEDED_SKYPE_SERVICE), "{card:?}");
+    assert_eq!(
+        s2.service.as_deref(),
+        Some(SEEDED_SKYPE_SERVICE),
+        "{card:?}"
+    );
     assert_eq!(
         s2.uri.as_deref(),
         Some(SEEDED_SKYPE_SERVICE_URI),
@@ -1461,7 +1465,11 @@ fn assert_the_seeded_service_survived(card: &ContactCard) {
     );
 
     let s3 = &services[SEEDED_MATRIX_SERVICE_KEY];
-    assert_eq!(s3.service.as_deref(), Some(SEEDED_MATRIX_SERVICE), "{card:?}");
+    assert_eq!(
+        s3.service.as_deref(),
+        Some(SEEDED_MATRIX_SERVICE),
+        "{card:?}"
+    );
     assert_eq!(
         s3.user.as_deref(),
         Some(SEEDED_MATRIX_SERVICE_HANDLE),
@@ -3239,12 +3247,28 @@ fn retyping_a_uri_only_handle_through_eds_writes_the_uri_back() {
     );
 
     let s2 = &services[SEEDED_SKYPE_SERVICE_KEY];
-    assert_eq!(s2.service.as_deref(), Some(SEEDED_SKYPE_SERVICE), "{card:?}");
-    assert_eq!(s2.uri.as_deref(), Some(SEEDED_SKYPE_SERVICE_URI), "{card:?}");
+    assert_eq!(
+        s2.service.as_deref(),
+        Some(SEEDED_SKYPE_SERVICE),
+        "{card:?}"
+    );
+    assert_eq!(
+        s2.uri.as_deref(),
+        Some(SEEDED_SKYPE_SERVICE_URI),
+        "{card:?}"
+    );
 
     let s3 = &services[SEEDED_MATRIX_SERVICE_KEY];
-    assert_eq!(s3.service.as_deref(), Some(SEEDED_MATRIX_SERVICE), "{card:?}");
-    assert_eq!(s3.user.as_deref(), Some(SEEDED_MATRIX_SERVICE_HANDLE), "{card:?}");
+    assert_eq!(
+        s3.service.as_deref(),
+        Some(SEEDED_MATRIX_SERVICE),
+        "{card:?}"
+    );
+    assert_eq!(
+        s3.user.as_deref(),
+        Some(SEEDED_MATRIX_SERVICE_HANDLE),
+        "{card:?}"
+    );
 
     // And what nobody touched at all, asserted for the reason the other legs
     // assert them.

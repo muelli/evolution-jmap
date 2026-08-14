@@ -3370,4 +3370,3 @@ fn editing_one_im_handle_preserves_secondary_im_handles_of_same_and_different_se
     assert_eq!(services["s5"].user.as_deref(), Some("123456"));
     assert_eq!(services["s5"].service.as_deref(), Some("Gadu-Gadu"));
 }
-

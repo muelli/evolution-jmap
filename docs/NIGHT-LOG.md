@@ -22194,4 +22194,57 @@ hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-twenty-second session)
 
-Claiming M3 increment: verify instant-messaging multi-service, HOME/WORK slot semantics, in-place EDS synthetic field editing, and multi-IM preservation across sync and real EDS.
+**Verifying instant-messaging multi-service, HOME/WORK slot semantics, in-place EDS synthetic field editing, and multi-IM preservation across sync and real EDS.**
+This session resolves the blocker "whether the editor lets a handle be moved between the Home and Work slots at all is unknown" by measuring EDS 3.52 `EContact` IM slot and synthetic field behavior in `eds-sys`, adding multi-service and HOME/WORK context mapping tests in `jmap-vcard`, verifying multi-IM preservation and targeted handle patching in `jmap-book-sync`, and proving survival across real EDS daemons in `jmap-functional`.
+
+**EDS 3.52 `EContact` IM slot and synthetic field measurement:**
+- Probed `libebook-contacts-1.2` for instant messaging field behavior across services and slot types:
+  - `E_CONTACT_IM_JABBER_HOME_1` (69), `E_CONTACT_IM_JABBER_WORK_1` (70), `E_CONTACT_IM_MATRIX_HOME_1` (166),
+    `E_CONTACT_IM_SKYPE_WORK_1` (161), and `E_CONTACT_IM_GADUGADU_HOME_1` (81) are synthetic string fields
+    corresponding to `X-JABBER`, `X-MATRIX`, `X-SKYPE`, and `X-GADUGADU` vCard attributes with `TYPE=HOME` or `TYPE=WORK`.
+  - On a vCard holding multiple `X-` IM lines with distinct or shared services and contexts:
+    - `e_contact_get_const` correctly extracts the respective handle for each service and context slot.
+    - `e_contact_set` modifies targeted IM slots in place, preserving `X-JMAP-KEY` on the updated line
+      and leaving secondary IM lines of the same or different services completely intact.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `instant_messaging_multi_service_and_slot_behavior_in_eds`: verifies slot accessors for HOME/WORK
+    across multiple services, in-place modifications, and vCard serialization preservation.
+
+**Mapping, sync, and functional verification across workspace:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `multiple_im_services_with_home_and_work_contexts_map_accurately`: verifies that cards carrying
+    multiple online services across Jabber, Matrix, Skype, and Gadu-Gadu with private/work contexts emit
+    correct `TYPE` and `X-JMAP-KEY` attributes, and round-trip faithfully.
+  - Added `secondary_im_service_of_same_type_is_preserved_when_reconstructed`: verifies that multiple
+    IM lines of the same service (e.g. multiple Jabber entries) are all parsed and preserved.
+  - Added `bare_im_service_lines_without_keys_receive_invented_keys`: verifies that bare `X-` IM lines
+    without keys receive stable invented keys (`s1`, `s2`) on parse.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `saving_contact_with_multiple_im_handles_preserves_all_entries`: verifies that editing an
+    unrelated field on a contact with 5 distinct online services preserves all entries intact on the server.
+  - Added `editing_one_im_handle_preserves_secondary_im_handles_of_same_and_different_services`: verifies
+    that editing one IM handle generates a targeted patch modifying only that entry while preserving all others.
+- In `jmap-functional/tests/address-book.rs`:
+  - Seeded `seed_card` with multiple online services (`SEEDED_SERVICE_KEY` Jabber, `SEEDED_SKYPE_SERVICE_KEY` Skype,
+    `SEEDED_MATRIX_SERVICE_KEY` Matrix).
+  - Updated `assert_the_seeded_service_survived` and `retyping_a_uri_only_handle_through_eds_writes_the_uri_back`
+    to assert across all 10 seeded functional test legs through real EDS daemons that all seeded services survive.
+
+Tests: 1042 in the default set (up 5: 119 in `jmap-vcard/tests/mapping.rs`, 93 in
+`jmap-book-sync/tests/save.rs`), plus 1 new test in `eds-sys/tests/contacts.rs` (10 total) and
+all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1042 tests,
+and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and
+`cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown (now verified and tabled).
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact editor
+writes for a replaced photo, and into a cleared field, is inferred rather than measured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.
