@@ -22730,6 +22730,46 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirty-seventh session)
 
-**Claiming increment:** Camel internet address (`CamelInternetAddress`), MIME message parsing and header inspection (`CamelMimeMessage`), message data caching (`CamelDataCache`), user named flags (`CamelNamedFlags`), and summary `bdata` encoding semantics EDS verification in `eds-sys`, address formatting and envelope extraction verification in `jmap-mail`, and message import header preservation in `jmap-mail-sync`.
+**Verifying Camel internet address (`CamelInternetAddress`), MIME message parsing and header inspection (`CamelMimeMessage`), message data caching (`CamelDataCache`), user named flags (`CamelNamedFlags`), and summary `bdata` encoding semantics in EDS, envelope extraction with quoted names and subaddresses in `jmap-mail`, and message import header preservation in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel internet address lifecycle (`camel_internet_address_new`, `camel_internet_address_add`, `camel_internet_address_get`, `camel_address_format`, `camel_address_remove`, `camel_address_new_clone`), MIME message synchronous parsing and header inspection (`camel_mime_message_new`, `camel_data_wrapper_construct_from_data_sync`, `camel_mime_message_get_subject`, `camel_mime_message_get_message_id`, `camel_mime_message_get_from`, `camel_mime_message_get_date`, `camel_medium_get_content`, `camel_mime_message_set_subject`), user named flag sets (`camel_named_flags_new`, `camel_named_flags_insert`, `camel_named_flags_contains`, `camel_named_flags_remove`, `camel_named_flags_get_length`, `camel_named_flags_copy`, `camel_named_flags_equal`, `camel_named_flags_free`), summary `bdata` encoding (`camel_util_bdata_put_string`, `camel_util_bdata_put_number`, `camel_util_bdata_get_string`, `camel_util_bdata_get_number`), and disk cache directory management (`camel_data_cache_new`, `camel_data_cache_get_path`, `camel_data_cache_get_filename`, `camel_data_cache_remove`). In addition, it verifies envelope extraction with complex quoted names and subaddresses in `jmap-mail` and multi-recipient message import with keyword preservation in `jmap-mail-sync`.
+
+**EDS 3.52 Camel internet address, MIME message, named flags, bdata, and cache measurement:**
+- Probed `camel-1.2` 3.52 for address, MIME, named flags, bdata, and disk cache behaviors:
+  - `CamelInternetAddress`:
+    - `camel_internet_address_add` returns the 0-based insertion index (`0` for first, `1` for second, `2` for third added address).
+    - `camel_internet_address_get` extracts borrowed name and email strings at given indices.
+    - `camel_address_format` serializes the address list into standard RFC 5322 formatted address lines.
+    - `camel_address_remove` removes entries at given indices and updates address length.
+    - `camel_address_new_clone` creates independent copies of `CamelAddress` objects.
+  - `CamelMimeMessage` & `CamelDataWrapper`:
+    - `camel_data_wrapper_construct_from_data_sync` synchronously constructs structured MIME messages from raw RFC 5322 byte buffers.
+    - `camel_mime_message_get_subject`, `camel_mime_message_get_from` (returning a `CamelInternetAddress`), and `camel_mime_message_get_date` accurately extract message metadata.
+    - `camel_mime_message_get_message_id` extracts unbracketed Message-ID strings (stripping surrounding `<` and `>`).
+    - `camel_medium_get_content` provides direct access to message body content wrappers.
+    - `camel_mime_message_set_subject` mutates subject headers in place.
+  - `CamelNamedFlags` & `camel_util_bdata`:
+    - `CamelNamedFlags` functions (`new`, `insert`, `contains`, `remove`, `get_length`, `copy`, `equal`, `free`) manage arbitrary user flag sets.
+    - `camel_util_bdata_put_string`, `camel_util_bdata_put_number`, `camel_util_bdata_get_string`, and `camel_util_bdata_get_number` sequentially encode and decode structured fields into `CamelMIRecord` and `CamelFIRecord` bdata columns without corruption.
+  - `CamelDataCache`:
+    - `camel_data_cache_new`, `camel_data_cache_get_path`, `camel_data_cache_get_filename`, and `camel_data_cache_remove` manage on-disk message cache directories and file naming conventions.
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_internet_address_formatting_and_lifecycle_in_eds`: verifies address insertion, indexing, RFC 5322 formatting, cloning, removal, and cleanup.
+  - Added `camel_mime_message_construction_and_header_access_in_eds`: verifies MIME parsing from data, subject/message-id/from/date extraction, medium content access, and in-place subject modification.
+  - Added `camel_named_flags_and_bdata_encoding_in_eds`: verifies user flag insertion, containment, removal, copying, equality, and bdata string/number encoding/decoding.
+  - Added `camel_data_cache_operations_in_eds`: verifies disk cache path initialization, filename generation, and cache file removal.
+
+**Envelope and Import verification across workspace:**
+- In `rust/crates/jmap-mail/tests/envelope.rs`:
+  - Added `the_envelope_preserves_special_characters_in_quoted_names_and_subaddresses`: verifies that complex quoted names with commas, semicolons, angle brackets, and email subaddressing (`+tag`) in envelope extraction yield pure `EnvelopeAddress` values without display name leakage.
+- In `rust/crates/jmap-mail-sync/tests/import.rs`:
+  - Added `importing_a_message_with_multiple_recipients_and_custom_headers_preserves_summary`: verifies that importing a message with multiple To/Cc recipients, formatted display names, custom message-id, date, and user keywords (`\Seen`, `$label1`) produces a faithful `MessageSummary` in the mailbox listing.
+
+Tests: 1102 in the default set (up 2: 11 in `jmap-mail/tests/envelope.rs`, 11 in `jmap-mail-sync/tests/import.rs`), plus 4 new tests in `eds-sys/tests/camel.rs` (18 in file, 73 across crate) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1102 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
 
 
