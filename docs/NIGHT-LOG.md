@@ -22126,5 +22126,69 @@ hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-twenty-first session)
 
-Claiming M3 increment: verify address LABEL TYPE semantics, synthetic field behavior in EDS, and address preservation.
+**Verifying address `LABEL` `TYPE` semantics, synthetic field behavior in EDS, and address preservation.**
+This session resolves the blocker "the two `LABEL` `TYPE` risks stand" by measuring EDS 3.52 `EContact`
+structured and synthetic address fields in `eds-sys`, adding multi-address and label pairing tests in
+`jmap-vcard`, verifying address preservation and label patching in `jmap-book-sync`, and proving survival
+across real EDS daemons in `jmap-functional`.
+
+**EDS 3.52 `EContact` address and label measurement:**
+- Probed `libebook-contacts-1.2` for address and address label field structures:
+  - `E_CONTACT_ADDRESS_HOME` (183), `E_CONTACT_ADDRESS_WORK` (184), and `E_CONTACT_ADDRESS_OTHER` (185)
+    are structured `EContactAddress` fields (`e_contact_field_is_string` is FALSE / `0`, type matches
+    `e_contact_address_get_type()`), with vCard attribute `"ADR"`.
+  - `E_CONTACT_ADDRESS_LABEL_HOME` (87), `E_CONTACT_ADDRESS_LABEL_WORK` (88), and
+    `E_CONTACT_ADDRESS_LABEL_OTHER` (89) are synthetic string fields (`e_contact_field_is_string` is TRUE / `1`),
+    with vCard attribute `"LABEL"`.
+  - On a vCard holding multiple `ADR` and `LABEL` lines with `TYPE` (`WORK`, `HOME`, `OTHER`) or without `TYPE`:
+    - `e_contact_get_const` for `E_CONTACT_ADDRESS_LABEL_WORK`, `_HOME`, and `_OTHER` returns the
+      matching label strings.
+    - `e_contact_set` modifies synthetic label fields in place, preserving `X-JMAP-KEY` and emitting
+      valid `LABEL;X-JMAP-KEY=...;TYPE=...` lines while leaving secondary `ADR` and `LABEL` lines intact.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `contact_address_and_label_field_properties`: verifies types, string status, field names,
+    and vCard attribute mappings.
+  - Added `address_label_synthetic_fields_behavior_in_eds`: verifies synthetic label getters, in-place
+    updates, and vCard serialization behavior.
+
+**Mapping, sync, and functional verification across workspace:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `multiple_addresses_with_different_types_and_labels_pair_accurately`: verifies that cards
+    carrying multiple addresses with distinct `TYPE` and labels emit matching `ADR` and `LABEL` lines,
+    and that `label_entry` pairs each label to the matching address even when `X-JMAP-KEY` is omitted.
+  - Added `unlabelled_second_address_of_same_type_is_not_corrupted_by_label`: verifies that when two
+    addresses share a `TYPE` (e.g. two HOME addresses) and one has a label, the label attaches to the
+    first unlabelled address and leaves the second unlabelled address intact.
+  - Added `bare_label_without_type_pairs_with_untyped_address`: verifies that a label with no `TYPE`
+    pairs with an untyped address (`contexts == None`) without creating spurious extra entries.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `saving_contact_with_multiple_addresses_and_labels_preserves_all_entries`: verifies that
+    editing an unrelated field on a contact with multiple structured addresses, labels, and coordinates/pref
+    preserves all 3 addresses intact.
+  - Added `editing_work_address_label_preserves_secondary_home_address_and_label`: verifies that editing
+    a work address label in vCard patches only `addresses/a1/full` and preserves secondary home addresses.
+- In `jmap-functional/tests/address-book.rs`:
+  - Seeded `seed_card` with structured addresses and formatted labels (`addr-work-1` and `addr-home-1`).
+  - Added `assert_the_seeded_addresses_survived`: verified across all 10 seeded functional test legs through
+    real EDS daemons that both addresses and their labels survive client edits intact.
+
+Tests: 1037 in the default set (up 5: 116 in `jmap-vcard/tests/mapping.rs`, 91 in
+`jmap-book-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/contacts.rs` (9 total) and
+all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1037 tests,
+and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and
+`cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: the two `LABEL` `TYPE` risks stand (now verified
+and tabled).
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; whether the editor lets a handle be moved between the Home and Work slots at all
+is unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact editor
+writes for a replaced photo, and into a cleared field, is inferred rather than measured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.
 

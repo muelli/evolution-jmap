@@ -3144,3 +3144,133 @@ fn editing_unrelated_field_preserves_all_multiple_orgs_and_titles() {
     assert_eq!(titles["r1"].name, "Lead Investigator");
     assert_eq!(titles["r2"].name, "Project Manager");
 }
+
+#[test]
+fn saving_contact_with_multiple_addresses_and_labels_preserves_all_entries() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "addresses": {
+                "a1": {
+                    "@type": "Address",
+                    "contexts": {"work": true},
+                    "components": [
+                        {"@type": "AddressComponent", "kind": "name", "value": "Hauptstraße 1"},
+                        {"@type": "AddressComponent", "kind": "locality", "value": "Berlin"},
+                        {"@type": "AddressComponent", "kind": "postcode", "value": "10115"},
+                        {"@type": "AddressComponent", "kind": "country", "value": "Germany"},
+                    ],
+                    "full": "Hauptstraße 1\n10115 Berlin\nGermany",
+                    "coordinates": "geo:52.5,13.4",
+                },
+                "a2": {
+                    "@type": "Address",
+                    "contexts": {"private": true},
+                    "components": [
+                        {"@type": "AddressComponent", "kind": "name", "value": "Heimweg 2"},
+                        {"@type": "AddressComponent", "kind": "locality", "value": "München"},
+                        {"@type": "AddressComponent", "kind": "postcode", "value": "80331"},
+                        {"@type": "AddressComponent", "kind": "country", "value": "Germany"},
+                    ],
+                    "full": "Heimweg 2\n80331 München\nGermany",
+                    "pref": 1,
+                },
+                "a3": {
+                    "@type": "Address",
+                    "full": "Postfach 42\n20095 Hamburg",
+                    "timeZone": "Europe/Berlin",
+                }
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "END:VCARD\r\n",
+        "NOTE:Preserve all addresses\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let addresses = card.addresses.expect("addresses");
+    assert_eq!(addresses.len(), 3, "{addresses:?}");
+
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("Hauptstraße 1\n10115 Berlin\nGermany")
+    );
+    assert_eq!(
+        addresses["a1"].extra.get("coordinates"),
+        Some(&json!("geo:52.5,13.4"))
+    );
+
+    assert_eq!(
+        addresses["a2"].full.as_deref(),
+        Some("Heimweg 2\n80331 München\nGermany")
+    );
+    assert_eq!(addresses["a2"].extra.get("pref"), Some(&json!(1)));
+
+    assert_eq!(
+        addresses["a3"].full.as_deref(),
+        Some("Postfach 42\n20095 Hamburg")
+    );
+    assert_eq!(
+        addresses["a3"].extra.get("timeZone"),
+        Some(&json!("Europe/Berlin"))
+    );
+}
+
+#[test]
+fn editing_work_address_label_preserves_secondary_home_address_and_label() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "addresses": {
+                "a1": {
+                    "@type": "Address",
+                    "contexts": {"work": true},
+                    "components": [
+                        {"@type": "AddressComponent", "kind": "name", "value": "Hauptstraße 1"},
+                        {"@type": "AddressComponent", "kind": "locality", "value": "Berlin"},
+                    ],
+                    "full": "Hauptstraße 1\n10115 Berlin\nGermany",
+                },
+                "a2": {
+                    "@type": "Address",
+                    "contexts": {"private": true},
+                    "components": [
+                        {"@type": "AddressComponent", "kind": "name", "value": "Heimweg 2"},
+                        {"@type": "AddressComponent", "kind": "locality", "value": "München"},
+                    ],
+                    "full": "Heimweg 2\n80331 München\nGermany",
+                }
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    // Simulate EDS setting a new work address label
+    let edited = vcard.replace(
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK:Hauptstraße 1\\n10115 Berlin\\nGermany",
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK:Updated Work Label\\nBerlin",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let addresses = card.addresses.expect("addresses");
+    assert_eq!(addresses.len(), 2, "{addresses:?}");
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("Updated Work Label\nBerlin")
+    );
+    assert_eq!(
+        addresses["a2"].full.as_deref(),
+        Some("Heimweg 2\n80331 München\nGermany")
+    );
+}

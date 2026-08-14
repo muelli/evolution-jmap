@@ -6,6 +6,8 @@
 //! ORG, TITLE, ROLE, NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the
 //! `X-` lines EDS keeps instant-messaging handles and the spouse on.
 
+use std::collections::BTreeMap;
+
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
@@ -848,6 +850,112 @@ fn an_address_written_out_as_nothing_gets_no_label_line() {
     let back =
         vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nLABEL:\r\nEND:VCARD\r\n").expect("parse");
     assert_eq!(back.addresses, None);
+}
+
+#[test]
+fn multiple_addresses_with_different_types_and_labels_pair_accurately() {
+    let mut addresses = BTreeMap::new();
+    addresses.insert(
+        "a-work".to_owned(),
+        Address {
+            contexts: Some(json!({"work": true})),
+            components: Some(vec![
+                AddressComponent::new("name", "Hauptstraße 1"),
+                AddressComponent::new("locality", "Berlin"),
+                AddressComponent::new("postcode", "10115"),
+                AddressComponent::new("country", "Germany"),
+            ]),
+            full: Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned()),
+            ..Address::default()
+        },
+    );
+    addresses.insert(
+        "a-home".to_owned(),
+        Address {
+            contexts: Some(json!({"private": true})),
+            components: Some(vec![
+                AddressComponent::new("name", "Heimweg 2"),
+                AddressComponent::new("locality", "München"),
+                AddressComponent::new("postcode", "80331"),
+                AddressComponent::new("country", "Germany"),
+            ]),
+            full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
+            ..Address::default()
+        },
+    );
+
+    let card = ContactCard {
+        addresses: Some(addresses),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(vcard.contains("ADR;X-JMAP-KEY=a-work;TYPE=WORK:"));
+    assert!(vcard.contains("LABEL;X-JMAP-KEY=a-work;TYPE=WORK:"));
+    assert!(vcard.contains("ADR;X-JMAP-KEY=a-home;TYPE=HOME:"));
+    assert!(vcard.contains("LABEL;X-JMAP-KEY=a-home;TYPE=HOME:"));
+
+    // Roundtrip directly on the emitted vCard
+    let roundtrip = vcard_to_card(&vcard).expect("parse emitted");
+    assert_eq!(roundtrip.addresses, card.addresses);
+
+    // And simulate EDS where LABEL lines have TYPE but no X-JMAP-KEY
+    let eds_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ADR;X-JMAP-KEY=a-work;TYPE=WORK:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
+        "LABEL;TYPE=WORK:Hauptstraße 1\\n10115 Berlin\\nGermany\r\n",
+        "ADR;X-JMAP-KEY=a-home;TYPE=HOME:;;Heimweg 2;München;;80331;Germany\r\n",
+        "LABEL;TYPE=HOME:Heimweg 2\\n80331 München\\nGermany\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_eds = vcard_to_card(eds_vcard).expect("parse from EDS");
+    let parsed_addresses = from_eds.addresses.expect("addresses");
+    assert_eq!(
+        parsed_addresses["a-work"].full.as_deref(),
+        Some("Hauptstraße 1\n10115 Berlin\nGermany")
+    );
+    assert_eq!(
+        parsed_addresses["a-home"].full.as_deref(),
+        Some("Heimweg 2\n80331 München\nGermany")
+    );
+}
+
+#[test]
+fn unlabelled_second_address_of_same_type_is_not_corrupted_by_label() {
+    let eds_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ADR;X-JMAP-KEY=a1;TYPE=HOME:;;Heimweg 2;München;;80331;Germany\r\n",
+        "LABEL;TYPE=HOME:Heimweg 2\\n80331 München\\nGermany\r\n",
+        "ADR;X-JMAP-KEY=a2;TYPE=HOME:;;Ferienhaus 4;Garmisch;;82467;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(eds_vcard).expect("parse");
+    let addresses = card.addresses.expect("addresses");
+    assert_eq!(addresses.keys().collect::<Vec<_>>(), vec!["a1", "a2"]);
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("Heimweg 2\n80331 München\nGermany")
+    );
+    assert_eq!(addresses["a2"].full, None);
+    assert_eq!(components_of(&addresses["a2"])[0], ("name", "Ferienhaus 4"));
+}
+
+#[test]
+fn bare_label_without_type_pairs_with_untyped_address() {
+    let eds_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
+        "LABEL:Hauptstraße 1\\n10115 Berlin\\nGermany\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(eds_vcard).expect("parse");
+    let addresses = card.addresses.expect("addresses");
+    assert_eq!(addresses.keys().collect::<Vec<_>>(), vec!["a1"]);
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("Hauptstraße 1\n10115 Berlin\nGermany")
+    );
+    assert_eq!(addresses["a1"].contexts, None);
 }
 
 fn one_note(key: &str, note: &str) -> ContactCard {

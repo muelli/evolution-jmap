@@ -357,3 +357,134 @@ END:VCARD\r\n";
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn contact_address_and_label_field_properties() {
+    unsafe {
+        let addr_type = e_contact_address_get_type();
+        assert_ne!(addr_type, 0);
+
+        // Address fields are structured EContactAddress fields (not strings)
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ADDRESS_HOME), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_ADDRESS_HOME), addr_type);
+        let addr_home_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS_HOME));
+        assert_eq!(addr_home_name.to_str().unwrap(), "address_home");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ADDRESS_WORK), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_ADDRESS_WORK), addr_type);
+        let addr_work_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS_WORK));
+        assert_eq!(addr_work_name.to_str().unwrap(), "address_work");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ADDRESS_OTHER), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_ADDRESS_OTHER), addr_type);
+        let addr_other_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS_OTHER));
+        assert_eq!(addr_other_name.to_str().unwrap(), "address_other");
+
+        // Address label fields are synthetic string fields
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ADDRESS_LABEL_HOME), 1);
+        let label_home_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS_LABEL_HOME));
+        assert_eq!(label_home_name.to_str().unwrap(), "address_label_home");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ADDRESS_LABEL_WORK), 1);
+        let label_work_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS_LABEL_WORK));
+        assert_eq!(label_work_name.to_str().unwrap(), "address_label_work");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ADDRESS_LABEL_OTHER), 1);
+        let label_other_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS_LABEL_OTHER));
+        assert_eq!(label_other_name.to_str().unwrap(), "address_label_other");
+
+        // Attribute names
+        assert_eq!(
+            CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_ADDRESS_HOME))
+                .to_str()
+                .unwrap(),
+            "ADR"
+        );
+        assert_eq!(
+            CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_ADDRESS_LABEL_HOME))
+                .to_str()
+                .unwrap(),
+            "LABEL"
+        );
+    }
+}
+
+#[test]
+fn address_label_synthetic_fields_behavior_in_eds() {
+    unsafe {
+        let vcard_str = c"BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Test Contact\r\n\
+N:Contact;Test;;;\r\n\
+ADR;TYPE=WORK;X-JMAP-KEY=a1:;;Hauptstraße 1;Berlin;;10115;Germany\r\n\
+LABEL;TYPE=WORK;X-JMAP-KEY=a1:Hauptstraße 1\\n10115 Berlin\\nGermany\r\n\
+ADR;TYPE=HOME;X-JMAP-KEY=a2:;;Heimweg 2;München;;80331;Germany\r\n\
+LABEL;TYPE=HOME;X-JMAP-KEY=a2:Heimweg 2\\n80331 München\\nGermany\r\n\
+LABEL;TYPE=OTHER:Postfach 42\\n20095 Hamburg\r\n\
+LABEL:Bare Label Without Type\r\n\
+END:VCARD\r\n";
+
+        let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
+        assert!(!contact.is_null());
+
+        // EDS returns typed label values for HOME, WORK, and OTHER synthetic fields
+        let work_label_ptr = e_contact_get_const(contact, E_CONTACT_ADDRESS_LABEL_WORK);
+        assert!(!work_label_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(work_label_ptr.cast()).to_str().unwrap(),
+            "Hauptstraße 1\n10115 Berlin\nGermany"
+        );
+
+        let home_label_ptr = e_contact_get_const(contact, E_CONTACT_ADDRESS_LABEL_HOME);
+        assert!(!home_label_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(home_label_ptr.cast()).to_str().unwrap(),
+            "Heimweg 2\n80331 München\nGermany"
+        );
+
+        let other_label_ptr = e_contact_get_const(contact, E_CONTACT_ADDRESS_LABEL_OTHER);
+        assert!(!other_label_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(other_label_ptr.cast()).to_str().unwrap(),
+            "Postfach 42\n20095 Hamburg"
+        );
+
+        // Modifying synthetic address label in place
+        e_contact_set(
+            contact,
+            E_CONTACT_ADDRESS_LABEL_WORK,
+            c"Updated Work Label\nBerlin".as_ptr().cast(),
+        );
+
+        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
+
+        // Synthetic LABEL fields preserve custom parameters and are serialized with TYPE parameter by EDS
+        assert!(
+            updated_vcard.contains("LABEL;X-JMAP-KEY=a1;TYPE=WORK:Updated Work Label\\nBerlin"),
+            "updated work label should be rendered with key and TYPE=WORK: {updated_vcard}"
+        );
+        // ADR line keeps its X-JMAP-KEY parameter
+        assert!(
+            updated_vcard.contains("ADR;X-JMAP-KEY=a1;TYPE=WORK:"),
+            "ADR line should retain X-JMAP-KEY: {updated_vcard}"
+        );
+        // Secondary HOME label, OTHER label, and bare label remain intact
+        assert!(
+            updated_vcard
+                .contains("LABEL;X-JMAP-KEY=a2;TYPE=HOME:Heimweg 2\\n80331 München\\nGermany"),
+            "HOME label should remain intact: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("LABEL;TYPE=OTHER:Postfach 42\\n20095 Hamburg"),
+            "OTHER label should remain intact: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("LABEL:Bare Label Without Type"),
+            "bare label should remain intact: {updated_vcard}"
+        );
+
+        g_free(updated_vcard_ptr.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
