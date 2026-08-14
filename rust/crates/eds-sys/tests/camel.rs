@@ -1152,3 +1152,181 @@ fn camel_error_quarks_and_distinct_domains_in_eds() {
         assert_eq!(CAMEL_STORE_ERROR_NO_FOLDER, 1);
     }
 }
+
+/// Probing `CamelMimePart` description, disposition, filename, content-ID, content-location,
+/// transfer encoding, and content payload setting in EDS 3.52.
+#[test]
+fn camel_mime_part_headers_disposition_and_encoding_in_eds() {
+    unsafe {
+        let part = camel_mime_part_new();
+        assert!(!part.is_null());
+
+        // Description
+        camel_mime_part_set_description(part, c"Monthly Financial Report".as_ptr());
+        let desc = camel_mime_part_get_description(part);
+        assert!(!desc.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(desc).to_str().unwrap(),
+            "Monthly Financial Report"
+        );
+
+        // Disposition & Filename
+        camel_mime_part_set_disposition(part, c"attachment".as_ptr());
+        let disp = camel_mime_part_get_disposition(part);
+        assert!(!disp.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(disp).to_str().unwrap(),
+            "attachment"
+        );
+
+        camel_mime_part_set_filename(part, c"report-jan2026.pdf".as_ptr());
+        let fname = camel_mime_part_get_filename(part);
+        assert!(!fname.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(fname).to_str().unwrap(),
+            "report-jan2026.pdf"
+        );
+
+        // Content-ID & Content-Location (Camel expects unbracketed ID and wraps it in Content-ID: <...>)
+        camel_mime_part_set_content_id(part, c"pdf-part-001@example.com".as_ptr());
+        let cid = camel_mime_part_get_content_id(part);
+        assert!(!cid.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(cid).to_str().unwrap(),
+            "pdf-part-001@example.com"
+        );
+
+        camel_mime_part_set_content_location(part, c"https://example.com/reports/jan.pdf".as_ptr());
+        let cloc = camel_mime_part_get_content_location(part);
+        assert!(!cloc.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(cloc).to_str().unwrap(),
+            "https://example.com/reports/jan.pdf"
+        );
+
+        // Transfer Encoding
+        camel_mime_part_set_encoding(part, CAMEL_TRANSFER_ENCODING_BASE64);
+        assert_eq!(
+            camel_mime_part_get_encoding(part),
+            CAMEL_TRANSFER_ENCODING_BASE64
+        );
+
+        camel_mime_part_set_encoding(part, CAMEL_TRANSFER_ENCODING_QUOTEDPRINTABLE);
+        assert_eq!(
+            camel_mime_part_get_encoding(part),
+            CAMEL_TRANSFER_ENCODING_QUOTEDPRINTABLE
+        );
+
+        // Content Setting
+        let dummy_pdf_data = b"%PDF-1.5 test document stream payload";
+        camel_mime_part_set_content(
+            part,
+            dummy_pdf_data.as_ptr().cast(),
+            dummy_pdf_data.len() as glib_sys::gint,
+            c"application/pdf".as_ptr(),
+        );
+
+        let content = camel_medium_get_content(part.cast());
+        assert!(!content.is_null());
+        let mime_type = camel_data_wrapper_get_mime_type(content);
+        assert!(!mime_type.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(mime_type).to_str().unwrap(),
+            "application/pdf"
+        );
+
+        gobject_sys::g_object_unref(part.cast());
+    }
+}
+
+/// Probing `CamelMultipart` container creation, boundary management, part addition,
+/// indexed retrieval, part counting, and preface/postface text in EDS 3.52.
+#[test]
+fn camel_multipart_container_and_part_management_in_eds() {
+    unsafe {
+        let mp = camel_multipart_new();
+        assert!(!mp.is_null());
+        assert_eq!(camel_multipart_get_number(mp), 0);
+
+        // Boundary
+        camel_multipart_set_boundary(mp, c"==_boundary_section_42_==".as_ptr());
+        let boundary = camel_multipart_get_boundary(mp);
+        assert!(!boundary.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(boundary).to_str().unwrap(),
+            "==_boundary_section_42_=="
+        );
+
+        // Preface & Postface
+        camel_multipart_set_preface(
+            mp,
+            c"This is a multi-part message in MIME format.\n".as_ptr(),
+        );
+        let preface = camel_multipart_get_preface(mp);
+        assert!(!preface.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(preface).to_str().unwrap(),
+            "This is a multi-part message in MIME format.\n"
+        );
+
+        camel_multipart_set_postface(mp, c"-- End of multi-part message --\n".as_ptr());
+        let postface = camel_multipart_get_postface(mp);
+        assert!(!postface.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(postface).to_str().unwrap(),
+            "-- End of multi-part message --\n"
+        );
+
+        // Add 2 parts
+        let part1 = camel_mime_part_new();
+        camel_mime_part_set_content(
+            part1,
+            c"Plain text body content".as_ptr(),
+            23,
+            c"text/plain".as_ptr(),
+        );
+        camel_multipart_add_part(mp, part1);
+
+        let part2 = camel_mime_part_new();
+        camel_mime_part_set_content(
+            part2,
+            c"<html><body><p>HTML formatted body</p></body></html>".as_ptr(),
+            52,
+            c"text/html".as_ptr(),
+        );
+        camel_multipart_add_part(mp, part2);
+
+        assert_eq!(camel_multipart_get_number(mp), 2);
+
+        // Inspect parts by index
+        let got_part1 = camel_multipart_get_part(mp, 0);
+        assert_eq!(got_part1, part1);
+        let got_part2 = camel_multipart_get_part(mp, 1);
+        assert_eq!(got_part2, part2);
+
+        // Attach multipart to a CamelMimeMessage
+        let msg = camel_mime_message_new();
+        camel_medium_set_content(msg.cast(), mp.cast());
+        let root_content = camel_medium_get_content(msg.cast());
+        assert_eq!(root_content, mp.cast());
+
+        gobject_sys::g_object_unref(part2.cast());
+        gobject_sys::g_object_unref(part1.cast());
+        gobject_sys::g_object_unref(msg.cast());
+    }
+}
+
+/// Probing `CamelTransferEncoding` constants and `CAMEL_MAX_PREVIEW_LENGTH` in EDS 3.52.
+#[test]
+fn camel_transfer_encoding_constants_in_eds() {
+    assert_eq!(CAMEL_TRANSFER_ENCODING_DEFAULT, 0);
+    assert_eq!(CAMEL_TRANSFER_ENCODING_7BIT, 1);
+    assert_eq!(CAMEL_TRANSFER_ENCODING_8BIT, 2);
+    assert_eq!(CAMEL_TRANSFER_ENCODING_BASE64, 3);
+    assert_eq!(CAMEL_TRANSFER_ENCODING_QUOTEDPRINTABLE, 4);
+    assert_eq!(CAMEL_TRANSFER_ENCODING_BINARY, 5);
+    assert_eq!(CAMEL_TRANSFER_ENCODING_UUENCODE, 6);
+    assert_eq!(CAMEL_TRANSFER_NUM_ENCODINGS, 7);
+
+    assert_eq!(CAMEL_MAX_PREVIEW_LENGTH, 256);
+}

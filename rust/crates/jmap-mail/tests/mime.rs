@@ -254,3 +254,107 @@ fn a_line_that_already_ended_crlf_does_not_gain_a_second_cr() {
     let again = Message::parsed(&written);
     assert_eq!(again.subject(), "Lunch?");
 }
+
+/// A multipart/mixed message containing text and an attachment serializes with CRLF
+/// across all boundaries and headers without introducing bare LFs, and roundtrips faithfully.
+#[test]
+fn multipart_mixed_message_with_pdf_attachment_serializes_with_crlf_and_parses_back_intact() {
+    let multipart_source = b"From: Alice <alice@example.com>\r\n\
+To: Bob <bob@example.com>\r\n\
+Subject: Monthly Report with Attachment\r\n\
+Message-ID: <multipart-report-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 10:00:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"====_report_boundary_123_====\"\r\n\
+\r\n\
+This is a multi-part message in MIME format.\r\n\
+\r\n\
+--====_report_boundary_123_====\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: 7bit\r\n\
+\r\n\
+Please find attached the financial report.\r\n\
+\r\n\
+--====_report_boundary_123_====\r\n\
+Content-Type: application/pdf; name=\"report.pdf\"\r\n\
+Content-Disposition: attachment; filename=\"report.pdf\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+JVBERi0xLjUKJcfsj6IKNCAwIG9iago8PAovVHlwZSAvUGFnZQovUGFyZW50IDMgMCBS\r\n\
+\r\n\
+--====_report_boundary_123_====--\r\n";
+
+    let message = Message::parsed(multipart_source);
+    let written = message.written();
+
+    let text = String::from_utf8(written.clone()).expect("the emitter wrote text");
+    assert!(
+        text.contains("Subject: Monthly Report with Attachment"),
+        "{text}"
+    );
+    assert!(text.contains("report.pdf"), "{text}");
+    assert!(text.contains("====_report_boundary_123_===="), "{text}");
+
+    // All line endings must strictly be CRLF
+    let bare = written
+        .iter()
+        .enumerate()
+        .filter(|(at, byte)| **byte == b'\n' && (*at == 0 || written[at - 1] != b'\r'))
+        .count();
+    assert_eq!(bare, 0, "found {bare} bare LFs in multipart output");
+
+    // No double-CR (\r\r\n)
+    assert!(
+        !written.windows(3).any(|run| run == b"\r\r\n"),
+        "found spurious double CR in output"
+    );
+
+    let roundtripped = Message::parsed(&written);
+    assert_eq!(roundtripped.subject(), "Monthly Report with Attachment");
+}
+
+/// A multipart/alternative message with HTML and plain text bodies preserves MIME parts
+/// and roundtrips without losing line formatting.
+#[test]
+fn multipart_alternative_message_with_html_and_plain_text_preserves_structure() {
+    let alt_source = b"From: Team <team@example.com>\r\n\
+To: Member <member@example.com>\r\n\
+Subject: Alternative format announcement\r\n\
+Message-ID: <alt-announcement-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 11:30:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/alternative; boundary=\"alt_boundary_456\"\r\n\
+\r\n\
+--alt_boundary_456\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+New feature release announcement in plain text.\r\n\
+\r\n\
+--alt_boundary_456\r\n\
+Content-Type: text/html; charset=\"utf-8\"\r\n\
+\r\n\
+<html><body><h1>New Feature Release</h1><p>Announcement in rich HTML.</p></body></html>\r\n\
+\r\n\
+--alt_boundary_456--\r\n";
+
+    let message = Message::parsed(alt_source);
+    let written = message.written();
+
+    let text = String::from_utf8(written.clone()).expect("the emitter wrote valid utf-8");
+    assert!(text.contains("Subject: Alternative format announcement"));
+    assert!(text.contains("<h1>New Feature Release</h1>"));
+    assert!(text.contains("New feature release announcement in plain text."));
+
+    let bare = written
+        .iter()
+        .enumerate()
+        .filter(|(at, byte)| **byte == b'\n' && (*at == 0 || written[at - 1] != b'\r'))
+        .count();
+    assert_eq!(
+        bare, 0,
+        "found {bare} bare LFs in multipart/alternative output"
+    );
+
+    let parsed_again = Message::parsed(&written);
+    assert_eq!(parsed_again.subject(), "Alternative format announcement");
+}
