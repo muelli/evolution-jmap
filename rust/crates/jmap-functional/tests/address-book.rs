@@ -756,6 +756,10 @@ const EDITED_EMAIL_AFTER: &str = "jp@example.org";
 /// back at all depends on what real EDS does to a card whose picture the user
 /// never touched.
 const SEEDED_PHOTO_KEY: &str = "picture-1";
+/// An unmodeled logo resource on the seeded card, filed under a server-chosen
+/// key, that gets no vCard line and must survive edits untouched.
+const SEEDED_LOGO_KEY: &str = "logo-1";
+const SEEDED_LOGO_URI: &str = "https://oldenburg.example/logo.png";
 /// The keys the *server* filed the seeded card's two calendaring resources
 /// under, and where each points. Nothing like the keys the reader invents
 /// (`c1`, `c2`, …), for the reason [`SEEDED_PHOTO_KEY`] is not.
@@ -816,7 +820,6 @@ const SEEDED_SERVICE_HANDLE: &str = "jp@jabber.example";
 const SEEDED_SERVICE_URI: &str = "xmpp:jp@jabber.example";
 const SEEDED_SKYPE_SERVICE_KEY: &str = "im-home-1";
 const SEEDED_SKYPE_SERVICE: &str = "Skype";
-const SEEDED_SKYPE_SERVICE_HANDLE: &str = "jp_skype";
 const SEEDED_SKYPE_SERVICE_URI: &str = "skype:jp_skype";
 const SEEDED_MATRIX_SERVICE_KEY: &str = "im-work-1";
 const SEEDED_MATRIX_SERVICE: &str = "Matrix";
@@ -956,15 +959,25 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // one is a property the user *can* see, so EDS puts it on the far side of
     // the round trip whether the mapping wants it there or not.
     card.media = Some(
-        [(
-            SEEDED_PHOTO_KEY.to_owned(),
-            Media {
-                kind: Some("photo".to_owned()),
-                uri: format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
-                media_type: Some(PHOTO_MEDIA_TYPE.to_owned()),
-                ..Media::default()
-            },
-        )]
+        [
+            (
+                SEEDED_PHOTO_KEY.to_owned(),
+                Media {
+                    kind: Some("photo".to_owned()),
+                    uri: format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
+                    media_type: Some(PHOTO_MEDIA_TYPE.to_owned()),
+                    ..Media::default()
+                },
+            ),
+            (
+                SEEDED_LOGO_KEY.to_owned(),
+                Media {
+                    kind: Some("logo".to_owned()),
+                    uri: SEEDED_LOGO_URI.to_owned(),
+                    ..Media::default()
+                },
+            ),
+        ]
         .into_iter()
         .collect(),
     );
@@ -1385,10 +1398,10 @@ fn assert_the_seeded_picture_survived(card: &ContactCard) {
         .unwrap_or_else(|| panic!("the save dropped the card's picture: {card:?}"));
     assert_eq!(
         media.keys().map(String::as_str).collect::<Vec<_>>(),
-        vec![SEEDED_PHOTO_KEY],
-        "the save re-filed the picture nobody touched: {card:?}"
+        vec![SEEDED_LOGO_KEY, SEEDED_PHOTO_KEY],
+        "the save re-filed the media nobody touched: {card:?}"
     );
-    let picture = media.values().next().expect("one media entry");
+    let picture = &media[SEEDED_PHOTO_KEY];
     assert_eq!(picture.kind.as_deref(), Some("photo"), "{card:?}");
     assert_eq!(
         picture.media_type.as_deref(),
@@ -1400,6 +1413,9 @@ fn assert_the_seeded_picture_survived(card: &ContactCard) {
         format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
         "the save rewrote the picture nobody touched: {card:?}"
     );
+    let logo = &media[SEEDED_LOGO_KEY];
+    assert_eq!(logo.kind.as_deref(), Some("logo"), "{card:?}");
+    assert_eq!(logo.uri, SEEDED_LOGO_URI, "{card:?}");
 }
 
 /// Hold the card the server now holds to the instant-messaging handle it was
@@ -2102,10 +2118,10 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
         .unwrap_or_else(|| panic!("the save dropped the card's picture: {card:?}"));
     assert_eq!(
         media.keys().map(String::as_str).collect::<Vec<_>>(),
-        vec![SEEDED_PHOTO_KEY],
+        vec![SEEDED_LOGO_KEY, SEEDED_PHOTO_KEY],
         "the new picture was filed beside the old one instead of over it: {card:?}"
     );
-    let picture = media.values().next().expect("one media entry");
+    let picture = &media[SEEDED_PHOTO_KEY];
     assert_eq!(picture.kind.as_deref(), Some("photo"), "{card:?}");
     assert_eq!(
         picture.media_type.as_deref(),
@@ -2117,6 +2133,9 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
         format!("data:{PHOTO_MEDIA_TYPE};base64,{REPLACEMENT_PHOTO_BASE64}"),
         "the picture the user chose did not reach the server: {card:?}"
     );
+    let logo = &media[SEEDED_LOGO_KEY];
+    assert_eq!(logo.kind.as_deref(), Some("logo"), "{card:?}");
+    assert_eq!(logo.uri, SEEDED_LOGO_URI, "{card:?}");
     // And what nobody touched, at this end too: the name components the `N`
     // line flattened, and the email address.
     let components = card

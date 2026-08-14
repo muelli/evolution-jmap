@@ -3370,3 +3370,82 @@ fn editing_one_im_handle_preserves_secondary_im_handles_of_same_and_different_se
     assert_eq!(services["s5"].user.as_deref(), Some("123456"));
     assert_eq!(services["s5"].service.as_deref(), Some("Gadu-Gadu"));
 }
+
+#[test]
+fn replacing_inlined_photo_with_uri_photo_and_preserving_unmodeled_logo() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"media": {
+            "m1": {"@type": "Media", "kind": "photo",
+                   "uri": format!("data:image/jpeg;base64,{PHOTO}"),
+                   "mediaType": "image/jpeg"},
+            "l1": {"@type": "Media", "kind": "logo",
+                   "uri": "https://example.com/corporate-logo.png"},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains(&format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PHOTO}")),
+        "{vcard}"
+    );
+    assert!(!vcard.contains("LOGO"), "{vcard}");
+
+    let edited = vcard.replace(
+        &format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PHOTO}"),
+        "PHOTO;VALUE=uri:https://example.com/new_avatar.png",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let media = card.media.expect("media");
+    assert_eq!(media.len(), 2, "{media:?}");
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].uri, "https://example.com/new_avatar.png");
+    assert_eq!(media["m1"].media_type, None);
+    assert_eq!(media["l1"].kind.as_deref(), Some("logo"));
+    assert_eq!(media["l1"].uri, "https://example.com/corporate-logo.png");
+}
+
+#[test]
+fn clearing_photo_preserves_unmodeled_logo_and_sound_media() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"media": {
+            "m1": {"@type": "Media", "kind": "photo",
+                   "uri": format!("data:image/jpeg;base64,{PHOTO}")},
+            "l1": {"@type": "Media", "kind": "logo",
+                   "uri": "https://example.com/logo.png"},
+            "s1": {"@type": "Media", "kind": "sound",
+                   "uri": "https://example.com/name-audio.ogg"},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let lines: Vec<&str> = vcard
+        .lines()
+        .filter(|line| !line.starts_with("PHOTO"))
+        .collect();
+    let edited = lines.join("\r\n") + "\r\n";
+    assert!(!edited.contains("PHOTO"), "{edited}");
+
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let media = card.media.expect("media");
+    assert_eq!(media.len(), 2, "{media:?}");
+    assert!(
+        !media.contains_key("m1"),
+        "photo m1 should be deleted: {media:?}"
+    );
+    assert_eq!(media["l1"].kind.as_deref(), Some("logo"));
+    assert_eq!(media["l1"].uri, "https://example.com/logo.png");
+    assert_eq!(media["s1"].kind.as_deref(), Some("sound"));
+    assert_eq!(media["s1"].uri, "https://example.com/name-audio.ogg");
+}
