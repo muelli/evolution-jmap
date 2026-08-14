@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
 use jmap_proto::contacts::{
-    Calendar, ContactCard, Media, Name, NameComponent, Note, OnlineService, Relation,
+    Anniversary, Calendar, ContactCard, Media, Name, NameComponent, Note, OnlineService, Relation,
 };
 
 /// The contact the client writes. One string, passed to the client on its
@@ -823,6 +823,21 @@ const RETYPED_SERVICE_URI: &str = "xmpp:jp@xmpp.example";
 /// entry's `extra` — which makes it the member that says whether a save
 /// *patched* the entry or replaced it: a replacement would hold the text alone.
 const SEEDED_NOTE_CREATED: &str = "2026-02-01T09:30:00Z";
+/// The keys and dates the *server* filed the seeded card's anniversaries under.
+///
+/// Three entries of different shapes: a wedding anniversary that reaches the
+/// `X-EVOLUTION-ANNIVERSARY` line, a year-only birthday no vCard line can state,
+/// and a deathday vCard 3.0 has no field for.
+const SEEDED_WEDDING_KEY: &str = "wedding-1";
+const SEEDED_YEAR_BIRTHDAY_KEY: &str = "birth-year-1";
+const SEEDED_DEATHDAY_KEY: &str = "death-1";
+const SEEDED_WEDDING_YEAR: u32 = 2005;
+const SEEDED_WEDDING_MONTH: u32 = 6;
+const SEEDED_WEDDING_DAY: u32 = 18;
+const SEEDED_BIRTH_YEAR: u32 = 1980;
+const SEEDED_DEATH_YEAR: u32 = 2021;
+const SEEDED_DEATH_MONTH: u32 = 5;
+const SEEDED_DEATH_DAY: u32 = 12;
 
 /// Which of the seeded card's notes the server files on it.
 ///
@@ -989,6 +1004,49 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
                 ..OnlineService::default()
             },
         )]
+        .into_iter()
+        .collect(),
+    );
+    card.anniversaries = Some(
+        [
+            (
+                SEEDED_WEDDING_KEY.to_owned(),
+                Anniversary {
+                    kind: "wedding".to_owned(),
+                    date: Some(serde_json::json!({
+                        "@type": "PartialDate",
+                        "year": SEEDED_WEDDING_YEAR,
+                        "month": SEEDED_WEDDING_MONTH,
+                        "day": SEEDED_WEDDING_DAY,
+                    })),
+                    ..Anniversary::default()
+                },
+            ),
+            (
+                SEEDED_YEAR_BIRTHDAY_KEY.to_owned(),
+                Anniversary {
+                    kind: "birth".to_owned(),
+                    date: Some(serde_json::json!({
+                        "@type": "PartialDate",
+                        "year": SEEDED_BIRTH_YEAR,
+                    })),
+                    ..Anniversary::default()
+                },
+            ),
+            (
+                SEEDED_DEATHDAY_KEY.to_owned(),
+                Anniversary {
+                    kind: "death".to_owned(),
+                    date: Some(serde_json::json!({
+                        "@type": "PartialDate",
+                        "year": SEEDED_DEATH_YEAR,
+                        "month": SEEDED_DEATH_MONTH,
+                        "day": SEEDED_DEATH_DAY,
+                    })),
+                    ..Anniversary::default()
+                },
+            ),
+        ]
         .into_iter()
         .collect(),
     );
@@ -1229,6 +1287,65 @@ fn assert_the_seeded_service_survived(card: &ContactCard) {
     );
 }
 
+/// Hold the card the server now holds to all three anniversaries it was seeded
+/// with: the wedding anniversary the X-EVOLUTION-ANNIVERSARY line shows, the
+/// year-only birthday no line can show, and the deathday vCard 3.0 has no
+/// property for.
+///
+/// Shared by the legs that edit something else entirely: a user who retypes
+/// their name or note has not changed their anniversaries, so a save that
+/// touched any of them — or dropped the unmodeled year-only birthday and
+/// deathday — did something nobody asked for.
+fn assert_the_seeded_anniversaries_survived(card: &ContactCard) {
+    let anniversaries = card
+        .anniversaries
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's anniversaries: {card:?}"));
+    assert_eq!(
+        anniversaries.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![
+            SEEDED_YEAR_BIRTHDAY_KEY,
+            SEEDED_DEATHDAY_KEY,
+            SEEDED_WEDDING_KEY
+        ],
+        "the save re-keyed an anniversary nobody touched: {card:?}"
+    );
+    let wedding = &anniversaries[SEEDED_WEDDING_KEY];
+    assert_eq!(wedding.kind, "wedding", "{card:?}");
+    assert_eq!(
+        wedding.date,
+        Some(serde_json::json!({
+            "@type": "PartialDate",
+            "year": SEEDED_WEDDING_YEAR,
+            "month": SEEDED_WEDDING_MONTH,
+            "day": SEEDED_WEDDING_DAY,
+        })),
+        "the save rewrote the wedding anniversary: {card:?}"
+    );
+    let birth = &anniversaries[SEEDED_YEAR_BIRTHDAY_KEY];
+    assert_eq!(birth.kind, "birth", "{card:?}");
+    assert_eq!(
+        birth.date,
+        Some(serde_json::json!({
+            "@type": "PartialDate",
+            "year": SEEDED_BIRTH_YEAR,
+        })),
+        "the save dropped or mangled the year-only birthday: {card:?}"
+    );
+    let death = &anniversaries[SEEDED_DEATHDAY_KEY];
+    assert_eq!(death.kind, "death", "{card:?}");
+    assert_eq!(
+        death.date,
+        Some(serde_json::json!({
+            "@type": "PartialDate",
+            "year": SEEDED_DEATH_YEAR,
+            "month": SEEDED_DEATH_MONTH,
+            "day": SEEDED_DEATH_DAY,
+        })),
+        "the save dropped or mangled the deathday: {card:?}"
+    );
+}
+
 /// The port the mock is listening on, for the keyfile the session is written
 /// with.
 fn mock_port(server: &jmap_mock::MockServer) -> u16 {
@@ -1421,6 +1538,7 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// What the user retypes the given-name field to, and the full name Evolution's
@@ -1579,6 +1697,7 @@ fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// The fourth leg, and the one edit that reaches the picture itself: the user
@@ -1731,6 +1850,7 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// What the user retypes the Calendar field to. A URI on a different host from
@@ -1885,6 +2005,7 @@ fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// What the user retypes the Spouse field to. A different person from the one
@@ -2024,6 +2145,7 @@ fn retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed() {
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// The seventh leg: the user *clears* the Spouse field, on the same card the
@@ -2163,6 +2285,7 @@ fn clearing_the_spouse_through_eds_withdraws_the_marriage_and_keeps_the_brother(
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// What the user retypes the Notes field to. Deliberately not a respelling of
@@ -2315,6 +2438,7 @@ fn retyping_the_note_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// What the client joins the card's `NOTE` line values with when it reports
@@ -2484,6 +2608,7 @@ fn clearing_the_note_through_eds_withdraws_it_and_keeps_the_one_behind_it() {
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// The tenth leg: the user empties the Notes field on a card the server filed
@@ -2643,6 +2768,7 @@ fn clearing_the_only_note_through_eds_withdraws_the_whole_property() {
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_service_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
 
 /// The eleventh leg: the user retypes an instant-messaging handle the server
@@ -2822,4 +2948,5 @@ fn retyping_a_uri_only_handle_through_eds_writes_the_uri_back() {
     assert_the_seeded_calendars_survived(card);
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
+    assert_the_seeded_anniversaries_survived(card);
 }
