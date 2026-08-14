@@ -2811,3 +2811,117 @@ fn conventional_im_services_with_user_handles_are_drawn_and_roundtripped() {
         assert_eq!(services["s1"].service.as_deref(), Some(service));
     }
 }
+
+#[test]
+fn multiple_im_services_with_home_and_work_contexts_map_accurately() {
+    let mut card = ContactCard::default();
+    let mut s1 = OnlineService {
+        service: Some("Jabber".to_owned()),
+        user: Some("vera@home.example".to_owned()),
+        ..OnlineService::default()
+    };
+    s1.extra
+        .insert("contexts".to_owned(), serde_json::json!({"private": true}));
+
+    let mut s2 = OnlineService {
+        service: Some("Jabber".to_owned()),
+        user: Some("vera@work.example".to_owned()),
+        ..OnlineService::default()
+    };
+    s2.extra
+        .insert("contexts".to_owned(), serde_json::json!({"work": true}));
+
+    let mut s3 = OnlineService {
+        service: Some("Matrix".to_owned()),
+        user: Some("@vera:matrix.example".to_owned()),
+        ..OnlineService::default()
+    };
+    s3.extra
+        .insert("contexts".to_owned(), serde_json::json!({"work": true}));
+
+    let mut s4 = OnlineService {
+        service: Some("Skype".to_owned()),
+        user: Some("vera_skype".to_owned()),
+        ..OnlineService::default()
+    };
+    s4.extra
+        .insert("contexts".to_owned(), serde_json::json!({"private": true}));
+
+    let mut s5 = OnlineService {
+        service: Some("Gadu-Gadu".to_owned()),
+        user: Some("123456".to_owned()),
+        ..OnlineService::default()
+    };
+    s5.extra
+        .insert("contexts".to_owned(), serde_json::json!({"work": true}));
+
+    card.online_services = Some(
+        [
+            ("s1".to_owned(), s1),
+            ("s2".to_owned(), s2),
+            ("s3".to_owned(), s3),
+            ("s4".to_owned(), s4),
+            ("s5".to_owned(), s5),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let vcard = card_to_vcard(&card);
+    assert!(vcard.contains("X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@home.example"));
+    assert!(vcard.contains("X-JABBER;X-JMAP-KEY=s2;TYPE=WORK:vera@work.example"));
+    assert!(vcard.contains("X-MATRIX;X-JMAP-KEY=s3;TYPE=WORK:@vera:matrix.example"));
+    assert!(vcard.contains("X-SKYPE;X-JMAP-KEY=s4;TYPE=HOME:vera_skype"));
+    assert!(vcard.contains("X-GADUGADU;X-JMAP-KEY=s5;TYPE=WORK:123456"));
+
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    let services = parsed.online_services.expect("online services");
+    assert_eq!(services.len(), 5);
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@home.example"));
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s2"].user.as_deref(), Some("vera@work.example"));
+    assert_eq!(services["s2"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s3"].user.as_deref(), Some("@vera:matrix.example"));
+    assert_eq!(services["s3"].service.as_deref(), Some("Matrix"));
+    assert_eq!(services["s4"].user.as_deref(), Some("vera_skype"));
+    assert_eq!(services["s4"].service.as_deref(), Some("Skype"));
+    assert_eq!(services["s5"].user.as_deref(), Some("123456"));
+    assert_eq!(services["s5"].service.as_deref(), Some("Gadu-Gadu"));
+}
+
+#[test]
+fn secondary_im_service_of_same_type_is_preserved_when_reconstructed() {
+    let vcard = "BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Vera\r\n\
+X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera1@jabber.example\r\n\
+X-JABBER;X-JMAP-KEY=s2;TYPE=WORK:vera2@jabber.example\r\n\
+X-JABBER;X-JMAP-KEY=s3;TYPE=HOME:vera3@jabber.example\r\n\
+END:VCARD\r\n";
+
+    let parsed = vcard_to_card(vcard).expect("parse");
+    let services = parsed.online_services.expect("online services");
+    assert_eq!(services.len(), 3);
+    assert_eq!(services["s1"].user.as_deref(), Some("vera1@jabber.example"));
+    assert_eq!(services["s2"].user.as_deref(), Some("vera2@jabber.example"));
+    assert_eq!(services["s3"].user.as_deref(), Some("vera3@jabber.example"));
+}
+
+#[test]
+fn bare_im_service_lines_without_keys_receive_invented_keys() {
+    let vcard = "BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Vera\r\n\
+X-JABBER;TYPE=HOME:alice@jabber.example\r\n\
+X-MATRIX;TYPE=WORK:@bob:matrix.example\r\n\
+END:VCARD\r\n";
+
+    let parsed = vcard_to_card(vcard).expect("parse");
+    let services = parsed.online_services.expect("online services");
+    assert_eq!(services.len(), 2);
+    assert_eq!(services["s1"].user.as_deref(), Some("alice@jabber.example"));
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s2"].user.as_deref(), Some("@bob:matrix.example"));
+    assert_eq!(services["s2"].service.as_deref(), Some("Matrix"));
+}
+

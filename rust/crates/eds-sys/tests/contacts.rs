@@ -488,3 +488,112 @@ END:VCARD\r\n";
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn instant_messaging_multi_service_and_slot_behavior_in_eds() {
+    unsafe {
+        let vcard_str = c"BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Test Contact\r\n\
+N:Contact;Test;;;\r\n\
+X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:alice@home.example\r\n\
+X-JABBER;X-JMAP-KEY=s2;TYPE=WORK:alice@work.example\r\n\
+X-MATRIX;X-JMAP-KEY=m1;TYPE=HOME:@alice:matrix.example\r\n\
+X-SKYPE;X-JMAP-KEY=k1;TYPE=WORK:alice_work\r\n\
+X-GADUGADU;X-JMAP-KEY=g1;TYPE=HOME:123456\r\n\
+END:VCARD\r\n";
+
+        let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
+        assert!(!contact.is_null());
+
+        // EDS reads distinct slot fields for HOME_1 and WORK_1 across services
+        let jabber_home_ptr = e_contact_get_const(contact, E_CONTACT_IM_JABBER_HOME_1);
+        assert!(!jabber_home_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(jabber_home_ptr.cast()).to_str().unwrap(),
+            "alice@home.example"
+        );
+
+        let jabber_work_ptr = e_contact_get_const(contact, E_CONTACT_IM_JABBER_WORK_1);
+        assert!(!jabber_work_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(jabber_work_ptr.cast()).to_str().unwrap(),
+            "alice@work.example"
+        );
+
+        let matrix_home_ptr = e_contact_get_const(contact, E_CONTACT_IM_MATRIX_HOME_1);
+        assert!(!matrix_home_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(matrix_home_ptr.cast()).to_str().unwrap(),
+            "@alice:matrix.example"
+        );
+
+        let skype_work_ptr = e_contact_get_const(contact, E_CONTACT_IM_SKYPE_WORK_1);
+        assert!(!skype_work_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(skype_work_ptr.cast()).to_str().unwrap(),
+            "alice_work"
+        );
+
+        let gg_home_ptr = e_contact_get_const(contact, E_CONTACT_IM_GADUGADU_HOME_1);
+        assert!(!gg_home_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(gg_home_ptr.cast()).to_str().unwrap(),
+            "123456"
+        );
+
+        // Modifying Jabber HOME_1 in place updates only that line and preserves its key
+        e_contact_set(
+            contact,
+            E_CONTACT_IM_JABBER_HOME_1,
+            c"alice_new@home.example".as_ptr().cast(),
+        );
+
+        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            updated_vcard.contains("X-JABBER;TYPE=HOME;X-JMAP-KEY=s1:alice_new@home.example")
+                || updated_vcard.contains("X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:alice_new@home.example"),
+            "Jabber HOME should update in place keeping X-JMAP-KEY: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("X-JABBER;TYPE=WORK;X-JMAP-KEY=s2:alice@work.example")
+                || updated_vcard.contains("X-JABBER;X-JMAP-KEY=s2;TYPE=WORK:alice@work.example"),
+            "Jabber WORK should remain intact: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("X-MATRIX;TYPE=HOME;X-JMAP-KEY=m1:@alice:matrix.example")
+                || updated_vcard.contains("X-MATRIX;X-JMAP-KEY=m1;TYPE=HOME:@alice:matrix.example"),
+            "Matrix HOME should remain intact: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("X-SKYPE;TYPE=WORK;X-JMAP-KEY=k1:alice_work")
+                || updated_vcard.contains("X-SKYPE;X-JMAP-KEY=k1;TYPE=WORK:alice_work"),
+            "Skype WORK should remain intact: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("X-GADUGADU;TYPE=HOME;X-JMAP-KEY=g1:123456")
+                || updated_vcard.contains("X-GADUGADU;X-JMAP-KEY=g1;TYPE=HOME:123456"),
+            "Gadu-Gadu HOME should remain intact: {updated_vcard}"
+        );
+
+        // Modifying Skype WORK_1 in place updates only that line and preserves its key
+        e_contact_set(
+            contact,
+            E_CONTACT_IM_SKYPE_WORK_1,
+            c"alice_skype_new".as_ptr().cast(),
+        );
+        let second_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let second_vcard = CStr::from_ptr(second_vcard_ptr).to_str().unwrap();
+        assert!(
+            second_vcard.contains("X-SKYPE;TYPE=WORK;X-JMAP-KEY=k1:alice_skype_new")
+                || second_vcard.contains("X-SKYPE;X-JMAP-KEY=k1;TYPE=WORK:alice_skype_new"),
+            "Skype WORK should update in place keeping X-JMAP-KEY: {second_vcard}"
+        );
+
+        g_free(updated_vcard_ptr.cast());
+        g_free(second_vcard_ptr.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
