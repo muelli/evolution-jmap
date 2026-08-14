@@ -22010,5 +22010,64 @@ hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-nineteenth session)
 
-Claiming M3 increment: verify year-only birthday and deathdate preservation and EDS field mapping.
+**Verifying year-only birthday and deathdate preservation and EDS field mapping.**
+This session resolves the blocker "a deathday and a birthday stated as a year alone are still invisible"
+by measuring EDS 3.52 `EContactDate` and date field mappings in `eds-sys`, adding partial date and
+deathdate omission tests in `jmap-vcard`, verifying in-place preservation of unmodeled dates in
+`jmap-book-sync`, and proving survival across real EDS daemons in `jmap-functional`.
+
+**EDS 3.52 `EContactDate` measurement and verification:**
+- Probed `libebook-contacts-1.2` for contact date structures and field properties:
+  - `E_CONTACT_BIRTH_DATE` (212) and `E_CONTACT_ANNIVERSARY` (213) are structured `EContactDate`
+    fields (`year`, `month`, `day`), where `e_contact_field_is_string` is FALSE (`0`) and
+    `e_contact_field_type` matches `e_contact_date_get_type()`.
+  - `e_contact_field_id_from_vcard` maps `BDAY` to `E_CONTACT_BIRTH_DATE` and
+    `X-EVOLUTION-ANNIVERSARY` to `E_CONTACT_ANNIVERSARY`.
+  - vCard 4.0 `DEATHDATE`, `X-DEATHDATE`, and standard `ANNIVERSARY` have NO EDS field ID (return `0`),
+    confirming EDS has no native representation for death dates.
+  - `e_contact_date_from_string` and `e_contact_date_to_string` parse and format ISO 8601 extended
+    (`1964-03-27`) and basic (`19640327`) calendar dates.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `contact_date_fields_are_structured_e_contact_date_types`: verifies type, string status,
+    field names (`"birth_date"`, `"anniversary"`), and vCard line mappings.
+  - Added `e_contact_date_parsing_and_formatting`: verifies struct field values and formatting.
+
+**Mapping, sync, and functional verification across workspace:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `partial_dates_for_wedding_and_death_anniversaries_get_no_vcard_lines`: verifies that
+    partial dates (year only, year+month only, month+day only) for `wedding` and `death` produce
+    no `X-EVOLUTION-ANNIVERSARY`, `ANNIVERSARY`, `BDAY`, or `DEATHDATE` lines.
+  - Added `multiple_anniversaries_with_unmodeled_death_and_partial_dates_emit_only_full_dates`:
+    verifies that a card with a full wedding anniversary, a year-only birthday, and a deathday
+    emits only the valid `X-EVOLUTION-ANNIVERSARY` line.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `editing_unrelated_field_preserves_year_only_birthday_and_deathday`: verifies that
+    editing an unrelated field and modifying the wedding anniversary preserves unmodeled
+    year-only birthdays and deathdays intact on the server.
+- In `jmap-functional/tests/address-book.rs`:
+  - Seeded `seed_card` with a full wedding anniversary (`wedding-1`), a year-only birthday
+    (`birth-year-1`), and a deathday (`death-1`).
+  - Added `assert_the_seeded_anniversaries_survived`: verified across all 10 seeded functional test
+    legs through real EDS daemons that all 3 anniversaries survive client edits intact.
+
+Tests: 1028 in the default set (up 3: 111 in `jmap-vcard/tests/mapping.rs`, 87 in
+`jmap-book-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/contacts.rs` (5 total) and
+all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1028 tests,
+and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and
+`cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: a deathday and a birthday stated as
+a year alone are still invisible (now verified and tabled).
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; whether the editor lets a handle be moved between the Home and Work slots at all
+is unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact editor
+writes for a replaced photo, and into a cleared field, is inferred rather than measured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.
 

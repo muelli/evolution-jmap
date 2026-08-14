@@ -972,6 +972,81 @@ fn invents_a_key_for_a_date_that_has_none() {
     assert_eq!(anniversaries["y2"].kind, "wedding");
 }
 
+#[test]
+fn partial_dates_for_wedding_and_death_anniversaries_get_no_vcard_lines() {
+    for date in [
+        json!({"year": 1996}),
+        json!({"month": 8, "day": 3}),
+        json!({"year": 1996, "month": 8}),
+    ] {
+        let vcard = card_to_vcard(&one_anniversary("wedding", date.clone()));
+        assert!(
+            !vcard.contains("\r\nX-EVOLUTION-ANNIVERSARY"),
+            "{date}: {vcard}"
+        );
+        assert!(!vcard.contains("ANNIVERSARY"), "{date}: {vcard}");
+    }
+
+    for date in [
+        json!({"year": 2019}),
+        json!({"month": 10, "day": 15}),
+        json!({"year": 2019, "month": 10, "day": 15}),
+    ] {
+        let vcard = card_to_vcard(&one_anniversary("death", date.clone()));
+        assert!(!vcard.contains("\r\nBDAY"), "{date}: {vcard}");
+        assert!(
+            !vcard.contains("\r\nX-EVOLUTION-ANNIVERSARY"),
+            "{date}: {vcard}"
+        );
+        assert!(!vcard.contains("DEATHDATE"), "{date}: {vcard}");
+    }
+}
+
+#[test]
+fn multiple_anniversaries_with_unmodeled_death_and_partial_dates_emit_only_full_dates() {
+    let card = ContactCard {
+        anniversaries: Some(
+            [
+                (
+                    "y1".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(json!({"year": 1964})),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y2".to_owned(),
+                    Anniversary {
+                        kind: "death".to_owned(),
+                        date: Some(json!({"year": 2019, "month": 10, "day": 15})),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y3".to_owned(),
+                    Anniversary {
+                        kind: "wedding".to_owned(),
+                        date: Some(json!({"year": 1996, "month": 8, "day": 3})),
+                        ..Anniversary::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(!vcard.contains("BDAY"), "{vcard}");
+    assert!(!vcard.contains("death"), "{vcard}");
+    assert!(!vcard.contains("DEATHDATE"), "{vcard}");
+    assert_eq!(
+        line(&vcard, "X-EVOLUTION-ANNIVERSARY"),
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y3:1996-08-03"
+    );
+}
+
 fn one_nickname(key: &str, name: &str) -> ContactCard {
     ContactCard {
         nicknames: Some(

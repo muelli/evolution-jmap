@@ -154,3 +154,64 @@ fn e_contact_field_id_from_vcard_maps_x_lines() {
         );
     }
 }
+
+#[test]
+fn contact_date_fields_are_structured_e_contact_date_types() {
+    unsafe {
+        let date_type = e_contact_date_get_type();
+        assert_ne!(date_type, 0);
+
+        // E_CONTACT_BIRTH_DATE is structured EContactDate, not string
+        assert_eq!(e_contact_field_is_string(E_CONTACT_BIRTH_DATE), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_BIRTH_DATE), date_type);
+        let bday_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_BIRTH_DATE));
+        assert_eq!(bday_name.to_str().unwrap(), "birth_date");
+
+        // E_CONTACT_ANNIVERSARY is structured EContactDate, not string
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ANNIVERSARY), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_ANNIVERSARY), date_type);
+        let ann_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ANNIVERSARY));
+        assert_eq!(ann_name.to_str().unwrap(), "anniversary");
+
+        // BDAY and X-EVOLUTION-ANNIVERSARY resolve to their field IDs
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"BDAY".as_ptr()),
+            E_CONTACT_BIRTH_DATE
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-EVOLUTION-ANNIVERSARY".as_ptr()),
+            E_CONTACT_ANNIVERSARY
+        );
+
+        // Unmodeled date headers (DEATHDATE, X-DEATHDATE, ANNIVERSARY) have no EDS field ID
+        assert_eq!(e_contact_field_id_from_vcard(c"DEATHDATE".as_ptr()), 0);
+        assert_eq!(e_contact_field_id_from_vcard(c"X-DEATHDATE".as_ptr()), 0);
+        assert_eq!(e_contact_field_id_from_vcard(c"ANNIVERSARY".as_ptr()), 0);
+    }
+}
+
+#[test]
+fn e_contact_date_parsing_and_formatting() {
+    unsafe {
+        // Complete ISO date parsing
+        let date = e_contact_date_from_string(c"1964-03-27".as_ptr());
+        assert!(!date.is_null());
+        assert_eq!((*date).year, 1964);
+        assert_eq!((*date).month, 3);
+        assert_eq!((*date).day, 27);
+
+        let formatted = e_contact_date_to_string(date);
+        assert!(!formatted.is_null());
+        assert_eq!(CStr::from_ptr(formatted).to_str().unwrap(), "1964-03-27");
+        g_free(formatted.cast());
+        e_contact_date_free(date);
+
+        // Compact ISO date parsing
+        let compact = e_contact_date_from_string(c"19640327".as_ptr());
+        assert!(!compact.is_null());
+        assert_eq!((*compact).year, 1964);
+        assert_eq!((*compact).month, 3);
+        assert_eq!((*compact).day, 27);
+        e_contact_date_free(compact);
+    }
+}
