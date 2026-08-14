@@ -858,3 +858,71 @@ fn a_row_stored_without_the_column_loads_as_a_row_that_remembers_nothing() {
         g_object_unref(info.cast());
     }
 }
+
+/// Verifying that headers containing multiple occurrences (e.g. repeated `Received` headers)
+/// and custom `X-` headers are safely processed into `CamelMessageInfo` via `CamelNameValueArray`.
+#[test]
+fn the_name_value_array_handles_duplicate_and_special_headers() {
+    let headers = &[
+        ("From", "sender@example.com"),
+        ("To", "receiver@example.com"),
+        ("Subject", "Multi-hop message"),
+        ("Received", "from mail1.example.org by mx.example.com"),
+        ("Received", "from client.local by mail1.example.org"),
+        ("X-Evolution-Custom", "true"),
+        ("X-JMAP-State", "sync-v1"),
+        ("Message-ID", "<msg-special-01@example.com>"),
+    ];
+
+    let info = camel_info_from(headers);
+    unsafe {
+        assert_eq!(
+            column(camel_message_info_get_subject(info)).as_deref(),
+            Some("Multi-hop message")
+        );
+        assert_eq!(
+            column(camel_message_info_get_from(info)).as_deref(),
+            Some("sender@example.com")
+        );
+        assert_eq!(
+            column(camel_message_info_get_to(info)).as_deref(),
+            Some("receiver@example.com")
+        );
+        let digest = camel_message_info_get_message_id(info);
+        assert_ne!(digest, 0);
+
+        g_object_unref(info.cast());
+    }
+}
+
+/// Verifying that multi-level reply chains and references maintain proper nearest-ancestor
+/// ordering and non-zero 64-bit digests in `CamelMessageInfo`.
+#[test]
+fn multiple_references_and_long_in_reply_to_chains_maintain_ancestry_ordering() {
+    let mut message = row("Em0099");
+    message.message_id = Some("reply-03@example.com".to_owned());
+    message.references = vec![
+        "root-00@example.com".to_owned(),
+        "parent-01@example.com".to_owned(),
+        "immediate-02@example.com".to_owned(),
+    ];
+    let info = info_of(&message);
+    let oracle = camel_info_from(&[
+        ("Message-ID", "<reply-03@example.com>"),
+        (
+            "References",
+            "<root-00@example.com> <parent-01@example.com>",
+        ),
+        ("In-Reply-To", "<immediate-02@example.com>"),
+    ]);
+
+    unsafe {
+        let refs = references(info);
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs, references(oracle));
+        assert_ne!(camel_message_info_get_message_id(info), 0);
+
+        g_object_unref(info.cast());
+        g_object_unref(oracle.cast());
+    }
+}

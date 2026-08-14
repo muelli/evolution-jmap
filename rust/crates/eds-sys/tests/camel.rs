@@ -774,3 +774,237 @@ fn camel_data_cache_operations_in_eds() {
         glib_sys::g_free(tmp_dir_raw.cast());
     }
 }
+
+/// Probing `CamelNameValueArray` construction, header insertion, named lookup, copying,
+/// equality, index removal, clearing, and cleanup in EDS 3.52.
+#[test]
+fn camel_name_value_array_lifecycle_and_operations_in_eds() {
+    unsafe {
+        let array = camel_name_value_array_new();
+        assert!(!array.is_null());
+        assert_eq!(camel_name_value_array_get_length(array), 0);
+
+        camel_name_value_array_append(array, c"Subject".as_ptr(), c"Quarterly Report".as_ptr());
+        camel_name_value_array_append(
+            array,
+            c"X-Custom-Header".as_ptr(),
+            c"CustomValue42".as_ptr(),
+        );
+        camel_name_value_array_append(
+            array,
+            c"Received".as_ptr(),
+            c"from mx1.example.com".as_ptr(),
+        );
+        camel_name_value_array_append(
+            array,
+            c"Received".as_ptr(),
+            c"from mx2.example.com".as_ptr(),
+        );
+
+        assert_eq!(camel_name_value_array_get_length(array), 4);
+
+        // Name and Value access by index
+        let name0 = camel_name_value_array_get_name(array, 0);
+        let val0 = camel_name_value_array_get_value(array, 0);
+        assert!(!name0.is_null());
+        assert!(!val0.is_null());
+        assert_eq!(std::ffi::CStr::from_ptr(name0).to_str().unwrap(), "Subject");
+        assert_eq!(
+            std::ffi::CStr::from_ptr(val0).to_str().unwrap(),
+            "Quarterly Report"
+        );
+
+        // Named lookup
+        let custom_val = camel_name_value_array_get_named(
+            array,
+            CAMEL_COMPARE_CASE_INSENSITIVE,
+            c"x-custom-header".as_ptr(),
+        );
+        assert!(!custom_val.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(custom_val).to_str().unwrap(),
+            "CustomValue42"
+        );
+
+        let missing_val = camel_name_value_array_get_named(
+            array,
+            CAMEL_COMPARE_CASE_SENSITIVE,
+            c"Non-Existent".as_ptr(),
+        );
+        assert!(missing_val.is_null());
+
+        // Get by out-pointers
+        let mut out_name: *const gchar = std::ptr::null();
+        let mut out_val: *const gchar = std::ptr::null();
+        let get_res = camel_name_value_array_get(array, 1, &mut out_name, &mut out_val);
+        assert_ne!(get_res, glib_sys::GFALSE);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(out_name).to_str().unwrap(),
+            "X-Custom-Header"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(out_val).to_str().unwrap(),
+            "CustomValue42"
+        );
+
+        // Copy and equality
+        let copy = camel_name_value_array_copy(array);
+        assert!(!copy.is_null());
+        assert_eq!(
+            camel_name_value_array_get_length(copy),
+            camel_name_value_array_get_length(array)
+        );
+
+        // Remove by index
+        camel_name_value_array_remove(array, 1);
+        assert_eq!(camel_name_value_array_get_length(array), 3);
+        assert_eq!(camel_name_value_array_get_length(copy), 4);
+
+        // Clear
+        camel_name_value_array_clear(array);
+        assert_eq!(camel_name_value_array_get_length(array), 0);
+
+        camel_name_value_array_free(copy);
+        camel_name_value_array_free(array);
+    }
+}
+
+/// Probing `CamelMessageFlags` and `CamelFolderFlags` bitmask constants and bit independence in EDS 3.52.
+#[test]
+fn camel_message_flags_and_folder_flags_in_eds() {
+    // 1. CamelMessageFlags bitmask isolation
+    assert_eq!(CAMEL_MESSAGE_ANSWERED, 1 << 0);
+    assert_eq!(CAMEL_MESSAGE_DELETED, 1 << 1);
+    assert_eq!(CAMEL_MESSAGE_DRAFT, 1 << 2);
+    assert_eq!(CAMEL_MESSAGE_FLAGGED, 1 << 3);
+    assert_eq!(CAMEL_MESSAGE_SEEN, 1 << 4);
+    assert_eq!(CAMEL_MESSAGE_ATTACHMENTS, 1 << 5);
+    assert_eq!(CAMEL_MESSAGE_ANSWERED_ALL, 1 << 6);
+    assert_eq!(CAMEL_MESSAGE_JUNK, 1 << 7);
+    assert_eq!(CAMEL_MESSAGE_SECURE, 1 << 8);
+    assert_eq!(CAMEL_MESSAGE_NOTJUNK, 1 << 9);
+    assert_eq!(CAMEL_MESSAGE_FORWARDED, 1 << 10);
+    assert_eq!(CAMEL_MESSAGE_FOLDER_FLAGGED, 1 << 16);
+    assert_eq!(CAMEL_MESSAGE_JUNK_LEARN, 1 << 30);
+    assert_eq!(CAMEL_MESSAGE_USER, 1 << 31);
+
+    let combined_msg_flags: CamelMessageFlags =
+        CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED | CAMEL_MESSAGE_ATTACHMENTS;
+    assert_ne!(combined_msg_flags & CAMEL_MESSAGE_SEEN, 0);
+    assert_ne!(combined_msg_flags & CAMEL_MESSAGE_FLAGGED, 0);
+    assert_ne!(combined_msg_flags & CAMEL_MESSAGE_ATTACHMENTS, 0);
+    assert_eq!(combined_msg_flags & CAMEL_MESSAGE_ANSWERED, 0);
+    assert_eq!(combined_msg_flags & CAMEL_MESSAGE_DELETED, 0);
+    assert_eq!(combined_msg_flags & CAMEL_MESSAGE_DRAFT, 0);
+
+    // 2. CamelFolderFlags (on folder objects) and CamelFolderInfoFlags (on folder info nodes)
+    assert_eq!(CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, 1 << 0);
+    assert_eq!(CAMEL_FOLDER_FILTER_RECENT, 1 << 2);
+    assert_eq!(CAMEL_FOLDER_HAS_BEEN_DELETED, 1 << 3);
+    assert_eq!(CAMEL_FOLDER_IS_TRASH, 1 << 4);
+    assert_eq!(CAMEL_FOLDER_IS_JUNK, 1 << 5);
+    assert_eq!(CAMEL_FOLDER_FILTER_JUNK, 1 << 6);
+
+    let combined_obj_flags: CamelFolderFlags =
+        CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY | CAMEL_FOLDER_FILTER_RECENT | CAMEL_FOLDER_IS_TRASH;
+    assert_ne!(combined_obj_flags & CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, 0);
+    assert_ne!(combined_obj_flags & CAMEL_FOLDER_FILTER_RECENT, 0);
+    assert_ne!(combined_obj_flags & CAMEL_FOLDER_IS_TRASH, 0);
+    assert_eq!(combined_obj_flags & CAMEL_FOLDER_IS_JUNK, 0);
+
+    // CamelFolderInfoFlags
+    assert_eq!(CAMEL_FOLDER_NOSELECT, 1 << 0);
+    assert_eq!(CAMEL_FOLDER_NOINFERIORS, 1 << 1);
+    assert_eq!(CAMEL_FOLDER_CHILDREN, 1 << 2);
+    assert_eq!(CAMEL_FOLDER_NOCHILDREN, 1 << 3);
+    assert_eq!(CAMEL_FOLDER_SUBSCRIBED, 1 << 4);
+    assert_eq!(CAMEL_FOLDER_VIRTUAL, 1 << 5);
+    assert_eq!(CAMEL_FOLDER_SYSTEM, 1 << 6);
+    assert_eq!(CAMEL_FOLDER_SHARED_TO_ME, 1 << 8);
+    assert_eq!(CAMEL_FOLDER_SHARED_BY_ME, 1 << 9);
+    assert_eq!(CAMEL_FOLDER_READONLY, 1 << 16);
+    assert_eq!(CAMEL_FOLDER_WRITEONLY, 1 << 17);
+
+    let combined_info_flags: CamelFolderInfoFlags =
+        CAMEL_FOLDER_SYSTEM | CAMEL_FOLDER_SUBSCRIBED | CAMEL_FOLDER_NOCHILDREN;
+    assert_ne!(combined_info_flags & CAMEL_FOLDER_SYSTEM, 0);
+    assert_ne!(combined_info_flags & CAMEL_FOLDER_SUBSCRIBED, 0);
+    assert_ne!(combined_info_flags & CAMEL_FOLDER_NOCHILDREN, 0);
+    assert_eq!(combined_info_flags & CAMEL_FOLDER_NOSELECT, 0);
+    assert_eq!(combined_info_flags & CAMEL_FOLDER_READONLY, 0);
+    assert_eq!(combined_info_flags & CAMEL_FOLDER_CHILDREN, 0);
+}
+
+/// Probing `CamelMIRecord` and `CamelFIRecord` summary database record structures in EDS 3.52.
+#[test]
+fn camel_summary_records_mirecord_and_firecord_in_eds() {
+    unsafe {
+        // CamelMIRecord (Message Info Record)
+        let mut mi_rec: CamelMIRecord = std::mem::zeroed();
+        let uid_ptr = glib_sys::g_strdup(c"msg-0042".as_ptr());
+        let subj_ptr = glib_sys::g_strdup(c"Test Subject".as_ptr());
+        let from_ptr = glib_sys::g_strdup(c"sender@example.com".as_ptr());
+        let to_ptr = glib_sys::g_strdup(c"recipient@example.com".as_ptr());
+        let bdata_ptr = glib_sys::g_strdup(c"keyword1 keyword2".as_ptr());
+
+        mi_rec.uid = uid_ptr;
+        mi_rec.subject = subj_ptr;
+        mi_rec.from = from_ptr;
+        mi_rec.to = to_ptr;
+        mi_rec.flags = CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED;
+        mi_rec.size = 2048;
+        mi_rec.dsent = 1700000000;
+        mi_rec.dreceived = 1700000100;
+        mi_rec.bdata = bdata_ptr;
+
+        assert_eq!(
+            std::ffi::CStr::from_ptr(mi_rec.uid).to_str().unwrap(),
+            "msg-0042"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(mi_rec.subject).to_str().unwrap(),
+            "Test Subject"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(mi_rec.from).to_str().unwrap(),
+            "sender@example.com"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(mi_rec.bdata).to_str().unwrap(),
+            "keyword1 keyword2"
+        );
+        assert_eq!(mi_rec.size, 2048);
+        assert_eq!(mi_rec.flags, CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED);
+
+        glib_sys::g_free(uid_ptr.cast());
+        glib_sys::g_free(subj_ptr.cast());
+        glib_sys::g_free(from_ptr.cast());
+        glib_sys::g_free(to_ptr.cast());
+        glib_sys::g_free(bdata_ptr.cast());
+
+        // CamelFIRecord (Folder Info Record)
+        let mut fi_rec: CamelFIRecord = std::mem::zeroed();
+        let fi_bdata = glib_sys::g_strdup(c"mailbox-state-token-12345".as_ptr());
+        fi_rec.version = 1;
+        fi_rec.flags = CAMEL_FOLDER_SYSTEM | CAMEL_FOLDER_SUBSCRIBED;
+        fi_rec.nextuid = 100;
+        fi_rec.timestamp = 1700000200;
+        fi_rec.saved_count = 50;
+        fi_rec.unread_count = 5;
+        fi_rec.deleted_count = 2;
+        fi_rec.junk_count = 0;
+        fi_rec.bdata = fi_bdata;
+
+        assert_eq!(fi_rec.version, 1);
+        assert_eq!(fi_rec.flags, CAMEL_FOLDER_SYSTEM | CAMEL_FOLDER_SUBSCRIBED);
+        assert_eq!(fi_rec.nextuid, 100);
+        assert_eq!(fi_rec.saved_count, 50);
+        assert_eq!(fi_rec.unread_count, 5);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(fi_rec.bdata).to_str().unwrap(),
+            "mailbox-state-token-12345"
+        );
+
+        glib_sys::g_free(fi_bdata.cast());
+    }
+}
