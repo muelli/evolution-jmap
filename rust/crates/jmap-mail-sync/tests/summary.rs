@@ -401,3 +401,37 @@ fn summary_maps_combined_flags_and_custom_tags_faithfully() {
         vec!["$custom_label".to_owned(), "work/urgent".to_owned()]
     );
 }
+
+#[test]
+fn summary_with_attachments_and_forwarded_flag_retains_all_attributes() {
+    let email = Email {
+        id: Some(Id::new("M-ATTACH-99")),
+        blob_id: Some(Id::new("B-ATTACH-99")),
+        thread_id: Some(Id::new("T-ATTACH-99")),
+        size: Some(1048576),
+        subject: Some("Quarterly Results Presentation".to_owned()),
+        has_attachment: Some(true),
+        keywords: Some(
+            [
+                (keyword::FORWARDED.to_owned(), true),
+                (keyword::SEEN.to_owned(), true),
+                ("finance".to_owned(), true),
+            ]
+            .into(),
+        ),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary with attachment");
+    assert_eq!(summary.uid, Id::new("M-ATTACH-99"));
+    assert_eq!(summary.size, 1048576);
+    assert_eq!(
+        summary.subject.as_deref(),
+        Some("Quarterly Results Presentation")
+    );
+    assert!(summary.flags.attachments);
+    assert!(summary.flags.forwarded);
+    assert!(summary.flags.seen);
+    assert!(!summary.flags.flagged);
+    assert_eq!(summary.tags, vec!["finance".to_owned()]);
+}

@@ -347,3 +347,71 @@ Detailed test body.\r\n";
     assert!(row.flags.seen);
     assert!(row.tags.contains(&"$label1".to_string()));
 }
+
+#[test]
+fn importing_a_multipart_message_with_attachment_and_html_alternate_preserves_content() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+
+    let multipart_bytes = b"From: Sender <sender@example.com>\r\n\
+To: Recipient <recipient@example.com>\r\n\
+Subject: Invoice and Statement\r\n\
+Message-ID: <invoice-statement-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 15:45:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"mix_bound_987\"\r\n\
+\r\n\
+--mix_bound_987\r\n\
+Content-Type: multipart/alternative; boundary=\"alt_bound_987\"\r\n\
+\r\n\
+--alt_bound_987\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+Please review your invoice attached.\r\n\
+\r\n\
+--alt_bound_987\r\n\
+Content-Type: text/html; charset=\"utf-8\"\r\n\
+\r\n\
+<p>Please review your invoice attached.</p>\r\n\
+\r\n\
+--alt_bound_987--\r\n\
+\r\n\
+--mix_bound_987\r\n\
+Content-Type: application/pdf; name=\"invoice.pdf\"\r\n\
+Content-Disposition: attachment; filename=\"invoice.pdf\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+JVBERi0xLjQKJcfsj6IKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAw\r\n\
+\r\n\
+--mix_bound_987--\r\n";
+
+    let flags = MessageFlags {
+        flagged: true,
+        ..MessageFlags::default()
+    };
+    let keywords = Keywords::new(&flags, &["billing".to_string()]);
+
+    let uid = fixture
+        .sync()
+        .import_message(&inbox, multipart_bytes.to_vec(), &keywords, None)
+        .expect("multipart message is imported");
+
+    let row = only(fixture.listing(&inbox));
+    assert_eq!(row.uid, uid);
+    assert_eq!(row.subject.as_deref(), Some("Invoice and Statement"));
+    assert_eq!(
+        row.message_id.as_deref(),
+        Some("invoice-statement-2026@example.com")
+    );
+    assert_eq!(row.from.len(), 1);
+    assert_eq!(row.from[0].email, "sender@example.com");
+    assert_eq!(row.size as usize, multipart_bytes.len());
+    assert!(row.flags.flagged);
+    assert!(row.tags.contains(&"billing".to_string()));
+
+    let fetched_source = fixture
+        .sync()
+        .message_source(&uid)
+        .expect("fetched binary source");
+    assert_eq!(fetched_source, multipart_bytes);
+}

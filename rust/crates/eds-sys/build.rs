@@ -156,7 +156,9 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelDataWrapper.*",
     "CamelMedium.*",
     "CamelMimePart.*",
+    "CamelMultipart.*",
     "CamelMimeMessage.*",
+    "CamelTransferEncoding",
     // Where a message fetched once is kept, so opening it a second time is not
     // a second download: a directory of files keyed by a path and a name, which
     // is what IMAPX's message cache is too. A `GObject` like the rest and
@@ -366,7 +368,8 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // asks where an entry landed.
     "camel_data_cache_.*",
     "camel_medium_.*",
-    "camel_mime_part_get_type",
+    "camel_mime_part_.*",
+    "camel_multipart_.*",
     "camel_mime_message_.*",
     "camel_transport_.*",
     "camel_session_.*",
@@ -396,6 +399,7 @@ const ALLOWED_VARS: &[&str] = &[
     "EDS_CAMEL_PROVIDER_DIR",
     "CAMEL_FOLDER_TYPE_BIT",
     "CAMEL_FOLDER_TYPE_MASK",
+    "CAMEL_MAX_PREVIEW_LENGTH",
 ];
 
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys

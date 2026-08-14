@@ -244,6 +244,11 @@ fn camel_layouts_match_the_gtype_system() {
     assert_layout!(camel_medium_get_type, CamelMedium, CamelMediumClass);
     assert_layout!(camel_mime_part_get_type, CamelMimePart, CamelMimePartClass);
     assert_layout!(
+        camel_multipart_get_type,
+        CamelMultipart,
+        CamelMultipartClass
+    );
+    assert_layout!(
         camel_mime_message_get_type,
         CamelMimeMessage,
         CamelMimeMessageClass
