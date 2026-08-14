@@ -22728,3 +22728,8 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-thirty-seventh session)
+
+**Claiming increment:** Camel internet address (`CamelInternetAddress`), MIME message parsing and header inspection (`CamelMimeMessage`), message data caching (`CamelDataCache`), user named flags (`CamelNamedFlags`), and summary `bdata` encoding semantics EDS verification in `eds-sys`, address formatting and envelope extraction verification in `jmap-mail`, and message import header preservation in `jmap-mail-sync`.
+
+
