@@ -22565,3 +22565,8 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-14 (two-hundred-and-thirty-second session)
+
+**Claiming increment:** structured name (EContactName), geographic coordinates (EContactGeo), certificates (EContactCert), and boolean metadata EDS verification, roundtrip fidelity in `jmap-vcard`, and targeted preservation across `jmap-book-sync`.
+
