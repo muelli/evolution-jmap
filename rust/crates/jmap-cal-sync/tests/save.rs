@@ -4239,3 +4239,117 @@ fn clearing_exdates_and_overrides_patches_server_recurrence_map() {
     let alerts = stored.alerts.expect("alerts");
     assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT10M"));
 }
+
+#[test]
+fn editing_event_datetime_and_duration_preserves_unmodeled_locations_and_links() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "timeZone": "Europe/Berlin",
+            "duration": "PT1H",
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": "Room 101",
+                    "coordinates": "geo:48.8566,2.3522"
+                }
+            },
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/spec.pdf",
+                    "contentType": "application/pdf"
+                }
+            },
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT10M"
+                    },
+                    "action": "display"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Modify DTSTART and DURATION
+    let edited = loaded
+        .replace("20260115T130000", "20260116T150000")
+        .replace("DURATION:PT1H", "DURATION:PT2H30M");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.start.as_deref(), Some("2026-01-16T15:00:00"));
+    assert_eq!(stored.duration.as_deref(), Some("PT2H30M"));
+    assert_eq!(stored.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    // Locations, links, and alerts are preserved intact
+    let locs = stored.locations.expect("locations");
+    assert_eq!(locs["loc1"]["name"], json!("Room 101"));
+    assert_eq!(locs["loc1"]["coordinates"], json!("geo:48.8566,2.3522"));
+
+    let links = stored.links.expect("links");
+    assert_eq!(
+        links["l1"]["href"],
+        json!("https://files.example.com/spec.pdf")
+    );
+
+    let alerts = stored.alerts.expect("alerts");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT10M"));
+}
+
+#[test]
+fn editing_allday_dates_preserves_unmodeled_virtual_locations_and_keywords() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Hackathon", "2026-01-15T00:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "showWithoutTime": true,
+            "timeZone": null,
+            "duration": "P2D",
+            "keywords": {"internal": true, "hackathon": true},
+            "virtualLocations": {
+                "v1": {
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/hackathon",
+                    "name": "Hackathon Main Room"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(loaded.contains("VALUE=DATE:20260115"), "{loaded}");
+
+    // Modify all-day start and duration
+    let edited = loaded
+        .replace("20260115", "20260117")
+        .replace("DURATION:P2D", "DURATION:P3D");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.start.as_deref(), Some("2026-01-17T00:00:00"));
+    assert_eq!(stored.duration.as_deref(), Some("P3D"));
+    assert_eq!(stored.show_without_time, Some(true));
+
+    let kws = stored.keywords.expect("keywords");
+    assert!(kws.contains_key("internal"));
+    assert!(kws.contains_key("hackathon"));
+
+    let vlocs = stored.virtual_locations.expect("virtual locations");
+    assert_eq!(
+        vlocs["v1"]["uri"],
+        json!("https://meet.example.com/hackathon")
+    );
+}
