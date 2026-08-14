@@ -21957,4 +21957,54 @@ hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-eighteenth session)
 
-Claiming M3 increment: verify conventional IM URI schemes for AIM, ICQ, MSN, and Yahoo in jmap-vcard and jmap-book-sync.
+**Tabling conventional IM URI schemes for AIM, ICQ, MSN, and Yahoo across workspace.**
+This session resolves the blocker "the conventional URI schemes for AIM, ICQ, MSN and Yahoo
+remain untabled" by adding explicit test suites in `jmap-vcard`, `jmap-book-sync`, and `eds-sys`
+verifying that conventional action/query and unstandardized URI formats are safely omitted from
+vCard drawing, slotted user handles round-trip faithfully, and server-side URI entries are
+preserved intact across EDS saves.
+
+**Conventional IM URI schemes analysis and test verification:**
+- Investigated conventional URI formats across instant-messaging protocols:
+  - `AIM`: Uses query/action schemes (`aim:goim?screenname=...`, `aim:addbuddy?screenname=...`).
+  - `MSN`: Uses query/action schemes (`msnim:chat?contact=...`, `msnim:add?contact=...`).
+  - `Yahoo`: Uses query/action schemes (`ymsgr:sendim?...`, `ymsgr:chat?...`).
+  - `ICQ`: Lacks a standalone IANA scheme and conventionally uses query parameters (`icq:message?uin=...`).
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `conventional_action_query_or_unregistered_im_uris_get_no_vcard_line`: proves that
+    URI-only entries for AIM, MSN, Yahoo, and ICQ produce no `X-AIM`, `X-MSN`, `X-YAHOO`, or `X-ICQ`
+    lines, preventing corruption of Evolution's free-text handle fields with URI parameters.
+  - Added `conventional_im_services_with_user_handles_are_drawn_and_roundtripped`: verifies that
+    entries specifying a `user` handle for AIM, ICQ, MSN, and Yahoo are correctly drawn with
+    `X-JMAP-KEY` and slot `TYPE=HOME` / `TYPE=WORK`, and parsed back into `OnlineService` entries.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `conventional_im_uri_schemes_are_preserved_across_saves`: verifies that when an address
+    book contact on the server carries conventional URI-only entries for AIM, ICQ, MSN, and ICQ,
+    editing an unrelated property in Evolution preserves all 4 URIs intact without mangling or data loss.
+  - Added `slotted_conventional_im_handles_are_patched_correctly`: verifies that modifying slotted
+    user handles in vCard accurately patches `onlineServices/<key>/user` on the server.
+- In `eds-sys/tests/contacts.rs`:
+  - Extended `e_contact_field_id_from_vcard_maps_x_lines` to verify that `X-ICQ`, `X-MSN`, `X-YAHOO`,
+    `X-GOOGLE-TALK`, and `X-GROUPWISE` all resolve to their corresponding `EContactField` enum IDs.
+
+Tests: 1025 in the default set (up 4: 109 in `jmap-vcard/tests/mapping.rs`, 86 in
+`jmap-book-sync/tests/save.rs`), plus comprehensive vCard field mapping assertions in `eds-sys`.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1025 tests,
+and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and
+`cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: the conventional URI schemes for AIM, ICQ, MSN
+and Yahoo remain untabled (now verified and tabled).
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as
+a year alone are still invisible; whether the editor lets a handle be moved between the Home and Work slots at all
+is unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact editor
+writes for a replaced photo, and into a cleared field, is inferred rather than measured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.
+

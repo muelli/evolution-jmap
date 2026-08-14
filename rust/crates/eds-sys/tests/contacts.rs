@@ -132,5 +132,25 @@ fn e_contact_field_id_from_vcard_maps_x_lines() {
             e_contact_field_id_from_vcard(c"X-MATRIX".as_ptr()),
             E_CONTACT_IM_MATRIX
         );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-ICQ".as_ptr()),
+            E_CONTACT_IM_ICQ
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-MSN".as_ptr()),
+            E_CONTACT_IM_MSN
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-YAHOO".as_ptr()),
+            E_CONTACT_IM_YAHOO
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-GOOGLE-TALK".as_ptr()),
+            E_CONTACT_IM_GOOGLE_TALK
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-GROUPWISE".as_ptr()),
+            E_CONTACT_IM_GROUPWISE
+        );
     }
 }
