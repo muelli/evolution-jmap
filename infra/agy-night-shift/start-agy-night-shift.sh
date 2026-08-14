@@ -40,14 +40,12 @@ while true; do
     duration=$(( $(date +%s) - start ))
     log "agy finished: exit=$status duration=${duration}s"
 
-    # Detect quota/usage limit: either by explicit message in output, or by
-    # a fast failure (< 30s) with non-zero exit — agy often just exits silently.
+    # Detect quota/usage limit.
+    # Exact message observed from agy: "Error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in Xh Ym Zs."
+    # Note: agy exits 0 even on quota errors, so we cannot rely on exit code.
     quota_hit=0
-    if grep -qiE "usage limit|quota exceeded|resource exhausted|rate limit|429" "$out"; then
+    if grep -qiE "Individual quota reached|usage limit|quota exceeded|resource exhausted|rate limit" "$out"; then
         log "Quota error detected in output."
-        quota_hit=1
-    elif [ "$status" -ne 0 ] && [ "$duration" -lt 30 ]; then
-        log "Fast non-zero exit (${duration}s) — likely a quota/auth error."
         quota_hit=1
     fi
     rm -f "$out"
