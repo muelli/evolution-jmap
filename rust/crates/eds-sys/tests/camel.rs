@@ -1330,3 +1330,271 @@ fn camel_transfer_encoding_constants_in_eds() {
 
     assert_eq!(CAMEL_MAX_PREVIEW_LENGTH, 256);
 }
+
+/// Probing `CamelContentType` creation, parameter setting, decoding, matching, and formatting in EDS 3.52.
+#[test]
+fn camel_content_type_creation_parameters_and_matching_in_eds() {
+    unsafe {
+        // Construct structured content type
+        let ct = camel_content_type_new(c"text".as_ptr(), c"plain".as_ptr());
+        assert!(!ct.is_null());
+        assert_eq!(
+            camel_content_type_is(ct, c"text".as_ptr(), c"plain".as_ptr()),
+            glib_sys::GTRUE
+        );
+        assert_eq!(
+            camel_content_type_is(ct, c"text".as_ptr(), c"*".as_ptr()),
+            glib_sys::GTRUE
+        );
+        assert_eq!(
+            camel_content_type_is(ct, c"image".as_ptr(), c"*".as_ptr()),
+            glib_sys::GFALSE
+        );
+
+        // Parameters
+        camel_content_type_set_param(ct, c"charset".as_ptr(), c"utf-8".as_ptr());
+        camel_content_type_set_param(ct, c"format".as_ptr(), c"flowed".as_ptr());
+        let charset = camel_content_type_param(ct, c"charset".as_ptr());
+        assert!(!charset.is_null());
+        assert_eq!(std::ffi::CStr::from_ptr(charset).to_str().unwrap(), "utf-8");
+
+        // Format
+        let formatted = camel_content_type_format(ct);
+        assert!(!formatted.is_null());
+        let formatted_str = std::ffi::CStr::from_ptr(formatted).to_str().unwrap();
+        assert!(formatted_str.starts_with("text/plain"));
+        assert!(formatted_str.contains("charset=\"utf-8\""));
+        assert!(formatted_str.contains("format=\"flowed\""));
+        glib_sys::g_free(formatted.cast());
+
+        let simple = camel_content_type_simple(ct);
+        assert!(!simple.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(simple).to_str().unwrap(),
+            "text/plain"
+        );
+        glib_sys::g_free(simple.cast());
+
+        camel_content_type_unref(ct);
+
+        // Decode from header string
+        let decoded = camel_content_type_decode(
+            c"text/html; charset=\"ISO-8859-1\"; name=\"document.html\"".as_ptr(),
+        );
+        assert!(!decoded.is_null());
+        assert_eq!(
+            camel_content_type_is(decoded, c"text".as_ptr(), c"html".as_ptr()),
+            glib_sys::GTRUE
+        );
+        let name_param = camel_content_type_param(decoded, c"name".as_ptr());
+        assert!(!name_param.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(name_param).to_str().unwrap(),
+            "document.html"
+        );
+
+        camel_content_type_unref(decoded);
+    }
+}
+
+/// Probing `CamelContentDisposition` decoding, formatting, and attachment checking in EDS 3.52.
+#[test]
+fn camel_content_disposition_attachment_parsing_in_eds() {
+    unsafe {
+        let disp = camel_content_disposition_decode(
+            c"attachment; filename=\"statement-2026.pdf\"".as_ptr(),
+        );
+        assert!(!disp.is_null());
+
+        let ct = camel_content_type_new(c"application".as_ptr(), c"pdf".as_ptr());
+        let is_att = camel_content_disposition_is_attachment(disp, ct);
+        assert_eq!(is_att, glib_sys::GTRUE);
+
+        let formatted = camel_content_disposition_format(disp);
+        assert!(!formatted.is_null());
+        let form_str = std::ffi::CStr::from_ptr(formatted).to_str().unwrap();
+        assert!(form_str.contains("attachment"));
+        assert!(form_str.contains("statement-2026.pdf"));
+        glib_sys::g_free(formatted.cast());
+
+        camel_content_type_unref(ct);
+        camel_content_disposition_unref(disp);
+    }
+}
+
+/// Probing `CamelHeaderAddress` address list decoding, formatting, and encoding in EDS 3.52.
+#[test]
+fn camel_header_address_mailbox_decoding_and_formatting_in_eds() {
+    unsafe {
+        let raw = c"Alice Smith <alice@example.com>, Bob Jones <bob@example.com>";
+        let mut addrs: *mut CamelHeaderAddress =
+            camel_header_address_decode(raw.as_ptr(), std::ptr::null());
+        assert!(!addrs.is_null());
+
+        // Check first address node
+        assert_eq!((*addrs).type_, CAMEL_HEADER_ADDRESS_NAME);
+        let name1 = (*addrs).name;
+        let addr1 = (*addrs).v.addr;
+        assert!(!name1.is_null());
+        assert!(!addr1.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(name1).to_str().unwrap(),
+            "Alice Smith"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(addr1).to_str().unwrap(),
+            "alice@example.com"
+        );
+
+        // Check second address node
+        let next_node = (*addrs).next;
+        assert!(!next_node.is_null());
+        assert_eq!((*next_node).type_, CAMEL_HEADER_ADDRESS_NAME);
+        let name2 = (*next_node).name;
+        let addr2 = (*next_node).v.addr;
+        assert_eq!(
+            std::ffi::CStr::from_ptr(name2).to_str().unwrap(),
+            "Bob Jones"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(addr2).to_str().unwrap(),
+            "bob@example.com"
+        );
+
+        // Format and Encode
+        let formatted = camel_header_address_list_format(addrs);
+        assert!(!formatted.is_null());
+        let f_str = std::ffi::CStr::from_ptr(formatted).to_str().unwrap();
+        assert!(f_str.contains("Alice Smith <alice@example.com>"));
+        assert!(f_str.contains("Bob Jones <bob@example.com>"));
+        glib_sys::g_free(formatted.cast());
+
+        let encoded = camel_header_address_list_encode(addrs);
+        assert!(!encoded.is_null());
+        let enc_str = std::ffi::CStr::from_ptr(encoded).to_str().unwrap();
+        assert!(enc_str.contains("alice@example.com"));
+        glib_sys::g_free(encoded.cast());
+
+        camel_header_address_list_clear(&mut addrs);
+        assert!(addrs.is_null());
+    }
+}
+
+/// Probing Camel header date decoding, date formatting, and message ID utilities in EDS 3.52.
+#[test]
+fn camel_header_date_and_msgid_utilities_in_eds() {
+    unsafe {
+        // Date parse
+        let mut tz_offset: glib_sys::gint = 0;
+        let date_sec =
+            camel_header_decode_date(c"Thu, 15 Jan 2026 09:30:00 +0000".as_ptr(), &mut tz_offset);
+        assert_eq!(date_sec, 1_768_469_400);
+        assert_eq!(tz_offset, 0);
+
+        // Date format
+        let formatted_date = camel_header_format_date(date_sec, 0);
+        assert!(!formatted_date.is_null());
+        let date_str = std::ffi::CStr::from_ptr(formatted_date).to_str().unwrap();
+        assert!(date_str.contains("Jan 2026 09:30:00"));
+        assert!(date_str.contains("+0000"));
+        glib_sys::g_free(formatted_date.cast());
+
+        // Message-ID decode (unwraps angle brackets)
+        let mid = camel_header_msgid_decode(c"<msg-alpha-99@example.com>".as_ptr());
+        assert!(!mid.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(mid).to_str().unwrap(),
+            "msg-alpha-99@example.com"
+        );
+        glib_sys::g_free(mid.cast());
+
+        // Transfer encoding from string
+        assert_eq!(
+            camel_transfer_encoding_from_string(c"base64".as_ptr()),
+            CAMEL_TRANSFER_ENCODING_BASE64
+        );
+        assert_eq!(
+            camel_transfer_encoding_from_string(c"quoted-printable".as_ptr()),
+            CAMEL_TRANSFER_ENCODING_QUOTEDPRINTABLE
+        );
+        assert_eq!(
+            camel_transfer_encoding_from_string(c"7bit".as_ptr()),
+            CAMEL_TRANSFER_ENCODING_7BIT
+        );
+    }
+}
+
+/// Probing `CamelMimeMessage` Message-ID, Reply-To, attachment detection, and part lookup by Content-ID in EDS 3.52.
+#[test]
+fn camel_mime_message_attachment_and_reply_to_in_eds() {
+    unsafe {
+        let msg = camel_mime_message_new();
+        assert!(!msg.is_null());
+
+        // Message-ID
+        camel_mime_message_set_message_id(msg, c"<auto-reply-777@example.com>".as_ptr());
+        let mid = camel_mime_message_get_message_id(msg);
+        assert!(!mid.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(mid).to_str().unwrap(),
+            "<auto-reply-777@example.com>"
+        );
+
+        // Reply-To
+        let reply_to = camel_internet_address_new();
+        camel_internet_address_add(
+            reply_to,
+            c"Support Team".as_ptr(),
+            c"support@example.com".as_ptr(),
+        );
+        camel_mime_message_set_reply_to(msg, reply_to);
+
+        let got_reply_to = camel_mime_message_get_reply_to(msg);
+        assert!(!got_reply_to.is_null());
+        assert_eq!(camel_address_length(got_reply_to.cast()), 1);
+
+        // Attachment and Content-ID lookup
+        assert_eq!(camel_mime_message_has_attachment(msg), glib_sys::GFALSE);
+
+        let mp = camel_multipart_new();
+        camel_multipart_set_boundary(mp, c"==_att_bound_==".as_ptr());
+
+        let text_part = camel_mime_part_new();
+        camel_mime_part_set_content(
+            text_part,
+            c"Please see attached invoice.".as_ptr(),
+            28,
+            c"text/plain".as_ptr(),
+        );
+        camel_multipart_add_part(mp, text_part);
+
+        let att_part = camel_mime_part_new();
+        camel_mime_part_set_disposition(att_part, c"attachment".as_ptr());
+        camel_mime_part_set_filename(att_part, c"invoice.pdf".as_ptr());
+        camel_mime_part_set_content_id(att_part, c"invoice-100@example.com".as_ptr());
+        camel_mime_part_set_content(
+            att_part,
+            c"%PDF-invoice-content".as_ptr(),
+            20,
+            c"application/pdf".as_ptr(),
+        );
+        camel_multipart_add_part(mp, att_part);
+
+        camel_medium_set_content(msg.cast(), mp.cast());
+
+        assert_eq!(camel_mime_message_has_attachment(msg), glib_sys::GTRUE);
+
+        let found_part =
+            camel_mime_message_get_part_by_content_id(msg, c"invoice-100@example.com".as_ptr());
+        assert_eq!(found_part, att_part);
+
+        let not_found =
+            camel_mime_message_get_part_by_content_id(msg, c"non-existent-id@example.com".as_ptr());
+        assert!(not_found.is_null());
+
+        gobject_sys::g_object_unref(att_part.cast());
+        gobject_sys::g_object_unref(text_part.cast());
+        gobject_sys::g_object_unref(reply_to.cast());
+        gobject_sys::g_object_unref(msg.cast());
+    }
+}
