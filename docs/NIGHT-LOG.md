@@ -22773,5 +22773,38 @@ No milestone tag.
 
 ## 2026-08-14 (two-hundred-and-thirty-eighth session)
 
-**Claiming increment:** Camel name-value array (`CamelNameValueArray`), message flag bitmasks (`CamelMessageFlags`), folder flag bitmasks (`CamelFolderFlags`), summary database records (`CamelMIRecord`, `CamelFIRecord`), and header threading semantics EDS verification in `eds-sys`, header preservation and multiple references in `jmap-mail`, and thread reference chain assembly in `jmap-mail-sync`.
+**Verifying Camel name-value array (`CamelNameValueArray`), message flag bitmasks (`CamelMessageFlags`), folder flag bitmasks (`CamelFolderFlags`, `CamelFolderInfoFlags`), summary database records (`CamelMIRecord`, `CamelFIRecord`), and header threading semantics in EDS, header preservation and multiple references in `jmap-mail`, and thread reference chain assembly in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel name-value array operations (`camel_name_value_array_new`, `camel_name_value_array_append`, `camel_name_value_array_get_length`, `camel_name_value_array_get_name`, `camel_name_value_array_get_value`, `camel_name_value_array_get_named`, `camel_name_value_array_get`, `camel_name_value_array_copy`, `camel_name_value_array_remove`, `camel_name_value_array_clear`, `camel_name_value_array_free`), `CamelMessageFlags` bitmasks (`CAMEL_MESSAGE_ANSWERED`, `CAMEL_MESSAGE_DELETED`, `CAMEL_MESSAGE_DRAFT`, `CAMEL_MESSAGE_FLAGGED`, `CAMEL_MESSAGE_SEEN`, `CAMEL_MESSAGE_ATTACHMENTS`, `CAMEL_MESSAGE_ANSWERED_ALL`, `CAMEL_MESSAGE_JUNK`, `CAMEL_MESSAGE_SECURE`, `CAMEL_MESSAGE_NOTJUNK`, `CAMEL_MESSAGE_FORWARDED`, `CAMEL_MESSAGE_FOLDER_FLAGGED`, `CAMEL_MESSAGE_JUNK_LEARN`, `CAMEL_MESSAGE_USER`), `CamelFolderFlags` / `CamelFolderInfoFlags` bitmasks (`CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY`, `CAMEL_FOLDER_FILTER_RECENT`, `CAMEL_FOLDER_HAS_BEEN_DELETED`, `CAMEL_FOLDER_IS_TRASH`, `CAMEL_FOLDER_IS_JUNK`, `CAMEL_FOLDER_FILTER_JUNK`, `CAMEL_FOLDER_NOSELECT`, `CAMEL_FOLDER_NOINFERIORS`, `CAMEL_FOLDER_CHILDREN`, `CAMEL_FOLDER_NOCHILDREN`, `CAMEL_FOLDER_SUBSCRIBED`, `CAMEL_FOLDER_VIRTUAL`, `CAMEL_FOLDER_SYSTEM`, `CAMEL_FOLDER_SHARED_TO_ME`, `CAMEL_FOLDER_SHARED_BY_ME`, `CAMEL_FOLDER_READONLY`, `CAMEL_FOLDER_WRITEONLY`), and summary database records (`CamelMIRecord`, `CamelFIRecord` field layouts and bdata storage). In addition, it verifies `CamelNameValueArray` header processing for repeated and custom headers in `jmap-mail`, and reference deduplication and combined flag mapping in `jmap-mail-sync`.
 
+**EDS 3.52 Camel name-value array, flags, and summary record measurement:**
+- Probed `camel-1.2` 3.52 for name-value array, flag masks, and record behaviors:
+  - `CamelNameValueArray`:
+    - `camel_name_value_array_append` appends header name/value pairs and increments length.
+    - `camel_name_value_array_get_name` and `camel_name_value_array_get_value` retrieve borrowed strings at given indices.
+    - `camel_name_value_array_get_named` performs case-insensitive or case-sensitive lookups over headers.
+    - `camel_name_value_array_get` populates out-pointers for name and value.
+    - `camel_name_value_array_copy` clones arrays, `camel_name_value_array_remove` deletes entries at given index, and `camel_name_value_array_clear` resets length to 0.
+  - `CamelMessageFlags` & `CamelFolderFlags`:
+    - Verified exact bit positions: `CAMEL_MESSAGE_ANSWERED` (1), `CAMEL_MESSAGE_DELETED` (2), `CAMEL_MESSAGE_DRAFT` (4), `CAMEL_MESSAGE_FLAGGED` (8), `CAMEL_MESSAGE_SEEN` (16), `CAMEL_MESSAGE_ATTACHMENTS` (32), `CAMEL_MESSAGE_ANSWERED_ALL` (64), `CAMEL_MESSAGE_JUNK` (128), `CAMEL_MESSAGE_SECURE` (256), `CAMEL_MESSAGE_NOTJUNK` (512), `CAMEL_MESSAGE_FORWARDED` (1024), `CAMEL_MESSAGE_FOLDER_FLAGGED` (65536), `CAMEL_MESSAGE_JUNK_LEARN` (1073741824), `CAMEL_MESSAGE_USER` (2147483648).
+    - Verified `CamelFolderFlags` vs `CamelFolderInfoFlags` bit positions: folder object capabilities (`HAS_SUMMARY_CAPABILITY` 1, `FILTER_RECENT` 4, `HAS_BEEN_DELETED` 8, `IS_TRASH` 16, `IS_JUNK` 32, `FILTER_JUNK` 64) and folder info flags (`NOSELECT` 1, `NOINFERIORS` 2, `CHILDREN` 4, `NOCHILDREN` 8, `SUBSCRIBED` 16, `VIRTUAL` 32, `SYSTEM` 64, `SHARED_TO_ME` 256, `SHARED_BY_ME` 512, `READONLY` 65536, `WRITEONLY` 131072).
+  - `CamelMIRecord` & `CamelFIRecord`:
+    - Initialized message and folder summary records with allocated C strings, timestamp (`dsent`, `dreceived`, `timestamp`), sizes, counts, flags, and `bdata`, and safely freed allocations.
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_name_value_array_lifecycle_and_operations_in_eds`: verifies array creation, header addition, named lookups, out-pointer inspection, cloning, index removal, and clearing.
+  - Added `camel_message_flags_and_folder_flags_in_eds`: verifies exact bitmask constants and bitwise independence across message and folder flags.
+  - Added `camel_summary_records_mirecord_and_firecord_in_eds`: verifies `CamelMIRecord` and `CamelFIRecord` struct field assignments and bdata roundtripping.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/message_info.rs`:
+  - Added `the_name_value_array_handles_duplicate_and_special_headers`: verifies that multiple duplicate headers (e.g. repeated `Received`) and custom `X-` headers are safely mapped into `CamelMessageInfo` via `CamelNameValueArray`.
+  - Added `multiple_references_and_long_in_reply_to_chains_maintain_ancestry_ordering`: verifies that multi-level reply chains preserve nearest-ancestor ordering and non-zero 64-bit message-id digests.
+- In `rust/crates/jmap-mail-sync/tests/summary.rs`:
+  - Added `multiple_references_and_in_reply_to_deduplicate_and_preserve_ancestry_order`: verifies that `In-Reply-To` matching the last reference is deduplicated while distinct parents are appended.
+  - Added `summary_maps_combined_flags_and_custom_tags_faithfully`: verifies that all standard keywords, custom user tags, and `has_attachment` are cleanly partitioned between `MessageFlags` and `tags`.
+
+Tests: 1104 in the default set (up 2: 18 in `jmap-mail-sync/tests/summary.rs`), plus 2 new tests in `jmap-mail/tests/message_info.rs` (28 in file, 334 across crate), 3 new tests in `eds-sys/tests/camel.rs` (21 in file, 76 across crate), and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1104 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
