@@ -3969,3 +3969,151 @@ fn editing_unrelated_field_preserves_participants_priority_and_geo_locations() {
     assert_eq!(locs["loc1"]["name"], json!("Conference Hall A"));
     assert_eq!(locs["loc1"]["coordinates"], json!("geo:48.8566,2.3522"));
 }
+
+#[test]
+fn editing_alerts_preserves_unmodeled_locations_and_participants() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M"
+                    },
+                    "action": "display"
+                }
+            },
+            "participants": {
+                "alice": {
+                    "@type": "Participant",
+                    "name": "Alice Example",
+                    "sendTo": {"imip": "mailto:alice@example.com"},
+                    "roles": {"owner": true}
+                }
+            },
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": "Conference Hall A",
+                    "coordinates": "geo:48.8566,2.3522"
+                }
+            },
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/agenda.pdf",
+                    "rel": "enclosure"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = loaded.replace("TRIGGER:-PT15M\r\n", "TRIGGER:-PT30M\r\n");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let alerts = stored.alerts.expect("alerts");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT30M"));
+
+    let parts = stored.participants.expect("participants");
+    assert_eq!(parts["alice"]["name"], json!("Alice Example"));
+
+    let locs = stored.locations.expect("locations");
+    assert_eq!(locs["loc1"]["name"], json!("Conference Hall A"));
+    assert_eq!(locs["loc1"]["coordinates"], json!("geo:48.8566,2.3522"));
+
+    let links = stored.links.expect("links");
+    assert_eq!(
+        links["l1"]["href"],
+        json!("https://files.example.com/agenda.pdf")
+    );
+}
+
+#[test]
+fn editing_unrelated_field_preserves_alerts_intact() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M"
+                    },
+                    "action": "display"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    let edited = loaded.replace(
+        "SUMMARY:Sprint Planning\r\n",
+        "SUMMARY:Sprint Planning v2\r\n",
+    );
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title, Some("Sprint Planning v2".to_owned()));
+
+    let alerts = stored.alerts.expect("alerts");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
+}
+
+#[test]
+fn removing_all_alerts_generates_targeted_null_patch() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M"
+                    },
+                    "action": "display"
+                }
+            },
+            "participants": {
+                "alice": {
+                    "@type": "Participant",
+                    "name": "Alice Example",
+                    "sendTo": {"imip": "mailto:alice@example.com"},
+                    "roles": {"owner": true}
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Remove the entire VALARM component
+    let valarm_start = loaded.find("BEGIN:VALARM\r\n").expect("VALARM start");
+    let valarm_end = loaded.find("END:VALARM\r\n").expect("VALARM end") + "END:VALARM\r\n".len();
+    let mut edited = loaded.clone();
+    edited.replace_range(valarm_start..valarm_end, "");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.alerts, None);
+
+    let parts = stored.participants.expect("participants");
+    assert_eq!(parts["alice"]["name"], json!("Alice Example"));
+}

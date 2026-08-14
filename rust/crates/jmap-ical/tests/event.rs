@@ -6799,3 +6799,123 @@ fn event_with_priority_and_geo_coordinates_roundtrips_faithfully() {
     let locs = parsed.locations.expect("locations");
     assert_eq!(locs["loc1"]["name"], json!("Berlin HQ"));
 }
+
+#[test]
+fn event_with_multiple_alerts_roundtrips_faithfully_to_valarms() {
+    let mut event = CalendarEvent {
+        title: Some("Architecture Review".to_owned()),
+        start: Some("2026-01-15T15:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    event.alerts = Some(
+        [
+            (
+                "a1".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M",
+                        "relativeTo": "start"
+                    },
+                    "action": "display"
+                }),
+            ),
+            (
+                "a2".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "PT10M",
+                        "relativeTo": "end"
+                    },
+                    "action": "display"
+                }),
+            ),
+            (
+                "a3".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-P1D",
+                        "relativeTo": "start"
+                    },
+                    "action": "display"
+                }),
+            ),
+        ]
+        .into(),
+    );
+
+    let ics = event_to_ical(&event);
+    assert_eq!(ics.matches("BEGIN:VALARM\r\n").count(), 3, "{ics}");
+
+    let parsed = ical_to_event(&ics).expect("parse");
+    let alerts = parsed.alerts.expect("alerts map");
+    assert_eq!(alerts.len(), 3);
+
+    assert_eq!(alerts["a1"]["action"], json!("display"));
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
+
+    assert_eq!(alerts["a2"]["action"], json!("display"));
+    assert_eq!(alerts["a2"]["trigger"]["offset"], json!("PT10M"));
+    assert_eq!(alerts["a2"]["trigger"]["relativeTo"], json!("end"));
+
+    assert_eq!(alerts["a3"]["action"], json!("display"));
+    assert_eq!(alerts["a3"]["trigger"]["offset"], json!("-P1D"));
+}
+
+#[test]
+fn event_with_unsupported_or_custom_alarm_action_drops_or_sanitizes_safely() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+               VERSION:2.0\r\n\
+               PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+               BEGIN:VEVENT\r\n\
+               UID:K1\r\n\
+               SUMMARY:Release Party\r\n\
+               DTSTART:20260115T180000Z\r\n\
+               DURATION:PT2H\r\n\
+               BEGIN:VALARM\r\n\
+               UID:valid-disp\r\n\
+               ACTION:DISPLAY\r\n\
+               DESCRIPTION:Reminder\r\n\
+               TRIGGER:-PT10M\r\n\
+               END:VALARM\r\n\
+               BEGIN:VALARM\r\n\
+               UID:audio1\r\n\
+               ACTION:AUDIO\r\n\
+               TRIGGER:-PT15M\r\n\
+               END:VALARM\r\n\
+               BEGIN:VALARM\r\n\
+               UID:email1\r\n\
+               ACTION:EMAIL\r\n\
+               TRIGGER:-PT1H\r\n\
+               DESCRIPTION:Email alert\r\n\
+               SUMMARY:Email alert\r\n\
+               END:VALARM\r\n\
+               BEGIN:VALARM\r\n\
+               UID:proc1\r\n\
+               ACTION:PROCEDURE\r\n\
+               TRIGGER:-PT5M\r\n\
+               END:VALARM\r\n\
+               BEGIN:VALARM\r\n\
+               UID:abs1\r\n\
+               ACTION:DISPLAY\r\n\
+               DESCRIPTION:Absolute alert\r\n\
+               TRIGGER;VALUE=DATE-TIME:20260115T174500Z\r\n\
+               END:VALARM\r\n\
+               END:VEVENT\r\n\
+               END:VCALENDAR\r\n";
+
+    let parsed = ical_to_event(ics).expect("parse");
+    assert_eq!(parsed.title.as_deref(), Some("Release Party"));
+
+    let alerts = parsed.alerts.expect("alerts map");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts["valid-disp"]["action"], json!("display"));
+    assert_eq!(alerts["valid-disp"]["trigger"]["offset"], json!("-PT10M"));
+}
