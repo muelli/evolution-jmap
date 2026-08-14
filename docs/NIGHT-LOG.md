@@ -22392,5 +22392,36 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-twenty-seventh session)
 
-Claiming M4 increment: verify calendar alarm/alert (VALARM) semantics, trigger types, in-place alarm modification and clearing in EDS, roundtrip fidelity in jmap-ical, and alert preservation across sync.
+**Verifying calendar alarm/alert (VALARM) semantics, trigger types, in-place alarm modification and clearing in EDS, round-trip fidelity in `jmap-ical`, and alert preservation across sync.**
+This session measures EDS 3.52 `ECalComponent` alarm (`VALARM`) behaviors, trigger kinds (`E_CAL_COMPONENT_ALARM_TRIGGER_RELATIVE_START`, `E_CAL_COMPONENT_ALARM_TRIGGER_ABSOLUTE`), repeat parameters (`ECalComponentAlarmRepeat`), in-place alarm creation/modification and clearing in `eds-sys`, adds multi-alert and unsupported action tolerance tests in `jmap-ical`, and verifies alert editing and clearing with unmodeled location/participant preservation in `jmap-cal-sync`.
+
+**EDS 3.52 `ECalComponent` alarm getters, setters, and clearing measurement:**
+- Probed `libecal-2.0` and `libical-glib` for alarm and trigger behaviors:
+  - `e_cal_component_has_alarms` checks if any `VALARM` components exist.
+  - `e_cal_component_get_alarm_uids` returns a `GSList` of internal alarm UIDs / hashes.
+  - `e_cal_component_get_alarm` returns `ECalComponentAlarm *`, with `e_cal_component_alarm_get_uid`, `get_action` (`E_CAL_COMPONENT_ALARM_DISPLAY`, `E_CAL_COMPONENT_ALARM_AUDIO`), `get_description`, `get_trigger`, and `get_repeat` accessors.
+  - `e_cal_component_alarm_get_trigger` returns `ECalComponentAlarmTrigger *`, exposing `e_cal_component_alarm_trigger_get_kind`, `get_duration` (`i_cal_duration_is_neg`, `i_cal_duration_get_minutes`), and `get_absolute_time`.
+  - `e_cal_component_alarm_get_repeat` returns `ECalComponentAlarmRepeat *`, exposing `e_cal_component_alarm_repeat_get_repetitions` and `e_cal_component_alarm_repeat_get_interval`.
+  - `e_cal_component_alarm_new`, `e_cal_component_alarm_set_uid`, `e_cal_component_alarm_set_action`, `e_cal_component_alarm_trigger_new_relative`, `e_cal_component_alarm_set_trigger`, and `e_cal_component_add_alarm` construct and install new alarms onto the component.
+  - `e_cal_component_remove_alarm` deletes a specific alarm by UID, and `e_cal_component_remove_all_alarms` clears all `VALARM` components.
+- In `rust/crates/eds-sys/build.rs`:
+  - Allowlisted `i_cal_duration_.*` and `i_cal_time_.*` functions.
+- In `rust/crates/eds-sys/tests/ical.rs`:
+  - Added `ecalcomponent_alarm_handling_and_properties_in_eds`: verifies alarm querying, trigger and repeat inspection, new alarm construction and addition, single alarm removal by UID, and complete alarm clearing.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-ical/tests/event.rs`:
+  - Added `event_with_multiple_alerts_roundtrips_faithfully_to_valarms`: verifies that multiple start-relative and end-relative alerts roundtrip faithfully into iCalendar `VALARM` components with RFC 9074 `UID` / `X-EVOLUTION-ALARM-UID` and back into JSCalendar `alerts`.
+  - Added `event_with_unsupported_or_custom_alarm_action_drops_or_sanitizes_safely`: verifies that unsupported actions (AUDIO, EMAIL, PROCEDURE) or absolute triggers in incoming iCalendar are safely dropped without failing the parse.
+- In `jmap-cal-sync/tests/save.rs`:
+  - Added `editing_alerts_preserves_unmodeled_locations_and_participants`: verifies that modifying an alert trigger produces a targeted patch while preserving unmodeled locations, participants, and links intact on the server.
+  - Added `editing_unrelated_field_preserves_alerts_intact`: verifies that modifying summary preserves all `alerts` intact.
+  - Added `removing_all_alerts_generates_targeted_null_patch`: verifies that clearing all VALARMs generates a clean alert removal patch on the server while keeping other properties intact.
+
+Tests: 1064 in the default set (up 5: 244 in `jmap-ical/tests/event.rs`, 125 in `jmap-cal-sync/tests/save.rs`), plus 1 new test in `eds-sys/tests/ical.rs` (13 total) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1064 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 

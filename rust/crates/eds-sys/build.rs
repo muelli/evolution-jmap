@@ -214,6 +214,8 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // libical's own.
     "i_cal_attach_.*",
     "i_cal_geo_.*",
+    "i_cal_duration_.*",
+    "i_cal_time_.*",
     "i_cal_property_.*",
     "i_cal_parameter_.*",
     "e_cal_component_.*",

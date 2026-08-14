@@ -816,3 +816,190 @@ fn ecalcomponent_priority_sequence_percent_complete_and_geo_in_eds() {
         g_object_unref(calendar.cast());
     }
 }
+
+/// Probing `ECalComponent` alarm accessors, trigger properties, repeat settings,
+/// in-place alarm modification, and alarm clearing.
+/// `e_cal_component_has_alarms` checks for `VALARM` components,
+/// `e_cal_component_get_alarm_uids` lists alarm UIDs,
+/// `e_cal_component_get_alarm` retrieves an `ECalComponentAlarm`,
+/// `e_cal_component_add_alarm` installs a new/modified alarm,
+/// `e_cal_component_remove_alarm` deletes a specific alarm by UID, and
+/// `e_cal_component_remove_all_alarms` clears all alarms.
+#[test]
+fn ecalcomponent_alarm_handling_and_properties_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Team Sync\r\n\
+         DTSTART:20260810T140000Z\r\n\
+         BEGIN:VALARM\r\n\
+         UID:alarm1\r\n\
+         ACTION:DISPLAY\r\n\
+         DESCRIPTION:Team Sync Reminder\r\n\
+         TRIGGER;RELATED=START:-PT15M\r\n\
+         REPEAT:2\r\n\
+         DURATION:PT5M\r\n\
+         END:VALARM\r\n\
+         BEGIN:VALARM\r\n\
+         UID:alarm2\r\n\
+         ACTION:AUDIO\r\n\
+         TRIGGER;VALUE=DATE-TIME:20260810T134500Z\r\n\
+         END:VALARM\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // Has alarms check
+        assert_eq!(e_cal_component_has_alarms(comp), 1);
+
+        // Alarm UIDs listing
+        let uids_list = e_cal_component_get_alarm_uids(comp);
+        assert!(!uids_list.is_null());
+        assert_eq!(g_slist_length(uids_list), 2);
+
+        let auid0 = CStr::from_ptr((*uids_list).data.cast())
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let auid1 = CStr::from_ptr((*(*uids_list).next).data.cast())
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        unsafe extern "C" fn free_gchar(ptr: *mut std::ffi::c_void) {
+            unsafe { g_free(ptr) };
+        }
+        g_slist_free_full(uids_list, Some(free_gchar));
+
+        let auid0_c = text(&auid0);
+        let auid1_c = text(&auid1);
+
+        // Retrieve alarms by the EDS alarm UIDs
+        let a0 = e_cal_component_get_alarm(comp, auid0_c.as_ptr());
+        assert!(!a0.is_null());
+        let a1_comp = e_cal_component_get_alarm(comp, auid1_c.as_ptr());
+        assert!(!a1_comp.is_null());
+
+        let action0 = e_cal_component_alarm_get_action(a0);
+
+        let (a1, a2, a2_uid_to_remove) = if action0 == E_CAL_COMPONENT_ALARM_DISPLAY {
+            (a0, a1_comp, auid1_c)
+        } else {
+            (a1_comp, a0, auid0_c)
+        };
+
+        let a1_uid = e_cal_component_alarm_get_uid(a1);
+        assert!(!a1_uid.is_null());
+        assert!(!CStr::from_ptr(a1_uid).to_str().unwrap().is_empty());
+        assert_eq!(
+            e_cal_component_alarm_get_action(a1),
+            E_CAL_COMPONENT_ALARM_DISPLAY
+        );
+
+        let desc_text = e_cal_component_alarm_get_description(a1);
+        assert!(!desc_text.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(desc_text))
+                .to_str()
+                .unwrap(),
+            "Team Sync Reminder"
+        );
+
+        let trig = e_cal_component_alarm_get_trigger(a1);
+        assert!(!trig.is_null());
+        assert_eq!(
+            e_cal_component_alarm_trigger_get_kind(trig),
+            E_CAL_COMPONENT_ALARM_TRIGGER_RELATIVE_START
+        );
+        let dur = e_cal_component_alarm_trigger_get_duration(trig);
+        assert!(!dur.is_null());
+        assert_eq!(i_cal_duration_is_neg(dur), 1);
+        assert_eq!(i_cal_duration_get_minutes(dur), 15);
+
+        let rep = e_cal_component_alarm_get_repeat(a1);
+        assert!(!rep.is_null());
+        assert_eq!(e_cal_component_alarm_repeat_get_repetitions(rep), 2);
+        let rep_dur = e_cal_component_alarm_repeat_get_interval(rep);
+        assert!(!rep_dur.is_null());
+        assert_eq!(i_cal_duration_get_minutes(rep_dur), 5);
+
+        // Get alarm2
+        assert_eq!(
+            e_cal_component_alarm_get_action(a2),
+            E_CAL_COMPONENT_ALARM_AUDIO
+        );
+        let trig2 = e_cal_component_alarm_get_trigger(a2);
+        assert!(!trig2.is_null());
+        assert_eq!(
+            e_cal_component_alarm_trigger_get_kind(trig2),
+            E_CAL_COMPONENT_ALARM_TRIGGER_ABSOLUTE
+        );
+        e_cal_component_alarm_free(a2.cast());
+
+        // Add a new alarm (alarm3)
+        let a3 = e_cal_component_alarm_new();
+        assert!(!a3.is_null());
+        e_cal_component_alarm_set_uid(a3, text("alarm3").as_ptr());
+        e_cal_component_alarm_set_action(a3, E_CAL_COMPONENT_ALARM_DISPLAY);
+
+        let dur3 = i_cal_duration_new_from_string(text("-PT30M").as_ptr());
+        assert!(!dur3.is_null());
+        let trig3 = e_cal_component_alarm_trigger_new_relative(
+            E_CAL_COMPONENT_ALARM_TRIGGER_RELATIVE_START,
+            dur3,
+        );
+        assert!(!trig3.is_null());
+        e_cal_component_alarm_set_trigger(a3, trig3);
+        e_cal_component_alarm_trigger_free(trig3.cast());
+        g_object_unref(dur3.cast());
+
+        e_cal_component_add_alarm(comp, a3);
+        e_cal_component_alarm_free(a3.cast());
+
+        // Verify alarm3 exists
+        let a3_read = e_cal_component_get_alarm(comp, text("alarm3").as_ptr());
+        assert!(!a3_read.is_null());
+        assert_eq!(
+            e_cal_component_alarm_get_action(a3_read),
+            E_CAL_COMPONENT_ALARM_DISPLAY
+        );
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_alarm_get_uid(a3_read))
+                .to_str()
+                .unwrap(),
+            "alarm3"
+        );
+        e_cal_component_alarm_free(a3_read.cast());
+
+        // Remove alarm2 by auid
+        e_cal_component_remove_alarm(comp, a2_uid_to_remove.as_ptr());
+        assert!(e_cal_component_get_alarm(comp, a2_uid_to_remove.as_ptr()).is_null());
+
+        // Remove all alarms
+        e_cal_component_remove_all_alarms(comp);
+        assert_eq!(e_cal_component_has_alarms(comp), 0);
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            !rendered.contains("BEGIN:VALARM"),
+            "VALARM still present after remove_all_alarms: {rendered}"
+        );
+
+        e_cal_component_alarm_free(a1.cast());
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}
