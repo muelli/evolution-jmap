@@ -3274,3 +3274,100 @@ fn editing_work_address_label_preserves_secondary_home_address_and_label() {
         Some("Heimweg 2\n80331 München\nGermany")
     );
 }
+
+#[test]
+fn saving_contact_with_multiple_im_services_and_contexts_preserves_all_entries() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s1": {"service": "Jabber", "user": "vera@home.example", "contexts": {"private": true}},
+                "s2": {"service": "Jabber", "user": "vera@work.example", "contexts": {"work": true}},
+                "s3": {"service": "Matrix", "user": "@vera:matrix.example", "contexts": {"work": true}},
+                "s4": {"service": "Skype", "user": "vera_skype", "contexts": {"private": true}},
+                "s5": {"service": "Gadu-Gadu", "user": "123456", "contexts": {"work": true}},
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@home.example"));
+    assert!(vcard.contains("X-JABBER;X-JMAP-KEY=s2;TYPE=WORK:vera@work.example"));
+    assert!(vcard.contains("X-MATRIX;X-JMAP-KEY=s3;TYPE=WORK:@vera:matrix.example"));
+    assert!(vcard.contains("X-SKYPE;X-JMAP-KEY=s4;TYPE=HOME:vera_skype"));
+    assert!(vcard.contains("X-GADUGADU;X-JMAP-KEY=s5;TYPE=WORK:123456"));
+
+    // An edit on an unrelated field preserves all 5 onlineServices intact
+    let edited = vcard.replace(
+        "END:VCARD\r\n",
+        "NOTE:Preserve all IM services\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let services = card.online_services.expect("onlineServices");
+    assert_eq!(services.len(), 5, "{services:?}");
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@home.example"));
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s2"].user.as_deref(), Some("vera@work.example"));
+    assert_eq!(services["s2"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s3"].user.as_deref(), Some("@vera:matrix.example"));
+    assert_eq!(services["s3"].service.as_deref(), Some("Matrix"));
+    assert_eq!(services["s4"].user.as_deref(), Some("vera_skype"));
+    assert_eq!(services["s4"].service.as_deref(), Some("Skype"));
+    assert_eq!(services["s5"].user.as_deref(), Some("123456"));
+    assert_eq!(services["s5"].service.as_deref(), Some("Gadu-Gadu"));
+}
+
+#[test]
+fn editing_one_im_handle_preserves_secondary_im_handles_of_same_and_different_services() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s1": {"service": "Jabber", "user": "vera@home.example", "contexts": {"private": true}},
+                "s2": {"service": "Jabber", "user": "vera@work.example", "contexts": {"work": true}},
+                "s3": {"service": "Matrix", "user": "@vera:matrix.example", "contexts": {"work": true}},
+                "s4": {"service": "Skype", "user": "vera_skype", "contexts": {"private": true}},
+                "s5": {"service": "Gadu-Gadu", "user": "123456", "contexts": {"work": true}},
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    // Edit s1 (Jabber HOME) and s4 (Skype HOME) in place
+    let edited = vcard
+        .replace(
+            "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@home.example",
+            "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera_updated@home.example",
+        )
+        .replace(
+            "X-SKYPE;X-JMAP-KEY=s4;TYPE=HOME:vera_skype",
+            "X-SKYPE;X-JMAP-KEY=s4;TYPE=HOME:alice_work_skype",
+        );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let services = card.online_services.expect("onlineServices");
+    assert_eq!(services.len(), 5, "{services:?}");
+    assert_eq!(
+        services["s1"].user.as_deref(),
+        Some("vera_updated@home.example")
+    );
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s2"].user.as_deref(), Some("vera@work.example"));
+    assert_eq!(services["s2"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s3"].user.as_deref(), Some("@vera:matrix.example"));
+    assert_eq!(services["s3"].service.as_deref(), Some("Matrix"));
+    assert_eq!(services["s4"].user.as_deref(), Some("alice_work_skype"));
+    assert_eq!(services["s4"].service.as_deref(), Some("Skype"));
+    assert_eq!(services["s5"].user.as_deref(), Some("123456"));
+    assert_eq!(services["s5"].service.as_deref(), Some("Gadu-Gadu"));
+}
+
