@@ -22940,3 +22940,7 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-14 (two-hundred-and-forty-second session)
+
+Claiming Camel stream (`CamelStream`, `CamelStreamMem`, `CamelStreamNull`, `CamelStreamFs`, `CamelStreamFilter`) and MIME filter (`CamelMimeFilter`, `CamelMimeFilterBasic`, `CamelMimeFilterCRLF`, `CamelMimeFilterLinewrap`) verification in EDS 3.52, stream pipeline and MIME filter tests in `jmap-mail`, and stream-based import and payload encoding tests in `jmap-mail-sync`.
