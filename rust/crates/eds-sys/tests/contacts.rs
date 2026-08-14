@@ -554,7 +554,8 @@ END:VCARD\r\n";
 
         assert!(
             updated_vcard.contains("X-JABBER;TYPE=HOME;X-JMAP-KEY=s1:alice_new@home.example")
-                || updated_vcard.contains("X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:alice_new@home.example"),
+                || updated_vcard
+                    .contains("X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:alice_new@home.example"),
             "Jabber HOME should update in place keeping X-JMAP-KEY: {updated_vcard}"
         );
         assert!(

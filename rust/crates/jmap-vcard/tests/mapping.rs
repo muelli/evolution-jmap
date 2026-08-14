@@ -2924,4 +2924,3 @@ END:VCARD\r\n";
     assert_eq!(services["s2"].user.as_deref(), Some("@bob:matrix.example"));
     assert_eq!(services["s2"].service.as_deref(), Some("Matrix"));
 }
-
