@@ -21834,6 +21834,63 @@ hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-sixteenth session)
 
-Claiming milestone completion tracking: establish docs/MILESTONES.md for completed milestones M1-M6, M8 and verify structure via tests.
+**Establishing `docs/MILESTONES.md` ledger and verifying milestone completions.**
+This session resolves the long-standing blocker "`docs/MILESTONES.md` does not exist,
+so the M8 tag is still unwritten" by creating the machine-readable milestones ledger
+per `docs/ROADMAP.md` rules and writing an automated verification suite in `jmap-proto`.
+
+**Machine-readable milestone completion tracking.**
+- `docs/ROADMAP.md` defines milestone signaling: `<TAG> COMPLETE <short-sha> <ISO-date>`,
+  which is also watched by `infra/night-shift/reaudit-trigger.sh`.
+- Created `docs/MILESTONES.md` recording all genuinely completed milestones with their
+  exact completion commit SHAs and dates from git history:
+  - `M1 COMPLETE 0ac316b 2026-08-08` (`eds-sys` bindgen FFI layer)
+  - `M2 COMPLETE 3d13b38 2026-08-08` (`jmap-backend-core` GObject subclassing scaffold)
+  - `M3 COMPLETE a46d271 2026-08-08` (address book backend `libebookbackendjmap.so`)
+  - `M4 COMPLETE 1d62c73 2026-08-08` (calendar backend `libecalbackendjmap.so`)
+  - `M5 COMPLETE 0464500 2026-08-10` (mail Camel provider `libcameljmap.so`)
+  - `M6 COMPLETE d0eb034 2026-08-10` (collection backend `module-jmap-backend.so`)
+  - `M8 COMPLETE 24d0b57 2026-08-10` (installable `.deb` artifact via CPack and release attestation)
+- Following the "Do not claim what you cannot verify" rule, M7 is not tagged COMPLETE
+  as it requires human verification in real Evolution, and M9 Tier 2 GUI smoke test
+  remains deferred.
+
+**TDD test suite in `jmap-proto`.**
+- Added `rust/crates/jmap-proto/tests/milestones.rs` with 4 tests:
+  - `milestones_file_exists_and_parses`: asserts existence of `docs/MILESTONES.md` and
+    presence of M1-M6, M8 completion tags.
+  - `milestones_entries_are_chronological`: enforces monotonic date ordering.
+  - `parser_rejects_malformed_entries`: validates strict adherence to schema (token
+    count, keyword, hex SHA length/validity, YYYY-MM-DD date range, tag uniqueness).
+  - `milestone_commits_exist_in_git_history`: verifies each listed commit SHA exists
+    in git via `git rev-parse --verify`.
+
+**EDS 3.52 probing for `E_CONTACT_SIP` and `E_CONTACT_IM_TWITTER`.**
+- Measured `libebook-contacts-1.2` field definitions: both `E_CONTACT_SIP` and
+  `E_CONTACT_IM_TWITTER` have `EContactField` type `EContactAttrList` (`GList*` of `char*`),
+  explaining why neither has synthetic per-slot string fields (`_HOME_1`, `_WORK_1`) in
+  Evolution's contact editor.
+
+Tests: 1018 in the default set (up 4 in `jmap-proto/tests/milestones.rs`).
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1018 tests,
+and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and
+`cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+Removed from the blocker list: `docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as
+a year alone are still invisible; the conventional URI schemes for AIM, ICQ, MSN and Yahoo
+remain untabled; `X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour
+unmeasured; whether the editor lets a handle be moved between the Home and Work slots at all
+is unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact editor
+writes for a replaced photo, and into a cleared field, is inferred rather than measured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.
+
 
 
