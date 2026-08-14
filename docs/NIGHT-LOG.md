@@ -22493,4 +22493,34 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirtieth session)
 
-Claiming M3 increment: verify web, collaboration, note, nickname, spouse, and categories semantics in EDS, roundtrip fidelity in jmap-vcard, and preservation across book sync.
+**Verifying web URL, collaboration, note, nickname, spouse, and categories semantics in EDS, roundtrip fidelity in `jmap-vcard`, and preservation across book sync.**
+This session measures EDS 3.52 `EContact` field properties and vCard line behaviors for web (`E_CONTACT_HOMEPAGE_URL`, `E_CONTACT_BLOG_URL`, `E_CONTACT_VIDEO_URL`), collaboration (`E_CONTACT_CALENDAR_URI`, `E_CONTACT_FREEBUSY_URL`, `E_CONTACT_ICS_CALENDAR`), notes (`E_CONTACT_NOTE`), nicknames (`E_CONTACT_NICKNAME`), spouse relations (`E_CONTACT_SPOUSE`), and categories (`E_CONTACT_CATEGORIES`, `E_CONTACT_CATEGORY_LIST`), adds multiple-entry roundtrip tests in `jmap-vcard`, and verifies field editing, unmodeled property preservation, and category clearing across `jmap-book-sync`.
+
+**EDS 3.52 `EContact` field properties and vCard behavior measurement:**
+- Probed `libebook-contacts` 3.52 for web, collaboration, note, nickname, spouse, and category field properties:
+  - `E_CONTACT_HOMEPAGE_URL` (`"homepage_url"`), `E_CONTACT_BLOG_URL` (`"blog_url"`), `E_CONTACT_VIDEO_URL` (`"video_url"`), `E_CONTACT_CALENDAR_URI` (`"caluri"`), `E_CONTACT_FREEBUSY_URL` (`"fburl"`), `E_CONTACT_ICS_CALENDAR` (`"icscalendar"`), `E_CONTACT_NOTE` (`"note"`), `E_CONTACT_SPOUSE` (`"spouse"`), `E_CONTACT_NICKNAME` (`"nickname"`), and `E_CONTACT_CATEGORIES` (`"categories"`) are string fields (`e_contact_field_is_string == 1`).
+  - `E_CONTACT_CATEGORY_LIST` (`"category_list"`) is a multi-valued field (`e_contact_field_is_string == 0`) returning a `GList *` of allocated `gchar *` strings.
+  - `e_contact_field_id_from_vcard` maps `"URL"` to `E_CONTACT_HOMEPAGE_URL`, `"CALURI"` to `E_CONTACT_CALENDAR_URI`, `"FBURL"` to `E_CONTACT_FREEBUSY_URL`, `"NOTE"` to `E_CONTACT_NOTE`, `"NICKNAME"` to `E_CONTACT_NICKNAME`, `"CATEGORIES"` to `E_CONTACT_CATEGORY_LIST` (93), `"X-EVOLUTION-BLOG-URL"` to `E_CONTACT_BLOG_URL`, `"X-EVOLUTION-VIDEO-URL"` to `E_CONTACT_VIDEO_URL`, and `"X-EVOLUTION-SPOUSE"` to `E_CONTACT_SPOUSE`.
+  - `e_contact_get_const` retrieves borrowed strings for homepage, calendar URI, freebusy URL, primary note, nickname, categories, and spouse.
+  - In-place modification via `e_contact_set` updates the targeted lines while preserving secondary `URL`, `CALURI`, `FBURL`, secondary `NOTE`, and `X-JMAP-KEY` parameters in `e_vcard_to_string`.
+  - Setting `E_CONTACT_NOTE` to `NULL` cleanly removes the targeted `NOTE:` line while preserving secondary notes.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `contact_web_collaboration_note_and_misc_field_properties`: verifies string vs list field classifications, field names, and vCard property ID mappings.
+  - Added `web_collaboration_note_nickname_categories_vcard_lines_and_modification_in_eds`: verifies multi-field parsing, `E_CONTACT_CATEGORY_LIST` iteration, in-place field modification, `X-JMAP-KEY` parameter survival, and line deletion upon clearing.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `maps_notes_with_multiple_entries_and_newlines_faithfully`: verifies that multi-entry and multi-line formatted notes roundtrip to `NOTE` lines with `X-JMAP-KEY` and back into JSContact `notes`.
+  - Added `maps_calendars_freebusy_and_links_faithfully`: verifies that `calendars` (`kind: "calendar"`, `kind: "freeBusy"`) and `links` (`URL`) roundtrip faithfully to `CALURI`, `FBURL`, `URL` lines with `X-JMAP-KEY` parameters.
+  - Added `maps_nicknames_spouse_and_keywords_faithfully`: verifies that `nicknames`, spouse `relatedTo` entries, and `keywords` roundtrip faithfully to `NICKNAME`, `X-EVOLUTION-SPOUSE`, and `CATEGORIES` lines.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `editing_notes_and_links_preserves_unmodeled_cards_and_properties`: verifies that editing notes and links generates targeted patches on `notes/<key>/note` and `links/<key>/uri` while preserving unmodeled `preferredLanguages` and `onlineServices` intact on the server.
+  - Added `editing_calendars_nicknames_and_spouse_preserves_unmodeled_contact_fields`: verifies that modifying calendars, nicknames, and spouse generates targeted patches while preserving crypto keys intact.
+  - Added `clearing_categories_and_notes_patches_server_fields`: verifies that clearing categories and notes from vCard sends clean deletion patches to the server while keeping emails and phones intact.
+
+Tests: 1078 in the default set (up 6: 124 in `jmap-vcard/tests/mapping.rs`, 98 in `jmap-book-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/contacts.rs` (14 in file, 59 across crate) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1078 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.

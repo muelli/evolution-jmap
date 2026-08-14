@@ -3449,3 +3449,165 @@ fn clearing_photo_preserves_unmodeled_logo_and_sound_media() {
     assert_eq!(media["s1"].kind.as_deref(), Some("sound"));
     assert_eq!(media["s1"].uri, "https://example.com/name-audio.ogg");
 }
+
+#[test]
+fn editing_notes_and_links_preserves_unmodeled_cards_and_properties() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "notes": {
+                "n1": {
+                    "@type": "Note",
+                    "note": "Original note text",
+                    "created": "2026-08-01T12:00:00Z"
+                }
+            },
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "uri": "https://example.com/old-website",
+                    "pref": 1
+                }
+            },
+            "preferredLanguages": {
+                "de": {"@type": "LanguagePref", "pref": 1}
+            },
+            "onlineServices": {
+                "os1": {
+                    "@type": "OnlineService",
+                    "service": "Matrix",
+                    "user": "@vera:matrix.org"
+                }
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard
+        .replace("Original note text", "Updated note with new details")
+        .replace(
+            "https://example.com/old-website",
+            "https://example.com/new-website",
+        );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let notes = card.notes.expect("notes");
+    assert_eq!(notes["n1"].note, "Updated note with new details");
+    assert_eq!(
+        notes["n1"].extra.get("created"),
+        Some(&json!("2026-08-01T12:00:00Z")),
+        "created timestamp should be preserved in extra"
+    );
+
+    let links = card.links.expect("links");
+    assert_eq!(links["l1"].uri, "https://example.com/new-website");
+
+    // Unmodeled preferredLanguages and onlineServices remain intact
+    let langs = card
+        .extra
+        .get("preferredLanguages")
+        .expect("preferredLanguages");
+    assert!(langs.get("de").is_some());
+
+    let services = card.online_services.expect("onlineServices");
+    assert_eq!(services["os1"].user.as_deref(), Some("@vera:matrix.org"));
+}
+
+#[test]
+fn editing_calendars_nicknames_and_spouse_preserves_unmodeled_contact_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "calendars": {
+                "c1": {"@type": "Calendar", "kind": "calendar", "uri": "https://example.com/old-cal.ics"},
+                "f1": {"@type": "Calendar", "kind": "freeBusy", "uri": "https://example.com/old-fb.ifb"}
+            },
+            "nicknames": {
+                "k1": {"@type": "Nickname", "name": "OldNick"}
+            },
+            "relatedTo": {
+                "Alex Olden": {"@type": "Relation", "relation": {"spouse": true}}
+            },
+            "cryptoKeys": {
+                "key1": {"@type": "CryptoKey", "uri": "https://example.com/pgp.asc"}
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard
+        .replace(
+            "https://example.com/old-cal.ics",
+            "https://example.com/new-cal.ics",
+        )
+        .replace(
+            "https://example.com/old-fb.ifb",
+            "https://example.com/new-fb.ifb",
+        )
+        .replace("OldNick", "NewNick")
+        .replace("Alex Olden", "Taylor Olden");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let cals = card.calendars.expect("calendars");
+    assert_eq!(cals["c1"].uri, "https://example.com/new-cal.ics");
+    assert_eq!(cals["f1"].uri, "https://example.com/new-fb.ifb");
+
+    let nicks = card.nicknames.expect("nicknames");
+    assert_eq!(nicks["k1"].name, "NewNick");
+
+    let rels = card.related_to.expect("relatedTo");
+    assert!(rels.contains_key("Taylor Olden"));
+
+    // CryptoKeys preserved
+    let crypto = card.extra.get("cryptoKeys").expect("cryptoKeys");
+    assert!(crypto.get("key1").is_some());
+}
+
+#[test]
+fn clearing_categories_and_notes_patches_server_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "keywords": {"Engineering": true, "Rust": true},
+            "notes": {
+                "n1": {"@type": "Note", "note": "To be removed"}
+            },
+            "phones": {
+                "p1": {"@type": "Phone", "number": "+41221234567"}
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let lines: Vec<&str> = vcard
+        .lines()
+        .filter(|l| !l.starts_with("CATEGORIES") && !l.starts_with("NOTE"))
+        .collect();
+    let edited = lines.join("\r\n") + "\r\n";
+
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    assert_eq!(card.keywords, None, "keywords should be removed: {card:?}");
+    assert_eq!(card.notes, None, "notes should be removed: {card:?}");
+
+    // Email and Phone remain intact
+    let emails = card.emails.expect("emails");
+    assert_eq!(
+        emails.values().next().map(|e| e.address.as_str()),
+        Some("vera@example.com")
+    );
+    let phones = card.phones.expect("phones");
+    assert_eq!(phones["p1"].number, "+41221234567");
+}
