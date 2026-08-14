@@ -2099,13 +2099,48 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
     //
     // An entry naming no service at all cannot be drawn either: the property is
     // what states the service, so there would be no line to choose.
-    for service in [Some("Signal"), Some("Twitter"), Some(""), None] {
+    for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
         assert!(
             !vcard.contains("handle"),
             "a handle at {service:?} was drawn: {vcard}"
         );
     }
+}
+
+#[test]
+fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
+    // libebook-contacts 3.52 knows X-TWITTER and X-SIP as EContactAttrList fields
+    // with no slotted fields (_HOME_1..3, _WORK_1..3). When parsing a vCard with
+    // X-TWITTER, X-SIP, or unknown X-SIGNAL, vcard_to_card safely ignores them rather
+    // than creating unmodeled online_services entries.
+    let vcard = "BEGIN:VCARD\r\n\
+                 VERSION:3.0\r\n\
+                 FN:Vera\r\n\
+                 N:;Vera;;;\r\n\
+                 X-SIP:sip:vera@example.com\r\n\
+                 X-TWITTER:vera\r\n\
+                 X-SIGNAL:vera\r\n\
+                 END:VCARD\r\n";
+    let card = vcard_to_card(vcard).expect("parse");
+    assert_eq!(card.online_services, None);
+}
+
+#[test]
+fn mapped_service_is_retained_while_unmapped_sip_and_twitter_are_ignored() {
+    let vcard = "BEGIN:VCARD\r\n\
+                 VERSION:3.0\r\n\
+                 FN:Vera\r\n\
+                 N:;Vera;;;\r\n\
+                 X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example\r\n\
+                 X-SIP:sip:vera@example.com\r\n\
+                 X-TWITTER:vera\r\n\
+                 END:VCARD\r\n";
+    let card = vcard_to_card(vcard).expect("parse");
+    let services = card.online_services.expect("online services");
+    assert_eq!(services.len(), 1);
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
 }
 
 fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {

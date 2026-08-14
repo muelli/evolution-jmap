@@ -21894,7 +21894,66 @@ hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-seventeenth session)
 
-Claiming M3 increment: map SIP service rejection in jmap-vcard and verify EDS contact field definitions in eds-sys.
+**Verifying EDS unslotted IM/SIP fields in `eds-sys` and mapping rejections in `jmap-vcard`.**
+This session closes the long-standing blocker "`X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured" by analyzing and pinning EDS 3.52 field structures in
+`eds-sys`, adding mapping rejection tests in `jmap-vcard`, and verifying save preservation in
+`jmap-book-sync`.
+
+**EDS 3.52 `EContactField` measurement and verification:**
+- Probed `libebook-contacts-1.2` field definitions for all instant-messaging and telephony fields:
+  - 10 slotted services (`AIM`, `GADUGADU`, `GOOGLE_TALK`, `GROUPWISE`, `ICQ`, `JABBER`,
+    `MSN`, `MATRIX`, `SKYPE`, `YAHOO`) each have 6 per-slot string fields (`_HOME_1..3`,
+    `_WORK_1..3`, e.g. `E_CONTACT_IM_AIM_HOME_1` to `E_CONTACT_IM_AIM_WORK_3`), where
+    `e_contact_field_is_string` is TRUE (`1`) and `e_contact_field_type` is `G_TYPE_STRING`.
+  - In contrast, `E_CONTACT_SIP` (127) and `E_CONTACT_IM_TWITTER` (135) have NO per-slot string
+    fields. They are defined solely as `EContactAttrList` (`GList*` of `char*`), where
+    `e_contact_field_is_string` is FALSE (`0`) and `e_contact_field_type` is
+    `e_contact_attr_list_get_type()`.
+  - `e_contact_field_id_from_vcard` maps `X-SIP` to `E_CONTACT_SIP`, `X-TWITTER` to
+    `E_CONTACT_IM_TWITTER`, and standard service lines (`X-JABBER`, `X-AIM`, etc.) to their
+    respective base attribute list fields (`E_CONTACT_IM_JABBER`, etc.).
+- Added `rust/crates/eds-sys/tests/contacts.rs` with 3 test functions:
+  - `twitter_and_sip_fields_are_unslotted_attribute_lists_not_strings`: verifies type, string status,
+    and field names (`"sip"`, `"im_twitter"`).
+  - `instant_messaging_slotted_fields_are_strings_and_have_home_work_slots`: verifies the 60 slotted
+    fields across all 10 services.
+  - `e_contact_field_id_from_vcard_maps_x_lines`: verifies vCard header name to field ID resolution.
+
+**Mapping and round-trip verification in `jmap-vcard` and `jmap-book-sync`:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Extended `a_service_eds_has_no_field_for_gets_no_line` to assert `Some("SIP")` produces no vCard
+    line.
+  - Added `unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader` and
+    `mapped_service_is_retained_while_unmapped_sip_and_twitter_are_ignored`, proving that `X-SIP`,
+    `X-TWITTER`, and unknown IM lines are safely ignored during parsing without inventing unmodeled
+    service entries.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `unmapped_or_unslotted_services_are_preserved_across_saves`, proving that when an address
+    book contact carries unmodeled or unslotted services (like Twitter or SIP) on the server, editing
+    a mapped service (like Jabber) via vCard preserves the unslotted services intact via JSON patch.
+
+Tests: 1021 in the default set (up 3: 107 in `jmap-vcard/tests/mapping.rs`, 84 in
+`jmap-book-sync/tests/save.rs`), plus 3 new tests in `eds-sys/tests/contacts.rs`.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`,
+`cargo clippy`, `cargo test --locked` 1021 tests, and `cargo deny check`); full
+`make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps`
+with `-D warnings` is clean.
+
+Removed from the blocker list: `X-TWITTER` and `X-SIP` are unmapped and their contact-editor
+behaviour unmeasured (now verified and tabled).
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as
+a year alone are still invisible; the conventional URI schemes for AIM, ICQ, MSN and Yahoo
+remain untabled; whether the editor lets a handle be moved between the Home and Work slots at all
+is unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact editor
+writes for a replaced photo, and into a cleared field, is inferred rather than measured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.
 
 
 
