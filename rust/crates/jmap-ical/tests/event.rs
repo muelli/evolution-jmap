@@ -7015,3 +7015,64 @@ fn recurring_event_with_instance_overrides_emits_multiple_vevents_with_recurrenc
         json!("tentative")
     );
 }
+
+#[test]
+fn event_with_allday_dates_and_explicit_timezone_roundtrips_faithfully() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+               VERSION:2.0\r\n\
+               PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+               BEGIN:VEVENT\r\n\
+               UID:allday-1\r\n\
+               SUMMARY:Multi-day Conference\r\n\
+               DTSTART;VALUE=DATE:20260810\r\n\
+               DTEND;VALUE=DATE:20260813\r\n\
+               LOCATION:Convention Center\r\n\
+               END:VEVENT\r\n\
+               END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(event.title.as_deref(), Some("Multi-day Conference"));
+    assert_eq!(event.start.as_deref(), Some("2026-08-10T00:00:00"));
+    assert_eq!(event.duration.as_deref(), Some("P3D"));
+    assert_eq!(event.show_without_time, Some(true));
+    assert_eq!(event.time_zone, None);
+
+    let rendered = event_to_ical(&event);
+    assert_eq!(line(&rendered, "DTSTART"), "DTSTART;VALUE=DATE:20260810");
+    assert_eq!(line(&rendered, "DURATION"), "DURATION:P3D");
+    assert_eq!(line(&rendered, "SUMMARY"), "SUMMARY:Multi-day Conference");
+
+    let parsed_back = ical_to_event(&rendered).expect("roundtrip");
+    assert_eq!(parsed_back.start.as_deref(), Some("2026-08-10T00:00:00"));
+    assert_eq!(parsed_back.duration.as_deref(), Some("P3D"));
+    assert_eq!(parsed_back.show_without_time, Some(true));
+}
+
+#[test]
+fn event_with_fractional_duration_and_utc_or_floating_start_roundtrips() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+               VERSION:2.0\r\n\
+               PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+               BEGIN:VEVENT\r\n\
+               UID:timed-1\r\n\
+               SUMMARY:Tech Sync\r\n\
+               DTSTART:20260810T143000Z\r\n\
+               DURATION:PT1H45M\r\n\
+               END:VEVENT\r\n\
+               END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(event.title.as_deref(), Some("Tech Sync"));
+    assert_eq!(event.start.as_deref(), Some("2026-08-10T14:30:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Etc/UTC"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H45M"));
+
+    let rendered = event_to_ical(&event);
+    assert_eq!(line(&rendered, "DTSTART"), "DTSTART:20260810T143000Z");
+    assert_eq!(line(&rendered, "SUMMARY"), "SUMMARY:Tech Sync");
+
+    let parsed_back = ical_to_event(&rendered).expect("roundtrip");
+    assert_eq!(parsed_back.start.as_deref(), Some("2026-08-10T14:30:00"));
+    assert_eq!(parsed_back.time_zone.as_deref(), Some("Etc/UTC"));
+    assert_eq!(parsed_back.duration.as_deref(), Some("PT1H45M"));
+}
