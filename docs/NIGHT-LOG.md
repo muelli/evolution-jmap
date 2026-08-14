@@ -22248,3 +22248,8 @@ is unmeasured; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's c
 writes for a replaced photo, and into a cleared field, is inferred rather than measured;
 and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
+
+## 2026-08-14 (two-hundred-and-twenty-third session)
+
+Claiming M3 increment: verify contact PHOTO and LOGO field properties, EContactPhoto type semantics, in-place EDS field modification/clearing behavior, and media preservation across sync and real EDS.
+
