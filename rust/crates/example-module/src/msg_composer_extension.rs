@@ -4,6 +4,7 @@
 //! `EMsgComposer` instance.  When a composer window is created the extension
 //! adds a custom menu item and toolbar button to it.
 
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -35,7 +36,7 @@ const COMPOSER_UI_DEF: &str = "\
 </toolbar>\
 \0";
 
-const GETTEXT_PACKAGE: &[u8] = b"example-module\0";
+const GETTEXT_PACKAGE: &CStr = c"example-module";
 
 // ── Action callback ───────────────────────────────────────────────────────────
 
@@ -63,21 +64,20 @@ unsafe extern "C" fn action_msg_composer_cb(_action: *mut ffi::GtkAction, extens
 unsafe fn add_composer_ui(extension: *mut ffi::GObject, composer: *mut ffi::EMsgComposer) {
     let html_editor = ffi::e_msg_composer_get_editor(composer);
     let ui_manager = ffi::e_html_editor_get_ui_manager(html_editor);
-    let action_group =
-        ffi::e_html_editor_get_action_group(html_editor, b"core\0".as_ptr() as *const c_char);
+    let action_group = ffi::e_html_editor_get_action_group(html_editor, c"core".as_ptr());
 
     let entries: [ffi::GtkActionEntry; 1] = [ffi::GtkActionEntry {
-        name: b"my-msg-composer-action\0".as_ptr() as *const c_char,
-        stock_id: b"document-new\0".as_ptr() as *const c_char,
-        label: b"M_y Message Composer Action...\0".as_ptr() as *const c_char,
+        name: c"my-msg-composer-action".as_ptr(),
+        stock_id: c"document-new".as_ptr(),
+        label: c"M_y Message Composer Action...".as_ptr(),
         accelerator: std::ptr::null(),
-        tooltip: b"My Message Composer Action\0".as_ptr() as *const c_char,
+        tooltip: c"My Message Composer Action".as_ptr(),
         callback: Some(action_msg_composer_cb),
     }];
 
     ffi::e_action_group_add_actions_localized(
         action_group,
-        GETTEXT_PACKAGE.as_ptr() as *const c_char,
+        GETTEXT_PACKAGE.as_ptr(),
         entries.as_ptr(),
         entries.len() as c_uint,
         extension as *mut c_void,
@@ -163,7 +163,7 @@ pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     let type_id = ffi::g_type_module_register_type(
         type_module,
         parent_type,
-        b"MMsgComposerExtension\0".as_ptr() as *const c_char,
+        c"MMsgComposerExtension".as_ptr(),
         &type_info,
         0,
     );
