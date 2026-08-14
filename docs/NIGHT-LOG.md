@@ -22943,4 +22943,43 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-forty-second session)
 
-Claiming Camel stream (`CamelStream`, `CamelStreamMem`, `CamelStreamNull`, `CamelStreamFs`, `CamelStreamFilter`) and MIME filter (`CamelMimeFilter`, `CamelMimeFilterBasic`, `CamelMimeFilterCRLF`, `CamelMimeFilterLinewrap`) verification in EDS 3.52, stream pipeline and MIME filter tests in `jmap-mail`, and stream-based import and payload encoding tests in `jmap-mail-sync`.
+**Verifying Camel stream (`CamelStream`, `CamelStreamMem`, `CamelStreamNull`, `CamelStreamFs`, `CamelStreamFilter`), MIME filter (`CamelMimeFilter`, `CamelMimeFilterBasic`, `CamelMimeFilterCRLF`, `CamelMimeFilterLinewrap`) operations and filter pipelines in EDS 3.52, QP and nested multipart MIME serialization in `jmap-mail`, and stream-based message import in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel stream abstractions (`camel_stream_get_type`, `camel_stream_read`, `camel_stream_write`, `camel_stream_flush`, `camel_stream_close`, `camel_stream_eos`, `camel_stream_write_string`), `CamelStreamMem` memory buffers (`camel_stream_mem_new`, `camel_stream_mem_new_with_buffer`, `camel_stream_mem_get_byte_array`), `CamelStreamNull` sinks (`camel_stream_null_new`, `camel_stream_null_get_bytes_written`, `camel_stream_null_get_ends_with_crlf`), `CamelStreamFs` filesystem streams (`camel_stream_fs_new_with_name`, `camel_stream_fs_get_fd`), `CamelStreamFilter` stream filter chaining (`camel_stream_filter_new`, `camel_stream_filter_get_source`, `camel_stream_filter_add`, `camel_stream_filter_remove`), and `CamelMimeFilter` stream transforms (`CamelMimeFilterBasic` Base64/QP encode and decode, `CamelMimeFilterCRLF` line ending canonicalization, and `CamelMimeFilterLinewrap`). In addition, it verifies Quoted-Printable and complex nested multipart MIME serialization and roundtripping in `jmap-mail`, and multi-part import with Base64 attachments in `jmap-mail-sync`.
+
+**EDS 3.52 Camel stream, MIME filter, and pipeline measurement:**
+- Probed `camel-1.2` 3.52 for stream, filter, and encoding pipeline behaviors:
+  - `CamelStream`, `CamelStreamMem`, `CamelStreamNull`, `CamelStreamFs`:
+    - Allowlisted `"CamelStream.*"` and `"camel_stream_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout checks for `CamelStream`, `CamelStreamMem`, `CamelStreamNull`, `CamelStreamFs`, and `CamelStreamFilter` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified memory stream allocation, write, flush, EOS state, and byte array retrieval.
+    - Verified null stream counting and CRLF detection.
+    - Verified filesystem stream creation with Unix file descriptors, string writes, closing, and reading.
+  - `CamelMimeFilter`, `CamelMimeFilterBasic`, `CamelMimeFilterCRLF`, `CamelMimeFilterLinewrap`:
+    - Allowlisted `"CamelMimeFilter.*"`, `"CamelMimeFilterBasicType"`, `"CamelMimeFilterCRLFDirection"`, `"CamelMimeFilterCRLFMode"`, `"camel_mime_filter_.*"`, and `"CAMEL_MIME_FILTER_LINEWRAP_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout checks for `CamelMimeFilter`, `CamelMimeFilterBasic`, `CamelMimeFilterCRLF`, and `CamelMimeFilterLinewrap` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified Base64 encode and decode filter pipelines with `camel_mime_filter_filter` and `camel_mime_filter_complete`, confirming internal buffer lifecycle and complete flushing.
+    - Verified Quoted-Printable filter allocation for encode and decode modes.
+    - Verified CRLF filter flags (`ensure_crlf_end`) and line wrap filter flags (`CAMEL_MIME_FILTER_LINEWRAP_WORD`).
+  - Stream Filter Pipeline:
+    - Verified `CamelStreamFilter` wrapping a memory stream, attaching a Base64 decoding `CamelMimeFilterBasic`, and streaming decoded plaintext directly through `camel_stream_read`.
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_stream_mem_and_null_stream_operations_in_eds`: verifies memory stream writes/EOS/flushing and null stream byte counting / CRLF tracking.
+  - Added `camel_stream_fs_file_operations_in_eds`: verifies temporary file creation, writing via filesystem stream, FD access, and read roundtripping.
+  - Added `camel_mime_filter_basic_base64_and_qp_in_eds`: verifies Base64 encode/decode roundtrips and QP filter allocation.
+  - Added `camel_mime_filter_crlf_and_linewrap_in_eds`: verifies CRLF end enforcement and linewrap filter creation.
+  - Added `camel_stream_filter_pipeline_in_eds`: verifies streaming decompression/decoding through a `CamelStreamFilter` pipeline.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/mime.rs`:
+  - Added `message_with_quoted_printable_body_and_custom_headers_serializes_with_crlf`: verifies that QP-encoded message bodies with soft breaks and custom headers serialize strictly with CRLF without double CRs or bare LFs.
+  - Added `message_with_nested_multipart_and_mixed_encodings_preserves_tree_structure`: verifies that nested multipart hierarchies (multipart/mixed containing multipart/alternative and base64 attachments) preserve boundary trees and CRLF lines.
+- In `rust/crates/jmap-mail-sync/tests/import.rs`:
+  - Added `importing_a_message_with_base64_attachment_and_qp_body_preserves_wire_format`: verifies that importing a message with QP text and Base64 patch attachments preserves summary metadata, size, flags, tags, and payload byte-for-byte.
+
+Tests: 1109 in the default set (up 1: 13 in `jmap-mail-sync/tests/import.rs`), plus 2 new tests in `jmap-mail/tests/mime.rs` (9 in file, 340 across crate), 5 new tests in `eds-sys/tests/camel.rs` (37 in file, 92 across crate), 9 new layout assertions in `eds-sys/tests/layout.rs`, and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1109 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
