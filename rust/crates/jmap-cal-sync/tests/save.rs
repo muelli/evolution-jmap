@@ -4353,3 +4353,125 @@ fn editing_allday_dates_preserves_unmodeled_virtual_locations_and_keywords() {
         json!("https://meet.example.com/hackathon")
     );
 }
+
+#[test]
+fn editing_descriptions_and_timestamps_preserves_unmodeled_event_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Architecture Sync", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "description": "Initial architecture review",
+            "keywords": {"architecture": true, "review": true},
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M"
+                    },
+                    "action": "display"
+                }
+            },
+            "virtualLocations": {
+                "v1": {
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/arch",
+                    "name": "Arch Channel"
+                }
+            },
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/arch-spec.pdf",
+                    "contentType": "application/pdf"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Modify DESCRIPTION in place
+    let edited = loaded.replace(
+        "DESCRIPTION:Initial architecture review\r\n",
+        "DESCRIPTION:Updated architecture review with team\\; all welcome\r\n",
+    );
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.description.as_deref(),
+        Some("Updated architecture review with team; all welcome")
+    );
+
+    // Unmodeled keywords, alerts, virtualLocations, and links are preserved
+    let kws = stored.keywords.expect("keywords");
+    assert!(kws.contains_key("architecture"));
+    assert!(kws.contains_key("review"));
+
+    let alerts = stored.alerts.expect("alerts");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
+
+    let vlocs = stored.virtual_locations.expect("virtual locations");
+    assert_eq!(vlocs["v1"]["uri"], json!("https://meet.example.com/arch"));
+
+    let links = stored.links.expect("links");
+    assert_eq!(
+        links["l1"]["href"],
+        json!("https://files.example.com/arch-spec.pdf")
+    );
+}
+
+#[test]
+fn clearing_descriptions_and_comments_patches_server_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Architecture Sync", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "description": "Initial architecture review",
+            "keywords": {"architecture": true},
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M"
+                    },
+                    "action": "display"
+                }
+            },
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": "Room 101"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Remove DESCRIPTION line
+    let desc_line = loaded
+        .lines()
+        .find(|l| l.starts_with("DESCRIPTION"))
+        .expect("DESCRIPTION line");
+    let edited = loaded.replace(&format!("{desc_line}\r\n"), "");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.description, None);
+
+    // Locations and alerts are preserved
+    let locs = stored.locations.expect("locations");
+    assert_eq!(locs["loc1"]["name"], json!("Room 101"));
+
+    let alerts = stored.alerts.expect("alerts");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
+}
