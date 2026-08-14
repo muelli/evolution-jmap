@@ -18,7 +18,7 @@
 //! in the order RFC 9553 §2.2.3's `units` gives them, so an entry crosses as
 //! one line with as many components as it has units. What does not cross is
 //! the entry's `sortAs` and `contexts`, which `ORG` has no component and no
-//! parameter for — hence the [`X_JMAP_KEY`] this side already writes on an
+//! parameter for — hence the `X_JMAP_KEY` this side already writes on an
 //! `EMAIL`, and a save that patches `organizations/<key>/name` in place.
 //!
 //! `titles` is the one property of which only *some* entries cross. RFC 9553
@@ -32,8 +32,8 @@
 //! that crosses on two lines. RFC 2426 §3.2.1's `ADR` has seven fields; RFC
 //! 9553 §2.5.1 builds an address out of named components, sixteen kinds of
 //! them. Seven of those kinds have a field of their own
-//! ([`ADDRESS_COMPONENTS`]) and one more, the house `number`, shares the
-//! street's ([`JOINED_COMPONENTS`]); the rest — `floor`, `room`, `landmark` —
+//! (`ADDRESS_COMPONENTS`) and one more, the house `number`, shares the
+//! street's (`JOINED_COMPONENTS`); the rest — `floor`, `room`, `landmark` —
 //! have nowhere to go, and are left off the line rather than written into a
 //! field that would say something else about them. Beside the `ADR`
 //! goes RFC 2426 §3.2.2's `LABEL`, the address written out as it should be
@@ -73,7 +73,7 @@
 //! value back as one string rather than splitting it on commas, and escapes a
 //! comma the user typed, so a list on one line would reach the contact editor
 //! as a single nickname with commas in it. Unlike a date line, the `NICKNAME`
-//! is rewritten in place with its parameters intact, so the [`X_JMAP_KEY`]
+//! is rewritten in place with its parameters intact, so the `X_JMAP_KEY`
 //! survives the trip through Evolution and the save needs no rekeying. An
 //! entry that names nothing gets no line, which is the same invisibility again.
 //!
@@ -86,7 +86,7 @@
 //! that would tell the user this is the contact's home page. What also does not
 //! cross is the entry's `mediaType`, `contexts`, `pref` and `label`, for which
 //! a bare URI has no parameter, so they ride in its `extra` as a nickname's do.
-//! The [`X_JMAP_KEY`] survives here too: measured against libebook-contacts
+//! The `X_JMAP_KEY` survives here too: measured against libebook-contacts
 //! 3.52, `E_CONTACT_HOMEPAGE_URL` is the first `URL` line, a set rewrites that
 //! line's value and leaves its parameters alone, and any further `URL` line
 //! passes through untouched.
@@ -105,7 +105,7 @@
 //! front of the user under a heading of their own. What does not cross is the
 //! entry's `mediaType`, `contexts`, `pref` and `label`, for which neither line
 //! has a parameter, so they ride in its `extra` as a link's do. The
-//! [`X_JMAP_KEY`] survives here too, for the reason it survives on a `URL`: a
+//! `X_JMAP_KEY` survives here too, for the reason it survives on a `URL`: a
 //! set rewrites the first line of that name in place and leaves its parameters
 //! alone, and any further line of the same name passes through untouched.
 //!
@@ -113,12 +113,12 @@
 //! 9553 §2.3.2 names the contact as one service or protocol knows them; RFC
 //! 4770's `IMPP` is vCard 4.0, which is not the format
 //! `e_contact_new_from_vcard()` is handed, so the line is the `X-` one EDS
-//! itself keeps a handle on — [`ONLINE_SERVICES`] — and the mapping states only
+//! itself keeps a handle on — `ONLINE_SERVICES` — and the mapping states only
 //! the ten services libebook-contacts 3.52 gives contact-editor slots to. Which
 //! makes the property lossy in three separate places: a service EDS has no field
 //! for has no line, an entry stating a `uri` and no `user` has one only where
-//! [`SERVICE_SCHEMES`] says the URI holds the handle and nothing else (see
-//! [`drawn_service`]), and neither has a handle the line would come back from
+//! `SERVICE_SCHEMES` says the URI holds the handle and nothing else (see
+//! `drawn_service`), and neither has a handle the line would come back from
 //! EDS having renamed.
 //!
 //! Its `TYPE` is also the one parameter here that is *not* the JSContact member
@@ -152,14 +152,14 @@
 //! themselves under `ENCODING=b`, which is the only form EDS reads a media type
 //! off: measured against libebook-contacts 3.52, `TYPE=JPEG` becomes
 //! `image/JPEG` and `TYPE=image/jpeg` becomes `image/image/jpeg`, so the
-//! parameter states the subtype alone ([`image_subtype`]). A picture the card
+//! parameter states the subtype alone (`image_subtype`). A picture the card
 //! only *points at* crosses as a `VALUE=uri` reference — the shape EDS's own
 //! writer emits, and one it reads as no picture at all when that parameter is
 //! missing, also measured. What else gets no line is a `data:` URI spelling its
 //! bytes as percent-encoded octets rather than base64, since `ENCODING=b` is
-//! the only encoding the line carries ([`photo`]).
+//! the only encoding the line carries (`photo`).
 //!
-//! A `PHOTO` line is read back into a `media` entry the same way ([`read_photo`]),
+//! A `PHOTO` line is read back into a `media` entry the same way (`read_photo`),
 //! so the picture the *user* chooses in Evolution reaches the server. Only the
 //! two forms above are read, because they are the two EDS's own writer emits;
 //! what a line the reader has to be careful about is spelled out there. The
@@ -167,7 +167,7 @@
 //! back from nothing — the save patches around them, as it does around every
 //! other entry the emitter left off.
 //!
-//! What the save cannot lean on is the [`X_JMAP_KEY`]: unlike a `NICKNAME`'s,
+//! What the save cannot lean on is the `X_JMAP_KEY`: unlike a `NICKNAME`'s,
 //! the key on a `PHOTO` line does not survive an edit. EDS rebuilds the line out
 //! of the photo it holds and writes none of the parameters back, exactly as it
 //! does for a date line (measured against libebook-contacts 3.52) — so the entry
@@ -179,7 +179,7 @@
 //! each relates in a set of types; vCard 3.0 has no `RELATED` — RFC 6350 §6.6.6
 //! is 4.0 — and of the twenty types, `spouse` is the one Evolution has a field
 //! for, on the line EDS keeps `E_CONTACT_SPOUSE` on
-//! ([`X_EVOLUTION_SPOUSE`]). The value on that line is the person's *name*, and
+//! (`X_EVOLUTION_SPOUSE`). The value on that line is the person's *name*, and
 //! the only place a name can be is the key: RFC 9555 §2.9.5 is what says a key
 //! may hold free text rather than an identifier, since that is what a vCard
 //! `RELATED;VALUE=text` becomes. So an entry keyed by a URI has no line — a URN
@@ -188,7 +188,7 @@
 //! for this property is not merely a rename but a *different entry*. See
 //! [`states_spouse`].
 //!
-//! Which also makes it the one property that carries no [`X_JMAP_KEY`]: there is
+//! Which also makes it the one property that carries no `X_JMAP_KEY`: there is
 //! nothing for the parameter to say that the value does not. The reader takes the
 //! key off the line's own text, so nothing is invented and no key has to survive
 //! Evolution — but a marriage the user retypes arrives under a key the server
@@ -572,7 +572,7 @@ fn calendar_kind(property: &str) -> Option<&'static str> {
 /// Two things have to hold at once:
 ///
 /// - **the relation must say `spouse`.** It is the one type of the twenty RFC
-///   9553 §2.1.8 lists that Evolution has a field for; see [`SPOUSE_RELATION`].
+///   9553 §2.1.8 lists that Evolution has a field for; see `SPOUSE_RELATION`.
 ///   An entry stating several types still crosses on the strength of that one,
 ///   and an entry stating none — which RFC 9555 §2.9.5 reads a `RELATED` line
 ///   carrying no `TYPE` into — states no marriage and gets no line.
@@ -650,7 +650,7 @@ fn names_a_uri(value: &str) -> bool {
 /// Whether a media entry reaches the user at all: it must be a photo, and the
 /// bytes or the URI it names must be something a `PHOTO` line can state.
 ///
-/// [`photo`] is where each of those is spelled out — the single point this and
+/// `photo` is where each of those is spelled out — the single point this and
 /// [`card_to_vcard`] agree through, so an entry cannot be called visible here
 /// and then left off the vCard.
 pub fn states_media(media: &Media) -> bool {
@@ -782,7 +782,7 @@ fn strip_suffix_ci<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
 
 /// Whether a handle at an online service reaches the user at all.
 ///
-/// Three things have to hold at once, and [`drawn_service`] is where each is
+/// Three things have to hold at once, and `drawn_service` is where each is
 /// spelled out: the service must be one EDS has a field for, the entry must
 /// state a handle — as a `user`, or as a `uri` this side can read one out of —
 /// and that handle must survive the trip through EDS unrenamed.
@@ -980,9 +980,9 @@ fn service_slot(service: &OnlineService) -> &'static str {
 /// - **A tag whose ends are whitespace.** EDS trims them: measured against
 ///   libebook-contacts 3.52, `CATEGORIES: quiet` reaches the user as `quiet`,
 ///   and the next save would rename the tag on the server. See
-///   [`edged_with_whitespace`].
+///   `edged_with_whitespace`.
 ///
-/// The single point the save and [`drawn_tags`] agree through, so a tag cannot
+/// The single point the save and `drawn_tags` agree through, so a tag cannot
 /// be called shown and then left off the line.
 pub fn states_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true)
@@ -1059,7 +1059,7 @@ pub fn states_phone(phone: &ContactPhone) -> bool {
 /// for its `kind` *and* the entry must name something.
 ///
 /// The kind alone is not the question. A title of kind `title` that names
-/// nothing has no `TITLE` line either, and asking only [`maps_title_kind`]
+/// nothing has no `TITLE` line either, and asking only `maps_title_kind`
 /// would call it visible and let a save delete it.
 pub fn states_title(title: &Title) -> bool {
     !title.name.is_empty() && maps_title_kind(title.kind.as_deref())
@@ -1779,7 +1779,7 @@ fn address_fields(address: &Address) -> Option<Vec<String>> {
 /// A field built from several components is read back as one component of the
 /// field's own kind, because nothing in `Hauptstraße 1` says where the street
 /// name ends and the house number begins, and a guess would be wrong in half
-/// the world's addresses. See [`restore_shared_fields`] for what is then done
+/// the world's addresses. See `restore_shared_fields` for what is then done
 /// about it.
 pub fn restore_address_components(
     current: &[AddressComponent],
@@ -1800,7 +1800,7 @@ pub fn restore_address_components(
 /// The `N` value has one field per component kind, so what shares a field here
 /// is two components of the *same* kind: RFC 9553 §2.2.1 states a
 /// double-barrelled given name as two `given` components, and `N`'s second
-/// field holds them both. The treatment is [`restore_shared_fields`]', the same
+/// field holds them both. The treatment is `restore_shared_fields`, the same
 /// one an address's street gets.
 pub fn restore_name_components(
     current: &[NameComponent],

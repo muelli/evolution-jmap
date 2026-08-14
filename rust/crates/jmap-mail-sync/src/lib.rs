@@ -84,7 +84,7 @@ pub enum FolderUpdate {
 ///   or never in it at all.
 /// - [`MessageUpdate::Relisted`] is the whole mailbox, for a state the server
 ///   cannot calculate from — or for a delta so large that listing is the
-///   cheaper way to answer the same question, per [`catch_up_limit`].
+///   cheaper way to answer the same question, per `catch_up_limit`.
 ///
 /// The caller diffs `present` and `absent` against the rows it already has,
 /// because it is the only side that knows them: a message that moved into this
@@ -250,7 +250,7 @@ impl MailSync {
     ///
     /// `held` is how many rows the caller already has for this mailbox, and it
     /// is used for one thing: deciding when catching up has stopped being the
-    /// cheap answer, per [`catch_up_limit`]. It is asked of the caller rather
+    /// cheap answer, per `catch_up_limit`. It is asked of the caller rather
     /// than of the server because the caller has it for free and the server
     /// would charge a round trip for it, and it is only ever a *cost* estimate —
     /// a caller that passes a wrong one gets the same rows by a more expensive
@@ -605,7 +605,7 @@ impl MailSync {
     /// it was copied, and sort it to the wrong end of the folder.
     ///
     /// An instant no `UTCDate` can spell is sent as no date at all, the judgement
-    /// [`date::utc_date`] documents: what the caller asked for is that the
+    /// `date::utc_date` documents: what the caller asked for is that the
     /// message be appended, and refusing the whole append over an unwritable
     /// date would lose the message to save its timestamp.
     ///
@@ -702,10 +702,10 @@ impl MailSync {
     /// lookup a `CamelTransport` makes before it can fill in
     /// [`Outgoing::identity`].
     ///
-    /// `address` is an addr-spec, as [`Envelope::mail_from`] carries it and as
+    /// `address` is an addr-spec, as `Envelope::mail_from` carries it and as
     /// a transport reads it out of Camel's `from` argument: no display name, no
     /// angle brackets. Which of the account's identities covers it — including
-    /// the domain wildcard RFC 8621 §6 allows — is [`crate::identity`]'s
+    /// the domain wildcard RFC 8621 §6 allows — is `crate::identity`'s
     /// judgement, documented there.
     ///
     /// **The envelope sender, not the message's `From`.** The two may differ on

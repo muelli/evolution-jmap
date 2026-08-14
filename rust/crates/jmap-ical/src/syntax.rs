@@ -20,9 +20,9 @@
 //! text to be picked apart later. That is the side hostile input arrives on,
 //! and it is not a liability worth carrying ourselves.
 //!
-//! **Structure is still checked here**, by [`check_structure`], and
-//! **writing is still ours**, by [`Component::to_ics`] — see [`fold_into`] and
-//! [`quote_param`] for why.
+//! **Structure is still checked here**, by `check_structure`, and
+//! **writing is still ours**, by [`Component::to_ics`] — see `fold_into` and
+//! `quote_param` for why.
 //!
 //! [RFC 5545]: https://www.rfc-editor.org/rfc/rfc5545
 
@@ -44,7 +44,7 @@ const FOLD_AT: usize = 75;
 /// the *parse* is not what needs a limit; the tree built from it is what does. A
 /// [`Component`] owns a `Vec<Component>`,
 /// so the drop glue recurses once per level, and so does
-/// [`write_into`](Component::write_into). A document nested a hundred thousand
+/// `Component::write_into`. A document nested a hundred thousand
 /// deep therefore aborts the process — "thread has overflowed its stack" — on a
 /// path with no `unsafe` in it at all, and in the calendar factory that takes
 /// every other calendar the user has down with it. Refusing the document is the

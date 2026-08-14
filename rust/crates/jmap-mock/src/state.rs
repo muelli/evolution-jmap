@@ -298,7 +298,7 @@ impl<T> Store<T> {
     /// Apply a batch of mutations as one state transition (one `/set` call
     /// bumps the state exactly once, however many objects it touched).
     ///
-    /// The callback stages mutations through [`Transaction`]; if it stages at
+    /// The callback stages mutations through `Transaction`; if it stages at
     /// least one change the state counter advances and the changes are
     /// logged.
     pub fn transaction<R>(&mut self, f: impl FnOnce(&mut Transaction<'_, T>) -> R) -> R {

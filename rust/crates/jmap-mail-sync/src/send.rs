@@ -190,7 +190,7 @@ impl OutgoingMailboxes {
     /// An account with no Drafts stages in Sent instead — the message is going
     /// there anyway, so the only thing lost is that a *refused* send leaves a
     /// message in Sent that never went out. It is still marked `$draft` when
-    /// that happens (see [`Outgoing::accepted_patch`], which is what clears the
+    /// that happens (see `Outgoing::accepted_patch`, which is what clears the
     /// keyword, and only on success), so it is distinguishable from mail that
     /// did go; and the alternative is refusing to send at all, which loses the
     /// message the user just wrote.
