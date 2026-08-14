@@ -21892,5 +21892,9 @@ writes for a replaced photo, and into a cleared field, is inferred rather than m
 and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-seventeenth session)
+
+Claiming M3 increment: map SIP service rejection in jmap-vcard and verify EDS contact field definitions in eds-sys.
+
 
 
