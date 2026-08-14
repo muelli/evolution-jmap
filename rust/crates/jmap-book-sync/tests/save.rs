@@ -3783,3 +3783,142 @@ fn editing_structured_name_components_preserves_unmodeled_crypto_and_personal_in
     assert!(card.extra.contains_key("cryptoKeys"));
     assert!(card.extra.contains_key("personalInfo"));
 }
+
+#[test]
+fn editing_multiple_addresses_preserves_unmodeled_contact_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "addresses": {
+                "a1": {
+                    "contexts": {"work": true},
+                    "components": [
+                        {"kind": "name", "value": "Hauptstraße 1"},
+                        {"kind": "locality", "value": "Berlin"},
+                        {"kind": "postcode", "value": "10115"},
+                        {"kind": "country", "value": "Germany"},
+                    ],
+                    "full": "Hauptstraße 1\n10115 Berlin\nGermany",
+                },
+                "a2": {
+                    "contexts": {"private": true},
+                    "components": [
+                        {"kind": "name", "value": "Heimweg 2"},
+                        {"kind": "locality", "value": "München"},
+                        {"kind": "region", "value": "Bayern"},
+                        {"kind": "postcode", "value": "80331"},
+                        {"kind": "country", "value": "Germany"},
+                    ],
+                    "full": "Heimweg 2\n80331 München\nGermany",
+                },
+            },
+            "preferredLanguages": {"de": 1, "en": 2},
+            "cryptoKeys": {"k1": {"uri": "https://keys.example.com/pkr.asc"}},
+            "personalInfo": {"expertise": ["Rust", "Evolution"]},
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let modified = vcard
+        .replace(
+            ";;Hauptstraße 1;Berlin;;10115;Germany",
+            ";;Unter den Linden 5;Berlin;;10117;Germany",
+        )
+        .replace(
+            "Hauptstraße 1\\n10115 Berlin\\nGermany",
+            "Unter den Linden 5\\n10117 Berlin\\nGermany",
+        )
+        .replace(
+            ";;Heimweg 2;München;Bayern;80331;Germany",
+            ";;Heimweg 99;München;Bayern;80331;Germany",
+        )
+        .replace(
+            "Heimweg 2\\n80331 München\\nGermany",
+            "Heimweg 99\\n80331 München\\nGermany",
+        );
+
+    sync.save_contact(&modified, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let addresses = card.addresses.expect("addresses");
+    assert_eq!(addresses.len(), 2);
+
+    let a1 = &addresses["a1"];
+    assert_eq!(
+        a1.full.as_deref(),
+        Some("Unter den Linden 5\n10117 Berlin\nGermany")
+    );
+    let a1_comps = a1.components.as_ref().expect("a1 components");
+    assert!(
+        a1_comps
+            .iter()
+            .any(|c| c.kind == "name" && c.value == "Unter den Linden 5")
+    );
+    assert!(
+        a1_comps
+            .iter()
+            .any(|c| c.kind == "postcode" && c.value == "10117")
+    );
+
+    let a2 = &addresses["a2"];
+    assert_eq!(
+        a2.full.as_deref(),
+        Some("Heimweg 99\n80331 München\nGermany")
+    );
+    let a2_comps = a2.components.as_ref().expect("a2 components");
+    assert!(
+        a2_comps
+            .iter()
+            .any(|c| c.kind == "name" && c.value == "Heimweg 99")
+    );
+
+    // Unmodeled properties preserved intact
+    assert!(card.extra.contains_key("preferredLanguages"));
+    assert!(card.extra.contains_key("cryptoKeys"));
+    assert!(card.extra.contains_key("personalInfo"));
+}
+
+#[test]
+fn clearing_all_addresses_patches_server_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "addresses": {
+                "a1": {
+                    "contexts": {"work": true},
+                    "components": [
+                        {"kind": "name", "value": "Hauptstraße 1"},
+                        {"kind": "locality", "value": "Berlin"},
+                    ],
+                },
+                "a2": {
+                    "contexts": {"private": true},
+                    "components": [
+                        {"kind": "name", "value": "Heimweg 2"},
+                        {"kind": "locality", "value": "München"},
+                    ],
+                },
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let modified: String = vcard
+        .lines()
+        .filter(|l| !l.starts_with("ADR") && !l.starts_with("LABEL"))
+        .map(|l| format!("{l}\r\n"))
+        .collect();
+
+    sync.save_contact(&modified, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    assert_eq!(card.addresses, None);
+    assert!(card.name.is_some());
+    assert!(card.emails.is_some());
+}

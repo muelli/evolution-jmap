@@ -3463,3 +3463,110 @@ fn maps_contact_with_unmodeled_crypto_keys_and_personal_info_safely() {
         Some("Vera Oldenburg")
     );
 }
+
+#[test]
+fn maps_multiple_addresses_with_custom_extended_and_po_box_components() {
+    let mut addresses = std::collections::BTreeMap::new();
+    addresses.insert(
+        "a1".to_owned(),
+        Address {
+            contexts: Some(json!({"work": true})),
+            components: Some(vec![
+                AddressComponent::new("postOfficeBox", "PO Box 42"),
+                AddressComponent::new("apartment", "Suite 100"),
+                AddressComponent::new("name", "Hauptstraße 1"),
+                AddressComponent::new("locality", "Berlin"),
+                AddressComponent::new("region", "Brandenburg"),
+                AddressComponent::new("postcode", "10115"),
+                AddressComponent::new("country", "Germany"),
+            ]),
+            full: Some("PO Box 42\nSuite 100\nHauptstraße 1\n10115 Berlin\nGermany".to_owned()),
+            ..Address::default()
+        },
+    );
+    addresses.insert(
+        "a2".to_owned(),
+        Address {
+            contexts: Some(json!({"private": true})),
+            components: Some(vec![
+                AddressComponent::new("name", "Heimweg 2"),
+                AddressComponent::new("locality", "München"),
+                AddressComponent::new("region", "Bayern"),
+                AddressComponent::new("postcode", "80331"),
+                AddressComponent::new("country", "Germany"),
+            ]),
+            full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
+            ..Address::default()
+        },
+    );
+
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Vera Olden".to_owned()),
+            ..Name::default()
+        }),
+        addresses: Some(addresses),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let unfolded = vcard.replace("\r\n ", "");
+    assert!(unfolded.contains("ADR;X-JMAP-KEY=a1;TYPE=WORK:PO Box 42;Suite 100;Hauptstraße 1;Berlin;Brandenburg;10115;Germany"));
+    assert!(unfolded.contains("LABEL;X-JMAP-KEY=a1;TYPE=WORK:PO Box 42\\nSuite 100\\nHauptstraße 1\\n10115 Berlin\\nGermany"));
+    assert!(
+        unfolded.contains("ADR;X-JMAP-KEY=a2;TYPE=HOME:;;Heimweg 2;München;Bayern;80331;Germany")
+    );
+    assert!(unfolded.contains("LABEL;X-JMAP-KEY=a2;TYPE=HOME:Heimweg 2\\n80331 München\\nGermany"));
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    let back_addresses = back.addresses.expect("addresses");
+    assert_eq!(back_addresses.len(), 2);
+    assert_eq!(
+        back_addresses["a1"].full.as_deref(),
+        Some("PO Box 42\nSuite 100\nHauptstraße 1\n10115 Berlin\nGermany")
+    );
+    assert_eq!(
+        back_addresses["a2"].full.as_deref(),
+        Some("Heimweg 2\n80331 München\nGermany")
+    );
+}
+
+#[test]
+fn maps_contact_with_unmodeled_office_and_organization_extra_safely() {
+    let mut org_extra = std::collections::BTreeMap::new();
+    org_extra.insert("office".to_owned(), json!("Building 4, Room 204"));
+    org_extra.insert("sortAs".to_owned(), json!("Acme"));
+
+    let mut organizations = std::collections::BTreeMap::new();
+    organizations.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some("Acme Corp".to_owned()),
+            units: Some(vec![
+                OrgUnit::new("Research"),
+                OrgUnit::new("Advanced Optics"),
+            ]),
+            extra: org_extra,
+        },
+    );
+
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Vera Olden".to_owned()),
+            ..Name::default()
+        }),
+        organizations: Some(organizations),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(vcard.contains("ORG;X-JMAP-KEY=o1:Acme Corp;Research;Advanced Optics"));
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    let back_orgs = back.organizations.expect("organizations");
+    assert_eq!(back_orgs["o1"].name.as_deref(), Some("Acme Corp"));
+    let units = back_orgs["o1"].units.as_ref().expect("units");
+    assert_eq!(units.len(), 2);
+    assert_eq!(units[0].name, "Research");
+    assert_eq!(units[1].name, "Advanced Optics");
+}

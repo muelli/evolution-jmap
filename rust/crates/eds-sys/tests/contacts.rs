@@ -1629,3 +1629,252 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn contact_structured_address_and_office_field_properties() {
+    unsafe {
+        let addr_type = e_contact_address_get_type();
+        assert_ne!(addr_type, 0);
+
+        assert_eq!(E_CONTACT_FIRST_ADDRESS_ID, 90);
+        assert_eq!(E_CONTACT_LAST_ADDRESS_ID, 92);
+        assert_eq!(E_CONTACT_FIRST_LABEL_ID, 13);
+        assert_eq!(E_CONTACT_LAST_LABEL_ID, 15);
+
+        // E_CONTACT_ADDRESS is a multi-valued structured field
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ADDRESS), 0);
+        let addr_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ADDRESS));
+        assert_eq!(addr_name.to_str().unwrap(), "address");
+
+        // Structured address synthetic fields
+        let address_fields: &[(EContactField, &str)] = &[
+            (E_CONTACT_ADDRESS_HOME, "address_home"),
+            (E_CONTACT_ADDRESS_WORK, "address_work"),
+            (E_CONTACT_ADDRESS_OTHER, "address_other"),
+        ];
+
+        for &(field, expected_name) in address_fields {
+            assert_eq!(
+                e_contact_field_is_string(field),
+                0,
+                "field {expected_name} must be a structured address field"
+            );
+            assert_eq!(
+                e_contact_field_type(field),
+                addr_type,
+                "field {expected_name} must match EContactAddress type"
+            );
+            let name_cstr = CStr::from_ptr(e_contact_field_name(field));
+            assert_eq!(name_cstr.to_str().unwrap(), expected_name);
+            let attr_cstr = CStr::from_ptr(e_contact_vcard_attribute(field));
+            assert_eq!(attr_cstr.to_str().unwrap(), "ADR");
+        }
+
+        // Office field is a simple string stored on the ORG attribute (3rd component)
+        assert_eq!(e_contact_field_is_string(E_CONTACT_OFFICE), 1);
+        let office_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_OFFICE));
+        assert_eq!(office_name.to_str().unwrap(), "office");
+        let office_attr = CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_OFFICE));
+        assert_eq!(office_attr.to_str().unwrap(), "ORG");
+
+        // Synthetic address label fields
+        let label_fields: &[(EContactField, &str)] = &[
+            (E_CONTACT_ADDRESS_LABEL_HOME, "address_label_home"),
+            (E_CONTACT_ADDRESS_LABEL_WORK, "address_label_work"),
+            (E_CONTACT_ADDRESS_LABEL_OTHER, "address_label_other"),
+        ];
+
+        for &(field, expected_name) in label_fields {
+            assert_eq!(
+                e_contact_field_is_string(field),
+                1,
+                "field {expected_name} must be a string field"
+            );
+            let name_cstr = CStr::from_ptr(e_contact_field_name(field));
+            assert_eq!(name_cstr.to_str().unwrap(), expected_name);
+            let attr_cstr = CStr::from_ptr(e_contact_vcard_attribute(field));
+            assert_eq!(attr_cstr.to_str().unwrap(), "LABEL");
+        }
+
+        // vCard field ID mapping for ADR
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"ADR".as_ptr().cast()),
+            E_CONTACT_ADDRESS
+        );
+
+        // EContactAddress allocation and manipulation
+        let addr = e_contact_address_new();
+        assert!(!addr.is_null());
+        (*addr).po = glib_sys::g_strdup(c"PO Box 42".as_ptr().cast());
+        (*addr).ext = glib_sys::g_strdup(c"Suite 100".as_ptr().cast());
+        (*addr).street = glib_sys::g_strdup(c"Hauptstraße 1".as_ptr().cast());
+        (*addr).locality = glib_sys::g_strdup(c"Berlin".as_ptr().cast());
+        (*addr).region = glib_sys::g_strdup(c"Brandenburg".as_ptr().cast());
+        (*addr).code = glib_sys::g_strdup(c"10115".as_ptr().cast());
+        (*addr).country = glib_sys::g_strdup(c"Germany".as_ptr().cast());
+
+        assert_eq!(CStr::from_ptr((*addr).po).to_str().unwrap(), "PO Box 42");
+        assert_eq!(CStr::from_ptr((*addr).ext).to_str().unwrap(), "Suite 100");
+        assert_eq!(
+            CStr::from_ptr((*addr).street).to_str().unwrap(),
+            "Hauptstraße 1"
+        );
+        assert_eq!(CStr::from_ptr((*addr).locality).to_str().unwrap(), "Berlin");
+        assert_eq!(
+            CStr::from_ptr((*addr).region).to_str().unwrap(),
+            "Brandenburg"
+        );
+        assert_eq!(CStr::from_ptr((*addr).code).to_str().unwrap(), "10115");
+        assert_eq!(CStr::from_ptr((*addr).country).to_str().unwrap(), "Germany");
+
+        e_contact_address_free(addr);
+    }
+}
+
+#[test]
+fn structured_address_and_office_vcard_lines_and_modification_in_eds() {
+    let vcard_str = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:pas-id-test-address-office-001\r\n",
+        "FN:Vera Olden\r\n",
+        "N:Olden;Vera;;;\r\n",
+        "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;Building 4 Room 204\r\n",
+        "ADR;TYPE=WORK;X-JMAP-KEY=a1:PO Box 42;Suite 100;Hauptstraße 1;Berlin;Brandenburg;10115;Germany\r\n",
+        "LABEL;TYPE=WORK;X-JMAP-KEY=a1:PO Box 42\\nSuite 100\\nHauptstraße 1\\n10115 Berlin\\nGermany\r\n",
+        "ADR;TYPE=HOME;X-JMAP-KEY=a2:;;Heimweg 2;München;Bayern;80331;Germany\r\n",
+        "LABEL;TYPE=HOME;X-JMAP-KEY=a2:Heimweg 2\\n80331 München\\nGermany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    unsafe {
+        let vcard_c = std::ffi::CString::new(vcard_str).unwrap();
+        let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
+        assert!(!contact.is_null());
+
+        // Structured address inspect
+        let work_addr = e_contact_get(contact, E_CONTACT_ADDRESS_WORK) as *mut EContactAddress;
+        assert!(!work_addr.is_null());
+        assert_eq!(
+            CStr::from_ptr((*work_addr).po).to_str().unwrap(),
+            "PO Box 42"
+        );
+        assert_eq!(
+            CStr::from_ptr((*work_addr).ext).to_str().unwrap(),
+            "Suite 100"
+        );
+        assert_eq!(
+            CStr::from_ptr((*work_addr).street).to_str().unwrap(),
+            "Hauptstraße 1"
+        );
+        assert_eq!(
+            CStr::from_ptr((*work_addr).locality).to_str().unwrap(),
+            "Berlin"
+        );
+        assert_eq!(
+            CStr::from_ptr((*work_addr).region).to_str().unwrap(),
+            "Brandenburg"
+        );
+        assert_eq!(CStr::from_ptr((*work_addr).code).to_str().unwrap(), "10115");
+        assert_eq!(
+            CStr::from_ptr((*work_addr).country).to_str().unwrap(),
+            "Germany"
+        );
+        e_contact_address_free(work_addr);
+
+        let home_addr = e_contact_get(contact, E_CONTACT_ADDRESS_HOME) as *mut EContactAddress;
+        assert!(!home_addr.is_null());
+        assert_eq!(
+            CStr::from_ptr((*home_addr).street).to_str().unwrap(),
+            "Heimweg 2"
+        );
+        assert_eq!(
+            CStr::from_ptr((*home_addr).locality).to_str().unwrap(),
+            "München"
+        );
+        assert_eq!(
+            CStr::from_ptr((*home_addr).region).to_str().unwrap(),
+            "Bayern"
+        );
+        assert_eq!(CStr::from_ptr((*home_addr).code).to_str().unwrap(), "80331");
+        assert_eq!(
+            CStr::from_ptr((*home_addr).country).to_str().unwrap(),
+            "Germany"
+        );
+        e_contact_address_free(home_addr);
+
+        // Office inspection from 3rd component of ORG
+        let office = e_contact_get_const(contact, E_CONTACT_OFFICE);
+        assert!(!office.is_null());
+        assert_eq!(
+            CStr::from_ptr(office.cast()).to_str().unwrap(),
+            "Building 4 Room 204"
+        );
+
+        // In-place modification of work address and office
+        let new_work_addr = e_contact_address_new();
+        (*new_work_addr).street = glib_sys::g_strdup(c"Unter den Linden 5".as_ptr().cast());
+        (*new_work_addr).locality = glib_sys::g_strdup(c"Berlin".as_ptr().cast());
+        (*new_work_addr).code = glib_sys::g_strdup(c"10117".as_ptr().cast());
+        (*new_work_addr).country = glib_sys::g_strdup(c"Germany".as_ptr().cast());
+
+        e_contact_set(contact, E_CONTACT_ADDRESS_WORK, new_work_addr.cast());
+        e_contact_address_free(new_work_addr);
+
+        e_contact_set(
+            contact,
+            E_CONTACT_OFFICE,
+            c"Tower 1, Floor 15".as_ptr().cast(),
+        );
+
+        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            updated_vcard.contains("Unter den Linden 5"),
+            "updated street missing: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("10117"),
+            "updated postcode missing: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("Heimweg 2"),
+            "home street must be preserved: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("Tower 1\\, Floor 15")
+                || updated_vcard.contains("Tower 1, Floor 15"),
+            "updated office missing: {updated_vcard}"
+        );
+
+        g_free(updated_vcard_ptr.cast());
+
+        // Field clearing by setting NULL
+        e_contact_set(contact, E_CONTACT_ADDRESS_WORK, std::ptr::null());
+        e_contact_set(contact, E_CONTACT_OFFICE, std::ptr::null());
+
+        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            !cleared_vcard.contains("Unter den Linden 5"),
+            "cleared work address must be removed: {cleared_vcard}"
+        );
+        assert!(
+            !cleared_vcard.contains("Tower 1"),
+            "cleared office must be removed: {cleared_vcard}"
+        );
+        assert!(
+            cleared_vcard.contains("Heimweg 2"),
+            "home address must remain: {cleared_vcard}"
+        );
+        assert!(
+            cleared_vcard.contains("Acme Ltd;Research"),
+            "organization name and unit must remain after clearing office: {cleared_vcard}"
+        );
+
+        g_free(cleared_vcard_ptr.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
