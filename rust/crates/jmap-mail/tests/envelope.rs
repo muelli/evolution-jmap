@@ -284,3 +284,39 @@ fn a_null_recipient_list_is_no_recipients() {
 
     release(from);
 }
+
+/// Quoted display names with commas, semicolons, brackets, and subaddressed emails
+/// in the envelope must be extracted cleanly without leaking display name artifacts into
+/// the EnvelopeAddress.
+#[test]
+fn the_envelope_preserves_special_characters_in_quoted_names_and_subaddresses() {
+    let from = internet(&[(Some("Doe, Jane (Work)"), "jane.doe+tag@example.com")]);
+    let recipients = internet(&[
+        (Some("O'Connor, Liam"), "liam@example.com"),
+        (
+            Some("\"Special, Name; <Group>\""),
+            "special.user@example.org",
+        ),
+        (Some("Müller, Tobias"), "muelli@example.net"),
+    ]);
+
+    // SAFETY: two live internet addresses.
+    let envelope = unsafe { read_envelope(from, recipients) }.expect("a sendable envelope");
+
+    assert_eq!(
+        envelope.mail_from,
+        EnvelopeAddress::new("jane.doe+tag@example.com")
+    );
+    assert_eq!(
+        envelope.rcpt_to,
+        vec![
+            EnvelopeAddress::new("liam@example.com"),
+            EnvelopeAddress::new("special.user@example.org"),
+            EnvelopeAddress::new("muelli@example.net"),
+        ],
+        "subaddresses and exact email strings must be preserved without name leakage"
+    );
+
+    release(from);
+    release(recipients);
+}
