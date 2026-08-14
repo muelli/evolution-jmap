@@ -2924,3 +2924,82 @@ END:VCARD\r\n";
     assert_eq!(services["s2"].user.as_deref(), Some("@bob:matrix.example"));
     assert_eq!(services["s2"].service.as_deref(), Some("Matrix"));
 }
+
+#[test]
+fn photo_with_value_uri_and_multiple_media_kinds_emits_only_photo_and_roundtrips() {
+    let mut card = ContactCard::simple("b1", "Vera Oldenburg", "vera@example.com");
+    card.media = Some(
+        [
+            (
+                "m1".to_owned(),
+                Media {
+                    kind: Some("photo".to_owned()),
+                    uri: "https://example.com/avatar.png".to_owned(),
+                    ..Media::default()
+                },
+            ),
+            (
+                "m2".to_owned(),
+                Media {
+                    kind: Some("logo".to_owned()),
+                    uri: "https://example.com/logo.png".to_owned(),
+                    ..Media::default()
+                },
+            ),
+            (
+                "m3".to_owned(),
+                Media {
+                    kind: Some("sound".to_owned()),
+                    uri: "https://example.com/pronunciation.ogg".to_owned(),
+                    ..Media::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://example.com/avatar.png")
+            || vcard.contains("PHOTO;VALUE=uri;X-JMAP-KEY=m1:https://example.com/avatar.png"),
+        "vcard should contain PHOTO with URI: {vcard}"
+    );
+    assert!(
+        !vcard.contains("LOGO"),
+        "vcard should not contain LOGO line: {vcard}"
+    );
+    assert!(
+        !vcard.contains("SOUND"),
+        "vcard should not contain SOUND line: {vcard}"
+    );
+
+    let read_back = vcard_to_card(&vcard).expect("parse");
+    let media = read_back.media.expect("media");
+    assert_eq!(media.len(), 1, "only photo media is in vCard: {media:?}");
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].uri, "https://example.com/avatar.png");
+}
+
+#[test]
+fn vcard_with_logo_and_multiple_photos_reads_only_photos() {
+    let vcard = "BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Vera\r\n\
+PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://example.com/photo1.png\r\n\
+PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:aGVsbG8tcGhvdG8=\r\n\
+LOGO;X-JMAP-KEY=l1;VALUE=uri:https://example.com/logo.png\r\n\
+END:VCARD\r\n";
+
+    let card = vcard_to_card(vcard).expect("parse");
+    let media = card.media.expect("media");
+    assert_eq!(
+        media.len(),
+        2,
+        "only the two photos should be in media: {media:?}"
+    );
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].uri, "https://example.com/photo1.png");
+    assert_eq!(media["m2"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m2"].uri, "data:image/jpeg;base64,aGVsbG8tcGhvdG8=");
+}
