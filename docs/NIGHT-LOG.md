@@ -22008,3 +22008,7 @@ writes for a replaced photo, and into a cleared field, is inferred rather than m
 and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-nineteenth session)
+
+Claiming M3 increment: verify year-only birthday and deathdate preservation and EDS field mapping.
+
