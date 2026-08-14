@@ -598,3 +598,184 @@ END:VCARD\r\n";
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn contact_photo_and_logo_field_properties_and_e_contact_photo_type() {
+    unsafe {
+        let photo_type = e_contact_photo_get_type();
+        assert_ne!(photo_type, 0);
+
+        // E_CONTACT_PHOTO (94) is a structured EContactPhoto field, not string
+        assert_eq!(e_contact_field_is_string(E_CONTACT_PHOTO), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_PHOTO), photo_type);
+        let photo_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_PHOTO));
+        assert_eq!(photo_name.to_str().unwrap(), "photo");
+
+        // E_CONTACT_LOGO (95) is a structured EContactPhoto field, not string
+        assert_eq!(e_contact_field_is_string(E_CONTACT_LOGO), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_LOGO), photo_type);
+        let logo_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_LOGO));
+        assert_eq!(logo_name.to_str().unwrap(), "logo");
+
+        // vCard attribute names
+        assert_eq!(
+            CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_PHOTO))
+                .to_str()
+                .unwrap(),
+            "PHOTO"
+        );
+        assert_eq!(
+            CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_LOGO))
+                .to_str()
+                .unwrap(),
+            "LOGO"
+        );
+
+        // vCard field ID mapping
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"PHOTO".as_ptr()),
+            E_CONTACT_PHOTO
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"LOGO".as_ptr()),
+            E_CONTACT_LOGO
+        );
+        // IMAGE has no field ID in EDS
+        assert_eq!(e_contact_field_id_from_vcard(c"IMAGE".as_ptr()), 0);
+
+        // EContactPhoto URI manipulation
+        let uri_photo = e_contact_photo_new();
+        assert!(!uri_photo.is_null());
+        (*uri_photo).type_ = E_CONTACT_PHOTO_TYPE_URI;
+        e_contact_photo_set_uri(uri_photo, c"https://example.com/avatar.png".as_ptr());
+        assert_eq!((*uri_photo).type_, E_CONTACT_PHOTO_TYPE_URI);
+        let uri_ptr = e_contact_photo_get_uri(uri_photo);
+        assert_eq!(
+            CStr::from_ptr(uri_ptr).to_str().unwrap(),
+            "https://example.com/avatar.png"
+        );
+        e_contact_photo_free(uri_photo);
+
+        // EContactPhoto inlined binary manipulation
+        let inlined_photo = e_contact_photo_new();
+        assert!(!inlined_photo.is_null());
+        assert_eq!((*inlined_photo).type_, E_CONTACT_PHOTO_TYPE_INLINED);
+        let sample_bytes = b"inlined_binary_photo_data_sample";
+        e_contact_photo_set_inlined(
+            inlined_photo,
+            sample_bytes.as_ptr(),
+            sample_bytes.len() as gsize,
+        );
+        e_contact_photo_set_mime_type(inlined_photo, c"image/png".as_ptr());
+        assert_eq!((*inlined_photo).type_, E_CONTACT_PHOTO_TYPE_INLINED);
+        let mut read_len: gsize = 0;
+        let data_ptr = e_contact_photo_get_inlined(inlined_photo, &mut read_len);
+        assert_eq!(read_len, sample_bytes.len() as gsize);
+        assert_eq!(
+            std::slice::from_raw_parts(data_ptr, read_len as usize),
+            sample_bytes
+        );
+        let mime_ptr = e_contact_photo_get_mime_type(inlined_photo);
+        assert_eq!(CStr::from_ptr(mime_ptr).to_str().unwrap(), "image/png");
+        e_contact_photo_free(inlined_photo);
+    }
+}
+
+#[test]
+fn photo_and_logo_vcard_lines_and_field_modification_behavior_in_eds() {
+    unsafe {
+        let vcard_str = c"BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Test Contact\r\n\
+N:Contact;Test;;;\r\n\
+PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://example.com/photo.png\r\n\
+PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:aGVsbG8tcGhvdG8=\r\n\
+LOGO;X-JMAP-KEY=l1;VALUE=uri:https://example.com/logo.png\r\n\
+END:VCARD\r\n";
+
+        let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
+        assert!(!contact.is_null());
+
+        // e_contact_get returns a dynamically allocated EContactPhoto
+        let photo_obj = e_contact_get(contact, E_CONTACT_PHOTO) as *mut EContactPhoto;
+        assert!(!photo_obj.is_null());
+        assert_eq!((*photo_obj).type_, E_CONTACT_PHOTO_TYPE_URI);
+        let photo_uri = e_contact_photo_get_uri(photo_obj);
+        assert_eq!(
+            CStr::from_ptr(photo_uri).to_str().unwrap(),
+            "https://example.com/photo.png"
+        );
+        e_contact_photo_free(photo_obj);
+
+        let logo_obj = e_contact_get(contact, E_CONTACT_LOGO) as *mut EContactPhoto;
+        assert!(!logo_obj.is_null());
+        assert_eq!((*logo_obj).type_, E_CONTACT_PHOTO_TYPE_URI);
+        let logo_uri = e_contact_photo_get_uri(logo_obj);
+        assert_eq!(
+            CStr::from_ptr(logo_uri).to_str().unwrap(),
+            "https://example.com/logo.png"
+        );
+        e_contact_photo_free(logo_obj);
+
+        // Replacing E_CONTACT_PHOTO in place with a new inlined photo
+        let new_photo = e_contact_photo_new();
+        let new_bytes = b"new_avatar_bytes";
+        e_contact_photo_set_inlined(new_photo, new_bytes.as_ptr(), new_bytes.len() as gsize);
+        e_contact_photo_set_mime_type(new_photo, c"image/png".as_ptr());
+        e_contact_set(contact, E_CONTACT_PHOTO, new_photo.cast());
+        e_contact_photo_free(new_photo);
+
+        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
+
+        // The first PHOTO line is replaced with the new inlined photo (EDS shortens image/png to TYPE=png)
+        assert!(
+            updated_vcard.contains("PHOTO;TYPE=png;ENCODING=b:bmV3X2F2YXRhcl9ieXRlcw==")
+                || updated_vcard
+                    .contains("PHOTO;ENCODING=b;TYPE=image/png:bmV3X2F2YXRhcl9ieXRlcw==")
+                || updated_vcard.contains("PHOTO;ENCODING=b;TYPE=PNG:bmV3X2F2YXRhcl9ieXRlcw=="),
+            "first PHOTO should be replaced in place: {updated_vcard}"
+        );
+        // The second PHOTO line remains intact
+        assert!(
+            updated_vcard.contains("PHOTO;ENCODING=b;TYPE=jpeg;X-JMAP-KEY=m2:aGVsbG8tcGhvdG8=")
+                || updated_vcard
+                    .contains("PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:aGVsbG8tcGhvdG8="),
+            "second PHOTO should remain intact: {updated_vcard}"
+        );
+        // The LOGO line remains intact
+        assert!(
+            updated_vcard.contains("LOGO;VALUE=uri;X-JMAP-KEY=l1:https://example.com/logo.png")
+                || updated_vcard
+                    .contains("LOGO;X-JMAP-KEY=l1;VALUE=uri:https://example.com/logo.png")
+                || updated_vcard.contains("LOGO;VALUE=uri:https://example.com/logo.png"),
+            "LOGO should remain intact: {updated_vcard}"
+        );
+        g_free(updated_vcard_ptr.cast());
+
+        // Clearing E_CONTACT_PHOTO by setting NULL
+        e_contact_set(contact, E_CONTACT_PHOTO, std::ptr::null());
+
+        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
+
+        // The first PHOTO line is removed, while second PHOTO and LOGO remain
+        assert!(
+            !cleared_vcard.contains("bmV3X2F2YXRhcl9ieXRlcw=="),
+            "first PHOTO should be removed when cleared: {cleared_vcard}"
+        );
+        assert!(
+            cleared_vcard.contains("PHOTO;ENCODING=b;TYPE=jpeg;X-JMAP-KEY=m2:aGVsbG8tcGhvdG8=")
+                || cleared_vcard
+                    .contains("PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:aGVsbG8tcGhvdG8="),
+            "second PHOTO should survive clearing the first photo: {cleared_vcard}"
+        );
+        assert!(
+            cleared_vcard.contains("https://example.com/logo.png"),
+            "LOGO line should survive clearing photo: {cleared_vcard}"
+        );
+        g_free(cleared_vcard_ptr.cast());
+
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}

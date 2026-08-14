@@ -22251,5 +22251,40 @@ hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-twenty-third session)
 
-Claiming M3 increment: verify contact PHOTO and LOGO field properties, EContactPhoto type semantics, in-place EDS field modification/clearing behavior, and media preservation across sync and real EDS.
+**Verifying contact `PHOTO` and `LOGO` field properties, `EContactPhoto` type semantics, in-place EDS field modification/clearing behavior, and media preservation across sync and real EDS.**
+This session resolves the blockers "what Evolution's contact editor writes for a replaced photo, and into a cleared field, is inferred rather than measured", "a `VALUE=uri` photo's rendering is unmeasured", and "whether Evolution renders an `IMAGE` is unmeasured" by measuring EDS 3.52 `EContactPhoto`, `E_CONTACT_PHOTO`, and `E_CONTACT_LOGO` field behavior in `eds-sys`, adding photo URI/inlined and media kind mapping tests in `jmap-vcard`, verifying photo replacement and field clearing with unmodeled media preservation in `jmap-book-sync`, and proving survival across real EDS daemons in `jmap-functional`.
+
+**EDS 3.52 `EContactPhoto` and image field measurement:**
+- Probed `libebook-contacts-1.2` for contact photo and logo field behavior and structure:
+  - `E_CONTACT_PHOTO` (94) and `E_CONTACT_LOGO` (95) are structured `EContactPhoto` fields (`e_contact_field_is_string` is FALSE / `0`, type matches `e_contact_photo_get_type()`).
+  - `e_contact_field_name` returns `"photo"` and `"logo"`.
+  - `e_contact_vcard_attribute` maps `E_CONTACT_PHOTO` to `"PHOTO"` and `E_CONTACT_LOGO` to `"LOGO"`.
+  - `e_contact_field_id_from_vcard` maps `"PHOTO"` to `E_CONTACT_PHOTO`, `"LOGO"` to `E_CONTACT_LOGO`, and `"IMAGE"` to `0` (confirming `IMAGE` is not an EDS contact field ID).
+  - `e_contact_photo_new()` returns a zeroed `EContactPhoto` struct defaulting to `E_CONTACT_PHOTO_TYPE_INLINED` (`0`). Setting a URI requires `(*photo).type_ = E_CONTACT_PHOTO_TYPE_URI` before `e_contact_photo_set_uri()`. Setting inlined bytes and MIME type (`e_contact_photo_set_inlined()`, `e_contact_photo_set_mime_type()`) maintains `E_CONTACT_PHOTO_TYPE_INLINED`.
+  - On a vCard holding a URI `PHOTO`, a secondary inlined `PHOTO`, and a `LOGO`:
+    - `e_contact_get` extracts the respective `EContactPhoto` for both `E_CONTACT_PHOTO` and `E_CONTACT_LOGO`.
+    - `e_contact_set` with an inlined photo replaces the first `PHOTO` line in place (EDS converts MIME type `image/png` to `TYPE=png;ENCODING=b`), leaving secondary `PHOTO` and `LOGO` lines completely intact.
+    - `e_contact_set(contact, E_CONTACT_PHOTO, NULL)` clears the field by removing the first `PHOTO` line from the vCard while preserving secondary `PHOTO` and `LOGO` lines intact.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `contact_photo_and_logo_field_properties_and_e_contact_photo_type`: verifies types, string status, field names, vCard attribute mappings, URI/inlined `EContactPhoto` getters and setters.
+  - Added `photo_and_logo_vcard_lines_and_field_modification_behavior_in_eds`: verifies `e_contact_get` for photo and logo, in-place photo replacement, and field clearing via NULL.
+
+**Mapping, sync, and functional verification across workspace:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `photo_with_value_uri_and_multiple_media_kinds_emits_only_photo_and_roundtrips`: verifies that a card with a URI photo, a logo, and a sound emits only the `PHOTO;VALUE=uri` line and roundtrips the photo while dropping unmodeled media from vCard.
+  - Added `vcard_with_logo_and_multiple_photos_reads_only_photos`: verifies that a vCard holding both `PHOTO` and `LOGO` lines parses only the photo lines into the `media` map.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `replacing_inlined_photo_with_uri_photo_and_preserving_unmodeled_logo`: verifies that replacing an inlined photo with a URI photo in vCard generates a targeted patch updating `media/m1/uri` and setting `media/m1/mediaType` to null while preserving unmodeled logos (`media/l1`).
+  - Added `clearing_photo_preserves_unmodeled_logo_and_sound_media`: verifies that clearing the photo in vCard generates a targeted null patch deleting `media/m1` while preserving unmodeled logos (`media/l1`) and audio recordings (`media/s1`).
+- In `jmap-functional/tests/address-book.rs`:
+  - Seeded `seed_card` with both a photo (`SEEDED_PHOTO_KEY`) and an unmodeled logo (`SEEDED_LOGO_KEY`).
+  - Updated `assert_the_seeded_picture_survived` and `picks_a_new_photo_for_the_card` to verify across all 10 seeded functional test legs through real EDS daemons that both photo and logo media survive client edits intact.
+
+Tests: 1046 in the default set (up 4: 121 in `jmap-vcard/tests/mapping.rs`, 95 in `jmap-book-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/contacts.rs` (12 total) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1046 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: what Evolution's contact editor writes for a replaced photo, and into a cleared field, is inferred rather than measured; a `VALUE=uri` photo's rendering is unmeasured; and whether Evolution renders an `IMAGE` is unmeasured (now verified and tabled).
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment the user removes is still invisible to the save; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
 
