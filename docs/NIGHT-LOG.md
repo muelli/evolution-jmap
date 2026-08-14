@@ -22192,3 +22192,6 @@ writes for a replaced photo, and into a cleared field, is inferred rather than m
 and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-twenty-second session)
+
+Claiming M3 increment: verify instant-messaging multi-service, HOME/WORK slot semantics, in-place EDS synthetic field editing, and multi-IM preservation across sync and real EDS.
