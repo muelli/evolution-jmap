@@ -22427,5 +22427,36 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-twenty-eighth session)
 
-Claiming M4 increment: verify calendar recurrence rules (RRULE), EXDATEs, recurrence overrides, and RECURRENCE-ID semantics in EDS, roundtrip fidelity in jmap-ical, and recurrence preservation across sync.
+**Verifying calendar recurrence rules (RRULE), exception dates (EXDATE), instance overrides, and RECURRENCE-ID semantics in EDS, round-trip fidelity in `jmap-ical`, and recurrence preservation across sync.**
+This session measures EDS 3.52 `ECalComponent` recurrence properties (`RRULE`, `EXDATE`, `RECURRENCE-ID`), `ICalRecurrence` rule inspection and serialization in `eds-sys`, adds complex multi-day recurrence rule and instance override roundtrip tests in `jmap-ical`, and verifies recurring event summary editing and exception date clearing in `jmap-cal-sync`.
+
+**EDS 3.52 `ECalComponent` recurrence properties and `ICalRecurrence` measurement:**
+- Probed `libecal-2.0` and `libical-glib` for recurrence, exception date, and recurrence ID behaviors:
+  - `e_cal_component_has_recurrences`, `e_cal_component_has_rrules`, and `e_cal_component_has_exdates` accurately detect recurrence rules and exception dates.
+  - `e_cal_component_get_rrules` returns a `GSList` of `ICalRecurrence *`, exposing `i_cal_recurrence_get_freq` (`I_CAL_WEEKLY_RECURRENCE`, `I_CAL_DAILY_RECURRENCE`, `I_CAL_MONTHLY_RECURRENCE`), `i_cal_recurrence_get_interval`, `i_cal_recurrence_get_count`, and `i_cal_recurrence_get_until`.
+  - `e_cal_component_get_exdates` returns a `GSList` of `ECalComponentDateTime *`, exposing `e_cal_component_datetime_get_value` which yields the exception `ICalTime *`.
+  - `e_cal_component_get_recurid_as_string` returns the ISO/iCalendar string representation of the recurrence ID (freed with `g_free`).
+  - `i_cal_recurrence_new_from_string` and `i_cal_recurrence_to_string` allow roundtripping RRULE value strings directly, and `i_cal_property_new_rrule` attaches the recurrence rule to an `ICalComponent`.
+  - `e_cal_component_set_rrules(comp, NULL)`, `e_cal_component_set_exdates(comp, NULL)`, and `e_cal_component_set_recurid(comp, NULL)` cleanly remove `RRULE:`, `EXDATE:`, and `RECURRENCE-ID:` lines from the component.
+- In `rust/crates/eds-sys/build.rs`:
+  - Allowlisted `i_cal_recurrence_.*` and `i_cal_recur_.*` functions.
+- In `rust/crates/eds-sys/tests/ical.rs`:
+  - Added `ecalcomponent_recurrence_rules_exdates_and_recurid_in_eds`: verifies recurrence querying, RRULE property accessors, EXDATE inspection, RECURRENCE-ID string retrieval, in-place rule modification, and clearing.
+  - Added `icalrecurrence_properties_and_string_roundtrips`: verifies `ICalRecurrence` string parsing, frequency/interval/until getters, serialization back to RRULE format, and `ICalProperty` attachment.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-ical/tests/event.rs`:
+  - Added `event_with_complex_rrule_and_exdates_roundtrips_faithfully`: verifies that events with weekly interval, count, BYDAY multi-day selectors, and multiple excluded dates roundtrip faithfully to iCalendar `RRULE` and `EXDATE` lines and back into JSCalendar `recurrenceRules` and `recurrenceOverrides`.
+  - Added `recurring_event_with_instance_overrides_emits_multiple_vevents_with_recurrence_id`: verifies that events carrying instance overrides serialize into master and child `VEVENT` blocks with matching `RECURRENCE-ID` and overridden summary/duration/status, roundtripping back intact.
+- In `jmap-cal-sync/tests/save.rs`:
+  - Added `editing_recurring_event_summary_preserves_recurrence_rules_and_overrides`: verifies that editing summary on a recurring event with recurrence overrides and unmodeled virtual locations produces a targeted patch while preserving recurrence rules, instance overrides, and locations intact on the server.
+  - Added `clearing_exdates_and_overrides_patches_server_recurrence_map`: verifies that removing EXDATE lines clears recurrence overrides on the server while preserving recurrence rules and alerts intact.
+
+Tests: 1068 in the default set (up 4: 246 in `jmap-ical/tests/event.rs`, 127 in `jmap-cal-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/ical.rs` (15 total) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1068 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
 

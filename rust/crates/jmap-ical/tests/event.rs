@@ -6919,3 +6919,99 @@ fn event_with_unsupported_or_custom_alarm_action_drops_or_sanitizes_safely() {
     assert_eq!(alerts["valid-disp"]["action"], json!("display"));
     assert_eq!(alerts["valid-disp"]["trigger"]["offset"], json!("-PT10M"));
 }
+
+#[test]
+fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
+    let mut event = fixture_event();
+    event.recurrence_rules = Some(vec![RecurrenceRule {
+        interval: Some(2),
+        count: Some(8),
+        by_day: Some(vec![
+            NDay {
+                day: "mo".to_owned(),
+                ..Default::default()
+            },
+            NDay {
+                day: "fr".to_owned(),
+                ..Default::default()
+            },
+        ]),
+        ..RecurrenceRule::new("weekly")
+    }]);
+    event.recurrence_overrides = Some(
+        [
+            ("2026-08-17T09:00:00".to_owned(), json!({"excluded": true})),
+            ("2026-08-21T09:00:00".to_owned(), json!({"excluded": true})),
+        ]
+        .into(),
+    );
+
+    let ics = event_to_ical(&event);
+    assert!(ics.contains("RRULE:"), "missing RRULE: {ics}");
+    assert!(ics.contains("FREQ=WEEKLY"), "missing FREQ: {ics}");
+    assert!(ics.contains("INTERVAL=2"), "missing INTERVAL: {ics}");
+    assert!(ics.contains("COUNT=8"), "missing COUNT: {ics}");
+    assert!(ics.contains("BYDAY=MO,FR"), "missing BYDAY: {ics}");
+    assert!(ics.contains("EXDATE"), "missing EXDATE: {ics}");
+
+    let parsed = ical_to_event(&ics).expect("parse");
+    let rules = parsed.recurrence_rules.expect("rules");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].interval, Some(2));
+    assert_eq!(rules[0].count, Some(8));
+    let byday = rules[0].by_day.as_ref().expect("byday");
+    assert_eq!(byday.len(), 2);
+    assert_eq!(byday[0].day, "mo");
+    assert_eq!(byday[1].day, "fr");
+
+    let overrides = parsed.recurrence_overrides.expect("overrides");
+    assert_eq!(overrides.len(), 2);
+    assert_eq!(overrides["2026-08-17T09:00:00"], json!({"excluded": true}));
+    assert_eq!(overrides["2026-08-21T09:00:00"], json!({"excluded": true}));
+}
+
+#[test]
+fn recurring_event_with_instance_overrides_emits_multiple_vevents_with_recurrence_id() {
+    let mut event = fixture_event();
+    event.recurrence_rules = Some(vec![RecurrenceRule {
+        interval: Some(1),
+        ..RecurrenceRule::new("daily")
+    }]);
+    event.recurrence_overrides = Some(
+        [(
+            "2026-08-15T09:00:00".to_owned(),
+            json!({
+                "title": "Special Session",
+                "duration": "PT2H",
+                "status": "tentative"
+            }),
+        )]
+        .into(),
+    );
+
+    let ics = event_to_ical(&event);
+    assert_eq!(vevents(&ics), 2, "must emit master and override: {ics}");
+    assert!(
+        ics.contains("RECURRENCE-ID"),
+        "missing RECURRENCE-ID: {ics}"
+    );
+    assert!(
+        ics.contains("Special Session"),
+        "missing override title: {ics}"
+    );
+
+    let parsed = ical_to_event(&ics).expect("parse");
+    assert_eq!(parsed.title.as_deref(), Some("Sprint planning"));
+    let overrides = parsed.recurrence_overrides.expect("overrides");
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(
+        overrides["2026-08-15T09:00:00"]["title"],
+        json!("Special Session")
+    );
+    assert_eq!(overrides["2026-08-15T09:00:00"]["duration"], json!("PT2H"));
+    assert_eq!(
+        overrides["2026-08-15T09:00:00"]["status"],
+        json!("tentative")
+    );
+}
