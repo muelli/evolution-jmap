@@ -22637,5 +22637,38 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirty-fourth session)
 
-**Claiming increment:** calendar descriptions, comments, contacts, timestamps (created, modified, completed, dtstamp), recurrence dates (`RDATE`/`ECalComponentPeriod`), and component ID (`ECalComponentId`) EDS verification, roundtrip fidelity in `jmap-ical`, and preservation across `jmap-cal-sync`.
+**Verifying calendar descriptions, comments, contacts, timestamps (created, modified, dtstamp), recurrence dates (RDATE/ECalComponentPeriod), and component ID (ECalComponentId) semantics in EDS, roundtrip fidelity in `jmap-ical`, and preservation across cal sync.**
+This session measures EDS 3.52 `ECalComponent` text lists and multi-locale accessors (`DESCRIPTION`, `COMMENT`, `CONTACT`, `SUMMARY` with ALTREP and LANGUAGE parameters), timestamps (`CREATED`, `LAST-MODIFIED`, `DTSTAMP`), recurrence dates (`RDATE` with `ECalComponentPeriod`), and component ID structure (`ECalComponentId` operations: `e_cal_component_get_id`, `e_cal_component_id_new`, `e_cal_component_id_get_uid`, `e_cal_component_id_get_rid`, `e_cal_component_id_copy`, `e_cal_component_id_free`, `e_cal_component_id_equal`, `e_cal_component_id_hash`), adds multi-line description and created/updated/recurrence series roundtrip tests in `jmap-ical`, and verifies description editing and clearing with unmodeled keywords, alerts, virtual locations, and links preservation in `jmap-cal-sync`.
+
+**EDS 3.52 `ECalComponent` text, timestamp, period, and component ID measurement:**
+- Probed `libecal` 3.52 and `libical-glib` for description, comment, contact, timestamp, period, and ID properties:
+  - `e_cal_component_get_descriptions` returns a `GSList *` of `ECalComponentText *` holding value, ALTREP URI (`e_cal_component_text_get_altrep`), and language (`e_cal_component_text_get_language`).
+  - `e_cal_component_dup_description_for_locale` retrieves the localized description matching the requested language tag.
+  - `e_cal_component_get_comments` returns a `GSList *` of `ECalComponentText *` for multiple `COMMENT` properties, and `e_cal_component_dup_comment_for_locale` extracts localized comment text.
+  - `e_cal_component_get_contacts` returns a `GSList *` of `ECalComponentText *` representing `CONTACT` properties with ALTREP URIs.
+  - `e_cal_component_dup_summaries` and `e_cal_component_dup_summary_for_locale` extract summary lists and localized summary text.
+  - `e_cal_component_get_created`, `e_cal_component_get_last_modified`, and `e_cal_component_get_dtstamp` return newly allocated `ICalTime *` instances with `transfer-ownership="full"`.
+  - `e_cal_component_has_rdates` and `e_cal_component_get_rdates` retrieve recurrence dates as a `GSList *` of `ECalComponentPeriod *`.
+  - `ECalComponentPeriod` accessors (`e_cal_component_period_get_kind`, `e_cal_component_period_get_start`, `e_cal_component_period_get_end`, `e_cal_component_period_get_duration`) inspect period bounds and duration (with borrowed return ownership).
+  - `ECalComponentId` operations: `e_cal_component_get_id` extracts component identity; `e_cal_component_id_new`, `e_cal_component_id_copy`, `e_cal_component_id_equal`, `e_cal_component_id_hash`, and `e_cal_component_id_free` allocate, compare, hash, and free IDs.
+  - In-place modification via setters updates descriptions, contacts, timestamps, and RDATEs in the serialized iCalendar string.
+  - Setting `NULL` on setters cleanly removes `DESCRIPTION:`, `COMMENT:`, `CONTACT:`, `CREATED:`, `LAST-MODIFIED:`, and `RDATE` lines from the component.
+- In `rust/crates/eds-sys/tests/ical.rs`:
+  - Added `ecalcomponent_descriptions_comments_contacts_and_summaries_in_eds`: verifies multi-description, comment, contact, and summary list parsing, localized lookups, in-place modification, and NULL clearing.
+  - Added `ecalcomponent_timestamps_rdates_and_component_id_in_eds`: verifies created/last-modified/dtstamp extraction, `ECalComponentId` equality/hashing/copying, `ECalComponentPeriod` inspection, and property removal.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-ical/tests/event.rs`:
+  - Added `maps_descriptions_with_multi_line_and_newlines_faithfully`: verifies that multi-line formatted descriptions with escaped semicolons and line breaks roundtrip faithfully to `DESCRIPTION` lines and back into JSCalendar `description`.
+  - Added `maps_created_updated_and_rdate_series_faithfully`: verifies that events with `created`, `updated`, and recurrence rules roundtrip accurately.
+- In `jmap-cal-sync/tests/save.rs`:
+  - Added `editing_descriptions_and_timestamps_preserves_unmodeled_event_fields`: verifies that editing event descriptions produces targeted patches while preserving unmodeled `keywords`, `alerts`, `virtualLocations`, and `links` intact on the server.
+  - Added `clearing_descriptions_and_comments_patches_server_fields`: verifies that removing description lines cleanly sends a deletion patch while keeping locations and alerts intact.
+
+Tests: 1093 in the default set (up 4: 250 in `jmap-ical/tests/event.rs`, 105 in `jmap-cal-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/ical.rs` (21 in file, 67 across crate) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1093 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
