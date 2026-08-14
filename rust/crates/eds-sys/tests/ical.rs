@@ -1398,3 +1398,377 @@ fn icaltime_date_vs_datetime_and_timezone_resolution() {
         assert!(rendered.contains("TZID:"), "{rendered}");
     }
 }
+
+/// Probing `ECalComponent` description, comment, contact, and summary text lists and multi-locale accessors:
+/// `e_cal_component_get_descriptions` returns a `GSList` of `ECalComponentText *`, with value, ALTREP, and LANGUAGE accessors;
+/// `e_cal_component_dup_description_for_locale` retrieves the localized description;
+/// `e_cal_component_get_comments` and `e_cal_component_dup_comment_for_locale` retrieve comments;
+/// `e_cal_component_get_contacts` returns contact strings;
+/// `e_cal_component_dup_summaries` returns summary entries;
+/// `e_cal_component_set_descriptions`, `e_cal_component_set_comments`, `e_cal_component_set_contacts`, `e_cal_component_set_summaries` support in-place modification;
+/// and setting `NULL` clears them from the component.
+#[test]
+fn ecalcomponent_descriptions_comments_contacts_and_summaries_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY;LANGUAGE=en:Product Launch\r\n\
+         DTSTART:20260810T100000Z\r\n\
+         DESCRIPTION;ALTREP=\"https://example.com/desc.html\";LANGUAGE=en:Launch details\r\n\
+         COMMENT;LANGUAGE=en:First comment\r\n\
+         COMMENT:Second comment\r\n\
+         CONTACT;ALTREP=\"https://example.com/team.vcf\":Team Alpha\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        unsafe extern "C" fn free_text(ptr: *mut std::ffi::c_void) {
+            unsafe { e_cal_component_text_free(ptr.cast()) };
+        }
+
+        // 1. Descriptions
+        let descs = e_cal_component_get_descriptions(comp);
+        assert!(!descs.is_null());
+        assert_eq!(g_slist_length(descs), 1);
+        let desc0 = (*descs).data as *mut ECalComponentText;
+        assert!(!desc0.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(desc0))
+                .to_str()
+                .unwrap(),
+            "Launch details"
+        );
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_altrep(desc0))
+                .to_str()
+                .unwrap(),
+            "https://example.com/desc.html"
+        );
+        let lang = e_cal_component_text_get_language(desc0);
+        if !lang.is_null() {
+            assert_eq!(CStr::from_ptr(lang).to_str().unwrap(), "en");
+        }
+        g_slist_free_full(descs, Some(free_text));
+
+        let localized_desc = e_cal_component_dup_description_for_locale(comp, text("en").as_ptr());
+        assert!(!localized_desc.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(localized_desc))
+                .to_str()
+                .unwrap(),
+            "Launch details"
+        );
+        e_cal_component_text_free(localized_desc.cast());
+
+        // 2. Comments
+        let comments = e_cal_component_get_comments(comp);
+        assert!(!comments.is_null());
+        assert_eq!(g_slist_length(comments), 2);
+        let c0 = (*comments).data as *mut ECalComponentText;
+        assert!(!c0.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(c0))
+                .to_str()
+                .unwrap(),
+            "First comment"
+        );
+        let c1_node = (*comments).next;
+        assert!(!c1_node.is_null());
+        let c1 = (*c1_node).data as *mut ECalComponentText;
+        assert!(!c1.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(c1))
+                .to_str()
+                .unwrap(),
+            "Second comment"
+        );
+        g_slist_free_full(comments, Some(free_text));
+
+        let localized_comment = e_cal_component_dup_comment_for_locale(comp, text("en").as_ptr());
+        assert!(!localized_comment.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(localized_comment))
+                .to_str()
+                .unwrap(),
+            "First comment"
+        );
+        e_cal_component_text_free(localized_comment.cast());
+
+        // 3. Contacts
+        let contacts = e_cal_component_get_contacts(comp);
+        assert!(!contacts.is_null());
+        assert_eq!(g_slist_length(contacts), 1);
+        let cnt0 = (*contacts).data as *mut ECalComponentText;
+        assert!(!cnt0.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(cnt0))
+                .to_str()
+                .unwrap(),
+            "Team Alpha"
+        );
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_altrep(cnt0))
+                .to_str()
+                .unwrap(),
+            "https://example.com/team.vcf"
+        );
+        g_slist_free_full(contacts, Some(free_text));
+
+        // 4. Summaries
+        let summaries = e_cal_component_dup_summaries(comp);
+        assert!(!summaries.is_null());
+        assert_eq!(g_slist_length(summaries), 1);
+        let s0 = (*summaries).data as *mut ECalComponentText;
+        assert!(!s0.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(s0))
+                .to_str()
+                .unwrap(),
+            "Product Launch"
+        );
+        g_slist_free_full(summaries, Some(free_text));
+
+        let localized_summary = e_cal_component_dup_summary_for_locale(comp, text("en").as_ptr());
+        assert!(!localized_summary.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_text_get_value(localized_summary))
+                .to_str()
+                .unwrap(),
+            "Product Launch"
+        );
+        e_cal_component_text_free(localized_summary.cast());
+
+        // 5. In-place modifications
+        let new_desc_text = e_cal_component_text_new(
+            text("Updated launch notes").as_ptr(),
+            text("https://example.com/v2.html").as_ptr(),
+        );
+        let new_desc_list = g_slist_append(std::ptr::null_mut(), new_desc_text.cast());
+        e_cal_component_set_descriptions(comp, new_desc_list);
+        g_slist_free_full(new_desc_list, Some(free_text));
+
+        let new_cnt_text = e_cal_component_text_new(text("Team Beta").as_ptr(), std::ptr::null());
+        let new_cnt_list = g_slist_append(std::ptr::null_mut(), new_cnt_text.cast());
+        e_cal_component_set_contacts(comp, new_cnt_list);
+        g_slist_free_full(new_cnt_list, Some(free_text));
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            rendered.contains(
+                "DESCRIPTION;ALTREP=\"https://example.com/v2.html\":Updated launch notes"
+            ),
+            "modified desc missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("CONTACT:Team Beta"),
+            "modified contact missing: {rendered}"
+        );
+
+        // 6. Clearing via NULL
+        e_cal_component_set_descriptions(comp, std::ptr::null());
+        e_cal_component_set_comments(comp, std::ptr::null());
+        e_cal_component_set_contacts(comp, std::ptr::null());
+
+        assert!(e_cal_component_get_descriptions(comp).is_null());
+        assert!(e_cal_component_get_comments(comp).is_null());
+        assert!(e_cal_component_get_contacts(comp).is_null());
+
+        let inner_cleared = e_cal_component_get_icalcomponent(comp);
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner_cleared));
+        assert!(
+            !cleared_rendered.contains("DESCRIPTION"),
+            "cleared desc still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("COMMENT"),
+            "cleared comment still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("CONTACT"),
+            "cleared contact still present: {cleared_rendered}"
+        );
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}
+
+/// Probing `ECalComponent` timestamps (`CREATED`, `LAST-MODIFIED`, `DTSTAMP`, `COMPLETED`), recurrence dates (`RDATE` with `ECalComponentPeriod`), and component ID (`ECalComponentId`):
+/// `e_cal_component_get_created`, `e_cal_component_get_last_modified`, and `e_cal_component_get_dtstamp` extract `ICalTime *` timestamps;
+/// `e_cal_component_get_completed` extracts completion timestamp on VTODO;
+/// `e_cal_component_has_rdates` and `e_cal_component_get_rdates` extract `ECalComponentPeriod *` entries;
+/// `e_cal_component_period_get_kind`, `e_cal_component_period_get_start`, `e_cal_component_period_get_end`, and `e_cal_component_period_get_duration` inspect period parameters;
+/// `e_cal_component_get_id` returns an `ECalComponentId *`, with `e_cal_component_id_get_uid`, `e_cal_component_id_get_rid`, `e_cal_component_id_copy`, `e_cal_component_id_equal`, `e_cal_component_id_hash`;
+/// and setters support in-place modification and NULL clearing.
+#[test]
+fn ecalcomponent_timestamps_rdates_and_component_id_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Milestone Review\r\n\
+         DTSTART:20260810T100000Z\r\n\
+         CREATED:20260801T080000Z\r\n\
+         LAST-MODIFIED:20260805T120000Z\r\n\
+         DTSTAMP:20260810T090000Z\r\n\
+         RDATE;VALUE=PERIOD:20260812T100000Z/PT2H\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // 1. Inspect Timestamps
+        let created = e_cal_component_get_created(comp);
+        assert!(!created.is_null());
+        assert_eq!(i_cal_time_get_year(created), 2026);
+        assert_eq!(i_cal_time_get_month(created), 8);
+        assert_eq!(i_cal_time_get_day(created), 1);
+        assert_eq!(i_cal_time_get_hour(created), 8);
+        assert_eq!(i_cal_time_is_utc(created), 1);
+        g_object_unref(created.cast());
+
+        let last_mod = e_cal_component_get_last_modified(comp);
+        assert!(!last_mod.is_null());
+        assert_eq!(i_cal_time_get_day(last_mod), 5);
+        assert_eq!(i_cal_time_get_hour(last_mod), 12);
+        g_object_unref(last_mod.cast());
+
+        let dtstamp = e_cal_component_get_dtstamp(comp);
+        assert!(!dtstamp.is_null());
+        assert_eq!(i_cal_time_get_day(dtstamp), 10);
+        assert_eq!(i_cal_time_get_hour(dtstamp), 9);
+        g_object_unref(dtstamp.cast());
+
+        // 2. Component ID operations
+        let comp_id = e_cal_component_get_id(comp);
+        assert!(!comp_id.is_null());
+        let uid_str = e_cal_component_id_get_uid(comp_id);
+        assert!(!uid_str.is_null());
+        assert_eq!(CStr::from_ptr(uid_str).to_str().unwrap(), "K1");
+        let rid_str = e_cal_component_id_get_rid(comp_id);
+        assert!(rid_str.is_null() || CStr::from_ptr(rid_str).to_str().unwrap().is_empty());
+
+        let id_copy = e_cal_component_id_copy(comp_id);
+        assert!(!id_copy.is_null());
+        assert_eq!(e_cal_component_id_equal(comp_id.cast(), id_copy.cast()), 1);
+        assert_eq!(
+            e_cal_component_id_hash(comp_id.cast()),
+            e_cal_component_id_hash(id_copy.cast())
+        );
+        e_cal_component_id_free(id_copy.cast());
+
+        let manual_id =
+            e_cal_component_id_new(text("K2").as_ptr(), text("20260810T100000Z").as_ptr());
+        assert!(!manual_id.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_id_get_uid(manual_id))
+                .to_str()
+                .unwrap(),
+            "K2"
+        );
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_id_get_rid(manual_id))
+                .to_str()
+                .unwrap(),
+            "20260810T100000Z"
+        );
+        assert_eq!(
+            e_cal_component_id_equal(comp_id.cast(), manual_id.cast()),
+            0
+        );
+        e_cal_component_id_free(manual_id.cast());
+        e_cal_component_id_free(comp_id.cast());
+
+        // 3. RDATEs & ECalComponentPeriod
+        assert_eq!(e_cal_component_has_rdates(comp), 1);
+        let rdates = e_cal_component_get_rdates(comp);
+        assert!(!rdates.is_null());
+        assert_eq!(g_slist_length(rdates), 1);
+
+        let period0 = (*rdates).data as *mut ECalComponentPeriod;
+        assert!(!period0.is_null());
+        assert_eq!(
+            e_cal_component_period_get_kind(period0),
+            E_CAL_COMPONENT_PERIOD_DURATION
+        );
+        let p_start = e_cal_component_period_get_start(period0);
+        assert!(!p_start.is_null());
+        assert_eq!(i_cal_time_get_day(p_start), 12);
+        assert_eq!(i_cal_time_get_hour(p_start), 10);
+
+        let p_dur = e_cal_component_period_get_duration(period0);
+        assert!(!p_dur.is_null());
+        assert_eq!(i_cal_duration_get_hours(p_dur), 2);
+
+        unsafe extern "C" fn free_period(ptr: *mut std::ffi::c_void) {
+            unsafe { e_cal_component_period_free(ptr) };
+        }
+        g_slist_free_full(rdates, Some(free_period));
+
+        // 4. Modify timestamps in place
+        let new_created_time = i_cal_time_new_from_string(c"20260802T090000Z".as_ptr());
+        e_cal_component_set_created(comp, new_created_time);
+        g_object_unref(new_created_time.cast());
+
+        let new_lastmod_time = i_cal_time_new_from_string(c"20260806T140000Z".as_ptr());
+        e_cal_component_set_last_modified(comp, new_lastmod_time);
+        g_object_unref(new_lastmod_time.cast());
+
+        let new_dtstamp_time = i_cal_time_new_from_string(c"20260810T120000Z".as_ptr());
+        e_cal_component_set_dtstamp(comp, new_dtstamp_time);
+        g_object_unref(new_dtstamp_time.cast());
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(rendered.contains("CREATED:20260802T090000Z"), "{rendered}");
+        assert!(
+            rendered.contains("LAST-MODIFIED:20260806T140000Z"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("DTSTAMP:20260810T120000Z"), "{rendered}");
+
+        // 5. Clear timestamps and RDATEs
+        e_cal_component_set_created(comp, std::ptr::null());
+        e_cal_component_set_last_modified(comp, std::ptr::null());
+        e_cal_component_set_rdates(comp, std::ptr::null());
+
+        assert_eq!(e_cal_component_has_rdates(comp), 0);
+        assert!(e_cal_component_get_created(comp).is_null());
+        assert!(e_cal_component_get_last_modified(comp).is_null());
+
+        let inner_cleared = e_cal_component_get_icalcomponent(comp);
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner_cleared));
+        assert!(!cleared_rendered.contains("CREATED:"), "{cleared_rendered}");
+        assert!(
+            !cleared_rendered.contains("LAST-MODIFIED:"),
+            "{cleared_rendered}"
+        );
+        assert!(!cleared_rendered.contains("RDATE"), "{cleared_rendered}");
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}

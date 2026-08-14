@@ -7076,3 +7076,76 @@ fn event_with_fractional_duration_and_utc_or_floating_start_roundtrips() {
     assert_eq!(parsed_back.time_zone.as_deref(), Some("Etc/UTC"));
     assert_eq!(parsed_back.duration.as_deref(), Some("PT1H45M"));
 }
+
+#[test]
+fn maps_descriptions_with_multi_line_and_newlines_faithfully() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+               VERSION:2.0\r\n\
+               PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+               BEGIN:VEVENT\r\n\
+               UID:desc-1\r\n\
+               SUMMARY:Release Planning\r\n\
+               DTSTART:20260810T100000Z\r\n\
+               DESCRIPTION:Sprint goals:\\n- Ship M4\\n- Review M5\\; with team\\n- Write docs\r\n\
+               END:VEVENT\r\n\
+               END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(event.title.as_deref(), Some("Release Planning"));
+    assert_eq!(
+        event.description.as_deref(),
+        Some("Sprint goals:\n- Ship M4\n- Review M5; with team\n- Write docs")
+    );
+
+    let rendered = event_to_ical(&event);
+    assert!(rendered.contains("SUMMARY:Release Planning"), "{rendered}");
+    assert!(
+        rendered.contains(
+            "DESCRIPTION:Sprint goals:\\n- Ship M4\\n- Review M5\\; with team\\n- Write docs"
+        ),
+        "{rendered}"
+    );
+
+    let back = ical_to_event(&rendered).expect("roundtrip");
+    assert_eq!(back.description, event.description);
+}
+
+#[test]
+fn maps_created_updated_and_rdate_series_faithfully() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+               VERSION:2.0\r\n\
+               PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+               BEGIN:VEVENT\r\n\
+               UID:series-1\r\n\
+               SUMMARY:Architecture Sync\r\n\
+               DTSTART:20260810T140000Z\r\n\
+               DURATION:PT1H\r\n\
+               CREATED:20260801T080000Z\r\n\
+               LAST-MODIFIED:20260805T120000Z\r\n\
+               RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=5\r\n\
+               END:VEVENT\r\n\
+               END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(event.title.as_deref(), Some("Architecture Sync"));
+    assert_eq!(event.start.as_deref(), Some("2026-08-10T14:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Etc/UTC"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H"));
+
+    let rules = event.recurrence_rules.as_ref().expect("rules");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].interval, Some(2));
+    assert_eq!(rules[0].count, Some(5));
+
+    let rendered = event_to_ical(&event);
+    assert!(rendered.contains("SUMMARY:Architecture Sync"), "{rendered}");
+    assert!(
+        rendered.contains("RRULE:FREQ=WEEKLY;COUNT=5;INTERVAL=2"),
+        "{rendered}"
+    );
+
+    let back = ical_to_event(&rendered).expect("roundtrip");
+    assert_eq!(back.title, event.title);
+    assert_eq!(back.recurrence_rules, event.recurrence_rules);
+}
