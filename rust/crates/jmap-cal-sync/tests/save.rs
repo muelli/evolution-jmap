@@ -4603,3 +4603,127 @@ fn clearing_privacy_removes_the_classification_from_the_server() {
     let alerts = stored.alerts.expect("alerts");
     assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
 }
+
+#[test]
+fn editing_location_and_priority_preserves_unmodeled_event_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Architecture Sync", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "priority": 3,
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": "Room 101",
+                    "coordinates": "geo:52.520008,13.404954",
+                    "description": "Main Building"
+                }
+            },
+            "virtualLocations": {
+                "v1": {
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/arch"
+                }
+            },
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/arch-spec.pdf"
+                }
+            },
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M"
+                    },
+                    "action": "display"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(loaded.contains("PRIORITY:3\r\n"), "{loaded}");
+    assert!(
+        loaded.contains("LOCATION;X-JMAP-KEY=loc1:Room 101\r\n")
+            || loaded.contains("LOCATION:Room 101\r\n"),
+        "{loaded}"
+    );
+
+    // Edit location name and change priority to 1 (high priority).
+    let edited = loaded
+        .replace("Room 101", "Room 204 (West Wing)")
+        .replace("PRIORITY:3", "PRIORITY:1");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.priority, Some(1));
+
+    let locs = stored.locations.expect("locations");
+    assert_eq!(locs["loc1"]["name"], json!("Room 204 (West Wing)"));
+    // Unmodeled coordinates and description on the location survive
+    assert_eq!(
+        locs["loc1"]["coordinates"],
+        json!("geo:52.520008,13.404954")
+    );
+    assert_eq!(locs["loc1"]["description"], json!("Main Building"));
+
+    // Virtual locations, links, and alerts survive
+    let vlocs = stored.virtual_locations.expect("virtual locations");
+    assert_eq!(vlocs["v1"]["uri"], json!("https://meet.example.com/arch"));
+
+    let links = stored.links.expect("links");
+    assert_eq!(
+        links["l1"]["href"],
+        json!("https://files.example.com/arch-spec.pdf")
+    );
+
+    let alerts = stored.alerts.expect("alerts");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT15M"));
+}
+
+#[test]
+fn clearing_location_and_priority_patches_server_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Status Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "priority": 2,
+            "description": "Weekly status check",
+            "keywords": {"standup": true},
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": "Room 302"
+                }
+            }
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    // Drop LOCATION and PRIORITY lines.
+    let edited: String = loaded
+        .lines()
+        .filter(|l| !l.starts_with("LOCATION") && !l.starts_with("PRIORITY"))
+        .map(|l| format!("{l}\r\n"))
+        .collect();
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.priority, None);
+    assert_eq!(stored.locations, None);
+
+    // Unmodified description and keywords survive
+    assert_eq!(stored.description.as_deref(), Some("Weekly status check"));
+    let kws = stored.keywords.expect("keywords");
+    assert!(kws.contains_key("standup"));
+}

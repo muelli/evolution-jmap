@@ -1772,3 +1772,234 @@ fn ecalcomponent_timestamps_rdates_and_component_id_in_eds() {
         g_object_unref(calendar.cast());
     }
 }
+
+/// Probing `ECalComponent` component types (`ECalComponentVType`), cloning (`e_cal_component_clone`),
+/// recurrence instance check (`e_cal_component_is_instance`), and string serialization (`e_cal_component_get_as_string`):
+/// `e_cal_component_get_vtype` correctly identifies `VEVENT` (`E_CAL_COMPONENT_EVENT`), `VTODO` (`E_CAL_COMPONENT_TODO`),
+/// `VJOURNAL` (`E_CAL_COMPONENT_JOURNAL`), and `VTIMEZONE` (`E_CAL_COMPONENT_TIMEZONE`);
+/// `e_cal_component_is_instance` detects components carrying `RECURRENCE-ID`;
+/// `e_cal_component_get_as_string` serializes the component into an allocated iCalendar string;
+/// and `e_cal_component_clone` yields a distinct deep copy of the component.
+#[test]
+fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
+    let calendar_source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:event-1\r\n\
+         SUMMARY:Team Meeting\r\n\
+         DTSTART:20260810T090000Z\r\n\
+         DURATION:PT1H\r\n\
+         END:VEVENT\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:event-1\r\n\
+         RECURRENCE-ID:20260817T090000Z\r\n\
+         SUMMARY:Team Meeting (Rescheduled)\r\n\
+         DTSTART:20260817T100000Z\r\n\
+         DURATION:PT1H\r\n\
+         END:VEVENT\r\n\
+         BEGIN:VTODO\r\n\
+         UID:todo-1\r\n\
+         SUMMARY:Implement Milestone\r\n\
+         DUE:20260815T180000Z\r\n\
+         PERCENT-COMPLETE:75\r\n\
+         END:VTODO\r\n\
+         BEGIN:VJOURNAL\r\n\
+         UID:journal-1\r\n\
+         SUMMARY:Session Notes\r\n\
+         DESCRIPTION:Verified component semantics\r\n\
+         END:VJOURNAL\r\n\
+         END:VCALENDAR\r\n",
+    );
+
+    unsafe {
+        let calendar = i_cal_component_new_from_string(calendar_source.as_ptr());
+        assert!(!calendar.is_null());
+
+        // 1. Master Event VEVENT
+        let event_comp = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event_comp.is_null());
+        let e_event = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event_comp));
+        assert!(!e_event.is_null());
+
+        assert_eq!(e_cal_component_get_vtype(e_event), E_CAL_COMPONENT_EVENT);
+        assert_eq!(e_cal_component_is_instance(e_event), 0);
+
+        // String serialization
+        let as_str_ptr = e_cal_component_get_as_string(e_event);
+        assert!(!as_str_ptr.is_null());
+        let rendered_str = CStr::from_ptr(as_str_ptr).to_str().unwrap();
+        assert!(rendered_str.contains("BEGIN:VEVENT"), "{rendered_str}");
+        assert!(rendered_str.contains("UID:event-1"), "{rendered_str}");
+        assert!(
+            rendered_str.contains("SUMMARY:Team Meeting"),
+            "{rendered_str}"
+        );
+        g_free(as_str_ptr.cast());
+
+        // Deep cloning
+        let cloned_event = e_cal_component_clone(e_event);
+        assert!(!cloned_event.is_null());
+        assert_ne!(cloned_event, e_event);
+        assert_eq!(
+            e_cal_component_get_vtype(cloned_event),
+            E_CAL_COMPONENT_EVENT
+        );
+        let cloned_id = e_cal_component_get_id(cloned_event);
+        assert!(!cloned_id.is_null());
+        assert_eq!(
+            CStr::from_ptr(e_cal_component_id_get_uid(cloned_id))
+                .to_str()
+                .unwrap(),
+            "event-1"
+        );
+        e_cal_component_id_free(cloned_id.cast());
+        g_object_unref(cloned_event.cast());
+        g_object_unref(e_event.cast());
+
+        // 2. Recurrence override instance VEVENT
+        let instance_comp = i_cal_component_get_next_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!instance_comp.is_null());
+        let e_instance =
+            e_cal_component_new_from_icalcomponent(i_cal_component_clone(instance_comp));
+        assert!(!e_instance.is_null());
+
+        assert_eq!(e_cal_component_get_vtype(e_instance), E_CAL_COMPONENT_EVENT);
+        assert_eq!(e_cal_component_is_instance(e_instance), 1);
+        g_object_unref(e_instance.cast());
+
+        // 3. VTODO component
+        let todo_comp = i_cal_component_get_first_component(calendar, I_CAL_VTODO_COMPONENT);
+        assert!(!todo_comp.is_null());
+        let e_todo = e_cal_component_new_from_icalcomponent(i_cal_component_clone(todo_comp));
+        assert!(!e_todo.is_null());
+
+        assert_eq!(e_cal_component_get_vtype(e_todo), E_CAL_COMPONENT_TODO);
+        assert_eq!(e_cal_component_is_instance(e_todo), 0);
+        g_object_unref(e_todo.cast());
+
+        // 4. VJOURNAL component
+        let journal_comp = i_cal_component_get_first_component(calendar, I_CAL_VJOURNAL_COMPONENT);
+        assert!(!journal_comp.is_null());
+        let e_journal = e_cal_component_new_from_icalcomponent(i_cal_component_clone(journal_comp));
+        assert!(!e_journal.is_null());
+
+        assert_eq!(
+            e_cal_component_get_vtype(e_journal),
+            E_CAL_COMPONENT_JOURNAL
+        );
+        g_object_unref(e_journal.cast());
+
+        g_object_unref(calendar.cast());
+    }
+}
+
+/// Probing `ECalComponent` geographic coordinates (`ICalGeo`), task percent complete, priority, and sequence in EDS:
+/// `e_cal_component_get_geo` extracts `ICalGeo *` with `i_cal_geo_get_lat` and `i_cal_geo_get_lon`;
+/// `e_cal_component_set_geo` updates coordinates in place or removes `GEO` with NULL;
+/// `e_cal_component_get_percent_complete` / `e_cal_component_set_percent_complete` manipulate task progress;
+/// `e_cal_component_get_priority` / `e_cal_component_set_priority` manage event/task priority (0..9);
+/// and `e_cal_component_get_sequence` / `e_cal_component_set_sequence` track revision sequences.
+#[test]
+fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:event-geo-1\r\n\
+         SUMMARY:Conference Keynote\r\n\
+         DTSTART:20260810T100000Z\r\n\
+         DURATION:PT1H30M\r\n\
+         GEO:52.520008;13.404954\r\n\
+         PRIORITY:1\r\n\
+         SEQUENCE:3\r\n\
+         END:VEVENT\r\n\
+         BEGIN:VTODO\r\n\
+         UID:todo-task-1\r\n\
+         SUMMARY:Complete Spec\r\n\
+         PERCENT-COMPLETE:50\r\n\
+         PRIORITY:3\r\n\
+         SEQUENCE:1\r\n\
+         END:VTODO\r\n\
+         END:VCALENDAR\r\n",
+    );
+
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // 1. GEO Coordinates extraction
+        let geo = e_cal_component_get_geo(comp);
+        assert!(!geo.is_null());
+        assert!((i_cal_geo_get_lat(geo) - 52.520008).abs() < 1e-5);
+        assert!((i_cal_geo_get_lon(geo) - 13.404954).abs() < 1e-5);
+        g_object_unref(geo.cast());
+
+        // Priority and Sequence inspection
+        assert_eq!(e_cal_component_get_priority(comp), 1);
+        assert_eq!(e_cal_component_get_sequence(comp), 3);
+
+        // 2. In-place modification of GEO, Priority, and Sequence
+        let new_geo = i_cal_geo_new(48.856614, 2.352222);
+        assert!(!new_geo.is_null());
+        e_cal_component_set_geo(comp, new_geo);
+        g_object_unref(new_geo.cast());
+
+        e_cal_component_set_priority(comp, 2);
+        e_cal_component_set_sequence(comp, 4);
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            rendered.contains("GEO:48.856614;2.352222")
+                || rendered.contains("GEO:48.856613;2.352222"),
+            "modified GEO missing: {rendered}"
+        );
+        assert!(rendered.contains("PRIORITY:2"), "{rendered}");
+        assert!(rendered.contains("SEQUENCE:4"), "{rendered}");
+
+        // 3. Clear GEO via NULL
+        e_cal_component_set_geo(comp, std::ptr::null());
+        assert!(e_cal_component_get_geo(comp).is_null());
+
+        let inner_cleared = e_cal_component_get_icalcomponent(comp);
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner_cleared));
+        assert!(!cleared_rendered.contains("GEO:"), "{cleared_rendered}");
+        assert!(
+            cleared_rendered.contains("PRIORITY:2"),
+            "{cleared_rendered}"
+        );
+
+        g_object_unref(comp.cast());
+
+        // 4. VTODO Task Percent-Complete and Sequence
+        let todo = i_cal_component_get_first_component(calendar, I_CAL_VTODO_COMPONENT);
+        assert!(!todo.is_null());
+        let comp_todo = e_cal_component_new_from_icalcomponent(i_cal_component_clone(todo));
+        assert!(!comp_todo.is_null());
+
+        assert_eq!(e_cal_component_get_percent_complete(comp_todo), 50);
+        assert_eq!(e_cal_component_get_priority(comp_todo), 3);
+        assert_eq!(e_cal_component_get_sequence(comp_todo), 1);
+
+        e_cal_component_set_percent_complete(comp_todo, 100);
+        assert_eq!(e_cal_component_get_percent_complete(comp_todo), 100);
+
+        let inner_todo = e_cal_component_get_icalcomponent(comp_todo);
+        let rendered_todo = take_string(i_cal_component_as_ical_string(inner_todo));
+        assert!(
+            rendered_todo.contains("PERCENT-COMPLETE:100"),
+            "{rendered_todo}"
+        );
+
+        g_object_unref(comp_todo.cast());
+        g_object_unref(calendar.cast());
+    }
+}
