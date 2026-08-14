@@ -16,17 +16,47 @@ log() { echo "$(date -Is) $*" >> "$LOG"; }
 
 log "=== agy night shift starting ==="
 
+AVAILABLE_MODELS=($(agy models </dev/null | grep -v "Fetching" | awk '{print $1}'))
+CURRENT_MODEL_INDEX=-1 # -1 means use the CLI default model
 consecutive_noop=0
 while true; do
     git pull --rebase --quiet >> "$LOG" 2>&1 || true
     start=$(date +%s)
-    log "launching agy in autonomous mode with /goal"
-    # Using --dangerously-skip-permissions to bypass prompts, and --print to run non-interactively.
-    agy --dangerously-skip-permissions --print-timeout 8h --print "/goal $(cat "$PROMPT_FILE")" >> "$LOG" 2>&1
+    
+    model_arg=""
+    current_model_name="default"
+    if [ "$CURRENT_MODEL_INDEX" -ge 0 ] && [ "$CURRENT_MODEL_INDEX" -lt "${#AVAILABLE_MODELS[@]}" ]; then
+        current_model_name="${AVAILABLE_MODELS[$CURRENT_MODEL_INDEX]}"
+        model_arg="--model $current_model_name"
+    fi
+    
+    log "launching agy in autonomous mode with /goal (model: $current_model_name)"
+    
+    out=$(mktemp)
+    agy $model_arg --dangerously-skip-permissions --print-timeout 8h --print "/goal $(cat "$PROMPT_FILE")" > "$out" 2>&1
     status=$?
+    cat "$out" >> "$LOG"
     
     duration=$(( $(date +%s) - start ))
     log "agy finished: exit=$status duration=${duration}s"
+
+    if grep -qiE "usage limit|quota exceeded|resource exhausted|rate limit" "$out"; then
+        rm -f "$out"
+        CURRENT_MODEL_INDEX=$(( CURRENT_MODEL_INDEX + 1 ))
+        if [ "$CURRENT_MODEL_INDEX" -lt "${#AVAILABLE_MODELS[@]}" ]; then
+            log "Usage limit reached. Switching to fallback model: ${AVAILABLE_MODELS[$CURRENT_MODEL_INDEX]}."
+            continue # immediately retry with the next fallback model
+        else
+            log "Usage limit reached for ALL fallback models. Exiting so VM naps."
+            exit 0
+        fi
+    fi
+    rm -f "$out"
+    
+    # Reset model to default if we successfully ran a long shift (quota may have recovered)
+    if [ "$duration" -ge 120 ] && [ "$status" -eq 0 ]; then
+        CURRENT_MODEL_INDEX=-1
+    fi
 
     if [ "$duration" -lt 120 ]; then
         consecutive_noop=$(( consecutive_noop + 1 ))
