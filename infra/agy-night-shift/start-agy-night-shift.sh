@@ -20,7 +20,7 @@ git pull --rebase --quiet >> "$LOG" 2>&1 || true
 
 log "launching agy in autonomous mode with /goal"
 # Using --dangerously-skip-permissions to bypass prompts, and --print to run non-interactively.
-agy --dangerously-skip-permissions --print "/goal $(cat "$PROMPT_FILE")" >> "$LOG" 2>&1
+agy --dangerously-skip-permissions --print-timeout 8h --print "/goal $(cat "$PROMPT_FILE")" >> "$LOG" 2>&1
 status=$?
 
 log "agy finished: exit=$status. VM will be napped by idle-watchdog once idle."
