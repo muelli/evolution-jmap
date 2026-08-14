@@ -430,6 +430,112 @@ fn invents_a_key_for_a_title_that_has_none() {
     assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
 }
 
+#[test]
+fn multiple_organizations_emit_distinct_vcard_lines_and_roundtrip() {
+    let card = ContactCard {
+        organizations: Some(
+            [
+                (
+                    "o1".to_owned(),
+                    Organization {
+                        name: Some("Acme Ltd".to_owned()),
+                        units: Some(vec![OrgUnit::new("Research")]),
+                        ..Organization::default()
+                    },
+                ),
+                (
+                    "o2".to_owned(),
+                    Organization {
+                        name: Some("Brauerei".to_owned()),
+                        units: Some(vec![OrgUnit::new("Logistics")]),
+                        ..Organization::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o1:Acme Ltd;Research\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o2:Brauerei;Logistics\r\n"),
+        "{vcard}"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
+}
+
+#[test]
+fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
+    let card = ContactCard {
+        titles: Some(
+            [
+                (
+                    "t1".to_owned(),
+                    Title {
+                        name: "Research Scientist".to_owned(),
+                        kind: None,
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "t2".to_owned(),
+                    Title {
+                        name: "Director of Engineering".to_owned(),
+                        kind: None,
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "r1".to_owned(),
+                    Title {
+                        name: "Lead Investigator".to_owned(),
+                        kind: Some("role".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "r2".to_owned(),
+                    Title {
+                        name: "Project Manager".to_owned(),
+                        kind: Some("role".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t1:Research Scientist\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t2:Director of Engineering\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ROLE;X-JMAP-KEY=r1:Lead Investigator\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ROLE;X-JMAP-KEY=r2:Project Manager\r\n"),
+        "{vcard}"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.titles, card.titles);
+}
+
 /// The kinds and values of an address's components, in the order it lists
 /// them.
 fn components_of(address: &Address) -> Vec<(&str, &str)> {
