@@ -779,3 +779,262 @@ END:VCARD\r\n";
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+/// Probing field properties of web, collaboration, note, nickname, spouse, and categories fields:
+/// `E_CONTACT_HOMEPAGE_URL`, `E_CONTACT_BLOG_URL`, `E_CONTACT_VIDEO_URL`, `E_CONTACT_CALENDAR_URI`,
+/// `E_CONTACT_FREEBUSY_URL`, `E_CONTACT_ICS_CALENDAR`, `E_CONTACT_NOTE`, `E_CONTACT_SPOUSE`,
+/// `E_CONTACT_NICKNAME`, and `E_CONTACT_CATEGORIES` are string fields, whereas `E_CONTACT_CATEGORY_LIST`
+/// is a multi-valued list type. `e_contact_field_id_from_vcard` maps standard and X- properties to these IDs.
+#[test]
+fn contact_web_collaboration_note_and_misc_field_properties() {
+    unsafe {
+        // String fields
+        for (field, expected_name) in [
+            (E_CONTACT_HOMEPAGE_URL, "homepage_url"),
+            (E_CONTACT_BLOG_URL, "blog_url"),
+            (E_CONTACT_VIDEO_URL, "video_url"),
+            (E_CONTACT_CALENDAR_URI, "caluri"),
+            (E_CONTACT_FREEBUSY_URL, "fburl"),
+            (E_CONTACT_ICS_CALENDAR, "icscalendar"),
+            (E_CONTACT_NOTE, "note"),
+            (E_CONTACT_SPOUSE, "spouse"),
+            (E_CONTACT_NICKNAME, "nickname"),
+            (E_CONTACT_CATEGORIES, "categories"),
+        ] {
+            assert_eq!(
+                e_contact_field_is_string(field),
+                1,
+                "field {expected_name} should be a string field"
+            );
+            let name_cstr = CStr::from_ptr(e_contact_field_name(field));
+            assert_eq!(
+                name_cstr.to_str().unwrap(),
+                expected_name,
+                "field name mismatch for {expected_name}"
+            );
+        }
+
+        // Multi-valued category list
+        assert_eq!(e_contact_field_is_string(E_CONTACT_CATEGORY_LIST), 0);
+        let cat_list_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_CATEGORY_LIST));
+        assert_eq!(cat_list_name.to_str().unwrap(), "category_list");
+
+        // e_contact_field_id_from_vcard mapping checks
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"URL".as_ptr()),
+            E_CONTACT_HOMEPAGE_URL
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"CALURI".as_ptr()),
+            E_CONTACT_CALENDAR_URI
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"FBURL".as_ptr()),
+            E_CONTACT_FREEBUSY_URL
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"NOTE".as_ptr()),
+            E_CONTACT_NOTE
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"NICKNAME".as_ptr()),
+            E_CONTACT_NICKNAME
+        );
+        // In EDS, the vCard property "CATEGORIES" maps to the multi-valued E_CONTACT_CATEGORY_LIST (93)
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"CATEGORIES".as_ptr()),
+            E_CONTACT_CATEGORY_LIST
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-EVOLUTION-BLOG-URL".as_ptr()),
+            E_CONTACT_BLOG_URL
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-EVOLUTION-VIDEO-URL".as_ptr()),
+            E_CONTACT_VIDEO_URL
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-EVOLUTION-SPOUSE".as_ptr()),
+            E_CONTACT_SPOUSE
+        );
+    }
+}
+
+/// Probing EDS behavior for web URLs, collaboration links, notes, nicknames, spouse, and categories:
+/// - Parsing vCard with multiple URL, CALURI, FBURL, NOTE, NICKNAME, CATEGORIES, and X-EVOLUTION-SPOUSE lines
+///   carrying X-JMAP-KEY parameters;
+/// - Reading via `e_contact_get_const` and `E_CONTACT_CATEGORY_LIST` GList;
+/// - In-place modification via `e_contact_set` updating target line while preserving extra lines and X-JMAP-KEYs;
+/// - Clearing fields removing lines cleanly.
+#[test]
+fn web_collaboration_note_nickname_categories_vcard_lines_and_modification_in_eds() {
+    unsafe {
+        let vcard_str = c"BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Vera Olden\r\n\
+N:Olden;Vera;;;\r\n\
+URL;X-JMAP-KEY=l1:https://example.com/homepage\r\n\
+URL;X-JMAP-KEY=l2:https://example.com/blog\r\n\
+CALURI;X-JMAP-KEY=c1:https://example.com/calendar.ics\r\n\
+FBURL;X-JMAP-KEY=f1:https://example.com/freebusy.ifb\r\n\
+NOTE;X-JMAP-KEY=n1:Primary note for Vera\r\n\
+NOTE;X-JMAP-KEY=n2:Secondary note with extra details\r\n\
+NICKNAME;X-JMAP-KEY=k1:Vee\r\n\
+CATEGORIES;X-JMAP-KEY=cat1:Engineering,Rust,Leadership\r\n\
+X-EVOLUTION-SPOUSE;X-JMAP-KEY=s1:Alex Olden\r\n\
+END:VCARD\r\n";
+
+        let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
+        assert!(!contact.is_null());
+
+        // Field getter assertions
+        let url_ptr = e_contact_get_const(contact, E_CONTACT_HOMEPAGE_URL);
+        assert!(!url_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(url_ptr.cast()).to_str().unwrap(),
+            "https://example.com/homepage"
+        );
+
+        let caluri_ptr = e_contact_get_const(contact, E_CONTACT_CALENDAR_URI);
+        assert!(!caluri_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(caluri_ptr.cast()).to_str().unwrap(),
+            "https://example.com/calendar.ics"
+        );
+
+        let fburl_ptr = e_contact_get_const(contact, E_CONTACT_FREEBUSY_URL);
+        assert!(!fburl_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(fburl_ptr.cast()).to_str().unwrap(),
+            "https://example.com/freebusy.ifb"
+        );
+
+        let note_ptr = e_contact_get_const(contact, E_CONTACT_NOTE);
+        assert!(!note_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(note_ptr.cast()).to_str().unwrap(),
+            "Primary note for Vera"
+        );
+
+        let nick_ptr = e_contact_get_const(contact, E_CONTACT_NICKNAME);
+        assert!(!nick_ptr.is_null());
+        assert_eq!(CStr::from_ptr(nick_ptr.cast()).to_str().unwrap(), "Vee");
+
+        let cat_ptr = e_contact_get_const(contact, E_CONTACT_CATEGORIES);
+        assert!(!cat_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(cat_ptr.cast()).to_str().unwrap(),
+            "Engineering,Rust,Leadership"
+        );
+
+        let spouse_ptr = e_contact_get_const(contact, E_CONTACT_SPOUSE);
+        assert!(!spouse_ptr.is_null());
+        assert_eq!(
+            CStr::from_ptr(spouse_ptr.cast()).to_str().unwrap(),
+            "Alex Olden"
+        );
+
+        // E_CONTACT_CATEGORY_LIST inspection
+        let cat_list = e_contact_get(contact, E_CONTACT_CATEGORY_LIST) as *mut glib_sys::GList;
+        assert!(!cat_list.is_null());
+        let mut categories = Vec::new();
+        let mut curr = cat_list;
+        while !curr.is_null() {
+            let item_str = CStr::from_ptr((*curr).data as *const gchar)
+                .to_str()
+                .unwrap();
+            categories.push(item_str.to_string());
+            curr = (*curr).next;
+        }
+        assert_eq!(categories, vec!["Engineering", "Rust", "Leadership"]);
+        unsafe extern "C" fn free_item(p: *mut std::ffi::c_void) {
+            unsafe {
+                glib_sys::g_free(p);
+            }
+        }
+        glib_sys::g_list_free_full(cat_list, Some(free_item));
+
+        // Modifying fields in place
+        e_contact_set(
+            contact,
+            E_CONTACT_HOMEPAGE_URL,
+            c"https://example.com/new-home".as_ptr().cast(),
+        );
+        e_contact_set(
+            contact,
+            E_CONTACT_NOTE,
+            c"Updated primary note".as_ptr().cast(),
+        );
+        e_contact_set(contact, E_CONTACT_NICKNAME, c"Vera-Prime".as_ptr().cast());
+        e_contact_set(contact, E_CONTACT_SPOUSE, c"Taylor Olden".as_ptr().cast());
+
+        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
+
+        // First URL is updated in place, second URL preserved
+        assert!(
+            updated_vcard.contains("URL;X-JMAP-KEY=l1:https://example.com/new-home")
+                || updated_vcard.contains("URL:https://example.com/new-home")
+                || updated_vcard.contains("https://example.com/new-home"),
+            "first URL should be updated: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("URL;X-JMAP-KEY=l2:https://example.com/blog")
+                || updated_vcard.contains("https://example.com/blog"),
+            "second URL should be preserved: {updated_vcard}"
+        );
+
+        // CALURI and FBURL preserved with X-JMAP-KEY
+        assert!(
+            updated_vcard.contains("CALURI;X-JMAP-KEY=c1:https://example.com/calendar.ics")
+                || updated_vcard.contains("https://example.com/calendar.ics"),
+            "CALURI should be preserved: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("FBURL;X-JMAP-KEY=f1:https://example.com/freebusy.ifb")
+                || updated_vcard.contains("https://example.com/freebusy.ifb"),
+            "FBURL should be preserved: {updated_vcard}"
+        );
+
+        // First NOTE is updated, second NOTE is preserved
+        assert!(
+            updated_vcard.contains("Updated primary note"),
+            "first NOTE should be updated: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("Secondary note with extra details"),
+            "second NOTE should be preserved: {updated_vcard}"
+        );
+
+        // NICKNAME updated
+        assert!(
+            updated_vcard.contains("Vera-Prime"),
+            "NICKNAME should be updated: {updated_vcard}"
+        );
+
+        // SPOUSE updated
+        assert!(
+            updated_vcard.contains("Taylor Olden"),
+            "SPOUSE should be updated: {updated_vcard}"
+        );
+
+        g_free(updated_vcard_ptr.cast());
+
+        // Clearing NOTE by passing NULL
+        e_contact_set(contact, E_CONTACT_NOTE, std::ptr::null());
+        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            !cleared_vcard.contains("Updated primary note"),
+            "first NOTE should be removed: {cleared_vcard}"
+        );
+        assert!(
+            cleared_vcard.contains("Secondary note with extra details"),
+            "second NOTE should remain: {cleared_vcard}"
+        );
+
+        g_free(cleared_vcard_ptr.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}

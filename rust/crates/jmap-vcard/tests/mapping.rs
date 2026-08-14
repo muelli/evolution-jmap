@@ -3003,3 +3003,206 @@ END:VCARD\r\n";
     assert_eq!(media["m2"].kind.as_deref(), Some("photo"));
     assert_eq!(media["m2"].uri, "data:image/jpeg;base64,aGVsbG8tcGhvdG8=");
 }
+
+#[test]
+fn maps_notes_with_multiple_entries_and_newlines_faithfully() {
+    let mut card = ContactCard {
+        id: Some("C10".into()),
+        name: Some(Name {
+            full: Some("Vera Olden".to_owned()),
+            ..Name::default()
+        }),
+        ..ContactCard::default()
+    };
+    card.notes = Some(
+        [
+            (
+                "n1".to_owned(),
+                Note {
+                    note: "First paragraph.\nSecond paragraph with details.".to_owned(),
+                    ..Note::default()
+                },
+            ),
+            (
+                "n2".to_owned(),
+                Note {
+                    note: "Follow-up note for 2026 meeting.".to_owned(),
+                    ..Note::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("NOTE;X-JMAP-KEY=n1:First paragraph.\\nSecond paragraph with details.")
+            || vcard
+                .contains("NOTE;X-JMAP-KEY=n1:First paragraph.\nSecond paragraph with details.")
+            || vcard.contains("NOTE;X-JMAP-KEY=n1:"),
+        "vCard should contain escaped first note: {vcard}"
+    );
+    assert!(
+        vcard.contains("NOTE;X-JMAP-KEY=n2:Follow-up note for 2026 meeting."),
+        "vCard should contain second note: {vcard}"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    let notes = parsed.notes.expect("notes");
+    assert_eq!(notes.len(), 2);
+    assert_eq!(
+        notes["n1"].note,
+        "First paragraph.\nSecond paragraph with details."
+    );
+    assert_eq!(notes["n2"].note, "Follow-up note for 2026 meeting.");
+}
+
+#[test]
+fn maps_calendars_freebusy_and_links_faithfully() {
+    let mut card = ContactCard {
+        id: Some("C11".into()),
+        name: Some(Name {
+            full: Some("Vera Olden".to_owned()),
+            ..Name::default()
+        }),
+        ..ContactCard::default()
+    };
+    card.calendars = Some(
+        [
+            (
+                "c1".to_owned(),
+                Calendar {
+                    kind: Some("calendar".to_owned()),
+                    uri: "https://example.com/team-calendar.ics".to_owned(),
+                    ..Calendar::default()
+                },
+            ),
+            (
+                "f1".to_owned(),
+                Calendar {
+                    kind: Some("freeBusy".to_owned()),
+                    uri: "https://example.com/busy-schedule.ifb".to_owned(),
+                    ..Calendar::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    card.links = Some(
+        [(
+            "l1".to_owned(),
+            Link {
+                uri: "https://example.com/homepage".to_owned(),
+                ..Link::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("CALURI;X-JMAP-KEY=c1:https://example.com/team-calendar.ics"),
+        "CALURI line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("FBURL;X-JMAP-KEY=f1:https://example.com/busy-schedule.ifb"),
+        "FBURL line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("URL;X-JMAP-KEY=l1:https://example.com/homepage"),
+        "URL line missing: {vcard}"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    let cals = parsed.calendars.expect("calendars");
+    assert_eq!(cals.len(), 2);
+    assert_eq!(cals["c1"].kind.as_deref(), Some("calendar"));
+    assert_eq!(cals["c1"].uri, "https://example.com/team-calendar.ics");
+    assert_eq!(cals["f1"].kind.as_deref(), Some("freeBusy"));
+    assert_eq!(cals["f1"].uri, "https://example.com/busy-schedule.ifb");
+
+    let links = parsed.links.expect("links");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links["l1"].uri, "https://example.com/homepage");
+}
+
+#[test]
+fn maps_nicknames_spouse_and_keywords_faithfully() {
+    let mut card = ContactCard {
+        id: Some("C12".into()),
+        name: Some(Name {
+            full: Some("Vera Olden".to_owned()),
+            ..Name::default()
+        }),
+        ..ContactCard::default()
+    };
+    card.nicknames = Some(
+        [(
+            "k1".to_owned(),
+            Nickname {
+                name: "Vee".to_owned(),
+                ..Nickname::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+    card.related_to = Some(
+        [(
+            "Alex Olden".to_owned(),
+            Relation {
+                relation: Some([("spouse".to_owned(), json!(true))].into_iter().collect()),
+                ..Relation::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+    card.keywords = Some(
+        [
+            ("Engineering".to_owned(), json!(true)),
+            ("Rust".to_owned(), json!(true)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("NICKNAME;X-JMAP-KEY=k1:Vee"),
+        "NICKNAME line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("X-EVOLUTION-SPOUSE:Alex Olden"),
+        "X-EVOLUTION-SPOUSE line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("CATEGORIES:Engineering,Rust")
+            || vcard.contains("CATEGORIES:Rust,Engineering"),
+        "CATEGORIES line missing: {vcard}"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    let nicks = parsed.nicknames.expect("nicknames");
+    assert_eq!(nicks["k1"].name, "Vee");
+
+    let rels = parsed.related_to.expect("relatedTo");
+    assert!(rels.contains_key("Alex Olden"));
+    assert_eq!(
+        rels["Alex Olden"]
+            .relation
+            .as_ref()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["spouse"]
+    );
+
+    let kws = parsed.keywords.expect("keywords");
+    assert!(kws.contains_key("Engineering"));
+    assert!(kws.contains_key("Rust"));
+}
