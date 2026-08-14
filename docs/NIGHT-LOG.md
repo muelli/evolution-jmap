@@ -22676,4 +22676,8 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 **Claiming increment:** calendar component types (`ECalComponentVType`), cloning and string serialization (`e_cal_component_get_as_string`, `e_cal_component_clone`, `e_cal_component_is_instance`), geographic coordinates (`ICalGeo`), and task completion/sequence semantics EDS verification, roundtrip fidelity in `jmap-ical`, and preservation across `jmap-cal-sync`.
 
+## 2026-08-14 (two-hundred-and-thirty-sixth session)
+
+**Claiming increment:** `jmap-cal-sync` save tests for `STATUS:CANCELLED` (cancelling an event reaches the server as `"cancelled"`), clearing `STATUS` removes it, and clearing `CLASS` removes `privacy` — the two mapped-property-clearing scenarios that the existing save test suite does not yet cover.
+
 
