@@ -1182,3 +1182,219 @@ fn icalrecurrence_properties_and_string_roundtrips() {
         g_object_unref(recur.cast());
     }
 }
+
+/// Probing `ECalComponent` datetime and duration properties (DTSTART, DTEND, DUE, DURATION):
+/// `e_cal_component_get_dtstart` extracts start datetime and TZID,
+/// `e_cal_component_get_dtend` extracts end datetime and TZID,
+/// `e_cal_component_get_due` extracts due datetime for tasks,
+/// `i_cal_component_get_duration` extracts event duration,
+/// and setters modify or clear (via NULL) these properties.
+#[test]
+fn ecalcomponent_dtstart_dtend_due_and_duration_in_eds() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Quarterly Review\r\n\
+         DTSTART;TZID=America/New_York:20260810T090000\r\n\
+         DTEND;TZID=America/New_York:20260810T103000\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+
+        // Inspect DTSTART
+        let dtstart = e_cal_component_get_dtstart(comp);
+        assert!(!dtstart.is_null());
+        let tzid = e_cal_component_datetime_get_tzid(dtstart);
+        assert!(!tzid.is_null());
+        assert_eq!(CStr::from_ptr(tzid).to_str().unwrap(), "America/New_York");
+        let start_time = e_cal_component_datetime_get_value(dtstart);
+        assert!(!start_time.is_null());
+        assert_eq!(i_cal_time_get_year(start_time), 2026);
+        assert_eq!(i_cal_time_get_month(start_time), 8);
+        assert_eq!(i_cal_time_get_day(start_time), 10);
+        assert_eq!(i_cal_time_get_hour(start_time), 9);
+        assert_eq!(i_cal_time_get_minute(start_time), 0);
+        assert_eq!(i_cal_time_is_date(start_time), 0);
+        assert_eq!(i_cal_time_is_utc(start_time), 0);
+        e_cal_component_datetime_free(dtstart.cast());
+
+        // Inspect DTEND
+        let dtend = e_cal_component_get_dtend(comp);
+        assert!(!dtend.is_null());
+        let end_tzid = e_cal_component_datetime_get_tzid(dtend);
+        assert_eq!(
+            CStr::from_ptr(end_tzid).to_str().unwrap(),
+            "America/New_York"
+        );
+        let end_time = e_cal_component_datetime_get_value(dtend);
+        assert_eq!(i_cal_time_get_hour(end_time), 10);
+        assert_eq!(i_cal_time_get_minute(end_time), 30);
+        e_cal_component_datetime_free(dtend.cast());
+
+        // Modify DTSTART in place to Europe/London 20260815T120000
+        let new_time = i_cal_time_new_from_string(c"20260815T120000".as_ptr());
+        assert!(!new_time.is_null());
+        let new_dt = e_cal_component_datetime_new_take(
+            new_time,
+            glib_sys::g_strdup(c"Europe/London".as_ptr()),
+        );
+        e_cal_component_set_dtstart(comp, new_dt);
+        e_cal_component_datetime_free(new_dt.cast());
+
+        let inner = e_cal_component_get_icalcomponent(comp);
+        let rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            rendered.contains("DTSTART;TZID=Europe/London:20260815T120000"),
+            "modified dtstart missing: {rendered}"
+        );
+
+        // Clear DTEND and set DURATION on inner ICalComponent
+        e_cal_component_set_dtend(comp, std::ptr::null());
+
+        let dur = i_cal_duration_new_from_string(c"PT1H30M".as_ptr());
+        assert!(!dur.is_null());
+        assert_eq!(i_cal_duration_get_hours(dur), 1);
+        assert_eq!(i_cal_duration_get_minutes(dur), 30);
+        assert_eq!(i_cal_duration_is_neg(dur), 0);
+        i_cal_component_set_duration(inner, dur);
+        g_object_unref(dur.cast());
+
+        let dur_rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            dur_rendered.contains("DURATION:PT1H30M"),
+            "duration missing: {dur_rendered}"
+        );
+
+        // Remove DURATION property
+        let dur_prop = i_cal_component_get_first_property(inner, I_CAL_DURATION_PROPERTY);
+        assert!(!dur_prop.is_null());
+        i_cal_component_remove_property(inner, dur_prop);
+        g_object_unref(dur_prop.cast());
+
+        let cleared_rendered = take_string(i_cal_component_as_ical_string(inner));
+        assert!(
+            !cleared_rendered.contains("DTEND"),
+            "cleared dtend still present: {cleared_rendered}"
+        );
+        assert!(
+            !cleared_rendered.contains("DURATION:"),
+            "cleared duration still present: {cleared_rendered}"
+        );
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+
+        // Test DUE on a VTODO component (libecal restricts DUE to E_CAL_COMPONENT_TODO)
+        let todo_source = text(
+            "BEGIN:VCALENDAR\r\n\
+             VERSION:2.0\r\n\
+             BEGIN:VTODO\r\n\
+             UID:T1\r\n\
+             SUMMARY:Task with deadline\r\n\
+             DUE;TZID=America/New_York:20260820T170000\r\n\
+             END:VTODO\r\n\
+             END:VCALENDAR\r\n",
+        );
+        let todo_cal = i_cal_component_new_from_string(todo_source.as_ptr());
+        assert!(!todo_cal.is_null());
+        let todo_comp = i_cal_component_get_first_component(todo_cal, I_CAL_VTODO_COMPONENT);
+        assert!(!todo_comp.is_null());
+
+        let e_todo = e_cal_component_new_from_icalcomponent(i_cal_component_clone(todo_comp));
+        assert!(!e_todo.is_null());
+
+        let initial_due = e_cal_component_get_due(e_todo);
+        assert!(!initial_due.is_null());
+        let due_val = e_cal_component_datetime_get_value(initial_due);
+        assert_eq!(i_cal_time_get_day(due_val), 20);
+        assert_eq!(i_cal_time_get_hour(due_val), 17);
+        e_cal_component_datetime_free(initial_due.cast());
+
+        // Modify DUE
+        let new_due_time = i_cal_time_new_from_string(c"20260825T180000".as_ptr());
+        let new_due_dt = e_cal_component_datetime_new_take(
+            new_due_time,
+            glib_sys::g_strdup(c"America/New_York".as_ptr()),
+        );
+        e_cal_component_set_due(e_todo, new_due_dt);
+        e_cal_component_datetime_free(new_due_dt.cast());
+
+        let inner_todo = e_cal_component_get_icalcomponent(e_todo);
+        let todo_rendered = take_string(i_cal_component_as_ical_string(inner_todo));
+        assert!(
+            todo_rendered.contains("DUE;TZID=America/New_York:20260825T180000"),
+            "modified due missing: {todo_rendered}"
+        );
+
+        // Clear DUE
+        e_cal_component_set_due(e_todo, std::ptr::null());
+        let cleared_todo = take_string(i_cal_component_as_ical_string(inner_todo));
+        assert!(
+            !cleared_todo.contains("DUE"),
+            "cleared due still present: {cleared_todo}"
+        );
+
+        g_object_unref(e_todo.cast());
+        g_object_unref(todo_comp.cast());
+        g_object_unref(todo_cal.cast());
+    }
+}
+
+/// Probing `ICalTime` parsing (DATE vs DATE-TIME), UTC flags, and `ICalTimezone` resolution:
+/// `i_cal_time_new_from_string` distinguishes VALUE=DATE from DATE-TIME and UTC from floating/local,
+/// and `i_cal_timezone_get_builtin_timezone` retrieves built-in VTIMEZONE definitions.
+#[test]
+fn icaltime_date_vs_datetime_and_timezone_resolution() {
+    unsafe {
+        // Date only (VALUE=DATE)
+        let d = i_cal_time_new_from_string(c"20260810".as_ptr());
+        assert!(!d.is_null());
+        assert_eq!(i_cal_time_is_date(d), 1);
+        assert_eq!(i_cal_time_is_utc(d), 0);
+        assert_eq!(i_cal_time_get_year(d), 2026);
+        assert_eq!(i_cal_time_get_month(d), 8);
+        assert_eq!(i_cal_time_get_day(d), 10);
+        assert_eq!(i_cal_time_get_hour(d), 0);
+        g_object_unref(d.cast());
+
+        // Date-time with UTC (Z)
+        let dt_utc = i_cal_time_new_from_string(c"20260810T153000Z".as_ptr());
+        assert!(!dt_utc.is_null());
+        assert_eq!(i_cal_time_is_date(dt_utc), 0);
+        assert_eq!(i_cal_time_is_utc(dt_utc), 1);
+        assert_eq!(i_cal_time_get_hour(dt_utc), 15);
+        assert_eq!(i_cal_time_get_minute(dt_utc), 30);
+        g_object_unref(dt_utc.cast());
+
+        // Date-time floating / local
+        let dt_local = i_cal_time_new_from_string(c"20260810T090000".as_ptr());
+        assert!(!dt_local.is_null());
+        assert_eq!(i_cal_time_is_date(dt_local), 0);
+        assert_eq!(i_cal_time_is_utc(dt_local), 0);
+        assert_eq!(i_cal_time_get_hour(dt_local), 9);
+        g_object_unref(dt_local.cast());
+
+        // Timezone resolution by IANA name
+        let tz = i_cal_timezone_get_builtin_timezone(c"Europe/Zurich".as_ptr());
+        assert!(!tz.is_null());
+        let vtz = i_cal_timezone_get_component(tz);
+        assert!(!vtz.is_null());
+        assert_eq!(i_cal_component_isa(vtz), I_CAL_VTIMEZONE_COMPONENT);
+
+        let rendered = take_string(i_cal_component_as_ical_string(vtz));
+        assert!(rendered.contains("BEGIN:VTIMEZONE"), "{rendered}");
+        assert!(rendered.contains("TZID:"), "{rendered}");
+    }
+}

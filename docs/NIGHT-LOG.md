@@ -22461,4 +22461,32 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-twenty-ninth session)
 
-Claiming M4 increment: verify calendar date-time, duration, all-day date, and timezone semantics in EDS, roundtrip fidelity in jmap-ical, and datetime/timezone preservation across sync.
+**Verifying calendar date-time, duration, all-day date, and timezone semantics in EDS, roundtrip fidelity in `jmap-ical`, and datetime/duration preservation across sync.**
+This session measures EDS 3.52 `ECalComponent` datetime and duration properties (`DTSTART`, `DTEND`, `DUE`, `DURATION`), `ICalTime` date vs date-time representations, and `ICalTimezone` resolution in `eds-sys`, adds all-day date and fractional/UTC duration roundtrip tests in `jmap-ical`, and verifies datetime/duration and all-day editing with unmodeled location, link, and keyword preservation in `jmap-cal-sync`.
+
+**EDS 3.52 `ECalComponent` datetime, duration, and `ICalTime` measurement:**
+- Probed `libecal-2.0` and `libical-glib` for datetime, duration, and timezone behaviors:
+  - `e_cal_component_get_dtstart` and `e_cal_component_get_dtend` return `ECalComponentDateTime *`, exposing `e_cal_component_datetime_get_value` (`ICalTime *`) and `e_cal_component_datetime_get_tzid`.
+  - `e_cal_component_get_due` and `e_cal_component_set_due` manage due dates on `VTODO` (`E_CAL_COMPONENT_TODO`) components (EDS enforces component type).
+  - `i_cal_component_get_duration` and `i_cal_component_set_duration` manage event duration; RFC 5545 prevents simultaneous `DTEND` and `DURATION` properties on a `VEVENT`, requiring `DTEND` clearing before setting `DURATION`.
+  - `i_cal_time_is_date` distinguishes `VALUE=DATE` (all-day date) from `DATE-TIME`, while `i_cal_time_is_utc` detects UTC (`Z`) timestamps.
+  - `i_cal_timezone_get_builtin_timezone` resolves standard IANA timezone names (e.g. `"Europe/Zurich"`) to `ICalTimezone *`, and `i_cal_timezone_get_component` retrieves the corresponding `VTIMEZONE` `ICalComponent`.
+  - `e_cal_component_set_dtend(comp, NULL)`, `e_cal_component_set_due(comp, NULL)`, and `i_cal_component_remove_property` for `I_CAL_DURATION_PROPERTY` cleanly remove properties from components.
+- In `rust/crates/eds-sys/tests/ical.rs`:
+  - Added `ecalcomponent_dtstart_dtend_due_and_duration_in_eds`: verifies start/end datetime inspection, in-place timezone modification, duration setting on inner component, task due date management on `VTODO`, and property removal.
+  - Added `icaltime_date_vs_datetime_and_timezone_resolution`: verifies `ICalTime` date/datetime/UTC parsing and built-in timezone component retrieval.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-ical/tests/event.rs`:
+  - Added `event_with_allday_dates_and_explicit_timezone_roundtrips_faithfully`: verifies that all-day events with multi-day spans roundtrip faithfully to `DTSTART;VALUE=DATE` and canonical `DURATION:P...D` lines and back into JSCalendar `start`, `showWithoutTime: true`, and `duration`.
+  - Added `event_with_fractional_duration_and_utc_or_floating_start_roundtrips`: verifies that events with UTC timestamps (`Z`) and fractional durations (`PT1H45M`) roundtrip into `Etc/UTC` and accurate duration strings.
+- In `jmap-cal-sync/tests/save.rs`:
+  - Added `editing_event_datetime_and_duration_preserves_unmodeled_locations_and_links`: verifies that modifying event start timestamp and duration generates targeted patches while preserving unmodeled locations, links, alerts, and timezones intact on the server.
+  - Added `editing_allday_dates_preserves_unmodeled_virtual_locations_and_keywords`: verifies that modifying all-day date bounds patches server start and duration while preserving virtual locations and keywords intact.
+
+Tests: 1072 in the default set (up 4: 248 in `jmap-ical/tests/event.rs`, 129 in `jmap-cal-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/ical.rs` (17 total) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1072 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
