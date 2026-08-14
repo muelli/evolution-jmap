@@ -2816,3 +2816,44 @@ fn a_spouse_whose_name_holds_a_pointer_character_is_patched_under_that_name() {
         "{related:?}"
     );
 }
+
+#[test]
+fn unmapped_or_unslotted_services_are_preserved_across_saves() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A card on the server carrying both a mapped service (Jabber) and unslotted /
+    // unmodeled services (Twitter, SIP) which EDS has no per-slot fields for.
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s1": {"service": "Jabber", "user": "vera@jabber.example"},
+                "s_tw": {"service": "Twitter", "user": "vera_tw"},
+                "s_sip": {"service": "SIP", "uri": "sip:vera@example.com"},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    // The vCard carries only the mapped Jabber handle.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example"),
+        "{vcard}"
+    );
+    assert!(!vcard.contains("vera_tw"), "{vcard}");
+    assert!(!vcard.contains("sip:vera@example.com"), "{vcard}");
+
+    // Edit the Jabber handle
+    let edited = vcard.replace("vera@jabber.example", "vera@xmpp.example");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    // On the server, Jabber was patched while Twitter and SIP remain completely intact.
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services["s1"].user.as_deref(), Some("vera@xmpp.example"));
+    assert_eq!(services["s_tw"].user.as_deref(), Some("vera_tw"));
+    assert_eq!(
+        services["s_sip"].uri.as_deref(),
+        Some("sip:vera@example.com")
+    );
+}
