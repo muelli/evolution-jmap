@@ -26,7 +26,8 @@ use std::collections::BTreeMap;
 use jmap_functional::{Session, observations, required_path};
 use jmap_proto::Id;
 use jmap_proto::contacts::{
-    Anniversary, Calendar, ContactCard, Media, Name, NameComponent, Note, OnlineService, Relation,
+    Anniversary, Calendar, ContactCard, Media, Name, NameComponent, Note, OnlineService, OrgUnit,
+    Organization, Relation, Title,
 };
 
 /// The contact the client writes. One string, passed to the client on its
@@ -839,6 +840,27 @@ const SEEDED_DEATH_YEAR: u32 = 2021;
 const SEEDED_DEATH_MONTH: u32 = 5;
 const SEEDED_DEATH_DAY: u32 = 12;
 
+/// The multiple organizations and titles/roles the server filed on the seeded card.
+///
+/// Evolution's contact editor displays only the first ORG line and first TITLE/ROLE
+/// lines, so secondary entries are invisible to the user. Verified across every
+/// seeded leg to ensure secondary entries survive client modifications intact.
+const SEEDED_ORG_KEY: &str = "org-1";
+const SEEDED_SECOND_ORG_KEY: &str = "org-2";
+const SEEDED_ORG_NAME: &str = "Acme Ltd";
+const SEEDED_ORG_UNIT: &str = "Research";
+const SEEDED_SECOND_ORG_NAME: &str = "Brauerei";
+const SEEDED_SECOND_ORG_UNIT: &str = "Logistics";
+
+const SEEDED_TITLE_KEY: &str = "title-1";
+const SEEDED_SECOND_TITLE_KEY: &str = "title-2";
+const SEEDED_ROLE_KEY: &str = "role-1";
+const SEEDED_SECOND_ROLE_KEY: &str = "role-2";
+const SEEDED_TITLE_NAME: &str = "Senior Research Scientist";
+const SEEDED_SECOND_TITLE_NAME: &str = "Director of Engineering";
+const SEEDED_ROLE_NAME: &str = "Lead Investigator";
+const SEEDED_SECOND_ROLE_NAME: &str = "Project Manager";
+
 /// Which of the seeded card's notes the server files on it.
 ///
 /// The distinction exists for one leg only, and it is a distinction the save
@@ -1044,6 +1066,66 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
                         "day": SEEDED_DEATH_DAY,
                     })),
                     ..Anniversary::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    card.organizations = Some(
+        [
+            (
+                SEEDED_ORG_KEY.to_owned(),
+                Organization {
+                    name: Some(SEEDED_ORG_NAME.to_owned()),
+                    units: Some(vec![OrgUnit::new(SEEDED_ORG_UNIT)]),
+                    ..Organization::default()
+                },
+            ),
+            (
+                SEEDED_SECOND_ORG_KEY.to_owned(),
+                Organization {
+                    name: Some(SEEDED_SECOND_ORG_NAME.to_owned()),
+                    units: Some(vec![OrgUnit::new(SEEDED_SECOND_ORG_UNIT)]),
+                    ..Organization::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    card.titles = Some(
+        [
+            (
+                SEEDED_TITLE_KEY.to_owned(),
+                Title {
+                    name: SEEDED_TITLE_NAME.to_owned(),
+                    kind: None,
+                    ..Title::default()
+                },
+            ),
+            (
+                SEEDED_SECOND_TITLE_KEY.to_owned(),
+                Title {
+                    name: SEEDED_SECOND_TITLE_NAME.to_owned(),
+                    kind: None,
+                    ..Title::default()
+                },
+            ),
+            (
+                SEEDED_ROLE_KEY.to_owned(),
+                Title {
+                    name: SEEDED_ROLE_NAME.to_owned(),
+                    kind: Some("role".to_owned()),
+                    ..Title::default()
+                },
+            ),
+            (
+                SEEDED_SECOND_ROLE_KEY.to_owned(),
+                Title {
+                    name: SEEDED_SECOND_ROLE_NAME.to_owned(),
+                    kind: Some("role".to_owned()),
+                    ..Title::default()
                 },
             ),
         ]
@@ -1346,6 +1428,69 @@ fn assert_the_seeded_anniversaries_survived(card: &ContactCard) {
     );
 }
 
+/// Hold the card the server now holds to all multiple organizations and titles/roles
+/// it was seeded with.
+///
+/// Evolution's contact editor displays only the first ORG line and first TITLE/ROLE lines,
+/// so secondary entries are invisible to the user. A save that touched unrelated fields
+/// must leave both organizations and all four titles/roles intact on the server.
+fn assert_the_seeded_organizations_and_titles_survived(card: &ContactCard) {
+    let orgs = card
+        .organizations
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's organizations: {card:?}"));
+    assert_eq!(
+        orgs.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![SEEDED_ORG_KEY, SEEDED_SECOND_ORG_KEY],
+        "the save re-keyed or dropped an organization: {card:?}"
+    );
+    assert_eq!(orgs[SEEDED_ORG_KEY].name.as_deref(), Some(SEEDED_ORG_NAME));
+    assert_eq!(
+        orgs[SEEDED_ORG_KEY]
+            .units
+            .as_ref()
+            .map(|u| u.iter().map(|o| o.name.as_str()).collect::<Vec<_>>()),
+        Some(vec![SEEDED_ORG_UNIT])
+    );
+    assert_eq!(
+        orgs[SEEDED_SECOND_ORG_KEY].name.as_deref(),
+        Some(SEEDED_SECOND_ORG_NAME)
+    );
+    assert_eq!(
+        orgs[SEEDED_SECOND_ORG_KEY]
+            .units
+            .as_ref()
+            .map(|u| u.iter().map(|o| o.name.as_str()).collect::<Vec<_>>()),
+        Some(vec![SEEDED_SECOND_ORG_UNIT])
+    );
+
+    let titles = card
+        .titles
+        .as_ref()
+        .unwrap_or_else(|| panic!("the save dropped the card's titles: {card:?}"));
+    assert_eq!(
+        titles.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![
+            SEEDED_ROLE_KEY,
+            SEEDED_SECOND_ROLE_KEY,
+            SEEDED_TITLE_KEY,
+            SEEDED_SECOND_TITLE_KEY
+        ],
+        "the save re-keyed or dropped a title/role: {card:?}"
+    );
+    assert_eq!(titles[SEEDED_TITLE_KEY].name, SEEDED_TITLE_NAME);
+    assert_eq!(titles[SEEDED_TITLE_KEY].kind, None);
+    assert_eq!(
+        titles[SEEDED_SECOND_TITLE_KEY].name,
+        SEEDED_SECOND_TITLE_NAME
+    );
+    assert_eq!(titles[SEEDED_SECOND_TITLE_KEY].kind, None);
+    assert_eq!(titles[SEEDED_ROLE_KEY].name, SEEDED_ROLE_NAME);
+    assert_eq!(titles[SEEDED_ROLE_KEY].kind.as_deref(), Some("role"));
+    assert_eq!(titles[SEEDED_SECOND_ROLE_KEY].name, SEEDED_SECOND_ROLE_NAME);
+    assert_eq!(titles[SEEDED_SECOND_ROLE_KEY].kind.as_deref(), Some("role"));
+}
+
 /// The port the mock is listening on, for the keyfile the session is written
 /// with.
 fn mock_port(server: &jmap_mock::MockServer) -> u16 {
@@ -1539,6 +1684,7 @@ fn an_edit_through_eds_keeps_the_name_parts_the_vcard_flattened() {
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// What the user retypes the given-name field to, and the full name Evolution's
@@ -1698,6 +1844,7 @@ fn retyping_the_name_through_eds_replaces_the_parts_the_vcard_flattened() {
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// The fourth leg, and the one edit that reaches the picture itself: the user
@@ -1851,6 +1998,7 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// What the user retypes the Calendar field to. A URI on a different host from
@@ -2006,6 +2154,7 @@ fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// What the user retypes the Spouse field to. A different person from the one
@@ -2146,6 +2295,7 @@ fn retyping_the_spouse_through_eds_moves_the_marriage_to_the_name_typed() {
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// The seventh leg: the user *clears* the Spouse field, on the same card the
@@ -2286,6 +2436,7 @@ fn clearing_the_spouse_through_eds_withdraws_the_marriage_and_keeps_the_brother(
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// What the user retypes the Notes field to. Deliberately not a respelling of
@@ -2439,6 +2590,7 @@ fn retyping_the_note_through_eds_patches_the_entry_it_replaces() {
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// What the client joins the card's `NOTE` line values with when it reports
@@ -2609,6 +2761,7 @@ fn clearing_the_note_through_eds_withdraws_it_and_keeps_the_one_behind_it() {
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// The tenth leg: the user empties the Notes field on a card the server filed
@@ -2769,6 +2922,7 @@ fn clearing_the_only_note_through_eds_withdraws_the_whole_property() {
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_service_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }
 
 /// The eleventh leg: the user retypes an instant-messaging handle the server
@@ -2949,4 +3103,5 @@ fn retyping_a_uri_only_handle_through_eds_writes_the_uri_back() {
     assert_the_seeded_relations_survived(card);
     assert_the_seeded_notes_survived(card);
     assert_the_seeded_anniversaries_survived(card);
+    assert_the_seeded_organizations_and_titles_survived(card);
 }

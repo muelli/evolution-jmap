@@ -3012,3 +3012,135 @@ fn editing_unrelated_field_preserves_year_only_birthday_and_deathday() {
     assert_eq!(anniversaries["y3"].kind, "wedding");
     assert_eq!(anniversaries.len(), 3);
 }
+
+#[test]
+fn editing_first_org_preserves_secondary_orgs_and_titles() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "organizations": {
+                "o1": {"name": "Acme Ltd", "units": [{"@type": "OrgUnit", "name": "Research"}]},
+                "o2": {"name": "Brauerei", "units": [{"@type": "OrgUnit", "name": "Logistics"}]},
+            },
+            "titles": {
+                "t1": {"name": "Research Scientist"},
+                "t2": {"name": "Director of Engineering"},
+                "r1": {"name": "Lead Investigator", "kind": "role"},
+                "r2": {"name": "Project Manager", "kind": "role"},
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o1:Acme Ltd;Research\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o2:Brauerei;Logistics\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t1:Research Scientist\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t2:Director of Engineering\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ROLE;X-JMAP-KEY=r1:Lead Investigator\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ROLE;X-JMAP-KEY=r2:Project Manager\r\n"),
+        "{vcard}"
+    );
+
+    // Edit the first ORG and first TITLE in place
+    let edited = vcard
+        .replace("Acme Ltd;Research", "Acme Corporation;Optics")
+        .replace("Research Scientist", "Principal Scientist");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let organizations = card.organizations.expect("organizations");
+    assert_eq!(organizations.len(), 2, "{organizations:?}");
+    assert_eq!(
+        organizations["o1"].name.as_deref(),
+        Some("Acme Corporation")
+    );
+    assert_eq!(
+        organizations["o1"].units.as_ref().unwrap()[0].name,
+        "Optics"
+    );
+    assert_eq!(organizations["o2"].name.as_deref(), Some("Brauerei"));
+    assert_eq!(
+        organizations["o2"].units.as_ref().unwrap()[0].name,
+        "Logistics"
+    );
+
+    let titles = card.titles.expect("titles");
+    assert_eq!(titles.len(), 4, "{titles:?}");
+    assert_eq!(titles["t1"].name, "Principal Scientist");
+    assert_eq!(titles["t1"].kind, None);
+    assert_eq!(titles["t2"].name, "Director of Engineering");
+    assert_eq!(titles["t2"].kind, None);
+    assert_eq!(titles["r1"].name, "Lead Investigator");
+    assert_eq!(titles["r1"].kind.as_deref(), Some("role"));
+    assert_eq!(titles["r2"].name, "Project Manager");
+    assert_eq!(titles["r2"].kind.as_deref(), Some("role"));
+}
+
+#[test]
+fn editing_unrelated_field_preserves_all_multiple_orgs_and_titles() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "organizations": {
+                "o1": {"name": "Acme Ltd", "units": [{"@type": "OrgUnit", "name": "Research"}]},
+                "o2": {"name": "Brauerei", "units": [{"@type": "OrgUnit", "name": "Logistics"}]},
+            },
+            "titles": {
+                "t1": {"name": "Research Scientist"},
+                "t2": {"name": "Director of Engineering"},
+                "r1": {"name": "Lead Investigator", "kind": "role"},
+                "r2": {"name": "Project Manager", "kind": "role"},
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace(
+        "END:VCARD\r\n",
+        "NOTE:Preserve orgs and titles\r\nEND:VCARD\r\n",
+    );
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let organizations = card.organizations.expect("organizations");
+    assert_eq!(organizations.len(), 2, "{organizations:?}");
+    assert_eq!(organizations["o1"].name.as_deref(), Some("Acme Ltd"));
+    assert_eq!(
+        organizations["o1"].units.as_ref().unwrap()[0].name,
+        "Research"
+    );
+    assert_eq!(organizations["o2"].name.as_deref(), Some("Brauerei"));
+    assert_eq!(
+        organizations["o2"].units.as_ref().unwrap()[0].name,
+        "Logistics"
+    );
+
+    let titles = card.titles.expect("titles");
+    assert_eq!(titles.len(), 4, "{titles:?}");
+    assert_eq!(titles["t1"].name, "Research Scientist");
+    assert_eq!(titles["t2"].name, "Director of Engineering");
+    assert_eq!(titles["r1"].name, "Lead Investigator");
+    assert_eq!(titles["r2"].name, "Project Manager");
+}
