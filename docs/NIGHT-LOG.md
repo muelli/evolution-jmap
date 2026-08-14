@@ -22672,3 +22672,8 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-thirty-fifth session)
+
+**Claiming increment:** calendar component types (`ECalComponentVType`), cloning and string serialization (`e_cal_component_get_as_string`, `e_cal_component_clone`, `e_cal_component_is_instance`), geographic coordinates (`ICalGeo`), and task completion/sequence semantics EDS verification, roundtrip fidelity in `jmap-ical`, and preservation across `jmap-cal-sync`.
+
+
