@@ -22769,7 +22769,9 @@ Tests: 1102 in the default set (up 2: 11 in `jmap-mail/tests/envelope.rs`, 11 in
 Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1102 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
 
 No milestone tag.
-Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
 
+## 2026-08-14 (two-hundred-and-thirty-eighth session)
+
+**Claiming increment:** Camel name-value array (`CamelNameValueArray`), message flag bitmasks (`CamelMessageFlags`), folder flag bitmasks (`CamelFolderFlags`), summary database records (`CamelMIRecord`, `CamelFIRecord`), and header threading semantics EDS verification in `eds-sys`, header preservation and multiple references in `jmap-mail`, and thread reference chain assembly in `jmap-mail-sync`.
 
