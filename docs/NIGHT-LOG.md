@@ -22568,5 +22568,38 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirty-second session)
 
-**Claiming increment:** structured name (EContactName), geographic coordinates (EContactGeo), certificates (EContactCert), and boolean metadata EDS verification, roundtrip fidelity in `jmap-vcard`, and targeted preservation across `jmap-book-sync`.
+**Verifying structured name (EContactName), geographic coordinates (EContactGeo), certificates (EContactCert), and boolean metadata semantics in EDS, roundtrip fidelity in `jmap-vcard`, and preservation across book sync.**
+This session measures EDS 3.52 `EContact` field properties and vCard line behaviors for structured names (`E_CONTACT_NAME`, `E_CONTACT_FULL_NAME`, `E_CONTACT_GIVEN_NAME`, `E_CONTACT_FAMILY_NAME`), geographic coordinates (`E_CONTACT_GEO`), certificates (`E_CONTACT_X509_CERT`, `E_CONTACT_PGP_CERT`), boolean fields (`E_CONTACT_WANTS_HTML`, `E_CONTACT_IS_LIST`, `E_CONTACT_LIST_SHOW_ADDRESSES`), and metadata fields (`E_CONTACT_REV`, `E_CONTACT_NAME_OR_ORG`, `E_CONTACT_BOOK_UID`), adds full name and unmodeled property roundtrip tests in `jmap-vcard`, and verifies structured name editing with unmodeled crypto key and personal info preservation in `jmap-book-sync`.
+
+**EDS 3.52 `EContact` name, geo, certificate, and metadata field measurement:**
+- Probed `libebook-contacts` 3.52 for name, geo, certificate, boolean, and metadata field properties:
+  - `E_CONTACT_FULL_NAME` (4, `"full_name"`), `E_CONTACT_GIVEN_NAME` (5, `"given_name"`), `E_CONTACT_FAMILY_NAME` (6, `"family_name"`), `E_CONTACT_REV` (89, `"Rev"`), `E_CONTACT_NAME_OR_ORG` (90, `"name_or_org"`), and `E_CONTACT_BOOK_UID` (3, `"book_uid"`) are string fields (`e_contact_field_is_string == 1`).
+  - `E_CONTACT_NAME` (96, `"name"`) is a structured field returning `EContactName *` (`e_contact_field_is_string == 0`, type `e_contact_name_get_type()`), with `family`, `given`, `additional`, `prefixes`, `suffixes` members.
+  - `E_CONTACT_GEO` (118, `"geo"`) is a structured field returning `EContactGeo *` (`e_contact_field_is_string == 0`, type `e_contact_geo_get_type()`), with `latitude` and `longitude` (`gdouble`) members.
+  - `E_CONTACT_X509_CERT` (106, `"x509Cert"`) and `E_CONTACT_PGP_CERT` (107, `"pgpCert"`) are structured fields returning `EContactCert *` (`e_contact_field_is_string == 0`, type `e_contact_cert_get_type()`), with `length` and `data` members.
+  - `E_CONTACT_WANTS_HTML` (103, `"wants_html"`), `E_CONTACT_IS_LIST` (104, `"list"`), and `E_CONTACT_LIST_SHOW_ADDRESSES` (105, `"list_show_addresses"`) are boolean fields (`e_contact_field_is_string == 0`).
+  - `e_contact_field_id_from_vcard` maps `"FN"` to `E_CONTACT_FULL_NAME` (4), `"N"` to `E_CONTACT_NAME` (96), `"GEO"` to `E_CONTACT_GEO` (118), and `"REV"` to `E_CONTACT_REV` (89).
+  - `EContactName` functions: `e_contact_name_new`, `e_contact_name_to_string`, `e_contact_name_copy`, `e_contact_name_free` allocate, render display strings, copy, and free struct instances.
+  - `EContactGeo` functions: `e_contact_geo_new`, `e_contact_geo_free` allocate and free coordinate instances.
+  - `EContactCert` functions: `e_contact_cert_new`, `e_contact_cert_free` allocate and free certificate instances.
+  - In-place modification via `e_contact_set` updates `E_CONTACT_FULL_NAME` and `E_CONTACT_GEO` while preserving other vCard lines and `N:` component formatting in `e_vcard_to_string`.
+  - Setting `E_CONTACT_GEO` to `NULL` cleanly removes the `GEO:` line from the serialized vCard.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `contact_structured_name_geo_cert_and_boolean_field_properties`: verifies string vs structured/boolean classifications, exact field names, vCard property ID mappings, and `EContactName` / `EContactGeo` / `EContactCert` constructor/destructor operations.
+  - Added `structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`: verifies multi-field parsing from vCard, `EContactName` and `EContactGeo` struct inspection, `REV` and derived `NAME_OR_ORG` accessors, in-place modification, and property removal upon clearing.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `maps_name_with_all_components_and_empty_prefix_suffix_faithfully`: verifies that full names with titles, given, given2, surname, and credentials roundtrip faithfully to structured `N:` and `FN:` lines and back into JSContact `name`.
+  - Added `maps_contact_with_unmodeled_crypto_keys_and_personal_info_safely`: verifies that unmodeled `cryptoKeys` and `personalInfo` survive roundtrips in `extra` without corruption.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `editing_structured_name_components_preserves_unmodeled_crypto_and_personal_info`: verifies that editing structured name components and full name produces targeted patches on `name/components` and `name/full` while preserving unmodeled `cryptoKeys` and `personalInfo` intact on the server.
+
+Tests: 1085 in the default set (up 3: 128 in `jmap-vcard/tests/mapping.rs`, 101 in `jmap-book-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/contacts.rs` (18 in file, 63 across crate) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1085 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
 
