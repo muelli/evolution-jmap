@@ -1333,3 +1333,299 @@ fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn contact_structured_name_geo_cert_and_boolean_field_properties() {
+    unsafe {
+        let name_type = e_contact_name_get_type();
+        assert_ne!(name_type, 0);
+
+        let geo_type = e_contact_geo_get_type();
+        assert_ne!(geo_type, 0);
+
+        let cert_type = e_contact_cert_get_type();
+        assert_ne!(cert_type, 0);
+
+        // Name fields
+        assert_eq!(e_contact_field_is_string(E_CONTACT_FULL_NAME), 1);
+        let fn_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_FULL_NAME));
+        assert_eq!(fn_name.to_str().unwrap(), "full_name");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_GIVEN_NAME), 1);
+        let given_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_GIVEN_NAME));
+        assert_eq!(given_name.to_str().unwrap(), "given_name");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_FAMILY_NAME), 1);
+        let family_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_FAMILY_NAME));
+        assert_eq!(family_name.to_str().unwrap(), "family_name");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_NAME), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_NAME), name_type);
+        let name_field = CStr::from_ptr(e_contact_field_name(E_CONTACT_NAME));
+        assert_eq!(name_field.to_str().unwrap(), "name");
+
+        // Geo field
+        assert_eq!(e_contact_field_is_string(E_CONTACT_GEO), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_GEO), geo_type);
+        let geo_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_GEO));
+        assert_eq!(geo_name.to_str().unwrap(), "geo");
+
+        // Certificate fields
+        assert_eq!(e_contact_field_is_string(E_CONTACT_X509_CERT), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_X509_CERT), cert_type);
+        let x509_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_X509_CERT));
+        assert_eq!(x509_name.to_str().unwrap(), "x509Cert");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_PGP_CERT), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_PGP_CERT), cert_type);
+        let pgp_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_PGP_CERT));
+        assert_eq!(pgp_name.to_str().unwrap(), "pgpCert");
+
+        // Boolean and metadata fields
+        assert_eq!(e_contact_field_is_string(E_CONTACT_WANTS_HTML), 0);
+        let wants_html_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_WANTS_HTML));
+        assert_eq!(wants_html_name.to_str().unwrap(), "wants_html");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_IS_LIST), 0);
+        let is_list_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_IS_LIST));
+        assert_eq!(is_list_name.to_str().unwrap(), "list");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_LIST_SHOW_ADDRESSES), 0);
+        let list_show_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_LIST_SHOW_ADDRESSES));
+        assert_eq!(list_show_name.to_str().unwrap(), "list_show_addresses");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_REV), 1);
+        let rev_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_REV));
+        assert_eq!(rev_name.to_str().unwrap(), "Rev");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_NAME_OR_ORG), 1);
+        let name_or_org_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_NAME_OR_ORG));
+        assert_eq!(name_or_org_name.to_str().unwrap(), "name_or_org");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_BOOK_UID), 1);
+        let book_uid_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_BOOK_UID));
+        assert_eq!(book_uid_name.to_str().unwrap(), "book_uid");
+
+        // vCard field ID mappings
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"FN".as_ptr().cast()),
+            E_CONTACT_FULL_NAME
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"N".as_ptr().cast()),
+            E_CONTACT_NAME
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"GEO".as_ptr().cast()),
+            E_CONTACT_GEO
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"REV".as_ptr().cast()),
+            E_CONTACT_REV
+        );
+
+        // EContactName construction, formatting, and copying
+        let name = e_contact_name_new();
+        assert!(!name.is_null());
+        (*name).family = glib_sys::g_strdup(c"Oldenburg".as_ptr().cast());
+        (*name).given = glib_sys::g_strdup(c"Vera".as_ptr().cast());
+        (*name).additional = glib_sys::g_strdup(c"Marie".as_ptr().cast());
+        (*name).prefixes = glib_sys::g_strdup(c"Dr.".as_ptr().cast());
+        (*name).suffixes = glib_sys::g_strdup(c"MSc".as_ptr().cast());
+
+        let rendered_name_ptr = e_contact_name_to_string(name);
+        assert!(!rendered_name_ptr.is_null());
+        let rendered_name = CStr::from_ptr(rendered_name_ptr).to_str().unwrap();
+        assert!(
+            rendered_name.contains("Vera") && rendered_name.contains("Oldenburg"),
+            "rendered name: {rendered_name}"
+        );
+        glib_sys::g_free(rendered_name_ptr.cast());
+
+        let copied_name = e_contact_name_copy(name);
+        assert!(!copied_name.is_null());
+        assert_eq!(
+            CStr::from_ptr((*copied_name).family).to_str().unwrap(),
+            "Oldenburg"
+        );
+        assert_eq!(
+            CStr::from_ptr((*copied_name).given).to_str().unwrap(),
+            "Vera"
+        );
+        assert_eq!(
+            CStr::from_ptr((*copied_name).additional).to_str().unwrap(),
+            "Marie"
+        );
+        assert_eq!(
+            CStr::from_ptr((*copied_name).prefixes).to_str().unwrap(),
+            "Dr."
+        );
+        assert_eq!(
+            CStr::from_ptr((*copied_name).suffixes).to_str().unwrap(),
+            "MSc"
+        );
+        e_contact_name_free(name);
+        e_contact_name_free(copied_name);
+
+        // EContactGeo construction and destruction
+        let geo = e_contact_geo_new();
+        assert!(!geo.is_null());
+        println!("DEBUG 8");
+        (*geo).latitude = 37.386013;
+        (*geo).longitude = -122.082932;
+        assert_eq!((*geo).latitude, 37.386013);
+        assert_eq!((*geo).longitude, -122.082932);
+        println!("DEBUG 9");
+        e_contact_geo_free(geo);
+        println!("DEBUG 10");
+
+        // EContactCert construction and destruction
+        let cert = e_contact_cert_new();
+        assert!(!cert.is_null());
+        println!("DEBUG 11");
+        e_contact_cert_free(cert);
+        println!("DEBUG 12");
+    }
+}
+
+#[test]
+fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
+    let vcard_str = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:pas-id-test-name-geo-001\r\n",
+        "FN:Dr. Vera Marie Oldenburg MSc\r\n",
+        "N:Oldenburg;Vera;Marie;Dr.;MSc\r\n",
+        "GEO:37.386013;-122.082932\r\n",
+        "REV:2026-08-14T12:00:00Z\r\n",
+        "X-MOZILLA-HTML:TRUE\r\n",
+        "END:VCARD\r\n"
+    );
+
+    unsafe {
+        let vcard_c = std::ffi::CString::new(vcard_str).unwrap();
+        let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
+        assert!(!contact.is_null());
+
+        // Full name and synthetic name components
+        let full_name = e_contact_get_const(contact, E_CONTACT_FULL_NAME);
+        assert!(!full_name.is_null());
+        assert_eq!(
+            CStr::from_ptr(full_name.cast()).to_str().unwrap(),
+            "Dr. Vera Marie Oldenburg MSc"
+        );
+
+        let given_name = e_contact_get_const(contact, E_CONTACT_GIVEN_NAME);
+        assert!(!given_name.is_null());
+        assert_eq!(CStr::from_ptr(given_name.cast()).to_str().unwrap(), "Vera");
+
+        let family_name = e_contact_get_const(contact, E_CONTACT_FAMILY_NAME);
+        assert!(!family_name.is_null());
+        assert_eq!(
+            CStr::from_ptr(family_name.cast()).to_str().unwrap(),
+            "Oldenburg"
+        );
+
+        // Structured EContactName
+        let name_struct = e_contact_get(contact, E_CONTACT_NAME) as *mut EContactName;
+        assert!(!name_struct.is_null());
+        assert_eq!(
+            CStr::from_ptr((*name_struct).family).to_str().unwrap(),
+            "Oldenburg"
+        );
+        assert_eq!(
+            CStr::from_ptr((*name_struct).given).to_str().unwrap(),
+            "Vera"
+        );
+        assert_eq!(
+            CStr::from_ptr((*name_struct).additional).to_str().unwrap(),
+            "Marie"
+        );
+        assert_eq!(
+            CStr::from_ptr((*name_struct).prefixes).to_str().unwrap(),
+            "Dr."
+        );
+        assert_eq!(
+            CStr::from_ptr((*name_struct).suffixes).to_str().unwrap(),
+            "MSc"
+        );
+        e_contact_name_free(name_struct);
+
+        // Geographic coordinates
+        let geo_struct = e_contact_get(contact, E_CONTACT_GEO) as *mut EContactGeo;
+        assert!(!geo_struct.is_null());
+        assert!(((*geo_struct).latitude - 37.386013).abs() < 1e-5);
+        assert!(((*geo_struct).longitude - -122.082932).abs() < 1e-5);
+        e_contact_geo_free(geo_struct);
+
+        // REV and NAME_OR_ORG
+        let rev = e_contact_get_const(contact, E_CONTACT_REV);
+        assert!(!rev.is_null());
+        assert_eq!(
+            CStr::from_ptr(rev.cast()).to_str().unwrap(),
+            "2026-08-14T12:00:00Z"
+        );
+
+        let name_or_org = e_contact_get_const(contact, E_CONTACT_NAME_OR_ORG);
+        assert!(!name_or_org.is_null());
+        // NAME_OR_ORG returns the first of [File-As, Full Name, Org, Email1];
+        // when File-As is not explicit, EDS derives it as "Family, Given"
+        assert_eq!(
+            CStr::from_ptr(name_or_org.cast()).to_str().unwrap(),
+            "Oldenburg, Vera"
+        );
+
+        // In-place modification of full name and geo
+        e_contact_set(
+            contact,
+            E_CONTACT_FULL_NAME,
+            c"Prof. Dr. Vera Oldenburg".as_ptr().cast(),
+        );
+
+        let new_geo = e_contact_geo_new();
+        (*new_geo).latitude = 47.3769;
+        (*new_geo).longitude = 8.5417;
+        e_contact_set(contact, E_CONTACT_GEO, new_geo.cast());
+        e_contact_geo_free(new_geo);
+
+        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            updated_vcard.contains("Prof. Dr. Vera Oldenburg"),
+            "updated full name missing: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("47.3769") || updated_vcard.contains("47.37689"),
+            "updated latitude missing: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("8.5417"),
+            "updated longitude missing: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("N:Oldenburg;Vera;Marie;Dr.;MSc"),
+            "N line must be preserved: {updated_vcard}"
+        );
+
+        g_free(updated_vcard_ptr.cast());
+
+        // Field clearing by setting NULL
+        e_contact_set(contact, E_CONTACT_GEO, std::ptr::null());
+
+        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            !cleared_vcard.contains("GEO:"),
+            "cleared GEO must be removed: {cleared_vcard}"
+        );
+        assert!(
+            cleared_vcard.contains("Prof. Dr. Vera Oldenburg"),
+            "full name must remain: {cleared_vcard}"
+        );
+
+        g_free(cleared_vcard_ptr.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
