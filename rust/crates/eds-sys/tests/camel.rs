@@ -1008,3 +1008,147 @@ fn camel_summary_records_mirecord_and_firecord_in_eds() {
         glib_sys::g_free(fi_bdata.cast());
     }
 }
+
+/// Probing `CamelURL` construction, parameter setting/getting, cloning, equality, hash,
+/// string formatting, and cleanup in EDS 3.52.
+#[test]
+fn camel_url_lifecycle_and_parameter_operations_in_eds() {
+    unsafe {
+        let raw_url_str = c"jmap://alice@mail.example.com:8443/inbox;param1=val1#anchor";
+        let url = camel_url_new(raw_url_str.as_ptr(), std::ptr::null_mut());
+        assert!(!url.is_null());
+
+        assert_eq!(
+            std::ffi::CStr::from_ptr((*url).protocol).to_str().unwrap(),
+            "jmap"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr((*url).user).to_str().unwrap(),
+            "alice"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr((*url).host).to_str().unwrap(),
+            "mail.example.com"
+        );
+        assert_eq!((*url).port, 8443);
+        assert_eq!(
+            std::ffi::CStr::from_ptr((*url).path).to_str().unwrap(),
+            "/inbox"
+        );
+
+        // Parameter get
+        let p1 = camel_url_get_param(url, c"param1".as_ptr());
+        assert!(!p1.is_null());
+        assert_eq!(std::ffi::CStr::from_ptr(p1).to_str().unwrap(), "val1");
+
+        // Parameter set
+        camel_url_set_param(url, c"param2".as_ptr(), c"val2".as_ptr());
+        let p2 = camel_url_get_param(url, c"param2".as_ptr());
+        assert!(!p2.is_null());
+        assert_eq!(std::ffi::CStr::from_ptr(p2).to_str().unwrap(), "val2");
+
+        // Copy, equality, and hash
+        let copy = camel_url_copy(url);
+        assert!(!copy.is_null());
+        assert_ne!(camel_url_equal(url, copy), glib_sys::GFALSE);
+        assert_eq!(camel_url_hash(url), camel_url_hash(copy));
+
+        // Format to string
+        let formatted = camel_url_to_string(url, 0);
+        assert!(!formatted.is_null());
+        let formatted_str = std::ffi::CStr::from_ptr(formatted).to_str().unwrap();
+        assert!(formatted_str.starts_with("jmap://"));
+        assert!(formatted_str.contains("mail.example.com"));
+        assert!(formatted_str.contains("param1=val1"));
+        assert!(formatted_str.contains("param2=val2"));
+        glib_sys::g_free(formatted.cast());
+
+        camel_url_free(copy);
+        camel_url_free(url);
+    }
+}
+
+/// Probing `CamelFolderChangeInfo` multi-event batching (add, remove, change, recent),
+/// concatenation (`camel_folder_change_info_cat`), clearing, and array access in EDS 3.52.
+#[test]
+fn camel_folder_change_info_batching_and_concatenation_in_eds() {
+    unsafe {
+        let info1 = camel_folder_change_info_new();
+        assert!(!info1.is_null());
+
+        camel_folder_change_info_add_uid(info1, c"msg-101".as_ptr());
+        camel_folder_change_info_remove_uid(info1, c"msg-102".as_ptr());
+        camel_folder_change_info_change_uid(info1, c"msg-103".as_ptr());
+        camel_folder_change_info_recent_uid(info1, c"msg-104".as_ptr());
+
+        assert_ne!(camel_folder_change_info_changed(info1), glib_sys::GFALSE);
+        assert_eq!((*camel_folder_change_info_get_added_uids(info1)).len, 1);
+        assert_eq!((*camel_folder_change_info_get_removed_uids(info1)).len, 1);
+        assert_eq!((*camel_folder_change_info_get_changed_uids(info1)).len, 1);
+        assert_eq!((*camel_folder_change_info_get_recent_uids(info1)).len, 1);
+
+        let info2 = camel_folder_change_info_new();
+        assert!(!info2.is_null());
+        camel_folder_change_info_add_uid(info2, c"msg-201".as_ptr());
+        camel_folder_change_info_change_uid(info2, c"msg-202".as_ptr());
+
+        // Concatenate info2 into info1
+        camel_folder_change_info_cat(info1, info2);
+
+        let added = camel_folder_change_info_get_added_uids(info1);
+        let removed = camel_folder_change_info_get_removed_uids(info1);
+        let changed = camel_folder_change_info_get_changed_uids(info1);
+        let recent = camel_folder_change_info_get_recent_uids(info1);
+
+        assert_eq!((*added).len, 2);
+        assert_eq!((*removed).len, 1);
+        assert_eq!((*changed).len, 2);
+        assert_eq!((*recent).len, 1);
+
+        // Clear info1
+        camel_folder_change_info_clear(info1);
+        assert_eq!(camel_folder_change_info_changed(info1), glib_sys::GFALSE);
+        assert_eq!((*camel_folder_change_info_get_added_uids(info1)).len, 0);
+
+        camel_folder_change_info_free(info2);
+        camel_folder_change_info_free(info1);
+    }
+}
+
+/// Probing Camel error domain quarks (`camel_folder_error_quark`, `camel_service_error_quark`,
+/// `camel_store_error_quark`) and error code constants in EDS 3.52.
+#[test]
+fn camel_error_quarks_and_distinct_domains_in_eds() {
+    unsafe {
+        let folder_q = camel_folder_error_quark();
+        let service_q = camel_service_error_quark();
+        let store_q = camel_store_error_quark();
+        let client_q = e_client_error_quark();
+        let book_q = e_book_client_error_quark();
+        let cal_q = e_cal_client_error_quark();
+
+        assert_ne!(folder_q, 0);
+        assert_ne!(service_q, 0);
+        assert_ne!(store_q, 0);
+
+        // All 6 quarks are pairwise distinct
+        assert_ne!(folder_q, service_q);
+        assert_ne!(folder_q, store_q);
+        assert_ne!(service_q, store_q);
+        assert_ne!(folder_q, client_q);
+        assert_ne!(folder_q, book_q);
+        assert_ne!(folder_q, cal_q);
+        assert_ne!(service_q, client_q);
+        assert_ne!(store_q, client_q);
+
+        // Distinct error codes
+        assert_eq!(CAMEL_FOLDER_ERROR_INVALID, 0);
+        assert_eq!(CAMEL_FOLDER_ERROR_INVALID_STATE, 1);
+        assert_eq!(CAMEL_FOLDER_ERROR_INVALID_UID, 6);
+        assert_eq!(CAMEL_SERVICE_ERROR_INVALID, 0);
+        assert_eq!(CAMEL_SERVICE_ERROR_URL_INVALID, 1);
+        assert_eq!(CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE, 3);
+        assert_eq!(CAMEL_STORE_ERROR_INVALID, 0);
+        assert_eq!(CAMEL_STORE_ERROR_NO_FOLDER, 1);
+    }
+}
