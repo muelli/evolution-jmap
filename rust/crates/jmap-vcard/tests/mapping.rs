@@ -3404,3 +3404,62 @@ fn maps_emails_with_multiple_contexts_and_pref_faithfully() {
     assert_eq!(emails["e3"].contexts, None);
     assert_eq!(emails["e3"].pref, None);
 }
+
+#[test]
+fn maps_name_with_all_components_and_empty_prefix_suffix_faithfully() {
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Prof. Dr. Vera Marie Oldenburg MSc Ph.D.".to_owned()),
+            components: Some(vec![
+                NameComponent::new("title", "Prof. Dr."),
+                NameComponent::new("given", "Vera"),
+                NameComponent::new("given2", "Marie"),
+                NameComponent::new("surname", "Oldenburg"),
+                NameComponent::new("credential", "MSc Ph.D."),
+            ]),
+            ..Name::default()
+        }),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "N:"),
+        "N:Oldenburg;Vera;Marie;Prof. Dr.;MSc Ph.D."
+    );
+    assert_eq!(
+        line(&vcard, "FN:"),
+        "FN:Prof. Dr. Vera Marie Oldenburg MSc Ph.D."
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.name.as_ref().unwrap(), card.name.as_ref().unwrap());
+}
+
+#[test]
+fn maps_contact_with_unmodeled_crypto_keys_and_personal_info_safely() {
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert(
+        "cryptoKeys".to_owned(),
+        json!({"k1": {"uri": "https://keys.example.com/pkr.asc"}}),
+    );
+    extra.insert(
+        "personalInfo".to_owned(),
+        json!({"expertise": ["Rust", "Evolution"]}),
+    );
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Vera Oldenburg".to_owned()),
+            ..Name::default()
+        }),
+        extra,
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(
+        back.name.as_ref().unwrap().full.as_deref(),
+        Some("Vera Oldenburg")
+    );
+}

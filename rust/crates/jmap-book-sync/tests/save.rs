@@ -3724,3 +3724,62 @@ fn clearing_phones_and_emails_patches_server_fields() {
     let notes = card.notes.expect("notes");
     assert_eq!(notes["n1"].note, "Persistent note");
 }
+
+#[test]
+fn editing_structured_name_components_preserves_unmodeled_crypto_and_personal_info() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Dr. Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "@type": "Name",
+                "full": "Dr. Vera Oldenburg",
+                "components": [
+                    {"@type": "NameComponent", "kind": "title", "value": "Dr."},
+                    {"@type": "NameComponent", "kind": "given", "value": "Vera"},
+                    {"@type": "NameComponent", "kind": "surname", "value": "Oldenburg"}
+                ]
+            },
+            "cryptoKeys": {
+                "k1": {"uri": "https://keys.example.com/openpgp.asc"}
+            },
+            "personalInfo": {
+                "expertise": ["C", "Rust"]
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let modified = vcard
+        .replace(
+            "N:Oldenburg;Vera;;Dr.;",
+            "N:Oldenburg-Smith;Vera;Marie;Prof. Dr.;MSc",
+        )
+        .replace(
+            "FN:Dr. Vera Oldenburg",
+            "FN:Prof. Dr. Vera Marie Oldenburg-Smith MSc",
+        );
+
+    sync.save_contact(&modified, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let name = card.name.expect("name");
+    assert_eq!(
+        name.full.as_deref(),
+        Some("Prof. Dr. Vera Marie Oldenburg-Smith MSc")
+    );
+    let comps = name.components.expect("components");
+    assert_eq!(comps.len(), 5);
+    let find_comp = |k: &str| comps.iter().find(|c| c.kind == k).map(|c| c.value.as_str());
+    assert_eq!(find_comp("title"), Some("Prof. Dr."));
+    assert_eq!(find_comp("given"), Some("Vera"));
+    assert_eq!(find_comp("given2"), Some("Marie"));
+    assert_eq!(find_comp("surname"), Some("Oldenburg-Smith"));
+    assert_eq!(find_comp("credential"), Some("MSc"));
+
+    // Unmodeled properties intact
+    assert!(card.extra.contains_key("cryptoKeys"));
+    assert!(card.extra.contains_key("personalInfo"));
+}
