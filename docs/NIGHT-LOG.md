@@ -22324,6 +22324,7 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag. Removed from the blocker list: an attachment the user removes is still invisible to the save (now verified and tabled).
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-twenty-fifth session)
 
-
+Claiming M4 increment: verify calendar classification, transparency, status, categories, and location/URL property semantics in EDS and preservation across sync and real EDS.
 
