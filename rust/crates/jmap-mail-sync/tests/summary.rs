@@ -332,3 +332,72 @@ fn a_date_the_client_cannot_read_leaves_the_message_dateless() {
         assert_eq!(summary.subject.as_deref(), Some("Unreadable date"));
     }
 }
+
+#[test]
+fn multiple_references_and_in_reply_to_deduplicate_and_preserve_ancestry_order() {
+    // 1. In-Reply-To already matching the last element of References is not duplicated
+    let email_matched = Email {
+        references: Some(vec![
+            "root@example.com".to_owned(),
+            "parent@example.com".to_owned(),
+        ]),
+        in_reply_to: Some(vec!["parent@example.com".to_owned()]),
+        ..bare_email()
+    };
+    let summary_matched =
+        MessageSummary::from_email(&email_matched).expect("a summary with matched in-reply-to");
+    assert_eq!(
+        summary_matched.references,
+        vec![
+            "root@example.com".to_owned(),
+            "parent@example.com".to_owned()
+        ]
+    );
+
+    // 2. In-Reply-To differing from References is appended to form complete lineage
+    let email_diff = Email {
+        references: Some(vec!["root@example.com".to_owned()]),
+        in_reply_to: Some(vec!["parent@example.com".to_owned()]),
+        ..bare_email()
+    };
+    let summary_diff =
+        MessageSummary::from_email(&email_diff).expect("a summary with distinct in-reply-to");
+    assert_eq!(
+        summary_diff.references,
+        vec![
+            "root@example.com".to_owned(),
+            "parent@example.com".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn summary_maps_combined_flags_and_custom_tags_faithfully() {
+    let email = Email {
+        keywords: Some(
+            [
+                (keyword::SEEN.to_owned(), true),
+                (keyword::FLAGGED.to_owned(), true),
+                (keyword::ANSWERED.to_owned(), true),
+                (keyword::DRAFT.to_owned(), false),
+                ("$custom_label".to_owned(), true),
+                ("work/urgent".to_owned(), true),
+                ("cleared_tag".to_owned(), false),
+            ]
+            .into(),
+        ),
+        has_attachment: Some(true),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("a summary with mixed flags");
+    assert!(summary.flags.seen);
+    assert!(summary.flags.flagged);
+    assert!(summary.flags.answered);
+    assert!(!summary.flags.draft);
+    assert!(summary.flags.attachments);
+    assert_eq!(
+        summary.tags,
+        vec!["$custom_label".to_owned(), "work/urgent".to_owned()]
+    );
+}
