@@ -2471,3 +2471,54 @@ fn a_gadu_gadu_uri_that_says_more_than_a_handle_gets_no_line() {
         assert!(!vcard.contains("X-GADUGADU"), "{uri} was drawn: {vcard}");
     }
 }
+
+#[test]
+fn conventional_action_query_or_unregistered_im_uris_get_no_vcard_line() {
+    // AIM, MSN, and Yahoo conventionally employ query/action URI formats
+    // (e.g. `aim:goim?screenname=...`, `msnim:chat?contact=...`, `ymsgr:sendim?...`)
+    // or unreserved schemes which are rejected because they do not represent bare
+    // handles, and ICQ lacks a registered IANA scheme. When given only a `uri`
+    // (and no `user`), card_to_vcard safely omits them so EDS fields are not corrupted.
+    for (service, uri, header) in [
+        ("AIM", "aim:goim?screenname=alice", "X-AIM"),
+        ("AIM", "aim:addbuddy?screenname=alice", "X-AIM"),
+        ("AIM", "aim:alice", "X-AIM"),
+        ("MSN", "msnim:chat?contact=bob@example.com", "X-MSN"),
+        ("MSN", "msnim:add?contact=bob@example.com", "X-MSN"),
+        ("MSN", "msnim:bob@example.com", "X-MSN"),
+        ("Yahoo", "ymsgr:sendim?carol", "X-YAHOO"),
+        ("Yahoo", "ymsgr:chat?carol", "X-YAHOO"),
+        ("Yahoo", "ymsgr:carol", "X-YAHOO"),
+        ("ICQ", "icq:message?uin=12345678", "X-ICQ"),
+        ("ICQ", "icq:12345678", "X-ICQ"),
+    ] {
+        let vcard = card_to_vcard(&at_uri(Some(service), uri));
+        assert!(
+            !vcard.contains(header),
+            "{service} uri '{uri}' was unexpectedly drawn on {header}: {vcard}"
+        );
+    }
+}
+
+#[test]
+fn conventional_im_services_with_user_handles_are_drawn_and_roundtripped() {
+    for (service, handle, header) in [
+        ("AIM", "alice_aim", "X-AIM"),
+        ("ICQ", "12345678", "X-ICQ"),
+        ("MSN", "bob@example.com", "X-MSN"),
+        ("Yahoo", "carol_yahoo", "X-YAHOO"),
+    ] {
+        let card = on_service(Some(service), Some(handle));
+        let vcard = card_to_vcard(&card);
+        assert_eq!(
+            line(&vcard, header),
+            format!("{header};X-JMAP-KEY=s1;TYPE=HOME:{handle}")
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse");
+        let services = parsed.online_services.expect("online services");
+        assert_eq!(services["s1"].user.as_deref(), Some(handle));
+        assert_eq!(services["s1"].uri, None);
+        assert_eq!(services["s1"].service.as_deref(), Some(service));
+    }
+}
