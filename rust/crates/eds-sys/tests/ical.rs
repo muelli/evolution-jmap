@@ -175,3 +175,156 @@ fn an_ecalcomponent_lends_out_the_icalcomponent_it_carries() {
         g_object_unref(component.cast());
     }
 }
+
+/// Probing `ECalComponent` attachment accessors and `ICalAttach` object properties.
+/// `e_cal_component_has_attachments` indicates whether any `ATTACH` properties exist,
+/// `e_cal_component_get_attachments` extracts them as a `GSList` of `ICalAttach *`,
+/// and `e_cal_component_set_attachments(comp, NULL)` clears all attachments.
+#[test]
+fn ecalcomponent_attachment_handling_and_icalattach_properties() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Standup\r\n\
+         DTSTART:20260810T070000Z\r\n\
+         ATTACH;FMTTYPE=application/pdf;SIZE=51200;X-JMAP-KEY=l1:https://files.example.com/standup.pdf\r\n\
+         ATTACH;X-JMAP-KEY=l2:https://files.example.com/notes.txt\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let comp = e_cal_component_new_from_icalcomponent(i_cal_component_clone(event));
+        assert!(!comp.is_null());
+        assert_eq!(e_cal_component_has_attachments(comp), 1);
+
+        let attachments = e_cal_component_get_attachments(comp);
+        assert!(!attachments.is_null());
+        assert_eq!(g_slist_length(attachments), 2);
+
+        let first = (*attachments).data as *mut ICalAttach;
+        assert!(!first.is_null());
+        assert_eq!(i_cal_attach_get_is_url(first), 1);
+        let first_url = i_cal_attach_get_url(first);
+        assert!(!first_url.is_null());
+        assert_eq!(
+            CStr::from_ptr(first_url).to_str().unwrap(),
+            "https://files.example.com/standup.pdf"
+        );
+
+        let next_node = (*attachments).next;
+        assert!(!next_node.is_null());
+        let second = (*next_node).data as *mut ICalAttach;
+        assert!(!second.is_null());
+        assert_eq!(i_cal_attach_get_is_url(second), 1);
+        let second_url = i_cal_attach_get_url(second);
+        assert!(!second_url.is_null());
+        assert_eq!(
+            CStr::from_ptr(second_url).to_str().unwrap(),
+            "https://files.example.com/notes.txt"
+        );
+
+        unsafe extern "C" fn unref_obj(ptr: *mut std::ffi::c_void) {
+            unsafe { g_object_unref(ptr.cast()) };
+        }
+        g_slist_free_full(attachments, Some(unref_obj));
+
+        // Clearing attachments via set_attachments with NULL removes them all.
+        e_cal_component_set_attachments(comp, std::ptr::null());
+        assert_eq!(e_cal_component_has_attachments(comp), 0);
+
+        g_object_unref(comp.cast());
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}
+
+/// Probing `ICalProperty` modification for ATTACH and IMAGE lines:
+/// Setting a new URL via `i_cal_attach_new_from_url` and `i_cal_property_set_attach`
+/// modifies the attachment in place while preserving non-standard `X-JMAP-KEY` parameters,
+/// and removing one property leaves other ATTACH and IMAGE properties intact.
+#[test]
+fn icalproperty_attach_and_image_modification_and_parameter_preservation() {
+    let source = text(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:K1\r\n\
+         SUMMARY:Standup\r\n\
+         DTSTART:20260810T070000Z\r\n\
+         ATTACH;FMTTYPE=application/pdf;SIZE=51200;X-JMAP-KEY=l1:https://files.example.com/standup.pdf\r\n\
+         ATTACH;X-JMAP-KEY=l2:https://files.example.com/notes.txt\r\n\
+         IMAGE;VALUE=URI;DISPLAY=BADGE;X-JMAP-KEY=img1:https://files.example.com/logo.png\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+    );
+    unsafe {
+        let calendar = i_cal_component_new_from_string(source.as_ptr());
+        assert!(!calendar.is_null());
+        let event = i_cal_component_get_first_component(calendar, I_CAL_VEVENT_COMPONENT);
+        assert!(!event.is_null());
+
+        let attach_prop = i_cal_component_get_first_property(event, I_CAL_ATTACH_PROPERTY);
+        assert!(!attach_prop.is_null());
+
+        // Modify the first ATTACH in place to a new URL
+        let new_url = text("https://files.example.com/standup-v2.pdf");
+        let new_attach = i_cal_attach_new_from_url(new_url.as_ptr());
+        assert!(!new_attach.is_null());
+        i_cal_property_set_attach(attach_prop, new_attach);
+        g_object_unref(new_attach.cast());
+
+        let rendered = take_string(i_cal_component_as_ical_string(calendar));
+        assert!(
+            rendered.contains("standup-v2.pdf"),
+            "new url missing: {rendered}"
+        );
+        assert!(rendered.contains("X-JMAP-KEY=l1"), "lost key: {rendered}");
+        assert!(
+            rendered.contains("FMTTYPE=application/pdf"),
+            "lost fmttype: {rendered}"
+        );
+        assert!(
+            rendered.contains("X-JMAP-KEY=l2"),
+            "lost secondary attach: {rendered}"
+        );
+        assert!(rendered.contains("IMAGE"), "lost image: {rendered}");
+        assert!(
+            rendered.contains("X-JMAP-KEY=img1"),
+            "lost image key: {rendered}"
+        );
+
+        // Remove the second ATTACH property
+        let second_prop = i_cal_component_get_next_property(event, I_CAL_ATTACH_PROPERTY);
+        assert!(!second_prop.is_null());
+        i_cal_component_remove_property(event, second_prop);
+        g_object_unref(second_prop.cast());
+        g_object_unref(attach_prop.cast());
+
+        let after_remove = take_string(i_cal_component_as_ical_string(calendar));
+        assert!(after_remove.contains("standup-v2.pdf"), "{after_remove}");
+        assert!(
+            !after_remove.contains("notes.txt"),
+            "removed attach still present: {after_remove}"
+        );
+        assert!(
+            after_remove.contains("IMAGE"),
+            "image removed: {after_remove}"
+        );
+        assert!(
+            after_remove.contains("logo.png"),
+            "image url lost: {after_remove}"
+        );
+
+        g_object_unref(event.cast());
+        g_object_unref(calendar.cast());
+    }
+}
