@@ -29,7 +29,7 @@ parse_reset_seconds() {
 
 log "=== agy night shift starting ==="
 
-AVAILABLE_MODELS=($(agy models </dev/null | grep -v "Fetching" | awk '{print $1}'))
+mapfile -t AVAILABLE_MODELS < <(agy models </dev/null | grep -v "Fetching" | awk '{print $1}' || true)
 CURRENT_MODEL_INDEX=-1 # -1 means use the CLI default model
 QUOTA_RESET_SECONDS=3600 # fallback sleep if we can't parse the reset time
 consecutive_noop=0
