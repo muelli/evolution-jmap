@@ -814,6 +814,13 @@ const SEEDED_SERVICE_KEY: &str = "handle-1";
 const SEEDED_SERVICE: &str = "Jabber";
 const SEEDED_SERVICE_HANDLE: &str = "jp@jabber.example";
 const SEEDED_SERVICE_URI: &str = "xmpp:jp@jabber.example";
+const SEEDED_SKYPE_SERVICE_KEY: &str = "im-home-1";
+const SEEDED_SKYPE_SERVICE: &str = "Skype";
+const SEEDED_SKYPE_SERVICE_HANDLE: &str = "jp_skype";
+const SEEDED_SKYPE_SERVICE_URI: &str = "skype:jp_skype";
+const SEEDED_MATRIX_SERVICE_KEY: &str = "im-work-1";
+const SEEDED_MATRIX_SERVICE: &str = "Matrix";
+const SEEDED_MATRIX_SERVICE_HANDLE: &str = "@jp:matrix.example";
 /// The handle the user retypes into that field, and the URI the save has to
 /// rebuild around it. A different host as well as a different local part, so a
 /// URI half-rewritten shows up as neither.
@@ -1032,14 +1039,34 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // belongs to a service EDS has no field for, which is a fixture's question
     // and not one that needs the daemons.
     card.online_services = Some(
-        [(
-            SEEDED_SERVICE_KEY.to_owned(),
-            OnlineService {
-                service: Some(SEEDED_SERVICE.to_owned()),
-                uri: Some(SEEDED_SERVICE_URI.to_owned()),
-                ..OnlineService::default()
-            },
-        )]
+        [
+            (
+                SEEDED_SERVICE_KEY.to_owned(),
+                OnlineService {
+                    service: Some(SEEDED_SERVICE.to_owned()),
+                    uri: Some(SEEDED_SERVICE_URI.to_owned()),
+                    ..OnlineService::default()
+                },
+            ),
+            (
+                SEEDED_SKYPE_SERVICE_KEY.to_owned(),
+                OnlineService {
+                    service: Some(SEEDED_SKYPE_SERVICE.to_owned()),
+                    uri: Some(SEEDED_SKYPE_SERVICE_URI.to_owned()),
+                    extra: [("contexts".to_owned(), serde_json::json!({"private": true}))].into(),
+                    ..OnlineService::default()
+                },
+            ),
+            (
+                SEEDED_MATRIX_SERVICE_KEY.to_owned(),
+                OnlineService {
+                    service: Some(SEEDED_MATRIX_SERVICE.to_owned()),
+                    user: Some(SEEDED_MATRIX_SERVICE_HANDLE.to_owned()),
+                    extra: [("contexts".to_owned(), serde_json::json!({"work": true}))].into(),
+                    ..OnlineService::default()
+                },
+            ),
+        ]
         .into_iter()
         .collect(),
     );
@@ -1401,19 +1428,49 @@ fn assert_the_seeded_service_survived(card: &ContactCard) {
         .unwrap_or_else(|| panic!("the save dropped the card's online services: {card:?}"));
     assert_eq!(
         services.keys().map(String::as_str).collect::<Vec<_>>(),
-        vec![SEEDED_SERVICE_KEY],
-        "the save re-filed the handle nobody touched: {card:?}"
+        vec![
+            SEEDED_SERVICE_KEY,
+            SEEDED_SKYPE_SERVICE_KEY,
+            SEEDED_MATRIX_SERVICE_KEY,
+        ],
+        "the save re-filed the handles nobody touched: {card:?}"
     );
-    let service = services.values().next().expect("one online service");
-    assert_eq!(service.service.as_deref(), Some(SEEDED_SERVICE), "{card:?}");
+    let s1 = &services[SEEDED_SERVICE_KEY];
+    assert_eq!(s1.service.as_deref(), Some(SEEDED_SERVICE), "{card:?}");
     assert_eq!(
-        service.uri.as_deref(),
+        s1.uri.as_deref(),
         Some(SEEDED_SERVICE_URI),
-        "the save rewrote the handle nobody touched: {card:?}"
+        "the save rewrote the Jabber handle: {card:?}"
     );
     assert_eq!(
-        service.user, None,
+        s1.user, None,
         "the save answered a card stating a URI with one stating a handle: {card:?}"
+    );
+
+    let s2 = &services[SEEDED_SKYPE_SERVICE_KEY];
+    assert_eq!(s2.service.as_deref(), Some(SEEDED_SKYPE_SERVICE), "{card:?}");
+    assert_eq!(
+        s2.uri.as_deref(),
+        Some(SEEDED_SKYPE_SERVICE_URI),
+        "the save rewrote the Skype handle: {card:?}"
+    );
+    assert_eq!(s2.user, None);
+    assert_eq!(
+        s2.extra.get("contexts"),
+        Some(&serde_json::json!({"private": true}))
+    );
+
+    let s3 = &services[SEEDED_MATRIX_SERVICE_KEY];
+    assert_eq!(s3.service.as_deref(), Some(SEEDED_MATRIX_SERVICE), "{card:?}");
+    assert_eq!(
+        s3.user.as_deref(),
+        Some(SEEDED_MATRIX_SERVICE_HANDLE),
+        "the save rewrote the Matrix handle: {card:?}"
+    );
+    assert_eq!(s3.uri, None);
+    assert_eq!(
+        s3.extra.get("contexts"),
+        Some(&serde_json::json!({"work": true}))
     );
 }
 
@@ -3158,10 +3215,14 @@ fn retyping_a_uri_only_handle_through_eds_writes_the_uri_back() {
         .unwrap_or_else(|| panic!("the save dropped the card's online services: {card:?}"));
     assert_eq!(
         services.keys().map(String::as_str).collect::<Vec<_>>(),
-        vec![SEEDED_SERVICE_KEY],
+        vec![
+            SEEDED_SERVICE_KEY,
+            SEEDED_SKYPE_SERVICE_KEY,
+            SEEDED_MATRIX_SERVICE_KEY,
+        ],
         "the handle the user typed was filed beside the entry it replaced: {card:?}"
     );
-    let service = services.values().next().expect("one online service");
+    let service = &services[SEEDED_SERVICE_KEY];
     assert_eq!(
         service.service.as_deref(),
         Some(SEEDED_SERVICE),
@@ -3176,6 +3237,14 @@ fn retyping_a_uri_only_handle_through_eds_writes_the_uri_back() {
         service.user, None,
         "the save answered a card stating a URI with one stating a handle: {card:?}"
     );
+
+    let s2 = &services[SEEDED_SKYPE_SERVICE_KEY];
+    assert_eq!(s2.service.as_deref(), Some(SEEDED_SKYPE_SERVICE), "{card:?}");
+    assert_eq!(s2.uri.as_deref(), Some(SEEDED_SKYPE_SERVICE_URI), "{card:?}");
+
+    let s3 = &services[SEEDED_MATRIX_SERVICE_KEY];
+    assert_eq!(s3.service.as_deref(), Some(SEEDED_MATRIX_SERVICE), "{card:?}");
+    assert_eq!(s3.user.as_deref(), Some(SEEDED_MATRIX_SERVICE_HANDLE), "{card:?}");
 
     // And what nobody touched at all, asserted for the reason the other legs
     // assert them.
