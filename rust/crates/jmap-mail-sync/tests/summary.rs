@@ -484,3 +484,58 @@ fn summary_extracts_structured_addresses_and_message_id_cleanly() {
     assert_eq!(summary.sent_at, Some(1_768_469_400));
     assert_eq!(summary.received_at, Some(1_768_469_400));
 }
+
+#[test]
+fn summary_handles_unicode_preview_and_subject_with_accents_and_emojis() {
+    let email = Email {
+        id: Some(Id::new("M-UNICODE-88")),
+        blob_id: Some(Id::new("B-UNICODE-88")),
+        subject: Some("JMAP Überprüfung 🚀 — 会議の招待".to_owned()),
+        preview: Some("Wichtige Aktualisierung für das Projekt: Bitte prüfen 👍".to_owned()),
+        from: Some(vec![EmailAddress::new(
+            Some("Müller & 佐藤"),
+            "team@example.com",
+        )]),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary with unicode fields");
+    assert_eq!(
+        summary.subject.as_deref(),
+        Some("JMAP Überprüfung 🚀 — 会議の招待")
+    );
+    assert_eq!(
+        summary.preview.as_deref(),
+        Some("Wichtige Aktualisierung für das Projekt: Bitte prüfen 👍")
+    );
+    assert_eq!(summary.from[0].name.as_deref(), Some("Müller & 佐藤"));
+}
+
+#[test]
+fn summary_maps_various_user_tags_and_retains_case_sensitivities() {
+    let email = Email {
+        id: Some(Id::new("M-TAGS-77")),
+        blob_id: Some(Id::new("B-TAGS-77")),
+        keywords: Some(
+            [
+                (keyword::SEEN.to_owned(), true),
+                (keyword::FLAGGED.to_owned(), false),
+                (keyword::DRAFT.to_owned(), true),
+                ("Project/Alpha".to_owned(), true),
+                ("URGENT-REVIEW".to_owned(), true),
+                ("Finance2026".to_owned(), true),
+            ]
+            .into(),
+        ),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary with multiple tags");
+    assert!(summary.flags.seen);
+    assert!(!summary.flags.flagged);
+    assert!(summary.flags.draft);
+    assert_eq!(summary.tags.len(), 3);
+    assert!(summary.tags.contains(&"Project/Alpha".to_owned()));
+    assert!(summary.tags.contains(&"URGENT-REVIEW".to_owned()));
+    assert!(summary.tags.contains(&"Finance2026".to_owned()));
+}
