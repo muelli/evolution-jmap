@@ -10,16 +10,16 @@
 //! - **The flags word.** Camel keeps a message's state as bits in one `guint32`
 //!   where JMAP keeps it as a set of keywords. The sync layer has already
 //!   sorted the keywords into the ones Camel has a bit for and the ones it does
-//!   not; turning the first into the word is [`flags_word`], and the second
+//!   not; turning the first into the word is `flags_word`, and the second
 //!   become Camel's user flags, which is what Evolution shows as labels.
 //! - **The address columns.** JMAP sends `from`, `to` and `cc` as structured
 //!   name/address pairs; Camel's summary stores one display string per header.
 //!   Formatting that string is `CamelInternetAddress`'s job — RFC 5322's
-//!   quoting rules live there — so [`address_list`] builds one and asks it.
+//!   quoting rules live there — so `address_list` builds one and asks it.
 //! - **The threading columns.** Camel does not store a `Message-ID`; it stores
 //!   64 bits of an MD5 over it, per `CamelSummaryMessageID`, and an array of
 //!   the same for the ancestors. There is no public function to compute one,
-//!   so [`message_id_digest`] computes it — and it computes exactly what
+//!   so `message_id_digest` computes it — and it computes exactly what
 //!   Camel's own `camel_message_info_new_from_headers` would have, because
 //!   those two paths meet: a message Camel parses locally lands in the same
 //!   summary as a row built here, and digests that disagreed would thread one
@@ -57,7 +57,7 @@
 //! - **A clone into a summary of ours carries it.** A copy that dropped the
 //!   column would be a row whose next flag change looked like the removal of
 //!   every keyword the message has. Which summary the copy is being made for is
-//!   what decides whether it is a row of ours at all — see [`clone`].
+//!   what decides whether it is a row of ours at all — see `clone`.
 //!
 //! The row is still built detached, with no summary behind it — nothing about
 //! the column needs one — but which class a *summary* instantiates is no longer
@@ -229,7 +229,7 @@ pub unsafe fn server_keywords(info: *mut CamelMessageInfo) -> Option<Keywords> {
 /// between them is the point: the before is a column only this provider keeps,
 /// while the after is read straight back out of Camel's own two — the flags word
 /// and the user flags — because those are what the user's click changed. It is
-/// [`flags_word`] and [`set_user_flags`] run backwards, over the same bits and
+/// `flags_word` and `set_user_flags` run backwards, over the same bits and
 /// the same names, so that a row nobody touched produces the set it was built
 /// from and therefore no change at all.
 ///
@@ -559,13 +559,13 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
 /// the other way round, because `||` short-circuits — and a row whose flags
 /// moved must still have its labels written.
 ///
-/// Written inside [`without_queueing`], because a listing is the server
+/// Written inside `without_queueing`, because a listing is the server
 /// speaking and the bit it would otherwise set means the opposite.
 ///
 /// ## What the listing is written *over*
 ///
 /// Not the row, if the row still has something to say — see
-/// [`outstanding_change`]. A refresh timer that goes off between the user's
+/// `outstanding_change`. A refresh timer that goes off between the user's
 /// click and the synchronisation brings back a listing the server made before
 /// the click, and writing that whole would undo the click on screen and, worse,
 /// leave the row claiming exactly what it remembers the server holding: the next

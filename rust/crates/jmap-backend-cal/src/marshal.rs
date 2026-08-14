@@ -245,7 +245,7 @@ pub unsafe fn component_uid(component: *mut ICalComponent) -> Option<String> {
 /// which this used to be — is therefore not a calendar object, and worse than
 /// malformed: the mapping cannot name the zone, so `patch::diff` leaves
 /// `timeZone` alone and the zone the user chose never reaches the server. See
-/// [`take_referenced_time_zones`].
+/// `take_referenced_time_zones`.
 ///
 /// A set of instances with no master at all is refused instead — there is
 /// nothing honest to send, and a visible failure beats rewriting a series to

@@ -21,7 +21,7 @@
 //!
 //! Every operation here is cancellable, and the cancellable that stops it is
 //! the one EDS handed *that call* — not the account's. [`observe`], held for
-//! the length of the call by [`with_connection`], installs it as the
+//! the length of the call by `with_connection`, installs it as the
 //! cancellation of every request this thread makes, and the client honours it
 //! in preference to whatever it was built with. The connection itself is built
 //! carrying no flag at all, so a connect the user stopped cannot leave behind a

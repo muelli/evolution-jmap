@@ -309,11 +309,11 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
 ///
 /// The one case worth stating because it is invisible from here: an unticked
 /// folder that is in the listing *only* because something ticked sits below it
-/// — see [`ticked`] — answers no. It is a folder the user chose not to see,
+/// — see `ticked` — answers no. It is a folder the user chose not to see,
 /// and the ticked folder underneath it is asked about separately.
 ///
 /// `CAMEL_FOLDER_NOSELECT` is deliberately not tested. This store never sets
-/// it (again see [`ticked`]: an unticked ancestor holds mail like any other
+/// it (again see `ticked`: an unticked ancestor holds mail like any other
 /// mailbox and is not dressed up as unselectable), and Evolution's
 /// `mail-send-recv.c` filters `NOSELECT` itself in the walk that asks this
 /// question — so a test here would be a second answer to a question the caller

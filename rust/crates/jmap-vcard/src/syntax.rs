@@ -17,7 +17,7 @@
 //!
 //! **Writing is still ours**, deliberately, because calcard's vCard writer
 //! targets 4.0 output and three of its choices are wrong for a 3.0 reader —
-//! see [`fold_into`] and [`quote_param`], and `docs/NIGHT-LOG.md` for the
+//! see `fold_into` and `quote_param`, and `docs/NIGHT-LOG.md` for the
 //! measurements. vCard 3.0 rather than 4.0 because that is the only format
 //! Evolution's `EVCard` emits (`EVC_FORMAT_VCARD_30`), and every vCard we
 //! produce is handed straight to `e_contact_new_from_vcard()`.
@@ -38,7 +38,7 @@ const FOLD_AT: usize = 75;
 ///
 /// The values are held decoded — unescaped, unfolded, and with any legacy
 /// transfer encoding already undone — because that is what the mapping wants;
-/// the escaping is applied on the way out, by [`write`].
+/// the escaping is applied on the way out, by `write`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
     /// The `item1` in `item1.TEL:…`, if the line was grouped.
@@ -103,7 +103,7 @@ impl Property {
     /// such as `CATEGORIES`.
     ///
     /// The difference from [`Self::structured`] is only which separator goes
-    /// between the values: [`escape`] escapes both of them inside a value
+    /// between the values: `escape` escapes both of them inside a value
     /// either way, so an item holding a comma states one item rather than two.
     pub fn list<I, S>(name: &str, items: I) -> Self
     where

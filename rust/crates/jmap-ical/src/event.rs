@@ -24,9 +24,9 @@
 //! `ECalMetaBackend` stores and hands back to a save.
 //!
 //! The one property read but never written is `DTEND`: it is how Evolution
-//! states an event's length, so [`read_duration`] measures it, while the length
+//! states an event's length, so `read_duration` measures it, while the length
 //! goes back out as the `DURATION` the two formats share. Both directions pass
-//! through [`stated_duration`], because the two formats spell an ISO 8601
+//! through `stated_duration`, because the two formats spell an ISO 8601
 //! duration identically but do not admit the same set of them.
 //!
 //! Its mirror is `CREATED`, `DTSTAMP` and `LAST-MODIFIED`, which are written and
@@ -42,40 +42,40 @@
 //! back *into* rather than as a whole. A VirtualLocation holds a `description`
 //! the line has no room for, so a save that named the property would delete the
 //! part of a place that was never shown; instead the key of the entry a line was
-//! drawn from rides on it in an [`X_JMAP_KEY`], and the save patches
-//! `virtualLocations/<key>/uri`. See [`drawn_conferences`],
-//! [`read_virtual_locations`] and [`maps_virtual_locations`].
+//! drawn from rides on it in an `X_JMAP_KEY`, and the save patches
+//! `virtualLocations/<key>/uri`. See `drawn_conferences`,
+//! `read_virtual_locations` and [`maps_virtual_locations`].
 //!
 //! What the event points at — RFC 8984 §4.2.7's `links` — is the third property
 //! read back *into* rather than as a whole, and crosses as two properties rather
 //! than one: a document attached to the event is an `ATTACH` (RFC 5545
 //! §3.8.1.1), a picture *of* it is an `IMAGE` (RFC 7986 §5.10), and the
-//! [`ICON_REL`] relation is what tells them apart. A Link holds a `cid` and a
+//! `ICON_REL` relation is what tells them apart. A Link holds a `cid` and a
 //! `title` no line has room for, so a save naming the property would delete the
 //! half of every resource the user was never shown; the key of the entry a line
-//! was drawn from rides on it in an [`X_JMAP_KEY`] instead, and the save patches
-//! `links/<key>/href`. See [`drawn_links`] and [`read_links`].
+//! was drawn from rides on it in an `X_JMAP_KEY` instead, and the save patches
+//! `links/<key>/href`. See `drawn_links` and `read_links`.
 //!
 //! `ORGANIZER` and `ATTENDEE` are written and never read for a heavier reason:
 //! who is invited, and what each of them replied, is *scheduling* state. Moving
 //! it means an iTIP REQUEST or REPLY going out to those people (RFC 5546), which
 //! this backend does not send — so the guest list RFC 8984 §4.4.6 states in
 //! `participants` is drawn for the user to read, and a save can never name the
-//! property. See [`drawn_participants`].
+//! property. See `drawn_participants`.
 //!
 //! A time zone crosses under two different kinds of name: iCalendar refers to
 //! one by a `TZID`, which is an identifier the document itself may define, and
 //! JSCalendar wants the zone's IANA name. [`names_time_zone`] says which is
-//! which and [`zone_names`] does the translating, off the `VTIMEZONE` the
+//! which and `zone_names` does the translating, off the `VTIMEZONE` the
 //! document is required to carry. In the other direction the identifier a
 //! zone *has no name* under is the one this crate has to define rather than
 //! refer to, out of the event's own RFC 8984 §4.7.2 `timeZones` — see
-//! [`drawn_time_zone`].
+//! `drawn_time_zone`.
 //!
 //! An all-day event has no property of its own in iCalendar; it is a `DTSTART`
 //! written as a date rather than a date-time, which puts JSCalendar's
 //! `showWithoutTime` in the value type of three properties at once. See
-//! [`shows_without_time`] for the conditions that has to meet and what happens
+//! `shows_without_time` for the conditions that has to meet and what happens
 //! when it cannot.
 //!
 //! Nothing here fails on unrecognised input. A property whose value the
@@ -327,7 +327,7 @@ const PARTICIPANT_KINDS: [(&str, &str); 4] = [
 /// `locations`, `virtualLocations` and `links` are also the three properties
 /// named *into* rather than replaced: a save patches `locations/<key>/name`,
 /// `virtualLocations/<key>/uri` and `links/<key>/href`, so the rest of the entry
-/// stays. See [`X_JMAP_KEY`], which is how a line says which entry it was drawn
+/// stays. See `X_JMAP_KEY`, which is how a line says which entry it was drawn
 /// from. `links` is conditional too, per entry rather than per property — see
 /// `jmap_cal_sync::patch`, which is where the condition lives, since it is about
 /// which entry a patch path can reach.
@@ -376,7 +376,7 @@ pub const MAPPED_PROPERTIES: [&str; 17] = [
 /// [`maps_recurrence_override`], which is asked of the event for that one reason.
 ///
 /// `showWithoutTime` is absent, one step further out — see
-/// [`shows_without_time`], which is decided once for the whole document.
+/// `shows_without_time`, which is decided once for the whole document.
 pub const OVERRIDE_PROPERTIES: [&str; 11] = [
     "title",
     "description",
@@ -509,7 +509,7 @@ fn place_name(location: &Value) -> Option<&str> {
 ///   tidiness — so the tag would come back spelled differently and a save would
 ///   rename it. A line feed is not this case: it has an escape and survives.
 ///
-/// The single point the save and [`drawn_tags`] agree through, so a tag cannot be
+/// The single point the save and `drawn_tags` agree through, so a tag cannot be
 /// called shown and then left off the line.
 pub fn maps_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true) && !tag.is_empty() && !tag.contains('\r')
@@ -537,20 +537,20 @@ fn drawn_tags(event: &CalendarEvent) -> Vec<&str> {
 /// **replaced whole** — a `VALARM` has no key of its own for a PatchObject to
 /// reach into beyond the RFC 9074 §6 `UID` the entry's key rides on — so, exactly
 /// as there, an alert this mapping leaves off the document is an alert the next
-/// save deletes. What [`drawn_alert`] refuses, this refuses:
+/// save deletes. What `drawn_alert` refuses, this refuses:
 ///
 /// - **An `action` other than `display`.** An `ACTION:EMAIL` alarm must carry a
 ///   `SUMMARY` and an `ATTENDEE` (RFC 5545 §3.6.6) that a JSCalendar Alert does
-///   not hold — see [`DISPLAY_ALERT`].
+///   not hold — see `DISPLAY_ALERT`.
 /// - **A trigger that is not an offset** — RFC 8984 §4.5.4's AbsoluteTrigger, or
-///   an offset that is no signed duration ([`stated_offset`]), or a `relativeTo`
+///   an offset that is no signed duration (`stated_offset`), or a `relativeTo`
 ///   outside the two §4.5.3 admits.
 /// - **Anything else on the alert or its trigger**, most importantly RFC 9074
 ///   §6.1's `acknowledged`: a reminder the user has already dismissed, which the
 ///   `VALARM` this writes cannot say, and which a property replaced whole would
 ///   therefore un-dismiss.
 /// - **A key no `UID` can carry back**, since the key is what a replaced map
-///   states its entries under; see [`names_map_entry`].
+///   states its entries under; see `names_map_entry`.
 ///
 /// Taken as the whole event rather than one entry, unlike [`maps_keyword`],
 /// because a second property decides this one: RFC 8984 §4.5.1's
@@ -1101,14 +1101,14 @@ fn read_alert(valarm: &Component) -> Option<Value> {
 /// `recurrenceRules` for a rule this returns `false` for narrows the user's
 /// recurrence behind their back.
 ///
-/// A rule [`rule_to_rrule`] refuses outright fails this too, so the save path
+/// A rule `rule_to_rrule` refuses outright fails this too, so the save path
 /// never patches over a recurrence the user was not shown — as does one whose
 /// days of the week, days of the month, days of the year, weeks of the year,
 /// months of the year, time of day, position in the set or day the week starts on
-/// the `RRULE` cannot carry, which [`by_day_part`], [`by_month_day_part`],
-/// [`by_year_day_part`], [`by_week_no_part`], [`by_month_part`],
-/// [`by_second_part`], [`by_minute_part`], [`by_hour_part`],
-/// [`by_set_position_part`] and [`weekday_token`] decide and [`rule_to_rrule`]
+/// the `RRULE` cannot carry, which `by_day_part`, `by_month_day_part`,
+/// `by_year_day_part`, `by_week_no_part`, `by_month_part`,
+/// `by_second_part`, `by_minute_part`, `by_hour_part`,
+/// `by_set_position_part` and `weekday_token` decide and `rule_to_rrule`
 /// then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
@@ -1325,7 +1325,7 @@ fn writable(rule: &RecurrenceRule) -> bool {
 /// `i_cal_component_new_from_string()`.
 ///
 /// The series comes first, then one component per instance edited on its own —
-/// see [`modified_instances`].
+/// see `modified_instances`.
 pub fn event_to_ical(event: &CalendarEvent) -> String {
     let start = event.start.as_deref().and_then(to_ical_date_time);
     // Whether this event goes out as a date rather than a date-time, which is
@@ -2046,7 +2046,7 @@ fn read_transparency(vevent: &Component) -> Option<String> {
 /// rather than by position: EDS hands a save every instance of one uid it holds,
 /// in no promised order, and taking the first component would read a single
 /// edited day as if it were the whole series. The rest become
-/// `recurrenceOverrides` entries — see [`read_overrides`].
+/// `recurrenceOverrides` entries — see `read_overrides`.
 ///
 /// A document holding *nothing but* detached instances has no series to attach
 /// them to, so the first component is read as the event it describes and the
@@ -2090,7 +2090,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
 /// libical names its builtin zones `/freeassociation.sourceforge.net/<zone>`
 /// and Evolution's appointment editor sets the start with the zone object, so
 /// every zoned component a save hands back carries one — even one this crate
-/// wrote spelling the zone plainly. [`zone_names`] is how it gets translated.
+/// wrote spelling the zone plainly. `zone_names` is how it gets translated.
 ///
 /// What is checked is the *shape* of a name, not membership of the database:
 /// non-empty segments of letters, digits, `_`, `-` and `+` separated by `/`.

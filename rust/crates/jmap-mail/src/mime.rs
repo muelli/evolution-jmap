@@ -45,7 +45,7 @@
 //! one whose DKIM signature is computed over different bytes than the recipient
 //! verifies, and whose body a strict relay may cut short.
 //!
-//! [`crlf`] is therefore the same rule Camel's own filter applies in
+//! `crlf` is therefore the same rule Camel's own filter applies in
 //! `CAMEL_MIME_FILTER_CRLF_ENCODE`: a CR is inserted before an LF that has none
 //! already, and nothing else is touched — not a lone CR, and deliberately not
 //! the leading dots `CRLF_MODE_CRLF_DOTS` would stuff, which are an SMTP

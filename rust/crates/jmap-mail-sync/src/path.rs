@@ -61,7 +61,7 @@ pub(crate) fn encode_component(name: &str) -> String {
 /// its component now is, and neither is anything it may split out for itself —
 /// the separator is this module's choice.
 ///
-/// A component can never contain the separator, since [`encode_component`]
+/// A component can never contain the separator, since `encode_component`
 /// escapes it, so the last one splits the path unambiguously. It is the same
 /// reading `FolderTree::insert` makes of a path.
 pub fn split(path: &str) -> (Option<&str>, &str) {

@@ -30,30 +30,30 @@
 //! - **`locations` is a map of places and the component has one line.** So the
 //!   name is patched *into* the server's own entry rather than the property
 //!   being replaced, which is one of the two places this module reaches below
-//!   the top level — see [`diff_locations`].
+//!   the top level — see `diff_locations`.
 //! - **`virtualLocations` is a map of places and the component has a line
 //!   each.** Which line stands for which entry is therefore a real question,
 //!   and the answer rides on the line as an `X-JMAP-KEY`; the members the line
 //!   shows are patched into the entry it names, and a line naming an entry the
 //!   server does not hold is neither created nor read as a deletion — see
-//!   [`diff_virtual_locations`].
+//!   `diff_virtual_locations`.
 //! - **`links` is a map of resources, and only one member of an entry is the
 //!   user's.** A line shows the address, the media type and the size; the type
 //!   and the size are the server's own description of what it holds, and the
 //!   `cid` and `title` beside them have no room on the line at all. So the save
-//!   patches `links/<key>/href` and nothing else — see [`diff_links`].
+//!   patches `links/<key>/href` and nothing else — see `diff_links`.
 //! - **`keywords` is a set, and a set has no keys to leave unnamed.** The
 //!   property goes back replaced whole, so a tag that never reached the
 //!   `CATEGORIES` line is one the user never saw and a plain rewrite would
 //!   delete. It is carried onto the set the save writes instead, which is how
 //!   the "an unshown entry is not the user's to delete" rule is kept where
-//!   leaving an entry unnamed is not available — see [`diff_keywords`].
+//!   leaving an entry unnamed is not available — see `diff_keywords`.
 //! - **`alerts` is a map replaced whole, and a second property decides
 //!   whether anything reads it.** A `VALARM` cannot say that the user already
 //!   dismissed the reminder, or that it fires at an absolute instant, or that
 //!   it sends mail; and RFC 8984 §4.5.1's `useDefaultAlerts` says the property
 //!   is ignored altogether. Either way the reminders were not shown, so they
-//!   are not written — see [`diff_alerts`].
+//!   are not written — see `diff_alerts`.
 //! - **`recurrenceRules` is one property, not a merge point.** A rule with
 //!   `rscale` cannot be spelled as an `RRULE` this crate emits, so patching
 //!   the array at all would narrow the user's recurrence behind their back.

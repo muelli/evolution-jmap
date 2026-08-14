@@ -20,7 +20,7 @@
 //!
 //! * **A path, not a mailbox.** Camel names a folder by its path, so resolving
 //!   it against the folder tree is this layer's job — through
-//!   [`tree_holding`](crate::folders::tree_holding), which looks again before
+//!   `tree_holding`, which looks again before
 //!   giving up, so that a mailbox another client created since the last listing
 //!   is subscribable without a restart.
 //! * **A non-blocking read.** `folder_is_subscribed` is declared by Camel as

@@ -25,7 +25,7 @@
 //!
 //! `parent_name` and the delete's `folder_name` are Camel *paths*, resolved
 //! against the tree the way every other folder vfunc resolves one — through
-//! [`tree_holding`], which looks again before giving up so that a mailbox
+//! `tree_holding`, which looks again before giving up so that a mailbox
 //! another client created since the last listing can still be a parent.
 //!
 //! The create's `folder_name` is not a path. It is the name of the folder being

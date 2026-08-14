@@ -28,7 +28,7 @@
 //!   address that was already preferred keeps its rank; the flag can only
 //!   introduce or remove a preference, never renumber one.
 //! - `name.components` are a *list* with no keys to patch by, so they go back
-//!   whole and are merged the way an address's components are ([`merge_named`]):
+//!   whole and are merged the way an address's components are (`merge_named`):
 //!   kinds the `N` value has no field for are carried across the replacement,
 //!   and a component that still says what it said keeps the members that value
 //!   had no field for either — its `phonetic` spelling above all. Their order
@@ -65,7 +65,7 @@
 //! - `media` entries have no surviving key either, and are patched by what the
 //!   `PHOTO` line states rather than by their members — a picture read back off
 //!   a line is not the entry that produced it. Only the first of them is ever
-//!   the one the user edited. See [`diff_media`].
+//!   the one the user edited. See `diff_media`.
 //! - `anniversaries` entries have no key to be patched by at all: EDS keeps a
 //!   birthday in a structured field and rebuilds the line out of it, dropping
 //!   the `X-JMAP-KEY`, so the entry an edited date belongs to is found by what
@@ -79,7 +79,7 @@
 //!   `contexts`. The handle is the entry's `user`, or the one its `uri` states
 //!   for a service whose URI scheme says nothing else — and a rename goes back
 //!   on whichever of the two it was drawn from. Where it cannot, the `uri` that
-//!   named the replaced handle is *dropped*: see [`diff_online_services`], the
+//!   named the replaced handle is *dropped*: see `diff_online_services`, the
 //!   one place here where a save removes a member the vCard never showed.
 //! - `relatedTo` is the one mapped property keyed by *who the entry is about*
 //!   rather than by an id of whoever wrote it, so it is the one whose key the
@@ -87,14 +87,14 @@
 //!   a marriage withdrawn from one entity and claimed of another. Both halves
 //!   reach into the relation *set* rather than replacing the entry, so that a
 //!   relation the line never stated survives either way. See
-//!   [`diff_related_to`].
+//!   `diff_related_to`.
 //! - `keywords` is the one mapped property that is a *set*, and the one that
 //!   goes back **replaced whole**: a tag is a bare string with no key and no
 //!   members, so there is nothing to reach into. A tag the `CATEGORIES` line
 //!   could not carry is therefore one a save would *delete* rather than merely
 //!   one the user cannot see — so the save carries it onto the set it writes,
 //!   which is how a set keeps the rule the keyed maps keep by leaving an entry
-//!   unnamed. See [`diff_keywords`].
+//!   unnamed. See `diff_keywords`.
 //! - *Every* keyed map is one of which the vCard states only **some**
 //!   entries. A title of a `kind` outside `title` and `role` has no vCard
 //!   property; an address with neither an `ADR` field nor a written-out form
@@ -108,7 +108,7 @@
 //!   therefore be invisible to the save in both directions — neither deleted
 //!   for being absent from the edited card, nor overwritten by an addition
 //!   whose key the reader invented by counting only the entries it could
-//!   see. That is what [`diff_entries`] and the `states_*` predicates it
+//!   see. That is what `diff_entries` and the `states_*` predicates it
 //!   takes are for; the predicates live next to the emitter, so what the
 //!   save calls invisible is what the emitter actually left out.
 //!
