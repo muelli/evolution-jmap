@@ -40,20 +40,31 @@ while true; do
     duration=$(( $(date +%s) - start ))
     log "agy finished: exit=$status duration=${duration}s"
 
-    if grep -qiE "usage limit|quota exceeded|resource exhausted|rate limit" "$out"; then
-        rm -f "$out"
+    # Detect quota/usage limit: either by explicit message in output, or by
+    # a fast failure (< 30s) with non-zero exit — agy often just exits silently.
+    quota_hit=0
+    if grep -qiE "usage limit|quota exceeded|resource exhausted|rate limit|429" "$out"; then
+        log "Quota error detected in output."
+        quota_hit=1
+    elif [ "$status" -ne 0 ] && [ "$duration" -lt 30 ]; then
+        log "Fast non-zero exit (${duration}s) — likely a quota/auth error."
+        quota_hit=1
+    fi
+    rm -f "$out"
+
+    if [ "$quota_hit" -eq 1 ]; then
         CURRENT_MODEL_INDEX=$(( CURRENT_MODEL_INDEX + 1 ))
         if [ "$CURRENT_MODEL_INDEX" -lt "${#AVAILABLE_MODELS[@]}" ]; then
-            log "Usage limit reached. Switching to fallback model: ${AVAILABLE_MODELS[$CURRENT_MODEL_INDEX]}."
-            continue # immediately retry with the next fallback model
+            log "Switching to fallback model: ${AVAILABLE_MODELS[$CURRENT_MODEL_INDEX]}."
+            consecutive_noop=0  # reset so drain detection doesn't fire prematurely
+            continue
         else
             log "Usage limit reached for ALL fallback models. Exiting so VM naps."
             exit 0
         fi
     fi
-    rm -f "$out"
-    
-    # Reset model to default if we successfully ran a long shift (quota may have recovered)
+
+    # Reset model to default after a successful long shift (quota may have recovered)
     if [ "$duration" -ge 120 ] && [ "$status" -eq 0 ]; then
         CURRENT_MODEL_INDEX=-1
     fi
