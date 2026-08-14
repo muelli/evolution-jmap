@@ -2404,3 +2404,35 @@ fn a_foreign_handle_holding_a_raw_separator_is_read_as_the_line_states_it() {
         assert_eq!(services["s1"].user.as_deref(), Some(handle), "{line}");
     }
 }
+
+#[test]
+fn a_uri_only_gadu_gadu_entry_is_drawn_as_x_gadugadu() {
+    // `gg` is the provisional IANA scheme (RFC 7595 template `gg:<userid>`) for
+    // Gadu-Gadu, where the handle is the numerical user identifier (UIN).
+    let vcard = card_to_vcard(&at_uri(Some("Gadu-Gadu"), "gg:12345678"));
+    assert_eq!(
+        line(&vcard, "X-GADUGADU"),
+        "X-GADUGADU;X-JMAP-KEY=s1;TYPE=HOME:12345678"
+    );
+
+    let services = vcard_to_card(&vcard)
+        .expect("parse")
+        .online_services
+        .expect("online services");
+    assert_eq!(services["s1"].user.as_deref(), Some("12345678"));
+    assert_eq!(services["s1"].uri, None);
+}
+
+#[test]
+fn a_gadu_gadu_uri_that_says_more_than_a_handle_gets_no_line() {
+    for uri in [
+        "gg:",
+        "gg:1234/work",
+        "gg:1234?chat",
+        "gg:1234#anchor",
+        "gg: 1234",
+    ] {
+        let vcard = card_to_vcard(&at_uri(Some("Gadu-Gadu"), uri));
+        assert!(!vcard.contains("X-GADUGADU"), "{uri} was drawn: {vcard}");
+    }
+}

@@ -2068,6 +2068,34 @@ fn renaming_a_handle_the_uri_alone_stated_rewrites_that_uri() {
 }
 
 #[test]
+fn renaming_a_gadu_gadu_handle_the_uri_alone_stated_rewrites_that_uri() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "onlineServices": {
+                "s1": {"service": "Gadu-Gadu", "uri": "gg:12345678"},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("\r\nX-GADUGADU;X-JMAP-KEY=s1;TYPE=HOME:12345678\r\n"),
+        "{vcard}"
+    );
+    let edited = vcard.replace("12345678", "87654321");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let services = fixture.card(&id).online_services.expect("onlineServices");
+    assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
+    assert_eq!(services["s1"].uri.as_deref(), Some("gg:87654321"));
+    assert_eq!(services["s1"].user, None, "a handle the entry never stated");
+}
+
+#[test]
 fn an_edit_that_left_a_uri_only_handle_alone_writes_nothing() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
