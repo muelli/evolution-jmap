@@ -31,7 +31,7 @@ cannot rot silently; the steps around it are what you are testing.
 ## 1. Start the mock server
 
 ```console
-$ cargo run -p evolution-jmap-mock --bin jmap-mockd
+$ cargo run --manifest-path rust/Cargo.toml -p evolution-jmap-mock --bin jmap-mockd
 jmap-mockd listening on http://127.0.0.1:8080
 ```
 
