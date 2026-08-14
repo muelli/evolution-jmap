@@ -751,6 +751,120 @@ fn an_attachment_under_a_key_this_side_invented_is_not_patched_onto_another() {
 }
 
 #[test]
+fn editing_one_of_several_attachments_preserves_other_attachments_and_images() {
+    let fixture = Fixture::start();
+    let image = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/badge.png",
+        "rel": "icon",
+        "display": "badge",
+        "title": "Badge Icon",
+    });
+    let slides = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/slides.pdf",
+        "contentType": "application/pdf",
+        "size": 102_400,
+        "title": "Presentation Slides",
+    });
+    let (id, sync) = points_at(
+        &fixture,
+        json!({
+            "l1": agenda(),
+            "l2": slides.clone(),
+            "img1": image.clone(),
+        }),
+    );
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar.replace("standup.pdf", "standup-v2.pdf");
+    assert_ne!(edited, icalendar, "line to edit not found");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let links = stored.links.as_ref().unwrap();
+    assert_eq!(links.len(), 3, "attachment count changed: {links:?}");
+    let mut expected_agenda = agenda();
+    expected_agenda["href"] = json!("https://files.example.com/standup-v2.pdf");
+    assert_eq!(links["l1"], expected_agenda);
+    assert_eq!(links["l2"], slides);
+    assert_eq!(links["img1"], image);
+}
+
+#[test]
+fn editing_unrelated_field_preserves_all_multiple_attachments_and_images() {
+    let fixture = Fixture::start();
+    let image = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/badge.png",
+        "rel": "icon",
+        "display": "badge",
+    });
+    let slides = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/slides.pdf",
+        "contentType": "application/pdf",
+    });
+    let (id, sync) = points_at(
+        &fixture,
+        json!({
+            "l1": agenda(),
+            "l2": slides.clone(),
+            "img1": image.clone(),
+        }),
+    );
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Sprint Planning Meeting");
+    assert_ne!(edited, icalendar, "summary not found");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Sprint Planning Meeting"));
+    let links = stored.links.as_ref().unwrap();
+    assert_eq!(
+        links.len(),
+        3,
+        "links map modified on unrelated edit: {links:?}"
+    );
+    assert_eq!(links["l1"], agenda());
+    assert_eq!(links["l2"], slides);
+    assert_eq!(links["img1"], image);
+}
+
+#[test]
+fn readdressing_an_image_preserves_icon_rel_and_display() {
+    let fixture = Fixture::start();
+    let image = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/badge.png",
+        "rel": "icon",
+        "display": "badge",
+        "title": "Badge Icon",
+    });
+    let (id, sync) = points_at(
+        &fixture,
+        json!({
+            "l1": agenda(),
+            "img1": image.clone(),
+        }),
+    );
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    let edited = icalendar.replace("badge.png", "new-badge.png");
+    assert_ne!(edited, icalendar, "image line not found");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let links = stored.links.as_ref().unwrap();
+    assert_eq!(links.len(), 2, "links count changed: {links:?}");
+    assert_eq!(links["l1"], agenda());
+    let mut expected_image = image;
+    expected_image["href"] = json!("https://files.example.com/new-badge.png");
+    assert_eq!(links["img1"], expected_image);
+}
+
+#[test]
 fn a_new_events_attachment_reaches_the_server() {
     // The create path writes the property whole — there is no server entry to
     // patch into — so a component that already points somewhere, which is what

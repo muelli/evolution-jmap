@@ -212,9 +212,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // the `TZID` property of the `VTIMEZONE` copied in beside it, so the
     // definition carries the identifier the properties actually use rather than
     // libical's own.
-    "i_cal_property_get_first_parameter",
-    "i_cal_property_set_tzid",
-    "i_cal_parameter_get_tzid",
+    "i_cal_attach_.*",
+    "i_cal_property_.*",
+    "i_cal_parameter_.*",
     "e_cal_component_.*",
     "e_client_error_.*",
     "e_(book|cal)_client_error_.*",
