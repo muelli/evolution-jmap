@@ -258,6 +258,43 @@ fn camel_layouts_match_the_gtype_system() {
         CamelDataCache,
         CamelDataCacheClass
     );
+    assert_layout!(camel_stream_get_type, CamelStream, CamelStreamClass);
+    assert_layout!(
+        camel_stream_mem_get_type,
+        CamelStreamMem,
+        CamelStreamMemClass
+    );
+    assert_layout!(
+        camel_stream_null_get_type,
+        CamelStreamNull,
+        CamelStreamNullClass
+    );
+    assert_layout!(camel_stream_fs_get_type, CamelStreamFs, CamelStreamFsClass);
+    assert_layout!(
+        camel_stream_filter_get_type,
+        CamelStreamFilter,
+        CamelStreamFilterClass
+    );
+    assert_layout!(
+        camel_mime_filter_get_type,
+        CamelMimeFilter,
+        CamelMimeFilterClass
+    );
+    assert_layout!(
+        camel_mime_filter_basic_get_type,
+        CamelMimeFilterBasic,
+        CamelMimeFilterBasicClass
+    );
+    assert_layout!(
+        camel_mime_filter_crlf_get_type,
+        CamelMimeFilterCRLF,
+        CamelMimeFilterCRLFClass
+    );
+    assert_layout!(
+        camel_mime_filter_linewrap_get_type,
+        CamelMimeFilterLinewrap,
+        CamelMimeFilterLinewrapClass
+    );
 }
 
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the
