@@ -17,7 +17,7 @@
 //! [`crate::folder`] put on it and `camel_folder_get_parent_store`, and the
 //! store is where [`crate::service`] left the client — so a refresh is the
 //! folder's mailbox id asked of the store's connection, which is
-//! [`JmapStore::messages`] or [`JmapStore::messages_since`]. That is also why
+//! [`crate::store::JmapStore::messages`] or [`crate::store::JmapStore::messages_since`]. That is also why
 //! the disconnected case reports
 //! `CAMEL_SERVICE_ERROR_NOT_CONNECTED` rather than anything about the folder:
 //! nothing is wrong with the folder, and that code is what makes Camel connect
@@ -39,7 +39,7 @@
 //! timer for as long as it stays open, and nearly every one of them finds a
 //! mailbox nobody has touched. Listing answers that at the price of the whole
 //! mailbox — one query and one `Email/get` per page of rows the folder already
-//! has — so what this vfunc asks first is [`JmapStore::messages_since`], which
+//! has — so what this vfunc asks first is [`crate::store::JmapStore::messages_since`], which
 //! is one `Email/changes` and, for the usual answer, nothing else at all.
 //!
 //! The state to ask from is the one the last refresh recorded, and it lives in

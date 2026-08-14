@@ -217,7 +217,7 @@ impl FolderTree {
     /// account whose inbox hangs under a per-address parent is ordinary.
     ///
     /// It reads the role this crate *assigned* — see
-    /// [`claim_roles`](Self::claim_roles), which gives a contested role to the
+    /// `claim_roles`, which gives a contested role to the
     /// first mailbox in sibling order — rather than the mailbox's own `role`
     /// property. That is what keeps the answer the same folder as the one the
     /// listing marked `CAMEL_FOLDER_TYPE_INBOX`.
@@ -266,7 +266,7 @@ impl FolderTree {
     /// Where it goes is read out of its own path rather than passed in beside
     /// it. A folder's path *is* its position — it is its parent's path with one
     /// encoded component after it, which is the invariant
-    /// [`paths`](Self::paths) maintains for every folder here — and a component
+    /// `paths` maintains for every folder here — and a component
     /// can never contain the separator, so the last one splits the path
     /// unambiguously. A caller that passed the parent separately could pass one
     /// that disagrees with the path; there is no such second version to

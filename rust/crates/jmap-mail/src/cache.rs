@@ -44,7 +44,7 @@
 //! path. A server that answered `Email/query` with `../../../.config/autostart`
 //! would otherwise be a server that chooses where this provider writes. Keys
 //! are therefore checked against the RFC's own grammar and a key that fails it
-//! is simply not cached — see [`valid_key`].
+//! is simply not cached — see `valid_key`.
 //!
 //! ## An entry is checked against the row it belongs to
 //!
@@ -74,7 +74,7 @@
 //! ## The bound: an entry survives being ignored, not being forgotten
 //!
 //! A cache that only grows is a cache that ends as a full disk, so an entry
-//! nobody has opened for [`UNUSED_FOR`] is dropped. Of the two clocks
+//! nobody has opened for `UNUSED_FOR` is dropped. Of the two clocks
 //! `CamelDataCache` can be given, that is `set_expire_access` — the file's atime
 //! — rather than `set_expire_age`, which is its mtime, and an `Email` being
 //! immutable means its mtime is the moment it was *downloaded* and nothing else.
@@ -99,7 +99,7 @@
 //!
 //! ## What is not here yet
 //!
-//! **A knob.** [`UNUSED_FOR`] is a constant rather than a setting, because Camel
+//! **A knob.** `UNUSED_FOR` is a constant rather than a setting, because Camel
 //! has nowhere to put it: `CamelOfflineSettings`'s `limit-by-age` is about which
 //! messages get *downloaded* for offline use, not how long a downloaded one is
 //! kept, and reading it as the latter would be an account's offline window
@@ -186,7 +186,7 @@ impl MessageCache {
         Self::open_bounded(directory, UNUSED_FOR)
     }
 
-    /// The same, with the bound given rather than taken from [`UNUSED_FOR`].
+    /// The same, with the bound given rather than taken from `UNUSED_FOR`.
     ///
     /// The policy lives in one constant and the mechanism takes a parameter, so
     /// that a test can watch an entry go without waiting a month or writing an
@@ -236,7 +236,7 @@ impl MessageCache {
     }
 
     /// The bytes cached for `uid`, if any, given the size the folder's row
-    /// claims for it — see [`claimed`] for what a claim is.
+    /// claims for it — see `claimed` for what a claim is.
     ///
     /// `None` covers every reason there are none — never stored, removed since,
     /// unreadable, damaged, a key this cache will not look up — because the

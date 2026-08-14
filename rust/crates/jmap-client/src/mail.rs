@@ -676,7 +676,7 @@ impl Client {
     /// `envelope` is the SMTP envelope, and passing one is the ordinary case
     /// here rather than the exception: the caller was given the recipients
     /// separately from the message and they are not the same thing as its
-    /// headers. See [`submission_request`].
+    /// headers. See `submission_request`.
     ///
     /// `on_success_update` is a patch applied to the message once the server
     /// accepts the submission (RFC 8621 §7.5) — moving it out of the mailbox it
@@ -758,7 +758,7 @@ impl Client {
     /// It still has to be encoded — a label is no less able to reshape a URL
     /// than an id is.
     ///
-    /// Every substituted value is percent-encoded — see [`crate::url`] for why
+    /// Every substituted value is percent-encoded — see `crate::url` for why
     /// that matters when the values are the server's own.
     ///
     /// `max_bytes` is how many octets of answer the caller will take, and it is

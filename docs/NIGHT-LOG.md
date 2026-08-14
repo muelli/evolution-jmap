@@ -21732,4 +21732,46 @@ hang is still an open design question with a lock-order hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-fourteenth session)
 
-Claiming: fix rustdoc intra-doc link errors and broken links in jmap-mail and related crates.
+**Resolving rustdoc warnings and intra-doc link errors across workspace crates.**
+This session resolves the long-standing blocker "jmap-mail's rustdoc is dirty"
+by cleaning up all broken intra-doc links, private item links, and doc warnings
+across `jmap-mail` and the rest of the workspace crates under
+`RUSTDOCFLAGS="-D warnings" cargo doc`.
+
+**Fixing intra-doc links in public documentation.** Rustdoc warns on links from
+public items or module-level documentation to private functions, constants, or
+helper types when building documentation without `--document-private-items`.
+These references (`UNUSED_FOR`, `valid_key`, `claimed`, `flags`, `ticked`,
+`tree_holding`, `flags_word`, `address_list`, `message_id_digest`, `crlf`,
+`push_row`, `diff_*`, `photo`, `drawn_*`, etc.) have been adjusted to inline
+code font (`` `...` ``) where appropriate, intra-crate references to `JmapStore`
+methods in `refresh.rs` have been fully qualified (`crate::store::JmapStore`),
+and ambiguous doc links (`[`write`]` in `jmap-vcard::syntax`) have been
+disambiguated.
+
+As a result, `RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path rust/Cargo.toml --workspace --no-deps`
+now compiles documentation for all 24 workspace crates with zero warnings and
+zero errors.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1012 tests,
+and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green
+including all 4 functional test legs and Debian packaging tests; and workspace-wide
+`cargo doc` under `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: `jmap-mail`'s rustdoc is dirty.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**;
+`docs/MILESTONES.md` does not exist, so the M8 tag is still unwritten; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as
+a year alone are still invisible; the conventional URI schemes for AIM, Gadu-Gadu,
+ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP`
+are unmapped and their contact-editor behaviour unmeasured; whether the editor lets
+a handle be moved between the Home and Work slots at all is unknown; a `VALUE=uri`
+photo's rendering is unmeasured; what Evolution's contact editor writes for a replaced
+photo, and into a cleared field, is inferred rather than measured; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order hypothesis
+attached.
+

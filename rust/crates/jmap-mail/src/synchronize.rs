@@ -66,7 +66,7 @@
 //! just gone away is discovered once per dirty row.
 //!
 //! A message another client destroyed is not a failure at all — see
-//! [`push_row`].
+//! `push_row`.
 //!
 //! ## The other half of the argument
 //!

@@ -28,7 +28,7 @@
 //! says how Camel *treats* the folder: whether incoming mail in it runs through
 //! the user's filters, whether it is the account's trash. Only the second is
 //! meaningful on an object, and only two of its bits can honestly be set by
-//! this increment — see [`flags`].
+//! this increment — see `flags`.
 //!
 //! The vfuncs a folder answers to — its summary, its messages — are not here
 //! yet; this is the type, and what one is constructed from.
