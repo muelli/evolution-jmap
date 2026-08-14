@@ -22326,5 +22326,33 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-twenty-fifth session)
 
-Claiming M4 increment: verify calendar classification, transparency, status, categories, and location/URL property semantics in EDS and preservation across sync and real EDS.
+**Verifying calendar classification, transparency, status, categories, and location/URL property semantics in EDS, round-trip fidelity in `jmap-ical`, and preservation across sync.**
+This session measures EDS 3.52 `ECalComponent` classification (`CLASS`), transparency (`TRANSP`), status (`STATUS`), categories (`CATEGORIES`), location (`LOCATION`), URL (`URL`), and summary text behavior in `eds-sys`, adds multi-property roundtrip and unmodeled value tolerance tests in `jmap-ical`, and verifies location/category editing and clearing with unmodeled alert and link preservation in `jmap-cal-sync`.
+
+**EDS 3.52 `ECalComponent` property getters, setters, and clearing measurement:**
+- Probed `libecal-2.0` and `libical-glib` for core calendar component property behaviors:
+  - `e_cal_component_get_classification` maps `CLASS:CONFIDENTIAL` to `E_CAL_COMPONENT_CLASS_CONFIDENTIAL` (3), `CLASS:PRIVATE` to `E_CAL_COMPONENT_CLASS_PRIVATE` (2), and `CLASS:PUBLIC` to `E_CAL_COMPONENT_CLASS_PUBLIC` (1). `e_cal_component_set_classification` modifies the classification in place, and setting `E_CAL_COMPONENT_CLASS_NONE` (0) clears the `CLASS:` line from the component.
+  - `e_cal_component_get_transparency` maps `TRANSP:TRANSPARENT` to `E_CAL_COMPONENT_TRANSP_TRANSPARENT` (1) and `TRANSP:OPAQUE` to `E_CAL_COMPONENT_TRANSP_OPAQUE` (2). `e_cal_component_set_transparency` modifies transparency in place, and setting `E_CAL_COMPONENT_TRANSP_NONE` (0) clears the `TRANSP:` line.
+  - `e_cal_component_get_status` maps `STATUS:CONFIRMED` to `I_CAL_STATUS_CONFIRMED`. `e_cal_component_set_status` modifies status in place, and `I_CAL_STATUS_NONE` clears `STATUS:`.
+  - `e_cal_component_get_categories` returns a comma-separated string (`"offsite,planning"`), `e_cal_component_get_categories_list` returns a `GSList` of individual category tokens, `e_cal_component_set_categories` modifies categories in place, and setting NULL clears `CATEGORIES:`.
+  - `e_cal_component_get_location` and `e_cal_component_get_url` return their respective string values, `set_location` and `set_url` modify them in place, and setting NULL removes `LOCATION:` and `URL:` lines.
+  - `e_cal_component_get_summary` returns structured `ECalComponentText`, accessible via `e_cal_component_text_get_value` and freed with `e_cal_component_text_free`.
+- In `rust/crates/eds-sys/tests/ical.rs`:
+  - Added `ecalcomponent_classification_transparency_and_status_in_eds`: verifies classification, transparency, and status getters, in-place modification, and clearing via NONE values.
+  - Added `ecalcomponent_categories_location_url_and_descriptions_in_eds`: verifies string and list categories accessors, location, URL, summary text, and NULL clearing.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-ical/tests/event.rs`:
+  - Added `event_with_categories_classification_transparency_status_and_url_roundtrips_faithfully`: verifies that an event carrying categories, secret classification, free transparency, confirmed status, priority, location, and links roundtrips faithfully to iCalendar and back into JSCalendar fields.
+  - Added `event_with_custom_privacy_and_freebusy_drops_unmodeled_lines_gracefully`: verifies that unrecognized custom privacy or freeBusyStatus strings are safely omitted from iCalendar output without errors.
+- In `jmap-cal-sync/tests/save.rs`:
+  - Added `editing_location_and_categories_preserves_unmodeled_alarms_and_links`: verifies that modifying location and categories produces targeted patches while preserving unmodeled alerts, links, and virtual locations intact on the server.
+  - Added `clearing_location_and_categories_generates_targeted_null_patches`: verifies that removing location and categories generates targeted removal patches without disturbing links.
+
+Tests: 1055 in the default set (up 4: 240 in `jmap-ical/tests/event.rs`, 120 in `jmap-cal-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/ical.rs` (10 total) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1055 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 

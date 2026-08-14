@@ -3758,3 +3758,98 @@ fn saving_something_that_holds_no_event_fails_before_any_request() {
     );
     assert!(fixture.sync().list_existing().unwrap().1.is_empty());
 }
+
+#[test]
+fn editing_location_and_categories_preserves_unmodeled_alarms_and_links() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "keywords": {"offsite": true},
+            "locations": {"loc1": {"@type": "Location", "name": "Room 42"}},
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/agenda.pdf",
+                    "contentType": "application/pdf",
+                    "size": 51200,
+                }
+            },
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M", "relativeTo": "start"},
+                    "action": "display",
+                }
+            },
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    let edited = loaded
+        .replace(
+            "LOCATION;X-JMAP-KEY=loc1:Room 42",
+            "LOCATION;X-JMAP-KEY=loc1:Conference Hall B",
+        )
+        .replace("CATEGORIES:offsite", "CATEGORIES:offsite,engineering");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    let locs = stored.locations.expect("locations");
+    assert_eq!(locs["loc1"]["name"], json!("Conference Hall B"));
+    let keywords = stored.keywords.expect("keywords");
+    assert!(keywords.contains_key("offsite"));
+    assert!(keywords.contains_key("engineering"));
+
+    // Unmodeled links and alerts are preserved
+    let links = stored.links.expect("links");
+    assert!(links.contains_key("l1"));
+    assert_eq!(links["l1"]["size"], json!(51200));
+    let alerts = stored.alerts.expect("alerts");
+    assert!(alerts.contains_key("a1"));
+}
+
+#[test]
+fn clearing_location_and_categories_generates_targeted_null_patches() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Planning", "2026-01-15T13:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "keywords": {"offsite": true},
+            "locations": {"loc1": {"@type": "Location", "name": "Room 42"}},
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/agenda.pdf",
+                    "contentType": "application/pdf",
+                }
+            },
+        }),
+    );
+
+    let sync = fixture.sync();
+    let loaded = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    let edited = loaded
+        .replace("LOCATION;X-JMAP-KEY=loc1:Room 42\r\n", "")
+        .replace("CATEGORIES:offsite\r\n", "");
+
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.locations, None);
+    assert_eq!(stored.keywords, None);
+
+    // Links are preserved
+    let links = stored.links.expect("links");
+    assert!(links.contains_key("l1"));
+    assert_eq!(
+        links["l1"]["href"],
+        json!("https://files.example.com/agenda.pdf")
+    );
+}
