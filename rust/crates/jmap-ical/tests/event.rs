@@ -7149,3 +7149,73 @@ fn maps_created_updated_and_rdate_series_faithfully() {
     assert_eq!(back.title, event.title);
     assert_eq!(back.recurrence_rules, event.recurrence_rules);
 }
+
+#[test]
+fn maps_location_with_special_characters_and_coordinates_safely() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+               VERSION:2.0\r\n\
+               PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+               BEGIN:VEVENT\r\n\
+               UID:loc-event-1\r\n\
+               SUMMARY:Quarterly Keynote\r\n\
+               DTSTART:20260810T100000Z\r\n\
+               DURATION:PT2H\r\n\
+               LOCATION;X-JMAP-KEY=l1:Building 4\\, Room 204\\; West Wing\r\n\
+               END:VEVENT\r\n\
+               END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(event.title.as_deref(), Some("Quarterly Keynote"));
+    let locs = event.locations.as_ref().expect("locations");
+    assert_eq!(
+        locs["l1"]["name"].as_str(),
+        Some("Building 4, Room 204; West Wing")
+    );
+
+    let rendered = event_to_ical(&event);
+    assert!(
+        rendered.contains("LOCATION;X-JMAP-KEY=l1:Building 4\\, Room 204\\; West Wing")
+            || rendered.contains("LOCATION:Building 4\\, Room 204\\; West Wing"),
+        "{rendered}"
+    );
+
+    let back = ical_to_event(&rendered).expect("roundtrip");
+    assert_eq!(back.locations, event.locations);
+}
+
+#[test]
+fn maps_priority_privacy_and_status_combinations_faithfully() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+               VERSION:2.0\r\n\
+               PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+               BEGIN:VEVENT\r\n\
+               UID:meta-event-1\r\n\
+               SUMMARY:Executive Strategy\r\n\
+               DTSTART:20260810T150000Z\r\n\
+               DURATION:PT1H30M\r\n\
+               PRIORITY:1\r\n\
+               CLASS:CONFIDENTIAL\r\n\
+               STATUS:TENTATIVE\r\n\
+               TRANSP:TRANSPARENT\r\n\
+               END:VEVENT\r\n\
+               END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(event.title.as_deref(), Some("Executive Strategy"));
+    assert_eq!(event.priority, Some(1));
+    assert_eq!(event.privacy.as_deref(), Some("secret"));
+    assert_eq!(event.status.as_deref(), Some("tentative"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("free"));
+
+    let rendered = event_to_ical(&event);
+    assert!(rendered.contains("PRIORITY:1"), "{rendered}");
+    assert!(rendered.contains("CLASS:CONFIDENTIAL"), "{rendered}");
+    assert!(rendered.contains("STATUS:TENTATIVE"), "{rendered}");
+    assert!(rendered.contains("TRANSP:TRANSPARENT"), "{rendered}");
+
+    let back = ical_to_event(&rendered).expect("roundtrip");
+    assert_eq!(back.priority, event.priority);
+    assert_eq!(back.privacy, event.privacy);
+    assert_eq!(back.status, event.status);
+    assert_eq!(back.free_busy_status, event.free_busy_status);
+}
