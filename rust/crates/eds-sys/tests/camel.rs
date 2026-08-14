@@ -1598,3 +1598,305 @@ fn camel_mime_message_attachment_and_reply_to_in_eds() {
         gobject_sys::g_object_unref(msg.cast());
     }
 }
+
+/// Probing `CamelStreamMem` memory stream and `CamelStreamNull` null sink in EDS 3.52.
+#[test]
+fn camel_stream_mem_and_null_stream_operations_in_eds() {
+    let test_data = b"Stream payload data for JMAP unit tests\r\n";
+
+    unsafe {
+        // 1. CamelStreamMem
+        let mem_stream = camel_stream_mem_new();
+        assert!(!mem_stream.is_null());
+        // Fresh empty memory stream has 0 bytes, so EOS is TRUE
+        assert_eq!(camel_stream_eos(mem_stream), glib_sys::GTRUE);
+
+        let mut error: *mut glib_sys::GError = std::ptr::null_mut();
+        let written = camel_stream_write(
+            mem_stream,
+            test_data.as_ptr().cast(),
+            test_data.len(),
+            std::ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(written as usize, test_data.len());
+        assert!(error.is_null());
+
+        let flush_res = camel_stream_flush(mem_stream, std::ptr::null_mut(), &mut error);
+        assert_eq!(flush_res, 0);
+        assert!(error.is_null());
+
+        let byte_array = camel_stream_mem_get_byte_array(mem_stream.cast());
+        assert!(!byte_array.is_null());
+        assert_eq!((*byte_array).len as usize, test_data.len());
+
+        // 2. CamelStreamNull
+        let null_stream = camel_stream_null_new();
+        assert!(!null_stream.is_null());
+        assert_eq!(camel_stream_null_get_bytes_written(null_stream.cast()), 0);
+
+        let null_written = camel_stream_write(
+            null_stream,
+            test_data.as_ptr().cast(),
+            test_data.len(),
+            std::ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(null_written as usize, test_data.len());
+        assert_eq!(
+            camel_stream_null_get_bytes_written(null_stream.cast()),
+            test_data.len()
+        );
+        assert_eq!(
+            camel_stream_null_get_ends_with_crlf(null_stream.cast()),
+            glib_sys::GTRUE
+        );
+
+        gobject_sys::g_object_unref(null_stream.cast());
+        gobject_sys::g_object_unref(mem_stream.cast());
+    }
+}
+
+/// Probing `CamelStreamFs` filesystem stream operations in EDS 3.52.
+#[test]
+fn camel_stream_fs_file_operations_in_eds() {
+    unsafe {
+        let mut tmp_error: *mut glib_sys::GError = std::ptr::null_mut();
+        let tmp_dir_raw =
+            glib_sys::g_dir_make_tmp(c"eds-fs-stream-XXXXXX".as_ptr(), &mut tmp_error);
+        assert!(!tmp_dir_raw.is_null());
+        assert!(tmp_error.is_null());
+
+        let file_path = format!(
+            "{}/test_file.bin\0",
+            std::ffi::CStr::from_ptr(tmp_dir_raw).to_str().unwrap()
+        );
+
+        let mut error: *mut glib_sys::GError = std::ptr::null_mut();
+        // O_RDWR (2) | O_CREAT (64) | O_TRUNC (512) = 578
+        let fs_stream =
+            camel_stream_fs_new_with_name(file_path.as_ptr().cast(), 578, 0o600, &mut error);
+        assert!(!fs_stream.is_null(), "camel_stream_fs_new_with_name failed");
+        assert!(error.is_null());
+
+        let fd = camel_stream_fs_get_fd(fs_stream.cast());
+        assert!(fd >= 0);
+
+        let test_str = c"Filesystem stream write test content\r\n";
+        let written = camel_stream_write_string(
+            fs_stream,
+            test_str.as_ptr(),
+            std::ptr::null_mut(),
+            &mut error,
+        );
+        assert!(written > 0);
+        assert!(error.is_null());
+
+        camel_stream_close(fs_stream, std::ptr::null_mut(), &mut error);
+        assert!(error.is_null());
+        gobject_sys::g_object_unref(fs_stream.cast());
+
+        // Re-open for read (O_RDONLY = 0)
+        let read_stream =
+            camel_stream_fs_new_with_name(file_path.as_ptr().cast(), 0, 0, &mut error);
+        assert!(!read_stream.is_null());
+        assert!(error.is_null());
+
+        let mut buf = [0u8; 64];
+        let n_read = camel_stream_read(
+            read_stream,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            std::ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(n_read, written);
+        assert_eq!(&buf[..n_read as usize], test_str.to_bytes());
+
+        camel_stream_close(read_stream, std::ptr::null_mut(), &mut error);
+        gobject_sys::g_object_unref(read_stream.cast());
+        glib_sys::g_free(tmp_dir_raw.cast());
+    }
+}
+
+/// Probing `CamelMimeFilterBasic` Base64 and Quoted-Printable filtering in EDS 3.52.
+#[test]
+fn camel_mime_filter_basic_base64_and_qp_in_eds() {
+    let plain = b"Hello, JMAP MIME stream filtering!";
+
+    unsafe {
+        // Base64 Encode
+        let enc_filter = camel_mime_filter_basic_new(CAMEL_MIME_FILTER_BASIC_BASE64_ENC);
+        assert!(!enc_filter.is_null());
+
+        let mut out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut out_len: gsize = 0;
+        let mut out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            enc_filter,
+            plain.as_ptr().cast(),
+            plain.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+
+        let mut encoded = Vec::new();
+        if out_len > 0 && !out_ptr.is_null() {
+            encoded.extend_from_slice(std::slice::from_raw_parts(out_ptr as *const u8, out_len));
+        }
+
+        let mut comp_ptr: *mut gchar = std::ptr::null_mut();
+        let mut comp_len: gsize = 0;
+        let mut comp_pre: gsize = 0;
+
+        let empty = c"";
+        camel_mime_filter_complete(
+            enc_filter,
+            empty.as_ptr(),
+            0,
+            0,
+            &mut comp_ptr,
+            &mut comp_len,
+            &mut comp_pre,
+        );
+
+        if comp_len > 0 && !comp_ptr.is_null() {
+            encoded.extend_from_slice(std::slice::from_raw_parts(comp_ptr as *const u8, comp_len));
+        }
+
+        assert!(!encoded.is_empty());
+        let enc_str = String::from_utf8_lossy(&encoded);
+        assert!(enc_str.contains("SGVsbG8sIEpNQVAgTUlNR"));
+
+        // Base64 Decode
+        let dec_filter = camel_mime_filter_basic_new(CAMEL_MIME_FILTER_BASIC_BASE64_DEC);
+        assert!(!dec_filter.is_null());
+
+        let mut dec_out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut dec_out_len: gsize = 0;
+        let mut dec_out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            dec_filter,
+            encoded.as_ptr().cast(),
+            encoded.len(),
+            0,
+            &mut dec_out_ptr,
+            &mut dec_out_len,
+            &mut dec_out_pre,
+        );
+
+        let mut decoded = Vec::new();
+        if dec_out_len > 0 && !dec_out_ptr.is_null() {
+            decoded.extend_from_slice(std::slice::from_raw_parts(
+                dec_out_ptr as *const u8,
+                dec_out_len,
+            ));
+        }
+
+        let mut dec_comp_ptr: *mut gchar = std::ptr::null_mut();
+        let mut dec_comp_len: gsize = 0;
+        let mut dec_comp_pre: gsize = 0;
+
+        camel_mime_filter_complete(
+            dec_filter,
+            empty.as_ptr(),
+            0,
+            0,
+            &mut dec_comp_ptr,
+            &mut dec_comp_len,
+            &mut dec_comp_pre,
+        );
+
+        if dec_comp_len > 0 && !dec_comp_ptr.is_null() {
+            decoded.extend_from_slice(std::slice::from_raw_parts(
+                dec_comp_ptr as *const u8,
+                dec_comp_len,
+            ));
+        }
+
+        assert_eq!(decoded.as_slice(), plain);
+
+        // QP Filter creation
+        let qp_enc = camel_mime_filter_basic_new(CAMEL_MIME_FILTER_BASIC_QP_ENC);
+        assert!(!qp_enc.is_null());
+        let qp_dec = camel_mime_filter_basic_new(CAMEL_MIME_FILTER_BASIC_QP_DEC);
+        assert!(!qp_dec.is_null());
+
+        gobject_sys::g_object_unref(qp_dec.cast());
+        gobject_sys::g_object_unref(qp_enc.cast());
+        gobject_sys::g_object_unref(dec_filter.cast());
+        gobject_sys::g_object_unref(enc_filter.cast());
+    }
+}
+
+/// Probing `CamelMimeFilterCRLF` and `CamelMimeFilterLinewrap` in EDS 3.52.
+#[test]
+fn camel_mime_filter_crlf_and_linewrap_in_eds() {
+    unsafe {
+        let crlf_filter = camel_mime_filter_crlf_new(
+            CAMEL_MIME_FILTER_CRLF_ENCODE,
+            CAMEL_MIME_FILTER_CRLF_MODE_CRLF_ONLY,
+        );
+        assert!(!crlf_filter.is_null());
+
+        camel_mime_filter_crlf_set_ensure_crlf_end(crlf_filter.cast(), glib_sys::GTRUE);
+        assert_eq!(
+            camel_mime_filter_crlf_get_ensure_crlf_end(crlf_filter.cast()),
+            glib_sys::GTRUE
+        );
+
+        let linewrap_filter =
+            camel_mime_filter_linewrap_new(72, 80, b' ' as gchar, CAMEL_MIME_FILTER_LINEWRAP_WORD);
+        assert!(!linewrap_filter.is_null());
+
+        gobject_sys::g_object_unref(linewrap_filter.cast());
+        gobject_sys::g_object_unref(crlf_filter.cast());
+    }
+}
+
+/// Probing `CamelStreamFilter` stream pipeline with `CamelMimeFilterBasic` in EDS 3.52.
+#[test]
+fn camel_stream_filter_pipeline_in_eds() {
+    let base64_input = b"SGVsbG8sIEpNQVAgc3RyZWFtIGZpbHRlciBwaXBlbGluZSE=";
+
+    unsafe {
+        let mem_stream =
+            camel_stream_mem_new_with_buffer(base64_input.as_ptr().cast(), base64_input.len());
+        assert!(!mem_stream.is_null());
+
+        let filter_stream = camel_stream_filter_new(mem_stream);
+        assert!(!filter_stream.is_null());
+
+        let source = camel_stream_filter_get_source(filter_stream.cast());
+        assert_eq!(source, mem_stream);
+
+        let dec_filter = camel_mime_filter_basic_new(CAMEL_MIME_FILTER_BASIC_BASE64_DEC);
+        let filter_id = camel_stream_filter_add(filter_stream.cast(), dec_filter);
+        assert!(filter_id >= 0);
+
+        let mut buf = [0u8; 128];
+        let mut error: *mut glib_sys::GError = std::ptr::null_mut();
+        let n_read = camel_stream_read(
+            filter_stream,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            std::ptr::null_mut(),
+            &mut error,
+        );
+        assert!(n_read > 0);
+        assert!(error.is_null());
+
+        let decoded_text = std::str::from_utf8(&buf[..n_read as usize]).unwrap();
+        assert_eq!(decoded_text, "Hello, JMAP stream filter pipeline!");
+
+        camel_stream_filter_remove(filter_stream.cast(), filter_id);
+
+        gobject_sys::g_object_unref(dec_filter.cast());
+        gobject_sys::g_object_unref(filter_stream.cast());
+        gobject_sys::g_object_unref(mem_stream.cast());
+    }
+}

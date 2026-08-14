@@ -169,6 +169,12 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelContentType.*",
     "CamelContentDisposition.*",
     "CamelHeaderAddress.*",
+    // Streams and MIME filter pipeline
+    "CamelStream.*",
+    "CamelMimeFilter.*",
+    "CamelMimeFilterBasicType",
+    "CamelMimeFilterCRLFDirection",
+    "CamelMimeFilterCRLFMode",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -387,6 +393,8 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_header_mailbox_decode",
     "camel_header_.*",
     "camel_transfer_encoding_.*",
+    "camel_stream_.*",
+    "camel_mime_filter_.*",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,
@@ -410,6 +418,7 @@ const ALLOWED_VARS: &[&str] = &[
     "CAMEL_FOLDER_TYPE_BIT",
     "CAMEL_FOLDER_TYPE_MASK",
     "CAMEL_MAX_PREVIEW_LENGTH",
+    "CAMEL_MIME_FILTER_LINEWRAP_.*",
 ];
 
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys
