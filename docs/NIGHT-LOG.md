@@ -21955,5 +21955,6 @@ writes for a replaced photo, and into a cleared field, is inferred rather than m
 and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
 
+## 2026-08-14 (two-hundred-and-eighteenth session)
 
-
+Claiming M3 increment: verify conventional IM URI schemes for AIM, ICQ, MSN, and Yahoo in jmap-vcard and jmap-book-sync.
