@@ -21775,3 +21775,7 @@ photo, and into a cleared field, is inferred rather than measured; and the `jmap
 `transport.rs` hang is still an open design question with a lock-order hypothesis
 attached.
 
+## 2026-08-14 (two-hundred-and-fifteenth session)
+
+Claiming M3 increment: map Gadu-Gadu gg URI scheme, verify round-trips and diffs, and test through real EDS.
+
