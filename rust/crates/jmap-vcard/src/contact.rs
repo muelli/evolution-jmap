@@ -333,6 +333,8 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 /// Deliberately shorter than [`ONLINE_SERVICES`], because a scheme is only
 /// listed here where its scheme-specific part *is* the handle:
 ///
+/// - `gg` is the provisional IANA scheme (RFC 7595 template `gg:<userid>`) for
+///   Gadu-Gadu, whose path is the numerical user identifier (UIN).
 /// - `xmpp` is RFC 5122 §2.1's, whose path is a JID. Google Talk ran on XMPP,
 ///   so its handles are JIDs too, and one scheme serves both.
 /// - `skype` is the scheme Skype's own links use, where the bare form
@@ -341,15 +343,15 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 /// - `matrix` is left out: RFC-registered, but it states an identifier as
 ///   `u/vera:matrix.example` rather than as the `@vera:matrix.example` the field
 ///   holds, so reading one means rewriting it and writing one means the reverse.
-/// - AIM, Gadu-Gadu, ICQ, MSN and Yahoo each had a conventional scheme that this
-///   table does not yet name, because none was verified here against the IANA
-///   registry. That omission costs exactly what it cost before this table
-///   existed — a `uri`-only entry at one of them stays invisible — and adding
-///   one is a line of table plus a test.
+/// - AIM, ICQ, MSN and Yahoo: AIM and MSN/Yahoo conventionally use query/action
+///   URIs (e.g. `aim:goim?screenname=...`, `msnim:chat?contact=...`,
+///   `ymsgr:sendim?...`) which [`plain_handle`] rejects, while ICQ has no
+///   registered standalone IANA scheme.
 ///
 /// Getting a scheme *wrong* is bounded the same way: a URI whose scheme does not
 /// match is not drawn, which is the behaviour of every service missing here.
-const SERVICE_SCHEMES: [(&str, &str); 3] = [
+const SERVICE_SCHEMES: [(&str, &str); 4] = [
+    ("Gadu-Gadu", "gg"),
     ("Google Talk", "xmpp"),
     ("Jabber", "xmpp"),
     ("Skype", "skype"),
