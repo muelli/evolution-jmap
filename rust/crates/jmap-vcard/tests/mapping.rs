@@ -3206,3 +3206,201 @@ fn maps_nicknames_spouse_and_keywords_faithfully() {
     assert!(kws.contains_key("Engineering"));
     assert!(kws.contains_key("Rust"));
 }
+
+#[test]
+fn maps_phones_with_multiple_types_features_and_pref_faithfully() {
+    let card = ContactCard {
+        phones: Some(
+            [
+                (
+                    "p1".to_owned(),
+                    ContactPhone {
+                        number: "+49 30 111111".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        features: Some(json!({"voice": true})),
+                        pref: Some(1),
+                        ..ContactPhone::default()
+                    },
+                ),
+                (
+                    "p2".to_owned(),
+                    ContactPhone {
+                        number: "+49 30 222222".to_owned(),
+                        contexts: Some(json!({"private": true})),
+                        features: Some(json!({"voice": true})),
+                        ..ContactPhone::default()
+                    },
+                ),
+                (
+                    "p3".to_owned(),
+                    ContactPhone {
+                        number: "+49 170 333333".to_owned(),
+                        features: Some(json!({"mobile": true})),
+                        ..ContactPhone::default()
+                    },
+                ),
+                (
+                    "p4".to_owned(),
+                    ContactPhone {
+                        number: "+49 30 444444".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        features: Some(json!({"fax": true})),
+                        ..ContactPhone::default()
+                    },
+                ),
+                (
+                    "p5".to_owned(),
+                    ContactPhone {
+                        number: "+49 30 555555".to_owned(),
+                        features: Some(json!({"pager": true})),
+                        ..ContactPhone::default()
+                    },
+                ),
+                (
+                    "p6".to_owned(),
+                    ContactPhone {
+                        number: "+49 30 666666".to_owned(),
+                        features: Some(json!({"video": true})),
+                        ..ContactPhone::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p1;TYPE=WORK,VOICE,PREF:+49 30 111111")
+            || vcard.contains("TEL;X-JMAP-KEY=p1;TYPE=WORK,PREF,VOICE:+49 30 111111")
+            || vcard.contains("TEL;X-JMAP-KEY=p1;TYPE=PREF,WORK,VOICE:+49 30 111111")
+            || (vcard.contains("TEL") && vcard.contains("+49 30 111111") && vcard.contains("PREF")),
+        "p1 TEL PREF line missing or malformed: {vcard}"
+    );
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p2;TYPE=HOME,VOICE:+49 30 222222")
+            || (vcard.contains("+49 30 222222") && vcard.contains("HOME")),
+        "p2 TEL line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p3;TYPE=CELL:+49 170 333333")
+            || (vcard.contains("+49 170 333333") && vcard.contains("CELL")),
+        "p3 CELL line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p4;TYPE=WORK,FAX:+49 30 444444")
+            || (vcard.contains("+49 30 444444") && vcard.contains("FAX")),
+        "p4 FAX line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p5;TYPE=PAGER:+49 30 555555")
+            || (vcard.contains("+49 30 555555") && vcard.contains("PAGER")),
+        "p5 PAGER line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p6;TYPE=VIDEO:+49 30 666666")
+            || (vcard.contains("+49 30 666666") && vcard.contains("VIDEO")),
+        "p6 VIDEO line missing: {vcard}"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    let phones = parsed.phones.expect("phones");
+    assert_eq!(phones.len(), 6);
+    assert_eq!(phones["p1"].number, "+49 30 111111");
+    assert_eq!(phones["p1"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p1"].features, Some(json!({"voice": true})));
+    assert_eq!(phones["p1"].pref, Some(1));
+
+    assert_eq!(phones["p2"].number, "+49 30 222222");
+    assert_eq!(phones["p2"].contexts, Some(json!({"private": true})));
+    assert_eq!(phones["p2"].features, Some(json!({"voice": true})));
+    assert_eq!(phones["p2"].pref, None);
+
+    assert_eq!(phones["p3"].number, "+49 170 333333");
+    assert_eq!(phones["p3"].features, Some(json!({"mobile": true})));
+
+    assert_eq!(phones["p4"].number, "+49 30 444444");
+    assert_eq!(phones["p4"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p4"].features, Some(json!({"fax": true})));
+
+    assert_eq!(phones["p5"].number, "+49 30 555555");
+    assert_eq!(phones["p5"].features, Some(json!({"pager": true})));
+
+    assert_eq!(phones["p6"].number, "+49 30 666666");
+    assert_eq!(phones["p6"].features, Some(json!({"video": true})));
+}
+
+#[test]
+fn maps_emails_with_multiple_contexts_and_pref_faithfully() {
+    let card = ContactCard {
+        emails: Some(
+            [
+                (
+                    "e1".to_owned(),
+                    ContactEmail {
+                        address: "vera.work@example.com".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        pref: Some(1),
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e2".to_owned(),
+                    ContactEmail {
+                        address: "vera.home@example.com".to_owned(),
+                        contexts: Some(json!({"private": true})),
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e3".to_owned(),
+                    ContactEmail {
+                        address: "vera.direct@example.com".to_owned(),
+                        contexts: None,
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("EMAIL;X-JMAP-KEY=e1;TYPE=WORK,PREF:vera.work@example.com")
+            || vcard.contains("EMAIL;X-JMAP-KEY=e1;TYPE=PREF,WORK:vera.work@example.com")
+            || (vcard.contains("vera.work@example.com") && vcard.contains("PREF")),
+        "e1 EMAIL line missing PREF: {vcard}"
+    );
+    assert!(
+        vcard.contains("EMAIL;X-JMAP-KEY=e2;TYPE=HOME:vera.home@example.com")
+            || (vcard.contains("vera.home@example.com") && vcard.contains("HOME")),
+        "e2 EMAIL line missing: {vcard}"
+    );
+    assert!(
+        vcard.contains("EMAIL;X-JMAP-KEY=e3:vera.direct@example.com")
+            || vcard.contains("vera.direct@example.com"),
+        "e3 EMAIL line missing: {vcard}"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    let emails = parsed.emails.expect("emails");
+    assert_eq!(emails.len(), 3);
+    assert_eq!(emails["e1"].address, "vera.work@example.com");
+    assert_eq!(emails["e1"].contexts, Some(json!({"work": true})));
+    assert_eq!(emails["e1"].pref, Some(1));
+
+    assert_eq!(emails["e2"].address, "vera.home@example.com");
+    assert_eq!(emails["e2"].contexts, Some(json!({"private": true})));
+    assert_eq!(emails["e2"].pref, None);
+
+    assert_eq!(emails["e3"].address, "vera.direct@example.com");
+    assert_eq!(emails["e3"].contexts, None);
+    assert_eq!(emails["e3"].pref, None);
+}

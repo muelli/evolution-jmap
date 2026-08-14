@@ -237,6 +237,8 @@ pub struct ContactPhone {
     pub features: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

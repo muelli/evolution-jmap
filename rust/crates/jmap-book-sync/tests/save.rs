@@ -3611,3 +3611,116 @@ fn clearing_categories_and_notes_patches_server_fields() {
     let phones = card.phones.expect("phones");
     assert_eq!(phones["p1"].number, "+41221234567");
 }
+
+#[test]
+fn editing_phones_and_emails_preserves_unmodeled_contact_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "emails": {
+                "e1": {"@type": "EmailAddress", "address": "vera.work@example.com", "contexts": {"work": true}, "pref": 1},
+                "e2": {"@type": "EmailAddress", "address": "vera.home@example.com", "contexts": {"private": true}}
+            },
+            "phones": {
+                "p1": {"@type": "Phone", "number": "+49 30 111111", "contexts": {"work": true}, "features": {"voice": true}},
+                "p2": {"@type": "Phone", "number": "+49 30 222222", "contexts": {"private": true}, "features": {"voice": true}}
+            },
+            "preferredLanguages": {
+                "de": {"@type": "LanguagePref", "pref": 1}
+            },
+            "personalInfo": {
+                "expert": {"@type": "PersonalInfo", "kind": "expertise", "value": "Rust"}
+            },
+            "cryptoKeys": {
+                "key1": {"@type": "CryptoKey", "uri": "https://example.com/key.asc"}
+            },
+            "onlineServices": {
+                "chat1": {"@type": "OnlineService", "service": "Matrix", "uri": "matrix:u/vera:matrix.org"}
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+
+    // Modify e1 email, add pref to p1 phone, update p2 phone number
+    let modified = vcard
+        .replace(
+            "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,PREF:vera.work@example.com",
+            "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,PREF:vera.newwork@example.com",
+        )
+        .replace(
+            "EMAIL;TYPE=WORK,PREF;X-JMAP-KEY=e1:vera.work@example.com",
+            "EMAIL;TYPE=WORK,PREF;X-JMAP-KEY=e1:vera.newwork@example.com",
+        )
+        .replace(
+            "TEL;X-JMAP-KEY=p2;TYPE=HOME,VOICE:+49 30 222222",
+            "TEL;X-JMAP-KEY=p2;TYPE=HOME,VOICE:+49 30 999999",
+        )
+        .replace(
+            "TEL;TYPE=HOME,VOICE;X-JMAP-KEY=p2:+49 30 222222",
+            "TEL;TYPE=HOME,VOICE;X-JMAP-KEY=p2:+49 30 999999",
+        );
+
+    sync.save_contact(&modified, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let emails = card.emails.expect("emails");
+    assert_eq!(emails["e1"].address, "vera.newwork@example.com");
+    assert_eq!(emails["e1"].pref, Some(1));
+    assert_eq!(emails["e2"].address, "vera.home@example.com");
+
+    let phones = card.phones.expect("phones");
+    assert_eq!(phones["p1"].number, "+49 30 111111");
+    assert_eq!(phones["p2"].number, "+49 30 999999");
+
+    // Unmodeled properties intact
+    assert!(card.extra.contains_key("preferredLanguages"));
+    assert!(card.extra.contains_key("personalInfo"));
+    assert!(card.extra.contains_key("cryptoKeys"));
+    assert!(card.online_services.as_ref().unwrap().contains_key("chat1"));
+}
+
+#[test]
+fn clearing_phones_and_emails_patches_server_fields() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "emails": {
+                "e1": {"@type": "EmailAddress", "address": "vera.work@example.com"}
+            },
+            "phones": {
+                "p1": {"@type": "Phone", "number": "+49 30 111111"}
+            },
+            "nicknames": {
+                "k1": {"@type": "Nickname", "name": "Vee"}
+            },
+            "notes": {
+                "n1": {"@type": "Note", "note": "Persistent note"}
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let lines: Vec<&str> = vcard
+        .lines()
+        .filter(|l| !l.starts_with("TEL") && !l.starts_with("EMAIL"))
+        .collect();
+    let edited = lines.join("\r\n") + "\r\n";
+
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    assert_eq!(card.emails, None, "emails should be cleared: {card:?}");
+    assert_eq!(card.phones, None, "phones should be cleared: {card:?}");
+
+    let nicks = card.nicknames.expect("nicknames");
+    assert_eq!(nicks["k1"].name, "Vee");
+    let notes = card.notes.expect("notes");
+    assert_eq!(notes["n1"].note, "Persistent note");
+}

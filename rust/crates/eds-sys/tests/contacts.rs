@@ -1038,3 +1038,298 @@ END:VCARD\r\n";
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn contact_telephone_and_email_field_properties() {
+    let phone_fields: &[(EContactField, &str)] = &[
+        (E_CONTACT_PHONE_ASSISTANT, "assistant_phone"),
+        (E_CONTACT_PHONE_BUSINESS, "business_phone"),
+        (E_CONTACT_PHONE_BUSINESS_2, "business_phone_2"),
+        (E_CONTACT_PHONE_BUSINESS_FAX, "business_fax"),
+        (E_CONTACT_PHONE_CALLBACK, "callback_phone"),
+        (E_CONTACT_PHONE_CAR, "car_phone"),
+        (E_CONTACT_PHONE_COMPANY, "company_phone"),
+        (E_CONTACT_PHONE_HOME, "home_phone"),
+        (E_CONTACT_PHONE_HOME_2, "home_phone_2"),
+        (E_CONTACT_PHONE_HOME_FAX, "home_fax"),
+        (E_CONTACT_PHONE_ISDN, "isdn_phone"),
+        (E_CONTACT_PHONE_MOBILE, "mobile_phone"),
+        (E_CONTACT_PHONE_OTHER, "other_phone"),
+        (E_CONTACT_PHONE_OTHER_FAX, "other_fax"),
+        (E_CONTACT_PHONE_PAGER, "pager"),
+        (E_CONTACT_PHONE_PRIMARY, "primary_phone"),
+        (E_CONTACT_PHONE_RADIO, "radio"),
+        (E_CONTACT_PHONE_TELEX, "telex"),
+        (E_CONTACT_PHONE_TTYTDD, "tty"),
+    ];
+
+    let email_fields: &[(EContactField, &str)] = &[
+        (E_CONTACT_EMAIL_1, "email_1"),
+        (E_CONTACT_EMAIL_2, "email_2"),
+        (E_CONTACT_EMAIL_3, "email_3"),
+        (E_CONTACT_EMAIL_4, "email_4"),
+    ];
+
+    unsafe {
+        assert_eq!(E_CONTACT_FIRST_PHONE_ID, 16);
+        assert_eq!(E_CONTACT_LAST_PHONE_ID, 34);
+        assert_eq!(E_CONTACT_FIRST_EMAIL_ID, 8);
+        assert_eq!(E_CONTACT_LAST_EMAIL_ID, 11);
+
+        for &(field, name) in phone_fields {
+            assert_eq!(
+                e_contact_field_is_string(field),
+                1,
+                "phone field {field} must be a string"
+            );
+            let field_name = CStr::from_ptr(e_contact_field_name(field))
+                .to_str()
+                .unwrap();
+            assert_eq!(field_name, name);
+        }
+
+        for &(field, name) in email_fields {
+            assert_eq!(
+                e_contact_field_is_string(field),
+                1,
+                "email field {field} must be a string"
+            );
+            let field_name = CStr::from_ptr(e_contact_field_name(field))
+                .to_str()
+                .unwrap();
+            assert_eq!(field_name, name);
+        }
+
+        let attr_list_type = e_contact_attr_list_get_type();
+        assert_ne!(attr_list_type, 0);
+
+        // E_CONTACT_TEL (119) and E_CONTACT_EMAIL (97) are attribute lists
+        assert_eq!(e_contact_field_is_string(E_CONTACT_TEL), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_TEL), attr_list_type);
+        let tel_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_TEL));
+        assert_eq!(tel_name.to_str().unwrap(), "phone");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_EMAIL), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_EMAIL), attr_list_type);
+        let email_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_EMAIL));
+        assert_eq!(email_name.to_str().unwrap(), "email");
+
+        // Relationships & metadata
+        assert_eq!(e_contact_field_is_string(E_CONTACT_MANAGER), 1);
+        let mgr_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_MANAGER));
+        assert_eq!(mgr_name.to_str().unwrap(), "manager");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ASSISTANT), 1);
+        let asst_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ASSISTANT));
+        assert_eq!(asst_name.to_str().unwrap(), "assistant");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_FILE_AS), 1);
+        let file_as_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_FILE_AS));
+        assert_eq!(file_as_name.to_str().unwrap(), "file_as");
+
+        assert_eq!(e_contact_field_is_string(E_CONTACT_MAILER), 1);
+        let mailer_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_MAILER));
+        assert_eq!(mailer_name.to_str().unwrap(), "mailer");
+
+        // vCard property ID mappings
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"TEL".as_ptr().cast()),
+            E_CONTACT_TEL
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"EMAIL".as_ptr().cast()),
+            E_CONTACT_EMAIL
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-EVOLUTION-MANAGER".as_ptr().cast()),
+            E_CONTACT_MANAGER
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-EVOLUTION-ASSISTANT".as_ptr().cast()),
+            E_CONTACT_ASSISTANT
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"X-EVOLUTION-FILE-AS".as_ptr().cast()),
+            E_CONTACT_FILE_AS
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"MAILER".as_ptr().cast()),
+            E_CONTACT_MAILER
+        );
+    }
+}
+
+#[test]
+fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
+    let vcard_str = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:pas-id-test-tel-email-001\r\n",
+        "FN:Vera Olden\r\n",
+        "N:Olden;Vera;;;\r\n",
+        "TEL;TYPE=WORK,VOICE;X-JMAP-KEY=p1:+1-555-0100\r\n",
+        "TEL;TYPE=HOME,VOICE;X-JMAP-KEY=p2:+1-555-0101\r\n",
+        "TEL;TYPE=CELL;X-JMAP-KEY=p3:+1-555-0102\r\n",
+        "TEL;TYPE=WORK,FAX;X-JMAP-KEY=p4:+1-555-0103\r\n",
+        "TEL;TYPE=PAGER;X-JMAP-KEY=p5:+1-555-0104\r\n",
+        "EMAIL;TYPE=WORK;X-JMAP-KEY=e1:vera.work@example.com\r\n",
+        "EMAIL;TYPE=HOME;X-JMAP-KEY=e2:vera.home@example.com\r\n",
+        "X-EVOLUTION-MANAGER:Jordan Smith\r\n",
+        "X-EVOLUTION-ASSISTANT:Morgan Lee\r\n",
+        "X-EVOLUTION-FILE-AS:Olden, Vera\r\n",
+        "END:VCARD\r\n"
+    );
+
+    unsafe {
+        let vcard_c = std::ffi::CString::new(vcard_str).unwrap();
+        let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
+        assert!(!contact.is_null());
+
+        // Synthetic phone fields inspection
+        let work_phone = e_contact_get_const(contact, E_CONTACT_PHONE_BUSINESS);
+        assert!(!work_phone.is_null());
+        assert_eq!(
+            CStr::from_ptr(work_phone.cast()).to_str().unwrap(),
+            "+1-555-0100"
+        );
+
+        let home_phone = e_contact_get_const(contact, E_CONTACT_PHONE_HOME);
+        assert!(!home_phone.is_null());
+        assert_eq!(
+            CStr::from_ptr(home_phone.cast()).to_str().unwrap(),
+            "+1-555-0101"
+        );
+
+        let cell_phone = e_contact_get_const(contact, E_CONTACT_PHONE_MOBILE);
+        assert!(!cell_phone.is_null());
+        assert_eq!(
+            CStr::from_ptr(cell_phone.cast()).to_str().unwrap(),
+            "+1-555-0102"
+        );
+
+        let fax_phone = e_contact_get_const(contact, E_CONTACT_PHONE_BUSINESS_FAX);
+        assert!(!fax_phone.is_null());
+        assert_eq!(
+            CStr::from_ptr(fax_phone.cast()).to_str().unwrap(),
+            "+1-555-0103"
+        );
+
+        let pager_phone = e_contact_get_const(contact, E_CONTACT_PHONE_PAGER);
+        assert!(!pager_phone.is_null());
+        assert_eq!(
+            CStr::from_ptr(pager_phone.cast()).to_str().unwrap(),
+            "+1-555-0104"
+        );
+
+        // Email synthetic fields inspection
+        let email_1 = e_contact_get_const(contact, E_CONTACT_EMAIL_1);
+        assert!(!email_1.is_null());
+        assert_eq!(
+            CStr::from_ptr(email_1.cast()).to_str().unwrap(),
+            "vera.work@example.com"
+        );
+
+        let email_2 = e_contact_get_const(contact, E_CONTACT_EMAIL_2);
+        assert!(!email_2.is_null());
+        assert_eq!(
+            CStr::from_ptr(email_2.cast()).to_str().unwrap(),
+            "vera.home@example.com"
+        );
+
+        // Relationship and metadata fields
+        let mgr = e_contact_get_const(contact, E_CONTACT_MANAGER);
+        assert!(!mgr.is_null());
+        assert_eq!(CStr::from_ptr(mgr.cast()).to_str().unwrap(), "Jordan Smith");
+
+        let asst = e_contact_get_const(contact, E_CONTACT_ASSISTANT);
+        assert!(!asst.is_null());
+        assert_eq!(CStr::from_ptr(asst.cast()).to_str().unwrap(), "Morgan Lee");
+
+        let file_as = e_contact_get_const(contact, E_CONTACT_FILE_AS);
+        assert!(!file_as.is_null());
+        assert_eq!(
+            CStr::from_ptr(file_as.cast()).to_str().unwrap(),
+            "Olden, Vera"
+        );
+
+        // E_CONTACT_TEL and E_CONTACT_EMAIL attribute lists
+        let tel_list = e_contact_get(contact, E_CONTACT_TEL) as *mut glib_sys::GList;
+        assert!(!tel_list.is_null());
+        let tel_count = glib_sys::g_list_length(tel_list);
+        assert_eq!(tel_count, 5);
+        unsafe extern "C" fn free_item(p: *mut std::ffi::c_void) {
+            unsafe {
+                glib_sys::g_free(p);
+            }
+        }
+        glib_sys::g_list_free_full(tel_list, Some(free_item));
+
+        let email_list = e_contact_get(contact, E_CONTACT_EMAIL) as *mut glib_sys::GList;
+        assert!(!email_list.is_null());
+        let email_count = glib_sys::g_list_length(email_list);
+        assert_eq!(email_count, 2);
+        glib_sys::g_list_free_full(email_list, Some(free_item));
+
+        // In-place modifications
+        e_contact_set(
+            contact,
+            E_CONTACT_PHONE_MOBILE,
+            c"+1-555-9999".as_ptr().cast(),
+        );
+        e_contact_set(
+            contact,
+            E_CONTACT_EMAIL_1,
+            c"vera.chief@example.com".as_ptr().cast(),
+        );
+        e_contact_set(contact, E_CONTACT_MANAGER, c"Taylor Brooks".as_ptr().cast());
+
+        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            updated_vcard.contains("+1-555-9999"),
+            "updated cell phone missing: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("vera.chief@example.com"),
+            "updated email 1 missing: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("Taylor Brooks"),
+            "updated manager missing: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("+1-555-0100"),
+            "work phone must be preserved: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("vera.home@example.com"),
+            "home email must be preserved: {updated_vcard}"
+        );
+
+        g_free(updated_vcard_ptr.cast());
+
+        // Field clearing by setting NULL
+        e_contact_set(contact, E_CONTACT_PHONE_MOBILE, std::ptr::null());
+        e_contact_set(contact, E_CONTACT_MANAGER, std::ptr::null());
+
+        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            !cleared_vcard.contains("+1-555-9999"),
+            "cleared cell phone must be removed: {cleared_vcard}"
+        );
+        assert!(
+            !cleared_vcard.contains("Taylor Brooks"),
+            "cleared manager must be removed: {cleared_vcard}"
+        );
+        assert!(
+            cleared_vcard.contains("+1-555-0100"),
+            "work phone must remain: {cleared_vcard}"
+        );
+
+        g_free(cleared_vcard_ptr.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
