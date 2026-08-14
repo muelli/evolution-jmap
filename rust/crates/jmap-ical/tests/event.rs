@@ -6628,3 +6628,98 @@ END:VCALENDAR\r\n";
     assert!(links.contains_key("img1"));
     assert_eq!(links["img1"]["display"], json!("graphic"));
 }
+
+#[test]
+fn event_with_categories_classification_transparency_status_and_url_roundtrips_faithfully() {
+    let event = CalendarEvent {
+        title: Some("Sprint Review".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        privacy: Some("secret".to_owned()),
+        free_busy_status: Some("free".to_owned()),
+        status: Some("confirmed".to_owned()),
+        priority: Some(1),
+        keywords: Some(
+            [
+                ("offsite".to_owned(), json!(true)),
+                ("planning".to_owned(), json!(true)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        locations: Some(
+            [(
+                "loc1".to_owned(),
+                json!({"@type": "Location", "name": "Room 42"}),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        links: Some(
+            [(
+                "l1".to_owned(),
+                json!({
+                    "@type": "Link",
+                    "href": "https://meet.example.com/planning",
+                    "contentType": "text/html",
+                }),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "CLASS:"), "CLASS:CONFIDENTIAL");
+    assert_eq!(line(&ics, "TRANSP:"), "TRANSP:TRANSPARENT");
+    assert_eq!(line(&ics, "STATUS:"), "STATUS:CONFIRMED");
+    assert_eq!(line(&ics, "PRIORITY:"), "PRIORITY:1");
+    assert_eq!(
+        content_line(&ics, "CATEGORIES"),
+        "CATEGORIES:offsite,planning"
+    );
+    assert_eq!(line(&ics, "LOCATION;"), "LOCATION;X-JMAP-KEY=loc1:Room 42");
+    assert_eq!(
+        line(&ics, "ATTACH;"),
+        "ATTACH;FMTTYPE=text/html;X-JMAP-KEY=l1:https://meet.example.com/planning"
+    );
+
+    let parsed = ical_to_event(&ics).expect("parse");
+    assert_eq!(parsed.privacy.as_deref(), Some("secret"));
+    assert_eq!(parsed.free_busy_status.as_deref(), Some("free"));
+    assert_eq!(parsed.status.as_deref(), Some("confirmed"));
+    assert_eq!(parsed.priority, Some(1));
+    let parsed_keywords = parsed.keywords.expect("keywords");
+    assert!(parsed_keywords.contains_key("offsite"));
+    assert!(parsed_keywords.contains_key("planning"));
+    let parsed_locs = parsed.locations.expect("locations");
+    assert_eq!(parsed_locs["loc1"]["name"], json!("Room 42"));
+    let parsed_links = parsed.links.expect("links");
+    assert_eq!(
+        parsed_links["l1"]["href"],
+        json!("https://meet.example.com/planning")
+    );
+}
+
+#[test]
+fn event_with_custom_privacy_and_freebusy_drops_unmodeled_lines_gracefully() {
+    let event = CalendarEvent {
+        title: Some("Custom Event".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        privacy: Some("x-custom-classification".to_owned()),
+        free_busy_status: Some("x-tentative-free".to_owned()),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&event);
+    assert!(without(&ics, "CLASS"));
+    assert!(without(&ics, "TRANSP"));
+
+    let parsed = ical_to_event(&ics).expect("parse");
+    assert_eq!(parsed.privacy, None);
+    assert_eq!(parsed.free_busy_status, None);
+}
