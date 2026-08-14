@@ -435,3 +435,52 @@ fn summary_with_attachments_and_forwarded_flag_retains_all_attributes() {
     assert!(!summary.flags.flagged);
     assert_eq!(summary.tags, vec!["finance".to_owned()]);
 }
+
+#[test]
+fn summary_extracts_structured_addresses_and_message_id_cleanly() {
+    let email = Email {
+        id: Some(Id::new("M-ADDR-01")),
+        blob_id: Some(Id::new("B-ADDR-01")),
+        subject: Some("Syncing addresses and IDs".to_owned()),
+        message_id: Some(vec!["<alpha-beta-123@example.com>".to_owned()]),
+        from: Some(vec![EmailAddress::new(
+            Some("Alice Sender"),
+            "alice@example.com",
+        )]),
+        to: Some(vec![
+            EmailAddress::new(Some("Bob Recipient"), "bob@example.com"),
+            EmailAddress::new(None, "carol@example.com"),
+        ]),
+        cc: Some(vec![EmailAddress::new(
+            Some("Dev Team"),
+            "devs@example.com",
+        )]),
+        preview: Some("Brief summary snippet".to_owned()),
+        sent_at: Some("2026-01-15T10:30:00+01:00".into()),
+        received_at: Some("2026-01-15T09:30:00Z".into()),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary from email with addresses");
+    assert_eq!(
+        summary.message_id.as_deref(),
+        Some("<alpha-beta-123@example.com>")
+    );
+    assert_eq!(summary.from.len(), 1);
+    assert_eq!(summary.from[0].name.as_deref(), Some("Alice Sender"));
+    assert_eq!(summary.from[0].email, "alice@example.com");
+
+    assert_eq!(summary.to.len(), 2);
+    assert_eq!(summary.to[0].name.as_deref(), Some("Bob Recipient"));
+    assert_eq!(summary.to[0].email, "bob@example.com");
+    assert_eq!(summary.to[1].name, None);
+    assert_eq!(summary.to[1].email, "carol@example.com");
+
+    assert_eq!(summary.cc.len(), 1);
+    assert_eq!(summary.cc[0].email, "devs@example.com");
+
+    assert_eq!(summary.preview.as_deref(), Some("Brief summary snippet"));
+    // Both timestamps point to the same instant 1768469400
+    assert_eq!(summary.sent_at, Some(1_768_469_400));
+    assert_eq!(summary.received_at, Some(1_768_469_400));
+}

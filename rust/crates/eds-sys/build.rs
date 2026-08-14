@@ -165,6 +165,10 @@ const ALLOWED_TYPES: &[&str] = &[
     // therefore layout-checked, though nothing subclasses it — the provider
     // only ever holds one.
     "CamelDataCache.*",
+    // Structured content types, content dispositions, and address headers
+    "CamelContentType.*",
+    "CamelContentDisposition.*",
+    "CamelHeaderAddress.*",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -377,6 +381,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_network_settings_.*",
     "camel_offline_settings_.*",
     "camel_url_.*",
+    "camel_content_type_.*",
+    "camel_content_disposition_.*",
+    "camel_header_address_.*",
+    "camel_header_mailbox_decode",
+    "camel_header_.*",
+    "camel_transfer_encoding_.*",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,
