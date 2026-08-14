@@ -22490,3 +22490,7 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-14 (two-hundred-and-thirtieth session)
+
+Claiming M3 increment: verify web, collaboration, note, nickname, spouse, and categories semantics in EDS, roundtrip fidelity in jmap-vcard, and preservation across book sync.
