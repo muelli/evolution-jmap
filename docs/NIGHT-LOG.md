@@ -22604,4 +22604,33 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-thirty-third session)
 
-**Claiming increment:** structured address (`EContactAddress`), office (`E_CONTACT_OFFICE`), and address label EDS verification, roundtrip fidelity in `jmap-vcard`, and targeted preservation across `jmap-book-sync`.
+**Verifying structured address (EContactAddress), office, and address label semantics in EDS, roundtrip fidelity in `jmap-vcard`, and preservation across book sync.**
+This session measures EDS 3.52 `EContact` field properties and vCard line behaviors for structured addresses (`E_CONTACT_ADDRESS`, `E_CONTACT_ADDRESS_HOME`, `E_CONTACT_ADDRESS_WORK`, `E_CONTACT_ADDRESS_OTHER`), office (`E_CONTACT_OFFICE`), synthetic address labels (`E_CONTACT_ADDRESS_LABEL_HOME`, `E_CONTACT_ADDRESS_LABEL_WORK`, `E_CONTACT_ADDRESS_LABEL_OTHER`), adds multi-address and unmodeled organization property roundtrip tests in `jmap-vcard`, and verifies multi-address editing and clearing with unmodeled preferred languages, crypto keys, and personal info preservation in `jmap-book-sync`.
+
+**EDS 3.52 `EContact` address, office, and label field measurement:**
+- Probed `libebook-contacts` 3.52 for address, office, and label field properties:
+  - `E_CONTACT_ADDRESS_HOME` (90, `"address_home"`), `E_CONTACT_ADDRESS_WORK` (91, `"address_work"`), and `E_CONTACT_ADDRESS_OTHER` (92, `"address_other"`) are structured `EContactAddress` fields (`e_contact_field_is_string == 0`, type `e_contact_address_get_type()`).
+  - `E_CONTACT_ADDRESS` (89, `"address"`) is a multi-valued structured attribute list field (`e_contact_field_is_string == 0`), mapping to vCard `"ADR"`.
+  - `E_CONTACT_OFFICE` (37, `"office"`) is a string field (`e_contact_field_is_string == 1`), corresponding to the 3rd component of the `"ORG"` attribute in vCard.
+  - `E_CONTACT_ADDRESS_LABEL_HOME` (13, `"address_label_home"`), `E_CONTACT_ADDRESS_LABEL_WORK` (14, `"address_label_work"`), and `E_CONTACT_ADDRESS_LABEL_OTHER` (15, `"address_label_other"`) are string fields (`e_contact_field_is_string == 1`), with attribute name `"LABEL"`.
+  - `EContactAddress` functions: `e_contact_address_new`, `e_contact_address_free` allocate, manipulate subfields (`po`, `ext`, `street`, `locality`, `region`, `code`, `country`), and free struct instances.
+  - In-place modification via `e_contact_set` updates `E_CONTACT_ADDRESS_WORK` and `E_CONTACT_OFFICE` while preserving home address lines, label lines, and escaping comma separators (`\,`) in `e_vcard_to_string`.
+  - Setting `E_CONTACT_ADDRESS_WORK` and `E_CONTACT_OFFICE` to `NULL` cleanly removes the work `ADR` line and office component while preserving home address and organization name/unit.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `contact_structured_address_and_office_field_properties`: verifies string vs structured classifications, exact field names, vCard attribute associations, and `EContactAddress` lifecycle operations.
+  - Added `structured_address_and_office_vcard_lines_and_modification_in_eds`: verifies multi-address parsing from vCard, `EContactAddress` struct inspection, office access from ORG, in-place modification, and property removal upon clearing.
+
+**Mapping and sync verification across workspace:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `maps_multiple_addresses_with_custom_extended_and_po_box_components`: verifies that multi-address cards with PO box, apartment/extended, street name, locality, region, postcode, and country roundtrip faithfully to `ADR` and `LABEL` lines with `X-JMAP-KEY` parameters and back into JSContact `addresses`.
+  - Added `maps_contact_with_unmodeled_office_and_organization_extra_safely`: verifies that organizations with multiple units and custom metadata in `extra` survive roundtrips without corruption.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `editing_multiple_addresses_preserves_unmodeled_contact_fields`: verifies that editing multiple addresses produces targeted patches on `addresses/<key>/components` and `addresses/<key>/full` while preserving unmodeled `preferredLanguages`, `cryptoKeys`, and `personalInfo` intact on the server.
+  - Added `clearing_all_addresses_patches_server_fields`: verifies that removing all `ADR` and `LABEL` lines cleanly sends a deletion patch for `addresses` while keeping name and emails intact.
+
+Tests: 1089 in the default set (up 4: 130 in `jmap-vcard/tests/mapping.rs`, 103 in `jmap-book-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/contacts.rs` (20 in file, 65 across crate) and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1089 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
