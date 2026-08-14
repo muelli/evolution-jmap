@@ -215,3 +215,145 @@ fn e_contact_date_parsing_and_formatting() {
         e_contact_date_free(compact);
     }
 }
+
+#[test]
+fn contact_org_title_and_role_field_properties() {
+    unsafe {
+        // E_CONTACT_ORG (35) is a string field
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ORG), 1);
+        let org_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ORG));
+        assert_eq!(org_name.to_str().unwrap(), "org");
+
+        // E_CONTACT_ORG_UNIT (36) is a string field
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ORG_UNIT), 1);
+        let unit_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ORG_UNIT));
+        assert_eq!(unit_name.to_str().unwrap(), "org_unit");
+
+        // E_CONTACT_TITLE (38) is a string field
+        assert_eq!(e_contact_field_is_string(E_CONTACT_TITLE), 1);
+        let title_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_TITLE));
+        assert_eq!(title_name.to_str().unwrap(), "title");
+
+        // E_CONTACT_ROLE (39) is a string field
+        assert_eq!(e_contact_field_is_string(E_CONTACT_ROLE), 1);
+        let role_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ROLE));
+        assert_eq!(role_name.to_str().unwrap(), "role");
+
+        // vCard field mapping: TITLE and ROLE map directly
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"TITLE".as_ptr()),
+            E_CONTACT_TITLE
+        );
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"ROLE".as_ptr()),
+            E_CONTACT_ROLE
+        );
+
+        // ORG and ORG_UNIT both map to the "ORG" vCard attribute
+        let org_attr = CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_ORG));
+        assert_eq!(org_attr.to_str().unwrap(), "ORG");
+        let unit_attr = CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_ORG_UNIT));
+        assert_eq!(unit_attr.to_str().unwrap(), "ORG");
+        let title_attr = CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_TITLE));
+        assert_eq!(title_attr.to_str().unwrap(), "TITLE");
+        let role_attr = CStr::from_ptr(e_contact_vcard_attribute(E_CONTACT_ROLE));
+        assert_eq!(role_attr.to_str().unwrap(), "ROLE");
+    }
+}
+
+#[test]
+fn multiple_org_title_and_role_vcard_lines_behavior_in_eds() {
+    unsafe {
+        let vcard_str = c"BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Test Contact\r\n\
+N:Contact;Test;;;\r\n\
+ORG;X-JMAP-KEY=o1:Acme Ltd;Research\r\n\
+ORG;X-JMAP-KEY=o2:Brauerei;Logistics\r\n\
+TITLE;X-JMAP-KEY=t1:Research Scientist\r\n\
+TITLE;X-JMAP-KEY=t2:Director of Engineering\r\n\
+ROLE;X-JMAP-KEY=r1:Lead Investigator\r\n\
+ROLE;X-JMAP-KEY=r2:Project Manager\r\n\
+END:VCARD\r\n";
+
+        let contact = e_contact_new_from_vcard(vcard_str.as_ptr());
+        assert!(!contact.is_null());
+
+        // EDS returns the first value for ORG, ORG_UNIT, TITLE, and ROLE
+        let org_ptr = e_contact_get_const(contact, E_CONTACT_ORG);
+        assert_eq!(CStr::from_ptr(org_ptr.cast()).to_str().unwrap(), "Acme Ltd");
+
+        let unit_ptr = e_contact_get_const(contact, E_CONTACT_ORG_UNIT);
+        assert_eq!(
+            CStr::from_ptr(unit_ptr.cast()).to_str().unwrap(),
+            "Research"
+        );
+
+        let title_ptr = e_contact_get_const(contact, E_CONTACT_TITLE);
+        assert_eq!(
+            CStr::from_ptr(title_ptr.cast()).to_str().unwrap(),
+            "Research Scientist"
+        );
+
+        let role_ptr = e_contact_get_const(contact, E_CONTACT_ROLE);
+        assert_eq!(
+            CStr::from_ptr(role_ptr.cast()).to_str().unwrap(),
+            "Lead Investigator"
+        );
+
+        // Modifying TITLE in place preserves X-JMAP-KEY and leaves second TITLE intact
+        e_contact_set(
+            contact,
+            E_CONTACT_TITLE,
+            c"Principal Scientist".as_ptr().cast(),
+        );
+        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            updated_vcard.contains("TITLE;X-JMAP-KEY=t1:Principal Scientist"),
+            "first TITLE should be updated in place keeping key: {updated_vcard}"
+        );
+        assert!(
+            updated_vcard.contains("TITLE;X-JMAP-KEY=t2:Director of Engineering"),
+            "second TITLE should remain intact: {updated_vcard}"
+        );
+        g_free(updated_vcard_ptr.cast());
+
+        // Modifying ORG in place preserves X-JMAP-KEY and leaves second ORG intact
+        e_contact_set(contact, E_CONTACT_ORG, c"Cyberdyne".as_ptr().cast());
+        let updated_org_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_org_vcard = CStr::from_ptr(updated_org_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            updated_org_vcard.contains("ORG;X-JMAP-KEY=o1:Cyberdyne;Research"),
+            "first ORG should be updated in place keeping key: {updated_org_vcard}"
+        );
+        assert!(
+            updated_org_vcard.contains("ORG;X-JMAP-KEY=o2:Brauerei;Logistics"),
+            "second ORG should remain intact: {updated_org_vcard}"
+        );
+        g_free(updated_org_vcard_ptr.cast());
+
+        // Modifying ROLE in place preserves X-JMAP-KEY and leaves second ROLE intact
+        e_contact_set(
+            contact,
+            E_CONTACT_ROLE,
+            c"Chief Investigator".as_ptr().cast(),
+        );
+        let updated_role_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_role_vcard = CStr::from_ptr(updated_role_vcard_ptr).to_str().unwrap();
+
+        assert!(
+            updated_role_vcard.contains("ROLE;X-JMAP-KEY=r1:Chief Investigator"),
+            "first ROLE should be updated in place keeping key: {updated_role_vcard}"
+        );
+        assert!(
+            updated_role_vcard.contains("ROLE;X-JMAP-KEY=r2:Project Manager"),
+            "second ROLE should remain intact: {updated_role_vcard}"
+        );
+        g_free(updated_role_vcard_ptr.cast());
+
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}

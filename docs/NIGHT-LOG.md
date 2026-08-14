@@ -22073,4 +22073,53 @@ hypothesis attached.
 
 ## 2026-08-14 (two-hundred-and-twentieth session)
 
-Claiming M3 increment: verify multi-ORG, multi-TITLE, and multi-ROLE field semantics, preservation, and EDS behavior.
+**Verifying multi-`ORG`, multi-`TITLE`, and multi-`ROLE` field semantics, preservation, and EDS behavior.**
+This session resolves the blocker "the multi-`ORG`/`TITLE` 'Evolution shows only the first' bet is still unverified"
+by measuring EDS 3.52 `EContact` behavior with multiple `ORG`, `TITLE`, and `ROLE` lines in `eds-sys`, adding multi-entry
+vCard emission and roundtrip tests in `jmap-vcard`, verifying in-place patching and secondary entry preservation across
+saves in `jmap-book-sync`, and proving survival across real EDS daemons in `jmap-functional`.
+
+**EDS 3.52 `EContact` measurement and verification:**
+- Probed `libebook-contacts-1.2` for organization, title, and role fields:
+  - `E_CONTACT_ORG` (35), `E_CONTACT_ORG_UNIT` (36), `E_CONTACT_TITLE` (38), and `E_CONTACT_ROLE` (39)
+    are string fields (`e_contact_field_is_string` is TRUE / `1`).
+  - `e_contact_vcard_attribute` maps `E_CONTACT_ORG` and `E_CONTACT_ORG_UNIT` to `"ORG"`,
+    `E_CONTACT_TITLE` to `"TITLE"`, and `E_CONTACT_ROLE` to `"ROLE"`.
+  - `e_contact_field_id_from_vcard` maps `"TITLE"` directly to `E_CONTACT_TITLE` and `"ROLE"` to `E_CONTACT_ROLE`.
+  - On a vCard holding multiple `ORG`, `TITLE`, and `ROLE` lines:
+    - `e_contact_get_const` returns the values from the *first* line of each attribute name (`ORG`, `ORG_UNIT`, `TITLE`, `ROLE`).
+    - `e_contact_set` modifies only the *first* line in place, retaining its `X-JMAP-KEY`, and leaves all secondary lines intact.
+- In `rust/crates/eds-sys/tests/contacts.rs`:
+  - Added `contact_org_title_and_role_field_properties`: verifies string types, field names, attribute names, and vCard mappings.
+  - Added `multiple_org_title_and_role_vcard_lines_behavior_in_eds`: verifies that `EContact` reads the first lines and that `e_contact_set` updates the first lines in place while preserving secondary `ORG`, `TITLE`, and `ROLE` lines and their `X-JMAP-KEY` parameters.
+
+**Mapping, sync, and functional verification across workspace:**
+- In `jmap-vcard/tests/mapping.rs`:
+  - Added `multiple_organizations_emit_distinct_vcard_lines_and_roundtrip`: verifies that multiple organizations emit distinct `ORG;X-JMAP-KEY=...` lines with units and roundtrip back faithfully.
+  - Added `multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip`: verifies that multiple titles and roles emit distinct `TITLE` and `ROLE` lines with keys and kinds, roundtripping back into distinct entries.
+- In `jmap-book-sync/tests/save.rs`:
+  - Added `editing_first_org_preserves_secondary_orgs_and_titles`: verifies that editing the first organization and first title in place patches only the targeted entries and preserves secondary organizations and titles/roles.
+  - Added `editing_unrelated_field_preserves_all_multiple_orgs_and_titles`: verifies that editing an unrelated field preserves all multiple organizations, titles, and roles intact on the server.
+- In `jmap-functional/tests/address-book.rs`:
+  - Seeded `seed_card` with secondary organizations (`org-2: Brauerei / Logistics`) and secondary titles/roles (`title-2: Director of Engineering`, `role-2: Project Manager`).
+  - Added `assert_the_seeded_organizations_and_titles_survived`: verified across all 10 seeded functional test legs through real EDS daemons that all multiple organizations, titles, and roles survive client edits intact.
+
+Tests: 1032 in the default set (up 4: 113 in `jmap-vcard/tests/mapping.rs`, 89 in
+`jmap-book-sync/tests/save.rs`), plus 2 new tests in `eds-sys/tests/contacts.rs` (7 total) and
+all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1032 tests,
+and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and
+`cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag. Removed from the blocker list: the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified (now verified and tabled).
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**; an attachment
+the user removes is still invisible to the save; whether Evolution renders an `IMAGE`
+is unmeasured; the two `LABEL` `TYPE` risks stand; whether the editor lets a handle be moved between the Home and Work slots at all
+is unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact editor
+writes for a replaced photo, and into a cleared field, is inferred rather than measured;
+and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.
