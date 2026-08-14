@@ -175,6 +175,18 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelMimeFilterBasicType",
     "CamelMimeFilterCRLFDirection",
     "CamelMimeFilterCRLFMode",
+    // MIME parser, trie, UID cache, and character set mapping
+    "CamelMimeParser.*",
+    "CamelMimeParserState",
+    "CamelTrie.*",
+    "CamelUIDCache.*",
+    "CamelCharset.*",
+    // Additional MIME filters and flags
+    "CamelMimeFilterPreview.*",
+    "CamelMimeFilterCanon.*",
+    "CamelMimeFilterCanonFlags",
+    "CamelMimeFilterToHTML.*",
+    "CamelMimeFilterToHTMLFlags",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -395,6 +407,11 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_transfer_encoding_.*",
     "camel_stream_.*",
     "camel_mime_filter_.*",
+    "camel_mime_parser_.*",
+    "camel_trie_.*",
+    "camel_uid_cache_.*",
+    "camel_charset_.*",
+    "camel_text_to_html",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,
@@ -419,6 +436,8 @@ const ALLOWED_VARS: &[&str] = &[
     "CAMEL_FOLDER_TYPE_MASK",
     "CAMEL_MAX_PREVIEW_LENGTH",
     "CAMEL_MIME_FILTER_LINEWRAP_.*",
+    "CAMEL_MIME_FILTER_TOHTML_.*",
+    "CAMEL_MIME_FILTER_CANON_.*",
 ];
 
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys

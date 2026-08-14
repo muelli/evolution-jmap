@@ -462,3 +462,51 @@ AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=\r\n\
     let roundtripped = Message::parsed(&written);
     assert_eq!(roundtripped.subject(), "Comprehensive Weekly Audit");
 }
+
+/// A message with UTF-8 encoded-word headers and plain/HTML bodies serializes with
+/// canonical CRLF and roundtrips without header corruption.
+#[test]
+fn message_with_encoded_word_subject_and_html_alternative_serializes_cleanly() {
+    let source = b"From: Sender <sender@example.com>\r\n\
+To: Recipient <recipient@example.com>\r\n\
+Subject: =?UTF-8?B?Sk1BUCDDnGJlcnByw7xmdW5nIPCfmYA=?=\r\n\
+Message-ID: <encoded-subj-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 18:00:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/alternative; boundary=\"_part_alt_boundary_999_\"\r\n\
+\r\n\
+--_part_alt_boundary_999_\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: 8bit\r\n\
+\r\n\
+Text preview line with UTF-8: Gr\xc3\xbc\xc3\x9fe aus Berlin!\r\n\
+\r\n\
+--_part_alt_boundary_999_\r\n\
+Content-Type: text/html; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: 8bit\r\n\
+\r\n\
+<html><body><p>HTML body with UTF-8: Gr&uuml;&szlig;e aus Berlin!</p></body></html>\r\n\
+\r\n\
+--_part_alt_boundary_999_--\r\n";
+
+    let message = Message::parsed(source);
+    let written = message.written();
+
+    let text = String::from_utf8(written.clone()).expect("the emitter wrote valid utf-8");
+    assert!(text.contains("_part_alt_boundary_999_"));
+
+    let bare = written
+        .iter()
+        .enumerate()
+        .filter(|(at, byte)| **byte == b'\n' && (*at == 0 || written[at - 1] != b'\r'))
+        .count();
+    assert_eq!(bare, 0, "found {bare} bare LFs in encoded word message");
+
+    assert!(
+        !written.windows(3).any(|run| run == b"\r\r\n"),
+        "found spurious double CR in output"
+    );
+
+    let roundtripped = Message::parsed(&written);
+    assert_eq!(roundtripped.subject(), "JMAP Überprüfung 🙀");
+}
