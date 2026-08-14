@@ -22985,5 +22985,50 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-14 (two-hundred-and-forty-third session)
 
-Claiming Camel MIME parser (`CamelMimeParser`), search trie (`CamelTrie`), UID cache (`CamelUIDCache`), charset mapping (`CamelCharset`), preview/HTML filters (`CamelMimeFilterPreview`, `CamelMimeFilterCanon`, `CamelMimeFilterToHTML`) verification in EDS 3.52, preview and HTML conversion tests in `jmap-mail`, and charset resolution and UID delta tracking in `jmap-mail-sync`.
+**Verifying Camel MIME parser (`CamelMimeParser`), search trie (`CamelTrie`), UID cache (`CamelUIDCache`), charset mapping (`CamelCharset`), preview/HTML filters (`CamelMimeFilterPreview`, `CamelMimeFilterCanon`, `CamelMimeFilterToHTML`) operations in EDS 3.52, encoded-word header and HTML/plain alternative roundtripping in `jmap-mail`, and unicode preview and custom tag retention in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel MIME parser streaming states and header extraction (`camel_mime_parser_new`, `camel_mime_parser_init_with_bytes`, `camel_mime_parser_step`, `camel_mime_parser_header`, `camel_mime_parser_content_type`), `CamelTrie` multi-pattern search (`camel_trie_new`, `camel_trie_add`, `camel_trie_search`, `camel_trie_free`), `CamelUIDCache` persistent UID caching and delta querying (`camel_uid_cache_new`, `camel_uid_cache_save_uid`, `camel_uid_cache_get_new_uids`, `camel_uid_cache_free_uids`, `camel_uid_cache_save`, `camel_uid_cache_destroy`), `CamelCharset` character set detection and ISO-to-Windows mapping (`camel_charset_init`, `camel_charset_step`, `camel_charset_best_name`, `camel_charset_best`, `camel_charset_iso_to_windows`), and MIME filter / conversion utilities (`camel_mime_filter_preview_new`, `camel_mime_filter_preview_get_limit`, `camel_mime_filter_preview_set_limit`, `camel_mime_filter_canon_new`, `camel_text_to_html`, `CamelMimeFilterToHTMLFlags`). In addition, it verifies encoded-word UTF-8 header roundtripping and CRLF canonical serialization in `jmap-mail`, and multi-byte UTF-8 preview / subject handling and custom user tag retention in `jmap-mail-sync`.
+
+**EDS 3.52 Camel MIME parser, trie, UID cache, and filter measurement:**
+- Probed `camel-1.2` 3.52 for parser, trie search, UID cache, and HTML/preview filter behaviors:
+  - `CamelMimeParser`:
+    - Allowlisted `"CamelMimeParser.*"`, `"CamelMimeParserState"`, and `"camel_mime_parser_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeParser` and `CamelMimeParserClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified stepwise streaming progression: `CAMEL_MIME_PARSER_STATE_HEADER` -> `CAMEL_MIME_PARSER_STATE_BODY` -> `CAMEL_MIME_PARSER_STATE_BODY_END` -> `CAMEL_MIME_PARSER_STATE_EOF`.
+    - Verified header extraction with `camel_mime_parser_header` and content-type parsing with `camel_mime_parser_content_type`.
+  - `CamelTrie`:
+    - Allowlisted `"CamelTrie.*"` and `"camel_trie_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified case-insensitive multi-pattern search indexing keywords (`$seen`, `$flagged`, `$answered`, `urgent`), advancing buffer search offsets, and memory cleanup with `camel_trie_free`.
+  - `CamelUIDCache`:
+    - Allowlisted `"CamelUIDCache.*"` and `"camel_uid_cache_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified UID cache allocation with temporary path, recorded UID saving (`camel_uid_cache_save_uid`), delta query filtering against `GPtrArray` (`camel_uid_cache_get_new_uids`), serialization (`camel_uid_cache_save`), and destruction (`camel_uid_cache_destroy`).
+  - `CamelCharset`:
+    - Allowlisted `"CamelCharset.*"` and `"camel_charset_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified `camel_charset_best` returning NULL on pure ASCII (signifying standard ASCII) and returning `"UTF-8"` / ISO names on multi-byte characters.
+    - Verified `camel_charset_iso_to_windows("iso-8859-1")` resolving to `"windows-cp1252"`.
+    - Verified stepwise charset detection with `camel_charset_init`, `camel_charset_step`, and `camel_charset_best_name`.
+  - Preview, Canon, and HTML MIME Filters:
+    - Allowlisted `"CamelMimeFilterPreview.*"`, `"CamelMimeFilterCanon.*"`, `"CamelMimeFilterCanonFlags"`, `"CamelMimeFilterToHTML.*"`, `"CamelMimeFilterToHTMLFlags"`, `"camel_text_to_html"`, and constants `CAMEL_MIME_FILTER_TOHTML_.*` and `CAMEL_MIME_FILTER_CANON_.*` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout checks for `CamelMimeFilterPreview`, `CamelMimeFilterCanon`, and `CamelMimeFilterToHTML` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified preview filter limits getter and setter.
+    - Verified `camel_text_to_html` converting URLs into `<a href="...">` and newlines into `<br>`.
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_mime_parser_streaming_and_header_scanning_in_eds`: verifies MIME streaming, step states, header extraction, and content-type parsing.
+  - Added `camel_trie_multi_pattern_search_in_eds`: verifies case-insensitive multi-pattern matching and offset advancement.
+  - Added `camel_uid_cache_operations_in_eds`: verifies UID cache creation, UID recording, delta array querying, and disk serialization.
+  - Added `camel_charset_detection_and_iso_to_windows_in_eds`: verifies charset resolution, stepwise scanning, and ISO-to-Windows mapping.
+  - Added `camel_mime_filter_preview_and_html_conversions_in_eds`: verifies preview filter limit configuration, canonical filter allocation, and text-to-HTML conversion.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/mime.rs`:
+  - Added `message_with_encoded_word_subject_and_html_alternative_serializes_cleanly`: verifies that messages with UTF-8 base64 encoded-word headers and multipart/alternative plain/HTML bodies serialize with canonical CRLF endings and parse back with uncorrupted subject text and structure.
+- In `rust/crates/jmap-mail-sync/tests/summary.rs`:
+  - Added `summary_handles_unicode_preview_and_subject_with_accents_and_emojis`: verifies that multi-byte UTF-8 subjects, preview snippets, and address names with accents and emojis roundtrip through `MessageSummary` without byte truncation.
+  - Added `summary_maps_various_user_tags_and_retains_case_sensitivities`: verifies that custom user tags retain their original casing in `summary.tags` while standard keywords update boolean flags appropriately.
+
+Tests: 1111 in the default set (up 2: 22 in `jmap-mail-sync/tests/summary.rs`), plus 1 new test in `jmap-mail/tests/mime.rs` (10 in file, 341 across crate), 5 new tests in `eds-sys/tests/camel.rs` (42 in file, 97 across crate), 4 new layout assertions in `eds-sys/tests/layout.rs`, and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1111 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
