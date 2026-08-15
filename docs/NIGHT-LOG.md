@@ -23445,3 +23445,100 @@ unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
 editor writes for a replaced photo, and into a cleared field, is inferred rather than
 measured; and the `jmap-mail` `transport.rs` hang is still an open design question
 with a lock-order hypothesis attached.
+
+## 2026-08-15 (two-hundred-and-fifty-first session)
+
+**The zone the document did *not* bring with it.** The previous session closed by
+naming what the custom-zone story still could not do: the mapping can now carry a
+`/`-prefixed `TimeZoneId` beside its `timeZones` definition, but the *envelope*
+`save_component_sync` builds could not supply one. `marshal::take_referenced_time_zones`
+copied in a `VTIMEZONE` for every zone the instances name **and libical can resolve**,
+out of the builtin table — and a custom zone is by definition one no zone database
+holds. So the pair reached `jmap_cal_sync` only from a document that already carried
+its own definition, never from one EDS reassembled.
+
+Which is every appointment that came from an invitation. EDS does not leave a
+client's `VTIMEZONE` in the component it arrived in: it files the zone in the
+calendar's `ETimezoneCache` and the instance goes on naming it. This repository had
+already measured that and written it down —
+`the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move` asserts
+`event-1-definitions` is `0`, i.e. that a `get` hands back the component alone. The
+same fact read from the save side says: an envelope built out of the instances and
+the builtin table has looked in both of the two places the definition is *not*.
+
+**The third place, and why it is third.** `resolve_time_zone` now asks, in order,
+libical's table under libical's own identifier, the table under a plain IANA name,
+and then the calendar. The table comes first deliberately: for a name it knows, its
+answer is the one every other client would give, where a calendar's copy is whatever
+some client happened to send once and may be years stale. Only what the database has
+never heard of falls through — which is exactly RFC 8984 §1.4.9's other kind of
+identifier, the solidus-prefixed one that resolves nowhere but the document it
+travels in. A Windows zone name falls through all three and stays undefined, as
+before: it is neither form of identifier, and the mapping refuses it downstream,
+which leaves the server's own value standing rather than overwriting it with a guess.
+`a_zone_the_calendar_does_not_hold_either_is_still_left_undefined` pins that asking
+one more place is not a licence to invent.
+
+**Where the cache comes from is the interesting half.** `ECalBackend` implements
+`ETimezoneCache`, so the object `save_component_sync` is already handed *is* the
+calendar's zone store — the definition is reachable exactly at the vfunc and nowhere
+further down. That makes the plumbing one cast in `backend.rs`, and the cast is the
+risk: a raw pointer cast in Rust asserts nothing, and had the type not implemented
+the interface, `e_timezone_cache_get_timezone` would not have failed loudly but
+returned NULL after a GLib critical — which reads exactly like a zone the calendar
+does not hold. So `eds-sys/tests/ical.rs` pins the implementation on
+`ECalMetaBackend`, `ECalBackend` and `ECalCache`, and pins that the interface is one
+(`g_type_query` reports nothing about it, the hole `CamelSubscribable` sits in too).
+
+**What the unit test stands the cache up as.** A real `ECalCache`, built on a
+temporary file and handed the zone through `e_timezone_cache_add_timezone` the way
+EDS's own `add_timezone` D-Bus method does — not a hand-rolled implementation of the
+interface. It is the object an `ECalMetaBackend` actually keeps, so what the
+marshalling is measured against is the implementation the backend will meet. The
+zone itself carries no `X-LIC-LOCATION`: one naming an IANA zone would make it a
+*spelling* of a zone that already has a name, which `jmap-ical` translates and the
+builtin table would then answer for, and the test would pass without testing
+anything.
+
+**What is verified and what is not.** The marshalling reads the calendar's store,
+against the real EDS implementation of it — that is measured. The existing functional
+leg measures the platform fact the change rests on, that EDS keeps such a zone in the
+store and not in the component. The join between them is *not* yet measured end to
+end: that EDS has filed a zone a client sent into the backend's own cache by the time
+it calls `save_component_sync`. Closing that means a new mode in
+`tests/functional/cal-zone-client.c` — `e_cal_client_add_timezone` and then a create
+naming it — plus a mock assertion that `timeZones` arrived. That is the next tractable
+item in this story, and it is a session of its own rather than a tail on this one.
+
+Tests: +3 in `jmap-backend-cal/tests/marshal.rs` (the custom zone defined out of the
+calendar, the zone nothing holds still left undefined, and NULL meaning no second
+place to look) and +1 in `eds-sys/tests/ical.rs` (the interface and its three
+implementers). Neither crate is in `default-members`, so the default set stays at
+1126; the two run as `cargo test -p eds-sys -p jmap-backend-cal`.
+
+Verified locally: `cargo test --locked` 1126, no failures; `cargo test --locked -p
+eds-sys -p jmap-backend-cal -p jmap-backend-cal-module` all green (49 in the marshal
+suite, 22 in `ical`); `cargo fmt --all --check` clean; `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean; `ninja -C
+build` then `ctest -L functional` 4/4, the calendar leg's three real-EDS tests
+included and named individually. `ci/checks.sh` still stops at its first step on this
+VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those two were reasoned by
+hand as before: no file is added or removed, so the SPDX header set is unchanged, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the last
+green run.
+
+No milestone tag. Removed from the blocker list: the save envelope cannot supply a
+custom zone's definition out of EDS's timezone cache. Added: nothing measures, end to
+end, that a zone a client sent is in the backend's cache by the time a save asks for
+it. Unchanged blockers: the calcard directive's two emitters are still ours; M9 has
+no CI job and no GUI tier; M7 still **needs human verification in real Evolution**;
+`jmap-mail`'s rustdoc is dirty; whether Evolution renders an `IMAGE` is unmeasured;
+the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified; the
+two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone are
+still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's rendering is
+unmeasured; what Evolution's contact editor writes for a replaced photo, and into a
+cleared field, is inferred rather than measured; and the `jmap-mail` `transport.rs`
+hang is still an open design question with a lock-order hypothesis attached.
