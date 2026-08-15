@@ -23542,3 +23542,87 @@ between the Home and Work slots at all is unknown; a `VALUE=uri` photo's renderi
 unmeasured; what Evolution's contact editor writes for a replaced photo, and into a
 cleared field, is inferred rather than measured; and the `jmap-mail` `transport.rs`
 hang is still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-15 (two-hundred-and-fifty-second session)
+
+**The join nobody had measured.** The previous session ended by naming exactly one
+thing: `save_component_sync` can now pick a custom zone's definition out of the
+calendar's `ETimezoneCache`, and `jmap-ical` can draw and read it, but nothing
+measured the *join* — that a `VTIMEZONE` a client handed EDS is in the backend's
+own cache, under the identifier the component still names, by the time EDS calls
+the vfunc. Every half was unit-tested against a real `ECalCache`; the sentence
+joining them was a claim about EDS, and this session turned it into a test.
+
+**A mode rather than a phase.** `cal-zone-client.c` now takes `read` or `create` as
+its first argument. `create` reads a `VTIMEZONE` out of a file, hands it to the
+calendar with `e_cal_client_add_timezone_sync`, and creates an event whose
+`DTSTART` merely *names* the zone — Evolution's own route for an appointment whose
+zone came from an invitation rather than a database. A separate run and not a third
+phase of the read leg, because the store must hold that zone for one reason only,
+that the client put it there: a run that had first read a server's zoned event
+would have filled the same store from elsewhere, and the leg would pass on a
+backend that never asked the calendar at all. The identifier is read back off the
+zone libical made of the file rather than passed on the command line, so the
+program cannot name a zone the file did not; the test asserts `zone-tzid` to catch
+libical naming it something else.
+
+**One description, two spellings.** `zone_definition(tzid)` is now what
+`defined_zone()` is written in terms of, and the new leg's `CLIENT_ZONE_VTIMEZONE`
+is the drawing of the same description. So the file the client is handed and the
+`timeZones` map the mock is held to come from one place — an assertion about the
+round trip rather than about two literals that happen to agree. The zone carries no
+`X-LIC-LOCATION`: one naming an IANA zone would make it a spelling of a zone that
+already has a name, which `jmap-ical` translates and libical's builtin table would
+then answer for, and the leg would pass without the client's definition being read.
+
+**Green on the first run, so it was broken on purpose.** Removing the calendar from
+`resolve_time_zone`'s three places to look — the last of them, added last session
+for exactly this — reddens this leg and nothing else in the calendar suite. What
+comes back is worth writing down: the appointment returns with **no `TZID` at all**
+and floats to 10:00Z, and the mock holds it with no zone. That is because a create
+is answered out of what the *server* stored, not out of the component the client
+wrote, so the read-back is evidence about the server after all — the comment
+claiming otherwise was corrected before committing. The change was reverted and the
+leg re-run green.
+
+**What is now measured and what is still assumed.** Measured: a zone only the
+client can name reaches the server with its whole §4.7.2 definition, through real
+EDS, and the appointment comes home at the instant the zone's `DAYLIGHT` observance
+means. Still assumed: nothing here drives an *edit* of such an event — the create
+path is the one `maps_time_zone` guards, and `patch::diff` deliberately never sends
+a zone it cannot name, which the third leg already pins from the other side.
+
+One stale claim was corrected in two places (`seed_zoned_events`'s doc and
+`docs/functional-tests.md`): "`jmap-cal-sync` never writes `timeZones`, so no event
+created in Evolution can carry one" stopped being true when the create path learned
+to send one.
+
+Tests: +1 in `jmap-functional/tests/calendar.rs`, which is a functional leg and so
+runs under `ctest -L functional` rather than in the default set — that stays at
+1126. The calendar leg is now four tests.
+
+Verified locally: `cargo test --locked` 1126, no failures; `cargo test --locked -p
+eds-sys -p jmap-backend-cal -p jmap-backend-cal-module` all green; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `ninja -C build` then `ctest -L functional` 4/4,
+the calendar leg's four real-EDS tests included. `ci/checks.sh` still stops at its
+first step on this VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those
+two were reasoned by hand: no file is added or removed, so the SPDX header set is
+unchanged, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it
+gave on the last green run.
+
+No milestone tag. Removed from the blocker list: nothing measures, end to end, that
+a zone a client sent is in the backend's cache by the time a save asks for it.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still **needs human verification in real Evolution**;
+`jmap-mail`'s rustdoc is dirty; whether Evolution renders an `IMAGE` is unmeasured;
+the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified;
+the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year
+alone are still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ,
+MSN and Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are
+unmapped and their contact-editor behaviour unmeasured; whether the editor lets a
+handle be moved between the Home and Work slots at all is unknown; a `VALUE=uri`
+photo's rendering is unmeasured; what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured; and the
+`jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.

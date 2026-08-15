@@ -726,9 +726,10 @@ The tail of the first identifier is `Europe-Berlin` and not `Europe/Berlin` on
 purpose: libical looks a location up in its own table, so an identifier whose tail
 *was* an IANA location could resolve out of the table and the leg would pass
 without the definition being read. Both are seeded straight into the mock rather
-than written through EDS, and here that is not a convenience — `jmap-cal-sync`
-never writes `timeZones`, so no event created in Evolution can carry one. A zone
-only a server can name reaches this backend only from a server.
+than written through EDS, and here that is not a convenience — a create carries a
+`timeZones` entry only for a zone somebody handed the calendar (the fourth leg,
+below), and what this leg is about is the zone nobody here ever had. A zone only a
+server can name reaches this backend only from a server.
 
 For each event the client reports the wall clock on the `DTSTART`, the `TZID`
 verbatim, how many `VTIMEZONE`s stand beside the event, and the instant the start
@@ -850,6 +851,61 @@ event.
 `cal-edit-client.c` report the instant through. Shared rather than copied because
 the two legs exist to be compared: a difference between their answers should be a
 difference in the event, not in how it was measured.
+
+### The fourth calendar leg: the zone only the client can name
+
+`a_zone_only_the_client_can_name_reaches_the_server_with_its_definition`, against
+the same program run as `functional-cal-zone-client create …`. It is the third leg
+turned around: there a zone only the server could name had to reach a consumer,
+here one only the *client* can name has to reach the server.
+
+Which is not a hypothetical. It is what Evolution has in hand the moment the user
+accepts an invitation whose `VTIMEZONE` names a zone no database holds — an
+Exchange organiser's own — and the route it takes is the one EDS gives it:
+`e_cal_client_add_timezone`, then a create whose `DTSTART` merely *names* the zone.
+EDS does not carry the definition inside the component; it files it in the
+calendar's own timezone store, which is the same platform fact the third leg pinned
+down from the read side. So a backend that looked only at what it was handed would
+see a `TZID` resolving nowhere, `jmap-ical`'s `maps_time_zone` would refuse it, and
+the appointment would be filed **floating** — an hour or two out for everybody but
+the user who typed it. `jmap_backend_cal`'s `resolve_time_zone` therefore asks the
+calendar as its third and last place to look, and `ECalBackend` implementing
+`ETimezoneCache` is what makes the store reachable at the vfunc.
+
+That much had unit tests on both sides. What had none was the **join**: that the
+zone a client sent is in the backend's own cache, under the identifier the
+component still names, by the time EDS calls `save_component_sync`. That is a fact
+about EDS, and this leg is where it stops being assumed.
+
+The client is handed a `VTIMEZONE` in a file — written by the test, out of the same
+description the expected `timeZones` map is written from, so the two ends cannot
+agree by accident — and reads the identifier back off the zone libical made of it
+rather than being told it, which keeps the program from being able to name a zone
+the file did not. The zone is `/example.com/Somewhere-New`, a third `example.com`
+identifier so that a definition arriving at the mock can only have come from here,
+and it carries no `X-LIC-LOCATION`: one naming an IANA zone would make it a
+*spelling* of a zone that already has a name, which `jmap-ical` translates and
+libical's builtin table would then answer for, and the leg would pass without the
+client's definition being read at all.
+
+What it asserts, from both ends:
+
+- **What EDS hands back**, which is not the component the client wrote: a create is
+  answered out of what the *server* stored, so the `TZID` on the read-back is the
+  zone as it came home. A backend that could not name the zone leaves it empty. The
+  instant beside it — 08:00Z for a 10:00 start in April — says the round trip did
+  not shift the clock; that the calendar still *knows* the zone is the weaker half
+  of that pair, since the client put it in the store itself.
+- **What the server holds**, which is the claim no client can fake: `timeZone` is
+  the custom identifier, and `timeZones` is the whole definition. Asserting the
+  identifier alone would pass on a backend that sent a dangling reference — RFC 8984
+  §1.4.9 admits a custom `TimeZoneId` only beside the entry that says what it is,
+  and a server is entitled to reject one without.
+
+One mutation stands behind it: dropping the calendar from `resolve_time_zone`'s
+list of places to look — the last of its three, the one added for exactly this —
+reddens this leg and nothing else in the calendar suite. The appointment comes back
+with no `TZID` at all and floats to 10:00Z, and the server holds it with no zone.
 
 ## What the mail test asserts
 
