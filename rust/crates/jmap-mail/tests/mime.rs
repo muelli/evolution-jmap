@@ -563,3 +563,43 @@ iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAA
     let roundtripped = Message::parsed(&written);
     assert_eq!(roundtripped.subject(), "Rich Newsletter with Inline Image");
 }
+
+/// A message with 8bit Content-Transfer-Encoding and custom charset serializes with
+/// canonical CRLF endings and parses back without line corruption.
+#[test]
+fn message_with_8bit_body_and_iso_charset_serializes_with_crlf_and_parses_back_intact() {
+    let source = b"From: Alice <alice@example.com>\r\n\
+To: Bob <bob@example.com>\r\n\
+Subject: 8-Bit Body and Charset Test\r\n\
+Message-ID: <8bit-charset-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 20:00:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: 8bit\r\n\
+\r\n\
+Direct 8bit utf-8 body: \xc3\x84pfel, \xc3\x96l, \xc3\x9cbung und Ma\xc3\x9fe.\r\n\
+Second paragraph with international accents: caf\xc3\xa9, na\xc3\xafve, fa\xc3\xa7ade.\r\n";
+
+    let message = Message::parsed(source);
+    let written = message.written();
+
+    let text = String::from_utf8(written.clone()).expect("the emitter wrote valid utf-8");
+    assert!(text.contains("Subject: 8-Bit Body and Charset Test"));
+    assert!(text.contains("Direct 8bit utf-8 body"));
+    assert!(text.contains("Äpfel, Öl, Übung und Maße."));
+
+    let bare = written
+        .iter()
+        .enumerate()
+        .filter(|(at, byte)| **byte == b'\n' && (*at == 0 || written[at - 1] != b'\r'))
+        .count();
+    assert_eq!(bare, 0, "found {bare} bare LFs in 8bit message output");
+
+    assert!(
+        !written.windows(3).any(|run| run == b"\r\r\n"),
+        "found spurious double CR in output"
+    );
+
+    let roundtripped = Message::parsed(&written);
+    assert_eq!(roundtripped.subject(), "8-Bit Body and Charset Test");
+}
