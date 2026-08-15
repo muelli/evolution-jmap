@@ -617,3 +617,70 @@ fn summary_preserves_multiple_recipient_groups_and_custom_references() {
     assert!(summary.flags.flagged);
     assert_eq!(summary.tags, vec!["audit-complete".to_owned()]);
 }
+
+#[test]
+fn summary_handles_modified_utf7_tag_and_subject_strings() {
+    let email = Email {
+        id: Some(Id::new("M-UTF7-11")),
+        blob_id: Some(Id::new("B-UTF7-11")),
+        subject: Some("Ordner Entw&APw-rfe und Gel&APY-schte Elemente".to_owned()),
+        preview: Some("Best&AOQ-tigung f&APw-r Benutzer".to_owned()),
+        keywords: Some(
+            [
+                (keyword::SEEN.to_owned(), true),
+                ("Posteingang/Privat & gesch&AOQ-ftlich".to_owned(), true),
+            ]
+            .into(),
+        ),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary with modified utf-7 patterns");
+    assert_eq!(
+        summary.subject.as_deref(),
+        Some("Ordner Entw&APw-rfe und Gel&APY-schte Elemente")
+    );
+    assert_eq!(
+        summary.preview.as_deref(),
+        Some("Best&AOQ-tigung f&APw-r Benutzer")
+    );
+    assert_eq!(
+        summary.tags,
+        vec!["Posteingang/Privat & gesch&AOQ-ftlich".to_owned()]
+    );
+}
+
+#[test]
+fn summary_handles_mixed_case_standard_keywords_alongside_custom_tags() {
+    let email = Email {
+        id: Some(Id::new("M-MIX-KW-22")),
+        blob_id: Some(Id::new("B-MIX-KW-22")),
+        keywords: Some(
+            [
+                ("$SEEN".to_owned(), true),
+                ("$Flagged".to_owned(), true),
+                ("$ANSWERED".to_owned(), true),
+                ("$dRaFt".to_owned(), true),
+                ("$Forwarded".to_owned(), true),
+                ("$Junk".to_owned(), true),
+                ("$NotJunk".to_owned(), true),
+                ("$MyCustomKeyword".to_owned(), true),
+                ("category/inbox-2026".to_owned(), true),
+            ]
+            .into(),
+        ),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary with mixed-case keywords");
+    assert!(summary.flags.seen);
+    assert!(summary.flags.flagged);
+    assert!(summary.flags.answered);
+    assert!(summary.flags.draft);
+    assert!(summary.flags.forwarded);
+    assert!(summary.flags.junk);
+    assert!(summary.flags.not_junk);
+    assert_eq!(summary.tags.len(), 2);
+    assert!(summary.tags.contains(&"$MyCustomKeyword".to_owned()));
+    assert!(summary.tags.contains(&"category/inbox-2026".to_owned()));
+}
