@@ -1195,6 +1195,39 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
 /// override it cannot describe with a bare `RDATE` rather than hiding the
 /// occurrence.
 pub fn maps_recurrence_override(series: &CalendarEvent, id: &str, patch: &Value) -> bool {
+    override_maps_by(series, id, patch, maps_override_field)
+}
+
+/// [`maps_recurrence_override`], asked by a save that can send a zone's
+/// definition beside the identifier naming it.
+///
+/// The two differ over one field. `timeZone` is refused above because a
+/// PatchObject naming `recurrenceOverrides` has no way to carry the RFC 8984
+/// §4.7.2 entry a custom identifier is only legal beside (§1.4.9) — but a save
+/// that patches `timeZones` in the same request does, and then the identifier
+/// is as sendable as an IANA name is. So a caller willing to send the
+/// definition asks this instead, and must actually send it: what makes the
+/// override legal is the pair, not the check.
+///
+/// Which definition counts is the *series'*, because that is where a document
+/// keeps them — one `VTIMEZONE` per `TZID` in the enclosing `VCALENDAR`,
+/// whichever component names it — and it is the same judgement the drawing
+/// makes, so an override this admits is one [`event_to_ical`] places in the zone
+/// it names rather than at the series' clock. Callers: `jmap_cal_sync`'s
+/// [`prune_time_zones`] neighbour, the patch path.
+pub fn sends_recurrence_override(series: &CalendarEvent, id: &str, patch: &Value) -> bool {
+    override_maps_by(series, id, patch, draws_override_field)
+}
+
+/// The shape both questions above have, with the per-field judgement left to the
+/// caller: an id an `EXDATE` can spell, an exclusion that says nothing else, and
+/// otherwise every restated field admitted by `field`.
+fn override_maps_by(
+    series: &CalendarEvent,
+    id: &str,
+    patch: &Value,
+    field: fn(&CalendarEvent, &str, &Value) -> bool,
+) -> bool {
     let Some(fields) = patch.as_object() else {
         return false;
     };
@@ -1206,7 +1239,7 @@ pub fn maps_recurrence_override(series: &CalendarEvent, id: &str, patch: &Value)
     }
     fields
         .iter()
-        .all(|(name, value)| maps_override_field(series, name, value))
+        .all(|(name, value)| field(series, name, value))
 }
 
 /// Whether one field of an override's PatchObject reaches the component and
@@ -1288,9 +1321,11 @@ fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> boo
         //
         // Which is why a custom identifier is refused here and *not* on the way
         // to the component — RFC 8984 §1.4.9 admits one only beside the
-        // `timeZones` entry defining it, and this property's patch has no way to
-        // carry that entry along. See [`draws_override_field`], which is the same
-        // question asked of the drawing.
+        // `timeZones` entry defining it, and this property's own patch has no way
+        // to carry that entry along. A save willing to patch `timeZones` in the
+        // same request asks [`sends_recurrence_override`] instead, which is
+        // [`draws_override_field`]'s rule; this one is for a caller that will
+        // send `recurrenceOverrides` alone.
         "timeZone" => value.is_null() || value.as_str().is_some_and(names_time_zone),
         // The only place an instance's own length is stated is its component's
         // DURATION, and one this mapping will not write there (see
@@ -1302,24 +1337,26 @@ fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> boo
     }
 }
 
-/// Whether one field of an override reaches the *component* — which for one
-/// property is a different question from whether it reaches the *server*.
+/// Whether one field of an override reaches the *component* — and, for the one
+/// property where the two once diverged, whether it reaches a server that is
+/// told what the identifier means.
 ///
-/// [`maps_override_field`] answers the second, and the drawing followed it for
-/// every field until a `timeZone` made the two diverge. A component states a
-/// custom identifier perfectly well, beside the `VTIMEZONE` the same document
-/// defines it with (see [`drawn_time_zones`]); a PatchObject cannot, because
-/// `recurrenceOverrides` goes back replaced whole while `timeZones` is never
-/// patched at all, so the identifier would reach the server dangling. Refusing
-/// it here as well drew the occurrence on the *series'* clock — a different
-/// appointment, stated without saying so.
+/// [`maps_override_field`] is the same rule for a caller that will send
+/// `recurrenceOverrides` and nothing else. A component states a custom
+/// identifier perfectly well, beside the `VTIMEZONE` the same document defines
+/// it with (see [`drawn_time_zones`]); a PatchObject naming only that one
+/// property cannot, because the identifier would reach the server dangling.
+/// Refusing it in the drawing as well drew the occurrence on the *series'*
+/// clock — a different appointment, stated without saying so — and refusing it
+/// in a save that *can* patch `timeZones` throws the user's move away, which is
+/// what [`sends_recurrence_override`] asks this instead.
 fn draws_override_field(series: &CalendarEvent, name: &str, value: &Value) -> bool {
     match name {
         "timeZone" => {
             value.is_null()
                 || value
                     .as_str()
-                    .is_some_and(|tzid| names_time_zone(tzid) || defines_zone(series, tzid))
+                    .is_some_and(|tzid| names_time_zone(tzid) || defines_time_zone(series, tzid))
         }
         _ => maps_override_field(series, name, value),
     }
@@ -1493,6 +1530,19 @@ fn definition_of<'a>(definitions: &'a BTreeMap<String, Value>, tzid: &str) -> Op
         .or_else(|| definitions.get(tzid.trim_start_matches('/')))
 }
 
+/// What `event` says the zone `tzid` is — its RFC 8984 §4.7.2 entry, or `None`
+/// where the event defines no such identifier.
+///
+/// `definition_of` asked of a whole event, for a caller outside this crate:
+/// `jmap_cal_sync`'s patch path, which sends the entry beside the identifier
+/// naming it and has to know whether the server already holds one. Says nothing
+/// about whether the definition can be *drawn* — that is
+/// [`defines_time_zone`]'s question, and the two differ exactly where a server
+/// states more than a `VTIMEZONE` has room for.
+pub fn time_zone_definition<'a>(event: &'a CalendarEvent, tzid: &str) -> Option<&'a Value> {
+    definition_of(event.time_zones.as_ref()?, tzid)
+}
+
 /// Whether the zone `event` is in is one a save may state to a server.
 ///
 /// Three shapes are sendable and one is not. No zone at all is a floating event,
@@ -1509,7 +1559,7 @@ fn definition_of<'a>(definitions: &'a BTreeMap<String, Value>, tzid: &str) -> Op
 /// which would cost the user every other edit in the same save.
 ///
 /// "Defines it" means the definition can be drawn *whole*, which is
-/// [`vtimezone_of`]'s judgement and not a second one: a definition this mapping
+/// `vtimezone_of`'s judgement and not a second one: a definition this mapping
 /// could only state in part describes a different zone, so the identifier is as
 /// good as undefined. Callers: `jmap_cal_sync`'s create path, which files the
 /// appointment floating rather than sending a zone a server cannot resolve.
@@ -1517,7 +1567,7 @@ pub fn maps_time_zone(event: &CalendarEvent) -> bool {
     let Some(tzid) = event.time_zone.as_deref() else {
         return true;
     };
-    names_time_zone(tzid) || defines_zone(event, tzid)
+    names_time_zone(tzid) || defines_time_zone(event, tzid)
 }
 
 /// Whether `event` says what the zone `tzid` is — RFC 8984 §1.4.9's second form
@@ -1525,10 +1575,13 @@ pub fn maps_time_zone(event: &CalendarEvent) -> bool {
 /// the object carrying it.
 ///
 /// "Says what it is" means the §4.7.2 entry can be drawn *whole*, which is
-/// [`vtimezone_of`]'s judgement asked directly rather than duplicated: a
+/// `vtimezone_of`'s judgement asked directly rather than duplicated: a
 /// definition this mapping could only state in part describes a different zone,
 /// so the identifier is as good as undefined.
-fn defines_zone(event: &CalendarEvent, tzid: &str) -> bool {
+///
+/// Public for `jmap_cal_sync`'s patch path, which may send such an identifier
+/// exactly when it can send [`time_zone_definition`] beside it.
+pub fn defines_time_zone(event: &CalendarEvent, tzid: &str) -> bool {
     tzid.starts_with('/')
         && event
             .time_zones
@@ -2323,7 +2376,7 @@ fn read_time_zones(calendar: &Component, event: &CalendarEvent) -> Option<BTreeM
 /// that moved into a zone of its own.
 ///
 /// Naming and *defining* are different questions: this lists what is referred to,
-/// whatever form the identifier takes, and leaves [`defines_zone`] to say which
+/// whatever form the identifier takes, and leaves [`defines_time_zone`] to say which
 /// of those references the event answers. [`read_time_zones`] collects the
 /// definitions for them; [`prune_time_zones`] drops the definitions for
 /// everything else.
