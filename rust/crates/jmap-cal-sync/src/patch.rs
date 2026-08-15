@@ -114,6 +114,16 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     // gave no way to translate it, the zone is left alone rather than sent as
     // it came or cleared. It is the same "seen in part, so not written back"
     // rule the recurrence properties follow, applied to one value.
+    //
+    // Only a *name*, deliberately — `names_time_zone` and not
+    // `jmap_ical::maps_time_zone`, which the create path uses. §1.4.9's other
+    // form is legal only beside the `timeZones` entry defining it, so sending a
+    // custom identifier here would mean sending `timeZones` too; that property
+    // is replaced whole, and a `VTIMEZONE` shows none of the `aliases`, `url` or
+    // `validUntil` the server's definition may carry. Patching it over would
+    // delete what the user was never shown, which is the rule this whole module
+    // exists to keep. A create has nothing to delete, which is why the two
+    // paths answer differently.
     if edited.time_zone.as_deref().is_none_or(names_time_zone)
         && baseline.time_zone != edited.time_zone
     {

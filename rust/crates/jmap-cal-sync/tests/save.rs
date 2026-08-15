@@ -2198,6 +2198,81 @@ fn a_move_to_another_zone_arrives_under_its_iana_name() {
     assert_eq!(stored.time_zone.as_deref(), Some("America/New_York"));
 }
 
+/// A zone only the document knows about, on a *new* appointment.
+///
+/// This is the one place where leaving the zone alone is not available. On an
+/// edit the server already holds a zone and keeping it is the conservative
+/// answer; on a create there is nothing to keep, so a zone that cannot be stated
+/// files the appointment floating — a wall-clock time in no particular zone,
+/// which every reader resolves to its own.
+///
+/// RFC 8984 §1.4.9 gives such a zone a way to be stated all the same: the custom
+/// identifier, sent beside the §4.7.2 `timeZones` entry that defines it. The
+/// definition is the document's own — read off the `VTIMEZONE` an Exchange
+/// invitation or another client's `.ics` carries — so the event goes out saying
+/// which zone it is in and what that zone does, rather than saying nothing.
+#[test]
+fn a_new_event_in_a_zone_only_the_document_defines_carries_its_definition() {
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT
+        .replace("TZID=Europe/Berlin", &format!("TZID={CUSTOM_TZID}"))
+        .replace("BEGIN:VEVENT", &format!("{CUSTOM_VTIMEZONE}BEGIN:VEVENT"));
+
+    let saved = fixture.sync().save_component(&icalendar, None).unwrap();
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(stored.start.as_deref(), Some("2026-01-15T13:00:00"));
+    assert_eq!(
+        stored.time_zone.as_deref(),
+        Some(CUSTOM_TZID),
+        "the appointment was filed floating, hours from where the user put it"
+    );
+    let definitions = stored.time_zones.expect("the zone the event names");
+    let zone = definitions
+        .get(CUSTOM_TZID)
+        .unwrap_or_else(|| panic!("no definition for {CUSTOM_TZID}: {definitions:?}"));
+    assert_eq!(zone["standard"][0]["offsetTo"], json!("+0100"));
+    assert_eq!(zone["daylight"][0]["offsetTo"], json!("+0200"));
+    // And EDS gets the event back with the definition still beside it, because
+    // that is the only thing that makes the `TZID` resolvable.
+    assert!(
+        saved.icalendar.contains(&format!("TZID:{CUSTOM_TZID}\r\n")),
+        "{saved:?}"
+    );
+}
+
+/// A zone the document leaves undefined still files the appointment floating: a
+/// solidus-prefixed identifier with no `VTIMEZONE` beside it is a reference to
+/// nothing, and a server is entitled to refuse the whole `CalendarEvent/set` for
+/// it — which would cost the user the appointment rather than its zone.
+#[test]
+fn a_new_event_naming_a_zone_nothing_defines_is_filed_floating() {
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace("TZID=Europe/Berlin", &format!("TZID={CUSTOM_TZID}"));
+
+    let saved = fixture.sync().save_component(&icalendar, None).unwrap();
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(stored.start.as_deref(), Some("2026-01-15T13:00:00"));
+    assert_eq!(stored.time_zone, None);
+    assert_eq!(stored.time_zones, None);
+}
+
+/// The identifier a server invents for a zone no database names — RFC 8984
+/// §1.4.9's second form — and the `VTIMEZONE` that defines it, as a document
+/// written elsewhere carries the pair.
+const CUSTOM_TZID: &str = "/example.com/Europe-Berlin";
+
+const CUSTOM_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
+TZID:/example.com/Europe-Berlin\r\n\
+BEGIN:STANDARD\r\nDTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\nTZNAME:CET\r\nEND:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\nDTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\nTZNAME:CEST\r\nEND:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n";
+
 /// A zone nothing in the document explains: a Windows name from Exchange, and
 /// libical's own identifier with no `VTIMEZONE` beside it to translate it. The
 /// backend's envelope now defines the zones its components name, so the second

@@ -469,10 +469,29 @@ fn value_text(value: &ICalendarValue) -> Option<(String, bool)> {
 
 /// A date-time in its iCalendar spelling: `20260115T130000`, with a `Z` when it
 /// was written as a UTC instant, and no time at all for a `VALUE=DATE`.
+///
+/// calcard holds four RFC 5545 value types in this one struct, and how it is
+/// spelled has to be chosen from what it carries, because `format_as_ical`
+/// writes whichever fields the type it is *given* calls for and fills the rest
+/// with zeroes. A UTC offset — `TZOFFSETFROM`, `TZOFFSETTO`, which is a
+/// `PartialDateTime` with nothing in it but `tz_hour`, `tz_minute` and the sign
+/// — asked for as a date-time therefore came back as `00000000`, which is not
+/// wrong about the offset so much as silent about it. The date is what says
+/// which of the four this is: an offset has none, and a bare TIME has an hour
+/// without one.
+///
+/// One narrowing below this layer, on the way in rather than out: calcard's
+/// offset parser reads at most four digits, so RFC 5545 §3.3.14's `±hhmmss`
+/// form arrives with its seconds dropped. Sub-minute offsets belong to
+/// pre-standard-time observances (`+001932` for Amsterdam before 1937), which no
+/// appointment is in; the [`event`](crate::event) mapping reads and writes the
+/// six-digit form regardless, so nothing above here assumes minutes.
 fn date_time_text(stamp: &PartialDateTime) -> String {
-    let kind = match stamp.hour.is_some() {
-        true => ICalendarValueType::DateTime,
-        false => ICalendarValueType::Date,
+    let kind = match (stamp.year.is_some(), stamp.hour.is_some()) {
+        (true, true) => ICalendarValueType::DateTime,
+        (true, false) => ICalendarValueType::Date,
+        (false, true) => ICalendarValueType::Time,
+        (false, false) => ICalendarValueType::UtcOffset,
     };
     let mut out = String::new();
     // Writing into a String cannot fail.

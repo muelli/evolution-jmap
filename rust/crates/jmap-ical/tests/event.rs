@@ -9,7 +9,8 @@
 
 use jmap_ical::{
     ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
-    maps_recurrence_override, maps_recurrence_rule, maps_virtual_locations, names_time_zone,
+    maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
+    names_time_zone,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -5192,9 +5193,9 @@ fn a_custom_zone_the_event_defines_is_defined_in_the_document() {
 }
 
 /// The identifier survives the round trip as itself, which is what makes the
-/// save path leave it alone: [`names_time_zone`] refuses a custom identifier, so
-/// `patch::diff` never sends one — the zone stays the server's, definition and
-/// all.
+/// save path leave it alone on an edit: `patch::diff` never sends a `timeZone`
+/// the server did not already hold, so the zone stays the server's, definition
+/// and all.
 #[test]
 fn a_custom_zone_is_read_back_as_the_identifier_it_was_drawn_with() {
     let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()})));
@@ -5203,9 +5204,127 @@ fn a_custom_zone_is_read_back_as_the_identifier_it_was_drawn_with() {
 
     assert_eq!(back.time_zone.as_deref(), Some(CUSTOM_TZID));
     assert_eq!(back.start.as_deref(), Some("2026-01-15T13:00:00"));
-    // The definitions are the server's own and no save writes them back, so
-    // nothing reads them off the document either — see `read_vevent`.
-    assert_eq!(back.time_zones, None);
+}
+
+/// And the *definition* survives it too, which is what makes the identifier
+/// worth anything: RFC 8984 §1.4.9 admits a custom `TimeZoneId` only beside the
+/// `timeZones` entry that says what zone it is, so an event carrying the one
+/// without the other names a zone nothing can resolve. A server is entitled to
+/// refuse it, and a reader that does not floats the appointment hours from where
+/// it belongs.
+///
+/// Reading it back is therefore not bookkeeping: it is the only way a document
+/// whose zone came from somewhere other than a database — an Exchange
+/// invitation's own `VTIMEZONE`, an `.ics` another client wrote — can be saved
+/// as the event it is rather than as a floating one. See `read_time_zones`.
+#[test]
+fn a_custom_zone_the_document_defines_is_read_back_as_a_definition() {
+    let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()})));
+
+    let back = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(
+        serde_json::to_value(&back.time_zones).expect("a map of time zones"),
+        json!({CUSTOM_TZID: custom_zone()}),
+        "the definition the document carries is the one the event is in: {ics}"
+    );
+    // Which is the whole claim stated the other way round: what was drawn from
+    // the definition draws again, so a save of an untouched component has
+    // nothing to report.
+    assert_eq!(event_to_ical(&back), ics);
+}
+
+/// A zone the document *names* is left to the reader on the way back in, as it
+/// was on the way out. `Europe/Berlin` is a zone every database has; the
+/// `VTIMEZONE` beside it is libical's own copy, and carrying it into `timeZones`
+/// would make this crate the author of a definition it merely passed.
+#[test]
+fn a_named_zones_definition_is_not_read_back_as_a_definition() {
+    let ics = zoned(LIBICAL_TZID, &vtimezone(LIBICAL_TZID, "Europe/Berlin"));
+
+    let event = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.time_zones, None, "{ics}");
+}
+
+/// An identifier RFC 8984 §1.4.9 admits in neither form defines nothing, however
+/// complete the `VTIMEZONE` beside it. A Windows zone name is not an IANA name
+/// and does not begin with the solidus a custom identifier must, so there is no
+/// `timeZones` key it could be filed under — inventing one would mean inventing
+/// the identifier the event is in, and this crate has no way to know which zone
+/// `W. Europe Standard Time` is meant to be.
+#[test]
+fn a_zone_no_identifier_admits_is_read_back_undefined() {
+    let ics = zoned(
+        "W. Europe Standard Time",
+        &vtimezone("W. Europe Standard Time", "W. Europe Standard Time"),
+    );
+
+    let event = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(event.time_zone.as_deref(), Some("W. Europe Standard Time"));
+    assert_eq!(event.time_zones, None, "{ics}");
+}
+
+/// Half a definition is not a zone — see `vtimezone_of`, which will not *draw*
+/// one for the same reason. A `VTIMEZONE` this mapping cannot read whole is read
+/// as no definition at all, so the identifier stays undefined and
+/// [`maps_time_zone`] refuses it, rather than the event being filed in a zone
+/// that is confidently wrong by an hour.
+#[test]
+fn a_definition_with_a_part_that_cannot_be_read_is_not_read_in_part() {
+    let ics = event_to_ical(&defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()})));
+    for broken in [
+        // No offset to arrive at: RFC 5545 §3.6.5 makes TZOFFSETTO REQUIRED, and
+        // an observance without one says nothing about what time it is.
+        ics.replace("TZOFFSETTO:+0100\r\n", ""),
+        // An offset that is no offset.
+        ics.replace("TZOFFSETFROM:+0100", "TZOFFSETFROM:half past"),
+        // A transition dated to a day that does not exist.
+        ics.replace("DTSTART:19701025T030000", "DTSTART:19701325T030000"),
+        // A rule that repeats the transition in a month no year has, which
+        // `rule_to_rrule` refuses to spell — so the zone would move once where
+        // it moves every year.
+        ics.replace("BYMONTH=10", "BYMONTH=13"),
+    ] {
+        let event = ical_to_event(&broken).expect("parse");
+
+        assert_eq!(event.time_zone.as_deref(), Some(CUSTOM_TZID));
+        assert_eq!(event.time_zones, None, "{broken}");
+        assert!(!maps_time_zone(&event));
+    }
+}
+
+/// The question the save path asks: may this event's zone be stated to a server?
+///
+/// Three answers are yes — no zone at all (a floating event, which is a real
+/// thing to save), an IANA name, and a custom identifier the event itself
+/// defines — and one is no: an identifier with nothing to resolve it, which is
+/// what an undefined `TZID` off a foreign document reads as.
+#[test]
+fn a_zone_is_sendable_when_something_says_what_it_is() {
+    let defined = defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}));
+    assert!(maps_time_zone(&defined));
+    // The other reading of where RFC 8984 §1.4.9's solidus lives, which
+    // `drawn_time_zone` already accepts on the way out.
+    assert!(maps_time_zone(&defining(
+        CUSTOM_TZID,
+        json!({"example.com/Europe-Berlin": custom_zone()}),
+    )));
+    assert!(maps_time_zone(&defining("Europe/Berlin", json!(null))));
+    assert!(maps_time_zone(&CalendarEvent::default()));
+
+    assert!(!maps_time_zone(&defining(CUSTOM_TZID, json!(null))));
+    assert!(!maps_time_zone(&defining(
+        CUSTOM_TZID,
+        json!({"/example.com/Elsewhere": custom_zone()}),
+    )));
+    // No solidus, so no form of identifier admits it, defined or not.
+    assert!(!maps_time_zone(&defining(
+        "W. Europe Standard Time",
+        json!({"W. Europe Standard Time": custom_zone()}),
+    )));
 }
 
 /// A definition keyed without the solidus RFC 8984 §1.4.9 requires of the
@@ -5299,6 +5418,22 @@ fn a_definition_this_mapping_cannot_draw_whole_is_not_drawn_at_all() {
             "offsetFrom": "+0200",
             "offsetTo": "+0100",
             "recurrenceRules": [{"@type": "RecurrenceRule", "interval": 1}],
+        }),
+        // A rule with a part that has no `RRULE` spelling. `rule_to_rrule`
+        // leaves such a part off and still writes a line, which here would be a
+        // zone that moves on the last Sunday of *every* month rather than of
+        // October — one hour wrong for eleven months of the year, stated with
+        // the same confidence as the truth.
+        json!({
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10L"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
         }),
     ];
 
