@@ -218,6 +218,13 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelSExpTerm.*",
     "CamelSExpTermType",
     "CamelSExpSymbol",
+    // Folder search, message threading, operation, NNTP address, local settings, and memchunk
+    "CamelFolderSearch.*",
+    "CamelFolderThread.*",
+    "CamelMemChunk.*",
+    "CamelOperation.*",
+    "CamelNNTPAddress.*",
+    "CamelLocalSettings.*",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -465,6 +472,14 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_string_is_all_ascii",
     "camel_hostname_utils_.*",
     "camel_sexp_.*",
+    "camel_folder_search_.*",
+    "camel_folder_thread_.*",
+    "camel_folder_threaded_messages_dump",
+    "camel_memchunk_.*",
+    "camel_operation_.*",
+    "camel_nntp_address_.*",
+    "camel_local_settings_.*",
+    "camel_file_util_.*",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,
