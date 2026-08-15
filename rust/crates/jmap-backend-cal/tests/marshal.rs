@@ -9,13 +9,15 @@
 
 use std::ffi::CStr;
 use std::ptr;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use eds_sys::{
-    ECalComponent, ECalMetaBackendInfo, I_CAL_VCALENDAR_COMPONENT, e_cal_component_new_from_string,
-    e_cal_meta_backend_info_free, i_cal_component_get_timezone, i_cal_component_isa,
-    i_cal_component_new_from_string, i_cal_timezone_get_component,
+    ECalComponent, ECalMetaBackendInfo, ETimezoneCache, I_CAL_VCALENDAR_COMPONENT, e_cal_cache_new,
+    e_cal_component_new_from_string, e_cal_meta_backend_info_free, e_timezone_cache_add_timezone,
+    i_cal_component_get_timezone, i_cal_component_isa, i_cal_component_new_from_string,
+    i_cal_timezone_get_component,
 };
-use glib_sys::{GSList, g_slist_length, g_slist_nth_data};
+use glib_sys::{GError, GSList, g_slist_length, g_slist_nth_data};
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_cal_sync::ComponentInfo;
@@ -248,7 +250,7 @@ fn the_master_leads_the_envelope_and_the_overrides_follow_it() {
     let list = instance_list(&components);
 
     unsafe {
-        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
         assert_eq!(saved.uid.as_deref(), Some("K1"));
         assert!(
             saved.icalendar.starts_with("BEGIN:VCALENDAR"),
@@ -291,8 +293,9 @@ fn the_instances_survive_being_marshalled() {
     let list = instance_list(&[master]);
 
     unsafe {
-        let first = marshal::icalendar_from_instances(list).expect("a master");
-        let again = marshal::icalendar_from_instances(list).expect("still a master");
+        let first = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
+        let again =
+            marshal::icalendar_from_instances(list, ptr::null_mut()).expect("still a master");
         assert_eq!(first.icalendar, again.icalendar);
 
         glib_sys::g_slist_free(list);
@@ -310,7 +313,7 @@ fn a_save_of_nothing_but_an_override_is_refused() {
     let list = instance_list(&[component]);
 
     unsafe {
-        assert!(marshal::icalendar_from_instances(list).is_none());
+        assert!(marshal::icalendar_from_instances(list, ptr::null_mut()).is_none());
         glib_sys::g_slist_free(list);
         g_object_unref(component.cast());
     }
@@ -319,7 +322,7 @@ fn a_save_of_nothing_but_an_override_is_refused() {
 #[test]
 fn a_save_with_no_instances_at_all_is_refused() {
     unsafe {
-        assert!(marshal::icalendar_from_instances(ptr::null()).is_none());
+        assert!(marshal::icalendar_from_instances(ptr::null(), ptr::null_mut()).is_none());
     }
 }
 
@@ -359,7 +362,7 @@ fn a_zoned_instance_brings_the_definition_of_its_zone() {
     let list = instance_list(&[component]);
 
     unsafe {
-        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
         assert_eq!(
             definitions(&saved.icalendar),
             1,
@@ -395,7 +398,7 @@ fn a_zone_named_plainly_is_defined_under_the_name_the_event_uses() {
     let list = instance_list(&[component]);
 
     unsafe {
-        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
         assert_eq!(definitions(&saved.icalendar), 1, "{}", saved.icalendar);
         assert!(
             saved.icalendar.contains("TZID:Europe/Zurich"),
@@ -443,7 +446,7 @@ fn every_instance_and_every_property_is_asked_which_zone_it_means() {
     let list = instance_list(&components);
 
     unsafe {
-        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
         assert_eq!(
             definitions(&saved.icalendar),
             2,
@@ -478,7 +481,7 @@ fn a_zone_no_database_knows_is_left_undefined() {
     let list = instance_list(&[component]);
 
     unsafe {
-        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
         assert_eq!(
             definitions(&saved.icalendar),
             0,
@@ -505,13 +508,187 @@ fn utc_is_a_zone_with_nothing_to_define() {
     let list = instance_list(&[component]);
 
     unsafe {
-        let saved = marshal::icalendar_from_instances(list).expect("a master");
+        let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
         assert_eq!(definitions(&saved.icalendar), 0, "{}", saved.icalendar);
         assert!(
             saved.icalendar.contains("SUMMARY:Standup"),
             "the event itself did not survive: {}",
             saved.icalendar
         );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+}
+
+/// An RFC 8984 §1.4.9 custom identifier: no zone database holds it, and the
+/// solidus is what makes it the *other* legal form of a `TimeZoneId` rather than
+/// a misspelled IANA name. This is the shape a `VTIMEZONE` written by another
+/// client — an Exchange invitation, an exported `.ics` — arrives under.
+const CUSTOM_TZID: &str = "/Example Corp/Reindeer Standard Time";
+
+/// The object such a zone arrives in, and the only place its rules exist.
+///
+/// Deliberately without an `X-LIC-LOCATION`: one naming an IANA zone would make
+/// this a *spelling* of a zone that already has a name, which `jmap-ical`
+/// translates and sends as the name. What is under test is the zone that has no
+/// name to translate to.
+const CUSTOM_ZONE_OBJECT: &str = "BEGIN:VCALENDAR\r\n\
+     VERSION:2.0\r\n\
+     PRODID:-//Example Corp//Invitation//EN\r\n\
+     BEGIN:VTIMEZONE\r\n\
+     TZID:/Example Corp/Reindeer Standard Time\r\n\
+     BEGIN:STANDARD\r\n\
+     DTSTART:19701025T030000\r\n\
+     RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\r\n\
+     TZOFFSETFROM:+0200\r\n\
+     TZOFFSETTO:+0100\r\n\
+     TZNAME:RST\r\n\
+     END:STANDARD\r\n\
+     BEGIN:DAYLIGHT\r\n\
+     DTSTART:19700329T020000\r\n\
+     RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\n\
+     TZOFFSETFROM:+0100\r\n\
+     TZOFFSETTO:+0200\r\n\
+     TZNAME:RDT\r\n\
+     END:DAYLIGHT\r\n\
+     END:VTIMEZONE\r\n\
+     END:VCALENDAR\r\n";
+
+/// Distinguishes the caches two tests in one process build.
+static CACHES: AtomicU32 = AtomicU32::new(0);
+
+/// The calendar a save's instances came from, holding the zones of `objects`.
+///
+/// An `ECalCache` rather than a hand-rolled implementation of the interface:
+/// it is the object an `ECalMetaBackend` actually keeps, and the one EDS files a
+/// client's `VTIMEZONE` in — so what the test hands the marshalling is the same
+/// implementation the backend will.
+fn zone_cache(objects: &[(&str, &str)]) -> *mut ETimezoneCache {
+    let path = std::env::temp_dir().join(format!(
+        "jmap-cal-zones-{}-{}.db",
+        std::process::id(),
+        CACHES.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&path);
+    let filename = std::ffi::CString::new(path.to_str().expect("a UTF-8 temporary path")).unwrap();
+
+    // SAFETY: every string is NUL-terminated and valid for its call. The cache
+    // and each parsed object are fresh references this owns; the zone comes back
+    // transfer full from the object and is dropped once the cache has taken its
+    // own reference to it.
+    unsafe {
+        let mut error: *mut GError = ptr::null_mut();
+        let cache = e_cal_cache_new(filename.as_ptr(), ptr::null_mut(), &mut error);
+        assert!(!cache.is_null(), "no calendar cache at {}", path.display());
+        for (icalendar, tzid) in objects {
+            let text = std::ffi::CString::new(*icalendar).unwrap();
+            let name = std::ffi::CString::new(*tzid).unwrap();
+            let component = i_cal_component_new_from_string(text.as_ptr());
+            assert!(!component.is_null(), "not a calendar object: {icalendar}");
+            let zone = i_cal_component_get_timezone(component, name.as_ptr());
+            assert!(!zone.is_null(), "the object defines no {tzid}");
+            e_timezone_cache_add_timezone(cache.cast(), zone);
+            g_object_unref(zone.cast());
+            g_object_unref(component.cast());
+        }
+        let _ = std::fs::remove_file(&path);
+        cache.cast()
+    }
+}
+
+/// A zone libical's builtin table cannot resolve but the calendar itself holds
+/// is defined out of the calendar, so that the envelope states the zone the
+/// appointment is really in.
+///
+/// This is the half of the custom-zone story the mapping already had and the
+/// backend did not: `jmap-ical` reads a `VTIMEZONE` back into an RFC 8984 §4.7.2
+/// `timeZones` entry, but only ever saw one if the document it was handed
+/// carried it. EDS does not keep a client's `VTIMEZONE` in the component — it
+/// files it in the calendar's timezone cache and leaves the instance naming it —
+/// so an envelope built from the instances alone named a zone nothing could
+/// resolve, and the mapping then refused it and left the server's own value
+/// standing. The user's zone never went anywhere.
+#[test]
+fn a_custom_zone_the_calendar_holds_is_defined_out_of_it() {
+    let component = instance(&zoned(CUSTOM_TZID));
+    let list = instance_list(&[component]);
+    let zones = zone_cache(&[(CUSTOM_ZONE_OBJECT, CUSTOM_TZID)]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list, zones).expect("a master");
+        assert_eq!(
+            definitions(&saved.icalendar),
+            1,
+            "the zone the calendar holds did not reach the envelope: {}",
+            saved.icalendar
+        );
+        assert!(
+            saved.icalendar.contains(&format!("TZID:{CUSTOM_TZID}")),
+            "the definition is not of the zone the event names: {}",
+            saved.icalendar
+        );
+        // The point of all of it: the mapping may now *state* this zone, which
+        // is what `maps_time_zone` asks and what a bare identifier fails.
+        let event = jmap_ical::ical_to_event(&saved.icalendar).expect("a calendar object");
+        assert_eq!(
+            event.time_zone.as_deref(),
+            Some(CUSTOM_TZID),
+            "the mapping cannot name the zone: {}",
+            saved.icalendar
+        );
+        assert!(
+            jmap_ical::maps_time_zone(&event),
+            "the zone is named but not defined, which the save refuses: {}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+        g_object_unref(zones.cast());
+    }
+}
+
+/// And a zone neither the builtin table nor the calendar knows is still left
+/// undefined rather than guessed at — asking the cache adds a place to look, not
+/// a licence to invent.
+#[test]
+fn a_zone_the_calendar_does_not_hold_either_is_still_left_undefined() {
+    let component = instance(&zoned("W. Europe Standard Time"));
+    let list = instance_list(&[component]);
+    let zones = zone_cache(&[(CUSTOM_ZONE_OBJECT, CUSTOM_TZID)]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list, zones).expect("a master");
+        assert_eq!(
+            definitions(&saved.icalendar),
+            0,
+            "a zone was invented for an identifier nothing resolves: {}",
+            saved.icalendar
+        );
+        assert!(
+            saved.icalendar.contains("SUMMARY:Standup"),
+            "the event itself did not survive: {}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+        g_object_unref(zones.cast());
+    }
+}
+
+/// A caller with no calendar to hand asks nothing of one. The zone stays
+/// undefined — which is what every other test here passes NULL for, and is
+/// stated once rather than assumed everywhere.
+#[test]
+fn no_calendar_means_no_second_place_to_look() {
+    let component = instance(&zoned(CUSTOM_TZID));
+    let list = instance_list(&[component]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
+        assert_eq!(definitions(&saved.icalendar), 0, "{}", saved.icalendar);
 
         glib_sys::g_slist_free(list);
         g_object_unref(component.cast());
@@ -1271,7 +1448,8 @@ fn libical_keeps_a_time_of_day_beside_an_all_day_start_that_forbids_it() {
     );
     let component = instance(vevent);
     let list = instance_list(&[component]);
-    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    let saved =
+        unsafe { marshal::icalendar_from_instances(list, ptr::null_mut()) }.expect("a master");
     unsafe {
         glib_sys::g_slist_free(list);
         g_object_unref(component.cast());
@@ -1356,7 +1534,8 @@ fn reparsed_rrule(value: &str) -> Option<String> {
     let component = instance(&vevent);
     let list = instance_list(&[component]);
     // SAFETY: `list` holds one live component, freed below with the instance.
-    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    let saved =
+        unsafe { marshal::icalendar_from_instances(list, ptr::null_mut()) }.expect("a master");
     unsafe {
         glib_sys::g_slist_free(list);
         g_object_unref(component.cast());
@@ -1486,7 +1665,8 @@ fn libical_keeps_the_tags_of_one_occurrence_apart_from_the_series() {
     );
     let list = instance_list(&[master, occurrence]);
     // SAFETY: `list` holds two live components, freed below.
-    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    let saved =
+        unsafe { marshal::icalendar_from_instances(list, ptr::null_mut()) }.expect("a master");
     unsafe {
         glib_sys::g_slist_free(list);
         for component in [master, occurrence] {
@@ -1551,7 +1731,8 @@ fn libical_keeps_the_reminder_of_one_occurrence_apart_from_the_series() {
     );
     let list = instance_list(&[master, occurrence]);
     // SAFETY: `list` holds two live components, freed below.
-    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    let saved =
+        unsafe { marshal::icalendar_from_instances(list, ptr::null_mut()) }.expect("a master");
     unsafe {
         glib_sys::g_slist_free(list);
         for component in [master, occurrence] {
@@ -1835,7 +2016,8 @@ fn reparsed_object(lines: &str) -> String {
     let component = instance(&vevent);
     let list = instance_list(&[component]);
     // SAFETY: `list` holds one live component, freed below with the instance.
-    let saved = unsafe { marshal::icalendar_from_instances(list) }.expect("a master");
+    let saved =
+        unsafe { marshal::icalendar_from_instances(list, ptr::null_mut()) }.expect("a master");
     unsafe {
         glib_sys::g_slist_free(list);
         g_object_unref(component.cast());

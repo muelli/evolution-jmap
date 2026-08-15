@@ -39,6 +39,14 @@ const ALLOWED_TYPES: &[&str] = &[
     // against `g_type_query` like every other type we cross the ABI with.
     "ICal.*",
     "ECalComponent.*",
+    // The zones a calendar knows that no zone database does. An `ECalBackend`
+    // implements this interface, and so does the `ECalCache` behind it, which is
+    // where a `VTIMEZONE` another client wrote arrives: EDS pulls it out of the
+    // object and files it here rather than in the component. A save that only
+    // asked libical's builtin table would therefore find nothing for such a
+    // zone. An interface, so `tests/layout.rs` cannot cover it — `tests/ical.rs`
+    // stands in, as `tests/camel.rs` does for `CamelSubscribable`.
+    "ETimezoneCache.*",
     // The error domain every EDS client speaks. Deliberately just the enum,
     // not the whole EClient class: the backends produce these codes, they
     // never talk to an EClient.
@@ -283,6 +291,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "i_cal_timezone_get_builtin_timezone",
     "i_cal_timezone_get_builtin_timezone_from_tzid",
     "i_cal_timezone_get_component",
+    // And the zones that table does not hold, which the calendar itself does:
+    // `e_timezone_cache_get_timezone` is the second place a save looks for the
+    // definition of a `TZID` an instance names. Four functions, so the prefix
+    // costs nothing; `add_timezone` is how a test puts a zone in the way EDS's
+    // own `add_timezone` D-Bus method does.
+    "e_timezone_cache_.*",
     // And the two ends of that: reading the `TZID` parameter off a property,
     // which is the only place a component says which zone it means, and setting
     // the `TZID` property of the `VTIMEZONE` copied in beside it, so the

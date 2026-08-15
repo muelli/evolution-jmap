@@ -2003,3 +2003,45 @@ fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
         g_object_unref(calendar.cast());
     }
 }
+
+/// The interface a save reaches the calendar's own zones through, and the two
+/// facts the backend's cast rests on.
+///
+/// `save_component_sync` is handed an `ECalMetaBackend *` and passes it to the
+/// marshalling as an `ETimezoneCache *`. That cast is unchecked — a raw pointer
+/// cast in Rust asserts nothing — and if the type did not implement the
+/// interface, `e_timezone_cache_get_timezone` would not fail loudly but return
+/// NULL after a GLib critical, which reads exactly like a zone the calendar does
+/// not hold. So the implementation is pinned here rather than trusted.
+///
+/// `ECalCache` is pinned beside it because that is what the marshalling's tests
+/// stand an `ETimezoneCache` up as, and the two being the same interface is what
+/// makes those tests say anything about the backend.
+///
+/// An interface, so `tests/layout.rs` cannot cover it — `g_type_query` reports
+/// nothing about one, the same hole `CamelSubscribable` sits in.
+#[test]
+fn a_calendar_backend_is_the_timezone_cache_a_save_asks() {
+    unsafe {
+        let cache = e_timezone_cache_get_type();
+        assert!(
+            gobject_sys::g_type_is_a(cache, gobject_sys::G_TYPE_INTERFACE) != 0,
+            "ETimezoneCache is not an interface"
+        );
+
+        let mut query: gobject_sys::GTypeQuery = std::mem::zeroed();
+        gobject_sys::g_type_query(cache, &mut query);
+        assert_eq!(query.type_, 0, "g_type_query knows an interface after all");
+
+        for (name, gtype) in [
+            ("ECalMetaBackend", e_cal_meta_backend_get_type()),
+            ("ECalBackend", e_cal_backend_get_type()),
+            ("ECalCache", e_cal_cache_get_type()),
+        ] {
+            assert!(
+                gobject_sys::g_type_is_a(gtype, cache) != 0,
+                "{name} does not implement ETimezoneCache"
+            );
+        }
+    }
+}
