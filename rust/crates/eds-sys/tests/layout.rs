@@ -27,6 +27,55 @@ fn query(gtype: GType) -> GTypeQuery {
     }
 }
 
+/// The EDS this test binary was built against and is running on, spelled out
+/// for whoever reads a failure.
+///
+/// M10 runs this file against a matrix of EDS releases, where the interesting
+/// question about a mismatch is not only *which type* drifted but *which
+/// version it drifted on* — and a leg's log is read long after the container
+/// that produced it is gone. Three numbers are worth naming, because they can
+/// disagree with each other and each disagreement is a different fault:
+///
+/// - the version pkg-config resolved when `build.rs` chose the include paths
+///   ([`EDS_HEADER_VERSION`]),
+/// - the version the headers themselves state (`EDS_MAJOR_VERSION` and its
+///   two siblings, `#define`d in `libedataserver/eds-version.h`), and
+/// - the version of the shared library this process actually loaded
+///   (`eds_major_version` and friends, which are `extern const guint`).
+///
+/// The first two disagreeing is a `.pc` file that does not describe the
+/// headers beside it; the last two disagreeing is a build against one EDS
+/// deployed on another, which is the ABI contract `docs/eds-versions.md`
+/// writes down.
+fn eds_versions() -> String {
+    format!(
+        "EDS {EDS_HEADER_VERSION} (pkg-config), headers {}, runtime {}",
+        header_version(),
+        runtime_version(),
+    )
+}
+
+/// What the installed headers say, from the `#define`s bindgen carried over.
+fn header_version() -> String {
+    format!("{EDS_MAJOR_VERSION}.{EDS_MINOR_VERSION}.{EDS_MICRO_VERSION}")
+}
+
+/// What the loaded `libedataserver` says, which is the only one of the three
+/// that describes the code this process will actually call.
+fn runtime_version() -> String {
+    unsafe { format!("{eds_major_version}.{eds_minor_version}.{eds_micro_version}") }
+}
+
+/// The message a failed size check carries, built here rather than inline so
+/// that the shape of it — the type that drifted, and the EDS it drifted on —
+/// is one testable thing rather than a format string per assertion.
+fn layout_message(name: &str, which: &str) -> String {
+    format!(
+        "{name}: {which} size disagrees with g_type_query, under {}",
+        eds_versions()
+    )
+}
+
 /// Checks one instance/class struct pair against the registered type.
 macro_rules! assert_layout {
     ($get_type:expr, $instance:ty, $class:ty) => {{
@@ -35,14 +84,74 @@ macro_rules! assert_layout {
         assert_eq!(
             q.instance_size as usize,
             size_of::<$instance>(),
-            "{name}: instance size disagrees with g_type_query"
+            "{}",
+            layout_message(name, "instance")
         );
         assert_eq!(
             q.class_size as usize,
             size_of::<$class>(),
-            "{name}: class size disagrees with g_type_query"
+            "{}",
+            layout_message(name, "class")
         );
     }};
+}
+
+/// M10 asks that a mismatch fail "loudly, with the version and the offending
+/// type in the output". The type name was always there; the version was not,
+/// and a matrix of otherwise identical legs is exactly where an unversioned
+/// message stops being enough to act on.
+#[test]
+fn a_layout_failure_names_the_type_and_the_eds_it_ran_against() {
+    let message = layout_message("EBookMetaBackend", "instance");
+    assert!(
+        message.contains("EBookMetaBackend"),
+        "the offending type is missing from {message:?}"
+    );
+    assert!(
+        message.contains(EDS_HEADER_VERSION),
+        "the pkg-config version is missing from {message:?}"
+    );
+    assert!(
+        message.contains(&header_version()),
+        "the header version is missing from {message:?}"
+    );
+    assert!(
+        message.contains(&runtime_version()),
+        "the runtime version is missing from {message:?}"
+    );
+}
+
+/// The `.pc` file pkg-config answered with must describe the headers next to
+/// it, or `build.rs` chose its include paths off a version claim that is not
+/// the one bindgen then read. Only the release part is compared: pkg-config
+/// carries whatever suffix a distribution appended, and the `#define`s cannot.
+#[test]
+fn pkg_config_describes_the_headers_it_pointed_at() {
+    let stated = header_version();
+    assert!(
+        EDS_HEADER_VERSION.starts_with(&stated),
+        "pkg-config says EDS {EDS_HEADER_VERSION}, the headers say {stated}"
+    );
+}
+
+/// The ABI contract in one assertion: an EDS module is built against one
+/// version of these libraries and must be run against that same version.
+/// `eds_check_version` is EDS's own answer to the question — it returns NULL
+/// when the running library can serve code compiled against the version
+/// given, and an English explanation when it cannot.
+///
+/// This is the check that turns "the plugin segfaults on a newer EDS" into a
+/// red test, and it is deliberately asked of the *compiled-in* `#define`s
+/// rather than of anything this file knows, so it stays true whatever the
+/// matrix leg installed.
+#[test]
+fn the_running_eds_can_serve_what_these_bindings_were_compiled_against() {
+    let complaint =
+        unsafe { eds_check_version(EDS_MAJOR_VERSION, EDS_MINOR_VERSION, EDS_MICRO_VERSION) };
+    if !complaint.is_null() {
+        let text = unsafe { std::ffi::CStr::from_ptr(complaint) };
+        panic!("{}: {}", eds_versions(), text.to_string_lossy());
+    }
 }
 
 #[test]
