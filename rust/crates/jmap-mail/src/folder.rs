@@ -223,6 +223,10 @@ unsafe impl ObjectSubclass for JmapFolder {
         //
         // SAFETY: as above.
         unsafe { crate::expunge::install_vfuncs(class.cast::<CamelFolderClass>()) };
+
+        let folder_class = unsafe { &mut *class.cast::<CamelFolderClass>() };
+        folder_class.search_by_expression = Some(search_by_expression);
+        folder_class.search_by_uids = Some(search_by_uids);
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.
@@ -240,6 +244,49 @@ unsafe impl ObjectSubclass for JmapFolder {
             (*instance).mailbox.clear();
             (*instance).cache.clear();
         };
+    }
+}
+
+unsafe extern "C" fn search_by_expression(
+    folder: *mut CamelFolder,
+    expression: *const gchar,
+    cancellable: *mut gio_sys::GCancellable,
+    error: *mut *mut glib_sys::GError,
+) -> *mut glib_sys::GPtrArray {
+    unsafe {
+        let search = eds_sys::camel_folder_search_new();
+        eds_sys::camel_folder_search_set_folder(search, folder);
+        let result = eds_sys::camel_folder_search_search(
+            search,
+            expression,
+            ptr::null_mut(),
+            cancellable,
+            error,
+        );
+        gobject_sys::g_object_unref(search.cast());
+        result
+    }
+}
+
+unsafe extern "C" fn search_by_uids(
+    folder: *mut CamelFolder,
+    expression: *const gchar,
+    uids: *mut glib_sys::GPtrArray,
+    cancellable: *mut gio_sys::GCancellable,
+    error: *mut *mut glib_sys::GError,
+) -> *mut glib_sys::GPtrArray {
+    unsafe {
+        let search = eds_sys::camel_folder_search_new();
+        eds_sys::camel_folder_search_set_folder(search, folder);
+        let result = eds_sys::camel_folder_search_search(
+            search,
+            expression,
+            uids,
+            cancellable,
+            error,
+        );
+        gobject_sys::g_object_unref(search.cast());
+        result
     }
 }
 

@@ -13,6 +13,10 @@ use crate::state::ServerState;
 
 /// Handle a POST to the API endpoint. Returns (HTTP status, JSON body).
 pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
+    if let Ok(text) = std::str::from_utf8(body) {
+        println!("--> POST /jmap\n{text}");
+    }
+
     // Counted before anything is read out of the body: what it is for is
     // telling one request carrying two chained calls apart from two requests
     // carrying one each, and a request refused below is still a round trip the
@@ -99,10 +103,11 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
         created_ids: None,
         session_state: state.session_state(),
     };
-    (
-        200,
-        serde_json::to_value(&response).expect("response serializes"),
-    )
+    
+    let response_value = serde_json::to_value(&response).expect("response serializes");
+    println!("<-- 200 OK\n{}\n", serde_json::to_string_pretty(&response_value).unwrap_or_default());
+    
+    (200, response_value)
 }
 
 fn error_invocation(error: MethodError, call_id: &str) -> Invocation {
