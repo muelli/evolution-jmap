@@ -103,10 +103,13 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
         created_ids: None,
         session_state: state.session_state(),
     };
-    
+
     let response_value = serde_json::to_value(&response).expect("response serializes");
-    println!("<-- 200 OK\n{}\n", serde_json::to_string_pretty(&response_value).unwrap_or_default());
-    
+    println!(
+        "<-- 200 OK\n{}\n",
+        serde_json::to_string_pretty(&response_value).unwrap_or_default()
+    );
+
     (200, response_value)
 }
 

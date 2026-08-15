@@ -278,13 +278,8 @@ unsafe extern "C" fn search_by_uids(
     unsafe {
         let search = eds_sys::camel_folder_search_new();
         eds_sys::camel_folder_search_set_folder(search, folder);
-        let result = eds_sys::camel_folder_search_search(
-            search,
-            expression,
-            uids,
-            cancellable,
-            error,
-        );
+        let result =
+            eds_sys::camel_folder_search_search(search, expression, uids, cancellable, error);
         gobject_sys::g_object_unref(search.cast());
         result
     }
