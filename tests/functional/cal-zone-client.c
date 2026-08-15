@@ -5,21 +5,30 @@
  * consumer that opens a calendar, reads events the *server* already held, and
  * reports the one thing it came for — what instant EDS and libical between them
  * say each event starts at, asked twice: of libical alone, and of the calendar
- * itself, which is the path Evolution takes. Then it retypes the title of the
- * first of them and looks again, which asks the same question of the same event
- * after a save.
+ * itself, which is the path Evolution takes. Then it saves the first of them
+ * twice and looks again after each, which asks the same question of the same
+ * event after an edit.
+ *
+ * The two edits are the two kinds there are, and they ask opposite things of one
+ * save path. The first retypes the title: an edit with nothing to do with the
+ * clock, so anything that happens to the clock is something the save did on its
+ * own. The second drags the appointment to another wall clock and states its new
+ * length the way Evolution's editor does — as a `DTEND`, in place of the
+ * `DURATION` the mapping wrote — which is an edit about nothing *but* the clock,
+ * and so the one that would show up a save that resends the zone whenever a
+ * date-time is in the patch. Neither may cost the user the zone, and the zone is
+ * the one thing here nothing outside the server can name.
  *
  * A program of its own rather than more arguments to cal-edit-client.c, which
  * asks what survives a save of the members no iCalendar line has room for:
  * handing it an event with no place, no conference and no attachment to retype
  * would mean either weakening what it insists on finding or seeding an event
- * with members this question has no use for. The edit here is the *only* one a
- * user can make to an event in a zone only their server can name — its title —
- * and it is here because reading and saving are two halves of one question. An
- * appointment whose zone is resolvable until the first time the user renames it
- * is not usable, and the half that could not be measured without the other half
- * in the same run is exactly this one: the cache the read filled is the cache
- * the save is made against.
+ * with members this question has no use for. And the edits are made here rather
+ * than in a second run because reading and saving are two halves of one question:
+ * an appointment whose zone is resolvable until the first time the user touches
+ * it is not usable, and the half that could not be measured without the other
+ * half in the same run is exactly this one — the cache the read filled is the
+ * cache the saves are made against.
  *
  * Several events in one run rather than one per run, because what is being
  * measured is a *contrast*: a zone the server defined against one it only named.
@@ -34,13 +43,19 @@
  * `rust/crates/jmap-functional/tests/calendar.rs`, which seeds the events, runs
  * this program and reads its output.
  *
- *   usage: functional-cal-zone-client <source-uid> <new-summary> <event-uid>...
+ *   usage: functional-cal-zone-client <source-uid> <new-summary>
+ *              <new-dtstart> <new-dtend> <event-uid>...
  *
  * The observations of the n-th event on the command line are prefixed `event-n`,
  * counting from one. Positional rather than keyed by the UID because the UID is
  * whatever the mock filed the event under, and a key beginning with a digit
  * makes for a poor observation name. What the first event looks like after the
- * save is prefixed `saved`.
+ * rename is prefixed `saved`, and after the move `moved`.
+ *
+ * The two clocks are iCalendar `DATE-TIME` values with no zone on them — the
+ * `TZID` the moved event keeps is the one already on its `DTSTART`, because the
+ * whole question is whether an appointment that moves stays in the zone it was
+ * in, and a client that named the zone itself would be answering it.
  */
 
 #include <libecal/libecal.h>
@@ -175,6 +190,102 @@ report_zone_lookup (const gchar *prefix,
 	g_clear_object (&property);
 }
 
+/* How long EDS says the event lasts, reported as both of the lines that can say
+ * so.
+ *
+ * Two observations rather than one resolved length, because which line carries it
+ * is itself the measurement: the mapping writes a `DURATION`, Evolution's editor
+ * writes a `DTEND`, and RFC 5545 §3.6.1 allows only one of them on a component. So
+ * the pair says which of the two shapes came back — and an event that came back
+ * with neither, or with both, is a different bug from one that came back the wrong
+ * length. */
+static void
+report_length (const gchar *prefix,
+	       ICalComponent *event)
+{
+	const struct {
+		ICalPropertyKind kind;
+		const gchar *name;
+	} lines[] = {
+		{ I_CAL_DURATION_PROPERTY, "duration" },
+		{ I_CAL_DTEND_PROPERTY, "dtend" },
+	};
+	gsize i;
+
+	for (i = 0; i < G_N_ELEMENTS (lines); i++) {
+		ICalProperty *property;
+		gchar *value;
+
+		property = i_cal_component_get_first_property (event, lines[i].kind);
+		value = property ? i_cal_property_get_value_as_string (property) : NULL;
+		g_print ("%s-%s=%s\n", prefix, lines[i].name, value ? value : "");
+		g_free (value);
+		g_clear_object (&property);
+	}
+}
+
+/* Move the appointment: retype the wall clock its `DTSTART` states, and state how
+ * long it now lasts as an end rather than as a length.
+ *
+ * The start is edited *in place* — the value of the property already there, with
+ * every parameter on it left alone — which is the same content line Evolution
+ * produces by a different route. Its editor builds an ECalComponentDateTime and
+ * calls e_cal_component_set_dtstart, which writes the value and puts back the
+ * `TZID` it was given; what reaches the backend either way is the same
+ * `DTSTART;TZID=…:…`. Doing it in place here is not a shortcut but the point: this
+ * program must not name the zone, or it would be supplying the answer the leg is
+ * asking for.
+ *
+ * The end is a new property carrying the `TZID` read off that same `DTSTART`,
+ * because an event whose two clocks are in different zones is a shape neither
+ * Evolution writes nor this mapping can resolve. And the `DURATION` the mapping
+ * drew is removed beside it: RFC 5545 §3.6.1 makes the two mutually exclusive, so
+ * leaving it would hand the backend a component no reader has to make sense of —
+ * and would leave it open which of the two the length came from.
+ *
+ * FALSE when the component states no start, or when libical would not read the
+ * end back: either is this program failing to make the edit, not an observation. */
+static gboolean
+move_event (ICalComponent *event,
+	    const gchar *new_start,
+	    const gchar *new_end)
+{
+	ICalProperty *start;
+	ICalProperty *end;
+	ICalProperty *duration;
+	ICalParameter *parameter;
+	const gchar *tzid;
+	gchar *line;
+
+	start = i_cal_component_get_first_property (event, I_CAL_DTSTART_PROPERTY);
+	if (!start)
+		return FALSE;
+
+	i_cal_property_set_value_from_string (start, new_start, "DATE-TIME");
+
+	parameter = i_cal_property_get_first_parameter (start, I_CAL_TZID_PARAMETER);
+	tzid = parameter ? i_cal_parameter_get_tzid (parameter) : NULL;
+	line = tzid ? g_strdup_printf ("DTEND;TZID=%s:%s", tzid, new_end)
+		    : g_strdup_printf ("DTEND:%s", new_end);
+	end = i_cal_property_new_from_string (line);
+	g_free (line);
+	g_clear_object (&parameter);
+	g_clear_object (&start);
+
+	if (!end)
+		return FALSE;
+
+	duration = i_cal_component_get_first_property (event, I_CAL_DURATION_PROPERTY);
+	if (duration) {
+		i_cal_component_remove_property (event, duration);
+		g_object_unref (duration);
+	}
+
+	i_cal_component_take_property (event, end);
+
+	return TRUE;
+}
+
 /* Ask for one event until EDS has it, or give up. cal-edit-client.c's
  * wait_for_event: a miss arrives as E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND rather
  * than as a failure of the call, so it is cleared and retried. */
@@ -198,6 +309,54 @@ wait_for_event (ECalClient *cal,
 	return NULL;
 }
 
+/* Send an edited component back and report what EDS hands out for the event
+ * afterwards, under `prefix`.
+ *
+ * The read-back is a plain get rather than a wait: the event is certainly in the
+ * cache by now — a save the backend accepted is a save it has already stored — so
+ * an answer of "not found" here is a finding rather than a race to sleep through.
+ *
+ * The same observations as the read loop makes, and in the same order, because
+ * what the leg compares is exactly a before and an after; a shorter report after a
+ * save would leave the assertions with nothing to hold the save to. 0 on success,
+ * and the program's exit status otherwise. */
+static int
+save_and_report (ECalClient *cal,
+		 ICalComponent *event,
+		 const gchar *uid,
+		 const gchar *prefix)
+{
+	GError *error = NULL;
+	ICalComponent *read_back = NULL;
+	ICalComponent *read_back_event;
+
+	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
+					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
+		return fail ("modify", error);
+
+	if (!e_cal_client_get_object_sync (cal, uid, NULL, &read_back, NULL, &error))
+		return fail ("get-after-modify", error);
+
+	read_back_event = first_vevent (read_back);
+	if (!read_back_event) {
+		g_printerr ("get-after-modify: what EDS handed back for %s holds no "
+			    "VEVENT\n", uid);
+		g_object_unref (read_back);
+		return 1;
+	}
+
+	g_print ("%s-summary=%s\n", prefix, i_cal_component_get_summary (read_back_event));
+	g_print ("%s-definitions=%u\n", prefix, definition_count (read_back));
+	functional_report_start (prefix, read_back_event);
+	report_zone_lookup (prefix, cal, read_back_event);
+	report_length (prefix, read_back_event);
+
+	g_object_unref (read_back_event);
+	g_object_unref (read_back);
+
+	return 0;
+}
+
 int
 main (int argc,
       char **argv)
@@ -209,23 +368,27 @@ main (int argc,
 	ECalClient *cal;
 	ICalComponent *fetched;
 	ICalComponent *event;
-	ICalComponent *read_back = NULL;
-	ICalComponent *read_back_event;
 	const gchar *source_uid;
 	const gchar *new_summary;
+	const gchar *new_start;
+	const gchar *new_end;
 	const gchar *saved_uid;
+	int status;
 	int first;
 	int index;
 
-	if (argc < 4) {
-		g_printerr ("usage: %s <source-uid> <new-summary> <event-uid>...\n", argv[0]);
+	if (argc < 6) {
+		g_printerr ("usage: %s <source-uid> <new-summary> <new-dtstart> "
+			    "<new-dtend> <event-uid>...\n", argv[0]);
 		return 2;
 	}
 
 	source_uid = argv[1];
 	new_summary = argv[2];
-	/* The first event on the command line, and the one the save is made to. */
-	first = 3;
+	new_start = argv[3];
+	new_end = argv[4];
+	/* The first event on the command line, and the one the saves are made to. */
+	first = 5;
 	saved_uid = argv[first];
 
 	registry = e_source_registry_new_sync (NULL, &error);
@@ -283,21 +446,22 @@ main (int argc,
 		 * VTIMEZONE standing in the VCALENDAR is still in reach from here. */
 		functional_report_start (prefix, event);
 		report_zone_lookup (prefix, cal, event);
+		report_length (prefix, event);
 
 		g_free (prefix);
 		g_object_unref (event);
 		g_object_unref (fetched);
 	}
 
-	/* And the save. The event is asked for again rather than kept from the loop
-	 * above, which costs one call to a cache that certainly holds it by now and
-	 * keeps the loop's job to reporting.
+	/* And the first save. The event is asked for again rather than kept from the
+	 * loop above, which costs one call to a cache that certainly holds it by now
+	 * and keeps the loop's job to reporting.
 	 *
 	 * The title is retyped through i_cal_component_set_summary, which replaces the
 	 * value of the SUMMARY already there and leaves everything around it alone —
 	 * so what goes back is the component EDS handed over with one line rewritten,
 	 * which is what Evolution's appointment editor sends. Nothing here touches the
-	 * DTSTART: the point of the save is that an edit which has nothing to do with
+	 * DTSTART: the point of this save is that an edit which has nothing to do with
 	 * the zone does not cost the user the zone, and an edit that restated the
 	 * clock could not tell the two apart. */
 	fetched = wait_for_event (cal, saved_uid);
@@ -314,30 +478,47 @@ main (int argc,
 	}
 
 	i_cal_component_set_summary (event, new_summary);
-
-	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
-					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
-		return fail ("modify", error);
+	status = save_and_report (cal, event, saved_uid, "saved");
 
 	g_object_unref (event);
 	g_object_unref (fetched);
 
-	if (!e_cal_client_get_object_sync (cal, saved_uid, NULL, &read_back, NULL, &error))
-		return fail ("get-after-modify", error);
+	if (status != 0)
+		return status;
 
-	read_back_event = first_vevent (read_back);
-	if (!read_back_event) {
-		g_printerr ("get-after-modify: what EDS handed back holds no VEVENT\n");
+	/* And the second, which is the edit about the clock and nothing else. Made to
+	 * the component EDS hands back *now* rather than to the one edited above,
+	 * because that is the component a user has in front of them: the save the
+	 * backend just made redrew the event from what the server holds, and an edit
+	 * built on the older copy would be sending back a line the first save may
+	 * already have changed. */
+	fetched = wait_for_event (cal, saved_uid);
+	if (!fetched) {
+		g_printerr ("get-before-move: EDS no longer has the event %s\n", saved_uid);
 		return 1;
 	}
 
-	g_print ("saved-summary=%s\n", i_cal_component_get_summary (read_back_event));
-	g_print ("saved-definitions=%u\n", definition_count (read_back));
-	functional_report_start ("saved", read_back_event);
-	report_zone_lookup ("saved", cal, read_back_event);
+	event = first_vevent (fetched);
+	if (!event) {
+		g_printerr ("get-before-move: what EDS handed back for %s holds no "
+			    "VEVENT\n", saved_uid);
+		return 1;
+	}
 
-	g_object_unref (read_back_event);
-	g_object_unref (read_back);
+	if (!move_event (event, new_start, new_end)) {
+		g_printerr ("move: the event %s states no start, or libical would not "
+			    "read the end back\n", saved_uid);
+		return 1;
+	}
+
+	status = save_and_report (cal, event, saved_uid, "moved");
+
+	g_object_unref (event);
+	g_object_unref (fetched);
+
+	if (status != 0)
+		return status;
+
 	g_object_unref (client);
 	g_object_unref (source);
 	g_object_unref (registry);
