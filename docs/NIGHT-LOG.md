@@ -23725,3 +23725,88 @@ slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; what
 Evolution's contact editor writes for a replaced photo, and into a cleared field,
 is inferred rather than measured; and the `jmap-mail` `transport.rs` hang is still
 an open design question with a lock-order hypothesis attached.
+
+## 2026-08-15 (two-hundred-and-fifty-fourth session)
+
+**The zone the series could not state took an occurrence's zone with it.**
+Last session's log left this on the blocker list, and it is closed here. On a
+create, `jmap_cal_sync::save_component` asks `maps_time_zone` whether the event's
+zone can be stated to a server; when the answer is no — a Windows name off an
+Exchange invitation, an identifier nothing defines — it files the appointment
+floating, which is the honest answer where there is no server zone to keep. It
+also cleared `time_zones`, on the reasoning written beside it: a §4.7.2 entry
+nothing refers to is a claim about a zone the event is not in.
+
+The reasoning is right and the code asked it of the wrong thing. "Nothing refers
+to it" is a question about the whole event, and since 5ffe045 the reader collects
+definitions for the series' zone *and* for every occurrence that moved into one
+of its own. So an event whose series was unsendable and whose Thursday had been
+moved into a zone only the document defines reached the server with the override
+still naming `/example.com/Europe-Berlin` and nothing to say what that is. RFC
+8984 §1.4.9 does not admit that identifier without its definition; a server may
+refuse the whole `CalendarEvent/set` over it, which costs the user the
+appointment rather than the series' zone, and a server that keeps it shows one
+occurrence floating.
+
+**So the map is pruned, not emptied.** `prune_time_zones` drops every definition
+the event no longer refers to and leaves the rest; emptied completely it removes
+the map rather than sending `{}`. The one caller is the create path, in place of
+the `event.time_zones = None` that was there.
+
+**"Refers to" is now written once.** `read_time_zones`'s iterator over the
+series' identifier and each override's became `referred_zones`, which both it and
+the pruning read. The definition lookup's tolerance for either spelling of RFC
+8984 §1.4.9's solidus — `definition_of` asks for the key with the prefix and
+without — had to be mirrored in the retain, or an entry kept under one spelling
+and looked up under the other becomes a zone that silently stops resolving. The
+unit test drives that case directly, because the behavioural test cannot: the
+reader keys what it reads off the `VTIMEZONE`, so only a server's document
+arrives under the other spelling.
+
+**What the red run printed** was the bug in one line: the override present with
+`"timeZone": "/example.com/Europe-Berlin"` and `timeZones` absent from the same
+object. The fixture is a series in `W. Europe Standard Time` — unsendable in
+either form — over one occurrence moved into the custom zone, which is the
+narrowest shape that separates the two questions.
+
+**What is measured and what is not.** Measured: the create through the mock, both
+spellings of the definition's key, the entry nothing names going while the series
+keeps its own, and the emptied map becoming absent. Not measured: any of it
+through real EDS. That is deliberate rather than skipped — Evolution's envelope
+defines the zones its components name, so the series-unsendable shape does not
+arise from Evolution; it arrives from a document written elsewhere, which is what
+the mock-level test hands in.
+
+One thing left where it is: the edit path is untouched. There a zone that cannot
+be stated leaves the server's own standing (`patch::diff` never names
+`timeZones`), so there is no map to prune and no dangling reference to make.
+
+Tests: +1 in `jmap-cal-sync/tests/save.rs`, +1 in `jmap-ical/tests/event.rs`. The
+default set is 1131.
+
+Verified locally: `cargo test --locked` 1131, no failures; `cargo test --locked -p
+eds-sys -p jmap-backend-cal -p jmap-backend-cal-module -p evolution-jmap-cal-sync`
+all green; `cargo fmt --all --check` clean; `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` clean; `ninja -C build` then
+`ctest -L functional` 4/4. `ci/checks.sh` still stops at its first step on this VM
+(no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those two were reasoned by
+hand: no file is added or removed, so the SPDX header set is unchanged, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the last
+green run.
+
+No milestone tag. Removed from the blocker list: the create path dropping a
+definition an override still refers to. Unchanged blockers: no functional leg
+drives an occurrence moved into a *client*-defined zone through real EDS; the
+calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier;
+M7 still **needs human verification in real Evolution**; `jmap-mail`'s rustdoc is
+dirty; whether Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE`
+"Evolution shows only the first" bet is still unverified; the two `LABEL` `TYPE`
+risks stand; a deathday and a birthday stated as a year alone are still invisible;
+the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified
+and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's rendering
+is unmeasured; what Evolution's contact editor writes for a replaced photo, and
+into a cleared field, is inferred rather than measured; and the `jmap-mail`
+`transport.rs` hang is still an open design question with a lock-order hypothesis
+attached.

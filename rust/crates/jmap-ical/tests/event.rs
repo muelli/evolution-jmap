@@ -10,7 +10,7 @@
 use jmap_ical::{
     ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
-    names_time_zone,
+    names_time_zone, prune_time_zones,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -5325,6 +5325,76 @@ fn a_zone_is_sendable_when_something_says_what_it_is() {
         "W. Europe Standard Time",
         json!({"W. Europe Standard Time": custom_zone()}),
     )));
+}
+
+/// What a save sends is the definitions the event still refers to — not the
+/// series' alone, and not the whole map regardless.
+///
+/// The caller is the create path, which clears a zone it cannot state. Clearing
+/// the map with it dropped the definition of a zone one *occurrence* had been
+/// moved into, leaving the override naming an identifier nothing resolved; the
+/// other direction, keeping an entry the event stopped referring to, is a claim
+/// about a zone the event is not in.
+#[test]
+fn pruning_keeps_the_definitions_the_event_still_refers_to() {
+    let moved_into = |tzid: &str| {
+        serde_json::from_value(json!({
+            "2026-01-16T13:00:00": {"start": "2026-01-16T15:00:00", "timeZone": tzid},
+        }))
+        .expect("a map of overrides")
+    };
+
+    // Nothing refers to the zone once the series' own is gone.
+    let mut lone = defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}));
+    lone.time_zone = None;
+    prune_time_zones(&mut lone);
+    assert_eq!(
+        lone.time_zones, None,
+        "emptied, the map goes rather than {{}}"
+    );
+
+    // An occurrence moved into it still refers to it, so the definition stays.
+    let mut moved = defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}));
+    moved.time_zone = None;
+    moved.recurrence_overrides = moved_into(CUSTOM_TZID);
+    prune_time_zones(&mut moved);
+    assert!(
+        moved
+            .time_zones
+            .as_ref()
+            .is_some_and(|zones| zones.contains_key(CUSTOM_TZID)),
+        "{moved:?}"
+    );
+
+    // Under the other reading of where the solidus lives, too: an entry kept
+    // under one spelling and looked up under the other is a zone that silently
+    // stops resolving.
+    let mut other_spelling = defining(
+        CUSTOM_TZID,
+        json!({"example.com/Europe-Berlin": custom_zone()}),
+    );
+    other_spelling.time_zone = None;
+    other_spelling.recurrence_overrides = moved_into(CUSTOM_TZID);
+    prune_time_zones(&mut other_spelling);
+    assert!(
+        other_spelling
+            .time_zones
+            .as_ref()
+            .is_some_and(|zones| zones.contains_key("example.com/Europe-Berlin")),
+        "{other_spelling:?}"
+    );
+
+    // And a definition of some third zone goes even while the series keeps its
+    // own, because nothing in the event names it.
+    let mut stranger = defining(
+        CUSTOM_TZID,
+        json!({CUSTOM_TZID: custom_zone(), "/example.com/Elsewhere": custom_zone()}),
+    );
+    prune_time_zones(&mut stranger);
+    assert_eq!(
+        stranger.time_zones.map(|zones| zones.into_keys().collect()),
+        Some(vec![CUSTOM_TZID.to_owned()]),
+    );
 }
 
 /// A definition keyed without the solidus RFC 8984 §1.4.9 requires of the
