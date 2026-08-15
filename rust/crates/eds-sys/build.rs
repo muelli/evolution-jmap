@@ -250,6 +250,11 @@ const ALLOWED_TYPES: &[&str] = &[
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
+    // EDS's own answer to "can the library you loaded serve code compiled
+    // against the version you were built for?". Asking it is cheaper and more
+    // durable than comparing the numbers here, because what counts as
+    // compatible is EDS's rule to state, not ours.
+    "eds_check_version",
     "e_backend_.*",
     "e_(book|cal)_backend_.*",
     "e_(book|cal)_meta_backend_.*",
@@ -533,6 +538,14 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
 /// and the mask are `#define`s. Retyping either is a folder that reads back as
 /// some other type.
 const ALLOWED_VARS: &[&str] = &[
+    // Which EDS this is, in the two spellings that can disagree: the
+    // `#define`s state the version of the headers bindgen just read, and the
+    // `extern const guint`s state the version of the `libedataserver` the
+    // process ends up loading. M10's matrix reads both out of a failing leg,
+    // and tests/layout.rs fails when they are not the same ABI — see
+    // docs/eds-versions.md.
+    "EDS_M(AJOR|INOR|ICRO)_VERSION",
+    "eds_m(ajor|inor|icro)_version",
     "E_SOURCE_EXTENSION_.*",
     "E_SOURCE_CREDENTIAL_.*",
     "EDS_CAMEL_PROVIDER_DIR",
@@ -572,6 +585,31 @@ const BLOCKED_TYPES: &[&str] = &[
     "__va_list_tag",
 ];
 
+/// The one EDS version the four probed packages describe.
+///
+/// They are four `.pc` files out of a single tarball, so in every sane
+/// installation they carry the same version — and if they do not, these
+/// bindings are being generated from headers of *mixed* ABIs, which is the
+/// hazard M10 exists to make visible rather than something to average over.
+/// There is no correct binding to emit in that case, so refuse to emit one.
+fn agreed(resolved: &[(&str, String)]) -> String {
+    let (_, first) = resolved.first().expect("no packages were probed");
+    if let Some((pkg, other)) = resolved.iter().find(|(_, v)| v != first) {
+        let all = resolved
+            .iter()
+            .map(|(p, v)| format!("{p} {v}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        panic!(
+            "the EDS development files disagree about their version \
+             ({pkg} is {other}, not {first}) — these libraries ship as one \
+             tarball, so a mixed installation would put headers of two ABIs \
+             behind one set of bindings. Found: {all}"
+        );
+    }
+    first.clone()
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=build.rs");
@@ -579,6 +617,7 @@ fn main() {
     // The pkg_config crate emits the cargo:rustc-link-lib/-search lines for
     // us; we only need the include paths for clang.
     let mut clang_args = vec!["-DE_CAL_DISABLE_DEPRECATED".to_string()];
+    let mut resolved: Vec<(&str, String)> = Vec::new();
     for pkg in [
         "libebackend-1.2",
         "libedata-book-1.2",
@@ -596,7 +635,9 @@ fn main() {
                 .iter()
                 .map(|p| format!("-I{}", p.display())),
         );
+        resolved.push((pkg, lib.version));
     }
+    println!("cargo::rustc-env=EDS_HEADER_VERSION={}", agreed(&resolved));
 
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
