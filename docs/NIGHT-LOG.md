@@ -23339,3 +23339,109 @@ unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
 editor writes for a replaced photo, and into a cleared field, is inferred rather than
 measured; and the `jmap-mail` `transport.rs` hang is still an open design question
 with a lock-order hypothesis attached.
+
+## 2026-08-15 (two-hundred-and-fiftieth session)
+
+**The zone a document brings with it.** The previous calendar session closed by
+naming the one direction of the custom-zone story nothing had measured: "nothing is
+read back from a `VTIMEZONE` into `timeZones`, so a document another client wrote a
+custom zone into still names a zone the save cannot send." `jmap_cal_sync`'s create
+path said the same thing in code, in a comment that had been there since the zone
+work began — *"on a create there is none to stand, so the appointment is filed
+floating."* A new appointment whose zone came from an Exchange invitation rather than
+a zone database reached the server as a wall clock time in no particular zone, which
+every reader then resolves to its own.
+
+RFC 8984 §1.4.9 has the answer already: a `TimeZoneId` is either an IANA name *or* a
+custom identifier beginning with a solidus, and the second is legal exactly beside the
+§4.7.2 `timeZones` entry that defines it. This crate wrote that pair — `drawn_time_zone`
+and `vtimezone_of` have drawn a `VTIMEZONE` out of a server's definition for several
+sessions — and never read it. `read_time_zones`/`read_definition`/`read_observance` are
+the inverse of those three, and `maps_time_zone` is the question the save path now asks
+instead of `names_time_zone`: may this event's zone be *stated*? No zone (floating),
+an IANA name, or a custom identifier the event itself defines — and nothing else.
+
+**The gate is the writer, asked rather than copied.** A definition is read only if
+`vtimezone_of` can draw it again. That is one line rather than a second copy of the
+"is this whole?" rules, and it makes the round trip exact: the test asserts
+`event_to_ical(ical_to_event(x)) == x` byte for byte for a document carrying a custom
+zone, so what comes back out is what came in.
+
+**Two bugs the red test found on the way, both in code that was already there.**
+
+- `syntax::date_time_text` spelled every `PartialDateTime` as a date or a date-time.
+  calcard holds four RFC 5545 value types in that one struct, and `format_as_ical`
+  writes whichever fields the type it is *given* calls for, zero-filling the rest — so
+  `TZOFFSETFROM:+0200` came back as **`00000000`**. Not wrong about the offset so much
+  as silent about it. The value type is now chosen from what the struct carries: a
+  date makes it a date-time, an hour without one a TIME, neither a UTC-OFFSET. Nothing
+  above this layer had read an offset before, which is why it had never shown.
+- `observance` drew an `RRULE` from whatever `rule_to_rrule` returned. That function
+  *leaves off* a `BYxxx` part it cannot spell and still yields a line, so a server
+  definition with, say, a leap-month `byMonth` drew a zone moving on the last Sunday
+  of **every** month where the rule said October — one hour wrong for eleven months of
+  the year, stated with the same confidence as the truth. It now asks
+  `maps_recurrence_rule` first and gives up the whole zone, which is what the
+  function's own doc comment ("half a definition is worse than none") always claimed
+  it did.
+
+**Where the two save paths deliberately disagree.** The create path sends a custom
+zone with its definition; `patch::diff` still refuses one on an edit, and now says
+why. `timeZones` is replaced whole, and a `VTIMEZONE` shows none of the `aliases`,
+`url` or `validUntil` a server's definition may carry — so patching it over would
+delete what the user was never shown, which is the rule that module exists to keep. A
+create has nothing to delete. The asymmetry is the point, not an oversight.
+
+**One narrowing below us, written down rather than worked around.** calcard's offset
+parser reads at most four digits, so RFC 5545 §3.3.14's `±hhmmss` arrives with its
+seconds dropped. Sub-minute offsets belong to pre-standard-time observances
+(`+001932` for Amsterdam before 1937) that no appointment is in, and `utc_offset` reads
+and writes the six-digit form regardless, so nothing above assumes minutes. Noted in
+`date_time_text`'s doc.
+
+**What this does *not* yet close.** The mapping can now carry such a zone; the
+*envelope* the backend builds still cannot supply one. `marshal::take_referenced_time_zones`
+copies in a definition for every zone the components name **and libical can resolve**,
+out of the builtin table — a custom zone lives in the calendar's own timezone store
+(`ETimezoneCache`), which that function has no handle on. So the pair reaches
+`jmap_cal_sync` today only from a document that already carries its own `VTIMEZONE`,
+not from one EDS reassembled. Closing that means threading the backend's timezone
+cache into `icalendar_from_instances`, which is a C/FFI change of its own and is the
+next tractable item in this story. A Windows zone name (`W. Europe Standard Time`)
+stays unsendable in both paths and always will be: it is neither form of identifier,
+and inventing one would mean this crate deciding which zone Exchange meant.
+
+Tests: 1126 in the default set, up 5 — four in `jmap-ical/tests/event.rs` (the
+definition round trip, the two shapes that are *not* read back, the unreadable-part
+case) plus the `maps_time_zone` table, and two in `jmap-cal-sync/tests/save.rs` (a new
+event in a defined custom zone, and one naming a zone nothing defines). One existing
+test gained a case: `a_definition_this_mapping_cannot_draw_whole_is_not_drawn_at_all`
+now drives the partly-spellable rule. One existing assertion was inverted with its
+reason rewritten — `a_custom_zone_is_read_back_as_the_identifier_it_was_drawn_with`
+asserted `time_zones == None`, which is the behaviour this session replaced; the
+stronger statement lives in the new round-trip test beside it.
+
+Verified locally: `cargo test --locked` 1126, no failures; `cargo fmt --all --check`
+clean; `cargo clippy --workspace --exclude example-module --all-targets --locked -- -D
+warnings` clean; `ninja -C build` then `ctest -L functional` 4/4 green (the calendar
+leg's three EDS tests included). `ci/checks.sh` still stops at its first step on this
+VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those two were reasoned by
+hand: no file is added or removed, so the SPDX header set is unchanged, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the last
+green run.
+
+No milestone tag. Removed from the blocker list: nothing is read back from a
+`VTIMEZONE` into `timeZones`. Added: the save envelope cannot supply a custom zone's
+definition out of EDS's timezone cache. Unchanged blockers: the calcard directive's
+two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `jmap-mail`'s rustdoc is dirty; whether Evolution
+renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the
+first" bet is still unverified; the two `LABEL` `TYPE` risks stand; a deathday and a
+birthday stated as a year alone are still invisible; the conventional URI schemes for
+AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled;
+`X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour unmeasured;
+whether the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
+editor writes for a replaced photo, and into a cleared field, is inferred rather than
+measured; and the `jmap-mail` `transport.rs` hang is still an open design question
+with a lock-order hypothesis attached.

@@ -23,7 +23,7 @@ pub mod patch;
 use std::collections::BTreeMap;
 
 use jmap_client::{ChangeSet, Client};
-use jmap_ical::{event_to_ical, ical_to_event, names_time_zone};
+use jmap_ical::{event_to_ical, ical_to_event, maps_time_zone};
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::{Id, State};
 use serde_json::Value;
@@ -131,12 +131,26 @@ impl CalSync {
             let local = event.id.take();
             event.uid = event.uid.take().or_else(|| local.map(|id| id.to_string()));
             event.calendar_ids = Some(BTreeMap::from([(self.calendar_id.clone(), true)]));
-            // A zone the document gave no JSCalendar name for. On an edit the
-            // server's own zone stands (see [`patch`]); on a create there is
+            // A zone the document gave no JSCalendar spelling for. On an edit
+            // the server's own zone stands (see [`patch`]); on a create there is
             // none to stand, so the appointment is filed floating. A
             // wall-clock time with no zone shows correctly for the user who
             // typed it, and an event the server refused shows nothing at all.
-            event.time_zone = event.time_zone.filter(|zone| names_time_zone(zone));
+            //
+            // Which is the answer only where there is no spelling. An IANA name
+            // has one, and so does a zone the document *defines* — RFC 8984
+            // §1.4.9's custom identifier, sent beside the §4.7.2 `timeZones`
+            // entry that says what it is, which is how an appointment whose zone
+            // came from an Exchange invitation rather than a database reaches
+            // the server as the event it is. See [`maps_time_zone`], and
+            // `jmap_ical`'s `read_time_zones`, which is where the definition is
+            // read off the `VTIMEZONE`.
+            if !maps_time_zone(&event) {
+                event.time_zone = None;
+                // With the zone goes its definition: a `timeZones` entry nothing
+                // refers to is a claim about a zone the event is not in.
+                event.time_zones = None;
+            }
             let stored = self.client.event_create(&self.account_id, &event)?;
             return ComponentInfo::render(&stored);
         };
