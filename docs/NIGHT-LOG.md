@@ -23084,3 +23084,8 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-15 (two-hundred-and-forty-fifth session)
+
+Claiming Camel best encoding filter (`CamelMimeFilterBestenc`), charset conversion filter (`CamelMimeFilterCharset`), mbox From escaping filter (`CamelMimeFilterFrom`), yEnc filter (`CamelMimeFilterYenc`), progress filter (`CamelMimeFilterProgress`), buffered stream (`CamelStreamBuffer`), and UTF-8/string utilities (`CamelUTF8`, `CamelStringUtils`, `CamelHostnameUtils`) EDS verification in `eds-sys`, 8bit / binary transfer encoding and charset conversion handling in `jmap-mail`, and UTF-8 validation and header sanitization in `jmap-mail-sync`.
+
+
