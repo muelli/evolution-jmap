@@ -78,8 +78,8 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# because they ask different questions: cal-client.c creates every event it
 	# looks at, cal-edit-client.c reads one the server already held and saves back
 	# the members no iCalendar line has room for, and cal-zone-client.c asks what
-	# instant an event's zone resolves to — before and after the one edit such an
-	# event can be given. See the header of each.
+	# instant an event's zone resolves to — before and after each of the two kinds
+	# of edit a user can make to such an event. See the header of each.
 	#
 	# event-start.c holds the one function that reports the instant a start
 	# resolves to, so that a difference between what two of these programs answer
