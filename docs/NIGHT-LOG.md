@@ -24001,3 +24001,108 @@ rendering is unmeasured; what Evolution's contact editor writes for a replaced
 photo, and into a cleared field, is inferred rather than measured; and the
 `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
+
+## 2026-08-15 (two-hundred-and-fifty-seventh session)
+
+**M10, started at the only end of it this VM can measure.** M10 asks for a CI
+matrix that builds `eds-sys` against several EDS releases and fails a leg loudly
+"with the version and the offending type in the output". The matrix itself is a
+CI job nothing here can run — but its *output* is code in this repository, and
+that half was missing: `tests/layout.rs` named the type that drifted and said
+nothing at all about which EDS it drifted on. Across a matrix of otherwise
+identical legs, read long after the container is gone, that is a log entry
+nobody can act on. So this session built the thing the matrix will report
+*through*, before the matrix that reports through it.
+
+**Three versions, not one, because they can disagree.** What "the EDS version"
+means turned out to be three separate facts, and each disagreement between them
+is a different fault:
+
+- what pkg-config resolved when `build.rs` chose the include paths — now
+  `eds_sys::EDS_HEADER_VERSION`, emitted as a `rustc-env` from the build script,
+  the only one of the three that is not in the bindings;
+- what the headers say — `EDS_MAJOR_VERSION` and its two siblings, `#define`d in
+  `libedataserver/eds-version.h`, now allowlisted into the bindings;
+- what the library this process actually loaded says — `eds_major_version` and
+  its siblings, `extern const guint` in `libedataserver`.
+
+(1) against (2) is a `.pc` file that does not describe the headers beside it, so
+`build.rs` chose its include paths off a claim bindgen then did not read; that is
+`pkg_config_describes_the_headers_it_pointed_at`. (2) against (3) is a build
+against one EDS deployed on another, which is the ABI contract itself; that is
+`the_running_eds_can_serve_what_these_bindings_were_compiled_against`. All three
+are named in every `assert_layout!` failure, which is the M10 acceptance line.
+
+**The ABI check asks EDS rather than comparing numbers.** `eds_check_version()`
+returns NULL when the loaded library can serve code compiled against the version
+given, and an English complaint when it cannot. Comparing majors and minors here
+would be this repository deciding what counts as compatible; EDS has a rule and
+it is EDS's to state. The call is deliberately handed the compiled-in `#define`s
+rather than anything the test file knows, so it stays true whatever a matrix leg
+installed.
+
+**`build.rs` now refuses a mixed installation outright.** The four probed `.pc`
+files — `libebackend-1.2`, `libedata-book-1.2`, `libedata-cal-2.0`, `camel-1.2`
+— ship in one tarball, so a version disagreement between them means headers of
+two ABIs behind one set of bindings. There is no correct binding to generate in
+that state, and generating one anyway is precisely the invisible breakage M10
+exists to end, so `agreed()` panics with all four versions listed. This is a
+build failure, not a test failure, on purpose: it happens before bindgen reads
+anything.
+
+**Every new check was made to fail before it was believed.** Four mutations, run
+and reverted: `size_of::<$instance>() + 1` in the macro, to read the real
+assertion output rather than a reconstruction of it — it says `EBookBackend:
+instance size disagrees with g_type_query, under EDS 3.52.3 (pkg-config),
+headers 3.52.3, runtime 3.52.3`; stripping the version back out of
+`layout_message`, which reddens the message test on all three numbers at once;
+a `+ 1` on the minor in each of the two version tests, which reddens them
+separately and produces EDS's own complaint text. The build-script refusal was
+driven with a doctored `camel-1.2.pc` claiming 3.99.0 on `PKG_CONFIG_PATH`, and
+the build stopped with the other three versions named beside it.
+
+**`docs/eds-versions.md`** is M10's third acceptance bullet: which EDS versions
+are supported, and the rule that a module must be built against the EDS it is
+deployed on — with the reason, which is that a backend is `dlopen`ed into EDS's
+address space and derives from EDS's classes, so the binding is ABI and not API.
+It also writes down M10's own limit in the milestone's words: none of this
+catches *semantic* drift, where the size and the signature hold still while the
+ownership or the pre/postcondition moves underneath. Only the functional tests
+and a human reading release notes catch that. A green build on a new EDS is not
+a claim that it works.
+
+Tests: +3 in `eds-sys/tests/layout.rs`, which is 12 → 15. The default set is
+unchanged at 1136 — `eds-sys` is not in it, by design.
+
+Verified locally: `cargo test --locked` 1136, no failures; `cargo test --locked
+-p eds-sys -p jmap-backend-book -p jmap-backend-cal -p jmap-backend-collection`
+all green, layout 15/15; `cargo fmt --all --check` clean; `cargo clippy
+--workspace --exclude example-module --all-targets --locked -- -D warnings`
+clean; `cargo doc --no-deps -p eds-sys` clean; `ninja -C build` then `ctest -L
+functional` 4/4. `ci/checks.sh` still stops at its first step on this VM (no
+`reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those two were reasoned by
+hand: the one file added is `docs/eds-versions.md`, and `docs/**` is annotated
+in `REUSE.toml`, so it carries no header by design and the SPDX set is
+unchanged; `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it
+gave on the last green run.
+
+**No milestone tag, and M10 is explicitly not done.** What is missing is the
+matrix itself — a CI job that builds and runs this against several pinned EDS
+container images. That is unwritable-and-unverifiable here in the same breath:
+this VM has exactly one EDS, so a workflow added tonight would be a file nobody
+had run. It is the next M10 increment and wants a machine that can pull more
+than one image, or a human to watch the first run.
+
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has
+no CI job and no GUI tier; M7 still **needs human verification in real
+Evolution**; `jmap-mail`'s rustdoc is dirty; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is
+still unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday
+stated as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
+editor writes for a replaced photo, and into a cleared field, is inferred rather
+than measured; and the `jmap-mail` `transport.rs` hang is still an open design
+question with a lock-order hypothesis attached.

@@ -26,4 +26,16 @@
 #![allow(clippy::all)]
 #![allow(rustdoc::all)]
 
+/// The EDS version pkg-config resolved when `build.rs` chose the include
+/// paths these bindings were generated from.
+///
+/// It is the only one of the three versions in play that is not in the
+/// bindings themselves: `EDS_MAJOR_VERSION` and its siblings come from the
+/// headers, `eds_major_version` and its siblings from the library loaded at
+/// run time, and this one from the `.pc` file that led to both. Naming it
+/// separately is what lets `tests/layout.rs` catch a `.pc` file that does not
+/// describe the headers beside it, and what lets a failing M10 matrix leg say
+/// which EDS it was. See `docs/eds-versions.md`.
+pub const EDS_HEADER_VERSION: &str = env!("EDS_HEADER_VERSION");
+
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
