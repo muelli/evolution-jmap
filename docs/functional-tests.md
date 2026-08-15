@@ -704,9 +704,10 @@ works through real EDS.
 against `tests/functional/cal-zone-client.c` — a third client program. The two
 legs above ask what reaches the server; this one starts from the other end, with a
 question about what reaches the *user*: is the appointment shown at the hour the
-server put it at? And then, once that is answered, it renames the appointment and
-asks it again — because a zone that is resolvable until the first ordinary edit is
-not resolvable.
+server put it at? And then, once that is answered, it saves the appointment twice
+and asks it again after each — because a zone that is resolvable until the first
+ordinary edit is not resolvable. The two saves are the two kinds of edit there are:
+one that has nothing to do with the clock, and one that is about nothing else.
 
 RFC 8984 §1.4.9 lets an event's `timeZone` be either an IANA name or a custom
 identifier beginning with a solidus **that the event's own `timeZones` (§4.7.2)
@@ -763,12 +764,13 @@ the assertion is what will fail on the day a server sends better or this reposit
 does better with it.
 
 **And then the user renames the appointment.** Retyping the `SUMMARY` of the
-defined-zone event and saving it is the only edit such an event can be given —
-Evolution offers no way to redefine a zone, and this mapping would refuse to send a
-redefinition — and it is deliberately an edit with nothing to do with the zone, so
-anything that happens to the zone is something the save did on its own. A start the
-user restated could not tell "the zone survived" from "the clock was re-sent in a
-way that happened to agree".
+defined-zone event and saving it is the edit that touches nothing the zone cares
+about — Evolution offers no way to *redefine* a zone, and this mapping would refuse
+to send a redefinition — and that is the point of doing it first: it has nothing to
+do with the zone, so anything that happens to the zone is something the save did on
+its own. A start the user restated could not tell "the zone survived" from "the
+clock was re-sent in a way that happened to agree" — which is why the clock is moved
+in a save of its own, below.
 
 What the save asserts, from both ends:
 
@@ -795,6 +797,45 @@ express it, so it is nothing" — reddens the consumer's pair immediately: the
 `TZID` is gone from the `DTSTART`, the calendar can no longer name a zone, and the
 appointment the user only renamed floats to 10:00Z, two hours from where it was.
 That is the bug this guard exists for, seen from the user's side.
+
+**And then the user drags the appointment.** The second save is the other kind of
+edit there is, and it asks the opposite question of the same save path: the rename
+says an edit with nothing to do with the clock leaves the clock alone, this one says
+an edit about nothing *but* the clock leaves the *zone* alone. It is the likelier
+bug of the two, because `patch::diff` reads a zone it cannot name off the component
+on both sides — so the guard that keeps `timeZone` out of the patch is only
+exercised where something else in the patch is a date-time.
+
+The client retypes the value of the `DTSTART` already there, leaving every parameter
+on it alone, and states the new length as a `DTEND` carrying the `TZID` it read off
+that same start — with the `DURATION` the mapping drew removed beside it, since RFC
+5545 §3.6.1 makes the two mutually exclusive. That is what Evolution's appointment
+editor produces; and the program must not name the zone itself, or it would be
+supplying the answer the leg is asking for.
+
+The new clock is **14:30 on 2026-11-05**, deliberately on the far side of the
+definition's `STANDARD` transition. A move inside CEST would resolve through the
+same observance the read already proved; landing in CET says the yearly rules of
+*both* halves survived into EDS's timezone store, which is what makes the zone a
+zone rather than a fixed offset that happened to be right in April. What it asserts:
+the title the rename gave it, the moved wall clock, the same identifier, and the
+calendar resolving it to **13:30Z** — one hour, not two. On the server: `start` moved
+to `2026-11-05T14:30:00` while `timeZone` and `timeZones` did not move at all, and a
+`duration` of `PT1H30M`. The length travels by a different route from the start —
+the start is a value copied across, the duration is *computed* from a pair of wall
+clocks by `read_duration` — and a duration that came out of the subtraction wrong is
+an appointment of the wrong length rather than at the wrong time, which no assertion
+about `start` would catch. This is also the one place `read_duration`'s `DTEND`
+branch is driven through real EDS, in a zone nothing outside the server can resolve.
+
+Two mutations stand behind this half, and both were invisible before it existed.
+Drawing only the `DAYLIGHT` observance of the definition puts the moved appointment
+at **12:30Z** — April's summer offset applied in November, confidently an hour out —
+while leaving *both* April lookups green at 08:00Z: a half-drawn zone is precisely
+the failure a single-date measurement cannot see. And dropping `read_duration`'s
+`DTEND` branch loses the length entirely: EDS reports no `DURATION` and no `DTEND`,
+and the server's `duration` goes to null, so an appointment the user gave a new end
+comes back with no end at all.
 
 Three earlier mutations stand behind the read half: never drawing the `VTIMEZONE`,
 which leaves the calendar unable to name the zone and both routes floating; drawing

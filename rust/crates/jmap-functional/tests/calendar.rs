@@ -18,8 +18,9 @@
 //! state, and asks what survives the round trip out to a component and back
 //! through a save. Only an event nobody here created can ask that. The third
 //! asks what a zone only the server can name means to a consumer — the instant
-//! it puts an appointment at, before and after the one edit such an event can
-//! be given.
+//! it puts an appointment at, before and after each of the two kinds of edit a
+//! user can make to it: one that has nothing to do with the clock, and one that
+//! is about nothing else.
 
 use std::collections::BTreeMap;
 
@@ -500,16 +501,74 @@ const ZONE_START: &str = "2026-04-09T10:00:00";
 const ZONE_DURATION: &str = "PT1H";
 
 /// What the user retypes over [`DEFINED_ZONE_TITLE`] in the appointment editor —
-/// the one edit an event in a zone only its server can name can be given, since
-/// Evolution offers no way to redefine the zone and this mapping would refuse to
-/// send a redefinition anyway.
+/// the edit that touches nothing the zone cares about, since Evolution offers no
+/// way to *redefine* the zone and this mapping would refuse to send a redefinition
+/// anyway.
 ///
-/// A title rather than the clock deliberately: what the save has to leave alone is
-/// the zone, and an edit that restated the start could not tell "the zone survived"
-/// from "the start was re-sent in a way that happened to agree". The user's edit
-/// here has nothing to do with the zone, so anything that happens to the zone is
-/// something the save did on its own.
+/// A title rather than the clock deliberately, and made first: what the save has to
+/// leave alone is the zone, and an edit that restated the start could not tell "the
+/// zone survived" from "the start was re-sent in a way that happened to agree". The
+/// user's edit here has nothing to do with the zone, so anything that happens to
+/// the zone is something the save did on its own. The clock is moved afterwards, in
+/// a save of its own — see [`ZONE_MOVED_DTSTART`].
 const ZONE_RETYPED_TITLE: &str = "Design review, with the numbers";
+
+/// And then the edit that *is* about the clock: where the user drags the
+/// appointment to, as the iCalendar value the client writes onto the `DTSTART`
+/// already there — the `TZID` beside it untouched, because moving an appointment
+/// does not move it out of its zone.
+///
+/// Made after the rename rather than instead of it, since the two ask opposite
+/// questions of the same save path. The rename says an edit that has nothing to do
+/// with the clock leaves `start` alone; this one says an edit that is *entirely*
+/// about the clock still leaves the *zone* alone. A mapping that resent `timeZone`
+/// whenever `start` changed would pass the first and fail this one, and it is the
+/// likelier bug of the two: `patch::diff` reads a zone it cannot name off the
+/// component on both sides, so the guard that keeps it out of the patch is only
+/// exercised where something else in the patch is a date-time.
+///
+/// In November, on the other side of the definition's `STANDARD` transition. A
+/// move inside CEST would resolve through the same observance the read already
+/// proved; landing in CET says the yearly rules of *both* halves survived into
+/// EDS's timezone store, which is what makes the zone a zone rather than a fixed
+/// offset that happened to be right in April.
+const ZONE_MOVED_DTSTART: &str = "20261105T143000";
+
+/// And where it now ends — the same clock, an hour and a half later.
+///
+/// Written as a `DTEND`, with the `DURATION` the mapping drew removed beside it,
+/// because that is what Evolution states: the appointment editor calls
+/// `e_cal_component_set_dtend`, and RFC 5545 §3.6.1 makes the two mutually
+/// exclusive. So this is also the one place `read_duration`'s `DTEND` branch is
+/// driven through real EDS — the length of an event stated by two wall clocks in a
+/// zone nothing outside the server can resolve, which is exactly the shape a
+/// fixture cannot vouch for: what reaches the mapping is whatever EDS's cache and
+/// libical made of a `DTEND` beside a `DTSTART` neither of them can place on a
+/// timeline.
+const ZONE_MOVED_DTEND: &str = "20261105T160000";
+
+/// What the server must hold afterwards: the moved wall clock as JSCalendar states
+/// it, and the length the two lines above state between them.
+///
+/// The length is asserted because it is the half that travels by a different route
+/// — the start is a value copied across, the duration is *computed* from a pair of
+/// wall clocks by `read_duration` — and because a duration that came out of the
+/// `DTSTART`/`DTEND` subtraction wrong is an appointment of the wrong length rather
+/// than at the wrong time, which no assertion about `start` would catch.
+const ZONE_MOVED_START: &str = "2026-11-05T14:30:00";
+const ZONE_MOVED_DURATION: &str = "PT1H30M";
+
+/// And the instant the moved appointment means: 14:30 in the zone's `STANDARD`
+/// half is 13:30 UTC.
+///
+/// One hour, not the two the April start resolves to, and that difference is the
+/// whole point of moving into November — a "zone" that had been flattened to the
+/// offset the first read happened to need would put this at 12:30Z.
+const ZONE_MOVED_DTSTART_UTC: &str = "20261105T133000Z";
+
+/// What libical alone lands on for it, which is the moved wall clock with a `Z`
+/// stamped on it for the reason [`FLOATING_DTSTART_UTC`] gives.
+const ZONE_MOVED_FLOATING_UTC: &str = "20261105T143000Z";
 
 /// The wall clock EDS should show for both, which is the start above as an
 /// iCalendar `DATE-TIME`.
@@ -1977,6 +2036,8 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
         &[
             "jmap-functional",
             ZONE_RETYPED_TITLE,
+            ZONE_MOVED_DTSTART,
+            ZONE_MOVED_DTEND,
             defined.as_str(),
             undefined.as_str(),
         ],
@@ -2130,6 +2191,69 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
          EDS states another clock, or another identifier, or the calendar can no \
          longer say what that identifier means\n{report}"
     );
+    // How long it was before the user touched the clock, which is what makes the
+    // pair below a *change*: the mapping writes a length as a `DURATION`, so this
+    // is the shape the client is about to replace with the two wall clocks
+    // Evolution's editor writes instead.
+    assert_eq!(
+        (seen.get("saved-duration"), seen.get("saved-dtend")),
+        (Some(&ZONE_DURATION), Some(&"")),
+        "EDS no longer states the seeded event's length as the DURATION the \
+         mapping drew\n{report}"
+    );
+
+    // And then the user drags the appointment into November. The wall clock is the
+    // one they dropped it on, the identifier is untouched — an appointment that is
+    // moved is not moved out of its zone — and the pair after it is the assertion
+    // this half exists for: the calendar still resolves the identifier, and to the
+    // instant the zone's *other* observance means. A save that had resent the zone
+    // it could not name, or cleared it because the patch was touching the clock
+    // anyway, shows up right here.
+    assert_eq!(
+        seen.get("moved-summary"),
+        Some(&ZONE_RETYPED_TITLE),
+        "moving the appointment lost the title the previous save gave it\n{report}"
+    );
+    assert_eq!(
+        (
+            seen.get("moved-dtstart"),
+            seen.get("moved-dtstart-tzid"),
+            seen.get("moved-zone-known"),
+            seen.get("moved-zone-utc"),
+        ),
+        (
+            Some(&ZONE_MOVED_DTSTART),
+            Some(&DEFINED_ZONE),
+            Some(&"1"),
+            Some(&ZONE_MOVED_DTSTART_UTC),
+        ),
+        "after the clock was moved EDS states another wall clock than the one the \
+         user set, or another identifier, or the calendar resolves that identifier \
+         to the wrong instant — the last of which is a zone that survived as the \
+         offset April needed rather than as the rules the server sent\n{report}"
+    );
+    // The two facts about the platform that the read half pinned down, asked again
+    // of an event whose clock a save has been through: EDS still keeps the
+    // definition out of the component, so libical alone still floats the moved
+    // start. Both would be news, and the news would be about the platform.
+    assert_eq!(
+        (seen.get("moved-definitions"), seen.get("moved-dtstart-utc"),),
+        (Some(&"0"), Some(&ZONE_MOVED_FLOATING_UTC)),
+        "what a plain libical consumer sees for an event whose clock was moved in \
+         a zone only the server can name has changed\n{report}"
+    );
+    // And the length, back in the shape the mapping writes. The user stated it as
+    // a `DTEND`; what comes back is a `DURATION` of the same length, which is the
+    // round trip `read_duration`'s `DTEND` branch and `vevent_of`'s `DURATION`
+    // make between them — measured here rather than inferred from fixtures,
+    // because in between the two lines passed through EDS's cache in a zone
+    // libical cannot place.
+    assert_eq!(
+        (seen.get("moved-duration"), seen.get("moved-dtend")),
+        (Some(&ZONE_MOVED_DURATION), Some(&"")),
+        "the length the user stated with two wall clocks did not come back as the \
+         DURATION the mapping writes\n{report}"
+    );
 
     let calls = server.method_calls();
     assert!(
@@ -2162,17 +2286,29 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
     assert_eq!(
         event.time_zone.as_deref(),
         Some(DEFINED_ZONE),
-        "the save moved the event out of the zone the server named for it"
+        "a save moved the event out of the zone the server named for it"
     );
     assert_eq!(
         event.time_zones,
         Some([(DEFINED_ZONE.to_owned(), defined_zone())].into()),
-        "the save rewrote or dropped the definition of a zone it never had in \
+        "a save rewrote or dropped the definition of a zone it never had in \
          its hands"
     );
+    // And where the event now is in time, which the second save moved and the
+    // first must not have. The two assertions above are what the pair below is
+    // *for*: a `start` that changed while `timeZone` and `timeZones` did not is an
+    // appointment the user moved, and one that changed while the zone under it
+    // moved too is an appointment nobody asked to move.
     assert_eq!(
         event.start.as_deref(),
-        Some(ZONE_START),
-        "the save restated the wall clock the event starts at"
+        Some(ZONE_MOVED_START),
+        "the server does not hold the wall clock the user dragged the \
+         appointment to"
+    );
+    assert_eq!(
+        event.duration.as_deref(),
+        Some(ZONE_MOVED_DURATION),
+        "the length the user stated as a DTEND did not reach the server as the \
+         length between it and the DTSTART"
     );
 }

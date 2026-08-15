@@ -23239,3 +23239,103 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 Claiming `CamelDB` (the SQLite-backed folder summary database GObject), `CamelDBError`, `CamelDBKnownColumnNames`, `CamelDBCollate`, and `CamelSasl` (the authentication mechanism GObject) EDS verification in `eds-sys`, with workspace tests in `jmap-mail` and `jmap-mail-sync` connecting these to the M5 implementation.
 
+## 2026-08-15 (two-hundred-and-forty-ninth session)
+
+**The edit that *is* about the clock.** The previous calendar session measured a save made to an
+event in a zone only its server can name, and closed by naming what it had not
+measured: an edit to the *clock* of such an event. The mapping sends `start` and
+withholds `timeZone`, which is right on paper, but what EDS's cache does to a
+`DTEND` beside a `DTSTART` it cannot resolve is not something fixtures can answer —
+in a fixture every one of those decisions is a comparison of text against text.
+
+**Two saves in one run, asking opposite questions of one save path.**
+`cal-zone-client.c` now makes a second save after the rename: it retypes the value
+of the `DTSTART` already there — every parameter on it left alone — and states the
+new length as a `DTEND` carrying the `TZID` read off that same start, with the
+`DURATION` the mapping drew removed beside it, because RFC 5545 §3.6.1 makes the two
+mutually exclusive and that is what Evolution's appointment editor writes. The
+program must not name the zone itself or it would be supplying the answer the leg is
+asking for, which is why the start is edited in place rather than rebuilt.
+
+The rename says an edit with nothing to do with the clock leaves `start` alone; the
+move says an edit about nothing *but* the clock leaves the *zone* alone. The second
+is the likelier bug: `patch::diff` reads a zone it cannot name off the component on
+both sides, so the guard keeping `timeZone` out of the patch is only exercised where
+something else in the patch is a date-time.
+
+**November, deliberately.** The new clock is 14:30 on 2026-11-05, on the far side of
+the definition's `STANDARD` transition. A move inside CEST would resolve through the
+same observance the read half already proved. The measured answer is **13:30Z** —
+one hour, not the two April resolves to — so the yearly rules of *both* halves of
+the definition survived into EDS's timezone store, which is what makes the zone a
+zone rather than a fixed offset that happened to be right in April. On the server:
+`start` moved, `timeZone` and `timeZones` did not, and `duration` came back
+`PT1H30M` — the length stated by two wall clocks, returned as the `DURATION` the
+mapping writes. That is also the one place `read_duration`'s `DTEND` branch is
+driven through real EDS.
+
+**The work was the mutations, and both were invisible before this half existed.**
+Drawing only the `DAYLIGHT` observance of the definition — half a zone, the case
+`vtimezone_of`'s doc comment calls "confidently wrong by an hour" — puts the moved
+appointment at **12:30Z** while leaving *both* April lookups green at 08:00Z. That
+is the finding worth writing down: a single-date measurement cannot see a half-drawn
+zone at all, because the half it drew is the half that date needed. Dropping
+`read_duration`'s `DTEND` branch loses the length entirely — EDS reports neither a
+`DURATION` nor a `DTEND`, and the server's `duration` goes null, so an appointment
+the user gave a new end comes back with no end.
+
+A third mutation was considered and *not* run, and is worth recording as such:
+resending `timeZone` whenever `start` changes would be a no-op here, since the
+identifier the mapping reads back is byte-identical to the one the server holds. The
+assertion that would catch that class of bug is the pair on `timeZone`/`timeZones`
+already there, driven by the `timeZone: null` mutation the previous session ran, not
+by anything the move adds.
+
+**No production code changed.** This is a measurement of behaviour that was already
+right. `docs/functional-tests.md`'s third-calendar-leg section gains the move half
+and its two mutations; the "the one edit such an event can be given" wording in
+`cmake/Functional.cmake`, `calendar.rs`'s module doc and `ZONE_RETYPED_TITLE`'s doc
+is now false and is corrected to name the two kinds of edit.
+
+Tests: 1119 in the default set, unchanged by this branch — the work is in
+`jmap-functional`, which runs under `ctest`. (The count moved from 1012 while this
+was in flight: the parallel Camel-verification stream landed on master underneath
+it, and this commit is rebased onto that.)
+
+Verified locally: full `ninja`, then `ctest -L functional` 4/4 green with no C
+warning; `cargo test --locked` 1119, no failures; `cargo fmt --all --check` clean;
+`cargo clippy --workspace --exclude example-module --all-targets --locked -- -D
+warnings` and `cargo clippy -p jmap-functional --all-targets --locked -- -D warnings`
+clean. `ci/checks.sh` still stops at its first step on this VM (no `reuse`, no
+`pipx`, no `uvx`), so the licence check was done by hand: no file is added, and of
+the four touched files three carry an SPDX `GPL-3.0-or-later` header while
+`docs/functional-tests.md` is covered by `REUSE.toml`'s `docs/**` stanza. No
+translatable string is introduced; `Cargo.lock` is unchanged, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+**What this still does not settle.** Nothing is read back from a `VTIMEZONE` into
+`timeZones`, so a document another client wrote a custom zone into still names a zone
+the save cannot send — now the only unmeasured direction of the custom-zone story.
+Whether Evolution's own views put such an event at 10:00 Berlin time remains
+inference: the leg proves the zone is reachable by the API Evolution's machinery
+uses, not that every screen uses it. And a move that crosses a transition *within*
+one appointment — a `DTSTART` before it and a `DTEND` after — is untested; the length
+would then be a wall-clock subtraction that is an hour off the elapsed time, and
+which of the two RFC 8984 wants is a design question, not a bug report.
+
+No milestone tag. Removed from the blocker list: an edit to the clock of an event in
+a custom zone is measured through real EDS. Unchanged blockers: the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still
+**needs human verification in real Evolution**; `docs/MILESTONES.md` does not exist,
+so the M8 tag is still unwritten; `jmap-mail`'s rustdoc is dirty; an
+attachment the user removes is still invisible to the save; whether Evolution renders
+an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first"
+bet is still unverified; the two `LABEL` `TYPE` risks stand; a deathday and a
+birthday stated as a year alone are still invisible; the conventional URI schemes for
+AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled;
+`X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour unmeasured;
+whether the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
+editor writes for a replaced photo, and into a cleared field, is inferred rather than
+measured; and the `jmap-mail` `transport.rs` hang is still an open design question
+with a lock-order hypothesis attached.
