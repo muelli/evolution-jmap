@@ -8,40 +8,63 @@
 #
 # Lifecycle & cost: the driver does NOT loop forever. It exits when it
 # can no longer make progress — a drained backlog (several no-op
-# iterations) or a usage limit — so that (a) it stops spending tokens on
-# sessions that conclude "nothing to do", and (b) the idle watchdog can
-# nap the VM. The hourly GCE instance schedule then reboots the VM to
-# poll for new work, and the @reboot cron relaunches this driver. So
-# "wait for more work" and "wait for a quota reset" are both handled by
-# nap + hourly reboot rather than by an expensive in-VM sleep. NOTE: the
-# watchdog's activity signal is the running `claude` session's argv, not
-# this script's name, so this driver sleeping or exiting never keeps the
-# VM alive by itself.
+# iterations) or a usage limit — so the idle watchdog can nap the VM and
+# the hourly GCE instance schedule reboots it to poll for new work
+# (@reboot relaunches this driver).
+#
+# Usage limits: Claude Code prints "You've hit your weekly|session limit ·
+# resets <time> (UTC)" and exits within seconds. Two things matter about
+# that. First it must be *detected* — an earlier version grepped for
+# "usage limit", which this message never contains, so 150 rate-limited
+# runs were misread as a drained backlog. Second, a *weekly* reset can be
+# days away, and the hourly reboot would otherwise fire a fresh (rejected)
+# call every hour for the whole week. So on a limit the driver records the
+# reset time in $LIMIT_FILE and exits, and every startup refuses to invoke
+# Claude at all until that time has passed — a napped, near-zero-cost wait
+# that resumes on the first reboot after the reset.
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 cd "$HOME/evolution-jmap" || exit 1
 LOG="$HOME/night-shift.log"
 PROMPT_FILE="$HOME/night-prompt.md"
+LIMIT_FILE="$HOME/.claude-limited-until"   # epoch seconds; present only while limited
 DRAIN_LIMIT=3          # consecutive no-op iterations that mean "backlog drained"
+UNKNOWN_RESET_BACKOFF=21600   # 6h, if a limit is seen but its reset can't be parsed
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
 
-# If $1 (a captured session log) shows a usage limit, echo a short human
-# ETA for the reset and return 0; otherwise return 1. Used only for an
-# informative log line now — the driver exits on a limit rather than
-# sleeping until reset, because sleeping in-VM would pay for idle time the
-# nap is meant to save.
-usage_limit_eta() {
-    local out="$1" reset tstr
-    grep -qiE "usage limit|rate limit" "$out" || return 1
-    reset=$(grep -oE '\|[0-9]{10}' "$out" | tr -d '|' | head -1)
-    if [ -z "$reset" ]; then
-        tstr=$(grep -oiE "resets? at [0-9apm: ]{1,8}" "$out" | head -1 | sed -E 's/resets? at //I')
-        [ -n "$tstr" ] && reset=$(date -d "$tstr" +%s 2>/dev/null)
+# If the captured session output ($1) shows a Claude Code limit, echo the
+# reset time in epoch seconds and return 0; otherwise return 1. Handles the
+# real message ("hit your weekly|session limit · resets Aug 15, 8pm (UTC)",
+# and the shorter "resets 8:20pm (UTC)"), falls back to a fixed backoff if
+# the wording matches but the time does not parse, and keeps the old
+# "usage/rate limit" strings as a backstop.
+limit_reset_epoch() {
+    local out="$1" line tstr epoch
+    line=$(grep -oiE "hit your [a-z]+ limit.*\(UTC\)" "$out" | head -1)
+    if [ -n "$line" ]; then
+        tstr=$(sed -E 's/.*resets //I; s/,//g; s/\(UTC\)/UTC/' <<<"$line")
+        epoch=$(date -d "$tstr" +%s 2>/dev/null)
+        [ -n "$epoch" ] && echo "$epoch" || echo $(( $(date +%s) + UNKNOWN_RESET_BACKOFF ))
+        return 0
     fi
-    if [ -n "$reset" ]; then echo "resets ~$(date -Is -d "@$reset" 2>/dev/null)"; else echo "reset time unknown"; fi
-    return 0
+    # Backstop for any other limit wording.
+    if grep -qiE "usage limit|rate limit" "$out"; then
+        echo $(( $(date +%s) + UNKNOWN_RESET_BACKOFF ))
+    fi
 }
+
+# Refuse to invoke Claude while a recorded limit is still in the future.
+# This is what a reboot during a multi-day weekly limit hits: a `date`
+# comparison and an immediate exit, not a rejected API call.
+if [ -f "$LIMIT_FILE" ]; then
+    until=$(cat "$LIMIT_FILE" 2>/dev/null)
+    if [[ "$until" =~ ^[0-9]+$ ]] && [ "$until" -gt "$(date +%s)" ]; then
+        log "still limited until $(date -Is -d "@$until"); not invoking Claude, exiting to nap"
+        exit 0
+    fi
+    rm -f "$LIMIT_FILE"   # reset has passed
+fi
 
 log "=== night shift starting ==="
 consecutive_noop=0
@@ -55,17 +78,16 @@ while true; do
     duration=$(( $(date +%s) - start ))
     log "iteration finished: exit=$status duration=${duration}s"
 
-    if eta=$(usage_limit_eta "$out"); then
-        rm -f "$out"
-        log "usage limit ($eta) - exiting so the VM naps; hourly reboot resumes once quota is back"
+    reset_epoch=$(limit_reset_epoch "$out")
+    rm -f "$out"
+    if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$(date +%s)" ]; then
+        echo "$reset_epoch" > "$LIMIT_FILE"
+        log "hit Claude limit; resets $(date -Is -d "@$reset_epoch"). Recorded; exiting to nap — no retry until then."
         exit 0
     fi
-    rm -f "$out"
 
     if [ "$duration" -lt 120 ]; then
-        # A fast exit is a no-op or a transient error. Ride out a couple
-        # (short sleep, retry while the VM is up anyway) before concluding
-        # the backlog is drained and exiting.
+        # A fast exit with no limit message is a no-op or transient error.
         consecutive_noop=$(( consecutive_noop + 1 ))
         log "short iteration ${consecutive_noop}/${DRAIN_LIMIT}"
         if [ "$consecutive_noop" -ge "$DRAIN_LIMIT" ]; then
