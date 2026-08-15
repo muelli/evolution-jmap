@@ -87,7 +87,7 @@
 //! field is better than a calendar that refuses to open; only a document
 //! without any `VEVENT` in it is an error.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Map, Value, json};
@@ -1285,6 +1285,12 @@ fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> boo
         // reads back from is an iCalendar identifier (see [`names_time_zone`]),
         // and `recurrenceOverrides` goes back to the server replaced whole, so
         // one entry the server rejects costs every edit in the save.
+        //
+        // Which is why a custom identifier is refused here and *not* on the way
+        // to the component — RFC 8984 §1.4.9 admits one only beside the
+        // `timeZones` entry defining it, and this property's patch has no way to
+        // carry that entry along. See [`draws_override_field`], which is the same
+        // question asked of the drawing.
         "timeZone" => value.is_null() || value.as_str().is_some_and(names_time_zone),
         // The only place an instance's own length is stated is its component's
         // DURATION, and one this mapping will not write there (see
@@ -1293,6 +1299,29 @@ fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> boo
         "duration" => value.is_null() || value.as_str().and_then(stated_duration).is_some(),
         // title, description.
         _ => value.is_null() || value.as_str().is_some_and(|text| !text.is_empty()),
+    }
+}
+
+/// Whether one field of an override reaches the *component* — which for one
+/// property is a different question from whether it reaches the *server*.
+///
+/// [`maps_override_field`] answers the second, and the drawing followed it for
+/// every field until a `timeZone` made the two diverge. A component states a
+/// custom identifier perfectly well, beside the `VTIMEZONE` the same document
+/// defines it with (see [`drawn_time_zones`]); a PatchObject cannot, because
+/// `recurrenceOverrides` goes back replaced whole while `timeZones` is never
+/// patched at all, so the identifier would reach the server dangling. Refusing
+/// it here as well drew the occurrence on the *series'* clock — a different
+/// appointment, stated without saying so.
+fn draws_override_field(series: &CalendarEvent, name: &str, value: &Value) -> bool {
+    match name {
+        "timeZone" => {
+            value.is_null()
+                || value
+                    .as_str()
+                    .is_some_and(|tzid| names_time_zone(tzid) || defines_zone(series, tzid))
+        }
+        _ => maps_override_field(series, name, value),
     }
 }
 
@@ -1358,22 +1387,28 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
         }
     }
 
+    // Before the envelope, because which zones the document has to define is
+    // decided by the components in it — an occurrence that moved into one of its
+    // own names a second `TZID`. See [`drawn_time_zones`].
+    let instances = modified_instances(event);
+
     let mut calendar = Component::new("VCALENDAR")
         .with(Property::raw("VERSION", "2.0"))
         .with(Property::raw("PRODID", PRODID));
-    // Ahead of the events that refer to it, which is where a reader resolving a
-    // `TZID` as it walks wants it.
-    if let Some(vtimezone) = drawn_time_zone(event, as_a_date) {
+    // Ahead of the events that refer to them, which is where a reader resolving a
+    // `TZID` as it walks wants them.
+    for vtimezone in drawn_time_zones(event, &instances, as_a_date) {
         calendar = calendar.with_child(vtimezone);
     }
     calendar = calendar.with_child(vevent);
-    for (id, instance) in modified_instances(event) {
-        calendar = calendar.with_child(vevent_of(&instance, as_a_date, zone, Some(&id)));
+    for (id, instance) in &instances {
+        calendar = calendar.with_child(vevent_of(instance, as_a_date, zone, Some(id)));
     }
     calendar.to_ics()
 }
 
-/// The zone the document has to define itself, as a `VTIMEZONE`.
+/// The zones the document has to define itself, as `VTIMEZONE`s, in the order a
+/// reader meets the components that refer to them.
 ///
 /// RFC 5545 §3.2.19 says a `TZID` parameter names a `VTIMEZONE` in the *same*
 /// object. The mapping leans on the reader for an IANA name — libical resolves
@@ -1397,24 +1432,51 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
 /// store rather than handing it back beside the event, so only a consumer that asks
 /// the calendar for the zone resolves the identifier.
 ///
-/// One definition is all a document ever needs, however many components it holds.
-/// The `TZID`s on it are the series' zone and — for an instance that moved into
-/// one of its own — the instance's, and [`maps_override_field`] admits only a
-/// zone that [`names_time_zone`] as an override's, so no `TZID` but the series'
-/// can be a custom identifier. Which is just as well: a second copy of one
-/// `VTIMEZONE` is a duplicate `TZID` in one object.
-fn drawn_time_zone(event: &CalendarEvent, as_a_date: bool) -> Option<Component> {
+/// The `TZID`s a document carries are the series' zone and — for an occurrence
+/// that moved into one of its own — that instance's, so more than one of them can
+/// be a custom identifier and each needs its own definition. What must *not*
+/// happen is one zone defined twice: two components naming the same custom
+/// identifier is the ordinary case (an occurrence moved by an hour but not out of
+/// its zone), and a second copy would be a duplicate `TZID` in one object. So the
+/// identifiers are walked in the order their components appear and drawn once
+/// each.
+///
+/// Only the drawing is this permissive. What the *save* path may state back to a
+/// server is a narrower question for an override, and one this does not answer —
+/// see [`maps_override_field`].
+fn drawn_time_zones(
+    event: &CalendarEvent,
+    instances: &[(String, CalendarEvent)],
+    as_a_date: bool,
+) -> Vec<Component> {
     // A date-valued `DTSTART` takes no `TZID` at all (RFC 5545 §3.2.19), so a
     // document written that way refers to no zone and defines none.
     if as_a_date {
-        return None;
+        return Vec::new();
     }
-    let tzid = event.time_zone.as_deref()?;
-    if names_time_zone(tzid) || is_utc(tzid) {
-        return None;
+    let Some(definitions) = event.time_zones.as_ref() else {
+        return Vec::new();
+    };
+    let mut seen = BTreeSet::new();
+    let mut drawn = Vec::new();
+    for tzid in std::iter::once(event.time_zone.as_deref())
+        .chain(
+            instances
+                .iter()
+                .map(|(_, instance)| instance.time_zone.as_deref()),
+        )
+        .flatten()
+    {
+        if names_time_zone(tzid) || is_utc(tzid) || !seen.insert(tzid) {
+            continue;
+        }
+        if let Some(vtimezone) =
+            definition_of(definitions, tzid).and_then(|definition| vtimezone_of(tzid, definition))
+        {
+            drawn.push(vtimezone);
+        }
     }
-    let definitions = event.time_zones.as_ref()?;
-    definition_of(definitions, tzid).and_then(|definition| vtimezone_of(tzid, definition))
+    drawn
 }
 
 /// The entry of a `timeZones` map that defines `tzid`, under either spelling of
@@ -1455,9 +1517,18 @@ pub fn maps_time_zone(event: &CalendarEvent) -> bool {
     let Some(tzid) = event.time_zone.as_deref() else {
         return true;
     };
-    if names_time_zone(tzid) {
-        return true;
-    }
+    names_time_zone(tzid) || defines_zone(event, tzid)
+}
+
+/// Whether `event` says what the zone `tzid` is — RFC 8984 §1.4.9's second form
+/// of a `TimeZoneId`, the solidus-prefixed identifier that resolves nowhere but
+/// the object carrying it.
+///
+/// "Says what it is" means the §4.7.2 entry can be drawn *whole*, which is
+/// [`vtimezone_of`]'s judgement asked directly rather than duplicated: a
+/// definition this mapping could only state in part describes a different zone,
+/// so the identifier is as good as undefined.
+fn defines_zone(event: &CalendarEvent, tzid: &str) -> bool {
     tzid.starts_with('/')
         && event
             .time_zones
@@ -1812,7 +1883,7 @@ fn modified_instances(event: &CalendarEvent) -> Vec<(String, CalendarEvent)> {
 /// moved to the occurrence's own — RFC 8984 §4.3.4's rule that an override's key
 /// *is* the instance's start unless the patch says otherwise. Then the patch is
 /// applied, one property at a time, and a key or a value outside what
-/// [`maps_override_field`] accepts is skipped rather than fatal: the instance is
+/// [`draws_override_field`] accepts is skipped rather than fatal: the instance is
 /// still worth drawing at the series' title, and [`maps_recurrence_override`]
 /// separately tells the save path that it was not seen whole.
 ///
@@ -1876,7 +1947,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
 
     let mut modified = false;
     for (name, value) in fields {
-        if !maps_override_field(event, name, value) {
+        if !draws_override_field(event, name, value) {
             continue;
         }
         // The one restatable property that is not text. Checked above, so a null
@@ -2130,15 +2201,11 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
     let zones = zone_names(&calendar);
     let mut event = read_vevent(series, &zones);
     event.recurrence_overrides = read_overrides(series, &vevents, &event, &zones);
-    // After the event, because which definition the document is carrying for us
-    // is decided by which zone the event turned out to be in — see
-    // [`read_time_zones`]. Only the series' zone can be a custom identifier
-    // ([`maps_override_field`] admits only a name as an override's), so one
-    // definition is all there is to look for.
-    event.time_zones = event
-        .time_zone
-        .as_deref()
-        .and_then(|tzid| read_time_zones(&calendar, tzid));
+    // After the overrides, because which definitions the document is carrying for
+    // us is decided by which zones the event turned out to refer to — the series'
+    // and one per occurrence that moved into a zone of its own. See
+    // [`read_time_zones`].
+    event.time_zones = read_time_zones(&calendar, &event);
     Ok(event)
 }
 
@@ -2195,8 +2262,15 @@ fn zone_names(calendar: &Component) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The definition of the zone the event is in, as the RFC 8984 §4.7.2
-/// `timeZones` map that carries it — the inverse of [`drawn_time_zone`].
+/// The definitions of the zones the event refers to, as the RFC 8984 §4.7.2
+/// `timeZones` map that carries them — the inverse of [`drawn_time_zones`].
+///
+/// "Refers to" is the series' zone *and* every occurrence that moved into one of
+/// its own: RFC 5545 §3.2.19 puts the zone on the property, so a detached
+/// instance states its own `TZID` and need not share the series'. Looking for the
+/// series' alone sent the server an occurrence naming a zone nothing defined —
+/// a dangling `TimeZoneId` §1.4.9 does not admit, which a server may reject
+/// outright and which a server that keeps it shows as one floating occurrence.
 ///
 /// Only a custom identifier gets one, and only when the document defines it.
 /// Which is the whole of the case: an IANA name resolves out of any zone
@@ -2219,18 +2293,39 @@ fn zone_names(calendar: &Component) -> BTreeMap<String, String> {
 /// zone is a different zone, so a `VTIMEZONE` this mapping cannot state whole is
 /// read as no definition at all. It also makes the round trip exact — what comes
 /// back out is byte for byte what came in.
-fn read_time_zones(calendar: &Component, tzid: &str) -> Option<BTreeMap<String, Value>> {
-    if names_time_zone(tzid) || !tzid.starts_with('/') {
-        return None;
+fn read_time_zones(calendar: &Component, event: &CalendarEvent) -> Option<BTreeMap<String, Value>> {
+    let mut zones: BTreeMap<String, Value> = BTreeMap::new();
+    for tzid in std::iter::once(event.time_zone.as_deref())
+        .chain(
+            event
+                .recurrence_overrides
+                .iter()
+                .flatten()
+                .map(|(_, patch)| patch.get("timeZone").and_then(Value::as_str)),
+        )
+        .flatten()
+    {
+        if names_time_zone(tzid) || !tzid.starts_with('/') || zones.contains_key(tzid) {
+            continue;
+        }
+        let Some(definition) = calendar
+            .children
+            .iter()
+            .filter(|child| child.name == "VTIMEZONE")
+            .find(|vtimezone| vtimezone.text("TZID").as_deref() == Some(tzid))
+            .and_then(read_definition)
+        else {
+            continue;
+        };
+        // Half a zone is a different zone, so one this mapping could not draw
+        // again is read as no definition at all — for that identifier alone,
+        // leaving whatever the other components named still defined.
+        if vtimezone_of(tzid, &definition).is_none() {
+            continue;
+        }
+        zones.insert(tzid.to_owned(), definition);
     }
-    let definition = calendar
-        .children
-        .iter()
-        .filter(|child| child.name == "VTIMEZONE")
-        .find(|vtimezone| vtimezone.text("TZID").as_deref() == Some(tzid))
-        .and_then(read_definition)?;
-    vtimezone_of(tzid, &definition)?;
-    Some(BTreeMap::from([(tzid.to_owned(), definition)]))
+    (!zones.is_empty()).then_some(zones)
 }
 
 /// One `VTIMEZONE` as the RFC 8984 §4.7.2 TimeZone it describes, or `None` for

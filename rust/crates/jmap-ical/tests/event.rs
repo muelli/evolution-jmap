@@ -5384,6 +5384,142 @@ fn a_custom_zone_with_no_definition_is_named_and_left_undefined() {
     }
 }
 
+/// A weekly series in a zone every database names, with one occurrence moved
+/// into a zone only the event itself can name — RFC 5545 §3.2.19 puts the zone
+/// on the *property*, so a detached instance need not share the series'.
+///
+/// The identifier is [`CUSTOM_TZID`], defined once in the event's own
+/// `timeZones`: one description of one zone, whichever component refers to it.
+fn instance_in_a_custom_zone() -> CalendarEvent {
+    CalendarEvent {
+        id: Some("E9".into()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rules: serde_json::from_value(json!([{
+            "@type": "RecurrenceRule",
+            "frequency": "weekly",
+        }]))
+        .expect("a list of recurrence rules"),
+        recurrence_overrides: serde_json::from_value(json!({
+            "2026-01-22T13:00:00": {
+                "start": "2026-01-22T09:00:00",
+                "timeZone": CUSTOM_TZID,
+            },
+        }))
+        .expect("a map of overrides"),
+        time_zones: serde_json::from_value(json!({CUSTOM_TZID: custom_zone()}))
+            .expect("a map of time zones"),
+        ..CalendarEvent::default()
+    }
+}
+
+/// An occurrence moved into a zone only the event can name is drawn in *that*
+/// zone, with the definition that says what it is.
+///
+/// The series' own zone is the one the document defines when there is one to
+/// define, but it is not the only zone the document can refer to: an override
+/// carries `timeZone` (RFC 8984 §4.3.4) and the instance's `DTSTART` states it
+/// as a `TZID` of its own. Drawing the instance at the series' clock instead is
+/// not a narrowing — it is the occurrence shown in a zone nobody moved it to,
+/// and wherever the two zones differ that is a different instant, silently.
+///
+/// [`custom_zone`] happens to describe the same rules as `Europe/Berlin`, which
+/// is deliberate: it keeps this leg measuring that the *identifier* the override
+/// named survives, rather than passing on an offset that would differ anyway.
+#[test]
+fn an_occurrence_moved_into_a_custom_zone_is_drawn_in_that_zone() {
+    let ics = event_to_ical(&instance_in_a_custom_zone());
+
+    assert_eq!(
+        line(vevent(&ics, 1), "DTSTART"),
+        format!("DTSTART;TZID={CUSTOM_TZID}:20260122T090000"),
+        "the occurrence is not on the clock the override moved it to: {ics}"
+    );
+    assert!(
+        ics.contains(CUSTOM_DEFINITION),
+        "the zone the occurrence names is not defined in the document that names \
+         it, so a reader floats that one occurrence: {ics}"
+    );
+    // And the series is untouched by any of it: its zone has a name, so nothing
+    // defines it here, and the `RECURRENCE-ID` names the occurrence the rules
+    // generated, which run on the series' clock (RFC 5545 §3.8.4.4).
+    assert_eq!(
+        line(vevent(&ics, 0), "DTSTART"),
+        "DTSTART;TZID=Europe/Berlin:20260115T130000",
+        "{ics}"
+    );
+    assert_eq!(
+        line(vevent(&ics, 1), "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260122T130000",
+        "{ics}"
+    );
+}
+
+/// And the definition comes back, which is what makes a *create* of such a
+/// document send the event it describes.
+///
+/// `ical_to_event` used to look for one definition — the series' — so an
+/// occurrence's own custom identifier reached the server with nothing to resolve
+/// it. That is a dangling `TimeZoneId`, which RFC 8984 §1.4.9 does not admit and
+/// a server is entitled to reject; and a server that keeps it has one occurrence
+/// floating.
+#[test]
+fn an_occurrences_own_custom_zone_is_read_back_with_its_definition() {
+    let ics = event_to_ical(&instance_in_a_custom_zone());
+
+    let back = ical_to_event(&ics).expect("parse");
+
+    assert_eq!(
+        serde_json::to_value(&back.time_zones).expect("a map of time zones"),
+        json!({CUSTOM_TZID: custom_zone()}),
+        "the definition the occurrence's zone needs did not come back: {ics}"
+    );
+    assert_eq!(
+        serde_json::to_value(&back.recurrence_overrides).expect("a map of overrides"),
+        json!({
+            "2026-01-22T13:00:00": {
+                "start": "2026-01-22T09:00:00",
+                "timeZone": CUSTOM_TZID,
+            },
+        }),
+        "{ics}"
+    );
+    // Which is the whole claim stated the other way round: what was drawn from
+    // the definition draws again, so a save of an untouched component has
+    // nothing to report.
+    assert_eq!(event_to_ical(&back), ics);
+}
+
+/// Drawn is not the same question as sendable, and this is the one property
+/// where the two answers differ.
+///
+/// A component can state a custom identifier — beside the `VTIMEZONE` that
+/// defines it, which the test above pins. A *patch* cannot: `recurrenceOverrides`
+/// goes back replaced whole while `timeZones` is never patched at all (see
+/// `jmap-cal-sync`'s `patch` module), so an override naming a zone the server
+/// does not already define would be a dangling reference that costs every other
+/// edit in the same save. So the occurrence is shown to the user and its zone is
+/// left to the server.
+#[test]
+fn an_occurrences_custom_zone_is_drawn_but_never_patched_back() {
+    let event = instance_in_a_custom_zone();
+    let (id, patch) = event
+        .recurrence_overrides
+        .as_ref()
+        .expect("the fixture's overrides")
+        .iter()
+        .next()
+        .expect("the fixture's one override");
+
+    assert!(
+        !maps_recurrence_override(&event, id, patch),
+        "an override naming a zone only this document defines is sendable, so a \
+         save would replace `recurrenceOverrides` with an identifier the server \
+         cannot resolve"
+    );
+}
+
 /// A definition with a part this mapping cannot draw is not drawn in part.
 ///
 /// Every observance of a zone describes the offsets between the transitions the
