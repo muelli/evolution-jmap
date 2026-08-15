@@ -23626,3 +23626,102 @@ photo's rendering is unmeasured; what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured; and the
 `jmap-mail` `transport.rs` hang is still an open design question with a lock-order
 hypothesis attached.
+
+## 2026-08-15 (two-hundred-and-fifty-third session)
+
+**One question asked in two places, and only one of them had the right answer.**
+`maps_override_field` decides what one field of a `recurrenceOverrides` patch
+means, and two callers were leaning on it: `maps_recurrence_override`, which asks
+whether the save path may state the override back to a *server*, and
+`modified_instance`, which asks whether the field reaches a *component*. For every
+field but one the two answers coincide — a `STATUS` outside the vocabulary has no
+line to be written on either. `timeZone` is where they diverge, and the divergence
+was a silent wrong hour.
+
+A component states RFC 8984 §1.4.9's custom identifier perfectly well: the
+`VTIMEZONE` beside it is what defines it, which is the whole of `drawn_time_zone`.
+A PatchObject cannot, because `recurrenceOverrides` goes back replaced whole while
+`timeZones` is never patched at all, so the identifier would arrive dangling and
+cost every other edit in the same save. The old code took the second answer for
+both, so an occurrence the user moved into a zone only the event can name was
+drawn at the **series'** clock — the field skipped, the instance inheriting
+`event.time_zone`. Not a narrowing: the occurrence shown in a zone nobody moved it
+to.
+
+**So the two questions are now two functions.** `draws_override_field` is what the
+drawing asks, and it differs from `maps_override_field` in exactly one arm; the
+sendability judgement is untouched, and a new test pins that — an override naming
+a zone only this document defines is still refused by `maps_recurrence_override`,
+so `patch::diff` still leaves `recurrenceOverrides` alone rather than sending a
+reference the server cannot resolve. `defines_zone` is the shared half both arms
+and `maps_time_zone` are now written in terms of.
+
+**A document defines the zones it refers to, not the zone its series is in.**
+Two consequences, one each way.
+
+Drawing: `drawn_time_zone` became `drawn_time_zones` and walks the series'
+identifier and then each drawn instance's, in the order a reader meets the
+components, drawing each custom one once. Once and not per component, deliberately
+— two occurrences moved by an hour but not out of their zone name the same
+identifier, and a second copy is a duplicate `TZID` in one object.
+
+Reading: `read_time_zones` took the series' `tzid` and now takes the event, so it
+looks for a definition per identifier the event refers to — the series' and one
+per override carrying a `timeZone`. What that fixes is a *create*: a component
+whose detached instance names a client-defined zone used to reach the server with
+nothing to say what that zone is, which §1.4.9 does not admit and a server may
+refuse outright. One judgement moved with it: a `VTIMEZONE` this mapping cannot
+draw again is still read as no definition at all, but now for that identifier
+alone rather than for the map.
+
+**The fixture's custom zone is Berlin's rules under another name, on purpose.**
+The failing assertion is therefore about the *identifier* surviving, not about an
+offset — two zones that differ would make the test pass on the difference rather
+than on the mapping. What the red run printed is the bug stated plainly:
+`DTSTART;TZID=Europe/Berlin:20260122T090000` on a component whose override said
+`/example.com/Europe-Berlin`, and `time_zones: null` on the way back.
+
+**What is measured and what is not.** Measured: the drawing, the read-back, the
+exact round trip (`event_to_ical(&back) == ics`), and that sendability did not
+move. Not measured here: any of it through real EDS — this is a mapping change,
+and the existing calendar leg that moves an occurrence into a second zone uses a
+*named* one, which EDS resolves out of libical's table. A functional leg for a
+client-defined zone on one occurrence is the natural next item and a session of
+its own.
+
+One corner deliberately left where it was, because it is not a regression: when
+the *series'* zone is one no identifier admits (a Windows zone name), the create
+path in `jmap-cal-sync` clears `time_zone` and `time_zones` together, so a
+definition an override still refers to goes with it. That was the outcome before
+this change too — the map simply never held that entry — and fixing it exactly
+means pruning `timeZones` to what is still referenced rather than dropping it,
+which wants its own red test.
+
+Tests: +3 in `jmap-ical/tests/event.rs`. The default set is 1129.
+
+Verified locally: `cargo test --locked` 1129, no failures; `cargo test --locked -p
+eds-sys -p jmap-backend-cal -p jmap-backend-cal-module -p evolution-jmap-cal-sync`
+all green; `cargo fmt --all --check` clean; `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` clean; `ninja -C build` then
+`ctest -L functional` 4/4. `ci/checks.sh` still stops at its first step on this VM
+(no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those two were reasoned by
+hand: no file is added or removed, so the SPDX header set is unchanged, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the last
+green run.
+
+No milestone tag. Added to the blocker list: no functional leg drives an
+occurrence moved into a *client*-defined zone through real EDS; and the create
+path drops a definition an override still refers to when the series' own zone is
+unsendable. Unchanged blockers: the calcard directive's two emitters are still
+ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in
+real Evolution**; `jmap-mail`'s rustdoc is dirty; whether Evolution renders an
+`IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first"
+bet is still unverified; the two `LABEL` `TYPE` risks stand; a deathday and a
+birthday stated as a year alone are still invisible; the conventional URI schemes
+for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled;
+`X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour
+unmeasured; whether the editor lets a handle be moved between the Home and Work
+slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; what
+Evolution's contact editor writes for a replaced photo, and into a cleared field,
+is inferred rather than measured; and the `jmap-mail` `transport.rs` hang is still
+an open design question with a lock-order hypothesis attached.
