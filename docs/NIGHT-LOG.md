@@ -23032,3 +23032,7 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-15 (two-hundred-and-forty-fourth session)
+
+Claiming Camel HTML parser (`CamelHTMLParser`), URL scanner (`CamelUrlScanner`), enriched filter (`CamelMimeFilterEnriched`), HTML-to-text filter (`CamelMimeFilterHTML`), gzip stream filter (`CamelMimeFilterGZip`), and Windows charset filter (`CamelMimeFilterWindows`) verification in EDS 3.52, rich HTML message filtering in `jmap-mail`, and multipart HTML body extraction and enriched text handling in `jmap-mail-sync`.
+
