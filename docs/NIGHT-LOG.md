@@ -23034,5 +23034,53 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-15 (two-hundred-and-forty-fourth session)
 
-Claiming Camel HTML parser (`CamelHTMLParser`), URL scanner (`CamelUrlScanner`), enriched filter (`CamelMimeFilterEnriched`), HTML-to-text filter (`CamelMimeFilterHTML`), gzip stream filter (`CamelMimeFilterGZip`), and Windows charset filter (`CamelMimeFilterWindows`) verification in EDS 3.52, rich HTML message filtering in `jmap-mail`, and multipart HTML body extraction and enriched text handling in `jmap-mail-sync`.
+**Verifying Camel HTML parser (`CamelHTMLParser`), URL scanner (`CamelUrlScanner`), enriched filter (`CamelMimeFilterEnriched`), HTML-to-text filter (`CamelMimeFilterHTML`), gzip stream filter (`CamelMimeFilterGZip`), and Windows charset filter (`CamelMimeFilterWindows`) in EDS 3.52, multipart/related HTML/inline MIME serialization in `jmap-mail`, and HTML entity / recipient group summary mapping in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel HTML parser tokenization and attribute extraction (`camel_html_parser_new`, `camel_html_parser_set_data`, `camel_html_parser_step`, `camel_html_parser_tag`, `camel_html_parser_attr`, `CamelHTMLParserState`), `CamelUrlScanner` URL pattern matching and buffer scanning (`camel_url_scanner_new`, `camel_url_scanner_add`, `camel_url_scanner_scan`, `camel_url_scanner_free`, `camel_url_web_start`, `camel_url_web_end`, `CamelUrlMatch`, `CamelUrlPattern`), `CamelMimeFilterEnriched` enriched-to-HTML conversion (`camel_mime_filter_enriched_new`, `camel_enriched_to_html`, `CamelMimeFilterEnrichedFlags`), `CamelMimeFilterHTML` HTML-to-text filtering (`camel_mime_filter_html_new`), `CamelMimeFilterGZip` stream compression and decompression (`camel_mime_filter_gzip_new`, `CamelMimeFilterGZipMode`), and `CamelMimeFilterWindows` Windows charset alias resolution (`camel_mime_filter_windows_new`, `camel_mime_filter_windows_is_windows_charset`, `camel_mime_filter_windows_real_charset`). In addition, it verifies multipart/related HTML message serialization with inline Content-ID attachments in `jmap-mail`, and HTML entity preservation and multiple recipient group mappings in `jmap-mail-sync`.
+
+**EDS 3.52 Camel HTML parser, URL scanner, and MIME filter measurement:**
+- Probed `camel-1.2` 3.52 for HTML parser, URL scanner, enriched, gzip, and windows filter behaviors:
+  - `CamelHTMLParser`:
+    - Allowlisted `"CamelHTMLParser.*"`, `"_camel_html_parser_.*"`, `"CamelHTMLParserState"`, functions `"camel_html_parser_.*"`, and constants `"CAMEL_HTML_PARSER_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelHTMLParser` and `CamelHTMLParserClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified HTML stepwise tokenization (`CAMEL_HTML_PARSER_TAG`, `CAMEL_HTML_PARSER_ELEMENT`, `CAMEL_HTML_PARSER_DATA`), tag name extraction (`camel_html_parser_tag`), and attribute lookup (`camel_html_parser_attr`).
+  - `CamelUrlScanner`:
+    - Allowlisted `"CamelUrlScanner.*"`, `"CamelUrlPattern"`, `"CamelUrlMatch"`, `"CamelUrlScanFunc"`, and functions `"camel_url_scanner_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified URL scanner creation (`camel_url_scanner_new`), web pattern registration with `camel_url_web_start` / `camel_url_web_end`, buffer scanning (`camel_url_scanner_scan`), match offset extraction (`um_so`, `um_eo`), and resource cleanup (`camel_url_scanner_free`).
+  - `CamelMimeFilterEnriched`:
+    - Allowlisted `"CamelMimeFilterEnriched.*"`, `"CamelMimeFilterEnrichedFlags"`, `"camel_enriched_to_html"`, and constants `"CAMEL_MIME_FILTER_ENRICHED_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterEnriched` and `CamelMimeFilterEnrichedClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified enriched text conversion to HTML formatting (`camel_enriched_to_html`).
+  - `CamelMimeFilterHTML`:
+    - Allowlisted `"CamelMimeFilterHTML.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterHTML` and `CamelMimeFilterHTMLClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified HTML tag stripping and plain text body extraction via filter streaming.
+  - `CamelMimeFilterGZip`:
+    - Allowlisted `"CamelMimeFilterGZip.*"` and `"CamelMimeFilterGZipMode"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterGZip` and `CamelMimeFilterGZipClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified stream compression with GZIP header magic bytes (`0x1f, 0x8b`) and full decompression roundtripping back to source bytes.
+  - `CamelMimeFilterWindows`:
+    - Allowlisted `"CamelMimeFilterWindows.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterWindows` and `CamelMimeFilterWindowsClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified character inspection for 0x80..0x9F bytes, Windows-1252 alias resolution (`windows-cp1252`), and ASCII pass-through.
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_html_parser_tokenization_and_attributes_in_eds`: verifies stepwise tokenization, tag extraction, and attribute lookups.
+  - Added `camel_url_scanner_detection_and_matching_in_eds`: verifies URL pattern matching and offset extraction.
+  - Added `camel_mime_filter_enriched_and_conversion_in_eds`: verifies enriched text to HTML conversions.
+  - Added `camel_mime_filter_html_to_plaintext_in_eds`: verifies HTML tag filtering to plain text.
+  - Added `camel_mime_filter_gzip_compression_and_decompression_in_eds`: verifies GZIP stream compression and decompression roundtrip.
+  - Added `camel_mime_filter_windows_charset_aliases_in_eds`: verifies Windows-1252 character range detection and charset mapping.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/mime.rs`:
+  - Added `multipart_related_message_with_html_and_inline_attachment_serializes_cleanly`: verifies that multipart/related HTML messages with inline images (Content-ID `cid:`) serialize with canonical CRLF endings, preserve boundary tree integrity, and parse back without corruption.
+- In `rust/crates/jmap-mail-sync/tests/summary.rs`:
+  - Added `summary_handles_html_entity_sequences_in_subject_and_preview`: verifies that HTML entities (`&amp;`, `&lt;`, `&gt;`, `&quot;`) in subject lines and preview text are handled without string corruption.
+  - Added `summary_preserves_multiple_recipient_groups_and_custom_references`: verifies that multiple from/to/cc addresses and extended message reference hierarchies are preserved.
+
+Tests: 1113 in the default set (up 2: 24 in `jmap-mail-sync/tests/summary.rs`), plus 1 new test in `jmap-mail/tests/mime.rs` (11 in file, 342 across crate), 6 new tests in `eds-sys/tests/camel.rs` (48 in file, 103 across crate), 5 new layout assertions in `eds-sys/tests/layout.rs`, and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1113 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
