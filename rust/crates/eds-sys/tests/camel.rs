@@ -2884,3 +2884,185 @@ fn camel_sexp_parsing_and_evaluation_in_eds() {
         gobject_sys::g_object_unref(sexp.cast());
     }
 }
+
+/// Probing `CamelFolderSearch` in EDS 3.52.
+#[test]
+fn camel_folder_search_utilities_in_eds() {
+    unsafe {
+        let search = camel_folder_search_new();
+        assert!(!search.is_null());
+
+        // 1. Message ID hashing
+        let msg_id = c"<msg-12345@example.com>";
+        let hash1 = camel_folder_search_util_hash_message_id(msg_id.as_ptr(), glib_sys::GFALSE);
+        let hash2 = camel_folder_search_util_hash_message_id(msg_id.as_ptr(), glib_sys::GFALSE);
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, 0);
+
+        // 2. Date comparison helper (date-only comparison)
+        let dt1 = 1700000000i64;
+        let dt2 = 1700003600i64;
+        assert_eq!(camel_folder_search_util_compare_date(dt1, dt2), 0);
+        let dt3 = 1700100000i64; // next day
+        assert!(camel_folder_search_util_compare_date(dt1, dt3) < 0);
+
+        // 3. Month addition helper
+        let now = 1700000000 as eds_sys::time_t;
+        let future = camel_folder_search_util_add_months(now, 2);
+        assert!(future > now);
+
+        // 4. Folder search cached messages configuration
+        camel_folder_search_set_only_cached_messages(search, glib_sys::GTRUE);
+        assert_ne!(
+            camel_folder_search_get_only_cached_messages(search),
+            glib_sys::GFALSE
+        );
+
+        gobject_sys::g_object_unref(search.cast());
+    }
+}
+
+/// Probing `CamelFolderThread` boxed type in EDS 3.52.
+#[test]
+fn camel_folder_thread_messages_in_eds() {
+    unsafe {
+        let gtype = camel_folder_thread_messages_get_type();
+        assert_ne!(gtype, G_TYPE_INVALID);
+        assert_eq!(g_type_fundamental(gtype), gobject_sys::G_TYPE_BOXED);
+    }
+}
+
+/// Probing `CamelOperation` in EDS 3.52.
+#[test]
+fn camel_operation_and_cancellable_in_eds() {
+    unsafe {
+        let cancellable = camel_operation_new();
+        assert!(!cancellable.is_null());
+
+        let msg = c"Syncing JMAP mailbox";
+        camel_operation_push_message(cancellable, msg.as_ptr());
+
+        let dup = camel_operation_dup_message(cancellable);
+        assert!(!dup.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(dup).to_str().unwrap(),
+            "Syncing JMAP mailbox"
+        );
+        glib_sys::g_free(dup.cast());
+
+        camel_operation_progress(cancellable, 50);
+
+        camel_operation_pop_message(cancellable);
+
+        let dup_after_pop = camel_operation_dup_message(cancellable);
+        assert!(dup_after_pop.is_null());
+
+        gobject_sys::g_object_unref(cancellable.cast());
+    }
+}
+
+/// Probing `CamelNNTPAddress` in EDS 3.52.
+#[test]
+fn camel_nntp_address_parsing_and_formatting_in_eds() {
+    unsafe {
+        let addr = camel_nntp_address_new();
+        assert!(!addr.is_null());
+
+        assert_eq!(camel_nntp_address_add(addr, c"comp.lang.rust".as_ptr()), 0);
+        assert_eq!(camel_nntp_address_add(addr, c"gnome.evolution".as_ptr()), 1);
+
+        let mut name: *const glib_sys::gchar = std::ptr::null();
+        assert_ne!(camel_nntp_address_get(addr, 0, &mut name), glib_sys::GFALSE);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(name).to_str().unwrap(),
+            "comp.lang.rust"
+        );
+
+        assert_ne!(camel_nntp_address_get(addr, 1, &mut name), glib_sys::GFALSE);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(name).to_str().unwrap(),
+            "gnome.evolution"
+        );
+
+        let formatted = camel_address_format(addr.cast());
+        assert!(!formatted.is_null());
+        let fmt_str = std::ffi::CStr::from_ptr(formatted).to_str().unwrap();
+        assert!(fmt_str.contains("comp.lang.rust"));
+        assert!(fmt_str.contains("gnome.evolution"));
+        glib_sys::g_free(formatted.cast());
+
+        gobject_sys::g_object_unref(addr.cast());
+    }
+}
+
+/// Probing `CamelFileUtils` in EDS 3.52.
+#[test]
+fn camel_file_utilities_in_eds() {
+    unsafe {
+        let unsafe_name = c"report/subfolder/test_filename.eml";
+        let safe_name = camel_file_util_safe_filename(unsafe_name.as_ptr());
+        assert!(!safe_name.is_null());
+        let safe_str = std::ffi::CStr::from_ptr(safe_name).to_str().unwrap();
+        assert!(!safe_str.contains('/'));
+        glib_sys::g_free(safe_name.cast());
+
+        let savename = camel_file_util_savename(c"/var/mail/inbox.dat".as_ptr());
+        assert!(!savename.is_null());
+        let save_str = std::ffi::CStr::from_ptr(savename).to_str().unwrap();
+        assert!(save_str.contains("inbox"));
+        glib_sys::g_free(savename.cast());
+    }
+}
+
+/// Probing `CamelLocalSettings` and `CamelStoreSettings` in EDS 3.52.
+#[test]
+fn camel_local_and_store_settings_in_eds() {
+    unsafe {
+        let settings = gobject_sys::g_object_new(
+            camel_local_settings_get_type(),
+            std::ptr::null::<std::os::raw::c_char>(),
+        ) as *mut CamelLocalSettings;
+        assert!(!settings.is_null());
+
+        camel_local_settings_set_path(settings, c"/tmp/jmap-test-cache".as_ptr());
+        let path = camel_local_settings_get_path(settings);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(path).to_str().unwrap(),
+            "/tmp/jmap-test-cache"
+        );
+
+        camel_local_settings_set_filter_all(settings, glib_sys::GTRUE);
+        assert_ne!(
+            camel_local_settings_get_filter_all(settings),
+            glib_sys::GFALSE
+        );
+
+        camel_local_settings_set_filter_junk(settings, glib_sys::GTRUE);
+        assert_ne!(
+            camel_local_settings_get_filter_junk(settings),
+            glib_sys::GFALSE
+        );
+
+        camel_local_settings_set_maildir_alt_flag_sep(settings, glib_sys::GTRUE);
+        assert_ne!(
+            camel_local_settings_get_maildir_alt_flag_sep(settings),
+            glib_sys::GFALSE
+        );
+
+        // Store settings properties inherited by CamelLocalSettings
+        let store_settings: *mut CamelStoreSettings = settings.cast();
+        camel_store_settings_set_filter_inbox(store_settings, glib_sys::GTRUE);
+        assert_ne!(
+            camel_store_settings_get_filter_inbox(store_settings),
+            glib_sys::GFALSE
+        );
+
+        camel_store_settings_set_store_changes_interval(store_settings, 120);
+        assert_eq!(
+            camel_store_settings_get_store_changes_interval(store_settings),
+            120
+        );
+
+        gobject_sys::g_object_unref(settings.cast());
+    }
+}

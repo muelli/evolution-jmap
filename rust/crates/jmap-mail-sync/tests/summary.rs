@@ -684,3 +684,43 @@ fn summary_handles_mixed_case_standard_keywords_alongside_custom_tags() {
     assert!(summary.tags.contains(&"$MyCustomKeyword".to_owned()));
     assert!(summary.tags.contains(&"category/inbox-2026".to_owned()));
 }
+
+#[test]
+fn summary_normalizes_and_preserves_subject_with_nested_reply_prefixes() {
+    let email = Email {
+        id: Some(Id::new("M-SUBJ-PREFIX-01")),
+        blob_id: Some(Id::new("B-SUBJ-PREFIX-01")),
+        subject: Some("Re: Re[2]: Fwd: [Engineering] Q3 Roadmap Planning".to_owned()),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary with nested prefixes");
+    assert_eq!(
+        summary.subject.as_deref(),
+        Some("Re: Re[2]: Fwd: [Engineering] Q3 Roadmap Planning")
+    );
+}
+
+#[test]
+fn summary_date_ordering_and_comparison_properties() {
+    let email_earlier = Email {
+        id: Some(Id::new("M-DATE-01")),
+        blob_id: Some(Id::new("B-DATE-01")),
+        received_at: Some("2026-08-15T00:00:00Z".into()),
+        sent_at: Some("2026-08-14T23:59:50Z".into()),
+        ..bare_email()
+    };
+    let email_later = Email {
+        id: Some(Id::new("M-DATE-02")),
+        blob_id: Some(Id::new("B-DATE-02")),
+        received_at: Some("2026-08-15T01:00:00Z".into()),
+        sent_at: Some("2026-08-15T00:59:50Z".into()),
+        ..bare_email()
+    };
+
+    let s1 = MessageSummary::from_email(&email_earlier).expect("earlier summary");
+    let s2 = MessageSummary::from_email(&email_later).expect("later summary");
+
+    assert!(s1.received_at.unwrap() < s2.received_at.unwrap());
+    assert!(s1.sent_at.unwrap() < s2.sent_at.unwrap());
+}
