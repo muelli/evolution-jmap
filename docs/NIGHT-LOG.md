@@ -24213,3 +24213,103 @@ contact-editor behaviour unmeasured; whether the editor lets a handle be moved
 between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-15 (two-hundred-and-fifty-ninth session)
+
+**A recurring event's end, moved by a save that never touched it.** RFC 5545
+§3.3.10 requires an `RRULE`'s `UNTIL` to be a UTC instant whenever `DTSTART`
+carries a `TZID`. RFC 8984 §4.3.3's `until` is the opposite: a *local* time in
+the event's own zone. The two are the same digits only where that zone is UTC —
+and `rrule_to_rule` read every `UNTIL` through `to_local_date_time`, which
+strips a trailing `Z` and hands back the digits. So a zoned series ending
+`UNTIL=20260901T070000Z` was read as ending at 07:00 Zurich time rather than
+09:00, and a save sent that to the server. Two hours before the last occurrence
+starts, which is a whole day of the series gone.
+
+**How a UTC `UNTIL` gets in.** Not from this crate: `rule_to_rrule` writes a
+zoned event's `UNTIL` local, deliberately, for the same missing-zone-database
+reason, and libical keeps both spellings verbatim — measured this session on
+EDS 3.52 with a scratch `eds-sys` test, parsing and re-rendering both forms.
+So the round trip through our own text was never wrong. It arrives from
+everything else: an Exchange or Google invitation, an imported `.ics`, any
+editor that normalises the rule to what §3.3.10 asks for. Those are exactly the
+documents the save path was least able to check.
+
+**Refused rather than converted, and refused in the crate's own idiom.**
+Converting needs the offset in effect at that instant, which means evaluating a
+`VTIMEZONE`'s observance rules — a zone database, which `jmap-ical` does not
+carry on purpose. So `read_until` keeps the instant as it was stated, `Z` and
+all. That string is not a JSCalendar LocalDateTime, so `writable` already
+refuses it and `maps_recurrence_rule` therefore already says the rule does not
+survive the trip — which is precisely the existing machinery for "read as
+itself, refused on the way out, flagged for the save path" that `BYDAY`'s and
+`BYMONTHDAY`'s unreadable tokens use. `jmap_cal_sync::patch::diff_recurrence`
+then leaves `recurrenceRules` alone entirely, so the server's own `until` stays
+where it is. No new gate was needed; the fix is four lines and a signature.
+
+**The three cases that must keep reading as they did**, because a `Z` is only a
+shift where there is an offset to shift by: an event whose zone *is* UTC; a
+floating event, which has no zone to resolve an instant against (RFC 5545 admits
+no `Z` there at all, so its digits are the best reading of a loose producer);
+and a `VTIMEZONE` observance, whose `DTSTART` dates itself in the zone being
+defined rather than in one referred to — that call site passes `None`. Refusing
+any of them would strand every recurring event this crate itself writes.
+
+**Red first, then each check mutated on its own.** The `jmap-ical` test asserts
+the zoned UTC `UNTIL` is not read as those local digits and that
+`maps_recurrence_rule` says so; it failed on the first run with `left` and
+`right` both `Some("2026-09-01T07:00:00")`. The `jmap-cal-sync` test is the
+consequence end to end against the mock: seed a zoned daily series ending
+09:00, take the drawn document, restate its `UNTIL` the way a conformant editor
+would, save, and assert the server's `until` did not move. Three mutations, run
+and reverted: `shifted = false` (the original red, which reddens both tests);
+dropping the `is_utc` guard, which reddens the two "same instant" cases and the
+existing `until_is_a_date_time_in_the_events_own_zone`; and passing `None`
+instead of the event's zone at the `read_vevent` call site.
+
+Tests: +2 in `jmap-ical/tests/event.rs`, +1 in `jmap-cal-sync/tests/save.rs`.
+The default set is 1136 → 1139.
+
+Verified locally: `cargo test --locked` 1139, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`
+clean for both touched crates; `ninja -C build` then `ctest --test-dir build`
+14/14, all four functional legs included. `ci/checks.sh` still stops at its
+first step on this VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so
+those two were reasoned by hand: no file is added or removed, so the SPDX header
+set is unchanged, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the
+one it gave on the last green run.
+
+**A blocker struck for being stale, not fixed.** "`jmap-mail`'s rustdoc is
+dirty (25 `private_intra_doc_links`)" has been on the list for many sessions;
+it is not true of the current code. Measured: `RUSTDOCFLAGS=-D warnings cargo
+doc --no-deps --workspace --exclude example-module` is clean, and so is
+`--document-private-items -p jmap-mail` on its own. Some session closed it
+without saying so. It is off the list.
+
+**A limit this leaves standing.** A `VTIMEZONE` observance's *own* `RRULE` may
+carry a UTC `UNTIL` too — RFC 5545's own examples do — and RFC 8984 §4.7.2 puts
+a TimeZoneRule's `until` in the `offsetFrom` time. That one *is* convertible
+without a database, because `offsetFrom` is a fixed offset sitting in the same
+component; it is arithmetic across a date boundary and nothing more. It is not
+done here, so a zone *defined by the document* whose observance rule ends at a
+UTC instant is read with that instant's digits. The blast radius is far smaller
+than the event case — it moves the end of a historical observance rule, not the
+end of the user's series — but it is the same bug one level down and it should
+be closed next.
+
+No milestone tag. Closed: a zoned recurrence's UTC `UNTIL` read as a local time.
+Unchanged blockers: M10 still has no CI matrix — the one piece left of it, and
+it wants a machine that can pull more than one EDS image; the calcard directive's
+two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs
+human verification in real Evolution**; a `VTIMEZONE` observance's own UTC
+`UNTIL` is still read as local (above); whether Evolution renders an `IMAGE` is
+unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; and what Evolution's
+contact editor writes for a replaced photo, and into a cleared field, is
+inferred rather than measured.
