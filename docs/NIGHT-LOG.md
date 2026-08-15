@@ -23143,6 +23143,51 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-15 (two-hundred-and-forty-sixth session)
 
-Claiming Camel folder search (`CamelFolderSearch`), message threading (`CamelFolderThread`), operation progress/cancellable (`CamelOperation`), NNTP address (`CamelNNTPAddress`), file utilities (`CamelFileUtils`), S-expression to SQL translation (`CamelSearchSQLSexp`), and store/local settings (`CamelLocalSettings`) EDS verification in `eds-sys`, folder query search filter matching in `jmap-mail`, and thread root subject extraction and safe filename generation in `jmap-mail-sync`.
+This session measures EDS 3.52 Camel folder search (`CamelFolderSearch`, `camel_folder_search_new`, `camel_folder_search_util_hash_message_id`, `camel_folder_search_util_compare_date`, `camel_folder_search_util_add_months`, `camel_folder_search_set_only_cached_messages`, `camel_folder_search_get_only_cached_messages`), `CamelFolderThread` boxed type (`camel_folder_thread_messages_get_type`, `CamelFolderThreadNode`), `CamelOperation` progress and cancellable message tracking (`camel_operation_new`, `camel_operation_push_message`, `camel_operation_pop_message`, `camel_operation_dup_message`, `camel_operation_progress`), `CamelNNTPAddress` newsgroup address formatting and indexing (`camel_nntp_address_new`, `camel_nntp_address_add`, `camel_nntp_address_get`), `CamelFileUtils` safe filename sanitization and savenames (`camel_file_util_safe_filename`, `camel_file_util_savename`), `CamelMemChunk` chunk allocators (`camel_memchunk_new`), and `CamelLocalSettings` / `CamelStoreSettings` configuration properties (`camel_local_settings_set_path`, `camel_local_settings_get_path`, `camel_local_settings_set_filter_all`, `camel_local_settings_get_filter_all`, `camel_local_settings_set_filter_junk`, `camel_local_settings_get_filter_junk`, `camel_local_settings_set_maildir_alt_flag_sep`, `camel_local_settings_get_maildir_alt_flag_sep`, `camel_store_settings_set_filter_inbox`, `camel_store_settings_get_filter_inbox`, `camel_store_settings_set_store_changes_interval`, `camel_store_settings_get_store_changes_interval`). In addition, it verifies Message-ID search hashing from opened message headers in `jmap-mail`, and subject prefix normalization preservation and date ordering properties in `jmap-mail-sync`.
 
+**EDS 3.52 Camel folder search, threading, operation, NNTP, file utilities, and settings measurement:**
+- Probed `camel-1.2` 3.52 for folder search, threading, operation, NNTP address, file utils, memchunk, and local settings behaviors:
+  - `CamelFolderSearch`:
+    - Allowlisted `"CamelFolderSearch.*"` and functions `"camel_folder_search_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelFolderSearch` and `CamelFolderSearchClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified message ID hashing consistency, date-only comparison, relative month calculations, and cached message search configuration.
+  - `CamelFolderThread`:
+    - Allowlisted `"CamelFolderThread.*"`, `"CamelMemChunk.*"`, and functions `"camel_folder_thread_.*"`, `"camel_folder_threaded_messages_dump"`, `"camel_memchunk_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified `camel_folder_thread_messages_get_type` boxed type registration and fundamental type identification.
+  - `CamelOperation`:
+    - Allowlisted `"CamelOperation.*"` and functions `"camel_operation_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelOperation` and `CamelOperationClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified operation message stack push, duplicate extraction, progress reporting, and stack pop.
+  - `CamelNNTPAddress`:
+    - Allowlisted `"CamelNNTPAddress.*"` and functions `"camel_nntp_address_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelNNTPAddress` and `CamelNNTPAddressClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified newsgroup address addition, indexed retrieval, and RFC address list formatting.
+  - `CamelFileUtils`:
+    - Allowlisted functions `"camel_file_util_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified safe filename path sanitization (stripping forward slashes) and savename basename extraction.
+  - `CamelLocalSettings` and `CamelStoreSettings`:
+    - Allowlisted `"CamelLocalSettings.*"` and functions `"camel_local_settings_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelLocalSettings` and `CamelLocalSettingsClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified setting and retrieving store path, filtering options, maildir alternate flag separator, inbox filtering, and store changes intervals.
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_folder_search_utilities_in_eds`: verifies folder search message ID hashing, date comparison, and month addition.
+  - Added `camel_folder_thread_messages_in_eds`: verifies message threading boxed type identity.
+  - Added `camel_operation_and_cancellable_in_eds`: verifies operation message stack and progress reporting.
+  - Added `camel_nntp_address_parsing_and_formatting_in_eds`: verifies NNTP address manipulation and formatting.
+  - Added `camel_file_utilities_in_eds`: verifies safe filename creation and savename resolution.
+  - Added `camel_local_and_store_settings_in_eds`: verifies local and store settings property manipulation.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/message.rs`:
+  - Added `an_opened_message_message_id_hashes_consistently`: verifies that Message-ID headers from opened messages hash deterministically with Camel's search helper.
+- In `rust/crates/jmap-mail-sync/tests/summary.rs`:
+  - Added `summary_normalizes_and_preserves_subject_with_nested_reply_prefixes`: verifies that subjects with nested reply and forward prefixes are preserved accurately in summaries.
+  - Added `summary_date_ordering_and_comparison_properties`: verifies chronological ordering and relative comparison of message timestamps.
+
+Tests: 1117 in the default set (up 2: 28 in `jmap-mail-sync/tests/summary.rs`), plus 1 new test in `jmap-mail/tests/message.rs` (13 in file, 344 across crate), 6 new tests in `eds-sys/tests/camel.rs` (61 in file, 116 across crate), 4 new layout assertions in `eds-sys/tests/layout.rs`, and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1117 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
