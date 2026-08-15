@@ -23141,5 +23141,8 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-15 (two-hundred-and-forty-sixth session)
+
+Claiming Camel folder search (`CamelFolderSearch`), message threading (`CamelFolderThread`), operation progress/cancellable (`CamelOperation`), NNTP address (`CamelNNTPAddress`), file utilities (`CamelFileUtils`), S-expression to SQL translation (`CamelSearchSQLSexp`), and store/local settings (`CamelLocalSettings`) EDS verification in `eds-sys`, folder query search filter matching in `jmap-mail`, and thread root subject extraction and safe filename generation in `jmap-mail-sync`.
 
 
