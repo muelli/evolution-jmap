@@ -724,3 +724,113 @@ fn summary_date_ordering_and_comparison_properties() {
     assert!(s1.received_at.unwrap() < s2.received_at.unwrap());
     assert!(s1.sent_at.unwrap() < s2.sent_at.unwrap());
 }
+
+/// `$junk` and `$notjunk` are distinct: both can be present simultaneously (a
+/// server that sets `$junk` on a message and a local junk-filter that disagrees
+/// by setting `$notjunk`).  The `MessageFlags` preserves both independently.
+///
+/// The `CAMEL_JUNK_STATUS` ordering (`MESSAGE_IS_JUNK = 2`,
+/// `MESSAGE_IS_NOT_JUNK = 3`) is verified separately in
+/// `eds-sys/tests/camel.rs::camel_junk_filter_interface_and_status_in_eds`;
+/// this test confirms the `MessageSummary` layer correctly distinguishes the
+/// two keywords and that neither implies the other.
+#[test]
+fn junk_and_not_junk_keywords_are_independently_tracked() {
+    // Only $junk.
+    let junk_email = Email {
+        id: Some(Id::new("M-JUNK-01")),
+        keywords: Some([(keyword::JUNK.to_owned(), true)].into_iter().collect()),
+        ..bare_email()
+    };
+    let junk_summary = MessageSummary::from_email(&junk_email).expect("junk summary");
+    assert!(
+        junk_summary.flags.junk,
+        "$junk keyword must set the junk flag"
+    );
+    assert!(
+        !junk_summary.flags.not_junk,
+        "$junk alone must not set the not_junk flag"
+    );
+
+    // Only $notjunk.
+    let not_junk_email = Email {
+        id: Some(Id::new("M-JUNK-02")),
+        keywords: Some([(keyword::NOT_JUNK.to_owned(), true)].into_iter().collect()),
+        ..bare_email()
+    };
+    let not_junk_summary = MessageSummary::from_email(&not_junk_email).expect("not-junk summary");
+    assert!(
+        !not_junk_summary.flags.junk,
+        "$notjunk alone must not set the junk flag"
+    );
+    assert!(
+        not_junk_summary.flags.not_junk,
+        "$notjunk keyword must set the not_junk flag"
+    );
+
+    // Both simultaneously: a server verdict ($junk) the user overrode ($notjunk).
+    let both_email = Email {
+        id: Some(Id::new("M-JUNK-03")),
+        keywords: Some(
+            [
+                (keyword::JUNK.to_owned(), true),
+                (keyword::NOT_JUNK.to_owned(), true),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..bare_email()
+    };
+    let both_summary = MessageSummary::from_email(&both_email).expect("both-flags summary");
+    assert!(both_summary.flags.junk, "both: junk flag must be set");
+    assert!(
+        both_summary.flags.not_junk,
+        "both: not_junk flag must be set"
+    );
+}
+
+/// The `subject` and `preview` fields of a `MessageSummary` are the strings a
+/// full-text indexer (e.g. `camel_index_name_add_buffer`, verified in
+/// `eds-sys/tests/camel.rs::camel_text_index_creation_and_words_in_eds`) would
+/// receive to index a message's searchable text content.  Verifies they round-
+/// trip cleanly, including Unicode, and are non-empty when the server sends them.
+#[test]
+fn subject_and_preview_provide_indexable_text() {
+    let email = Email {
+        id: Some(Id::new("M-IDX-01")),
+        subject: Some("Quarterly review: JMAP sync performance 🚀".to_owned()),
+        preview: Some(
+            "Please review the attached metrics before the meeting on Friday.".to_owned(),
+        ),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("indexable summary");
+
+    let subject = summary.subject.as_deref().expect("subject must be present");
+    let preview = summary.preview.as_deref().expect("preview must be present");
+
+    // Both fields are non-empty — something a CamelTextIndex would tokenise.
+    assert!(!subject.is_empty());
+    assert!(!preview.is_empty());
+
+    // Content is preserved exactly, including non-ASCII characters.
+    assert!(
+        subject.contains("JMAP"),
+        "subject must contain 'JMAP'; got {subject:?}"
+    );
+    assert!(
+        subject.contains('🚀'),
+        "subject must preserve emoji; got {subject:?}"
+    );
+    assert!(
+        preview.contains("Friday"),
+        "preview must preserve its content; got {preview:?}"
+    );
+
+    // A message with no subject or preview produces `None` in those fields —
+    // the indexer must not be handed an empty string as a document key.
+    let bare = MessageSummary::from_email(&bare_email()).expect("bare summary");
+    assert!(bare.subject.is_none());
+    assert!(bare.preview.is_none());
+}

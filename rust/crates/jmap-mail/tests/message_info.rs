@@ -926,3 +926,96 @@ fn multiple_references_and_long_in_reply_to_chains_maintain_ancestry_ordering() 
         g_object_unref(oracle.cast());
     }
 }
+
+/// The `$junk` keyword becomes `CAMEL_MESSAGE_JUNK` in the flags word, and
+/// `$notjunk` becomes `CAMEL_MESSAGE_NOTJUNK`.  This verifies the bit-level
+/// correspondence between our keyword→flag mapping and the CamelMessageInfo
+/// flags that Camel (and, in turn, a `CamelJunkFilter` implementation) reads.
+///
+/// The positioning (`CAMEL_JUNK_STATUS_MESSAGE_IS_JUNK = 2`,
+/// `CAMEL_JUNK_STATUS_MESSAGE_IS_NOT_JUNK = 3`) is an EDS invariant checked in
+/// `eds-sys/tests/camel.rs::camel_junk_filter_interface_and_status_in_eds`.
+#[test]
+fn junk_and_not_junk_keywords_map_to_camel_message_flags() {
+    // Message with only $junk set (server believes it is spam).
+    let junk_only = MessageSummary {
+        flags: MessageFlags {
+            junk: true,
+            not_junk: false,
+            ..MessageFlags::default()
+        },
+        ..row("Em-junk-01")
+    };
+    let info = info_of(&junk_only);
+    unsafe {
+        let flags = camel_message_info_get_flags(info);
+        assert_ne!(
+            flags & CAMEL_MESSAGE_JUNK,
+            0,
+            "CAMEL_MESSAGE_JUNK must be set"
+        );
+        assert_eq!(
+            flags & CAMEL_MESSAGE_NOTJUNK,
+            0,
+            "CAMEL_MESSAGE_NOTJUNK must be clear when only $junk is set"
+        );
+        g_object_unref(info.cast());
+    }
+
+    // Message with only $notjunk set (user manually cleared spam verdict).
+    let not_junk_only = MessageSummary {
+        flags: MessageFlags {
+            junk: false,
+            not_junk: true,
+            ..MessageFlags::default()
+        },
+        ..row("Em-junk-02")
+    };
+    let info2 = info_of(&not_junk_only);
+    unsafe {
+        let flags = camel_message_info_get_flags(info2);
+        assert_eq!(
+            flags & CAMEL_MESSAGE_JUNK,
+            0,
+            "CAMEL_MESSAGE_JUNK must be clear when only $notjunk is set"
+        );
+        assert_ne!(
+            flags & CAMEL_MESSAGE_NOTJUNK,
+            0,
+            "CAMEL_MESSAGE_NOTJUNK must be set"
+        );
+        g_object_unref(info2.cast());
+    }
+}
+
+/// A flag-word update round-trip: set `CAMEL_MESSAGE_JUNK` on an info created
+/// from a non-junk row, then read back the current keywords through
+/// `row_keywords` and confirm `$junk` appears.  This tests that
+/// `camel_message_info_set_flags` + `row_keywords` stay consistent when the
+/// local Camel state changes independently of the server (e.g. a
+/// `CamelJunkFilter` reclassified the message after sync).
+#[test]
+fn junk_flag_update_round_trips_through_row_keywords() {
+    let clean = row("Em-junk-03");
+    let info = info_of(&clean);
+    unsafe {
+        // Initially no junk bit.
+        let before = camel_message_info_get_flags(info);
+        assert_eq!(before & CAMEL_MESSAGE_JUNK, 0);
+
+        // Simulate the junk filter setting the bit.
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_JUNK);
+        let after = camel_message_info_get_flags(info);
+        assert_ne!(after & CAMEL_MESSAGE_JUNK, 0);
+
+        // The keyword set derived from the current flags word must now include $junk.
+        let kw_after = row_keywords(info);
+        assert!(
+            kw_after.iter().any(|k| k == "$junk"),
+            "row_keywords must contain $junk after CAMEL_MESSAGE_JUNK is set; got {:?}",
+            kw_after.iter().collect::<Vec<_>>(),
+        );
+
+        g_object_unref(info.cast());
+    }
+}
