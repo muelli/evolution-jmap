@@ -23915,3 +23915,89 @@ and Work slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured;
 what Evolution's contact editor writes for a replaced photo, and into a cleared
 field, is inferred rather than measured; and the `jmap-mail` `transport.rs` hang
 is still an open design question with a lock-order hypothesis attached.
+
+## 2026-08-15 (two-hundred-and-fifty-sixth session)
+
+**The blocker the last session left, closed.** The mapping half of "an occurrence
+moved into a zone only the client can name" went green last night against the
+mock, and the log said plainly what was still missing: nothing drove it through
+real EDS. That is now `calendar.rs`'s fifth leg — a second `VTIMEZONE` handed to
+the calendar, a series created in the first zone, and one occurrence dragged into
+the second with `E_CAL_OBJ_MOD_THIS`.
+
+**Why real EDS is the only place this can be asked.** The fourth leg sends a
+client-defined zone in a *create*, where `jmap-ical` builds the whole `timeZones`
+map and may state it whole. This one sends the other kind of save. The map at the
+server is by then the user's own, so `diff_time_zones` may only add to it through
+RFC 8620 §5.3's pointer — and getting into that position takes two saves in order,
+the second finding the first's map already at the server. A fixture can stage that
+state; it cannot stage the thing underneath it, which is that EDS has the second
+definition in the calendar's `ETimezoneCache` by the time it calls
+`save_component_sync` for a `MOD_THIS`, under the identifier the detached instance
+still names. That is a platform fact about a *different* vfunc call from the one
+the fourth leg measured, and one where EDS hands the backend the master and the
+instance together.
+
+**It passed first time, and was then made to fail twice on purpose.** A leg that
+goes green on the first run measures nothing until it has been shown to
+discriminate, so `patch::diff_time_zones` was broken in two ways and the leg run
+against each. Returning early from it — no definition sent — reddens on the
+client's own observation, not the mock's: the override reaches the server naming a
+zone the event does not define, the next refresh cannot draw it, and EDS hands the
+occurrence back on the *series'* zone. That is the user-visible bug in full, two
+hours from where they put it. Forcing the whole-property branch — the map restated
+rather than added to — reddens on the mock, with the series' own definition gone.
+Both mutations were reverted and the leg is green again; the two failures are what
+say the assertions are load-bearing.
+
+**Two zones that differ in exactly one respect.** The moved zone's `VTIMEZONE` is
+the fourth leg's with the offsets and the `TZNAME`s changed and everything else —
+both observance dates, both yearly rules — left alone. A mix-up then shows up as
+that one respect rather than as a wholesale difference any bug could explain. The
+offsets are +0300/+0400, which no European zone has, so the instant the moved
+occurrence resolves to is unreachable from the series' zone: 08:00 there is 04:00
+UTC, against 06:00 for a reader that applied the series' CEST and 08:00 for one
+that resolved nothing. `zone_definition` grew the four parameters that describe
+that difference and kept its old signature as a wrapper, so the CET/CEST
+description the two older legs assert against is still written once.
+
+**`occurrence-detached`, which is not decoration.**
+`e_cal_client_get_object_sync` answers a request for an instance it holds no
+detached copy of with the *master* — and the master of this series has the same
+UID, the same summary and the unmoved clock. Without that observation, "EDS kept
+no detached instance at all" and "the save lost the moved zone" would read the
+same way from here, and they are not the same bug.
+
+The client program grew a `series` mode beside `read` and `create`; the zone-file
+loading the fourth leg had inline is now `add_zone_from_file`, which both modes
+call, and the mode dispatch became a table of arities rather than a boolean, since
+a third mode with a different argument count would otherwise read past the end of
+`argv`.
+
+Tests: +1 in `jmap-functional/tests/calendar.rs`, which is the calendar leg's
+fifth. The default set is unchanged at 1136 — `jmap-functional` is not in it.
+
+Verified locally: `ninja -C build` then `ctest -L functional` 4/4, the calendar
+leg's own run reporting 5 passed; `cargo test --locked` 1136, no failures; `cargo
+fmt --all --check` clean; `cargo clippy --workspace --exclude example-module
+--all-targets --locked -- -D warnings` clean. No Rust source outside a test file
+changed, so `cargo doc` is untouched. `ci/checks.sh` still stops at its first step
+on this VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those two were
+reasoned by hand: no file is added or removed, so the SPDX header set is unchanged,
+and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+No milestone tag. The blocker this closes is gone from the list. Unchanged
+blockers: the calcard directive's two emitters are still ours; M9 has no CI job and
+no GUI tier; M7 still **needs human verification in real Evolution**; `jmap-mail`'s
+rustdoc is dirty; whether Evolution renders an `IMAGE` is unmeasured; the
+multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified; the
+two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone
+are still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and
+Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped
+and their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; what Evolution's contact editor writes for a replaced
+photo, and into a cleared field, is inferred rather than measured; and the
+`jmap-mail` `transport.rs` hang is still an open design question with a lock-order
+hypothesis attached.

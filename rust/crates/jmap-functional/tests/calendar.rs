@@ -612,34 +612,65 @@ fn defined_zone() -> serde_json::Value {
 /// That definition under any identifier, so that the leg which sends one can
 /// state what it expects with the same text the leg which receives one does.
 fn zone_definition(tzid: &str) -> serde_json::Value {
+    zone_definition_offset(tzid, "+0100", "+0200", "CET", "CEST")
+}
+
+/// And the zone [`CLIENT_MOVED_ZONE_VTIMEZONE`] describes, which is the same
+/// definition on other offsets under other names — see that constant for why the
+/// two differ in nothing else.
+fn moved_zone_definition() -> serde_json::Value {
+    zone_definition_offset(
+        CLIENT_MOVED_ZONE,
+        CLIENT_MOVED_ZONE_STANDARD_OFFSET,
+        CLIENT_MOVED_ZONE_DAYLIGHT_OFFSET,
+        CLIENT_MOVED_ZONE_STANDARD_NAME,
+        CLIENT_MOVED_ZONE_DAYLIGHT_NAME,
+    )
+}
+
+/// The definition both of the above are, written once: two observances that
+/// trade `standard` for `daylight` on the last Sunday of March and back on the
+/// last Sunday of October, differing only in what each half is called and what it
+/// is worth.
+///
+/// The `offsetFrom` of each observance is the other's `offsetTo`, because that is
+/// what a transition is; stating them separately here rather than deriving them
+/// would let a caller describe a zone that jumps.
+fn zone_definition_offset(
+    tzid: &str,
+    standard_offset: &str,
+    daylight_offset: &str,
+    standard_name: &str,
+    daylight_name: &str,
+) -> serde_json::Value {
     serde_json::json!({
         "@type": "TimeZone",
         "tzId": tzid,
         "standard": [{
             "@type": "TimeZoneRule",
             "start": "1970-10-25T03:00:00",
-            "offsetFrom": "+0200",
-            "offsetTo": "+0100",
+            "offsetFrom": daylight_offset,
+            "offsetTo": standard_offset,
             "recurrenceRules": [{
                 "@type": "RecurrenceRule",
                 "frequency": "yearly",
                 "byMonth": ["10"],
                 "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
             }],
-            "names": {"CET": true},
+            "names": {standard_name: true},
         }],
         "daylight": [{
             "@type": "TimeZoneRule",
             "start": "1970-03-29T02:00:00",
-            "offsetFrom": "+0100",
-            "offsetTo": "+0200",
+            "offsetFrom": standard_offset,
+            "offsetTo": daylight_offset,
             "recurrenceRules": [{
                 "@type": "RecurrenceRule",
                 "frequency": "yearly",
                 "byMonth": ["3"],
                 "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
             }],
-            "names": {"CEST": true},
+            "names": {daylight_name: true},
         }],
     })
 }
@@ -706,6 +737,95 @@ const CLIENT_ZONE_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
      TZNAME:CEST\r\n\
      END:DAYLIGHT\r\n\
      END:VTIMEZONE\r\n";
+
+/// The zone the **fifth** leg moves one occurrence of its series into, and the
+/// second one that leg's client defines.
+///
+/// The fourth leg sends a client-defined zone in a `CalendarEvent/set` *create*,
+/// where the mapping builds the whole `timeZones` map itself. This one sends the
+/// other kind of save: an `update`, where the map already on the server is the
+/// user's own and RFC 8620 §5.3's pointer patch is the only way to add to it
+/// without rewriting what a `VTIMEZONE` cannot show. Nothing but real EDS can ask
+/// it, because the definition must be in the calendar's timezone store *and* the
+/// series' definition must already be at the server, which is two saves.
+///
+/// A fourth `example.com` zone, so that a definition arriving in the mock under
+/// this identifier can only have come from the second file this leg wrote.
+const CLIENT_MOVED_ZONE: &str = "/example.com/Somewhere-Further";
+
+/// The description that zone is written from, in the two spellings the leg needs:
+/// the `VTIMEZONE` the client hands the calendar, and the RFC 8984 §4.7.2 map the
+/// mock is held to.
+///
+/// [`CLIENT_ZONE_VTIMEZONE`]'s shape with two members changed — the offsets and
+/// the names — and everything else, the observance dates and both yearly rules,
+/// left as it stands. Deliberately: the fifth leg's claim is about *which* zone
+/// each of two definitions describes, and two definitions that differ in one
+/// respect make a mix-up show up as that one respect rather than as a wholesale
+/// difference that any bug could explain.
+///
+/// The offsets are three and four hours, which no European zone has, so the
+/// instant the moved occurrence resolves to cannot be reached from the series'
+/// zone: 08:00 here is 04:00 UTC, against 06:00 for a reader that applied the
+/// series' CEST and 08:00 for one that resolved nothing at all.
+const CLIENT_MOVED_ZONE_STANDARD_OFFSET: &str = "+0300";
+const CLIENT_MOVED_ZONE_DAYLIGHT_OFFSET: &str = "+0400";
+const CLIENT_MOVED_ZONE_STANDARD_NAME: &str = "EXT";
+const CLIENT_MOVED_ZONE_DAYLIGHT_NAME: &str = "EXST";
+const CLIENT_MOVED_ZONE_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
+     TZID:/example.com/Somewhere-Further\r\n\
+     BEGIN:STANDARD\r\n\
+     DTSTART:19701025T030000\r\n\
+     TZOFFSETFROM:+0400\r\n\
+     TZOFFSETTO:+0300\r\n\
+     RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+     TZNAME:EXT\r\n\
+     END:STANDARD\r\n\
+     BEGIN:DAYLIGHT\r\n\
+     DTSTART:19700329T020000\r\n\
+     TZOFFSETFROM:+0300\r\n\
+     TZOFFSETTO:+0400\r\n\
+     RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+     TZNAME:EXST\r\n\
+     END:DAYLIGHT\r\n\
+     END:VTIMEZONE\r\n";
+
+/// The series the fifth leg creates, in [`CLIENT_ZONE`] — the same zone the
+/// fourth leg's one-off event is in, and the same file, because what this leg
+/// adds is the *second* zone rather than a second way of sending the first.
+///
+/// Weekly and three long, which is [`ZONED_RECURRING_SUMMARY`]'s shape: enough
+/// occurrences that the one that moves is neither the first nor the last, so an
+/// override attached to the wrong instance lands on an occurrence that exists and
+/// is therefore visible as a wrong date rather than as a rejected save.
+const CLIENT_SERIES_TITLE: &str = "Standup, in a zone the client brought";
+const CLIENT_SERIES_DTSTART: &str = "20260409T100000";
+const CLIENT_SERIES_START: &str = "2026-04-09T10:00:00";
+const CLIENT_SERIES_DURATION: &str = "PT1H";
+const CLIENT_SERIES_RRULE: &str = "FREQ=WEEKLY;COUNT=3";
+
+/// And the occurrence that moves: the second one, named by the `RECURRENCE-ID`
+/// the rules generated for it — a wall clock on the *series'* zone — and put two
+/// hours earlier on the clock of a zone only this client can name.
+///
+/// The key the override arrives under is that recurrence id as JSCalendar states
+/// one, so it is written out here too: a series that reached the server floating
+/// or in UTC would make the same wall clock name a different instant, and the
+/// override would hang off an occurrence the rules never generated.
+const CLIENT_MOVED_RECURRENCE_ID: &str = "20260416T100000";
+const CLIENT_MOVED_INSTANCE: &str = "2026-04-16T10:00:00";
+const CLIENT_MOVED_DTSTART: &str = "20260416T080000";
+const CLIENT_MOVED_START: &str = "2026-04-16T08:00:00";
+
+/// The instant that moved wall clock means, which is the number the leg's
+/// client-side half exists for: 08:00 in the moved zone's `DAYLIGHT` observance,
+/// which is +0400, is 04:00 UTC.
+///
+/// Neither of the two ways this can go wrong reaches it. A reader that applied the
+/// series' zone to the detached instance lands on 06:00 UTC; one that resolved
+/// nothing lands on 08:00 UTC, since libical stamps a `Z` on a floating time
+/// rather than adjusting it.
+const CLIENT_MOVED_DTSTART_UTC: &str = "20260416T040000Z";
 
 /// Put nothing but a calendar in the mock's store, for the leg that creates the
 /// only event there will be.
@@ -2575,5 +2695,217 @@ fn a_zone_only_the_client_can_name_reaches_the_server_with_its_definition() {
         Some([(CLIENT_ZONE.to_owned(), zone_definition(CLIENT_ZONE))].into()),
         "the identifier arrived without the definition that says what it means, \
          or with one the round trip through EDS's timezone store changed\n{report}"
+    );
+}
+
+/// The fifth leg: an occurrence dragged into a second zone only the **client**
+/// can name, added to a `timeZones` map that is already the server's.
+///
+/// The leg above sends such a zone in a create, where the mapping builds the
+/// whole map and may state it whole. This one sends it in an *update*, which is
+/// the save a user actually makes when they drag one day of a standing meeting
+/// into the hours they are travelling — and there the map at the server is the
+/// user's own. RFC 8984 §4.7.2's definitions can carry an `aliases`, a `url` and
+/// a `validUntil` that no `VTIMEZONE` has room for, so a save that restated the
+/// property would delete what the user was never shown; `jmap-cal-sync`'s
+/// `diff_time_zones` therefore adds one entry through RFC 8620 §5.3's pointer,
+/// and this is where that runs against a real server's map rather than a
+/// fixture's.
+///
+/// Three joins in one save, and no unit test can reach any of them. The
+/// definition of the moved zone has to be in the calendar's timezone store when
+/// EDS calls `save_component_sync` for a `E_CAL_OBJ_MOD_THIS` — a different call
+/// from the create the leg above measured, and one where EDS hands the backend
+/// the master *and* the detached instance. The identifier the instance names has
+/// to survive into `recurrenceOverrides`. And the series' own definition, which
+/// the create put at the server, has to still be there afterwards, byte for byte,
+/// because the patch was supposed to add rather than replace.
+///
+/// The assertion that matters is again the mock's. Asking the calendar to resolve
+/// either identifier afterwards only says the store still holds what the client
+/// put in it; what no client can fake is the second entry arriving beside the
+/// first.
+#[test]
+fn an_occurrence_moved_into_a_client_named_zone_reaches_the_server_defined() {
+    let client = required_path("JMAP_FUNCTIONAL_CAL_ZONE_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_CAL_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    seed_empty_calendar(&server);
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/calendar-zone-series"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_calendar_backend(&module);
+    let zone_file = session.write_input("series-zone.ics", CLIENT_ZONE_VTIMEZONE);
+    let moved_zone_file = session.write_input("moved-zone.ics", CLIENT_MOVED_ZONE_VTIMEZONE);
+
+    let output = session.run(
+        &client,
+        &[
+            "series",
+            "jmap-functional",
+            zone_file.to_str().expect("the zone file's path is UTF-8"),
+            moved_zone_file
+                .to_str()
+                .expect("the moved zone file's path is UTF-8"),
+            CLIENT_SERIES_TITLE,
+            CLIENT_SERIES_DTSTART,
+            CLIENT_SERIES_DURATION,
+            CLIENT_SERIES_RRULE,
+            CLIENT_MOVED_RECURRENCE_ID,
+            CLIENT_MOVED_DTSTART,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // What libical made of the two files, reported for the reason the leg above
+    // gives: the client is never told either identifier, so a definition filed
+    // under some other name would leave every `TZID` below naming a zone nobody
+    // wrote. Both, because the whole leg is about telling two zones apart.
+    assert_eq!(
+        (seen.get("zone-tzid"), seen.get("moved-zone-tzid")),
+        (Some(&CLIENT_ZONE), Some(&CLIENT_MOVED_ZONE)),
+        "libical named one of the client's zones something other than its own \
+         TZID\n{report}"
+    );
+
+    // That EDS answered with the instance at all, which is what makes the pair
+    // below mean anything: `e_cal_client_get_object_sync` answers a request for an
+    // instance it holds no detached copy of with the *master*, and the master here
+    // is a component with the same UID, the same summary and the unmoved clock.
+    assert_eq!(
+        seen.get("occurrence-detached"),
+        Some(&"1"),
+        "EDS answered with the series rather than with the occurrence the client \
+         moved, so the move reached nothing\n{report}"
+    );
+
+    // And what EDS kept of the occurrence the client moved — not the component it
+    // wrote: the read-back is answered out of what the backend stored after the
+    // save, so this is the moved instance as it came back from the mock. A save
+    // that could not name the moved zone leaves the instance on the series' one,
+    // and then this `TZID` reads as [`CLIENT_ZONE`] rather than as nothing, which
+    // is the failure that looks most like success.
+    assert_eq!(
+        (
+            seen.get("occurrence-dtstart"),
+            seen.get("occurrence-dtstart-tzid"),
+        ),
+        (Some(&CLIENT_MOVED_DTSTART), Some(&CLIENT_MOVED_ZONE)),
+        "the occurrence EDS hands back is not on the clock, or not in the zone, \
+         the client moved it to\n{report}"
+    );
+    assert_eq!(
+        (
+            seen.get("occurrence-zone-known"),
+            seen.get("occurrence-zone-utc"),
+        ),
+        (Some(&"1"), Some(&CLIENT_MOVED_DTSTART_UTC)),
+        "the calendar no longer resolves the second zone the client gave it, or \
+         resolves it to another instant than its DAYLIGHT observance means — the \
+         series' own zone would land two hours later\n{report}"
+    );
+    assert_eq!(
+        seen.get("occurrence-duration"),
+        Some(&CLIENT_SERIES_DURATION),
+        "the moved occurrence came back some other length than the series'\n{report}"
+    );
+
+    // And the claim, on the only side that can make it.
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let events = &state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .calendar_events;
+    assert_eq!(
+        events.len(),
+        1,
+        "the server holds something other than the one series the client \
+         created\n{report}"
+    );
+    let (_, event) = events
+        .iter()
+        .next()
+        .expect("the one series the client created");
+
+    assert_eq!(
+        event.title.as_deref(),
+        Some(CLIENT_SERIES_TITLE),
+        "the server does not hold the series the client created\n{report}"
+    );
+    // The series' own clock first, because the override's key is a wall-clock
+    // time *on it*: a series that arrived floating or in UTC would make the key
+    // below name an instant the rules never generated.
+    assert_eq!(
+        (
+            event.start.as_deref(),
+            event.time_zone.as_deref(),
+            event.duration.as_deref(),
+        ),
+        (
+            Some(CLIENT_SERIES_START),
+            Some(CLIENT_ZONE),
+            Some(CLIENT_SERIES_DURATION),
+        ),
+        "the save of one occurrence moved the series itself\n{report}"
+    );
+    assert_eq!(
+        event.recurrence_overrides,
+        Some(
+            [(
+                CLIENT_MOVED_INSTANCE.to_owned(),
+                serde_json::json!({
+                    "start": CLIENT_MOVED_START,
+                    "timeZone": CLIENT_MOVED_ZONE,
+                }),
+            )]
+            .into()
+        ),
+        "the occurrence the user moved did not reach the server on the zone they \
+         moved it to\n{report}"
+    );
+    // The point of the leg: both definitions, the series' one untouched beside
+    // the one this save added. A patch that had restated the property whole would
+    // pass an assertion about the new entry alone and lose whatever the server
+    // held for the old one, which is exactly the failure §5.3's pointer exists to
+    // avoid — so the map is asserted whole.
+    assert_eq!(
+        event.time_zones,
+        Some(
+            [
+                (CLIENT_ZONE.to_owned(), zone_definition(CLIENT_ZONE)),
+                (CLIENT_MOVED_ZONE.to_owned(), moved_zone_definition()),
+            ]
+            .into()
+        ),
+        "the zone the occurrence moved into arrived without the definition that \
+         says what it means, or the save overwrote the definition the series was \
+         created with\n{report}"
     );
 }
