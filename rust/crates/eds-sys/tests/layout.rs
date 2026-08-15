@@ -391,6 +391,17 @@ fn camel_layouts_match_the_gtype_system() {
         CamelLocalSettings,
         CamelLocalSettingsClass
     );
+    assert_layout!(camel_certdb_get_type, CamelCertDB, CamelCertDBClass);
+    assert_layout!(
+        camel_text_index_get_type,
+        CamelTextIndex,
+        CamelTextIndexClass
+    );
+    assert_layout!(
+        camel_text_index_name_get_type,
+        CamelTextIndexName,
+        CamelTextIndexNameClass
+    );
 }
 
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the

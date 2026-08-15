@@ -23195,4 +23195,45 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 Claiming Camel certificate database (`CamelCertDB`, `CamelCert`), junk filter interface (`CamelJunkFilter`), network service (`CamelNetworkService`), memory pool (`CamelMemPool`), text index (`CamelTextIndex`), and filter search (`CamelFilterSearch`) EDS verification in `eds-sys`, certificate host verification and junk header analysis in `jmap-mail`, and junk status mapping and index term extraction in `jmap-mail-sync`.
 
+**EDS 3.52 certificate database, junk filter, network service, memory pool, text index, and filter search measurement:**
+- Probed `camel-1.2` 3.52 for certificate, junk, network, pool, index, and filter-search behaviors:
+  - `CamelCertDB` and `CamelCert`:
+    - Allowlisted `"CamelCertDB.*"`, `"CamelCert.*"`, `"CamelCertTrust"` and functions `"camel_certdb_.*"`, `"camel_cert_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Allowlisted variables `"CAMEL_CERT_TRUST_.*"` in `build.rs`.
+    - Added GObject layout check for `CamelCertDB` and `CamelCertDBClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified `CamelCert` creation, field assignment (`hostname`, `fingerprint`, `trust`), ref/unref lifecycle, trust enum ordering (UNKNOWN=0, NEVER=1, MARGINAL=2, FULLY=3, ULTIMATE=4, TEMPORARY=5), `CamelCertDB` creation, filename setting, `camel_certdb_save` returning 0, and `camel_certdb_clear`.
+  - `CamelJunkFilter`:
+    - Allowlisted `"CamelJunkFilter.*"`, `"CamelJunkStatus"`, `"CAMEL_JUNK_STATUS_.*"` in `build.rs`.
+    - Verified that `camel_junk_filter_get_type()` registers as a `G_TYPE_INTERFACE`, and confirmed enum values: `CAMEL_JUNK_STATUS_ERROR=0`, `CAMEL_JUNK_STATUS_INCONCLUSIVE=1`, `CAMEL_JUNK_STATUS_MESSAGE_IS_JUNK=2`, `CAMEL_JUNK_STATUS_MESSAGE_IS_NOT_JUNK=3`.
+  - `CamelNetworkService`:
+    - Allowlisted `"CamelNetworkService.*"` and functions `"camel_network_service_.*"` in `build.rs`.
+    - Verified `camel_network_service_get_type()` registers as a `G_TYPE_INTERFACE`.
+  - `CamelMemPool`:
+    - Allowlisted `"CamelMemPool.*"`, `"CamelMemPoolFlags"`, `"CAMEL_MEMPOOL_.*"` and functions `"camel_mempool_.*"` in `build.rs`.
+    - Verified `camel_mempool_new`, `camel_mempool_alloc` returning non-null pointer suitable for writing, `camel_mempool_strdup` preserving string content exactly, and `camel_mempool_flush`/`camel_mempool_destroy` lifecycle.
+  - `CamelTextIndex` and `CamelIndex`:
+    - Allowlisted `"CamelIndex.*"`, `"CamelIndexName.*"`, `"CamelIndexCursor.*"`, `"CamelTextIndex.*"` and functions `"camel_index_.*"`, `"camel_text_index_.*"` in `build.rs`.
+    - Added GObject layout checks for `CamelTextIndex`/`CamelTextIndexClass` and `CamelTextIndexName`/`CamelTextIndexNameClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified `camel_text_index_new` (with `O_RDWR|O_CREAT|O_TRUNC = 578`), `camel_index_add_name`, `camel_index_name_add_word`, `camel_index_name_add_buffer` (returns 0 = zero bytes remaining, not bytes consumed — the `CamelTextIndex` implementation processes all input incrementally), `camel_index_write_name` (0 = success), `camel_index_sync` (0 = success), and `camel_text_index_check` (0 = consistent index).
+    - Decision: the prior claim that `add_buffer` returns bytes consumed was wrong. A C probe confirmed the function always returns 0 (0 bytes remaining). The original test asserted `== 32`; that was corrected to `== 0` with a comment explaining the semantics.
+  - `CamelFilterSearch`:
+    - Allowlisted `"CamelFilterSearch.*"`, `"CAMEL_SEARCH_.*"` and functions `"camel_filter_search_.*"` in `build.rs`.
+    - Verified `CAMEL_SEARCH_ERROR=-1`, `CAMEL_SEARCH_NOMATCH=0`, `CAMEL_SEARCH_MATCHED=1`.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/message_info.rs`:
+  - Added `junk_and_not_junk_keywords_map_to_camel_message_flags`: verifies that a `MessageSummary` with `junk: true, not_junk: false` sets `CAMEL_MESSAGE_JUNK` but not `CAMEL_MESSAGE_NOTJUNK` in the Camel flags word, and vice versa — connecting the JMAP keyword layer to the `CAMEL_JUNK_STATUS_MESSAGE_IS_JUNK / IS_NOT_JUNK` EDS constants verified in `eds-sys`.
+  - Added `junk_flag_update_round_trips_through_row_keywords`: verifies that after `camel_message_info_set_flags` sets `CAMEL_MESSAGE_JUNK` (simulating a `CamelJunkFilter` reclassification), `row_keywords` includes `$junk` — confirming that the local Camel state and the keyword-upload path stay consistent.
+- In `rust/crates/jmap-mail-sync/tests/summary.rs`:
+  - Added `junk_and_not_junk_keywords_are_independently_tracked`: verifies that `$junk` and `$notjunk` are independently tracked in `MessageFlags` — neither implies the other, and both can be set simultaneously (server verdict + local override); connects to `CAMEL_JUNK_STATUS` ordering verified in `eds-sys`.
+  - Added `subject_and_preview_provide_indexable_text`: verifies that `MessageSummary.subject` and `.preview` preserve their content exactly (including Unicode/emoji) for use as full-text index input (connecting to `camel_index_name_add_buffer` verified in `eds-sys`), and that a bare email without subject or preview produces `None` rather than an empty string.
+
+Tests: 1121 in the default set (up 4: 30 in `jmap-mail/tests/message_info.rs` and 30 in `jmap-mail-sync/tests/summary.rs`), plus 6 new tests in `eds-sys/tests/camel.rs` (67 in file, 122 across crate), 3 new layout assertions in `eds-sys/tests/layout.rs`, and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1121 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
+
 
