@@ -124,6 +124,18 @@ impl Session {
         .expect("write the source keyfile");
     }
 
+    /// Write a file for a client program to read, and hand back its path.
+    ///
+    /// For input a client is *told* rather than one it invents — a `VTIMEZONE`
+    /// the test also asserts about, say. Written under the session's root so it
+    /// goes when the next run wipes it, and so a failed run leaves it beside
+    /// the tree it belongs to.
+    pub fn write_input(&self, name: &str, contents: &str) -> PathBuf {
+        let path = self.root.join(name);
+        fs::write(&path, contents).expect("write the client's input file");
+        path
+    }
+
     /// Stage a built cdylib as the one address book backend this session's
     /// factory can see, under the name EDS derives from `BackendName`.
     pub fn stage_address_book_backend(&mut self, built_module: &Path) {
