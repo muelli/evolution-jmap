@@ -23810,3 +23810,108 @@ is unmeasured; what Evolution's contact editor writes for a replaced photo, and
 into a cleared field, is inferred rather than measured; and the `jmap-mail`
 `transport.rs` hang is still an open design question with a lock-order hypothesis
 attached.
+
+## 2026-08-15 (two-hundred-and-fifty-fifth session)
+
+**The occurrence the user moved into an invitation's zone never left the
+laptop.** Last session closed the create path's half of this; the log's own
+closing note said the edit path was untouched, and it was worse than untouched.
+`jmap_ical::maps_override_field` refuses an override whose `timeZone` is RFC 8984
+§1.4.9's custom identifier, and `patch::diff_overrides` reads that refusal as
+"leave `recurrenceOverrides` entirely alone" — so a user who drags one day of a
+series into a zone Evolution holds only in the calendar's timezone store saves,
+sees the move, and the server never hears about it. Every other client shows that
+day at the series' clock. The series' own `timeZone` had the same rule and the
+same outcome.
+
+**The refusal was right about the reason and wrong about the remedy.** §1.4.9
+admits a custom identifier only beside the `timeZones` entry that says what it
+is, and a patch naming `recurrenceOverrides` alone cannot carry one — the entry
+belongs to a different property. The comment beside it went on to say why
+`timeZones` could not be sent either: it would go out replaced whole, and a
+`VTIMEZONE` shows none of the `aliases`, `url` or `validUntil` a server's own
+definition may hold, so patching it over deletes what the user was never shown.
+That is the rule this module exists to keep, and it is an argument against
+*replacing* the map — not against adding to it. RFC 8620 §5.3 gives a patch a
+pointer into an object, which `diff_locations` has used for `locations/<key>/name`
+since M4.
+
+**So `diff_time_zones` adds one entry per identifier.** It runs last, over the
+patch the rest of `diff` wrote rather than over the event, because the patch is
+what says which zones are actually being sent — a zone named only by a value that
+never made it in is not this save's business. For each solidus-prefixed
+identifier in `timeZone` or in an override's, it writes `timeZones/<pointer>`
+with the definition the document brought. Two things it does not do: an
+identifier the *server* already defines is skipped completely, because the
+document's drawing of a zone the server has already described can only lose
+members; and nothing is pruned, because the map here is the server's, an
+unreferenced entry is legal, and removing one is deleting on a guess. (The create
+path does prune — it built the whole map itself.)
+
+**Where `timeZones` is absent from the server's event the property is written
+whole**, and only there: §5.3 wants every path segment before the last to exist
+already. There is nothing to overwrite in that case, which is what makes it safe
+rather than convenient. The distinction has its own test, and the test really
+does discriminate — forcing the whole-property branch reddens it, which is how it
+was checked rather than reasoned.
+
+**Two predicates now, not one.** `jmap_ical::sends_recurrence_override` is
+`maps_recurrence_override` with `draws_override_field`'s `timeZone` rule, and the
+pair says something real: what a save may state depends on what else that save is
+willing to send. A caller that will send `recurrenceOverrides` and nothing else
+still asks the old one. `defines_time_zone` (the former private `defines_zone`)
+and `time_zone_definition` went public beside it, the second being
+`definition_of` asked of a whole event — which matters, because it tolerates
+either spelling of §1.4.9's solidus and so will not add an entry under `/x` that
+the server already holds under `x`. The series' own `timeZone` check became
+`maps_time_zone`, the same question the create path asks.
+
+**The guard that should be unreachable.** Every identifier reaching the patch was
+admitted by a check against the *edited* event's definitions, so the lookup that
+follows always answers. If it ever does not, the property that named the zone is
+removed from the patch rather than the definition being skipped: a reference to
+nothing is grounds to refuse the whole `CalendarEvent/set`, which costs the user
+every other edit in the save, where dropping the property costs them one and
+leaves the server's own standing — which is exactly what an unnameable zone gets.
+
+**What is measured and what is not.** Measured, through the mock: an occurrence
+moved into a document-defined zone arriving with its definition; the same for a
+series; a zone the server already defines left byte-for-byte alone, `url` and
+all; a second zone added to a map that already exists without touching the first;
+and both predicates over a defined and an undefined identifier. Not measured:
+any of it through real EDS. That is the blocker this session set out to close and
+did not — the leg needs `cal-zone-client.c` to add a second zone, create a
+series in one and `E_CAL_OBJ_MOD_THIS` an occurrence into the other, and it is
+its own increment. The mapping half is now green, so that leg would be measuring
+the join rather than reddening on this bug.
+
+Tests: +4 in `jmap-cal-sync/tests/save.rs`, +1 in `jmap-ical/tests/event.rs` (and
+one there renamed, since its claim — "`timeZones` is never patched at all" — is
+no longer true). The default set is 1136.
+
+Verified locally: `cargo test --locked` 1136, no failures; `cargo test --locked -p
+eds-sys -p jmap-backend-cal -p jmap-backend-cal-module -p evolution-jmap-cal-sync`
+all green; `cargo fmt --all --check` clean; `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` clean; `cargo doc --no-deps`
+clean for both crates touched, which is not automatic — four intra-doc links broke
+in the move and one predated it; `ninja -C build` then `ctest -L functional` 4/4.
+`ci/checks.sh` still stops at its first step on this VM (no `reuse`, no `pipx`, no
+`uvx`, no `cargo-deny`), so those two were reasoned by hand: no file is added or
+removed, so the SPDX header set is unchanged, and `Cargo.lock` is untouched, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Unchanged blockers: no functional leg drives an occurrence moved
+into a client-defined zone through real EDS — now the *only* thing left of that
+item, since the mapping underneath it is done; the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; `jmap-mail`'s rustdoc is dirty; whether
+Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution
+shows only the first" bet is still unverified; the two `LABEL` `TYPE` risks stand;
+a deathday and a birthday stated as a year alone are still invisible; the
+conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and
+therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their contact-editor
+behaviour unmeasured; whether the editor lets a handle be moved between the Home
+and Work slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured;
+what Evolution's contact editor writes for a replaced photo, and into a cleared
+field, is inferred rather than measured; and the `jmap-mail` `transport.rs` hang
+is still an open design question with a lock-order hypothesis attached.

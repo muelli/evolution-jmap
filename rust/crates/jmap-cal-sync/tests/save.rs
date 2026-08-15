@@ -2497,6 +2497,284 @@ fn an_occurrences_unnameable_zone_leaves_the_overrides_alone() {
     );
 }
 
+/// One occurrence moved into a zone the *document* defines — the other half of
+/// [`an_occurrences_unnameable_zone_leaves_the_overrides_alone`], and the half
+/// that has to arrive.
+///
+/// This is the user who drags one day of a series into the zone an invitation
+/// brought: Evolution files that `VTIMEZONE` in the calendar's own timezone
+/// store, the backend's envelope copies it back beside the components that name
+/// it, and what reaches this crate is a custom identifier *with* its RFC 8984
+/// §4.7.2 definition. §1.4.9 admits that pair, so the save has something to send
+/// — and must send both halves: the identifier alone is a dangling reference the
+/// server may reject the whole `CalendarEvent/set` over.
+///
+/// The definition goes out as its own entry, `timeZones/<pointer>`, not as the
+/// property replaced whole. That is what keeps the module's rule where a
+/// `VTIMEZONE` cannot show a zone's `aliases`, `url` or `validUntil`: an entry
+/// the server did not have is added, and nothing it did have is touched — see
+/// [`an_occurrence_moved_into_a_zone_the_server_defines_leaves_the_definition_alone`].
+#[test]
+fn moving_one_occurrence_into_a_zone_only_the_document_defines_sends_the_definition() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    let sync = fixture.sync();
+
+    // The definition ahead of the series, once: two copies would be two zones
+    // under one `TZID`.
+    let icalendar = sync
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar
+        .replacen(
+            "BEGIN:VEVENT",
+            &format!("{CUSTOM_VTIMEZONE}BEGIN:VEVENT"),
+            1,
+        );
+    let edited = with_instance(
+        &icalendar,
+        &format!(
+            "BEGIN:VEVENT\r\n\
+             UID:{id}\r\n\
+             RECURRENCE-ID:20260116T090000Z\r\n\
+             DTSTART;TZID={CUSTOM_TZID}:20260116T100000\r\n\
+             DURATION:PT1H\r\n\
+             STATUS:CONFIRMED\r\n\
+             SUMMARY:Standup\r\n\
+             END:VEVENT\r\n"
+        ),
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-16T09:00:00".to_owned(),
+                json!({"start": "2026-01-16T10:00:00", "timeZone": CUSTOM_TZID}),
+            )]
+            .into()
+        ),
+        "the occurrence stayed where the series is, hours from where the user put it"
+    );
+    let definitions = stored
+        .time_zones
+        .expect("the zone the moved occurrence names");
+    let zone = definitions
+        .get(CUSTOM_TZID)
+        .unwrap_or_else(|| panic!("no definition for {CUSTOM_TZID}: {definitions:?}"));
+    assert_eq!(zone["standard"][0]["offsetTo"], json!("+0100"));
+    assert_eq!(zone["daylight"][0]["offsetTo"], json!("+0200"));
+}
+
+/// The same move onto an identifier the **server** already defines, which is
+/// what a second edit of the same occurrence is.
+///
+/// Nothing needs adding, and nothing may be written: the server's own entry may
+/// carry an `url`, a `validUntil` or a set of `aliases`, none of which a
+/// `VTIMEZONE` has room for and none of which the user was ever shown. So the
+/// override goes out naming the zone and the definition beside it is left
+/// exactly as it stood.
+#[test]
+fn an_occurrence_moved_into_a_zone_the_server_defines_leaves_the_definition_alone() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    // A definition richer than any document can state, filed under the same
+    // identifier the component below names.
+    let held = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "url": "https://example.com/zones/Europe-Berlin",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+        }],
+    });
+    fixture.patch(&id, json!({"timeZones": {CUSTOM_TZID: held}}));
+    let sync = fixture.sync();
+
+    let icalendar = sync
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar
+        .replacen(
+            "BEGIN:VEVENT",
+            &format!("{CUSTOM_VTIMEZONE}BEGIN:VEVENT"),
+            1,
+        );
+    let edited = with_instance(
+        &icalendar,
+        &format!(
+            "BEGIN:VEVENT\r\n\
+             UID:{id}\r\n\
+             RECURRENCE-ID:20260116T090000Z\r\n\
+             DTSTART;TZID={CUSTOM_TZID}:20260116T100000\r\n\
+             DURATION:PT1H\r\n\
+             STATUS:CONFIRMED\r\n\
+             SUMMARY:Standup\r\n\
+             END:VEVENT\r\n"
+        ),
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-16T09:00:00".to_owned(),
+                json!({"start": "2026-01-16T10:00:00", "timeZone": CUSTOM_TZID}),
+            )]
+            .into()
+        ),
+    );
+    let definitions = stored.time_zones.expect("the zone the server defined");
+    let zone = definitions
+        .get(CUSTOM_TZID)
+        .unwrap_or_else(|| panic!("no definition for {CUSTOM_TZID}: {definitions:?}"));
+    assert_eq!(
+        zone["url"],
+        json!("https://example.com/zones/Europe-Berlin"),
+        "the save overwrote a definition the user was never shown"
+    );
+    assert!(
+        zone["daylight"].is_null(),
+        "the server's definition was replaced by the document's drawing: {zone}"
+    );
+}
+
+/// And the whole series moved into a zone only the document defines, which is
+/// the same pair one level up: the user changes the appointment's time zone to
+/// the one an invitation brought, and `timeZone` and its `timeZones` entry have
+/// to travel together or the identifier reaches the server naming nothing.
+#[test]
+fn moving_a_series_into_a_zone_only_the_document_defines_sends_the_definition() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"timeZone": "Europe/Berlin"}));
+    let sync = fixture.sync();
+
+    let icalendar = sync
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar
+        .replace("TZID=Europe/Berlin", &format!("TZID={CUSTOM_TZID}"))
+        .replace("BEGIN:VEVENT", &format!("{CUSTOM_VTIMEZONE}BEGIN:VEVENT"));
+    sync.save_component(&icalendar, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.time_zone.as_deref(),
+        Some(CUSTOM_TZID),
+        "the zone the user picked did not reach the server"
+    );
+    let definitions = stored.time_zones.expect("the zone the event names");
+    let zone = definitions
+        .get(CUSTOM_TZID)
+        .unwrap_or_else(|| panic!("no definition for {CUSTOM_TZID}: {definitions:?}"));
+    assert_eq!(zone["standard"][0]["offsetTo"], json!("+0100"));
+}
+
+/// A second identifier arriving at an event that already has a `timeZones` map —
+/// the case the pointer path exists for.
+///
+/// Where the server holds no map at all the property has to be written whole
+/// (RFC 8620 §5.3 wants every path segment before the last to exist already),
+/// and nothing is at risk because there was nothing there. Where it *does* hold
+/// one, writing the property would delete the zone the series is in — which is
+/// the definition the appointment's own clock resolves against, so the whole
+/// event would go unresolvable to add one occurrence's zone. So the entry goes
+/// in under its own pointer and the map keeps everything else, `url` and all.
+#[test]
+fn a_second_zone_is_added_to_the_map_the_server_already_holds() {
+    let fixture = Fixture::start();
+    let id = seed_daily(&fixture);
+    fixture.patch(
+        &id,
+        json!({
+            "timeZone": CUSTOM_TZID,
+            "timeZones": {CUSTOM_TZID: {
+                "@type": "TimeZone",
+                "tzId": CUSTOM_TZID,
+                "url": "https://example.com/zones/Europe-Berlin",
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                }],
+            }},
+        }),
+    );
+    let sync = fixture.sync();
+
+    // The series keeps the zone the server named; the occurrence moves into the
+    // second one, which only this document defines.
+    let icalendar = sync
+        .load_component(id.as_str())
+        .unwrap()
+        .icalendar
+        .replacen(
+            "BEGIN:VEVENT",
+            &format!("{OTHER_CUSTOM_VTIMEZONE}BEGIN:VEVENT"),
+            1,
+        );
+    let edited = with_instance(
+        &icalendar,
+        &format!(
+            "BEGIN:VEVENT\r\n\
+             UID:{id}\r\n\
+             RECURRENCE-ID;TZID={CUSTOM_TZID}:20260116T090000\r\n\
+             DTSTART;TZID={OTHER_CUSTOM_TZID}:20260116T100000\r\n\
+             DURATION:PT1H\r\n\
+             STATUS:CONFIRMED\r\n\
+             SUMMARY:Standup\r\n\
+             END:VEVENT\r\n"
+        ),
+    );
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-16T09:00:00".to_owned(),
+                json!({"start": "2026-01-16T10:00:00", "timeZone": OTHER_CUSTOM_TZID}),
+            )]
+            .into()
+        ),
+    );
+    let definitions = stored.time_zones.expect("the zones the event names");
+    assert_eq!(
+        definitions[CUSTOM_TZID]["url"],
+        json!("https://example.com/zones/Europe-Berlin"),
+        "the series' own zone was overwritten to add the occurrence's: {definitions:?}"
+    );
+    assert_eq!(
+        definitions[OTHER_CUSTOM_TZID]["standard"][0]["offsetTo"],
+        json!("-0500"),
+        "the zone the occurrence moved into did not reach the server: {definitions:?}"
+    );
+}
+
+/// A second identifier for a zone on the other side of the Atlantic, so that a
+/// definition arriving under it cannot be [`CUSTOM_VTIMEZONE`] by another name.
+const OTHER_CUSTOM_TZID: &str = "/example.com/America-New_York";
+
+const OTHER_CUSTOM_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
+TZID:/example.com/America-New_York\r\n\
+BEGIN:STANDARD\r\nDTSTART:19701101T020000\r\n\
+TZOFFSETFROM:-0400\r\nTZOFFSETTO:-0500\r\n\
+RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=11\r\nTZNAME:EST\r\nEND:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\nDTSTART:19700308T020000\r\n\
+TZOFFSETFROM:-0500\r\nTZOFFSETTO:-0400\r\n\
+RRULE:FREQ=YEARLY;BYDAY=2SU;BYMONTH=3\r\nTZNAME:EDT\r\nEND:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n";
+
 /// An event with one place, keyed the way a server keys it, and the component
 /// Evolution is shown for it.
 fn placed(fixture: &Fixture, location: serde_json::Value) -> (jmap_proto::Id, String) {

@@ -10,7 +10,7 @@
 use jmap_ical::{
     ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
-    names_time_zone, prune_time_zones,
+    names_time_zone, prune_time_zones, sends_recurrence_override,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -5561,18 +5561,25 @@ fn an_occurrences_own_custom_zone_is_read_back_with_its_definition() {
     assert_eq!(event_to_ical(&back), ics);
 }
 
-/// Drawn is not the same question as sendable, and this is the one property
-/// where the two answers differ.
+/// Sendable is not one question but two, and this is the one property that
+/// tells them apart: what a save may state depends on what else that save is
+/// willing to send.
 ///
 /// A component can state a custom identifier — beside the `VTIMEZONE` that
-/// defines it, which the test above pins. A *patch* cannot: `recurrenceOverrides`
-/// goes back replaced whole while `timeZones` is never patched at all (see
-/// `jmap-cal-sync`'s `patch` module), so an override naming a zone the server
-/// does not already define would be a dangling reference that costs every other
-/// edit in the same save. So the occurrence is shown to the user and its zone is
-/// left to the server.
+/// defines it, which the test above pins. A patch naming `recurrenceOverrides`
+/// and nothing else cannot: the property goes back replaced whole, so the
+/// identifier would reach the server with nothing to say what it means, and RFC
+/// 8984 §1.4.9 admits it only beside its `timeZones` entry — a dangling
+/// reference the server may reject the whole `CalendarEvent/set` over, costing
+/// every other edit in the same save. That is `maps_recurrence_override`.
+///
+/// A save that will *also* patch `timeZones` is in a different position, and
+/// asks [`sends_recurrence_override`]: it can put the entry there, so the pair
+/// is legal and the occurrence keeps the zone the user moved it into. See
+/// `jmap-cal-sync`'s `patch` module, which adds one entry per identifier rather
+/// than replacing the map.
 #[test]
-fn an_occurrences_custom_zone_is_drawn_but_never_patched_back() {
+fn an_occurrences_custom_zone_is_sendable_only_beside_its_definition() {
     let event = instance_in_a_custom_zone();
     let (id, patch) = event
         .recurrence_overrides
@@ -5584,9 +5591,47 @@ fn an_occurrences_custom_zone_is_drawn_but_never_patched_back() {
 
     assert!(
         !maps_recurrence_override(&event, id, patch),
-        "an override naming a zone only this document defines is sendable, so a \
-         save would replace `recurrenceOverrides` with an identifier the server \
-         cannot resolve"
+        "an override naming a zone only this document defines is sendable on its \
+         own, so a save would replace `recurrenceOverrides` with an identifier \
+         the server cannot resolve"
+    );
+    assert!(
+        sends_recurrence_override(&event, id, patch),
+        "an override naming a zone this document defines is unsendable even to a \
+         save that would carry the definition, so the user's move is thrown away"
+    );
+}
+
+/// And the identifier the document only *names*, asked of the same pair: neither
+/// predicate admits it.
+///
+/// A definition it can send is what makes the difference above, so an event that
+/// has none is back where it started — there is nothing to put in `timeZones`,
+/// and an entry drawn from half a description would be a different zone. The
+/// series' own identifier is the one defined here, which keeps the fixture
+/// honest: what the override names is undefined, not the whole event.
+#[test]
+fn an_occurrence_naming_an_undefined_zone_is_sendable_by_neither_rule() {
+    let event = CalendarEvent {
+        recurrence_overrides: serde_json::from_value(json!({
+            "2026-01-22T13:00:00": {"timeZone": "/example.com/Elsewhere"},
+        }))
+        .expect("a map of overrides"),
+        ..defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}))
+    };
+    let (id, patch) = event
+        .recurrence_overrides
+        .as_ref()
+        .expect("the fixture's overrides")
+        .iter()
+        .next()
+        .expect("the fixture's one override");
+
+    assert!(!maps_recurrence_override(&event, id, patch));
+    assert!(
+        !sends_recurrence_override(&event, id, patch),
+        "an override naming a zone nothing defines is sendable, so the save would \
+         reach the server with a reference to nothing"
     );
 }
 
