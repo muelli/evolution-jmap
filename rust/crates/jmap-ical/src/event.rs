@@ -76,6 +76,12 @@
 //! client's `.ics` — be saved as the event it is rather than as a floating one.
 //! See [`maps_time_zone`], which is the question the save path asks.
 //!
+//! The one place a zone is needed and no database is at hand is a recurrence's
+//! `UNTIL`: RFC 5545 §3.3.10 states it as a UTC instant beside a zoned
+//! `DTSTART` where RFC 8984 §4.3.3 wants a local time in the event's own zone,
+//! and the two differ by exactly the offset this crate cannot compute. Such a
+//! rule is therefore read as unmappable rather than shifted — see `read_until`.
+//!
 //! An all-day event has no property of its own in iCalendar; it is a `DTSTART`
 //! written as a date rather than a date-time, which puts JSCalendar's
 //! `showWithoutTime` in the value type of three properties at once. See
@@ -2487,7 +2493,9 @@ fn read_observance(component: &Component) -> Option<Value> {
         .all("RRULE")
         .into_iter()
         .map(|property| {
-            let recurrence = rrule_to_rule(&property.raw_value())?;
+            // No zone: an observance dates itself in the zone it is defining,
+            // not in one it refers to — see [`read_until`].
+            let recurrence = rrule_to_rule(&property.raw_value(), None)?;
             serde_json::to_value(recurrence).ok()
         })
         .collect::<Option<Vec<Value>>>()?;
@@ -2543,7 +2551,7 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
     let rules: Vec<RecurrenceRule> = vevent
         .all("RRULE")
         .into_iter()
-        .filter_map(|property| rrule_to_rule(&property.raw_value()))
+        .filter_map(|property| rrule_to_rule(&property.raw_value(), time_zone.as_deref()))
         .collect();
 
     CalendarEvent {
@@ -3913,10 +3921,43 @@ fn weekday_token(day: &str) -> Option<&'static str> {
         .find(|weekday| weekday.eq_ignore_ascii_case(day))
 }
 
+/// A rule's `UNTIL` as RFC 8984 §4.3.3's `until`, which is a local time in the
+/// event's own zone — `time_zone` being the zone the rule's component named, as
+/// `read_start` resolved it, and `None` a floating event or a `VTIMEZONE`
+/// observance.
+///
+/// RFC 5545 §3.3.10 requires the value to be a UTC instant whenever `DTSTART`
+/// carries a `TZID`, so a `Z` here is what every conformant producer writes —
+/// an invitation, an imported `.ics`. Reading its digits as a local time would
+/// move the end of the series by the zone's offset, which is a recurrence the
+/// user never edited being shortened on the server. Converting it properly
+/// needs a zone database this crate deliberately does not carry, so the instant
+/// is kept as it was stated, `Z` and all: that is not a LocalDateTime, so
+/// [`writable`] refuses it and [`maps_recurrence_rule`] tells the save path to
+/// leave `recurrenceRules` alone.
+///
+/// The three cases with no offset to shift by are read as they always were. An
+/// event whose zone *is* UTC states the same digits either way; a floating one
+/// has no zone to resolve an instant against, and RFC 5545 admits no `Z` beside
+/// a floating `DTSTART` at all, so its digits are the best reading of a
+/// producer being loose; and an observance's own `UNTIL` belongs to the zone
+/// being defined rather than to one being referred to.
+fn read_until(value: &str, time_zone: Option<&str>) -> Option<String> {
+    let local = to_local_date_time(value)?;
+    let shifted = value.ends_with(['Z', 'z']) && time_zone.is_some_and(|zone| !is_utc(zone));
+    Some(match shifted {
+        true => format!("{local}Z"),
+        false => local,
+    })
+}
+
 /// The reverse. Parts outside the modeled set are dropped rather than parked
 /// in `extra`: an `RSCALE=CHINESE` copied verbatim into JSCalendar would be
 /// rejected by the server, whose `rscale` is a lowercase calendar-system name.
-fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
+///
+/// `time_zone` is the zone the component naming the rule is in, which only
+/// `UNTIL` needs — see [`read_until`].
+fn rrule_to_rule(value: &str, time_zone: Option<&str>) -> Option<RecurrenceRule> {
     let mut rule = RecurrenceRule::default();
     for part in value.split(';') {
         let Some((key, value)) = part.split_once('=') else {
@@ -3926,7 +3967,7 @@ fn rrule_to_rule(value: &str) -> Option<RecurrenceRule> {
             "FREQ" => rule.frequency = value.to_ascii_lowercase(),
             "INTERVAL" => rule.interval = value.parse().ok(),
             "COUNT" => rule.count = value.parse().ok(),
-            "UNTIL" => rule.until = to_local_date_time(value),
+            "UNTIL" => rule.until = read_until(value, time_zone),
             "BYDAY" => rule.by_day = Some(value.split(',').map(to_nday).collect()),
             "BYMONTHDAY" => {
                 rule.by_month_day = Some(value.split(',').map(to_month_day).collect());

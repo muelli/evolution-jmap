@@ -2325,6 +2325,91 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
 }
 
 #[test]
+fn a_zoned_rules_utc_until_is_not_taken_for_a_local_time() {
+    // RFC 5545 §3.3.10 requires UNTIL to be a UTC instant whenever DTSTART
+    // names a zone, so it is what every conformant producer writes — an
+    // Exchange invitation, a Google `.ics`, anything imported into the
+    // calendar. RFC 8984 §4.3.3's `until` is a local time in the event's own
+    // zone, and the two are the same instant only where that zone is UTC.
+    //
+    // Dropping the `Z` and calling the digits local moves the end of the series
+    // by the zone's offset: the rule below would end at 07:00 Zurich time
+    // rather than 09:00, which is two hours before the last occurrence starts —
+    // so a save would tell the server the series stops a day earlier than it
+    // does.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART;TZID=Europe/Zurich:20260810T090000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20260901T070000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let rules = ical_to_event(ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+    assert_ne!(rules[0].until.as_deref(), Some("2026-09-01T07:00:00"));
+    // Converting it would need a zone database this crate deliberately does not
+    // carry, so the rule is one the save path must leave alone: the server's own
+    // `until` stays where it is rather than being moved by an edit that never
+    // touched the recurrence.
+    assert!(!maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn a_utc_until_is_read_as_local_wherever_the_two_are_the_same_instant() {
+    // The other side of the rule above. A `Z` is only a shift where there is an
+    // offset to shift by, so the three cases that have none keep reading as they
+    // did — refusing them would strand every recurring event this crate itself
+    // writes.
+    let zoned = |dtstart: &str, until: &str| {
+        format!(
+            "BEGIN:VCALENDAR\r\n\
+             BEGIN:VEVENT\r\n\
+             UID:E1\r\n\
+             DTSTART{dtstart}\r\n\
+             RRULE:FREQ=DAILY;UNTIL={until}\r\n\
+             END:VEVENT\r\n\
+             END:VCALENDAR\r\n"
+        )
+    };
+    for (dtstart, until, read) in [
+        // An event whose own zone is UTC: the instant and the local time are
+        // the same digits.
+        (
+            ":20260810T070000Z",
+            "20260901T070000Z",
+            "2026-09-01T07:00:00",
+        ),
+        // A floating event, which has no zone to resolve a UTC instant against.
+        // RFC 5545 admits no `Z` here at all, so this is a producer being loose
+        // and the digits are the best reading of it.
+        (
+            ":20260810T090000",
+            "20260901T090000Z",
+            "2026-09-01T09:00:00",
+        ),
+        // And the form this crate writes for a zoned event: local, as its
+        // DTSTART is.
+        (
+            ";TZID=Europe/Zurich:20260810T090000",
+            "20260901T090000",
+            "2026-09-01T09:00:00",
+        ),
+    ] {
+        let ics = zoned(dtstart, until);
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+        assert_eq!(rules[0].until.as_deref(), Some(read), "{dtstart}");
+        assert!(maps_recurrence_rule(&rules[0]), "{dtstart}");
+    }
+}
+
+#[test]
 fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
     // `rscale` & friends ride in `extra` and do not survive the trip through
     // iCalendar, so the save path must not patch recurrenceRules for them. (It

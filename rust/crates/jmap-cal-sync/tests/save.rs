@@ -1087,6 +1087,51 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
 }
 
 #[test]
+fn a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-08-10T09:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "timeZone": "Europe/Zurich",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "daily",
+                "until": "2026-09-01T09:00:00",
+            }],
+        }),
+    );
+    let sync = fixture.sync();
+
+    // RFC 8984 §4.3.3's `until` is a local time in the event's own zone, so it
+    // is drawn the way DTSTART is.
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        icalendar.contains("UNTIL=20260901T090000\r\n")
+            || icalendar.contains("UNTIL=20260901T090000;"),
+        "{icalendar}"
+    );
+
+    // RFC 5545 §3.3.10 asks for a UTC instant there instead, whenever DTSTART
+    // names a zone — so that is what a conformant editor writes back, and what
+    // an event imported from anywhere else carries: the same moment, two hours
+    // earlier on the clock. Read as a local time it would tell the server the
+    // series stops at 07:00 Zurich time, which is before the last occurrence
+    // begins, so the day the user could still see would be gone from it.
+    let edited = icalendar.replace("UNTIL=20260901T090000", "UNTIL=20260901T070000Z");
+    assert_ne!(edited, icalendar);
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        rules[0].until.as_deref(),
+        Some("2026-09-01T09:00:00"),
+        "the end of the series moved on a save that never edited it"
+    );
+}
+
+#[test]
 fn the_days_a_weekly_rule_repeats_on_reach_the_server() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
