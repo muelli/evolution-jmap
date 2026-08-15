@@ -71,22 +71,29 @@
 //!   override the component could only place with a bare
 //!   `RDATE` would come back as the empty patch, deleting what it could not
 //!   draw, so if any override the server holds fails
-//!   [`maps_recurrence_override`], the property is left alone entirely — as it
+//!   [`sends_recurrence_override`], the property is left alone entirely — as it
 //!   is when an override the *save* brings holds a value that cannot be sent,
 //!   which is the same check the series' `timeZone` gets below.
+//! - **`timeZones` is not diffed at all — it is added to.** The map says what
+//!   the identifiers the event names mean, and a server's entry may hold an
+//!   `url`, a `validUntil` or a set of `aliases` no `VTIMEZONE` has room for. So
+//!   it is never compared and never replaced: where the save sends an identifier
+//!   the server has no definition for, that one entry is written and no other —
+//!   see `diff_time_zones`.
 //! - **`start` is required by RFC 8984.** A component whose `DTSTART` the
 //!   mapping cannot read yields no start, and `"start": null` is not a legal
 //!   way to say so, so the server's start stands.
 //!
 //! And one property is checked on its way *out* rather than against the
-//! baseline: a `TZID` is an iCalendar identifier, which RFC 8984 §1.4.9 only
-//! sometimes admits as a time zone. See [`names_time_zone`] and [`diff`].
+//! baseline: a `TZID` is an iCalendar identifier, which RFC 8984 §1.4.9 admits
+//! as a time zone under its own name or beside the definition that says what it
+//! is, and otherwise not at all. See [`jmap_ical::maps_time_zone`] and [`diff`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_ical::{
-    event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
-    maps_recurrence_override, maps_recurrence_rule, maps_virtual_locations, names_time_zone,
+    event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations, maps_recurrence_rule,
+    maps_time_zone, maps_virtual_locations, sends_recurrence_override, time_zone_definition,
 };
 use jmap_proto::calendars::CalendarEvent;
 use serde_json::{Map, Value};
@@ -115,18 +122,15 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     // it came or cleared. It is the same "seen in part, so not written back"
     // rule the recurrence properties follow, applied to one value.
     //
-    // Only a *name*, deliberately — `names_time_zone` and not
-    // `jmap_ical::maps_time_zone`, which the create path uses. §1.4.9's other
-    // form is legal only beside the `timeZones` entry defining it, so sending a
-    // custom identifier here would mean sending `timeZones` too; that property
-    // is replaced whole, and a `VTIMEZONE` shows none of the `aliases`, `url` or
-    // `validUntil` the server's definition may carry. Patching it over would
-    // delete what the user was never shown, which is the rule this whole module
-    // exists to keep. A create has nothing to delete, which is why the two
-    // paths answer differently.
-    if edited.time_zone.as_deref().is_none_or(names_time_zone)
-        && baseline.time_zone != edited.time_zone
-    {
+    // §1.4.9's second form — the custom identifier — is sendable too, and by the
+    // same `jmap_ical::maps_time_zone` the create path uses: legal only beside
+    // the `timeZones` entry defining it, which [`diff_time_zones`] adds below,
+    // one entry at a time so that nothing the server already holds is written
+    // over. What is left out is the identifier the document neither names nor
+    // defines — a Windows zone off an Exchange invitation, or a solidus-prefixed
+    // one with no `VTIMEZONE` beside it — which is left alone rather than sent as
+    // it came or cleared.
+    if maps_time_zone(edited) && baseline.time_zone != edited.time_zone {
         set(&mut patch, "timeZone", edited.time_zone.as_deref());
     }
     for (property, was, now) in [
@@ -196,7 +200,117 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     diff_alerts(&mut patch, current, &baseline, edited);
     diff_recurrence(&mut patch, current, &baseline, edited);
     diff_overrides(&mut patch, current, &baseline, edited);
+    // Last, because it reads the patch the others wrote.
+    diff_time_zones(&mut patch, current, edited);
     patch
+}
+
+/// The definitions the identifiers already in `patch` need, added beside them.
+///
+/// RFC 8984 §1.4.9's second form of a `TimeZoneId` — the solidus-prefixed one a
+/// server or an Exchange organiser invents for a zone no database names — means
+/// nothing on its own: it is legal only where the event's §4.7.2 `timeZones` map
+/// says what it is. So a save that sends one has to send the other, or the
+/// identifier reaches the server dangling and the whole `CalendarEvent/set` may
+/// be refused over it. Everything above may therefore write such an identifier
+/// on the understanding that this runs afterwards; the patch it wrote is what
+/// says which zones are wanted, which is why it is read from there rather than
+/// off the event — the same value in `edited` that never made it into the patch
+/// is a zone this save is not sending.
+///
+/// **One entry at a time**, `timeZones/<pointer>`, not the property replaced
+/// whole: a `VTIMEZONE` has no room for the `aliases`, `url` or `validUntil` a
+/// server's own definition may carry, so a rewrite would delete what the user
+/// was never shown — the rule this whole module exists to keep. For the same
+/// reason an identifier the server *already* defines is left completely alone:
+/// the entry the document brought is a drawing of a zone the server has already
+/// described, and describing it again can only lose. Only where `timeZones` is
+/// absent from the server's event altogether is the property written whole, and
+/// then only because RFC 8620 §5.3 requires every path segment before the last
+/// to exist already — there is nothing there to overwrite.
+///
+/// What is *not* done is pruning: a definition the edit stopped referring to
+/// stays where it is. The create path drops those ([`jmap_ical::prune_time_zones`]),
+/// having built the whole map itself; here the map is the server's, an
+/// unreferenced entry is legal, and removing one is deleting something on a
+/// guess.
+fn diff_time_zones(
+    patch: &mut Map<String, Value>,
+    current: &CalendarEvent,
+    edited: &CalendarEvent,
+) {
+    let mut wanted: BTreeMap<String, Value> = BTreeMap::new();
+    for property in ["timeZone", "recurrenceOverrides"] {
+        let Some(value) = patch.get(property) else {
+            continue;
+        };
+        // The zone the series moved into, or the one each override moved its
+        // instance into. Told apart by shape rather than by the name above:
+        // `timeZone` is a string and `recurrenceOverrides` a map of patches, so
+        // the two readings cannot be applied to the wrong property. Either may
+        // be the `null` that removes the property, which names nothing and falls
+        // out of both.
+        let named: BTreeSet<String> = match value.as_object() {
+            Some(overrides) => overrides
+                .values()
+                .filter_map(|instance| custom_zone(instance.get("timeZone")))
+                .collect(),
+            None => custom_zone(Some(value)).into_iter().collect(),
+        };
+        // The document defined every identifier it let into the patch — that is
+        // what admitted it — so these lookups answer, and this is the guard for
+        // the day one of them does not. The property naming a zone the save
+        // cannot define goes back to being the server's, which is the same
+        // answer the checks above give a zone the document could not name at
+        // all; leaving it in the patch is the one outcome that would be worse
+        // than not sending the edit, since a reference to nothing is grounds to
+        // refuse the whole `CalendarEvent/set`.
+        if named
+            .iter()
+            .any(|tzid| time_zone_definition(edited, tzid).is_none())
+        {
+            patch.remove(property);
+            continue;
+        }
+        for tzid in named {
+            // Already described where the patch is going: leave it exactly as
+            // it stands.
+            if time_zone_definition(current, &tzid).is_some() {
+                continue;
+            }
+            if let Some(definition) = time_zone_definition(edited, &tzid) {
+                wanted.insert(tzid, definition.clone());
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return;
+    }
+    match current.time_zones.is_some() {
+        true => {
+            for (tzid, definition) in wanted {
+                patch.insert(format!("timeZones/{}", escaped(&tzid)), definition);
+            }
+        }
+        false => {
+            patch.insert(
+                "timeZones".to_owned(),
+                Value::Object(wanted.into_iter().collect()),
+            );
+        }
+    }
+}
+
+/// The custom `TimeZoneId` a `timeZone` states, where it states one.
+///
+/// Only RFC 8984 §1.4.9's solidus-prefixed form, because that is the only one
+/// that needs saying: an IANA name resolves against a database every reader has,
+/// and a `null` is the zone cleared, which names nothing.
+fn custom_zone(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|tzid| tzid.starts_with('/'))
+        .map(str::to_owned)
 }
 
 /// The place the event happens at — the one property patched *into* rather than
@@ -634,12 +748,21 @@ fn diff_overrides(
     // states its zone with a `TZID`, which RFC 8984 §1.4.9 only sometimes admits
     // as a name, and this property goes out replaced whole — so one entry the
     // server is entitled to reject would cost every edit in the save.
+    //
+    // [`sends_recurrence_override`] rather than `maps_recurrence_override`,
+    // because this save *can* send a zone's definition: [`diff_time_zones`] adds
+    // a `timeZones` entry for every custom identifier the patch names, so an
+    // instance moved into a zone the document defines is one of the identifiers
+    // §1.4.9 admits rather than a dangling reference. Each side is asked of its
+    // own definitions — the server's for what it holds, the document's for what
+    // the save brings — which is what makes both answers about the event they
+    // came from.
     if [current, edited].iter().any(|event| {
         event
             .recurrence_overrides
             .iter()
             .flatten()
-            .any(|(id, override_patch)| !maps_recurrence_override(event, id, override_patch))
+            .any(|(id, override_patch)| !sends_recurrence_override(event, id, override_patch))
     }) {
         return;
     }
