@@ -74,12 +74,19 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-book-client PRIVATE ${LIBEBOOK_LIBRARIES})
 	target_link_directories(functional-book-client PRIVATE ${LIBEBOOK_LIBRARY_DIRS})
 
-	# Three calendar clients rather than one program with a phase argument,
-	# because they ask different questions: cal-client.c creates every event it
-	# looks at, cal-edit-client.c reads one the server already held and saves back
-	# the members no iCalendar line has room for, and cal-zone-client.c asks what
-	# instant an event's zone resolves to — before and after each of the two kinds
-	# of edit a user can make to such an event. See the header of each.
+	# Three calendar clients rather than one, because they ask different
+	# questions: cal-client.c creates every event it looks at, cal-edit-client.c
+	# reads one the server already held and saves back the members no iCalendar
+	# line has room for, and cal-zone-client.c asks what instant an event's zone
+	# resolves to — before and after each of the two kinds of edit a user can make
+	# to such an event. See the header of each.
+	#
+	# The third takes a mode argument, which the other two do not, because it asks
+	# its one question from both ends: `read` starts from a zone only the server
+	# can name, `create` from one only the client can. The two are separate runs
+	# and not phases of one — `create`'s zone must be in the calendar's timezone
+	# store for one reason only, that the client put it there, and a run that had
+	# read a server's zone first would have filled that store from elsewhere.
 	#
 	# event-start.c holds the one function that reports the instant a start
 	# resolves to, so that a difference between what two of these programs answer

@@ -37,25 +37,43 @@
  * share the session's XDG directories and so the meta backend's cache, which is
  * the one thing the harness deliberately starts empty.
  *
+ * And a second mode, which asks the same question from the other end. Everything
+ * above starts from a zone the *server* named; `create` starts from one the
+ * **client** names — it hands the calendar a `VTIMEZONE` through
+ * `e_cal_client_add_timezone_sync` and then creates an event whose `DTSTART`
+ * refers to it, which is what Evolution does when the user accepts an invitation
+ * carrying a zone no database holds. EDS files such a definition in the
+ * calendar's own timezone store and leaves the component naming it, so the save
+ * that follows reaches this repository's backend with a `TZID` and nothing to
+ * resolve it by — and whether the definition is picked back out of that store and
+ * sent is the whole of what this mode measures. It is a mode rather than a phase
+ * of the read run because the store must hold the zone for one reason only: the
+ * client put it there.
+ *
  * Like its twins it has no notion of what "correct" is: it reports what EDS told
  * it on stdout, one `key=value` line per observation, and exits non-zero the
  * moment a call fails. Every assertion belongs to
  * `rust/crates/jmap-functional/tests/calendar.rs`, which seeds the events, runs
  * this program and reads its output.
  *
- *   usage: functional-cal-zone-client <source-uid> <new-summary>
+ *   usage: functional-cal-zone-client read <source-uid> <new-summary>
  *              <new-dtstart> <new-dtend> <event-uid>...
+ *          functional-cal-zone-client create <source-uid> <zone-file>
+ *              <summary> <dtstart> <duration>
  *
  * The observations of the n-th event on the command line are prefixed `event-n`,
  * counting from one. Positional rather than keyed by the UID because the UID is
  * whatever the mock filed the event under, and a key beginning with a digit
  * makes for a poor observation name. What the first event looks like after the
- * rename is prefixed `saved`, and after the move `moved`.
+ * rename is prefixed `saved`, and after the move `moved`; what `create` made is
+ * prefixed `created`.
  *
  * The two clocks are iCalendar `DATE-TIME` values with no zone on them — the
  * `TZID` the moved event keeps is the one already on its `DTSTART`, because the
  * whole question is whether an appointment that moves stays in the zone it was
- * in, and a client that named the zone itself would be answering it.
+ * in, and a client that named the zone itself would be answering it. `create`'s
+ * clock is bare for the same reason and gets its `TZID` from the zone file, so
+ * this program never spells the identifier out.
  */
 
 #include <libecal/libecal.h>
@@ -357,69 +375,27 @@ save_and_report (ECalClient *cal,
 	return 0;
 }
 
-int
-main (int argc,
-      char **argv)
+/* The read mode: report the seeded events, then make the two saves to the first
+ * of them. `argv[first]` onwards are the event UIDs.
+ *
+ * 0 on success, and the program's exit status otherwise. */
+static int
+run_read (ECalClient *cal,
+	  const gchar *new_summary,
+	  const gchar *new_start,
+	  const gchar *new_end,
+	  int argc,
+	  char **argv,
+	  int first)
 {
-	GError *error = NULL;
-	ESourceRegistry *registry;
-	ESource *source;
-	EClient *client;
-	ECalClient *cal;
 	ICalComponent *fetched;
 	ICalComponent *event;
-	const gchar *source_uid;
-	const gchar *new_summary;
-	const gchar *new_start;
-	const gchar *new_end;
 	const gchar *saved_uid;
 	int status;
-	int first;
 	int index;
 
-	if (argc < 6) {
-		g_printerr ("usage: %s <source-uid> <new-summary> <new-dtstart> "
-			    "<new-dtend> <event-uid>...\n", argv[0]);
-		return 2;
-	}
-
-	source_uid = argv[1];
-	new_summary = argv[2];
-	new_start = argv[3];
-	new_end = argv[4];
 	/* The first event on the command line, and the one the saves are made to. */
-	first = 5;
 	saved_uid = argv[first];
-
-	registry = e_source_registry_new_sync (NULL, &error);
-	if (!registry)
-		return fail ("registry", error);
-
-	source = e_source_registry_ref_source (registry, source_uid);
-	if (!source) {
-		g_printerr ("source: no source with uid %s\n", source_uid);
-		return 1;
-	}
-
-	/* (guint32) -1 is EDS's "do not wait for connected". A program shaped like
-	 * this one cannot use the built-in wait — it blocks the only thread that
-	 * would iterate the context the notification arrives on, so it always
-	 * expires — and waiting properly is what functional_report_connection_status
-	 * below is for. See "Why the clients pass 'do not wait for connected'" in
-	 * docs/functional-tests.md. */
-	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
-					    (guint32) -1, NULL, &error);
-	if (!client)
-		return fail ("connect", error);
-
-	/* Reported before anything is asked of the calendar, for the reason its
-	 * twins give: e_cal_client_connect_sync succeeds even when the backend's
-	 * connect_sync failed, so a calendar the backend never opened looks from
-	 * here exactly like one it opened and forgot to claim writable. */
-	functional_report_connection_status (source, 10);
-
-	cal = E_CAL_CLIENT (client);
-	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
 	for (index = first; index < argc; index++) {
 		gchar *prefix = g_strdup_printf ("event-%d", index - first + 1);
@@ -516,12 +492,221 @@ main (int argc,
 	g_object_unref (event);
 	g_object_unref (fetched);
 
-	if (status != 0)
-		return status;
+	return status;
+}
+
+/* The create mode: hand the calendar the `VTIMEZONE` in `zone_path`, create an
+ * event that refers to it, and report what EDS hands back for that event.
+ *
+ * The zone comes out of a file rather than out of this program, so that what
+ * defines it and what asserts about it are the same text: the test writes the
+ * file and holds the mock to the definition it wrote. The `TZID` is read back off
+ * the zone EDS made of it rather than passed separately, which keeps this program
+ * from being able to name a zone the file did not.
+ *
+ * `e_cal_client_add_timezone_sync` is what Evolution calls before saving an
+ * appointment whose zone came from an invitation rather than from a database, and
+ * it is the only way such a definition reaches a backend at all: EDS strips the
+ * `VTIMEZONE` out of the component on its way through and keeps it in the
+ * calendar's own timezone store.
+ *
+ * 0 on success, and the program's exit status otherwise. */
+static int
+run_create (ECalClient *cal,
+	    const gchar *zone_path,
+	    const gchar *summary,
+	    const gchar *dtstart,
+	    const gchar *duration)
+{
+	GError *error = NULL;
+	gchar *text = NULL;
+	gchar *icalendar;
+	gchar *created_uid = NULL;
+	ICalComponent *definition;
+	ICalComponent *event;
+	ICalComponent *fetched;
+	ICalComponent *created;
+	ICalTimezone *zone;
+	const gchar *tzid;
+
+	if (!g_file_get_contents (zone_path, &text, NULL, &error))
+		return fail ("zone-file", error);
+
+	definition = i_cal_component_new_from_string (text);
+	g_free (text);
+	if (!definition) {
+		g_printerr ("zone-file: libical would not parse %s\n", zone_path);
+		return 1;
+	}
+
+	/* i_cal_timezone_set_component takes the component (see its documentation:
+	 * "the zone assumes ownership of the comp"), so the definition is not
+	 * unreffed here — and on the failure path it is left to the zone too, since
+	 * what it did with it is exactly what is not known. */
+	zone = i_cal_timezone_new ();
+	if (!zone || !i_cal_timezone_set_component (zone, definition)) {
+		g_printerr ("zone-file: libical would not make a zone of %s, which "
+			    "means it states no TZID\n", zone_path);
+		g_clear_object (&zone);
+		return 1;
+	}
+
+	tzid = i_cal_timezone_get_tzid (zone);
+	g_print ("zone-tzid=%s\n", tzid ? tzid : "");
+
+	if (!e_cal_client_add_timezone_sync (cal, zone, NULL, &error)) {
+		g_object_unref (zone);
+		return fail ("add-timezone", error);
+	}
+
+	/* The UID is this program's own, as Evolution's is its own: it is a local
+	 * name, and what the server files the event under is what create_object
+	 * hands back. The length is a DURATION because that is the shape the mapping
+	 * writes, so a read-back that states one has been through the round trip
+	 * rather than past it. */
+	icalendar = g_strdup_printf (
+		"BEGIN:VEVENT\r\n"
+		"UID:jmap-functional-client-zone\r\n"
+		"DTSTART;TZID=%s:%s\r\n"
+		"DURATION:%s\r\n"
+		"SUMMARY:%s\r\n"
+		"END:VEVENT\r\n",
+		tzid, dtstart, duration, summary);
+	event = i_cal_component_new_from_string (icalendar);
+	g_free (icalendar);
+	g_object_unref (zone);
+
+	if (!event) {
+		g_printerr ("build: libical would not parse the event this test "
+			    "writes\n");
+		return 1;
+	}
+
+	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
+					      &created_uid, NULL, &error)) {
+		g_object_unref (event);
+		return fail ("create", error);
+	}
+
+	g_object_unref (event);
+	g_print ("created-uid=%s\n", created_uid ? created_uid : "");
+
+	if (!created_uid) {
+		g_printerr ("create: EDS accepted the event and named no uid for it\n");
+		return 1;
+	}
+
+	fetched = wait_for_event (cal, created_uid);
+	if (!fetched) {
+		g_printerr ("get-created: EDS never handed back the event it made, %s\n",
+			    created_uid);
+		g_free (created_uid);
+		return 1;
+	}
+
+	created = first_vevent (fetched);
+	if (!created) {
+		g_printerr ("get-created: what EDS handed back for %s holds no VEVENT\n",
+			    created_uid);
+		g_free (created_uid);
+		g_object_unref (fetched);
+		return 1;
+	}
+
+	g_print ("created-summary=%s\n", i_cal_component_get_summary (created));
+	g_print ("created-definitions=%u\n", definition_count (fetched));
+	functional_report_start ("created", created);
+	report_zone_lookup ("created", cal, created);
+	report_length ("created", created);
+
+	g_free (created_uid);
+	g_object_unref (created);
+	g_object_unref (fetched);
+
+	return 0;
+}
+
+static void
+usage (const gchar *program)
+{
+	g_printerr ("usage: %s read <source-uid> <new-summary> <new-dtstart> "
+		    "<new-dtend> <event-uid>...\n"
+		    "       %s create <source-uid> <zone-file> <summary> "
+		    "<dtstart> <duration>\n", program, program);
+}
+
+int
+main (int argc,
+      char **argv)
+{
+	GError *error = NULL;
+	ESourceRegistry *registry;
+	ESource *source;
+	EClient *client;
+	ECalClient *cal;
+	const gchar *source_uid;
+	gboolean creating;
+	int status;
+
+	if (argc < 3) {
+		usage (argv[0]);
+		return 2;
+	}
+
+	creating = g_strcmp0 (argv[1], "create") == 0;
+	if (!creating && g_strcmp0 (argv[1], "read") != 0) {
+		usage (argv[0]);
+		return 2;
+	}
+	/* `create` takes a fixed list and `read` a variadic one, so the arity is
+	 * checked here rather than in each: a mode run with too few arguments would
+	 * otherwise read past the end of argv. */
+	if (creating ? argc != 7 : argc < 7) {
+		usage (argv[0]);
+		return 2;
+	}
+
+	source_uid = argv[2];
+
+	registry = e_source_registry_new_sync (NULL, &error);
+	if (!registry)
+		return fail ("registry", error);
+
+	source = e_source_registry_ref_source (registry, source_uid);
+	if (!source) {
+		g_printerr ("source: no source with uid %s\n", source_uid);
+		return 1;
+	}
+
+	/* (guint32) -1 is EDS's "do not wait for connected". A program shaped like
+	 * this one cannot use the built-in wait — it blocks the only thread that
+	 * would iterate the context the notification arrives on, so it always
+	 * expires — and waiting properly is what functional_report_connection_status
+	 * below is for. See "Why the clients pass 'do not wait for connected'" in
+	 * docs/functional-tests.md. */
+	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
+					    (guint32) -1, NULL, &error);
+	if (!client)
+		return fail ("connect", error);
+
+	/* Reported before anything is asked of the calendar, for the reason its
+	 * twins give: e_cal_client_connect_sync succeeds even when the backend's
+	 * connect_sync failed, so a calendar the backend never opened looks from
+	 * here exactly like one it opened and forgot to claim writable. */
+	functional_report_connection_status (source, 10);
+
+	cal = E_CAL_CLIENT (client);
+	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
+
+	if (creating)
+		status = run_create (cal, argv[3], argv[4], argv[5], argv[6]);
+	else
+		/* The first event UID is argv[6]; the rest follow it. */
+		status = run_read (cal, argv[3], argv[4], argv[5], argc, argv, 6);
 
 	g_object_unref (client);
 	g_object_unref (source);
 	g_object_unref (registry);
 
-	return 0;
+	return status;
 }

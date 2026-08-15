@@ -11,7 +11,7 @@
 //! two ends and nothing in between — the client program says what EDS gave a
 //! libecal consumer, the mock says what the backend asked the server for.
 //!
-//! Three legs, asking different questions, so they run different client
+//! Four legs, asking different questions, so they run different client
 //! programs. The first creates every event it looks at, which is what a user
 //! making an appointment does; the second starts from an event the *server*
 //! held before EDS ever connected, carrying members no iCalendar line can
@@ -20,7 +20,9 @@
 //! asks what a zone only the server can name means to a consumer — the instant
 //! it puts an appointment at, before and after each of the two kinds of edit a
 //! user can make to it: one that has nothing to do with the clock, and one that
-//! is about nothing else.
+//! is about nothing else. The fourth runs the same program the other way round:
+//! the *client* defines a zone no database holds, and the question is whether
+//! the definition reaches the server at all.
 
 use std::collections::BTreeMap;
 
@@ -604,9 +606,15 @@ const FLOATING_DTSTART_UTC: &str = "20260409T100000Z";
 /// event resolvable out of a 1970 definition at all — and a `TZNAME`, which is
 /// what a reader shows for the offset.
 fn defined_zone() -> serde_json::Value {
+    zone_definition(DEFINED_ZONE)
+}
+
+/// That definition under any identifier, so that the leg which sends one can
+/// state what it expects with the same text the leg which receives one does.
+fn zone_definition(tzid: &str) -> serde_json::Value {
     serde_json::json!({
         "@type": "TimeZone",
-        "tzId": DEFINED_ZONE,
+        "tzId": tzid,
         "standard": [{
             "@type": "TimeZoneRule",
             "start": "1970-10-25T03:00:00",
@@ -636,6 +644,84 @@ fn defined_zone() -> serde_json::Value {
     })
 }
 
+/// The zone the **fourth** leg's client defines, and which nothing else anywhere
+/// does.
+///
+/// The other half of [`DEFINED_ZONE`], asked from the other end: there a zone only
+/// the server could name had to reach a consumer, here one only the *client* can
+/// name has to reach the server. It is what Evolution has in hand after the user
+/// accepts an invitation whose `VTIMEZONE` names a zone no database holds — the
+/// Exchange organiser's own — and the only route it can take is
+/// `e_cal_client_add_timezone`, because EDS strips the definition out of the
+/// component and keeps it in the calendar's timezone store. A backend that
+/// looked only at what it was handed would send a `TZID` naming nothing, which
+/// `jmap-ical`'s `maps_time_zone` then refuses, and the appointment would be
+/// filed floating.
+///
+/// A third `example.com` zone rather than a reuse of either above, so that a
+/// definition arriving in the mock can only have come from the file this leg
+/// wrote.
+const CLIENT_ZONE: &str = "/example.com/Somewhere-New";
+
+/// What the fourth leg's client makes, and where in time it puts it.
+///
+/// The same wall clock and length as the third leg's events, and inside CEST for
+/// the same reason: the zone's `DAYLIGHT` observance applies on 2026-04-09, so a
+/// definition that arrived with only its `STANDARD` half would land an hour out
+/// rather than passing.
+const CLIENT_ZONE_TITLE: &str = "Design review, in a zone the client brought";
+const CLIENT_ZONE_DTSTART: &str = "20260409T100000";
+const CLIENT_ZONE_DURATION: &str = "PT1H";
+
+/// And what the server must hold for it: the same wall clock as JSCalendar states
+/// one, the length, and the identifier the client's own `VTIMEZONE` gave.
+const CLIENT_ZONE_START: &str = "2026-04-09T10:00:00";
+
+/// The definition the client hands the calendar, as the `VTIMEZONE` a document
+/// carries it in.
+///
+/// The drawing of [`zone_definition`] and not a second zone: what the mock is
+/// held to is that map, so writing the two out of one description is what makes
+/// the assertion an assertion about the round trip rather than about two
+/// literals that happen to agree.
+///
+/// No `X-LIC-LOCATION`. One naming an IANA zone would make this a *spelling* of a
+/// zone that already has a name, which `jmap-ical` translates and libical's
+/// builtin table would then answer for — and the leg would pass without the
+/// client's own definition being read at all.
+const CLIENT_ZONE_VTIMEZONE: &str = "BEGIN:VTIMEZONE\r\n\
+     TZID:/example.com/Somewhere-New\r\n\
+     BEGIN:STANDARD\r\n\
+     DTSTART:19701025T030000\r\n\
+     TZOFFSETFROM:+0200\r\n\
+     TZOFFSETTO:+0100\r\n\
+     RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+     TZNAME:CET\r\n\
+     END:STANDARD\r\n\
+     BEGIN:DAYLIGHT\r\n\
+     DTSTART:19700329T020000\r\n\
+     TZOFFSETFROM:+0100\r\n\
+     TZOFFSETTO:+0200\r\n\
+     RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+     TZNAME:CEST\r\n\
+     END:DAYLIGHT\r\n\
+     END:VTIMEZONE\r\n";
+
+/// Put nothing but a calendar in the mock's store, for the leg that creates the
+/// only event there will be.
+///
+/// A calendar is still needed: `CalSync` writes into the one the source names, so
+/// an account holding none has nowhere to file a create.
+fn seed_empty_calendar(server: &jmap_mock::MockServer) {
+    let account_id = server.account_id();
+    let state = server.state();
+    let mut state = state.lock().expect("mock state lock");
+    state
+        .account_mut(&account_id)
+        .expect("the mock's default account")
+        .seed_calendar("Personal", true);
+}
+
 /// Put the third leg's two events into the mock's store — one in a zone the event
 /// defines, one in a zone nothing defines — and hand back the ids the server filed
 /// them under, in that order.
@@ -646,9 +732,10 @@ fn defined_zone() -> serde_json::Value {
 /// starts empty.
 ///
 /// Seeded straight into the store rather than written through EDS for a reason
-/// stronger than [`seed_placed_event`]'s: `jmap-cal-sync` never *writes*
-/// `timeZones`, so no event created through Evolution can carry one. A zone only
-/// the server can name reaches this backend only from a server.
+/// stronger than [`seed_placed_event`]'s: a create carries a `timeZones` entry
+/// only for a zone somebody handed the calendar (see [`CLIENT_ZONE`]), and what
+/// this leg is about is the zone nobody here ever had — the server's own, which
+/// reaches this backend only from a server.
 fn seed_zoned_events(server: &jmap_mock::MockServer) -> (Id, Id) {
     let account_id = server.account_id();
     let state = server.state();
@@ -2034,6 +2121,7 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
     let output = session.run(
         &client,
         &[
+            "read",
             "jmap-functional",
             ZONE_RETYPED_TITLE,
             ZONE_MOVED_DTSTART,
@@ -2310,5 +2398,182 @@ fn the_zone_only_the_server_can_name_means_an_instant_a_save_does_not_move() {
         Some(ZONE_MOVED_DURATION),
         "the length the user stated as a DTEND did not reach the server as the \
          length between it and the DTSTART"
+    );
+}
+
+/// The fourth leg: a zone only the **client** can name, sent to the server with
+/// the definition that says what it is.
+///
+/// The inverse of the leg above, and the half no unit test can vouch for. The
+/// mapping has been able to *draw* a custom identifier beside its `timeZones`
+/// entry for a while, and `jmap-backend-cal` has been able to pick a definition
+/// out of the calendar's `ETimezoneCache` — but nothing measured the join: that a
+/// `VTIMEZONE` a client handed EDS is in the backend's own cache by the time EDS
+/// calls `save_component_sync`, under the identifier the component still names.
+/// It is a platform fact, and one this repository would rather find out about
+/// here than from an appointment that silently went floating.
+///
+/// The client's route is Evolution's: `e_cal_client_add_timezone` and then a
+/// create. EDS does not carry such a definition inside the component — the third
+/// leg pinned that down from the read side — so a backend that read only what it
+/// was handed would see a `TZID` resolving nowhere, `maps_time_zone` would refuse
+/// it, and the appointment would reach the server with no zone at all.
+///
+/// The assertion that matters is the mock's, not EDS's: asking the calendar to
+/// resolve the identifier afterwards would only prove that what the client put in
+/// the store is still in the store. What no client can fake is `timeZones`
+/// arriving at the server.
+#[test]
+fn a_zone_only_the_client_can_name_reaches_the_server_with_its_definition() {
+    let client = required_path("JMAP_FUNCTIONAL_CAL_ZONE_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_CAL_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    seed_empty_calendar(&server);
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/calendar-zone-create"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_calendar_backend(&module);
+    let zone_file = session.write_input("client-zone.ics", CLIENT_ZONE_VTIMEZONE);
+
+    let output = session.run(
+        &client,
+        &[
+            "create",
+            "jmap-functional",
+            zone_file.to_str().expect("the zone file's path is UTF-8"),
+            CLIENT_ZONE_TITLE,
+            CLIENT_ZONE_DTSTART,
+            CLIENT_ZONE_DURATION,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    // What the client read off the file it was handed. Reported rather than
+    // assumed because the client is never told the identifier: if libical made a
+    // zone of the definition under some other name, every `TZID` below is that
+    // other name and the leg would be measuring a zone nobody wrote.
+    assert_eq!(
+        seen.get("zone-tzid"),
+        Some(&CLIENT_ZONE),
+        "libical named the client's zone something other than its own TZID\n{report}"
+    );
+
+    // And what EDS hands back for the event the client made, which is *not* the
+    // component the client wrote: a create is answered out of what the server
+    // stored, so the `TZID` below is the zone as it came back from the mock. A
+    // backend that could not name the zone files the appointment floating, and
+    // then this line reads `created-dtstart-tzid=` — measured, not assumed.
+    //
+    // The pair after it is the weaker of the two, and reported anyway: the client
+    // put this zone into the calendar's store itself, so `zone-known` says the
+    // store still holds it rather than that anything survived the trip. Its value
+    // is the *instant* — that what came back is still 10:00 in the zone's DAYLIGHT
+    // half, not a clock the round trip shifted.
+    assert_eq!(
+        (
+            seen.get("created-summary"),
+            seen.get("created-dtstart"),
+            seen.get("created-dtstart-tzid"),
+        ),
+        (
+            Some(&CLIENT_ZONE_TITLE),
+            Some(&CLIENT_ZONE_DTSTART),
+            Some(&CLIENT_ZONE),
+        ),
+        "what EDS hands back for the event the client created is not the event it \
+         wrote\n{report}"
+    );
+    assert_eq!(
+        (seen.get("created-zone-known"), seen.get("created-zone-utc")),
+        (Some(&"1"), Some(&DEFINED_ZONE_DTSTART_UTC)),
+        "the calendar no longer resolves the zone the client gave it, or resolves \
+         it to another instant than its DAYLIGHT observance means\n{report}"
+    );
+    // The same platform fact the third leg pinned down, asked of an event that
+    // went out rather than one that came in: EDS keeps the definition in the
+    // calendar's store and hands the component back alone.
+    assert_eq!(
+        seen.get("created-definitions"),
+        Some(&"0"),
+        "EDS now hands the VTIMEZONE back beside an event the client created, \
+         which is more than it used to\n{report}"
+    );
+    assert_eq!(
+        seen.get("created-duration"),
+        Some(&CLIENT_ZONE_DURATION),
+        "the length the client stated did not come back as the DURATION the \
+         mapping writes\n{report}"
+    );
+
+    // And the claim, on the only side that can make it. `timeZone` alone would
+    // pass on a backend that sent the identifier and nothing else — which is the
+    // dangling reference RFC 8984 §1.4.9 forbids and a server may reject — so the
+    // definition is asserted beside it, whole, against the same description the
+    // `VTIMEZONE` was written from.
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let events = &state
+        .account(&account_id)
+        .expect("the mock's default account")
+        .calendar_events;
+    assert_eq!(
+        events.len(),
+        1,
+        "the server holds something other than the one event the client \
+         created\n{report}"
+    );
+    let (_, event) = events
+        .iter()
+        .next()
+        .expect("the one event the client created");
+
+    assert_eq!(
+        event.title.as_deref(),
+        Some(CLIENT_ZONE_TITLE),
+        "the server does not hold the event the client created\n{report}"
+    );
+    assert_eq!(
+        (event.start.as_deref(), event.duration.as_deref()),
+        (Some(CLIENT_ZONE_START), Some(CLIENT_ZONE_DURATION)),
+        "the wall clock the client wrote did not reach the server whole\n{report}"
+    );
+    assert_eq!(
+        event.time_zone.as_deref(),
+        Some(CLIENT_ZONE),
+        "the zone the client defined did not reach the server: a create that \
+         cannot name the zone files the appointment floating, which is an hour or \
+         two out for everybody but the user who typed it\n{report}"
+    );
+    assert_eq!(
+        event.time_zones,
+        Some([(CLIENT_ZONE.to_owned(), zone_definition(CLIENT_ZONE))].into()),
+        "the identifier arrived without the definition that says what it means, \
+         or with one the round trip through EDS's timezone store changed\n{report}"
     );
 }
