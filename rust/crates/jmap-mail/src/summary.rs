@@ -188,6 +188,13 @@ unsafe impl ObjectSubclass for JmapSummary {
         unsafe { camel_folder_summary_get_type() }
     }
 
+    fn class_init_types() -> Vec<GType> {
+        // Registered before this type, not from inside its class initialiser:
+        // `class_init` runs under GLib's class-initialisation lock and cannot
+        // take the registration lock without inverting the two.
+        vec![message_info_type()]
+    }
+
     unsafe fn class_init(class: *mut Self::Class) {
         // SAFETY: the class leads with CamelFolderSummaryClass — the contract
         // above.

@@ -93,6 +93,15 @@ unsafe impl ObjectSubclass for JmapBookFactory {
         unsafe { e_book_backend_factory_get_type() }
     }
 
+    fn class_init_types() -> Vec<GType> {
+        // The backend type below, in the case where `class_init` would
+        // otherwise register it: that runs under GLib's class-initialisation
+        // lock, which cannot take the registration lock without inverting the
+        // two. Under EDS the module has already registered it and this only
+        // reads the atomic.
+        vec![backend_type()]
+    }
+
     unsafe fn class_init(class: *mut Self::Class) {
         // SAFETY: `class` points at a freshly allocated class struct of ours,
         // which leads with the parent's; both fields are in that half.

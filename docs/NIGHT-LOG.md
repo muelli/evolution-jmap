@@ -24106,3 +24106,110 @@ unknown; a `VALUE=uri` photo's rendering is unmeasured; what Evolution's contact
 editor writes for a replaced photo, and into a cleared field, is inferred rather
 than measured; and the `jmap-mail` `transport.rs` hang is still an open design
 question with a lock-order hypothesis attached.
+
+## 2026-08-15 (two-hundred-and-fifty-eighth session)
+
+**The `transport.rs` hang, closed.** It has been on the blocker list since the
+hundred-and-seventy-seventh session as "a design question with a lock-order
+hypothesis attached": the `jmap-mail` test binary wedged for eleven minutes,
+three threads in `futex_do_wait`, no socket open. The hypothesis was a cycle
+between `jmap_backend_core::subclass`'s `REGISTRATION` mutex and GLib's
+class-initialisation lock — one thread holding ours and wanting GLib's inside
+`g_type_add_interface_static`, another holding GLib's and wanting ours because
+`JmapStore::class_init` and `JmapTransport::class_init` both call
+`settings_type()`, which is `register_static::<JmapSettings>()`.
+
+**Why the earlier session stopped, and what it missed.** It rejected per-type
+locks and a `Once` on the grounds that they narrow the window without closing
+it, which is right: the cycle survives any per-type scheme, because thread A can
+be registering the *same* type whose accessor thread B's `class_init` is
+blocked on. What it did not consider is that the cycle has a second edge, and
+that edge is ours alone. A lock order is not a property of one lock; it is the
+claim that nobody takes them the other way round. So rather than making our
+lock finer, this session made the order true: `REGISTRATION` is taken *before*
+GLib's class-init lock and never after it.
+
+**How "never after" is kept.** A thread-local counter, `IN_CLASS_INIT`, raised
+by `class_init_trampoline` and `interface_init_trampoline` around the user
+callback — the two places GLib calls us with its lock held. `register` reads it
+first: non-zero means answer out of `g_type_from_name` and take nothing at all.
+A counter and not a flag, because referencing a class from inside an initialiser
+runs that one's initialiser on the same thread; and lowered from a `Drop`
+guard, because a count left raised would silently disable registration on that
+thread for the rest of the process.
+
+That leaves the obvious hole — a `class_init` asking for a type nobody has
+registered gets zero — which is why the same change adds
+`ObjectSubclass::class_init_types()`. It is `interfaces()`'s sibling and is
+resolved in the same place, before the lock: the declaring type's registration
+calls the accessors, on a thread holding neither lock, so by the time
+`class_init` runs the type is in the type system and the lookup is a read.
+Nothing consumes the `Vec<GType>` it returns — the call is the point — and it
+returns `GType`s rather than `()` only so an implementation reads as the list of
+types it is.
+
+Six class initialisers reach for one of our types, and all six now declare it:
+`JmapStore` and `JmapTransport` (the settings class, which is the deadlock as
+found), `JmapSummary` (its message-info row type), and the three backend
+factories (`backend_type()`, whose atomic is already set under EDS — the
+declaration matters for the test path, where the fallback would otherwise have
+registered from under GLib's lock).
+
+**A refusal, not a silent zero.** An undeclared type asked for from a
+`class_init` gets a GLib critical naming both the type and
+`class_init_types()`, and zero. Zero is a bad `GType` and GLib will complain
+about it in turn, which is a bug report — where the deadlock was a hang with
+nothing in the log at all.
+
+**Red first, and each check made to fail on its own.** The deadlock is now a
+deterministic test rather than an eleven-minute observation: the test holds
+`REGISTRATION` itself — standing in for whatever else is mid-registration —
+and asserts that a `g_type_class_ref` on another thread completes inside ten
+seconds. Against the old code it does not, and the first run failed on exactly
+that, in exactly ten. It lives in a `#[cfg(test)] mod tests` inside
+`src/subclass.rs` because it needs the private mutex; the lock is released
+whatever the outcome, so a failing run joins its thread rather than wedging the
+suite in a new way. Three mutations, run and reverted, one per check: dropping
+the `IN_CLASS_INIT` branch (the original red), dropping the
+`T::class_init_types()` call, and letting the refusal fall through to a real
+registration.
+
+Tests: +3 in `jmap-backend-core`, 11 → 14 in its lib target. The default set is
+unchanged at 1136 — `jmap-backend-core` needs EDS headers and is not in it; the
+new tests run in the `rust-test-eds` ctest leg, which is the leg the hang was
+seen in.
+
+Verified locally: `cargo test --locked` 1136, no failures; `ninja -C build` then
+`ctest --test-dir build` 14/14, including `rust-test-eds` and all four
+functional legs; `cargo fmt --all --check` clean; `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean;
+`RUSTDOCFLAGS=-D warnings cargo doc --no-deps -p jmap-backend-core` clean, so
+the new prose adds nothing to `jmap-mail`'s standing rustdoc debt. `ci/checks.sh` still
+stops at its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no
+`cargo-deny`), so those two were reasoned by hand: no file is added or removed,
+so the SPDX header set is unchanged, and `Cargo.lock` is untouched, so `cargo
+deny`'s answer is the one it gave on the last green run.
+
+**What this does not claim.** The hang itself was never reproduced on demand —
+ten runs of the leg and twenty-five of the binary all passed when it was
+chased — so this closes the mechanism, not a repro. What is proven is the
+invariant: no `class_init` in this repository can wait on `REGISTRATION`, and
+the test says so deterministically. If a hang of the same shape recurs, that
+hypothesis is now excluded rather than merely suspected.
+
+No milestone tag. Closed: the `jmap-mail` `transport.rs` hang, which is off the
+blocker list. Unchanged blockers: M10 still has no CI matrix — the one piece
+left of it, and it wants a machine that can pull more than one EDS image; the
+calcard directive's two emitters are still ours; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**; `jmap-mail`'s
+rustdoc is dirty (25 `private_intra_doc_links` under `RUSTDOCFLAGS=-D
+warnings`); whether Evolution
+renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only
+the first" bet is still unverified; the two `LABEL` `TYPE` risks stand; a
+deathday and a birthday stated as a year alone are still invisible; the
+conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified
+and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.
