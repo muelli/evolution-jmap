@@ -35,7 +35,8 @@ use eds_sys::{
     CamelAddress, CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMedium, CamelMimeMessage,
     camel_address_format, camel_data_wrapper_decode_to_output_stream_sync,
     camel_folder_error_quark, camel_folder_free_uids, camel_folder_get_message_sync,
-    camel_folder_get_uids, camel_folder_refresh_info_sync, camel_medium_get_content,
+    camel_folder_get_uids, camel_folder_refresh_info_sync,
+    camel_folder_search_util_hash_message_id, camel_medium_get_content,
     camel_mime_message_get_date, camel_mime_message_get_from, camel_mime_message_get_message_id,
     camel_mime_message_get_subject, camel_service_error_quark, camel_store_get_folder_sync,
 };
@@ -469,6 +470,29 @@ fn an_opened_message_provides_message_id_and_date() {
         // "2026-01-01T09:00:00Z" is 1767258000
         assert_eq!(date, 1_767_258_000);
         assert_eq!(offset, 0);
+    }
+
+    drop(opened);
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// An opened message's Message-ID can be hashed using Camel's search helper.
+#[test]
+fn an_opened_message_message_id_hashes_consistently() {
+    let (_server, _account, folder) = with_one_message();
+    let uid = the_one_uid(folder);
+
+    let opened = Opened::of(folder, &uid);
+    let message = opened.expect_message();
+
+    unsafe {
+        let msg_id = camel_mime_message_get_message_id(message);
+        assert!(!msg_id.is_null());
+
+        let hash1 = camel_folder_search_util_hash_message_id(msg_id, glib_sys::GFALSE);
+        let hash2 = camel_folder_search_util_hash_message_id(msg_id, glib_sys::GFALSE);
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, 0);
     }
 
     drop(opened);

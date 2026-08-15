@@ -371,6 +371,26 @@ fn camel_layouts_match_the_gtype_system() {
         CamelStreamBufferClass
     );
     assert_layout!(camel_sexp_get_type, CamelSExp, CamelSExpClass);
+    assert_layout!(
+        camel_folder_search_get_type,
+        CamelFolderSearch,
+        CamelFolderSearchClass
+    );
+    assert_layout!(
+        camel_operation_get_type,
+        CamelOperation,
+        CamelOperationClass
+    );
+    assert_layout!(
+        camel_nntp_address_get_type,
+        CamelNNTPAddress,
+        CamelNNTPAddressClass
+    );
+    assert_layout!(
+        camel_local_settings_get_type,
+        CamelLocalSettings,
+        CamelLocalSettingsClass
+    );
 }
 
 /// bindgen will happily regenerate `GObject`, `GError` and friends from the
