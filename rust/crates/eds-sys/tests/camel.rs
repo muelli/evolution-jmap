@@ -2477,3 +2477,410 @@ fn camel_mime_filter_windows_charset_aliases_in_eds() {
         gobject_sys::g_object_unref(ascii_filter.cast());
     }
 }
+
+/// Probing `CamelMimeFilterBestenc` encoding and charset detection in EDS 3.52.
+#[test]
+fn camel_mime_filter_bestenc_detection_in_eds() {
+    unsafe {
+        // 1. Text with 7-bit ASCII
+        let flags =
+            CAMEL_BESTENC_GET_ENCODING | CAMEL_BESTENC_GET_CHARSET | CAMEL_BESTENC_LF_IS_CRLF;
+        let filter = camel_mime_filter_bestenc_new(flags as glib_sys::guint);
+        assert!(!filter.is_null());
+
+        let text = b"Hello, this is pure ASCII content.\r\nLine 2.\r\n";
+        let mut out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut out_len: gsize = 0;
+        let mut out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            filter,
+            text.as_ptr().cast(),
+            text.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+
+        let mut comp_ptr: *mut gchar = std::ptr::null_mut();
+        let mut comp_len: gsize = 0;
+        let mut comp_pre: gsize = 0;
+        let empty = [0u8; 0];
+        camel_mime_filter_complete(
+            filter,
+            empty.as_ptr().cast(),
+            0,
+            0,
+            &mut comp_ptr,
+            &mut comp_len,
+            &mut comp_pre,
+        );
+
+        let best_enc = camel_mime_filter_bestenc_get_best_encoding(
+            filter.cast(),
+            CAMEL_BESTENC_7BIT | CAMEL_BESTENC_TEXT,
+        );
+        assert!(
+            best_enc == CAMEL_TRANSFER_ENCODING_7BIT
+                || best_enc == CAMEL_TRANSFER_ENCODING_QUOTEDPRINTABLE
+        );
+
+        let best_cs = camel_mime_filter_bestenc_get_best_charset(filter.cast());
+        // For pure ASCII, Camel returns NULL (indicating standard default) or "US-ASCII"
+        if !best_cs.is_null() {
+            assert_eq!(
+                std::ffi::CStr::from_ptr(best_cs).to_str().unwrap(),
+                "US-ASCII"
+            );
+        }
+
+        gobject_sys::g_object_unref(filter.cast());
+
+        // 2. Text with 8-bit characters (e.g. UTF-8 ä ö ü)
+        let filter8 = camel_mime_filter_bestenc_new(flags as glib_sys::guint);
+        assert!(!filter8.is_null());
+        let text8 = "Grüße aus Berlin! Überprüfung.\r\n".as_bytes();
+        camel_mime_filter_filter(
+            filter8,
+            text8.as_ptr().cast(),
+            text8.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+        camel_mime_filter_complete(
+            filter8,
+            empty.as_ptr().cast(),
+            0,
+            0,
+            &mut comp_ptr,
+            &mut comp_len,
+            &mut comp_pre,
+        );
+
+        let best_enc8 = camel_mime_filter_bestenc_get_best_encoding(
+            filter8.cast(),
+            CAMEL_BESTENC_7BIT | CAMEL_BESTENC_TEXT,
+        );
+        assert!(
+            best_enc8 == CAMEL_TRANSFER_ENCODING_QUOTEDPRINTABLE
+                || best_enc8 == CAMEL_TRANSFER_ENCODING_BASE64
+                || best_enc8 == CAMEL_TRANSFER_ENCODING_8BIT
+        );
+
+        let best_cs8 = camel_mime_filter_bestenc_get_best_charset(filter8.cast());
+        assert!(!best_cs8.is_null());
+        assert!(
+            std::ffi::CStr::from_ptr(best_cs8)
+                .to_str()
+                .unwrap()
+                .contains("UTF-8")
+                || std::ffi::CStr::from_ptr(best_cs8)
+                    .to_str()
+                    .unwrap()
+                    .contains("ISO-8859")
+        );
+
+        gobject_sys::g_object_unref(filter8.cast());
+    }
+}
+
+/// Probing `CamelMimeFilterCharset` UTF-8 to ISO-8859-1 conversion in EDS 3.52.
+#[test]
+fn camel_mime_filter_charset_conversion_in_eds() {
+    unsafe {
+        let filter = camel_mime_filter_charset_new(c"UTF-8".as_ptr(), c"ISO-8859-1".as_ptr());
+        assert!(!filter.is_null());
+
+        let utf8_input = "Café".as_bytes();
+        let mut out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut out_len: gsize = 0;
+        let mut out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            filter,
+            utf8_input.as_ptr().cast(),
+            utf8_input.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+
+        let mut result = Vec::new();
+        if out_len > 0 && !out_ptr.is_null() {
+            result.extend_from_slice(std::slice::from_raw_parts(out_ptr as *const u8, out_len));
+        }
+
+        let mut comp_ptr: *mut gchar = std::ptr::null_mut();
+        let mut comp_len: gsize = 0;
+        let mut comp_pre: gsize = 0;
+        let empty = [0u8; 0];
+        camel_mime_filter_complete(
+            filter,
+            empty.as_ptr().cast(),
+            0,
+            0,
+            &mut comp_ptr,
+            &mut comp_len,
+            &mut comp_pre,
+        );
+        if comp_len > 0 && !comp_ptr.is_null() {
+            result.extend_from_slice(std::slice::from_raw_parts(comp_ptr as *const u8, comp_len));
+        }
+
+        assert_eq!(result.as_slice(), &[b'C', b'a', b'f', 0xE9]);
+
+        gobject_sys::g_object_unref(filter.cast());
+    }
+}
+
+/// Probing `CamelMimeFilterFrom` mbox "From " line escaping in EDS 3.52.
+#[test]
+fn camel_mime_filter_from_escaping_in_eds() {
+    unsafe {
+        let filter = camel_mime_filter_from_new();
+        assert!(!filter.is_null());
+
+        let mbox_content = b"From sender@example.com Sat Jan 15 12:00:00 2026\nSubject: Test\n\nBody line.\nFrom inside text\n";
+        let mut out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut out_len: gsize = 0;
+        let mut out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            filter,
+            mbox_content.as_ptr().cast(),
+            mbox_content.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+
+        let mut escaped = Vec::new();
+        if out_len > 0 && !out_ptr.is_null() {
+            escaped.extend_from_slice(std::slice::from_raw_parts(out_ptr as *const u8, out_len));
+        }
+
+        let mut comp_ptr: *mut gchar = std::ptr::null_mut();
+        let mut comp_len: gsize = 0;
+        let mut comp_pre: gsize = 0;
+        let empty = [0u8; 0];
+        camel_mime_filter_complete(
+            filter,
+            empty.as_ptr().cast(),
+            0,
+            0,
+            &mut comp_ptr,
+            &mut comp_len,
+            &mut comp_pre,
+        );
+        if comp_len > 0 && !comp_ptr.is_null() {
+            escaped.extend_from_slice(std::slice::from_raw_parts(comp_ptr as *const u8, comp_len));
+        }
+
+        let escaped_str = String::from_utf8_lossy(&escaped);
+        assert!(escaped_str.contains(">From sender@example.com"));
+        assert!(escaped_str.contains(">From inside text"));
+
+        gobject_sys::g_object_unref(filter.cast());
+    }
+}
+
+/// Probing `CamelMimeFilterYenc` and yEnc step encoding/decoding in EDS 3.52.
+#[test]
+fn camel_mime_filter_yenc_encode_and_decode_in_eds() {
+    unsafe {
+        let input_data = b"Testing yEnc binary payload 0123456789 \x00\xFF\x0D\x0A.";
+        let mut encoded_buf = vec![0u8; input_data.len() * 3 + 128];
+        let mut state: glib_sys::gint = CAMEL_MIME_YENCODE_STATE_INIT as glib_sys::gint;
+        let mut pcrc: u32 = 0;
+        let mut crc: u32 = CAMEL_MIME_YENCODE_CRC_INIT as u32;
+
+        let enc_len = camel_yencode_step(
+            input_data.as_ptr(),
+            input_data.len(),
+            encoded_buf.as_mut_ptr(),
+            &mut state,
+            &mut pcrc,
+            &mut crc,
+        );
+
+        let close_len = camel_yencode_close(
+            input_data.as_ptr(),
+            0,
+            encoded_buf.as_mut_ptr().add(enc_len),
+            &mut state,
+            &mut pcrc,
+            &mut crc,
+        );
+        let total_enc_len = enc_len + close_len;
+        let final_crc = !crc;
+        assert!(total_enc_len > 0);
+
+        let mut decoded_buf = vec![0u8; input_data.len() + 128];
+        let mut dec_state: glib_sys::gint = CAMEL_MIME_YDECODE_STATE_INIT as glib_sys::gint;
+        let mut dec_pcrc: u32 = 0;
+        let mut dec_crc: u32 = CAMEL_MIME_YENCODE_CRC_INIT as u32;
+
+        let dec_len = camel_ydecode_step(
+            encoded_buf.as_ptr(),
+            total_enc_len,
+            decoded_buf.as_mut_ptr(),
+            &mut dec_state,
+            &mut dec_pcrc,
+            &mut dec_crc,
+        );
+
+        assert_eq!(&decoded_buf[..dec_len], input_data);
+        assert_eq!(!dec_crc, final_crc);
+    }
+}
+
+/// Probing `CamelMimeFilterProgress` and `CamelStreamBuffer` line reading in EDS 3.52.
+#[test]
+fn camel_mime_filter_progress_and_stream_buffer_in_eds() {
+    unsafe {
+        let prog_filter = camel_mime_filter_progress_new(std::ptr::null_mut(), 1024);
+        assert!(!prog_filter.is_null());
+        gobject_sys::g_object_unref(prog_filter.cast());
+
+        let payload = b"First Line\nSecond Line\nThird Line\n";
+        let mem_stream = camel_stream_mem_new_with_buffer(payload.as_ptr().cast(), payload.len());
+        assert!(!mem_stream.is_null());
+
+        let buf_stream = camel_stream_buffer_new(mem_stream, CAMEL_STREAM_BUFFER_READ);
+        assert!(!buf_stream.is_null());
+
+        let mut error: *mut glib_sys::GError = std::ptr::null_mut();
+        let line1 =
+            camel_stream_buffer_read_line(buf_stream.cast(), std::ptr::null_mut(), &mut error);
+        assert!(!line1.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(line1).to_str().unwrap(),
+            "First Line"
+        );
+        glib_sys::g_free(line1.cast());
+
+        let line2 =
+            camel_stream_buffer_read_line(buf_stream.cast(), std::ptr::null_mut(), &mut error);
+        assert!(!line2.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(line2).to_str().unwrap(),
+            "Second Line"
+        );
+        glib_sys::g_free(line2.cast());
+
+        camel_stream_buffer_discard_cache(buf_stream.cast());
+
+        gobject_sys::g_object_unref(buf_stream.cast());
+        gobject_sys::g_object_unref(mem_stream.cast());
+    }
+}
+
+/// Probing `CamelUTF8`, `CamelStringUtils`, and `CamelHostnameUtils` in EDS 3.52.
+#[test]
+fn camel_utf8_and_string_utilities_in_eds() {
+    unsafe {
+        // 1. UTF-8 Validation
+        let valid_text = c"Valid UTF-8 string: Grüß Gott!";
+        let checked = camel_utf8_make_valid(valid_text.as_ptr());
+        assert!(!checked.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(checked).to_str().unwrap(),
+            "Valid UTF-8 string: Grüß Gott!"
+        );
+        glib_sys::g_free(checked.cast());
+
+        let invalid_bytes = [b'A', b'B', 0xFF, 0xFE, b'C', 0];
+        let sanitized = camel_utf8_make_valid(invalid_bytes.as_ptr().cast());
+        assert!(!sanitized.is_null());
+        let san_str = std::ffi::CStr::from_ptr(sanitized).to_str().unwrap();
+        assert!(san_str.starts_with("AB"));
+        assert!(san_str.ends_with("C"));
+        glib_sys::g_free(sanitized.cast());
+
+        // 2. UTF-7 / UTF-8 conversion (Modified IMAP UTF-7)
+        let utf8_folder = c"Entw&APw-rfe";
+        let converted_utf8 = camel_utf7_utf8(utf8_folder.as_ptr());
+        assert!(!converted_utf8.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(converted_utf8).to_str().unwrap(),
+            "Entwürfe"
+        );
+
+        let roundtrip_utf7 = camel_utf8_utf7(converted_utf8);
+        assert!(!roundtrip_utf7.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(roundtrip_utf7).to_str().unwrap(),
+            "Entw&APw-rfe"
+        );
+        glib_sys::g_free(converted_utf8.cast());
+        glib_sys::g_free(roundtrip_utf7.cast());
+
+        // 3. String Utilities
+        assert_ne!(
+            camel_string_is_all_ascii(c"pure ascii".as_ptr()),
+            glib_sys::GFALSE
+        );
+        assert_eq!(
+            camel_string_is_all_ascii(c"Müller".as_ptr()),
+            glib_sys::GFALSE
+        );
+
+        assert_ne!(
+            camel_strcase_equal(
+                c"Hello World".as_ptr().cast(),
+                c"hello world".as_ptr().cast()
+            ),
+            0
+        );
+        assert_eq!(
+            camel_strcase_hash(c"ABC".as_ptr().cast()),
+            camel_strcase_hash(c"abc".as_ptr().cast())
+        );
+
+        let found_sub =
+            camel_strstrcase(c"Header: Content-Type".as_ptr(), c"content-type".as_ptr());
+        assert!(!found_sub.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(found_sub).to_str().unwrap(),
+            "Content-Type"
+        );
+
+        // 4. Hostname Utils
+        assert_eq!(
+            camel_hostname_utils_requires_ascii(c"mail.example.com".as_ptr()),
+            glib_sys::GFALSE
+        );
+        assert_ne!(
+            camel_hostname_utils_requires_ascii(c"münchen.example.com".as_ptr()),
+            glib_sys::GFALSE
+        );
+    }
+}
+
+/// Probing `CamelSExp` S-expression parsing and evaluation in EDS 3.52.
+#[test]
+fn camel_sexp_parsing_and_evaluation_in_eds() {
+    unsafe {
+        let sexp = camel_sexp_new();
+        assert!(!sexp.is_null());
+
+        let expr = c"(and (= 1 1) (< 2 5))";
+        camel_sexp_input_text(sexp, expr.as_ptr(), expr.to_bytes().len() as glib_sys::gint);
+
+        let parsed = camel_sexp_parse(sexp);
+        assert_eq!(parsed, 0, "S-expression failed to parse");
+
+        let result = camel_sexp_eval(sexp);
+        assert!(!result.is_null());
+        assert_eq!((*result).type_, CAMEL_SEXP_RES_BOOL);
+        assert_ne!(*(*result).value.boolean.as_ref(), 0);
+
+        camel_sexp_result_free(sexp, result);
+        gobject_sys::g_object_unref(sexp.cast());
+    }
+}

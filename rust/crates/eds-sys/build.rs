@@ -201,6 +201,23 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelMimeFilterGZip.*",
     "CamelMimeFilterGZipMode",
     "CamelMimeFilterWindows.*",
+    // Best encoding, charset, From, yEnc, progress filters, stream buffer, and S-expression search
+    "CamelMimeFilterBestenc.*",
+    "CamelBestencRequired",
+    "CamelBestencEncoding",
+    "CamelMimeFilterCharset.*",
+    "CamelMimeFilterFrom.*",
+    "CamelMimeFilterYenc.*",
+    "CamelMimeFilterYencDirection",
+    "CamelMimeFilterProgress.*",
+    "CamelStreamBuffer.*",
+    "CamelStreamBufferMode",
+    "CamelSExp.*",
+    "CamelSExpResult.*",
+    "CamelSExpResultType",
+    "CamelSExpTerm.*",
+    "CamelSExpTermType",
+    "CamelSExpSymbol",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -429,6 +446,25 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_html_parser_.*",
     "camel_url_scanner_.*",
     "camel_enriched_to_html",
+    "camel_mime_filter_bestenc_.*",
+    "camel_mime_filter_charset_.*",
+    "camel_mime_filter_from_.*",
+    "camel_mime_filter_yenc_.*",
+    "camel_ydecode_step",
+    "camel_yencode_step",
+    "camel_yencode_close",
+    "camel_mime_filter_progress_.*",
+    "camel_stream_buffer_.*",
+    "camel_utf8_.*",
+    "camel_utf7_.*",
+    "camel_ucs2_.*",
+    "camel_strcase_.*",
+    "camel_strstrcase",
+    "camel_strdown",
+    "camel_pstring_.*",
+    "camel_string_is_all_ascii",
+    "camel_hostname_utils_.*",
+    "camel_sexp_.*",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,
@@ -457,6 +493,9 @@ const ALLOWED_VARS: &[&str] = &[
     "CAMEL_MIME_FILTER_CANON_.*",
     "CAMEL_MIME_FILTER_ENRICHED_.*",
     "CAMEL_HTML_PARSER_.*",
+    "CAMEL_BESTENC_.*",
+    "CAMEL_MIME_YDECODE_STATE_.*",
+    "CAMEL_MIME_YENCODE_.*",
 ];
 
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys
