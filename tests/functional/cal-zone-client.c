@@ -50,6 +50,20 @@
  * of the read run because the store must hold the zone for one reason only: the
  * client put it there.
  *
+ * And a third mode, which asks `create`'s question of the save `create` cannot
+ * make. `series` hands the calendar **two** definitions, creates a recurring
+ * event in the first and then drags one occurrence into the second with
+ * `E_CAL_OBJ_MOD_THIS` — which is a user moving one day of a standing meeting
+ * into the hours they are travelling, and reaches the backend as an *update* to
+ * an event the server already holds rather than as a create. The two differ in
+ * what the mapping may say: a create states the whole `timeZones` map, while an
+ * update may only add an entry to the map already there. So the second zone is
+ * the one this mode is about, and the first is there to be left alone.
+ *
+ * Two zones from two files rather than one file naming two, because what is
+ * asserted about each is its own definition: a single file could not tell a save
+ * that sent the wrong one from a save that sent both.
+ *
  * Like its twins it has no notion of what "correct" is: it reports what EDS told
  * it on stdout, one `key=value` line per observation, and exits non-zero the
  * moment a call fails. Every assertion belongs to
@@ -60,20 +74,28 @@
  *              <new-dtstart> <new-dtend> <event-uid>...
  *          functional-cal-zone-client create <source-uid> <zone-file>
  *              <summary> <dtstart> <duration>
+ *          functional-cal-zone-client series <source-uid> <zone-file>
+ *              <moved-zone-file> <summary> <dtstart> <duration> <rrule>
+ *              <recurrence-id> <moved-dtstart>
  *
  * The observations of the n-th event on the command line are prefixed `event-n`,
  * counting from one. Positional rather than keyed by the UID because the UID is
  * whatever the mock filed the event under, and a key beginning with a digit
  * makes for a poor observation name. What the first event looks like after the
  * rename is prefixed `saved`, and after the move `moved`; what `create` made is
- * prefixed `created`.
+ * prefixed `created`, and the occurrence `series` moved `occurrence`.
  *
  * The two clocks are iCalendar `DATE-TIME` values with no zone on them — the
  * `TZID` the moved event keeps is the one already on its `DTSTART`, because the
  * whole question is whether an appointment that moves stays in the zone it was
  * in, and a client that named the zone itself would be answering it. `create`'s
  * clock is bare for the same reason and gets its `TZID` from the zone file, so
- * this program never spells the identifier out.
+ * this program never spells the identifier out. `series` takes three such bare
+ * clocks — the series' start, the `RECURRENCE-ID` of the occurrence that moves,
+ * and where it moves to — and puts the first two on the zone out of the first
+ * file and the last on the zone out of the second, which is the one arrangement
+ * RFC 5545 §3.2.19 leaves room for: the recurrence id names an instance the
+ * rules generated, so it is on the series' clock however far the instance moved.
  */
 
 #include <libecal/libecal.h>
@@ -495,20 +517,115 @@ run_read (ECalClient *cal,
 	return status;
 }
 
-/* The create mode: hand the calendar the `VTIMEZONE` in `zone_path`, create an
- * event that refers to it, and report what EDS hands back for that event.
+/* Whether the component replaces an occurrence of a series rather than being one
+ * — RFC 5545 §3.8.4.4's `RECURRENCE-ID`, cal-client.c's is_detached_instance.
+ *
+ * Asked because `e_cal_client_get_object_sync` answers a request for an instance
+ * EDS holds no detached copy of with the master, and the master of the series
+ * `series` builds is a component with the right UID, the right summary and the
+ * *unmoved* clock. Without this the mode's whole failure — a move EDS did not
+ * keep — would read as an event on the series' own zone, which is also what a
+ * save that lost the moved zone looks like. They are not the same bug. */
+static gboolean
+is_detached_instance (ICalComponent *event)
+{
+	ICalProperty *recurrence_id;
+
+	recurrence_id = i_cal_component_get_first_property (
+		event, I_CAL_RECURRENCEID_PROPERTY);
+	if (!recurrence_id)
+		return FALSE;
+
+	g_object_unref (recurrence_id);
+
+	return TRUE;
+}
+
+/* Hand the calendar the `VTIMEZONE` in `path`, report the identifier libical read
+ * off it under `report_key`, and give that identifier back to the caller.
  *
  * The zone comes out of a file rather than out of this program, so that what
  * defines it and what asserts about it are the same text: the test writes the
  * file and holds the mock to the definition it wrote. The `TZID` is read back off
  * the zone EDS made of it rather than passed separately, which keeps this program
- * from being able to name a zone the file did not.
+ * from being able to name a zone the file did not — and is reported, because a
+ * definition libical filed under some other name would leave every later `TZID`
+ * naming a zone nobody wrote.
  *
  * `e_cal_client_add_timezone_sync` is what Evolution calls before saving an
  * appointment whose zone came from an invitation rather than from a database, and
  * it is the only way such a definition reaches a backend at all: EDS strips the
  * `VTIMEZONE` out of the component on its way through and keeps it in the
  * calendar's own timezone store.
+ *
+ * The identifier is copied rather than borrowed from the zone, so that the caller
+ * may build components with it after this has dropped its reference. NULL when
+ * anything failed, having said what on stderr. */
+static gchar *
+add_zone_from_file (ECalClient *cal,
+		    const gchar *path,
+		    const gchar *report_key)
+{
+	GError *error = NULL;
+	gchar *text = NULL;
+	ICalComponent *definition;
+	ICalTimezone *zone;
+	const gchar *tzid;
+	gchar *owned;
+
+	if (!g_file_get_contents (path, &text, NULL, &error)) {
+		fail ("zone-file", error);
+		return NULL;
+	}
+
+	definition = i_cal_component_new_from_string (text);
+	g_free (text);
+	if (!definition) {
+		g_printerr ("zone-file: libical would not parse %s\n", path);
+		return NULL;
+	}
+
+	/* i_cal_timezone_set_component takes the component (see its documentation:
+	 * "the zone assumes ownership of the comp"), so the definition is not
+	 * unreffed here — and on the failure path it is left to the zone too, since
+	 * what it did with it is exactly what is not known. */
+	zone = i_cal_timezone_new ();
+	if (!zone || !i_cal_timezone_set_component (zone, definition)) {
+		g_printerr ("zone-file: libical would not make a zone of %s, which "
+			    "means it states no TZID\n", path);
+		g_clear_object (&zone);
+		return NULL;
+	}
+
+	tzid = i_cal_timezone_get_tzid (zone);
+	g_print ("%s=%s\n", report_key, tzid ? tzid : "");
+
+	if (!tzid) {
+		g_printerr ("zone-file: the zone libical made of %s names itself "
+			    "nothing\n", path);
+		g_object_unref (zone);
+		return NULL;
+	}
+
+	owned = g_strdup (tzid);
+
+	if (!e_cal_client_add_timezone_sync (cal, zone, NULL, &error)) {
+		g_object_unref (zone);
+		g_free (owned);
+		fail ("add-timezone", error);
+		return NULL;
+	}
+
+	g_object_unref (zone);
+
+	return owned;
+}
+
+/* The create mode: hand the calendar the `VTIMEZONE` in `zone_path`, create an
+ * event that refers to it, and report what EDS hands back for that event.
+ *
+ * The zone reaches the calendar through add_zone_from_file, which is where the
+ * route it takes is written down.
  *
  * 0 on success, and the program's exit status otherwise. */
 static int
@@ -519,45 +636,16 @@ run_create (ECalClient *cal,
 	    const gchar *duration)
 {
 	GError *error = NULL;
-	gchar *text = NULL;
 	gchar *icalendar;
 	gchar *created_uid = NULL;
-	ICalComponent *definition;
 	ICalComponent *event;
 	ICalComponent *fetched;
 	ICalComponent *created;
-	ICalTimezone *zone;
-	const gchar *tzid;
+	gchar *tzid;
 
-	if (!g_file_get_contents (zone_path, &text, NULL, &error))
-		return fail ("zone-file", error);
-
-	definition = i_cal_component_new_from_string (text);
-	g_free (text);
-	if (!definition) {
-		g_printerr ("zone-file: libical would not parse %s\n", zone_path);
+	tzid = add_zone_from_file (cal, zone_path, "zone-tzid");
+	if (!tzid)
 		return 1;
-	}
-
-	/* i_cal_timezone_set_component takes the component (see its documentation:
-	 * "the zone assumes ownership of the comp"), so the definition is not
-	 * unreffed here — and on the failure path it is left to the zone too, since
-	 * what it did with it is exactly what is not known. */
-	zone = i_cal_timezone_new ();
-	if (!zone || !i_cal_timezone_set_component (zone, definition)) {
-		g_printerr ("zone-file: libical would not make a zone of %s, which "
-			    "means it states no TZID\n", zone_path);
-		g_clear_object (&zone);
-		return 1;
-	}
-
-	tzid = i_cal_timezone_get_tzid (zone);
-	g_print ("zone-tzid=%s\n", tzid ? tzid : "");
-
-	if (!e_cal_client_add_timezone_sync (cal, zone, NULL, &error)) {
-		g_object_unref (zone);
-		return fail ("add-timezone", error);
-	}
 
 	/* The UID is this program's own, as Evolution's is its own: it is a local
 	 * name, and what the server files the event under is what create_object
@@ -574,7 +662,7 @@ run_create (ECalClient *cal,
 		tzid, dtstart, duration, summary);
 	event = i_cal_component_new_from_string (icalendar);
 	g_free (icalendar);
-	g_object_unref (zone);
+	g_free (tzid);
 
 	if (!event) {
 		g_printerr ("build: libical would not parse the event this test "
@@ -626,13 +714,175 @@ run_create (ECalClient *cal,
 	return 0;
 }
 
+/* The series mode: hand the calendar both `VTIMEZONE`s, create a recurring event
+ * in the first zone, drag one occurrence of it into the second, and report what
+ * EDS hands back for that occurrence.
+ *
+ * Two saves, and the second is the one the mode exists for. The create states the
+ * whole event, so the definition of the series' zone travels the way the create
+ * mode already measured; the move is an *update* to an event the server holds,
+ * where the `timeZones` map is the server's own and the mapping may only add to
+ * it. Nothing short of real EDS can put the two in that order — the second save
+ * has to find the first's map already at the server.
+ *
+ * The move is written as a whole component with the series' UID, a
+ * `RECURRENCE-ID` naming the instance it replaces, and its own `DTSTART`, which
+ * is what Evolution's "Edit this occurrence" hands over; `E_CAL_OBJ_MOD_THIS` is
+ * what tells EDS this replaces one instance rather than the series. Its length is
+ * the series' length, so that nothing but the clock and the zone differ between
+ * the instance and the rule that generated it — a duration that differed would
+ * ride out in the same patch and leave it open which member the server's answer
+ * came from.
+ *
+ * 0 on success, and the program's exit status otherwise. */
+static int
+run_series (ECalClient *cal,
+	    const gchar *zone_path,
+	    const gchar *moved_zone_path,
+	    const gchar *summary,
+	    const gchar *dtstart,
+	    const gchar *duration,
+	    const gchar *rrule,
+	    const gchar *recurrence_id,
+	    const gchar *moved_dtstart)
+{
+	GError *error = NULL;
+	gchar *icalendar;
+	gchar *series_uid = NULL;
+	gchar *tzid;
+	gchar *moved_tzid;
+	ICalComponent *event;
+	ICalComponent *fetched;
+	ICalComponent *occurrence;
+
+	tzid = add_zone_from_file (cal, zone_path, "zone-tzid");
+	if (!tzid)
+		return 1;
+
+	moved_tzid = add_zone_from_file (cal, moved_zone_path, "moved-zone-tzid");
+	if (!moved_tzid) {
+		g_free (tzid);
+		return 1;
+	}
+
+	/* The rule rides in the text with everything else, unlike cal-client.c's
+	 * series: a RRULE carries no zone, so writing it out is not the shortcut
+	 * that spelling an identifier would be. */
+	icalendar = g_strdup_printf (
+		"BEGIN:VEVENT\r\n"
+		"UID:jmap-functional-client-zone-series\r\n"
+		"DTSTART;TZID=%s:%s\r\n"
+		"DURATION:%s\r\n"
+		"RRULE:%s\r\n"
+		"SUMMARY:%s\r\n"
+		"END:VEVENT\r\n",
+		tzid, dtstart, duration, rrule, summary);
+	event = i_cal_component_new_from_string (icalendar);
+	g_free (icalendar);
+
+	if (!event) {
+		g_printerr ("build: libical would not parse the series this test "
+			    "writes\n");
+		g_free (tzid);
+		g_free (moved_tzid);
+		return 1;
+	}
+
+	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
+					      &series_uid, NULL, &error)) {
+		g_object_unref (event);
+		g_free (tzid);
+		g_free (moved_tzid);
+		return fail ("create-series", error);
+	}
+
+	g_object_unref (event);
+	g_print ("series-uid=%s\n", series_uid ? series_uid : "");
+
+	if (!series_uid) {
+		g_printerr ("create-series: EDS accepted the series and named no uid "
+			    "for it\n");
+		g_free (tzid);
+		g_free (moved_tzid);
+		return 1;
+	}
+
+	icalendar = g_strdup_printf (
+		"BEGIN:VEVENT\r\n"
+		"UID:%s\r\n"
+		"RECURRENCE-ID;TZID=%s:%s\r\n"
+		"DTSTART;TZID=%s:%s\r\n"
+		"DURATION:%s\r\n"
+		"SUMMARY:%s\r\n"
+		"END:VEVENT\r\n",
+		series_uid, tzid, recurrence_id, moved_tzid, moved_dtstart, duration,
+		summary);
+	event = i_cal_component_new_from_string (icalendar);
+	g_free (icalendar);
+	g_free (tzid);
+	g_free (moved_tzid);
+
+	if (!event) {
+		g_printerr ("build: libical would not parse the moved occurrence this "
+			    "test writes\n");
+		g_free (series_uid);
+		return 1;
+	}
+
+	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_THIS,
+					      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
+		g_object_unref (event);
+		g_free (series_uid);
+		return fail ("modify-occurrence", error);
+	}
+
+	g_object_unref (event);
+
+	/* Asked for by the pair, UID and RECURRENCE-ID: the id is a wall-clock time
+	 * on the series' zone, which is the string ECalCache keys a detached
+	 * instance on. A plain get is enough — a save the backend accepted is a save
+	 * it has already stored, so "not found" here would be a finding rather than
+	 * a race to sleep through. */
+	if (!e_cal_client_get_object_sync (cal, series_uid, recurrence_id, &fetched,
+					   NULL, &error)) {
+		g_free (series_uid);
+		return fail ("get-occurrence", error);
+	}
+
+	occurrence = first_vevent (fetched);
+	if (!occurrence) {
+		g_printerr ("get-occurrence: what EDS handed back for %s holds no "
+			    "VEVENT\n", series_uid);
+		g_free (series_uid);
+		g_object_unref (fetched);
+		return 1;
+	}
+
+	g_free (series_uid);
+
+	g_print ("occurrence-detached=%d\n", is_detached_instance (occurrence) ? 1 : 0);
+	g_print ("occurrence-summary=%s\n", i_cal_component_get_summary (occurrence));
+	g_print ("occurrence-definitions=%u\n", definition_count (fetched));
+	functional_report_start ("occurrence", occurrence);
+	report_zone_lookup ("occurrence", cal, occurrence);
+	report_length ("occurrence", occurrence);
+
+	g_object_unref (occurrence);
+	g_object_unref (fetched);
+
+	return 0;
+}
+
 static void
 usage (const gchar *program)
 {
 	g_printerr ("usage: %s read <source-uid> <new-summary> <new-dtstart> "
 		    "<new-dtend> <event-uid>...\n"
 		    "       %s create <source-uid> <zone-file> <summary> "
-		    "<dtstart> <duration>\n", program, program);
+		    "<dtstart> <duration>\n"
+		    "       %s series <source-uid> <zone-file> <moved-zone-file> "
+		    "<summary> <dtstart> <duration> <rrule> <recurrence-id> "
+		    "<moved-dtstart>\n", program, program, program);
 }
 
 int
@@ -645,26 +895,43 @@ main (int argc,
 	EClient *client;
 	ECalClient *cal;
 	const gchar *source_uid;
-	gboolean creating;
+	const gchar *mode;
+	gsize index;
+
 	int status;
+
+	/* What each mode takes. Checked here rather than in each, because a mode run
+	 * with too few arguments would otherwise read past the end of argv — and
+	 * `read` is the one that cannot say "exactly": it takes one event UID or
+	 * several. */
+	static const struct {
+		const gchar *name;
+		int arguments;
+		gboolean variadic;
+	} modes[] = {
+		{ "read", 7, TRUE },
+		{ "create", 7, FALSE },
+		{ "series", 11, FALSE },
+	};
 
 	if (argc < 3) {
 		usage (argv[0]);
 		return 2;
 	}
 
-	creating = g_strcmp0 (argv[1], "create") == 0;
-	if (!creating && g_strcmp0 (argv[1], "read") != 0) {
+	mode = argv[1];
+	for (index = 0; index < G_N_ELEMENTS (modes); index++) {
+		if (g_strcmp0 (mode, modes[index].name) == 0)
+			break;
+	}
+
+	if (index == G_N_ELEMENTS (modes) ||
+	    (modes[index].variadic ? argc < modes[index].arguments
+				   : argc != modes[index].arguments)) {
 		usage (argv[0]);
 		return 2;
 	}
-	/* `create` takes a fixed list and `read` a variadic one, so the arity is
-	 * checked here rather than in each: a mode run with too few arguments would
-	 * otherwise read past the end of argv. */
-	if (creating ? argc != 7 : argc < 7) {
-		usage (argv[0]);
-		return 2;
-	}
+
 
 	source_uid = argv[2];
 
@@ -698,8 +965,11 @@ main (int argc,
 	cal = E_CAL_CLIENT (client);
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
-	if (creating)
+	if (g_strcmp0 (mode, "create") == 0)
 		status = run_create (cal, argv[3], argv[4], argv[5], argv[6]);
+	else if (g_strcmp0 (mode, "series") == 0)
+		status = run_series (cal, argv[3], argv[4], argv[5], argv[6], argv[7],
+				     argv[8], argv[9], argv[10]);
 	else
 		/* The first event UID is argv[6]; the rest follow it. */
 		status = run_read (cal, argv[3], argv[4], argv[5], argc, argv, 6);
