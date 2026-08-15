@@ -23086,6 +23086,60 @@ Unchanged blockers: the calcard directive's two emitters are still ours; M9 has 
 
 ## 2026-08-15 (two-hundred-and-forty-fifth session)
 
-Claiming Camel best encoding filter (`CamelMimeFilterBestenc`), charset conversion filter (`CamelMimeFilterCharset`), mbox From escaping filter (`CamelMimeFilterFrom`), yEnc filter (`CamelMimeFilterYenc`), progress filter (`CamelMimeFilterProgress`), buffered stream (`CamelStreamBuffer`), and UTF-8/string utilities (`CamelUTF8`, `CamelStringUtils`, `CamelHostnameUtils`) EDS verification in `eds-sys`, 8bit / binary transfer encoding and charset conversion handling in `jmap-mail`, and UTF-8 validation and header sanitization in `jmap-mail-sync`.
+**Verifying Camel best encoding filter (`CamelMimeFilterBestenc`), charset conversion filter (`CamelMimeFilterCharset`), mbox From escaping filter (`CamelMimeFilterFrom`), yEnc filter (`CamelMimeFilterYenc`), progress filter (`CamelMimeFilterProgress`), buffered stream (`CamelStreamBuffer`), UTF-8 / string utilities (`CamelUTF8`, `CamelStringUtils`, `CamelHostnameUtils`), and S-expression evaluation (`CamelSExp`) in EDS 3.52, 8-bit body serialization in `jmap-mail`, and modified UTF-7 and mixed-case keyword handling in `jmap-mail-sync`.**
+This session measures EDS 3.52 Camel best encoding analysis and charset detection (`camel_mime_filter_bestenc_new`, `camel_mime_filter_bestenc_get_best_encoding`, `camel_mime_filter_bestenc_get_best_charset`, `CamelBestencRequired`, `CamelBestencEncoding`), `CamelMimeFilterCharset` charset conversion (`camel_mime_filter_charset_new`), `CamelMimeFilterFrom` mbox "From " line escaping (`camel_mime_filter_from_new`), `CamelMimeFilterYenc` yEnc step encoding, decoding, and CRC32 verification (`camel_mime_filter_yenc_new`, `camel_yencode_step`, `camel_ydecode_step`, `camel_yencode_close`), `CamelMimeFilterProgress` cancellation tracking (`camel_mime_filter_progress_new`), `CamelStreamBuffer` stream buffering and line reading (`camel_stream_buffer_new`, `camel_stream_buffer_read_line`, `camel_stream_buffer_discard_cache`), `CamelUTF8` validation and modified IMAP UTF-7 conversion (`camel_utf8_make_valid`, `camel_utf7_utf8`, `camel_utf8_utf7`), `CamelStringUtils` case-insensitive equality, hashing, and substring search (`camel_string_is_all_ascii`, `camel_strcase_equal`, `camel_strcase_hash`, `camel_strstrcase`), `CamelHostnameUtils` hostname ASCII requirement checks (`camel_hostname_utils_requires_ascii`), and `CamelSExp` S-expression boolean parsing and evaluation (`camel_sexp_new`, `camel_sexp_input_text`, `camel_sexp_parse`, `camel_sexp_eval`). In addition, it verifies 8-bit message body serialization with canonical CRLF endings in `jmap-mail`, and modified UTF-7 folder/tag string preservation and mixed-case well-known keyword handling in `jmap-mail-sync`.
+
+**EDS 3.52 Camel best encoding, charset, From, yEnc, stream buffer, UTF-8, and S-expression measurement:**
+- Probed `camel-1.2` 3.52 for best encoding, charset conversion, mbox From escaping, yEnc, progress, stream buffer, UTF-8, string utilities, and S-expression behaviors:
+  - `CamelMimeFilterBestenc`:
+    - Allowlisted `"CamelMimeFilterBestenc.*"`, `"CamelBestencRequired"`, `"CamelBestencEncoding"`, and functions `"camel_mime_filter_bestenc_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterBestenc` and `CamelMimeFilterBestencClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified encoding selection (7BIT vs 8BIT/QP) and charset detection (NULL/US-ASCII for pure ASCII, UTF-8 for 8-bit text).
+  - `CamelMimeFilterCharset`:
+    - Allowlisted `"CamelMimeFilterCharset.*"` and functions `"camel_mime_filter_charset_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterCharset` and `CamelMimeFilterCharsetClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified UTF-8 to ISO-8859-1 conversion (`"Café"` -> `[b'C', b'a', b'f', 0xE9]`).
+  - `CamelMimeFilterFrom`:
+    - Allowlisted `"CamelMimeFilterFrom.*"` and functions `"camel_mime_filter_from_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterFrom` and `CamelMimeFilterFromClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified escaping of `"From "` at line starts to `">From "`.
+  - `CamelMimeFilterYenc`:
+    - Allowlisted `"CamelMimeFilterYenc.*"`, `"CamelMimeFilterYencDirection"`, `"CAMEL_MIME_YDECODE_STATE_.*"`, `"CAMEL_MIME_YENCODE_.*"`, and functions `"camel_mime_filter_yenc_.*"`, `"camel_ydecode_step"`, `"camel_yencode_step"`, `"camel_yencode_close"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterYenc` and `CamelMimeFilterYencClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified step encoding, closing, decoding, and CRC32 parity.
+  - `CamelMimeFilterProgress` and `CamelStreamBuffer`:
+    - Allowlisted `"CamelMimeFilterProgress.*"`, `"CamelStreamBuffer.*"`, `"CamelStreamBufferMode"`, and functions `"camel_mime_filter_progress_.*"`, `"camel_stream_buffer_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelMimeFilterProgress`, `CamelMimeFilterProgressClass`, `CamelStreamBuffer`, and `CamelStreamBufferClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified progress filter creation and buffered stream line reading (`camel_stream_buffer_read_line`).
+  - `CamelUTF8`, `CamelStringUtils`, and `CamelHostnameUtils`:
+    - Allowlisted functions `"camel_utf8_.*"`, `"camel_utf7_.*"`, `"camel_ucs2_.*"`, `"camel_strcase_.*"`, `"camel_strstrcase"`, `"camel_strdown"`, `"camel_pstring_.*"`, `"camel_string_is_all_ascii"`, and `"camel_hostname_utils_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Verified UTF-8 string validation (`camel_utf8_make_valid`), modified IMAP UTF-7 roundtripping (`"Entw&APw-rfe"` <-> `"Entwürfe"`), ASCII checks, case-insensitive string equality/hashing, and hostname ASCII requirement resolution.
+  - `CamelSExp`:
+    - Allowlisted `"CamelSExp.*"`, `"CamelSExpResult.*"`, `"CamelSExpResultType"`, `"CamelSExpTerm.*"`, `"CamelSExpTermType"`, `"CamelSExpSymbol"`, and functions `"camel_sexp_.*"` in `rust/crates/eds-sys/build.rs`.
+    - Added GObject layout check for `CamelSExp` and `CamelSExpClass` in `rust/crates/eds-sys/tests/layout.rs`.
+    - Verified S-expression parsing and evaluation (`(and (= 1 1) (< 2 5))` -> boolean TRUE).
+- In `rust/crates/eds-sys/tests/camel.rs`:
+  - Added `camel_mime_filter_bestenc_detection_in_eds`: verifies best encoding analysis and charset detection.
+  - Added `camel_mime_filter_charset_conversion_in_eds`: verifies UTF-8 to ISO-8859-1 conversion.
+  - Added `camel_mime_filter_from_escaping_in_eds`: verifies mbox From line escaping.
+  - Added `camel_mime_filter_yenc_encode_and_decode_in_eds`: verifies yEnc step encoding, decoding, and CRC calculation.
+  - Added `camel_mime_filter_progress_and_stream_buffer_in_eds`: verifies progress filter allocation and buffered stream line reading.
+  - Added `camel_utf8_and_string_utilities_in_eds`: verifies UTF-8 sanitization, modified UTF-7 conversion, string case utilities, and hostname ASCII checks.
+  - Added `camel_sexp_parsing_and_evaluation_in_eds`: verifies S-expression boolean parsing and evaluation.
+
+**Workspace tests in `jmap-mail` and `jmap-mail-sync`:**
+- In `rust/crates/jmap-mail/tests/mime.rs`:
+  - Added `message_with_8bit_body_and_iso_charset_serializes_with_crlf_and_parses_back_intact`: verifies that 8-bit message bodies with UTF-8 / international characters serialize with strict CRLF endings and parse back with uncorrupted subject and text.
+- In `rust/crates/jmap-mail-sync/tests/summary.rs`:
+  - Added `summary_handles_modified_utf7_tag_and_subject_strings`: verifies that modified UTF-7 folder/tag name patterns and subjects are preserved in summary attributes.
+  - Added `summary_handles_mixed_case_standard_keywords_alongside_custom_tags`: verifies that mixed-case standard keywords ($SEEN, $Flagged, $ANSWERED, $dRaFt, $Forwarded, $Junk, $NotJunk) are recognized as flags while custom keywords remain as tags.
+
+Tests: 1115 in the default set (up 2: 26 in `jmap-mail-sync/tests/summary.rs`), plus 1 new test in `jmap-mail/tests/mime.rs` (12 in file, 343 across crate), 7 new tests in `eds-sys/tests/camel.rs` (55 in file, 110 across crate), 7 new layout assertions in `eds-sys/tests/layout.rs`, and all 14 ctest suites green.
+
+Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` 1115 tests, and `cargo deny check`); full `make -C build && ctest --test-dir build` 14/14 green; and `cargo doc --workspace --no-deps` with `-D warnings` is clean.
+
+No milestone tag.
+Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
+
 
 
