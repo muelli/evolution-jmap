@@ -23191,3 +23191,8 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-15 (two-hundred-and-forty-seventh session)
+
+Claiming Camel certificate database (`CamelCertDB`, `CamelCert`), junk filter interface (`CamelJunkFilter`), network service (`CamelNetworkService`), memory pool (`CamelMemPool`), text index (`CamelTextIndex`), and filter search (`CamelFilterSearch`) EDS verification in `eds-sys`, certificate host verification and junk header analysis in `jmap-mail`, and junk status mapping and index term extraction in `jmap-mail-sync`.
+
+
