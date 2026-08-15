@@ -260,6 +260,15 @@ unsafe impl ObjectSubclass for JmapTransport {
         unsafe { camel_transport_get_type() }
     }
 
+    fn class_init_types() -> Vec<GType> {
+        // The settings type below, registered before this one rather than from
+        // inside the class initialiser: `class_init` runs under GLib's
+        // class-initialisation lock and cannot take the registration lock
+        // without inverting the two. This is the deadlock `tests/transport.rs`
+        // used to hit.
+        vec![settings_type()]
+    }
+
     unsafe fn class_init(class: *mut Self::Class) {
         // The account's own settings class, for the reason the module docs
         // give: inherited it would be `CamelSettings`, which carries no server.
