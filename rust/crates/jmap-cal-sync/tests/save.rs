@@ -2258,6 +2258,63 @@ fn a_new_event_naming_a_zone_nothing_defines_is_filed_floating() {
     assert_eq!(stored.time_zones, None);
 }
 
+/// A series in a zone that cannot be sent, over an occurrence in one that can.
+///
+/// The series' `TZID` is a Windows name, so the create files the series
+/// floating — there is no `TimeZoneId` to state it by. The occurrence the user
+/// moved is in a different zone, one the document *defines*, which RFC 8984
+/// §1.4.9 does admit; dropping `timeZones` wholesale along with the series'
+/// zone took that definition with it and left the override's identifier
+/// dangling, which is the shape a server may refuse the whole
+/// `CalendarEvent/set` for.
+///
+/// So the map is pruned to what is still referred to, not emptied: the series
+/// goes floating, and the occurrence keeps the zone it was moved into.
+#[test]
+fn a_new_events_unsendable_zone_keeps_the_definition_an_occurrence_still_names() {
+    let fixture = Fixture::start();
+    let icalendar = with_instance(
+        &NEW_EVENT
+            .replace("TZID=Europe/Berlin", "TZID=W. Europe Standard Time")
+            .replace(
+                "DURATION:PT90M",
+                "DURATION:PT90M\r\nRRULE:FREQ=DAILY;COUNT=3",
+            )
+            .replace("BEGIN:VEVENT", &format!("{CUSTOM_VTIMEZONE}BEGIN:VEVENT")),
+        &format!(
+            "BEGIN:VEVENT\r\n\
+             UID:20260808T101500Z-4711-1000-1-0@localhost\r\n\
+             RECURRENCE-ID;TZID=W. Europe Standard Time:20260116T130000\r\n\
+             DTSTART;TZID={CUSTOM_TZID}:20260116T150000\r\n\
+             DURATION:PT90M\r\n\
+             SUMMARY:Planning\r\n\
+             END:VEVENT\r\n"
+        ),
+    );
+
+    let saved = fixture.sync().save_component(&icalendar, None).unwrap();
+
+    let stored = fixture.event(&saved.uid.as_str().into());
+    assert_eq!(stored.time_zone, None, "the series' zone cannot be stated");
+    assert_eq!(
+        stored.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-16T13:00:00".to_owned(),
+                json!({"start": "2026-01-16T15:00:00", "timeZone": CUSTOM_TZID}),
+            )]
+            .into()
+        ),
+    );
+    let definitions = stored
+        .time_zones
+        .expect("the zone the moved occurrence names");
+    let zone = definitions
+        .get(CUSTOM_TZID)
+        .unwrap_or_else(|| panic!("no definition for {CUSTOM_TZID}: {definitions:?}"));
+    assert_eq!(zone["standard"][0]["offsetTo"], json!("+0100"));
+}
+
 /// The identifier a server invents for a zone no database names — RFC 8984
 /// §1.4.9's second form — and the `VTIMEZONE` that defines it, as a document
 /// written elsewhere carries the pair.

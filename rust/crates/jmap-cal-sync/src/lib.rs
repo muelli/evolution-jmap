@@ -23,7 +23,7 @@ pub mod patch;
 use std::collections::BTreeMap;
 
 use jmap_client::{ChangeSet, Client};
-use jmap_ical::{event_to_ical, ical_to_event, maps_time_zone};
+use jmap_ical::{event_to_ical, ical_to_event, maps_time_zone, prune_time_zones};
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::{Id, State};
 use serde_json::Value;
@@ -148,8 +148,12 @@ impl CalSync {
             if !maps_time_zone(&event) {
                 event.time_zone = None;
                 // With the zone goes its definition: a `timeZones` entry nothing
-                // refers to is a claim about a zone the event is not in.
-                event.time_zones = None;
+                // refers to is a claim about a zone the event is not in. Only
+                // its own, though — an occurrence the user moved into a zone of
+                // its own still names one, and taking the whole map left that
+                // override pointing at a `TimeZoneId` nothing defined, which is
+                // the shape a server may refuse the entire save over.
+                prune_time_zones(&mut event);
             }
             let stored = self.client.event_create(&self.account_id, &event)?;
             return ComponentInfo::render(&stored);

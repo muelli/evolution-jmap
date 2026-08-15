@@ -2295,16 +2295,7 @@ fn zone_names(calendar: &Component) -> BTreeMap<String, String> {
 /// back out is byte for byte what came in.
 fn read_time_zones(calendar: &Component, event: &CalendarEvent) -> Option<BTreeMap<String, Value>> {
     let mut zones: BTreeMap<String, Value> = BTreeMap::new();
-    for tzid in std::iter::once(event.time_zone.as_deref())
-        .chain(
-            event
-                .recurrence_overrides
-                .iter()
-                .flatten()
-                .map(|(_, patch)| patch.get("timeZone").and_then(Value::as_str)),
-        )
-        .flatten()
-    {
+    for tzid in referred_zones(event) {
         if names_time_zone(tzid) || !tzid.starts_with('/') || zones.contains_key(tzid) {
             continue;
         }
@@ -2326,6 +2317,58 @@ fn read_time_zones(calendar: &Component, event: &CalendarEvent) -> Option<BTreeM
         zones.insert(tzid.to_owned(), definition);
     }
     (!zones.is_empty()).then_some(zones)
+}
+
+/// Every `TimeZoneId` the event names — the series' own, and one per occurrence
+/// that moved into a zone of its own.
+///
+/// Naming and *defining* are different questions: this lists what is referred to,
+/// whatever form the identifier takes, and leaves [`defines_zone`] to say which
+/// of those references the event answers. [`read_time_zones`] collects the
+/// definitions for them; [`prune_time_zones`] drops the definitions for
+/// everything else.
+fn referred_zones(event: &CalendarEvent) -> impl Iterator<Item = &str> {
+    std::iter::once(event.time_zone.as_deref())
+        .chain(
+            event
+                .recurrence_overrides
+                .iter()
+                .flatten()
+                .map(|(_, patch)| patch.get("timeZone").and_then(Value::as_str)),
+        )
+        .flatten()
+}
+
+/// Drop every `timeZones` entry the event no longer refers to.
+///
+/// A §4.7.2 entry nothing names is a claim about a zone the event is not in, so
+/// it is not sent — but "nothing names it" has to be asked of the whole event
+/// rather than of its series alone. A caller that clears an unsendable
+/// [`CalendarEvent::time_zone`] (see [`maps_time_zone`], and `jmap_cal_sync`'s
+/// create path, which is the one caller) used to clear the map with it; that
+/// took the definition of a zone one *occurrence* had been moved into, leaving
+/// the override naming a `TimeZoneId` nothing resolved. RFC 8984 §1.4.9 does not
+/// admit that identifier without its definition, and a server is entitled to
+/// refuse the whole `CalendarEvent/set` over it — costing the user the
+/// appointment rather than the series' zone.
+///
+/// Emptied completely, the map goes away rather than being sent as `{}`.
+pub fn prune_time_zones(event: &mut CalendarEvent) {
+    let referred: BTreeSet<String> = referred_zones(event).map(str::to_owned).collect();
+    let Some(definitions) = event.time_zones.as_mut() else {
+        return;
+    };
+    // Under either spelling of the key, for the reason [`definition_of`] reads
+    // both: an entry kept under one and looked up under the other is a zone that
+    // silently stops resolving.
+    definitions.retain(|tzid, _| {
+        referred
+            .iter()
+            .any(|referred| referred == tzid || referred.trim_start_matches('/') == tzid)
+    });
+    if definitions.is_empty() {
+        event.time_zones = None;
+    }
 }
 
 /// One `VTIMEZONE` as the RFC 8984 §4.7.2 TimeZone it describes, or `None` for
