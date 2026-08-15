@@ -3066,3 +3066,171 @@ fn camel_local_and_store_settings_in_eds() {
         gobject_sys::g_object_unref(settings.cast());
     }
 }
+
+/// Probing `CamelCertDB` and `CamelCert` certificate database operations in EDS 3.52.
+#[test]
+fn camel_certdb_operations_and_host_certificates_in_eds() {
+    unsafe {
+        // 1. CamelCert creation, field manipulation, ref and unref
+        let cert = camel_cert_new();
+        assert!(!cert.is_null());
+        assert_eq!((*cert).refcount, 1);
+        (*cert).hostname = glib_sys::g_strdup(c"mail.example.com".as_ptr());
+        (*cert).fingerprint = glib_sys::g_strdup(c"01:23:45:67:89:AB:CD:EF".as_ptr());
+        (*cert).trust = CAMEL_CERT_TRUST_FULLY;
+
+        assert_eq!(
+            std::ffi::CStr::from_ptr((*cert).hostname).to_str().unwrap(),
+            "mail.example.com"
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr((*cert).fingerprint)
+                .to_str()
+                .unwrap(),
+            "01:23:45:67:89:AB:CD:EF"
+        );
+        assert_eq!((*cert).trust, CAMEL_CERT_TRUST_FULLY);
+
+        let cert_ref = camel_cert_ref(cert);
+        assert_eq!(cert_ref, cert);
+        assert_eq!((*cert).refcount, 2);
+        camel_cert_unref(cert_ref);
+        assert_eq!((*cert).refcount, 1);
+        camel_cert_unref(cert);
+
+        // 2. CamelCertTrust enum values
+        assert_eq!(CAMEL_CERT_TRUST_UNKNOWN, 0);
+        assert_eq!(CAMEL_CERT_TRUST_NEVER, 1);
+        assert_eq!(CAMEL_CERT_TRUST_MARGINAL, 2);
+        assert_eq!(CAMEL_CERT_TRUST_FULLY, 3);
+        assert_eq!(CAMEL_CERT_TRUST_ULTIMATE, 4);
+        assert_eq!(CAMEL_CERT_TRUST_TEMPORARY, 5);
+
+        // 3. CamelCertDB creation, filename setting, and saving
+        let certdb = camel_certdb_new();
+        assert!(!certdb.is_null());
+
+        let mut tmp_error: *mut glib_sys::GError = std::ptr::null_mut();
+        let tmp_dir = glib_sys::g_dir_make_tmp(c"eds-certdb-XXXXXX".as_ptr(), &mut tmp_error);
+        assert!(!tmp_dir.is_null());
+        assert!(tmp_error.is_null());
+
+        let db_path = format!(
+            "{}/certs.db\0",
+            std::ffi::CStr::from_ptr(tmp_dir).to_str().unwrap()
+        );
+        camel_certdb_set_filename(certdb, db_path.as_ptr().cast());
+        assert_eq!(camel_certdb_save(certdb), 0);
+
+        camel_certdb_clear(certdb);
+        gobject_sys::g_object_unref(certdb.cast());
+        glib_sys::g_free(tmp_dir.cast());
+    }
+}
+
+/// Probing `CamelJunkFilter` interface and status constants in EDS 3.52.
+#[test]
+fn camel_junk_filter_interface_and_status_in_eds() {
+    unsafe {
+        let gtype = camel_junk_filter_get_type();
+        assert_ne!(gtype, 0);
+        assert_ne!(
+            gobject_sys::g_type_is_a(gtype, gobject_sys::G_TYPE_INTERFACE),
+            glib_sys::GFALSE
+        );
+
+        // Enum constants
+        assert_eq!(CAMEL_JUNK_STATUS_ERROR, 0);
+        assert_eq!(CAMEL_JUNK_STATUS_INCONCLUSIVE, 1);
+        assert_eq!(CAMEL_JUNK_STATUS_MESSAGE_IS_JUNK, 2);
+        assert_eq!(CAMEL_JUNK_STATUS_MESSAGE_IS_NOT_JUNK, 3);
+    }
+}
+
+/// Probing `CamelNetworkService` interface in EDS 3.52.
+#[test]
+fn camel_network_service_interface_in_eds() {
+    unsafe {
+        let gtype = camel_network_service_get_type();
+        assert_ne!(gtype, 0);
+        assert_ne!(
+            gobject_sys::g_type_is_a(gtype, gobject_sys::G_TYPE_INTERFACE),
+            glib_sys::GFALSE
+        );
+    }
+}
+
+/// Probing `CamelMemPool` allocation and lifecycle in EDS 3.52.
+#[test]
+fn camel_mempool_allocation_and_flush_in_eds() {
+    unsafe {
+        let pool = camel_mempool_new(1024, 256, CAMEL_MEMPOOL_ALIGN_STRUCT);
+        assert!(!pool.is_null());
+
+        let mem = camel_mempool_alloc(pool, 128);
+        assert!(!mem.is_null());
+        std::ptr::write_bytes(mem as *mut u8, 0xAB, 128);
+
+        let dup = camel_mempool_strdup(pool, c"JMAP memory pool test string".as_ptr());
+        assert!(!dup.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(dup).to_str().unwrap(),
+            "JMAP memory pool test string"
+        );
+
+        camel_mempool_flush(pool, 0);
+        camel_mempool_destroy(pool);
+    }
+}
+
+/// Probing `CamelTextIndex` creation and word additions in EDS 3.52.
+#[test]
+fn camel_text_index_creation_and_words_in_eds() {
+    unsafe {
+        let mut tmp_error: *mut glib_sys::GError = std::ptr::null_mut();
+        let tmp_dir = glib_sys::g_dir_make_tmp(c"eds-index-XXXXXX".as_ptr(), &mut tmp_error);
+        assert!(!tmp_dir.is_null());
+        assert!(tmp_error.is_null());
+
+        let idx_path = format!(
+            "{}/mail.index\0",
+            std::ffi::CStr::from_ptr(tmp_dir).to_str().unwrap()
+        );
+
+        // O_RDWR (2) | O_CREAT (64) | O_TRUNC (512) = 578
+        let idx = camel_text_index_new(idx_path.as_ptr().cast(), 578);
+        assert!(!idx.is_null());
+
+        let name = camel_index_add_name(idx.cast(), c"subject_field".as_ptr());
+        assert!(!name.is_null());
+
+        camel_index_name_add_word(name, c"roadmap".as_ptr());
+        camel_index_name_add_word(name, c"milestone".as_ptr());
+
+        let buf = c"Search keywords and token stream";
+        // add_buffer returns the number of bytes *remaining* (not yet processed); the
+        // CamelTextIndex implementation processes all input incrementally, so it always
+        // returns 0 (nothing left over).
+        let remaining = camel_index_name_add_buffer(name, buf.as_ptr(), 32);
+        assert_eq!(remaining, 0);
+
+        // Commit the indexed words to the index, then flush to disk.
+        assert_eq!(camel_index_write_name(idx.cast(), name), 0);
+        assert_eq!(camel_index_sync(idx.cast()), 0);
+
+        gobject_sys::g_object_unref(name.cast());
+        gobject_sys::g_object_unref(idx.cast());
+
+        assert_eq!(camel_text_index_check(idx_path.as_ptr().cast()), 0);
+
+        glib_sys::g_free(tmp_dir.cast());
+    }
+}
+
+/// Probing `CamelFilterSearch` search constants in EDS 3.52.
+#[test]
+fn camel_filter_search_constants_in_eds() {
+    assert_eq!(CAMEL_SEARCH_ERROR, -1);
+    assert_eq!(CAMEL_SEARCH_NOMATCH, 0);
+    assert_eq!(CAMEL_SEARCH_MATCHED, 1);
+}

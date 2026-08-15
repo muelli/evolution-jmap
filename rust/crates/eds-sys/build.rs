@@ -225,6 +225,20 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelOperation.*",
     "CamelNNTPAddress.*",
     "CamelLocalSettings.*",
+    // Certificate database, junk filter, network service, memory pool, text index, and filter search
+    "CamelCertDB.*",
+    "CamelCert.*",
+    "CamelCertTrust",
+    "CamelJunkFilter.*",
+    "CamelJunkStatus",
+    "CamelNetworkService.*",
+    "CamelMemPool.*",
+    "CamelMemPoolFlags",
+    "CamelIndex.*",
+    "CamelIndexName.*",
+    "CamelIndexCursor.*",
+    "CamelTextIndex.*",
+    "CamelFilterSearch.*",
 ];
 
 const ALLOWED_FUNCTIONS: &[&str] = &[
@@ -480,6 +494,14 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_nntp_address_.*",
     "camel_local_settings_.*",
     "camel_file_util_.*",
+    "camel_certdb_.*",
+    "camel_cert_.*",
+    "camel_junk_filter_.*",
+    "camel_network_service_.*",
+    "camel_mempool_.*",
+    "camel_index_.*",
+    "camel_text_index_.*",
+    "camel_filter_search_.*",
 ];
 
 /// The names an `ESource` extension is looked up by are `#define`d strings,
@@ -511,6 +533,10 @@ const ALLOWED_VARS: &[&str] = &[
     "CAMEL_BESTENC_.*",
     "CAMEL_MIME_YDECODE_STATE_.*",
     "CAMEL_MIME_YENCODE_.*",
+    "CAMEL_SEARCH_.*",
+    "CAMEL_MEMPOOL_.*",
+    "CAMEL_CERT_TRUST_.*",
+    "CAMEL_JUNK_STATUS_.*",
 ];
 
 /// `GType` and friends come from the gtk-rs sys crates so that eds-sys
