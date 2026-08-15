@@ -23235,5 +23235,7 @@ Verified locally: `ci/checks.sh` completely green (REUSE lint compliant, `cargo 
 No milestone tag.
 Unchanged blockers: the calcard directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human verification in real Evolution**; and the `jmap-mail` `transport.rs` hang is still an open design question with a lock-order hypothesis attached.
 
+## 2026-08-15 (two-hundred-and-forty-eighth session)
 
+Claiming `CamelDB` (the SQLite-backed folder summary database GObject), `CamelDBError`, `CamelDBKnownColumnNames`, `CamelDBCollate`, and `CamelSasl` (the authentication mechanism GObject) EDS verification in `eds-sys`, with workspace tests in `jmap-mail` and `jmap-mail-sync` connecting these to the M5 implementation.
 
