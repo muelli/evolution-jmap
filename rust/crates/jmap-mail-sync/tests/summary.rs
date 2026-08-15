@@ -539,3 +539,81 @@ fn summary_maps_various_user_tags_and_retains_case_sensitivities() {
     assert!(summary.tags.contains(&"URGENT-REVIEW".to_owned()));
     assert!(summary.tags.contains(&"Finance2026".to_owned()));
 }
+
+#[test]
+fn summary_handles_html_entity_sequences_in_subject_and_preview() {
+    let email = Email {
+        id: Some(Id::new("M-ENTITY-55")),
+        blob_id: Some(Id::new("B-ENTITY-55")),
+        subject: Some("Invoice &amp; Statement #1234 &lt;Q1&gt;".to_owned()),
+        preview: Some("Total amount due: &quot;$1,250.00&quot; &amp; fees".to_owned()),
+        from: Some(vec![EmailAddress::new(
+            Some("Billing &amp; Finance"),
+            "billing@example.com",
+        )]),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary with html entities");
+    assert_eq!(
+        summary.subject.as_deref(),
+        Some("Invoice &amp; Statement #1234 &lt;Q1&gt;")
+    );
+    assert_eq!(
+        summary.preview.as_deref(),
+        Some("Total amount due: &quot;$1,250.00&quot; &amp; fees")
+    );
+    assert_eq!(
+        summary.from[0].name.as_deref(),
+        Some("Billing &amp; Finance")
+    );
+}
+
+#[test]
+fn summary_preserves_multiple_recipient_groups_and_custom_references() {
+    let email = Email {
+        id: Some(Id::new("M-RECIP-33")),
+        blob_id: Some(Id::new("B-RECIP-33")),
+        subject: Some("Group distribution update".to_owned()),
+        from: Some(vec![
+            EmailAddress::new(Some("Primary Sender"), "sender1@example.com"),
+            EmailAddress::new(Some("Co-Sender"), "sender2@example.com"),
+        ]),
+        to: Some(vec![
+            EmailAddress::new(Some("Alice Lead"), "alice@example.com"),
+            EmailAddress::new(Some("Bob Reviewer"), "bob@example.com"),
+        ]),
+        cc: Some(vec![
+            EmailAddress::new(Some("Carol Auditor"), "carol@example.com"),
+            EmailAddress::new(None, "audit-archive@example.com"),
+        ]),
+        references: Some(vec![
+            "<root-msg-001@example.com>".to_owned(),
+            "<inter-msg-002@example.com>".to_owned(),
+            "<prev-msg-003@example.com>".to_owned(),
+        ]),
+        in_reply_to: Some(vec!["<prev-msg-003@example.com>".to_owned()]),
+        keywords: Some(
+            [
+                (keyword::SEEN.to_owned(), true),
+                (keyword::FLAGGED.to_owned(), true),
+                ("audit-complete".to_owned(), true),
+            ]
+            .into(),
+        ),
+        ..bare_email()
+    };
+
+    let summary = MessageSummary::from_email(&email).expect("summary with multiple recipients");
+    assert_eq!(summary.from.len(), 2);
+    assert_eq!(summary.to.len(), 2);
+    assert_eq!(summary.cc.len(), 2);
+    assert_eq!(summary.references.len(), 3);
+    assert_eq!(
+        summary.references[2],
+        "<prev-msg-003@example.com>".to_owned()
+    );
+    assert!(summary.flags.seen);
+    assert!(summary.flags.flagged);
+    assert_eq!(summary.tags, vec!["audit-complete".to_owned()]);
+}
