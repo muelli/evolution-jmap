@@ -2129,3 +2129,351 @@ fn camel_mime_filter_preview_and_html_conversions_in_eds() {
         glib_sys::g_free(html_out.cast());
     }
 }
+
+/// Probing `CamelHTMLParser` data loading, stepwise tokenization, tag and attribute extraction in EDS 3.52.
+#[test]
+fn camel_html_parser_tokenization_and_attributes_in_eds() {
+    unsafe {
+        let parser = camel_html_parser_new();
+        assert!(!parser.is_null());
+
+        let html_content =
+            c"<p class=\"greeting\" id=\"p1\">Hello <strong>world</strong> &amp; welcome</p>";
+        let raw_bytes = html_content.to_bytes();
+        camel_html_parser_set_data(
+            parser,
+            html_content.as_ptr(),
+            raw_bytes.len() as glib_sys::gint,
+            1,
+        );
+
+        let mut data_ptr: *const gchar = std::ptr::null();
+        let mut data_len: glib_sys::gint = 0;
+        let mut states = Vec::new();
+        let mut tags = Vec::new();
+
+        loop {
+            let st = camel_html_parser_step(parser, &mut data_ptr, &mut data_len);
+            states.push(st);
+            if st == CAMEL_HTML_PARSER_EOF || st == CAMEL_HTML_PARSER_EOD {
+                break;
+            }
+            if st == CAMEL_HTML_PARSER_TAG || st == CAMEL_HTML_PARSER_ELEMENT {
+                let tag = camel_html_parser_tag(parser);
+                if !tag.is_null() {
+                    let tag_name = std::ffi::CStr::from_ptr(tag)
+                        .to_str()
+                        .unwrap()
+                        .to_lowercase();
+                    tags.push(tag_name);
+                }
+                let class_attr = camel_html_parser_attr(parser, c"class".as_ptr());
+                if !class_attr.is_null() {
+                    assert_eq!(
+                        std::ffi::CStr::from_ptr(class_attr).to_str().unwrap(),
+                        "greeting"
+                    );
+                }
+            }
+        }
+
+        assert!(
+            states.contains(&CAMEL_HTML_PARSER_TAG) || states.contains(&CAMEL_HTML_PARSER_ELEMENT)
+        );
+        assert!(tags.iter().any(|t| t == "p" || t == "strong"));
+
+        gobject_sys::g_object_unref(parser.cast());
+    }
+}
+
+/// Probing `CamelUrlScanner` pattern registration and URL detection in EDS 3.52.
+#[test]
+fn camel_url_scanner_detection_and_matching_in_eds() {
+    unsafe {
+        let scanner = camel_url_scanner_new();
+        assert!(!scanner.is_null());
+
+        let mut pattern = CamelUrlPattern {
+            pattern: c"https://".as_ptr(),
+            prefix: std::ptr::null(),
+            start: Some(camel_url_web_start),
+            end: Some(camel_url_web_end),
+        };
+        camel_url_scanner_add(scanner, &mut pattern);
+
+        let text = b"Read specification at https://jmap.io/spec.html for details";
+        let mut match_info = std::mem::zeroed::<CamelUrlMatch>();
+
+        let found =
+            camel_url_scanner_scan(scanner, text.as_ptr().cast(), text.len(), &mut match_info);
+        assert_eq!(found, glib_sys::GTRUE);
+        assert!(match_info.um_so >= 0);
+        assert!(match_info.um_eo > match_info.um_so);
+
+        let matched_slice = &text[match_info.um_so as usize..match_info.um_eo as usize];
+        let matched_str = std::str::from_utf8(matched_slice).unwrap();
+        assert_eq!(matched_str, "https://jmap.io/spec.html");
+
+        camel_url_scanner_free(scanner);
+    }
+}
+
+/// Probing `CamelMimeFilterEnriched` and `camel_enriched_to_html` in EDS 3.52.
+#[test]
+fn camel_mime_filter_enriched_and_conversion_in_eds() {
+    unsafe {
+        let filter = camel_mime_filter_enriched_new(CAMEL_MIME_FILTER_ENRICHED_NONE);
+        assert!(!filter.is_null());
+        gobject_sys::g_object_unref(filter.cast());
+
+        let enriched_input = c"<bold>Meeting Agenda</bold><italic>Review</italic>";
+        let html_output = camel_enriched_to_html(enriched_input.as_ptr(), 0);
+        assert!(!html_output.is_null());
+        let converted = std::ffi::CStr::from_ptr(html_output).to_str().unwrap();
+        assert!(
+            converted.contains("<bold>")
+                || converted.contains("<b>")
+                || converted.contains("<italic>")
+                || converted.contains("<i>")
+        );
+        assert!(converted.contains("Meeting Agenda"));
+        assert!(converted.contains("Review"));
+        glib_sys::g_free(html_output.cast());
+    }
+}
+
+/// Probing `CamelMimeFilterHTML` HTML-to-plaintext conversion in EDS 3.52.
+#[test]
+fn camel_mime_filter_html_to_plaintext_in_eds() {
+    unsafe {
+        let filter = camel_mime_filter_html_new();
+        assert!(!filter.is_null());
+
+        let html_input = b"<html><head><title>Test</title></head><body><h1>Heading</h1><p>Paragraph text.</p></body></html>";
+
+        let mut out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut out_len: gsize = 0;
+        let mut out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            filter,
+            html_input.as_ptr().cast(),
+            html_input.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+
+        let mut extracted = Vec::new();
+        if out_len > 0 && !out_ptr.is_null() {
+            extracted.extend_from_slice(std::slice::from_raw_parts(out_ptr as *const u8, out_len));
+        }
+
+        let mut comp_ptr: *mut gchar = std::ptr::null_mut();
+        let mut comp_len: gsize = 0;
+        let mut comp_pre: gsize = 0;
+
+        let empty = c"";
+        camel_mime_filter_complete(
+            filter,
+            empty.as_ptr(),
+            0,
+            0,
+            &mut comp_ptr,
+            &mut comp_len,
+            &mut comp_pre,
+        );
+
+        if comp_len > 0 && !comp_ptr.is_null() {
+            extracted
+                .extend_from_slice(std::slice::from_raw_parts(comp_ptr as *const u8, comp_len));
+        }
+
+        let extracted_text = String::from_utf8_lossy(&extracted);
+        assert!(extracted_text.contains("Heading") || extracted_text.contains("Paragraph text."));
+        assert!(!extracted_text.contains("<html>"));
+        assert!(!extracted_text.contains("<body>"));
+
+        gobject_sys::g_object_unref(filter.cast());
+    }
+}
+
+/// Probing `CamelMimeFilterGZip` compression and decompression in EDS 3.52.
+#[test]
+fn camel_mime_filter_gzip_compression_and_decompression_in_eds() {
+    let payload = b"Compression test payload for CamelMimeFilterGZip in Evolution Data Server.";
+
+    unsafe {
+        // Compress
+        let zip_filter = camel_mime_filter_gzip_new(CAMEL_MIME_FILTER_GZIP_MODE_ZIP, 6);
+        assert!(!zip_filter.is_null());
+
+        let mut out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut out_len: gsize = 0;
+        let mut out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            zip_filter,
+            payload.as_ptr().cast(),
+            payload.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+
+        let mut compressed = Vec::new();
+        if out_len > 0 && !out_ptr.is_null() {
+            compressed.extend_from_slice(std::slice::from_raw_parts(out_ptr as *const u8, out_len));
+        }
+
+        let mut comp_ptr: *mut gchar = std::ptr::null_mut();
+        let mut comp_len: gsize = 0;
+        let mut comp_pre: gsize = 0;
+        let empty = c"";
+
+        camel_mime_filter_complete(
+            zip_filter,
+            empty.as_ptr(),
+            0,
+            0,
+            &mut comp_ptr,
+            &mut comp_len,
+            &mut comp_pre,
+        );
+
+        if comp_len > 0 && !comp_ptr.is_null() {
+            compressed
+                .extend_from_slice(std::slice::from_raw_parts(comp_ptr as *const u8, comp_len));
+        }
+
+        assert!(compressed.len() >= 10);
+        // Gzip header magic bytes: 0x1f, 0x8b
+        assert_eq!(compressed[0], 0x1f);
+        assert_eq!(compressed[1], 0x8b);
+
+        gobject_sys::g_object_unref(zip_filter.cast());
+
+        // Decompress
+        let unzip_filter = camel_mime_filter_gzip_new(CAMEL_MIME_FILTER_GZIP_MODE_UNZIP, 0);
+        assert!(!unzip_filter.is_null());
+
+        let mut dec_out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut dec_out_len: gsize = 0;
+        let mut dec_out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            unzip_filter,
+            compressed.as_ptr().cast(),
+            compressed.len(),
+            0,
+            &mut dec_out_ptr,
+            &mut dec_out_len,
+            &mut dec_out_pre,
+        );
+
+        let mut decompressed = Vec::new();
+        if dec_out_len > 0 && !dec_out_ptr.is_null() {
+            decompressed.extend_from_slice(std::slice::from_raw_parts(
+                dec_out_ptr as *const u8,
+                dec_out_len,
+            ));
+        }
+
+        let mut dec_comp_ptr: *mut gchar = std::ptr::null_mut();
+        let mut dec_comp_len: gsize = 0;
+        let mut dec_comp_pre: gsize = 0;
+
+        camel_mime_filter_complete(
+            unzip_filter,
+            empty.as_ptr(),
+            0,
+            0,
+            &mut dec_comp_ptr,
+            &mut dec_comp_len,
+            &mut dec_comp_pre,
+        );
+
+        if dec_comp_len > 0 && !dec_comp_ptr.is_null() {
+            decompressed.extend_from_slice(std::slice::from_raw_parts(
+                dec_comp_ptr as *const u8,
+                dec_comp_len,
+            ));
+        }
+
+        assert_eq!(decompressed.as_slice(), payload);
+
+        gobject_sys::g_object_unref(unzip_filter.cast());
+    }
+}
+
+/// Probing `CamelMimeFilterWindows` Windows charset detection and alias resolution in EDS 3.52.
+#[test]
+fn camel_mime_filter_windows_charset_aliases_in_eds() {
+    unsafe {
+        let win_filter = camel_mime_filter_windows_new(c"iso-8859-1".as_ptr());
+        assert!(!win_filter.is_null());
+
+        // Initially no windows characters observed
+        assert_eq!(
+            camel_mime_filter_windows_is_windows_charset(win_filter.cast()),
+            glib_sys::GFALSE
+        );
+
+        // Feed bytes containing Windows-1252 specific byte (0x93: left curly double quote)
+        let win1252_bytes = [b'A', b'B', 0x93, b'C'];
+        let mut out_ptr: *mut gchar = std::ptr::null_mut();
+        let mut out_len: gsize = 0;
+        let mut out_pre: gsize = 0;
+
+        camel_mime_filter_filter(
+            win_filter,
+            win1252_bytes.as_ptr().cast(),
+            win1252_bytes.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+
+        // Now filter detects Windows charset
+        assert_eq!(
+            camel_mime_filter_windows_is_windows_charset(win_filter.cast()),
+            glib_sys::GTRUE
+        );
+        let real_cs = camel_mime_filter_windows_real_charset(win_filter.cast());
+        assert!(!real_cs.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(real_cs).to_str().unwrap(),
+            "windows-cp1252"
+        );
+
+        gobject_sys::g_object_unref(win_filter.cast());
+
+        // For pure ASCII input, filter does not detect Windows charset
+        let ascii_filter = camel_mime_filter_windows_new(c"iso-8859-1".as_ptr());
+        assert!(!ascii_filter.is_null());
+        let ascii_bytes = b"Pure ASCII content";
+        camel_mime_filter_filter(
+            ascii_filter,
+            ascii_bytes.as_ptr().cast(),
+            ascii_bytes.len(),
+            0,
+            &mut out_ptr,
+            &mut out_len,
+            &mut out_pre,
+        );
+        assert_eq!(
+            camel_mime_filter_windows_is_windows_charset(ascii_filter.cast()),
+            glib_sys::GFALSE
+        );
+        let ascii_cs = camel_mime_filter_windows_real_charset(ascii_filter.cast());
+        assert!(!ascii_cs.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(ascii_cs).to_str().unwrap(),
+            "iso-8859-1"
+        );
+        gobject_sys::g_object_unref(ascii_filter.cast());
+    }
+}

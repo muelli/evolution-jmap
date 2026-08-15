@@ -510,3 +510,56 @@ Content-Transfer-Encoding: 8bit\r\n\
     let roundtripped = Message::parsed(&written);
     assert_eq!(roundtripped.subject(), "JMAP Überprüfung 🙀");
 }
+
+/// A multipart/related message containing an HTML body and inline image attachment
+/// referenced via Content-ID serializes with clean CRLF endings and roundtrips intact.
+#[test]
+fn multipart_related_message_with_html_and_inline_attachment_serializes_cleanly() {
+    let related_source = b"From: Alice <alice@example.com>\r\n\
+To: Bob <bob@example.com>\r\n\
+Subject: Rich Newsletter with Inline Image\r\n\
+Message-ID: <newsletter-2026@example.com>\r\n\
+Date: Fri, 16 Jan 2026 19:00:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"_rel_bound_777_\"; type=\"text/html\"\r\n\
+\r\n\
+--_rel_bound_777_\r\n\
+Content-Type: text/html; charset=\"utf-8\"\r\n\
+Content-Transfer-Encoding: 7bit\r\n\
+\r\n\
+<html><body><h1>Weekly Update</h1><p><img src=\"cid:logo-img@example.com\" alt=\"Logo\"/></p></body></html>\r\n\
+\r\n\
+--_rel_bound_777_\r\n\
+Content-Type: image/png\r\n\
+Content-ID: <logo-img@example.com>\r\n\
+Content-Disposition: inline; filename=\"logo.png\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n\
+\r\n\
+--_rel_bound_777_--\r\n";
+
+    let message = Message::parsed(related_source);
+    let written = message.written();
+
+    let text = String::from_utf8(written.clone()).expect("the emitter wrote valid utf-8");
+    assert!(text.contains("Subject: Rich Newsletter with Inline Image"));
+    assert!(text.contains("_rel_bound_777_"));
+    assert!(text.contains("cid:logo-img@example.com"));
+    assert!(text.contains("image/png"));
+
+    let bare = written
+        .iter()
+        .enumerate()
+        .filter(|(at, byte)| **byte == b'\n' && (*at == 0 || written[at - 1] != b'\r'))
+        .count();
+    assert_eq!(bare, 0, "found {bare} bare LFs in multipart/related output");
+
+    assert!(
+        !written.windows(3).any(|run| run == b"\r\r\n"),
+        "found spurious double CR in output"
+    );
+
+    let roundtripped = Message::parsed(&written);
+    assert_eq!(roundtripped.subject(), "Rich Newsletter with Inline Image");
+}
