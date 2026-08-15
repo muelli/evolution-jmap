@@ -643,6 +643,14 @@ unsafe impl ObjectSubclass for JmapStore {
         vec![InterfaceDecl::filled_by::<Subscribable>()]
     }
 
+    fn class_init_types() -> Vec<GType> {
+        // The settings type below, registered before this one rather than from
+        // inside the class initialiser: `class_init` runs under GLib's
+        // class-initialisation lock and cannot take the registration lock
+        // without inverting the two.
+        vec![settings_type()]
+    }
+
     unsafe fn class_init(class: *mut Self::Class) {
         // Which class `camel_service_ref_settings` instantiates when nothing
         // has handed the service a settings object — and, more to the point,
