@@ -419,10 +419,16 @@ unsafe extern "C" fn save_component_sync(
             cancellable,
             error,
             |sync| {
+                // The backend *is* the calendar's timezone cache: `ECalBackend`
+                // implements `ETimezoneCache`, and a `VTIMEZONE` a client sent
+                // is filed there rather than in the component. So the zone of
+                // an appointment that came from an invitation is reachable
+                // exactly here, and nowhere further down.
                 ops::save_component(
                     sync,
                     overwrite_existing,
                     instances,
+                    meta_backend.cast(),
                     out_new_uid,
                     out_new_extra,
                     error,

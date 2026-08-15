@@ -19,16 +19,17 @@ use std::ffi::CStr;
 use std::ptr;
 
 use eds_sys::{
-    ECalComponent, I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY, I_CAL_TZID_PARAMETER,
-    I_CAL_TZID_PROPERTY, I_CAL_VCALENDAR_COMPONENT, I_CAL_VEVENT_COMPONENT, ICalComponent,
-    ICalComponentKind, e_cal_component_get_icalcomponent, e_cal_meta_backend_info_new,
-    i_cal_component_as_ical_string, i_cal_component_clone, i_cal_component_get_first_component,
-    i_cal_component_get_first_property, i_cal_component_get_next_component,
-    i_cal_component_get_next_property, i_cal_component_get_timezone, i_cal_component_get_uid,
-    i_cal_component_isa, i_cal_component_new_from_string, i_cal_component_new_vcalendar,
-    i_cal_component_take_component, i_cal_parameter_get_tzid, i_cal_property_get_first_parameter,
-    i_cal_property_set_tzid, i_cal_timezone_get_builtin_timezone,
-    i_cal_timezone_get_builtin_timezone_from_tzid, i_cal_timezone_get_component,
+    ECalComponent, ETimezoneCache, I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY,
+    I_CAL_TZID_PARAMETER, I_CAL_TZID_PROPERTY, I_CAL_VCALENDAR_COMPONENT, I_CAL_VEVENT_COMPONENT,
+    ICalComponent, ICalComponentKind, ICalTimezone, e_cal_component_get_icalcomponent,
+    e_cal_meta_backend_info_new, e_timezone_cache_get_timezone, i_cal_component_as_ical_string,
+    i_cal_component_clone, i_cal_component_get_first_component, i_cal_component_get_first_property,
+    i_cal_component_get_next_component, i_cal_component_get_next_property,
+    i_cal_component_get_timezone, i_cal_component_get_uid, i_cal_component_isa,
+    i_cal_component_new_from_string, i_cal_component_new_vcalendar, i_cal_component_take_component,
+    i_cal_parameter_get_tzid, i_cal_property_get_first_parameter, i_cal_property_set_tzid,
+    i_cal_timezone_get_builtin_timezone, i_cal_timezone_get_builtin_timezone_from_tzid,
+    i_cal_timezone_get_component,
 };
 use glib_sys::{GSList, g_free, g_slist_prepend, gchar};
 use gobject_sys::g_object_unref;
@@ -251,11 +252,20 @@ pub unsafe fn component_uid(component: *mut ICalComponent) -> Option<String> {
 /// nothing honest to send, and a visible failure beats rewriting a series to
 /// look like one moved day.
 ///
+/// `zones` is the calendar the instances came from, asked for the definition of
+/// any zone libical's builtin table does not hold — see
+/// `take_referenced_time_zones`. NULL asks nothing, which leaves such a zone
+/// undefined and is what a caller with no calendar to hand gets.
+///
 /// # Safety
 ///
 /// `instances` must be NULL or a valid `GSList` whose nodes are
-/// `ECalComponent *`, which is what the vfunc receives.
-pub unsafe fn icalendar_from_instances(instances: *const GSList) -> Option<SavedComponent> {
+/// `ECalComponent *`, which is what the vfunc receives, and `zones` NULL or a
+/// valid `ETimezoneCache`.
+pub unsafe fn icalendar_from_instances(
+    instances: *const GSList,
+    zones: *mut ETimezoneCache,
+) -> Option<SavedComponent> {
     // SAFETY: the caller guarantees the list's shape; the components are
     // borrowed from the ECalComponents that own them.
     let components = unsafe { instance_components(instances) };
@@ -271,7 +281,7 @@ pub unsafe fn icalendar_from_instances(instances: *const GSList) -> Option<Saved
         if calendar.is_null() {
             return None;
         }
-        take_referenced_time_zones(calendar, &components);
+        take_referenced_time_zones(calendar, &components, zones);
         i_cal_component_take_component(calendar, i_cal_component_clone(master));
         for instance in &components {
             if !ptr::eq(*instance, master) {
@@ -384,7 +394,9 @@ unsafe fn take_event_time_zones(calendar: *mut ICalComponent) -> bool {
             return false;
         }
         let events = child_components(calendar, I_CAL_VEVENT_COMPONENT);
-        let defined = take_referenced_time_zones(calendar, &events);
+        // No cache: this is the way *out*, and an object built by `jmap-ical`
+        // carries the definition of any zone it names that is not an IANA one.
+        let defined = take_referenced_time_zones(calendar, &events, ptr::null_mut());
         for event in events {
             component_unref(event);
         }
@@ -444,24 +456,21 @@ unsafe fn child_components(
 unsafe fn take_referenced_time_zones(
     calendar: *mut ICalComponent,
     components: &[*mut ICalComponent],
+    zones: *mut ETimezoneCache,
 ) -> bool {
     let mut defined = false;
     // SAFETY: the caller guarantees the components.
     for tzid in unsafe { referenced_tzids(components) } {
         let name = cstring_lossy(&tzid);
         // SAFETY: `name` is valid for the calls, which copy what they keep.
-        // Both lookups hand back a builtin zone the library owns — transfer
-        // none, so neither is unreffed here.
+        // Every lookup hands back a zone its owner keeps — the library's builtin
+        // table or the calendar's cache — transfer none, so none is unreffed
+        // here.
         unsafe {
             if defines_time_zone(calendar, name.as_ptr()) {
                 continue;
             }
-            let zone = i_cal_timezone_get_builtin_timezone_from_tzid(name.as_ptr());
-            let zone = if zone.is_null() {
-                i_cal_timezone_get_builtin_timezone(name.as_ptr())
-            } else {
-                zone
-            };
+            let zone = resolve_time_zone(name.as_ptr(), zones);
             if zone.is_null() {
                 continue;
             }
@@ -488,6 +497,49 @@ unsafe fn take_referenced_time_zones(
         }
     }
     defined
+}
+
+/// The zone `tzid` names, borrowed from whoever holds it, or NULL.
+///
+/// Three places, in this order, and the order is the point:
+/// 1. libical's builtin table under libical's own identifier
+///    (`/freeassociation.sourceforge.net/Europe/Berlin`), which is what
+///    Evolution's editor writes;
+/// 2. the same table under a plain IANA name;
+/// 3. `zones` — the calendar the instances came from.
+///
+/// The table comes first because it is the zone database: for a name it knows,
+/// its answer is the one every other client would give, where a calendar's copy
+/// is whatever some client happened to send once and may be years stale. Only
+/// what the database has never heard of falls through, which is exactly RFC 8984
+/// §1.4.9's other kind of identifier — the solidus-prefixed one that resolves
+/// nowhere but the document it travels in.
+///
+/// That kind reaches a save through the calendar and through nothing else. EDS
+/// does not leave a client's `VTIMEZONE` in the component it came with: it files
+/// the zone in the calendar's `ETimezoneCache` and the instance keeps naming it.
+/// So an envelope built from the instances alone names a zone nothing can
+/// resolve — and `jmap-ical`'s `maps_time_zone` then refuses it, which leaves the
+/// server's own `timeZone` standing and the user's choice nowhere.
+///
+/// # Safety
+///
+/// `tzid` must be a valid NUL-terminated string and `zones` NULL or a valid
+/// `ETimezoneCache`.
+unsafe fn resolve_time_zone(tzid: *const gchar, zones: *mut ETimezoneCache) -> *mut ICalTimezone {
+    // SAFETY: the caller guarantees both. Every lookup here is transfer none —
+    // the builtin table and the cache each keep owning what they hand back.
+    unsafe {
+        let zone = i_cal_timezone_get_builtin_timezone_from_tzid(tzid);
+        if !zone.is_null() {
+            return zone;
+        }
+        let zone = i_cal_timezone_get_builtin_timezone(tzid);
+        if !zone.is_null() || zones.is_null() {
+            return zone;
+        }
+        e_timezone_cache_get_timezone(zones, tzid)
+    }
 }
 
 /// Whether `calendar` already carries a `VTIMEZONE` defining `tzid`.

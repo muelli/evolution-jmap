@@ -27,7 +27,7 @@
 //! does not implement either.
 
 use eds_sys::{
-    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, ICalComponent,
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, ETimezoneCache, ICalComponent,
     e_cal_client_error_create, e_client_error_create,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
@@ -221,20 +221,24 @@ pub unsafe fn load_component(
 /// otherwise report the edit as saved and the server would never have heard of
 /// it.
 ///
+/// `zones` is the calendar itself, which is where the definition of a zone no
+/// zone database knows lives; the marshalling says what it is asked for.
+///
 /// # Safety
 ///
 /// As [`list_existing`], and `instances` must be NULL or a valid `GSList` whose
-/// nodes are `ECalComponent *`.
+/// nodes are `ECalComponent *`, and `zones` NULL or a valid `ETimezoneCache`.
 pub unsafe fn save_component(
     sync: &CalSync,
     overwrite_existing: gboolean,
     instances: *const GSList,
+    zones: *mut ETimezoneCache,
     out_new_uid: *mut *mut gchar,
     _out_new_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: the caller guarantees the list's shape.
-    let Some(saved) = (unsafe { marshal::icalendar_from_instances(instances) }) else {
+    let Some(saved) = (unsafe { marshal::icalendar_from_instances(instances, zones) }) else {
         // SAFETY: `error` satisfies the contract by this function's own.
         return unsafe {
             fail_invalid(
