@@ -51,6 +51,13 @@ pub const MAX_API_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 /// small enough that an endpoint answering with an endless body costs nothing.
 pub const MAX_OAUTH_METADATA_BYTES: u64 = 1024 * 1024;
 
+/// The most octets an RFC 7591 dynamic client registration response may be.
+///
+/// Same reasoning and the same number as [`MAX_OAUTH_METADATA_BYTES`]: a flat
+/// JSON object of a client id, an optional secret and a handful of echoed
+/// metadata fields, read from a server this client has only just discovered.
+pub const MAX_OAUTH_REGISTRATION_BYTES: u64 = 1024 * 1024;
+
 /// The most octets one blob download may be when the caller has no better
 /// number.
 ///

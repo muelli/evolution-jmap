@@ -1,15 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Finding a JMAP deployment's OAuth 2.0 endpoints (RFC 8414), against the
-//! mock.
+//! Finding a JMAP deployment's OAuth 2.0 endpoints (RFC 8414) and, where it
+//! offers one, registering with it (RFC 7591), against the mock.
 //!
 //! The unit tests next to the code cover URL construction and the shapes of a
 //! hostile document; these cover the part only a server can show — that the
 //! document is fetched from the right place, that fetching it needs no
-//! credentials, and that a deployment offering no OAuth 2.0 says so.
+//! credentials, and that a deployment offering no OAuth 2.0 (or no
+//! registration) says so.
 
-use jmap_client::oauth::{self, AuthorizationServer};
+use jmap_client::oauth::{self, AuthorizationServer, ClientRegistrationRequest};
 use jmap_client::transport::UreqTransport;
 use jmap_mock::MockServer;
 use serde_json::json;
@@ -141,5 +142,101 @@ fn a_server_naming_no_grant_types_gets_rfc_8414s_default() {
     assert_eq!(
         discovered.grant_types_supported,
         ["authorization_code", "implicit"]
+    );
+}
+
+fn register(
+    endpoint: &str,
+    request: &ClientRegistrationRequest<'_>,
+) -> Result<oauth::ClientRegistration, jmap_client::Error> {
+    oauth::register_client(&UreqTransport::default(), endpoint, request, None)
+}
+
+#[test]
+fn registration_reads_back_the_client_id() {
+    let server = MockServer::builder()
+        .oauth_authorization_server(metadata)
+        .oauth_client_registration(|_request| (201, json!({"client_id": "abc123"})))
+        .start();
+
+    let request = ClientRegistrationRequest {
+        client_name: "Evolution",
+        redirect_uris: &["https://client.example.org/callback"],
+    };
+    let registered = register(&format!("{}/oauth/register", server.origin()), &request)
+        .expect("the deployment registers this client");
+
+    assert_eq!(registered.client_id, "abc123");
+    assert_eq!(registered.client_secret, None);
+}
+
+#[test]
+fn registration_sends_the_client_name_redirect_uris_and_a_public_clients_metadata() {
+    // RFC 8252 §8.4: a native app registers as a public client (no secret it
+    // could keep confidential) and relies on PKCE instead — this is the one
+    // thing only a server-side assertion on the actual request body can
+    // prove, unlike the response shapes the unit tests already cover.
+    let server = MockServer::builder()
+        .oauth_client_registration(|request| {
+            assert_eq!(request["client_name"], "Evolution");
+            assert_eq!(
+                request["redirect_uris"],
+                json!(["https://client.example.org/callback"])
+            );
+            assert_eq!(request["token_endpoint_auth_method"], "none");
+            assert_eq!(
+                request["grant_types"],
+                json!(["authorization_code", "refresh_token"])
+            );
+            assert_eq!(request["response_types"], json!(["code"]));
+            (201, json!({"client_id": "abc123"}))
+        })
+        .start();
+
+    let request = ClientRegistrationRequest {
+        client_name: "Evolution",
+        redirect_uris: &["https://client.example.org/callback"],
+    };
+    register(&format!("{}/oauth/register", server.origin()), &request)
+        .expect("the deployment registers this client");
+}
+
+#[test]
+fn registration_is_served_without_credentials() {
+    // Registration is how a client obtains an identity in the first place —
+    // sending credentials for it would be circular, the same reasoning
+    // `the_metadata_document_is_served_without_credentials` establishes for
+    // discovery.
+    let server = MockServer::builder()
+        .basic_auth("alice", "secret")
+        .oauth_client_registration(|_request| (201, json!({"client_id": "abc123"})))
+        .start();
+
+    let request = ClientRegistrationRequest {
+        client_name: "Evolution",
+        redirect_uris: &["https://client.example.org/callback"],
+    };
+    let registered = register(&format!("{}/oauth/register", server.origin()), &request)
+        .expect("registration needs no credentials");
+
+    assert_eq!(registered.client_id, "abc123");
+}
+
+#[test]
+fn a_deployment_that_offers_no_registration_says_so() {
+    let server = MockServer::builder()
+        .oauth_authorization_server(metadata)
+        .start();
+
+    let request = ClientRegistrationRequest {
+        client_name: "Evolution",
+        redirect_uris: &["https://client.example.org/callback"],
+    };
+    let error = register(&format!("{}/oauth/register", server.origin()), &request)
+        .expect_err("no registration endpoint exists");
+
+    assert!(
+        matches!(error, jmap_client::Error::Http { status: 404, .. }),
+        "expected HTTP 404, got {error:?}"
     );
 }
