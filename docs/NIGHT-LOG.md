@@ -30031,3 +30031,43 @@ unwanted one, if the maintainer prefers to let a broken manual pick fail
 loudly downstream rather than block `Next` on it). Re-surveying this same
 ground nightly has diminishing returns; the log now has two independent
 confirmations (310th, 313th) of the same conclusion.
+
+## 2026-08-16 (three-hundred-and-fourteenth session)
+
+**Claiming: gate `check_complete` on OAuth 2.0 actually having a registered
+client.** `git fetch origin` shows `origin/master` unchanged at `0d77f69`
+(the 313th session's tag), so no other agent has this.
+
+Re-examined the 313th session's own finding rather than accepting its
+"needs a maintainer decision" conclusion at face value, via a read-only
+audit of the full text of `complete.rs`, `backend.rs`'s combo wiring,
+`oauth2.rs`/`oauth2_setup.rs`, and `docs/manual-test-account-setup.md`'s
+"What this does not cover" section. Confirmed independently: `check()`
+never reads `auth_method` at all, so Password and OAuth 2.0 are provably
+indistinguishable to it; `oauth2_setup::discover_and_register` is called
+from exactly one place in the crate, `config_lookup.rs`'s
+`EConfigLookupWorker::run`; and `oauth2.rs`'s own `NoRegistration` error
+text ("an OAuth 2.0 account against it needs a client id from elsewhere")
+shows the codebase already anticipates a client id arriving by some path
+other than this project's own registration — which is exactly why "a
+client id is registered" is the right thing to gate on rather than "did
+autodiscovery run": it is correct under either design, needs no guess
+about a manual-entry UI that does not exist yet, and needs no network
+call (matching `check_complete`'s own "runs on every keystroke" rule).
+That reframes the 313th session's "ambiguous, needs a human" verdict as a
+narrow, decidable invariant — the maintainer's open question is what a
+*manual* OAuth 2.0 entry path should look like, not whether committing an
+account that names OAuth 2.0 with no client behind it should be allowed.
+
+**Plan for this increment:** add `Account::oauth2_registered: bool`
+(populated by `account::read` from `oauth2::read(source).client_id.is_some()`,
+left alone by `account::apply` — it is `discover_and_register`'s field to
+set, not a setup entry's), a new `Incomplete::OAuth2NotRegistered` variant
+in `complete.rs`, and the gate itself in `check()`: OAuth 2.0 selected
+(`auth_method` matching `oauth2_service::NAME`) with `oauth2_registered ==
+false` refuses the commit, translated status text pointing at "Look Up
+Account Details". TDD: red test in `tests/backend.rs` (OAuth 2.0 picked by
+hand with no `[JMAP OAuth2]` client registered is incomplete; registering
+one via `oauth2::apply` on the same source makes it complete again) plus a
+`complete.rs` unit test with the new field set/unset, both written before
+the implementation.
