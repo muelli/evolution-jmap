@@ -80,15 +80,17 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_config_lookup_get_type",
     "e_config_lookup_register_worker",
     "e_config_lookup_add_result",
-    // `EConfigLookupResultSimple`'s constructor and the two setters `run()`
-    // uses — a string value for every `[Collection]`/`[Authentication]`/
-    // `[Security]`/`[JMAP OAuth2]` field it writes, and a boolean for the
-    // three `*-enabled` flags. Not `_add_int`/`_add_uint`/`_add_int64`/
+    // `EConfigLookupResultSimple`'s constructor and the setters `run()` uses —
+    // a string value for every `[Collection]`/`[Authentication]`/`[Security]`/
+    // `[JMAP OAuth2]` field it writes, a boolean for the three `*-enabled`
+    // flags, and a uint for the one `servers` entry can name a non-default
+    // port on (`[Authentication] port`). Not `_add_int`/`_add_int64`/
     // `_add_uint64`/`_add_double`/`_add_enum`/`_add_value`: this worker's
     // result has no field of those shapes.
     "e_config_lookup_result_simple_new",
     "e_config_lookup_result_simple_add_string",
     "e_config_lookup_result_simple_add_boolean",
+    "e_config_lookup_result_simple_add_uint",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
