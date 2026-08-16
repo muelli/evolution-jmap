@@ -29654,3 +29654,78 @@ run through once there is a spare few minutes at a real Evolution session —
 it is the fastest way to find out whether `insert_widgets` actually works
 before spending any more effort on the OAuth2 wiring that builds on top of
 it.
+
+## 2026-08-16 (three-hundred-and-tenth session)
+
+**Survey, no claim.** Running on Sonnet. `git fetch origin` at the start
+shows `origin/master` unchanged at `1b7b1f4` (the 309th session's tag), so
+no other agent moved since. Re-walked the roadmap's dependency graph from
+the code rather than trusting the log's summary of itself, the way the
+297th/309th sessions did, specifically re-checking the two "real-server
+readiness" leaf items the roadmap's priority-2 names, since neither had
+been independently re-verified from scratch in a few sessions:
+
+- **Capability-negotiation robustness.** Read `jmap-proto/src/session.rs`
+  (`resolve_primary_account`, the four `max_*` limit accessors, all doc'd
+  against RFC 8620 §2/§3.3) and confirmed every caller that needs a
+  capability actually gates on it before calling: `jmap-mail/src/connect.rs`
+  on `CAPABILITY_MAIL`, `jmap-backend-book/src/connect.rs` and
+  `jmap-backend-cal/src/connect.rs` on their respective capabilities,
+  `jmap-client/src/mail.rs`'s `send_email`/`submit_email`/`identities` on
+  `CAPABILITY_SUBMISSION`, `jmap-collection-sync/src/layout.rs` on whichever
+  capability a child source names. `jmap-client/src/client.rs` also has
+  `refresh_session` (`sessionState`-driven re-fetch), so a server that grows
+  a capability mid-session is not a blind spot either. Grepped for
+  `CAPABILITY_SUBMISSION`'s only other uses and found no dangling caller that
+  skips the gate. Nothing here is a TODO or a stub — this matches, and
+  independently reconfirms, what sessions ~296–300 already closed.
+- **M10.** `docs/eds-versions.md` already documents supported versions and
+  what the single-version `layout.rs` check does and does not catch;
+  extending it to a real matrix needs a second EDS install, which on this VM
+  only comes from growing `Containerfile.ci`/`.github/workflows/ci-image.yml`
+  — both on the hard-rules' do-not-touch list, no carve-out. Same conclusion
+  every session back to the 297th has reached.
+- **M7.** `insert_widgets` unchanged since the 309th session's manual-test
+  doc: functionally complete except the authentication-method surfacing the
+  operator's human-verification note asked for, which is gated on both the
+  maintainer's still-unanswered method-chooser-vs-auto-discovery question and
+  the cross-thread FFI/lifetime reasoning the 297th session flagged as
+  escalation-worthy. Checked `~/.night-shift-escalate` — empty, so no queued
+  escalation from a prior session is sitting unconsumed; the design question
+  is the actual bottleneck, not model choice, and escalating to Opus would
+  not resolve a decision only the maintainer can make.
+- **`docs/BACKLOG.md`.** Re-read in full; every item is explicitly deferred
+  M1–M6/M8-area fidelity polish or the parked M7 whitespace edge case, and
+  the file's own header says not to work these until the priority items are
+  done. None qualifies as "priority work" under tonight's directive.
+
+Delegated the capability-negotiation and M10 halves of this survey to a
+read-only Explore subagent first, then independently re-checked its two
+headline claims (the submission-capability gate and the session-refresh
+existence) against the source myself rather than taking its word — both
+held up.
+
+**Conclusion: nothing unblocked and in-priority remains that this session
+can implement.** Every backend (M1–M6, M8) is closed and off-limits to
+reopen for polish; M9 is closed; M10 needs infra changes off-limits to this
+stream; both real-server-readiness leaf items are done and re-verified
+tonight; M7's one remaining gap needs a human decision first. Per the hard
+rules, a session that ends with no new commit because the honest state is
+"blocked" is the correct outcome here, not a failure to find work — pushing
+a cosmetic change just to have a diff would be exactly the "progress over
+correctness" mistake the rules warn against. No `~/.night-shift-escalate`
+written either: the blocker is the design question, not a task beyond
+Sonnet's reach.
+
+No commits to `rust/`, `docs/BACKLOG.md`, or `docs/MILESTONES.md` this
+session — only this log entry, pushed on its own. Tests/clippy/fmt were not
+re-run, since nothing in `rust/` changed.
+
+**Next session.** Unchanged: `insert_widgets`'s OAuth2-method surfacing
+needs the maintainer's method-chooser-vs-auto-discovery decision before
+anything else touches it. If a future session finds that decision recorded
+somewhere (a commit, an issue, this log), that unblocks both the design
+half and, per the 297th session's assessment, likely an escalation to
+`claude-opus-5` for the threading/FFI half. Until then, re-surveying this
+same ground nightly has diminishing value — worth the maintainer's
+attention specifically on making that one call.
