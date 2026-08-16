@@ -25396,3 +25396,124 @@ their contact-editor behaviour unmeasured; whether the editor lets a handle be
 moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-seventieth session)
+
+**"Whether any zone Evolution ships is in that state is unmeasured beyond
+Berlin" has been a standing blocker since `jmap-ical/src/zone.rs` was written.
+It is measured now, and the answer was that a third of them were.** 189 of the
+596 zones libical resolves — Ireland, Israel, Greenland, Chile, Argentina,
+Egypt, most of Brazil — could not have a recurring appointment with an end date
+saved from a calendar in them. The `UNTIL` came back verbatim, `maps_recurrence_
+rule` refused it, and the create was turned away with the message about a
+recurrence that cannot be stated.
+
+**The measurement is now the test, and it has an oracle.**
+`jmap-backend-cal/tests/zones.rs` walks `/usr/share/zoneinfo`, asks libical for
+each zone's builtin `VTIMEZONE` — the same call `marshal` makes when it copies a
+definition into a save envelope, so this is the producer whose shapes actually
+reach the mapping — and drives four instants spread across the year through
+`ical_to_event`. Each answer is compared against **libical's own**
+`i_cal_time_convert_to_zone` for the same instant in the same zone: two
+implementations of one question, one reading tzdata's binary file and one
+reading the `VTIMEZONE` text. 596 zones × 4 instants, and a conversion that is
+merely *produced* proves nothing — an offset an hour out reads as a perfectly
+ordinary `UNTIL` all the way to the server.
+
+Every assertion sits inside a loop over what the filesystem holds, so the test
+counts what it examined and fails under 400. Pointing `ZONEINFO` at a directory
+that does not exist was run, and says "only 0 zones were examined" rather than
+passing.
+
+**Three defects, each with its own red test in `jmap-ical` first.**
+
+1. *The pair `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29` was refused outright* —
+   two ways of naming the day, read as a rule stating a set. It is nothing of
+   the kind: it is how tzdata's commonest idiom, "the first Sunday on or after
+   the 23rd", reaches iCalendar, because that has no ordinal for a `BYDAY` to
+   carry. §3.3.10 makes `BYMONTHDAY` expand and `BYDAY` limit, so the pair is
+   the dates in the run falling on the weekday — one, for a run of seven
+   consecutive dates. The code counts rather than assuming that: two is a set
+   and still refused, and *which* it is depends on the year, so the decision is
+   per year and not once per rule. This alone was 88 of the 189.
+
+2. *A year a rule does not fire in was read as a rule that could not be
+   counted.* A run of dates need hold no occurrence of its weekday; nor is
+   there a fifth Sunday or a thirty-first in every month. §3.3.10 reads all
+   three as years without an occurrence. Telling that apart from a shape that
+   was misread meant reading the day-naming out of the rule *once*, before the
+   year loop — the new `Day` enum — so that `Falls::Never` and a refusal stop
+   being the same `None`.
+
+3. *A sub-minute offset west of UTC arrived as `-0000`.* calcard's offset parser
+   reads four digits, so Accra's `TZOFFSETFROM:-000052` loses its seconds, and
+   what is left is a spelling §3.3.14 forbids — there is no negative zero. The
+   `syntax` layer was handing the mapping a value it could only refuse, and one
+   unreadable observance costs a whole `VTIMEZONE`: a zone that has not moved
+   its clocks since 1915 was refused over the offset it moved away from then.
+   It is written `+0000`, which is what the truncation left.
+
+**The year search went from two years to forty, and that part is *not* what the
+corpus needed** — with (2) fixed, a two-year search passes all 596, because a
+bounded rule's last year is by construction a year it fired in. It is in
+because an *unbounded* sparse rule (the 25th of March, but only when it is a
+Sunday — 2018, then nothing until 2029) would still be refused, and forty years
+covers the longest gap any fixed date has before falling on a given weekday
+again: eleven within a century, twelve across a non-leap one, forty for the
+29th of February. A fixed bound, so a document stating a rule spanning millennia
+cannot make it expensive. Two unit tests pin it, since the corpus does not:
+searching further back, and — the other end — refusing when the search found
+nothing *and* did not reach the rule's own start, because a rule wrongly read as
+silent leaves the zone described by whichever other observance was latest.
+
+**Mutation-checked, seven ways, each run and reverted.** `SEARCH` back to 2;
+the empty-search refusal dropped; `Falls::Set` skipped rather than refusing; the
+`-0000` rewrite disabled; the `BYDAY`+`BYMONTHDAY` pair refused as before; the
+in-force transition taken as the earliest rather than the latest; and
+`ZONEINFO` pointed at nothing. Every one reddens something, and the last three
+redden the corpus test by name — `Africa/Algiers at 20260128T070000Z does not
+read the way libical reads it`.
+
+Tests: +6 in `jmap-ical/tests/event.rs`, +1 CTest-visible test file
+(`jmap-backend-cal/tests/zones.rs`, one test over 2 384 conversions) in the
+`rust-test-eds` leg. The default set is 1175 → 1181.
+
+Verified locally: `cargo test --locked` 1181, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS=-D warnings cargo doc --no-deps -p
+evolution-jmap-ical` clean; `ninja -C build` then `ctest --test-dir build` 15/15,
+functional, EDS-linked and packaging legs included. `ci/checks.sh` still stops at
+its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so
+those were reasoned by hand: one file is added,
+`rust/crates/jmap-backend-cal/tests/zones.rs`, and it carries the SPDX header and
+the `GPL-3.0-or-later` identifier like every other; `Cargo.lock` is untouched, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Closed: **the zone conversion is measured against every zone
+Evolution can put an appointment in, and agrees with libical on all of them.**
+
+**What this still does not cover, said plainly.** The corpus is libical's
+builtin table, which is the producer on the *save* path. A `VTIMEZONE` written
+by something else — an Exchange invitation, a `.ics` from another client — can
+still be in a shape this refuses, and nothing measures that population. The
+probes are four instants in 2026: a zone whose rules differ only before 1970 or
+after 2038 is not distinguished. And the oracle is libical, so a shape libical
+itself renders wrongly out of tzdata would have both sides agreeing on the wrong
+answer.
+
+Unchanged blockers: no `.po` exists, and whether this repository's first
+translation should be written by an autonomous session is a maintainer's call;
+`gettext` is not in `Containerfile.ci`, so the `.pot` in the tree is trusted to
+have come from `po/extract.sh`; M10 still has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; an `UNTIL` the parser
+itself refuses is invisible to `jmap-ical`; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is
+still unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday
+stated as a year alone are still invisible; the conventional URI schemes for
+AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled;
+`X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour
+unmeasured; whether the editor lets a handle be moved between the Home and Work
+slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; and what
+Evolution's contact editor writes for a replaced photo, and into a cleared
+field, is inferred rather than measured.
