@@ -1177,6 +1177,30 @@ pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
             .is_none_or(|day| weekday_token(day).is_some())
 }
 
+/// The end a rule states that this mapping could not turn into RFC 8984
+/// §4.3.3's local time, and so kept as it stood — `None` for a rule whose end
+/// converted, and for one that never had an end at all.
+///
+/// [`maps_recurrence_rule`] says only *whether* a rule can be written back. A
+/// save that refuses a create over it has to tell the user which appointment to
+/// change, and this is the one refusal there is anything actionable to say
+/// about: the value is a UTC instant (RFC 5545 §3.3.10's spelling wherever
+/// `DTSTART` names a zone) that the document gave no way of resolving, because
+/// it names a zone it does not define or defines it in a shape this crate's
+/// zone evaluator will not guess at. So the caller can name the instant and the
+/// zone rather
+/// than say that something, somewhere, did not map. See `jmap_cal_sync`'s
+/// `save_component`, which phrases it.
+///
+/// A rule refused for any *other* reason — a `byMonth` the `RRULE` cannot
+/// carry, a missing frequency — answers `None` here, so a caller cannot dress
+/// an unrelated refusal up as a time-zone problem.
+pub fn unstateable_until(rule: &RecurrenceRule) -> Option<&str> {
+    rule.until
+        .as_deref()
+        .filter(|until| to_ical_date_time(until).is_none())
+}
+
 /// Whether a recurrence override survives the trip through iCalendar.
 ///
 /// iCalendar names a single instance of a recurring event three ways, and
