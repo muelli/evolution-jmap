@@ -30253,3 +30253,22 @@ gap is the human verification pass; real-server readiness, M9 closed;
 M10 blocked on infra, off-limits. `docs/BACKLOG.md`'s other four entries
 are still genuine M3/M4/M7 polish, not re-surveyed again tonight since
 nothing changed upstream to reopen them. `~/.night-shift-escalate` empty.
+
+## 2026-08-16 (three-hundred-and-seventeenth session)
+
+**Claiming**: mail (Camel provider, M5) OAuth 2.0 authentication. Re-surveyed
+before claiming, same as the 316th did — three sessions in a row (310th,
+313th, 315th) had independently confirmed nothing codable remained ahead of
+M7's human-verification gate, and the 316th settled the one open backlog
+question. That survey was right about M7 and about the backlog, but it did
+not check every "real-server readiness" item against the *mail* backend
+specifically: `jmap-backend-book` and `jmap-backend-cal`'s `connect_sync`
+both resolve OAuth 2.0 via `jmap_backend_core::oauth2` (confirmed by reading
+`jmap-backend-core/src/connect.rs`'s `connect_with`), but `jmap-mail`'s
+`open_mail` (`jmap-mail/src/connect.rs:313`) only ever builds
+`Credentials::basic`/`::none()` — no OAuth 2.0 account can authenticate
+its mail today, only its contacts and calendar. Not implemented anywhere,
+not in `docs/BACKLOG.md` (which is M3/M4/M7 polish only, not this), and not
+mentioned by any of the four "nothing to do" sessions before this one — a
+real gap in the roadmap's stated priority 2, previously unnoticed because
+those sessions checked the *EDS* backends' OAuth2 wiring but not Camel's.
