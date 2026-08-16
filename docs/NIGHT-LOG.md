@@ -29908,3 +29908,55 @@ red/green is the `live_server.rs` compile+`--ignored` run before/after —
 there is no new unit to add here, only routing three real-server smoke
 tests through the already-tested robust path instead of the untested-by-
 comparison naive one.
+
+**Delivered.** `rust/crates/jmap-client/tests/live_server.rs`: the mail,
+contacts, and calendars tests now bind `account_id` via
+`client.primary_account(CAPABILITY_*)` (a `Result`, matched with
+`let Ok(...) else`) instead of `client.session().primary_account(...)
+.cloned()` (an `Option`); the "skip, don't fail" behaviour when no such
+account exists is unchanged, only which document-reading strategy decides
+that. The mail test's doc comment gained a paragraph explaining why —
+tying it back to RFC 8620 §2 permitting an omitted `primaryAccounts` and
+naming `Client::primary_account` as the fix, so a future reader does not
+have to re-derive this from a diff.
+
+**Gates.** Hit [[disk-fills-from-cargo-target]] immediately on the first
+`cargo test --workspace` run this session (`/` at 100%, `ld` killed by a
+bus error mid-link) — `cargo clean --profile dev` recovered 23.6 GiB, and
+every result below is from the rerun after. `cargo fmt --all -- --check`
+clean. `cargo clippy -p evolution-jmap-client --features live-server
+--all-targets --locked -- -D warnings` clean; `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean.
+`cargo test -p evolution-jmap-client --features live-server --no-run`
+compiles (the feature/`#[ignore]` double gate means the three edited
+tests cannot actually run without a real server, so this compile check
+plus the type change — `Option` to `Result`, `.cloned()` dropped — is the
+strongest verification available here; the *logic* being routed to,
+`resolve_primary_account`, already has its own unit tests in
+`jmap-proto`). `cargo test --workspace --exclude example-module --locked`
+— the same eleven pre-existing `JMAP_FUNCTIONAL_BOOK_CLIENT`-unset
+`jmap-functional` failures every prior session has documented; confirmed
+unchanged by running `--exclude jmap-functional` fully green first.
+`ninja -C build` (release, already up to date) then `ctest --test-dir
+build` — **16/16**, `functional-config-lookup` included, so the mock-
+backed capability-negotiation paths this change is adjacent to still
+work. `rust/Cargo.lock` untouched — no new dependency. No new source
+files, so no new SPDX headers; nothing here touches `po/POTFILES.in`
+(doc-comment prose only, no new user-visible string).
+
+**Not tagging any milestone.** This is a correctness fix inside the
+already-existing live-server harness, not new milestone scope — the
+"real-server readiness" priority item stays exactly as complete as it
+was, now slightly more honestly tested.
+
+**Next session.** `docs/BACKLOG.md` unchanged; nothing tonight was
+edge-case polish of a closed backend. Worth checking, next time a session
+re-surveys "real-server readiness" or "capability negotiation" as done:
+grep the whole workspace for `.primary_account(` and confirm every
+remaining call site is `Client::primary_account` (or a fresh use of
+`Session::resolve_primary_account` directly) rather than the raw
+`Session::primary_account` field-lookup — that grep is what turned up
+tonight's gap and is cheap enough to repeat rather than trust from
+memory. M7's one remaining gap is still purely human verification in a
+real Evolution session (`docs/manual-test-account-setup.md`); that has
+not changed.
