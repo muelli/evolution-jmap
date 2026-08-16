@@ -132,45 +132,20 @@ impl CollectionLayout {
 }
 
 /// The account serving `capability`, if this login has one.
+///
+/// The inference (server capability, then `primaryAccounts`, then the sole
+/// personal account offering it) lives on
+/// [`Session::resolve_primary_account`] itself now, shared with
+/// [`jmap_client::Client::primary_account`] — this just attaches the name and
+/// read-only bit the child source needs.
 fn service(session: &Session, capability: &str) -> Option<ServiceAccount> {
-    // The server's word first: without it nothing may name the capability in a
-    // `using`, so whatever the accounts claim is unreachable.
-    if !session.capabilities.contains_key(capability) {
-        return None;
-    }
-
-    let id = match session.primary_account(capability) {
-        Some(id) => id.clone(),
-        None => sole_personal_account(session, capability)?,
-    };
+    let id = session.resolve_primary_account(capability)?.clone();
     let account = session.accounts.get(&id)?;
-    // A `primaryAccounts` entry naming an account that is absent from
-    // `accounts`, or one that does not itself claim the capability, is a
-    // contradiction in the document. Believing it costs the user a child source
-    // that fails on every use; ignoring it costs them one that was never going
-    // to work.
-    if !account.account_capabilities.contains_key(capability) {
-        return None;
-    }
-
     Some(ServiceAccount {
         id,
         name: account.name.clone(),
         read_only: account.is_read_only,
     })
-}
-
-/// The one account of the user's own that offers `capability` — `None` when
-/// there is none, or more than one to choose between.
-fn sole_personal_account(session: &Session, capability: &str) -> Option<Id> {
-    let mut candidates = session.accounts.iter().filter(|(_, account)| {
-        account.is_personal && account.account_capabilities.contains_key(capability)
-    });
-    let (id, _) = candidates.next()?;
-    match candidates.next() {
-        None => Some(id.clone()),
-        Some(_) => None,
-    }
 }
 
 #[cfg(test)]

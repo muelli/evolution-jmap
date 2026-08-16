@@ -38,6 +38,15 @@ pub struct ServerState {
     /// need not offer all four, and a client that resolves an account under
     /// the wrong capability has to be able to notice.
     pub omitted_capabilities: BTreeSet<String>,
+    /// Leave `primaryAccounts` out of the session document entirely, as
+    /// [`crate::MockServerBuilder::without_primary_accounts`] asked. RFC 8620
+    /// §2 permits a server to omit it outright ("a server that does not
+    /// support this concept MUST omit this property"), which is a different,
+    /// legal server shape from naming a capability with no primary account —
+    /// every capability still lists its accounts under
+    /// [`AccountState`]'s own capabilities, so a client is left to infer
+    /// which one is primary the way RFC 8620 allows.
+    pub omit_primary_accounts: bool,
     /// How many method calls one request may carry, as
     /// [`crate::MockServerBuilder::calls_in_request`] asked — advertised as
     /// `maxCallsInRequest` in the session document and enforced at the API
@@ -95,6 +104,7 @@ impl ServerState {
             method_calls: Vec::new(),
             api_requests: 0,
             omitted_capabilities: BTreeSet::new(),
+            omit_primary_accounts: false,
             calls_in_request: Some(crate::DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
             objects_in_get: None,
