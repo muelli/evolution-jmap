@@ -31,6 +31,14 @@
 # in principle be swallowed. Whoever wires the extraction into the build should
 # either check the `.pot` against this list or use a Rust-aware extractor.
 #
+# `-L C` costs one more thing, which the test file above also enforces: a
+# marked literal must be written on a single line. A backslash at the end of a
+# line means something slightly different in each language — Rust drops the
+# newline and the indentation after it, C drops only the newline — so a wrapped
+# message is extracted with the source's indentation inside it and can never
+# match the msgid the program looks up. Long lines are the price of that; do not
+# "tidy" one by wrapping it.
+#
 # What is NOT here, and why:
 #
 # - `src/*.c`. The C example module is upstream skeleton code from the GNOME

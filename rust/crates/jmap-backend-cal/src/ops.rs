@@ -352,6 +352,13 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
 /// says no leaves the user to guess which part of an appointment offended, and
 /// the answer — state the recurrence as a repeat count rather than an end date —
 /// is one sentence long.
+///
+/// Each message is one long line, and has to stay one: `xgettext` reads the
+/// source as C, where a backslash at the end of a line drops the newline and
+/// keeps the indentation that follows, while Rust drops both. Wrapped, the
+/// msgid in the catalogue would carry indentation the lookup does not and no
+/// translation would ever be found — silently.
+/// `jmap-backend-core/tests/potfiles.rs` holds every marked literal to that.
 fn refusal(reason: &Unsendable) -> String {
     match reason {
         Unsendable::RecurrenceEnd { until, zone } => translate_with(
@@ -359,11 +366,7 @@ fn refusal(reason: &Unsendable) -> String {
             // saved. %1$s is the date and time the series ends, as it was
             // written in the appointment; %2$s is a time zone identifier such
             // as "Europe/Berlin".
-            c"This event repeats until %1$s, and the time zone it is in, \
-              %2$s, is not defined in this calendar entry in a way that \
-              instant can be converted out of — so the event was not \
-              created. Stating the recurrence as a repeat count works \
-              instead.",
+            c"This event repeats until %1$s, and the time zone it is in, %2$s, is not defined in this calendar entry in a way that instant can be converted out of — so the event was not created. Stating the recurrence as a repeat count works instead.",
             &[until.as_str(), zone.as_str()],
         ),
         // No placeholders, so no arguments: the mapping knows the rule cannot
@@ -372,9 +375,7 @@ fn refusal(reason: &Unsendable) -> String {
             // TRANSLATORS: shown when a new recurring appointment could not be
             // saved, and the reason is not something the user can be pointed
             // at more precisely than this.
-            c"This event repeats in a way that cannot be stored on the \
-              server, so it was not created. Stating the recurrence as a \
-              repeat count is the spelling that always works.",
+            c"This event repeats in a way that cannot be stored on the server, so it was not created. Stating the recurrence as a repeat count is the spelling that always works.",
         ),
     }
 }
