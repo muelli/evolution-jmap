@@ -675,6 +675,121 @@ fn renaming_an_employer_keeps_what_the_org_line_cannot_carry() {
 }
 
 #[test]
+fn an_org_unit_the_line_left_out_survives_an_edit_of_the_others() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A unit that names nothing is left off the ORG line exactly as an empty
+    // entry is left off the card, so the save must not read its absence from
+    // the edited line as the user having dissolved it.
+    fixture.patch(
+        &id,
+        json!({"organizations": {"o1": {
+            "name": "Acme",
+            "units": [
+                {"@type": "OrgUnit", "name": "Research"},
+                {"@type": "OrgUnit", "name": "", "sortAs": "Optics"},
+            ],
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o1:Acme;Research\r\n"),
+        "the unnamed unit has no component on the line: {vcard}"
+    );
+    let edited = vcard.replace("Acme;Research", "Acme Ltd;Research");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    let organization = &stored.organizations.as_ref().expect("organizations")["o1"];
+    let units = organization.units.as_ref().expect("units");
+    let by_name: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
+    assert_eq!(
+        by_name,
+        vec!["Research", ""],
+        "a unit the ORG line never stated was deleted by an edit beside it"
+    );
+    assert_eq!(
+        units[1].extra.get("sortAs"),
+        Some(&json!("Optics")),
+        "and it kept what it was carrying, in the place it was carrying it"
+    );
+}
+
+#[test]
+fn saving_an_org_back_untouched_does_not_reshuffle_the_unit_the_line_left_out() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The unnamed unit is *first*, so putting it back at the end would be a
+    // rewrite of a list the user never touched.
+    fixture.patch(
+        &id,
+        json!({"organizations": {"o1": {
+            "name": "Acme",
+            "units": [
+                {"@type": "OrgUnit", "name": "", "sortAs": "Optics"},
+                {"@type": "OrgUnit", "name": "Research"},
+            ],
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a save that changed nothing rewrote the units"
+    );
+    let stored = fixture.card(&id);
+    let units = &stored.organizations.as_ref().expect("organizations")["o1"]
+        .units
+        .as_ref()
+        .expect("units");
+    let by_name: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
+    assert_eq!(by_name, vec!["", "Research"]);
+}
+
+#[test]
+fn an_org_line_stating_no_unit_at_all_keeps_the_one_it_never_carried() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The degenerate half of the same case: every unit the entry has is
+    // unnamed, so the line is the employer alone and the edited card states no
+    // units whatsoever — which is not the user having emptied the list.
+    fixture.patch(
+        &id,
+        json!({"organizations": {"o1": {
+            "name": "Acme",
+            "units": [{"@type": "OrgUnit", "name": "", "sortAs": "Optics"}],
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o1:Acme\r\n"),
+        "the line states the employer and nothing else: {vcard}"
+    );
+    let edited = vcard.replace("ORG;X-JMAP-KEY=o1:Acme", "ORG;X-JMAP-KEY=o1:Acme Ltd");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    let organization = &stored.organizations.as_ref().expect("organizations")["o1"];
+    assert_eq!(organization.name.as_deref(), Some("Acme Ltd"));
+    let units = organization
+        .units
+        .as_ref()
+        .expect("units the line never stated");
+    assert_eq!(units.len(), 1);
+    assert_eq!(units[0].name, "");
+    assert_eq!(units[0].extra.get("sortAs"), Some(&json!("Optics")));
+}
+
+#[test]
 fn removing_the_org_line_removes_the_organization() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
