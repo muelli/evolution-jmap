@@ -25178,3 +25178,126 @@ contact-editor behaviour unmeasured; whether the editor lets a handle be moved
 between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-eighth session)
+
+**A translation can now become a file gettext opens.** The chain the last
+three sessions built goes: a string is marked, `xgettext` extracts it into
+`po/evolution-jmap.pot`, and a test holds the catalogue against the sources in
+both directions. What it did not have was an end. A `.po` a translator sends
+back is text; what the modules load is a `.mo`, and nothing in this tree turned
+one into the other. New crate `rust/crates/po-compile`: a library that compiles
+the text of a `.po` into the bytes of a `.mo`, and a `po-compile <in> <out>`
+binary for the build system to call.
+
+**Why not `msgfmt`, which already exists and is on every developer's machine.**
+Because it is not in `Containerfile.ci`, and adding it there is not this
+stream's to do — the image is built by a workflow these sessions must not
+touch, and a Containerfile edit would not reach CI until a human rebuilt and
+re-pinned it. That leaves two other shapes and both are worse. Making the
+catalogue step conditional on `msgfmt` being found means a build without it
+ships silently in English, which is the exact failure mode the whole i18n
+directive exists to prevent. Committing compiled `.mo` files puts a binary
+artefact in the tree and moves the compile step to whoever remembers to run it.
+
+Extraction is different and stays a developer's command: it runs once when a
+string changes, and its output is committed and checked. Compiling has to
+happen on every machine that builds, once per language, so it has to be
+something the build can do by itself.
+
+The format was not the hard part, and this repository had already decided as
+much: `jmap-backend-core/tests/catalogue.rs` writes a `.mo` by hand for the
+same reason — "shelling out to `msgfmt` would make the test depend on the
+gettext tools being installed, which is exactly the kind of thing that makes a
+test pass on a developer's machine and vanish in a container". This is that
+twenty lines grown a `.po` parser and a set of refusals.
+
+**The refusals are the design.** A compiler for a subset meets something
+outside the subset and has two options: drop it or stop. Dropping loses a
+translation with no diagnostic — green build, English text, nobody notices —
+so everything unimplemented stops and names its line: `msgctxt`, plural forms,
+an escape it does not know (octal and hex among them), a duplicate msgid, a
+line it cannot place, a string whose closing quote turned out to be escaped,
+and a catalogue declaring any charset but UTF-8. The line number matters
+because the file is edited by someone who is not reading this code.
+
+Two things are dropped rather than refused, because dropping is what they
+*mean*: a `fuzzy` entry (a translator's guess) and one with an empty `msgstr`
+(untranslated). gettext falls back to the English msgid for both, which is the
+wanted result. The header entry is exempt from the fuzzy rule — `msginit`
+marks it fuzzy in every new catalogue, and dropping it would take the charset
+declaration with it. That exemption is not a guess: `msgfmt` was run on a file
+holding a fuzzy header, a fuzzy entry, an untranslated entry and an obsolete
+`#~` pair, and `msgunfmt` on its output shows exactly which four survive.
+
+**Checked against the real reader, not against our own idea of the format.**
+`tests/compile.rs` reads the bytes back with a reader written for the test, so
+the compiler is not marking its own homework about the layout. `tests/gettext.rs` does the
+other half: writes the catalogue under
+`<dir>/xx/LC_MESSAGES/`, calls `bindtextdomain` and `dgettext` — glibc's, the
+same implementation the installed modules call — and asserts the German comes
+back. It declares the three libc functions itself rather than going through
+`jmap-backend-core`'s `i18n`, which lives in a crate needing the EDS headers;
+this way the check runs in a plain `cargo test`. Same locale caveat as
+`catalogue.rs`, handled the same way, and it printed `catalogue lookup
+exercised under locale en_US.UTF-8` here, so the real branch ran.
+
+Mutation-checked, four ways. Keep fuzzy entries → the fuzzy test fails. Keep
+empty-`msgstr` entries → the untranslated test fails. Write the tables in
+descending order → `entries_are_written_in_ascending_order` fails, and, run on
+its own, so does the glibc test: with the two entries reversed, gettext's
+binary search over the table of originals walks off the end and returns the
+msgid. That last one is the point of sorting stated by the only authority that
+counts. And `msgunfmt` on this compiler's output prints the same four lines it
+prints for `msgfmt`'s.
+
+No hash table is written (`0` in both header fields). The format allows it and
+gettext then binary-searches, which is what the mutation above exercised.
+Writing one would let the output be compared byte-for-byte against `msgfmt`,
+which is tempting — but that oracle cannot run in CI, where there is no
+`msgfmt`, so it would buy a local-only check at the price of implementing
+GNU's string hash.
+
+Tests: +18 in the new crate (17 in `tests/compile.rs`, 1 in `tests/gettext.rs`).
+Default set 1157 → 1175. The crate needs no EDS headers, so it is in
+`default-members` and runs in the plain leg.
+
+Verified locally: `cargo test --locked` 1175, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module
+--all-targets --locked -- -D warnings` clean; `ninja -C build` then `ctest
+--test-dir build` 14/14, functional, EDS-linked and packaging legs included.
+`ci/checks.sh` still stops at its first step on this VM (no `reuse`, no `pipx`,
+no `uvx`, no `cargo-deny`), so those were reasoned by hand: every new file
+carries an SPDX `GPL-3.0-or-later` header, and the only `Cargo.lock` change is
+this workspace's own new path crate — no external dependency was added, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Closed: the compile half of "nothing in CMake generates or
+installs the catalogue" — the tool exists and is tested. **Still open, and it
+is the next increment**: CMake does not call it. There is no rule reading
+`po/LINGUAS`, no `msgfmt`-equivalent step in the build, and nothing installs a
+`.mo` into `${LANGUAGE_SUPPORT_DIRECTORY}/<lang>/LC_MESSAGES/evolution-jmap.mo`
+— the path `jmap-backend-core`'s `LOCALE_DIR` already points at and
+`tests/catalogue.rs` already proves gettext reads. Note that wiring it will be
+testable end to end only once some `.po` exists: `LINGUAS` is still empty, so
+an install-tree check over it would today be vacuously green, which is not a
+check. Whether this repository's first translation should be written by an
+autonomous session at all is a maintainer's call, not one to take quietly in
+the dark — logged here rather than acted on.
+
+Unchanged blockers: `gettext` is not in `Containerfile.ci`, so the `.pot` in
+the tree is trusted to have come from `po/extract.sh`; a transition rule
+outside the counted shape still costs the whole zone, and whether any zone
+Evolution ships is in that state is unmeasured beyond Berlin; M10 still has no
+CI matrix; the calcard directive's two emitters are still ours; M9 has no CI
+job and no GUI tier; M7 still **needs human verification in real Evolution**;
+an `UNTIL` the parser itself refuses is invisible to `jmap-ical`; whether
+Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution
+shows only the first" bet is still unverified; the two `LABEL` `TYPE` risks
+stand; a deathday and a birthday stated as a year alone are still invisible;
+the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are
+unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.
