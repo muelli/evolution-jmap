@@ -28641,3 +28641,70 @@ vs-auto-discovery question. If it arrives, that unblocks the GTK wiring item
 design is fixed). If it does not, re-surveying from scratch each session adds
 little; a future session should check whether the question has been answered
 before re-deriving the same "everything is blocked" conclusion again.
+
+## 2026-08-16 (three-hundred-and-first session)
+
+**Survey, no claim.** `git fetch origin` at the start shows `origin/master`
+unchanged at `fae71cb` (the 300th session's tag). Running on Sonnet.
+
+Re-derived the current-priority queue from the code rather than trusting
+four straight sessions' agreement on faith, and tried one new angle before
+concluding the same thing: whether the "browser consent exchange" the last
+several sessions call a blocker is actually this project's problem at all.
+
+- Read `oauth2_service.rs` in full (224 lines): the `EOAuth2Service`
+  *interface* implementation the 283rd session flagged as bindgen/vtable
+  territory reserved for an escalated session is not a gap any more — it is
+  done, filling exactly the vfuncs EDS's own `e-oauth2-service.c` leaves
+  `NULL` (`get_name`/`get_display_name`/`get_client_id`/
+  `get_authentication_uri`) plus the three EDS defaults that are wrong for a
+  per-account deployment (`get_refresh_uri`/`get_redirect_uri`/
+  `get_client_secret`), read against the installed library's source rather
+  than assumed. `oauth2_setup.rs`'s `discover_and_register` (RFC 8414 +
+  RFC 7591, pure Rust/HTTP, tested against the mock) is likewise complete.
+- Checked whether this project therefore still owes its own browser/
+  redirect-capture code (a loopback HTTP listener, RFC 8252-style) before
+  OAuth2 setup can work end to end — that would have been a pure-Rust,
+  no-GTK, no-display, design-decision-independent slice, and worth claiming
+  if real. It is not: EDS drives the actual consent exchange itself, through
+  `ECredentialsPrompterImplOAuth2` (`e-credentials-prompter-impl-oauth2.h`),
+  a WebKit-backed prompter EDS already ships and already uses for its
+  built-in Google/Outlook/Yahoo `EOAuth2Service`s — the same generic
+  mechanism this project's `EOAuth2Service` registration plugs into. There is
+  no gap here to fill; inventing a redirect listener would be unneeded
+  surface duplicating what EDS already owns. Recording this explicitly so no
+  future session re-opens it looking for a "Sonnet-sized slice" that isn't
+  real.
+- That leaves the actual remaining piece exactly where the last four
+  sessions left it: calling `discover_and_register` from the setup flow
+  (`insert_widgets`/`commit_changes` in `jmap-config/src/backend.rs`) so an
+  OAuth2-capable deployment gets a `client_id` and a stored `Config` before
+  EDS's prompter ever runs. That wiring needs (1) the maintainer's still-
+  unanswered method-chooser-vs-auto-discovery UX decision — a blocking
+  network probe needs a *trigger*, and guessing whether that trigger is an
+  explicit checkbox or a transparent first-connect attempt would mean
+  building UI the maintainer may reject — and (2), independently, marshalling
+  a blocking network call off the GTK main thread onto cached raw
+  widget/`ESource` pointers, a concurrency/FFI shape this codebase has not
+  attempted anywhere else. Both blockers are unchanged and confirmed fresh,
+  not re-read off the log.
+- **M9**: unchanged, tagged complete (299th session). **M10**: unchanged,
+  needs `Containerfile.ci`/CI-image growth, out of these hard rules.
+  **`docs/BACKLOG.md`**: re-read in full, unchanged — all items are M3/M4
+  fidelity polish, the deferred M7 whitespace edge case, or the
+  `ConnectError` translation retrofit; none is current-priority work in
+  disguise.
+
+**Conclusion: current-priority band is still entirely blocked** — on the
+maintainer's open design decision, on GUI verification that has nothing new
+to verify, or on M10's out-of-scope infra. Not escalating: as the 300th
+session found, the open item needs the design decision made first, not a
+more capable model guessing a user-facing auth-flow design.
+
+No commits to `rust/`, `docs/BACKLOG.md`, or `docs/MILESTONES.md` — only this
+log entry. Tests/clippy/fmt not re-run; nothing in the tree changed.
+
+**Next session**: unchanged. Check whether the maintainer has answered the
+method-chooser-vs-auto-discovery question before re-deriving the same
+"everything is blocked" conclusion again; if answered, the GTK wiring item is
+still a live escalation candidate for the concurrency reasoning alone.
