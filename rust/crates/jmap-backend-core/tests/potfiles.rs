@@ -20,15 +20,15 @@
 //!
 //! ## What counts as a marked string
 //!
-//! A literal handed straight to one of the two functions in
+//! A literal handed straight to one of the functions in
 //! [`jmap_backend_core::i18n`] that gettext is told to key on — spelled
-//! `N_(c"…")` or `translate(c"…")` in the source, which is the form
-//! `xgettext --keyword` recognises. Deliberately a textual match on the call
-//! site rather than anything cleverer: it is the same thing `xgettext` does, so
-//! it agrees with the tool by construction, including on the cases where the
-//! tool is the one being crude.
+//! `N_(c"…")`, `translate(c"…")` or `translate_with(c"…", …)` in the source,
+//! which is the form `xgettext --keyword` recognises. Deliberately a textual
+//! match on the call site rather than anything cleverer: it is close to what
+//! `xgettext` does, so it agrees with the tool on the cases where the tool is
+//! the one being crude.
 //!
-//! Two consequences worth knowing before adding a string:
+//! Three consequences worth knowing before adding a string:
 //!
 //! - **A marker whose argument is not a literal is not a marked string** —
 //!   `translate(NAME)` looks a message up but contributes nothing to extract,
@@ -37,6 +37,12 @@
 //! - **Line comments do not count.** They are stripped before the match, so a
 //!   doc comment may spell a marker out — this file's own module docs do —
 //!   without putting the file in the list. `xgettext` skips comments too.
+//! - **The literal need not be on the marker's own line.** `rustfmt` moves it
+//!   to the next line as soon as the call is too wide, which is what a message
+//!   long enough to be worth translating does. `xgettext` lexes rather than
+//!   reads lines and does not care; a line-at-a-time match here would have
+//!   quietly stopped recognising exactly the longest strings, so the whitespace
+//!   between the two is skipped the way the lexer skips it.
 //!
 //! ## Why this crate
 //!
@@ -53,7 +59,7 @@ use std::path::{Path, PathBuf};
 /// Kept in step with the `--keyword` arguments the `.pot` is generated with:
 /// a keyword the extractor knows and this list does not is a string that can
 /// go unlisted, which is the whole failure this file exists to prevent.
-const MARKERS: [&str; 2] = ["N_(c\"", "translate(c\""];
+const MARKERS: [&str; 3] = ["N_(", "translate(", "translate_with("];
 
 /// The root of the checkout, from this crate's manifest directory.
 fn repo_root() -> PathBuf {
@@ -125,11 +131,29 @@ fn marks_a_string(root: &Path, path: &str) -> bool {
     let text = fs::read_to_string(root.join(path)).unwrap_or_else(|error| {
         panic!("po/POTFILES.in lists {path}, which cannot be read ({error})")
     });
-    text.lines()
+    let code: String = text
+        .lines()
         // Comments are not code to `xgettext` either. Whole-line only: a
         // marker never shares a line with the `//` that would precede it.
         .filter(|line| !line.trim_start().starts_with("//"))
-        .any(|line| MARKERS.iter().any(|marker| line.contains(marker)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    MARKERS
+        .iter()
+        .any(|marker| calls_on_a_literal(&code, marker))
+}
+
+/// Whether `code` hands `marker` a C string literal, wherever the formatter
+/// put the line break.
+///
+/// `marker` ends at the opening parenthesis, and what has to follow — once the
+/// whitespace `rustfmt` may have inserted is skipped — is `c"`, the start of a
+/// literal. Nothing here tries to match the closing parenthesis or the argument
+/// after it: this is a check on whether a file contributes strings at all, not
+/// a parser.
+fn calls_on_a_literal(code: &str, marker: &str) -> bool {
+    code.match_indices(marker)
+        .any(|(at, _)| code[at + marker.len()..].trim_start().starts_with("c\""))
 }
 
 #[test]

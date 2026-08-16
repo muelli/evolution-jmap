@@ -22,9 +22,10 @@
 //!   without this crate doing anything — *provided* the domain is bound, which
 //!   is why [`bind`] is called from the provider module's entry point rather
 //!   than from wherever the first translated string happens to be.
-//! - **This code, for text it emits itself** — [`translate`]. Nothing needs it
-//!   yet; the account-setup labels and the user-visible parts of Camel error
-//!   messages will.
+//! - **This code, for text it emits itself** — [`translate`], or
+//!   [`translate_with`] where the sentence has to name something. The calendar
+//!   backend's refusals are the first of these; the account-setup labels and
+//!   the user-visible parts of Camel error messages will follow.
 //!
 //! ## Why the directory is a build-time input
 //!
@@ -196,4 +197,90 @@ pub fn translate(msgid: &CStr) -> String {
     unsafe { CStr::from_ptr(dgettext(DOMAIN.as_ptr(), msgid.as_ptr())) }
         .to_string_lossy()
         .into_owned()
+}
+
+/// [`translate`], with `%1$s`-style placeholders filled from `arguments`.
+///
+/// The form of a message that has to name something — a time zone, a folder, a
+/// server's own words. Two rules come out of the fact that the template is a
+/// *translation*, and neither is optional:
+///
+/// - **The placeholders are numbered.** Word order is not something a sentence
+///   keeps across languages: "the time zone %2$s cannot state %1$s" is the
+///   natural German shape of a sentence English writes the other way round. A
+///   translator given bare `%s`es has to choose between a natural sentence and
+///   a correct one, so every placeholder here carries the argument's position
+///   and a translation may put them in any order, or repeat one.
+/// - **This is not `printf`, and must never become it.** A catalogue is data
+///   loaded at run time from a file this program did not write, and handing a
+///   translated string to a real format function is the textbook way that data
+///   turns into control over the process: a `%n` nobody wrote in the source,
+///   read against arguments that are not there. The substitution below knows
+///   exactly one construct and copies every other byte through, so the worst a
+///   hostile or merely wrong `.mo` can do is make the sentence read badly.
+///
+/// A placeholder no argument answers is left as written rather than dropped or
+/// fatal: it is a bug in a translation, and showing the marker is what makes it
+/// reportable. Ill-formed `%` sequences are ordinary characters, so a message
+/// may say `50%` without ceremony.
+///
+/// Like [`translate`], this is a name `xgettext --keyword` is told about, so a
+/// literal written here is extracted where it stands and needs no [`N_`] around
+/// it — see `po/POTFILES.in`, and the file the string is in has to be listed
+/// there.
+pub fn translate_with(msgid: &CStr, arguments: &[&str]) -> String {
+    substitute(&translate(msgid), arguments)
+}
+
+/// Fills `template`'s placeholders from `arguments`, in one left-to-right pass.
+///
+/// One pass rather than one replacement per argument, which matters for what
+/// the arguments *are*: values from a server, a user's calendar, a time zone
+/// database. Replacing argument by argument would run the second replacement
+/// over the first argument's text, so a value containing `%2$s` would have the
+/// next argument spliced into it — a value from outside choosing what the
+/// message says. Here an argument's expansion is output and is never looked at
+/// again.
+fn substitute(template: &str, arguments: &[&str]) -> String {
+    let mut filled = String::with_capacity(template.len());
+    let mut rest = template;
+
+    while let Some(at) = rest.find('%') {
+        filled.push_str(&rest[..at]);
+        rest = &rest[at..];
+        match placeholder(rest) {
+            Some((position, length)) if (1..=arguments.len()).contains(&position) => {
+                filled.push_str(arguments[position - 1]);
+                rest = &rest[length..];
+            }
+            // Not a placeholder, or one this call has no argument for: the `%`
+            // is a character like any other. Stepping over just the `%` is what
+            // keeps the scan moving and leaves the rest to be matched again.
+            _ => {
+                filled.push('%');
+                rest = &rest[1..];
+            }
+        }
+    }
+
+    filled.push_str(rest);
+    filled
+}
+
+/// The argument position `text` opens with, and the bytes it spans.
+///
+/// `text` starts at a `%`. A placeholder is that, one or more decimal digits,
+/// and `$s` — `printf`'s positional form, so a translator's tooling recognises
+/// it and `xgettext`'s format checks apply. Anything else, including a number
+/// too large to be a position, is not one.
+fn placeholder(text: &str) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut end = 1;
+    while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+        end += 1;
+    }
+    if end == 1 || bytes.get(end) != Some(&b'$') || bytes.get(end + 1) != Some(&b's') {
+        return None;
+    }
+    Some((text[1..end].parse().ok()?, end + 2))
 }
