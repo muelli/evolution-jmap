@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Two languages, one of them with a territory, so the check covers both the
+# plain code and the underscored form gettext looks up.
+#
+# This comment holds an em dash — as this project's own po/LINGUAS does —
+# because a reader that treats it as binary breaks the line at it and reads
+# the rest of the sentence as a list of languages.
+
+xx
+zz_ZZ

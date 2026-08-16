@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Not a translation: a fixture. The msgid is a real string from
+# po/evolution-jmap.pot so the shape is the shape a translator would send,
+# and the msgstr is a marker the check looks for in the compiled catalogue.
+msgid ""
+msgstr ""
+"Project-Id-Version: evolution-jmap\n"
+"Language: xx\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "JMAP"
+msgstr "FIXTURE-XX-PROTOCOL"
+
+msgid "For reading and storing mail on JMAP servers."
+msgstr "FIXTURE-XX-DESCRIPTION"

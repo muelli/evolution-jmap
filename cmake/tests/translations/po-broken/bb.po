@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# A catalogue po-compile refuses: `msgctxt` is one of the constructs it stops
+# on rather than dropping. The build must go red on it. A compile step whose
+# failure is swallowed is the worst outcome available here — a green build
+# that shows English to a user who has a translation installed.
+msgid ""
+msgstr ""
+"Project-Id-Version: evolution-jmap\n"
+"Language: bb\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgctxt "protocol"
+msgid "JMAP"
+msgstr "FIXTURE-BB-PROTOCOL"

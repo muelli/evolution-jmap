@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# A language nobody wrote a catalogue for. There is deliberately no `qq.po`
+# beside this file: the check requires configuring to fail and to name `qq`,
+# because the alternative — a build that quietly ships one language fewer
+# than LINGUAS promises — looks exactly like a build that worked.
+
+qq
