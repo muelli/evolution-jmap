@@ -26683,3 +26683,23 @@ human verification in real Evolution**, and its one remaining vfunc
 (`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
 page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
 fidelity items are all still parked there.
+
+## 2026-08-16 (two-hundred-and-eighty-second session)
+
+**Claiming: OAuth2, slice 1.5 — RFC 7591 dynamic client registration in
+`jmap-client`, ahead of the `eds-sys` bindgen slice the last session flagged
+as next.**
+
+Running on Sonnet (no escalation file present at session start). The last
+session's own note named `eds-sys` bindgen (`EOAuth2Service`/
+`EOAuth2Services`/`EOAuth2ServiceBase` on the allowlist, `g_type_query` layout
+checks, and a `libsoup-3.0` generation-time check) as slice 2 — but that is
+exactly the shape of work the escalation rule reserves for Opus/Fable
+(new bindgen-layout/ABI surface), not a routine Sonnet item. Per "prefer a
+different tractable Sonnet-sized item first if one exists," this session
+takes the registration slice instead: pure Rust, HTTP + JSON against the
+mock, no FFI, and a real gap the discovery slice left open — `oauth.rs`
+already parses a `registration_endpoint` out of the metadata document but
+nothing calls it, so a self-hosted deployment still has no way to get a
+`client_id` without one being compiled in or pasted in by the user. The
+bindgen slice is left for the next escalation, not attempted here.
