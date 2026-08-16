@@ -29285,3 +29285,152 @@ triggering question are unchanged and out of scope for the reasons the
 non-default-port, plaintext JMAP deployment**, found by spiking the
 306th session's own "next session" note before trusting its shape. Running
 on Sonnet.
+
+The 306th session's note said the `EConfigLookup`-against-a-real-registry
+functional test "still needs new `evo-sys` bindings for a live
+`EConfigLookup`" — and four sessions before that (296th–299th) treated the
+same area with the same caution, without any of them actually checking it
+against the M9 harness's own established shape. That claim turned out to be
+wrong: M9's existing functional tests (`address-book.rs`, `calendar.rs`, …)
+never call EDS from Rust at all — they drive a small **C** client program
+(`tests/functional/*.c`) that links the real headers directly, and a
+config-lookup test would follow exactly that shape, needing no new Rust FFI.
+Worth spiking before either attempting the harness on that wrong premise or
+deferring/escalating it on the same premise.
+
+**The spike, and what it found.** A throwaway C program (not committed —
+scratch, `/tmp`, outside the repo) that:
+1. `e_module_load_all_in_directory()`s a directory holding only the built
+   `libjmap_config_module.so` and `g_type_module_use()`s the result, the same
+   dynamic-type-registration idiom `module.rs`'s own docs describe;
+2. constructs a real `ESourceRegistry` and `EConfigLookup` under
+   `dbus-run-session` (the exact environment `jmap_functional::Session`
+   already sets up for M9's other tests);
+3. calls `e_config_lookup_run()` with an email address and a `servers` value,
+   spins a `GMainLoop` until the `GAsyncReadyCallback` fires (the same
+   loop-and-quit shape `tests/functional/connection-status.c` already uses
+   for an async EDS wait, so nothing new there either), and reads back
+   `e_config_lookup_dup_results()`.
+
+Two real findings fell out, one a build/link detail and one a genuine bug:
+- **`EConfigLookup` lives in `e-util`, not any EDS library** — linking needs
+  `pkg-config evolution-shell-3.0` (which pulls in `evolution-util`, GTK,
+  WebKit — checked, not assumed, since that is a heavier dependency than any
+  existing functional-test client carries). It links and runs headlessly
+  without a display; nothing here calls `gtk_init` or opens a window.
+- **The built module failed to load** the first time, with `module_load:
+  libevolution-mail.so.0: cannot open shared object file`: `/usr/lib/evolution`
+  (where the transitive `EMailConfigServiceBackend` dependency lives) is not
+  on the default loader path, and `evolution-shell-3.0`'s own pkg-config
+  output only sets `-Wl,-R` (an rpath) on a binary linked against it directly
+  — a module loaded via `dlopen` later doesn't inherit that. `LD_LIBRARY_PATH=
+  /usr/lib/evolution` fixes it; a future permanent test needs the same in
+  `jmap_functional::Session`'s environment.
+- **The real bug**: with that fixed, the module loaded, registered one
+  worker, `e_config_lookup_run` completed with no error, but **zero results**.
+  `run()` hardcodes `discover_and_register(&transport, &host, 0, true, …)` —
+  port 0 (scheme default) and `secure: true` (HTTPS), always. Against
+  `jmap-mockd`, which is plaintext-only on an ephemeral port, that can never
+  succeed — not a spike artifact, a real defect: **any** locally-run or
+  test JMAP deployment on a non-default, plaintext port is undiscoverable by
+  this worker, with no way to name it. Checked against real upstream
+  (`/tmp/evo-src/src/modules/config-lookup/e-webdav-config-lookup.c`) for the
+  right fix rather than inventing one: it builds `https://` + the bare
+  `servers` entry by default, but uses a `servers` entry *verbatim* as a full
+  URL when it already contains `"://"` — "users can override it with the
+  Servers value" of its own comment. Its `[Security]`-equivalent write is
+  likewise never hardcoded to secure in this project's other paths
+  (`account.rs`/`backend.rs` both derive it from what was actually used),
+  which `run()`'s always-`"tls"` write did not honour.
+
+**Delivered, gates green.** `jmap-config/src/config_lookup.rs`: a new
+`Target { host, port, secure }` and `parse_target(&str) -> Option<Target>`
+sit between `probe_host` (which entry to use, unchanged) and
+`discover_and_register` (what to use it for) — a bare host still defaults to
+HTTPS/no port (right for the email-domain fallback, which is always a bare
+domain); an `http://`/`https://` prefix and optional `:port` suffix override
+both, mirroring upstream's own convention line for line. `run()` now passes
+`target.host/port/secure` through instead of the `(&host, 0, true)`
+constants, and `add_result` writes `[Authentication] port` (via a new
+`e_config_lookup_result_simple_add_uint` binding — `evo-sys/build.rs`'s
+allowlist, the same shape as the existing `_add_string`/`_add_boolean`
+entries, no new ownership or vtable surface) when the target names one, and
+`[Security] method` as `"tls"`/`"none"` matching `target.secure` instead of
+an unconditional `"tls"`. A bare, unbracketed IPv6 literal (`::1`) is
+deliberately not split on its last colon, since `jmap_backend_core::source`
+accepts a host in that shape and splitting it would cut off what looks like
+a port.
+
+**Verified past the unit tests, not just past them.** Rebuilt
+`jmap-config-module` and re-ran the same spike with the fix in place, against
+a real `jmap-mockd --oauth2` on an ephemeral plaintext port, naming it as
+`servers=http://127.0.0.1:<port>`: **one positive, complete result** came
+back (`protocol=jmap display="JMAP account (OAuth 2.0)" complete=1`) — the
+first time `JmapConfigLookup::run()`'s live dispatch has been exercised end
+to end through a real `EConfigLookup` at all, by anyone, ever, in this
+project's history. Recorded in `config_lookup.rs`'s own module doc (a new
+"manually verified once" note) rather than left only here, so a future
+session sees it beside the code instead of having to search 29,000 lines of
+log — and worded to be unambiguous that this was one hand-run, not a standing
+test, since the module's own "not tagged complete"/"needs the harness" claims
+are otherwise still exactly true and must stay true until an automated test
+exists.
+
+Eight new unit tests for `parse_target` (bare host, scheme+port, https+port,
+scheme with no port, bare IPv6, unparsable port, empty authority), following
+`probe_host`'s own style; a mutation check (temporarily merging the
+IPv6-guard branch into the general case) caught two of them before being
+reverted — worth recording that the revert (`git checkout --`) briefly wiped
+the *entire* file's session changes along with the deliberate mutation, since
+`git checkout -- <path>` discards all uncommitted changes to that path, not
+just the last edit; recovered by reapplying every edit from this session's
+own record of them, `cargo test` after confirming an exact match to the
+pre-mutation state.
+
+**Gates.** `cargo fmt --all --check` clean (one line needed the pass);
+`cargo clippy --workspace --exclude example-module --all-targets --locked
+-- -D warnings` clean; `cargo test --workspace --exclude example-module
+--locked` — 11 failures, all the same pre-existing `JMAP_FUNCTIONAL_BOOK_
+CLIENT`-unset `jmap-functional` ones every prior session's gate has
+documented, everything else green (`jmap-config`'s own suite: 8 new plus all
+prior, unaffected). Hit [[disk-fills-from-cargo-target]] first (`rust/target`
+at 24 GiB, `/` at 100%, a linker "Bus error" that reads like a toolchain
+fault and is not one); `cargo clean --profile dev` recovered it and the
+numbers above are the clean rerun. `ninja -C build` (release) then `ctest
+--test-dir build` **15/15**, `functional-book` included — `ctest` sets
+`JMAP_FUNCTIONAL_BOOK_CLIENT` itself, so the eleven `cargo test`-only
+failures above are not a real gap. No new files, so the reuse lint has
+nothing new to check; both touched files already carry their SPDX headers.
+`rust/Cargo.lock` untouched (no new dependencies). `ci/checks.sh` still
+cannot run on this VM ([[checks-sh-blocked-on-vm]]).
+
+**Next session: a permanent functional test is now a small, well-scoped,
+de-risked increment**, not a research question. The recipe this session
+proved by hand:
+- `tests/functional/config-lookup-client.c`, in the same shape as
+  `book-client.c`/`connection-status.c`: link `evolution-shell-3.0` (new
+  `pkg_check_modules` line in `cmake/Functional.cmake`, alongside the
+  existing `LIBEBOOK`/`LIBECAL`/`CAMEL_CLIENT` ones), load the module
+  directory, build an `EConfigLookup`, run it with a `GMainLoop`, print
+  `e_config_lookup_dup_results()`'s fields the way every other client here
+  prints `key=value` observations for `jmap_functional::observations()`.
+- `jmap_functional::Session` needs one new method alongside
+  `stage_address_book_backend`/`stage_calendar_backend` —
+  `stage_config_lookup_module`, which stages the module the way those two
+  do, *and* sets `LD_LIBRARY_PATH=/usr/lib/evolution` in the session's
+  environment (this session's second finding; nothing today sets it).
+- The test itself: point `servers` at `jmap-mockd --oauth2`'s own plaintext
+  origin (now expressible at all, because of this session's fix) and assert
+  a positive result with the right `[Collection]`/`[Authentication]`
+  properties — the collection-source counterpart of what
+  `address-book.rs` already asserts for a book. `REDIRECT_URI`'s actual
+  round-trip through a real consent prompter is still out of reach here and
+  still a human-verification item; this test only proves discovery and
+  registration, which is everything `run()` does before a browser gets
+  involved.
+This is real-server-readiness tooling under M7, not a milestone acceptance
+criterion by itself — not tagging anything complete. `docs/BACKLOG.md` is
+unchanged; nothing here was deferred, it was fixed. M7's `insert_widgets`
+OAuth2-triggering question and the maintainer's method-chooser-vs-
+auto-discovery decision remain exactly where the 292nd–306th sessions left
+them.
