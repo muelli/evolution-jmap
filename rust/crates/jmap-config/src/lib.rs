@@ -144,6 +144,7 @@
 pub mod account;
 pub mod backend;
 pub mod complete;
+pub mod config_lookup;
 pub mod defaults;
 pub mod mail;
 pub mod module;

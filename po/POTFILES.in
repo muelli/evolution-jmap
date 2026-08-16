@@ -54,6 +54,7 @@ rust/crates/jmap-backend-core/src/connect.rs
 rust/crates/jmap-backend-core/src/oauth2.rs
 rust/crates/jmap-config/src/backend.rs
 rust/crates/jmap-config/src/complete.rs
+rust/crates/jmap-config/src/config_lookup.rs
 rust/crates/jmap-config/src/oauth2_service.rs
 rust/crates/jmap-config/src/oauth2_setup.rs
 rust/crates/jmap-mail/src/provider.rs

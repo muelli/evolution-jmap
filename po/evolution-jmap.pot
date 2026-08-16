@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-16 17:22+0000\n"
+"POT-Creation-Date: 2026-08-16 18:47+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -117,6 +117,21 @@ msgstr ""
 #: rust/crates/jmap-config/src/complete.rs:147
 #, c-format
 msgid "\"%1$s\" is not an email address."
+msgstr ""
+
+#: rust/crates/jmap-config/src/config_lookup.rs:235
+msgid "Look up JMAP account details"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the server this account was discovered
+#. against, shown in the account assistant's list of lookup results.
+#: rust/crates/jmap-config/src/config_lookup.rs:290
+#, c-format
+msgid "JMAP account at %1$s, using OAuth 2.0"
+msgstr ""
+
+#: rust/crates/jmap-config/src/config_lookup.rs:309
+msgid "JMAP account (OAuth 2.0)"
 msgstr ""
 
 #. TRANSLATORS: the name of an account type, in the list of account types
