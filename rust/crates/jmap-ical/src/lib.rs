@@ -19,6 +19,7 @@
 pub mod error;
 pub mod event;
 pub mod syntax;
+mod zone;
 
 pub use error::ICalError;
 pub use event::{

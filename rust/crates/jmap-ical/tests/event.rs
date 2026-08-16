@@ -2409,6 +2409,303 @@ fn a_utc_until_is_read_as_local_wherever_the_two_are_the_same_instant() {
     }
 }
 
+/// Berlin as libical writes it, and as every renderer of tzdata's own rules
+/// does: two observances, each springing on the last Sunday of its month, which
+/// is what Directive 2000/84/EC states for the whole EU.
+fn berlin(tzid: &str) -> String {
+    format!(
+        "BEGIN:VTIMEZONE\r\n\
+         TZID:{tzid}\r\n\
+         X-LIC-LOCATION:Europe/Berlin\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+0100\r\n\
+         TZOFFSETTO:+0200\r\n\
+         TZNAME:CEST\r\n\
+         DTSTART:19700329T020000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0100\r\n\
+         TZNAME:CET\r\n\
+         DTSTART:19701025T030000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n"
+    )
+}
+
+/// A recurring event in `tzid`, ending at `until`, in a document that defines
+/// the zone the way a real one does.
+fn recurring_in(tzid: &str, definition: &str, until: &str) -> String {
+    format!(
+        "BEGIN:VCALENDAR\r\n\
+         {definition}\
+         BEGIN:VEVENT\r\n\
+         UID:E1\r\n\
+         DTSTART;TZID={tzid}:20260115T130000\r\n\
+         RRULE:FREQ=WEEKLY;UNTIL={until}\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    )
+}
+
+#[test]
+fn a_zoned_rules_utc_until_is_converted_through_the_documents_own_vtimezone() {
+    // The other side of `a_zoned_rules_utc_until_is_not_taken_for_a_local_time`:
+    // converting the instant §3.3.10 requires needs the offset in force *at* it,
+    // and a document that carries the `VTIMEZONE` — which is every document
+    // Evolution writes, and every invitation and `.ics` worth the name — says
+    // what that offset is. So the zone database this crate refuses to ship is
+    // not needed after all: the rules are in the file.
+    //
+    // Both spellings of the identifier, because the definition is looked up by
+    // the `TZID` the property names and not by the zone it resolves to:
+    // libical's own components carry the solidus form.
+    for tzid in [
+        "Europe/Berlin",
+        "/freeassociation.sourceforge.net/Europe/Berlin",
+    ] {
+        for (until, read) in [
+            // Summer: the last Sunday of March has passed, so +0200.
+            ("20260331T120000Z", "2026-03-31T14:00:00"),
+            // Winter, on the other side of the October transition.
+            ("20261130T120000Z", "2026-11-30T13:00:00"),
+            // At the spring transition itself, which the new offset owns.
+            ("20260329T010000Z", "2026-03-29T03:00:00"),
+            // And one second before it, which the old one still does.
+            ("20260329T005959Z", "2026-03-29T01:59:59"),
+            // Before the definition's first transition, where the only thing it
+            // says about the zone is the offset that transition moved away from.
+            ("19600101T000000Z", "1960-01-01T01:00:00"),
+        ] {
+            let ics = recurring_in(tzid, &berlin(tzid), until);
+
+            let rules = ical_to_event(&ics)
+                .expect("parse")
+                .recurrence_rules
+                .expect("a rule came back");
+
+            assert_eq!(rules[0].until.as_deref(), Some(read), "{until} in {tzid}");
+            // Which is the point of the conversion: the rule can now be sent,
+            // where before it was kept verbatim and the save path had to leave
+            // `recurrenceRules` alone — or refuse the create outright.
+            assert!(maps_recurrence_rule(&rules[0]), "{until} in {tzid}");
+        }
+    }
+
+    // The trip back is the local form beside the zoned `DTSTART`, which is what
+    // this crate has always written and libical reads in the event's own zone —
+    // the same instant, and one this mapping then reads back unchanged.
+    let event = ical_to_event(&recurring_in(
+        "Europe/Berlin",
+        &berlin("Europe/Berlin"),
+        "20260331T120000Z",
+    ))
+    .expect("parse");
+    let ics = event_to_ical(&event);
+    assert!(
+        ics.contains("RRULE:FREQ=WEEKLY;UNTIL=20260331T140000\r\n"),
+        "{ics}"
+    );
+    assert_eq!(
+        ical_to_event(&ics).expect("parse").recurrence_rules,
+        event.recurrence_rules
+    );
+}
+
+#[test]
+fn a_summer_that_began_last_year_is_still_the_offset_in_force() {
+    // Auckland, whose daylight saving starts in September and ends in April, so
+    // that a January instant is governed by a transition in the *previous*
+    // year — and whose two observances start in different years, as they do
+    // wherever one of the two rules changed and the other did not.
+    //
+    // The naive answer is the transition each rule has in the year asked about,
+    // and in January both of those are still to come; the answer left is then
+    // whichever observance was written down last, which here is the wrong one
+    // by an hour. A southern-hemisphere summer is the case that says so.
+    let definition = "BEGIN:VTIMEZONE\r\n\
+         TZID:Pacific/Auckland\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+1200\r\n\
+         TZOFFSETTO:+1300\r\n\
+         TZNAME:NZDT\r\n\
+         DTSTART:20070930T020000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=9\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+1300\r\n\
+         TZOFFSETTO:+1200\r\n\
+         TZNAME:NZST\r\n\
+         DTSTART:20080406T030000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=4\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+    for (until, read) in [
+        // Summer there: the last Sunday of September 2025 put +1300 in force
+        // and nothing has moved it since.
+        ("20260115T120000Z", "2026-01-16T01:00:00"),
+        // Winter, after the first Sunday of April took it back to +1200.
+        ("20260715T120000Z", "2026-07-16T00:00:00"),
+    ] {
+        let ics = recurring_in("Pacific/Auckland", definition, until);
+
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+    }
+}
+
+#[test]
+fn a_zone_of_one_observance_states_the_offset_it_never_moves_from() {
+    // A zone that does not observe daylight saving is a `VTIMEZONE` of a single
+    // observance with no rule at all, and its one `DTSTART` is the whole of it.
+    let definition = "BEGIN:VTIMEZONE\r\n\
+         TZID:Asia/Kolkata\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0530\r\n\
+         TZOFFSETTO:+0530\r\n\
+         TZNAME:IST\r\n\
+         DTSTART:19700101T000000\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+    let ics = recurring_in("Asia/Kolkata", definition, "20260331T120000Z");
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T17:30:00"));
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn a_transition_the_zone_lists_by_date_counts_like_any_other() {
+    // Not every zone moves on a rule. Casablanca's clocks go back for Ramadan,
+    // which is not a date any `RRULE` states, so tzdata's renderers write the
+    // transitions out one date at a time — a `DTSTART` and an `RDATE` per year
+    // — and a zone whose dated transitions went uncounted would be read as
+    // whatever its last *rule* said, an hour out for weeks at a time.
+    let definition = "BEGIN:VTIMEZONE\r\n\
+         TZID:Africa/Casablanca\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0100\r\n\
+         TZOFFSETTO:+0000\r\n\
+         TZNAME:+00\r\n\
+         DTSTART:20250301T030000\r\n\
+         RDATE:20260218T030000\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+0000\r\n\
+         TZOFFSETTO:+0100\r\n\
+         TZNAME:+01\r\n\
+         DTSTART:20250406T020000\r\n\
+         RDATE:20260322T020000\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n";
+    for (until, read) in [
+        // Between the two dates of 2026, where the zone is at +0000.
+        ("20260301T120000Z", "2026-03-01T12:00:00"),
+        // And after the second of them, back at +0100.
+        ("20260401T120000Z", "2026-04-01T13:00:00"),
+    ] {
+        let ics = recurring_in("Africa/Casablanca", definition, until);
+
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
+    }
+}
+
+#[test]
+fn a_transition_rule_that_has_stopped_stops_being_counted() {
+    // Istanbul, which abolished daylight saving in September 2016 and has been
+    // at +0300 ever since: two rules that ended, and a third observance with no
+    // rule at all that has been in force since. An `UNTIL` need not fall on an
+    // occurrence (RFC 5545 §3.3.10 does not ask it to), and the one here names
+    // the moment the rule stopped applying rather than the last transition it
+    // made — so its own year still has an occurrence, one that never happened.
+    //
+    // Counting it would put the zone back an hour for every instant since, and
+    // it is the *later* of the two candidates, so it would win.
+    let definition = "BEGIN:VTIMEZONE\r\n\
+         TZID:Europe/Istanbul\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0300\r\n\
+         TZNAME:EEST\r\n\
+         DTSTART:19700329T030000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3;UNTIL=20160327T010000Z\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0300\r\n\
+         TZOFFSETTO:+0200\r\n\
+         TZNAME:EET\r\n\
+         DTSTART:19701025T040000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10;UNTIL=20160907T210000Z\r\n\
+         END:STANDARD\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0300\r\n\
+         TZOFFSETTO:+0300\r\n\
+         TZNAME:+03\r\n\
+         DTSTART:20160908T000000\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+    let ics = recurring_in("Europe/Istanbul", definition, "20260331T120000Z");
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T15:00:00"));
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn a_zone_whose_transitions_cannot_be_worked_out_leaves_the_until_alone() {
+    // The conversion is only as good as the definition it reads, so a rule this
+    // cannot count occurrences of takes the whole zone with it and the `UNTIL`
+    // stays exactly where it was: kept verbatim, no LocalDateTime, so the save
+    // path knows the end did not survive. Guessing an offset out of half a
+    // definition would move the end of the series by an hour or by twelve, and
+    // nothing downstream could tell that it had happened.
+    for rule in [
+        // A weekday with no ordinal is every Sunday in the month, which is a set
+        // of days and not the one a transition happens on.
+        "FREQ=YEARLY;BYDAY=SU;BYMONTH=3",
+        // A frequency this does not count in.
+        "FREQ=MONTHLY;BYMONTHDAY=1",
+        // A part outside the handful a transition rule is written from: read as
+        // "the rule says more than was understood", not ignored.
+        "FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3;BYSETPOS=1",
+    ] {
+        let definition = berlin("Europe/Berlin").replace("FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3", rule);
+        let ics = recurring_in("Europe/Berlin", &definition, "20260331T120000Z");
+
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert_eq!(
+            rules[0].until.as_deref(),
+            Some("2026-03-31T12:00:00Z"),
+            "{rule}"
+        );
+        assert!(!maps_recurrence_rule(&rules[0]), "{rule}");
+    }
+}
+
 #[test]
 fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
     // `rscale` & friends ride in `extra` and do not survive the trip through

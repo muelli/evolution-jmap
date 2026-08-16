@@ -1192,6 +1192,53 @@ fn a_new_event_whose_series_end_cannot_be_stated_is_not_created_at_all() {
     );
 }
 
+/// Berlin as libical writes it, and as every component Evolution hands a save
+/// carries it: the `VTIMEZONE` RFC 5545 §3.6.5 says defines the `TZID` beside
+/// it.
+const BERLIN: &str = "BEGIN:VTIMEZONE\r\n\
+TZID:Europe/Berlin\r\n\
+BEGIN:DAYLIGHT\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+DTSTART:19700329T020000\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+DTSTART:19701025T030000\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n";
+
+#[test]
+fn a_new_events_series_end_converts_through_the_zone_the_document_defines() {
+    // The refusal above is what is left when a document names a zone and does
+    // not define it. A real one defines it, and then the UTC instant §3.3.10
+    // requires converts into the local time §4.3.3 wants without any zone
+    // database: the rules are in the file. So the commonest recurring save
+    // there is — "repeat weekly until <date>" in a zoned calendar — reaches the
+    // server as the series it is, rather than as an error the user has to work
+    // around.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT
+        .replace("BEGIN:VEVENT", &format!("{BERLIN}BEGIN:VEVENT"))
+        .replace(
+            "DURATION:PT90M",
+            "DURATION:PT90M\r\nRRULE:FREQ=WEEKLY;UNTIL=20260331T120000Z",
+        );
+
+    let saved = fixture.sync().save_component(&icalendar, None).unwrap();
+
+    let rules = fixture
+        .event(&saved.uid.as_str().into())
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules.len(), 1);
+    // Two hours on, the last Sunday of March having passed two days earlier.
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T14:00:00"));
+}
+
 #[test]
 fn a_new_event_whose_rule_the_rrule_narrowed_is_not_created_at_all() {
     // The other half of the same refusal, and the one that is not about time

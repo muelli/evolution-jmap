@@ -79,8 +79,11 @@
 //! The one place a zone is needed and no database is at hand is a recurrence's
 //! `UNTIL`: RFC 5545 §3.3.10 states it as a UTC instant beside a zoned
 //! `DTSTART` where RFC 8984 §4.3.3 wants a local time in the event's own zone,
-//! and the two differ by exactly the offset this crate cannot compute. Such a
-//! rule is therefore read as unmappable rather than shifted — see `read_until`.
+//! and the two differ by the offset in force at that instant. The document
+//! answers that itself wherever it carries the `VTIMEZONE` §3.6.5 says defines
+//! the zone — see the `zone` module — and a rule whose offset neither the
+//! document nor this crate knows is read as unmappable rather than shifted, so
+//! that the save path leaves the server's own rule alone. See `read_until`.
 //! A `VTIMEZONE` observance's own `UNTIL` is the same shape one level down and
 //! *is* converted, because an observance dates itself in the zone it defines:
 //! the offset is the fixed one `TZOFFSETFROM` states in the same component,
@@ -172,7 +175,7 @@ const RECURRENCE_ID: &str = "RECURRENCE-ID";
 /// §3.3.10). JSCalendar's `day` (RFC 8984 §4.3.3) is the same closed set in
 /// lowercase, so the two differ only in case — and a value outside it is
 /// dropped rather than passed through in the other format's clothes.
-const WEEKDAYS: [&str; 7] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+pub(crate) const WEEKDAYS: [&str; 7] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
 
 /// JSCalendar `status` values and their iCalendar `STATUS` spelling. Both sets
 /// are closed, so a value outside this table is dropped rather than passed
@@ -1420,7 +1423,7 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     let mut vevent = vevent_of(event, as_a_date, zone, None);
 
     for rule in event.recurrence_rules.iter().flatten() {
-        if let Some(value) = rule_to_rrule(rule, Ends::In(zone), as_a_date) {
+        if let Some(value) = rule_to_rrule(rule, Ends::In(Zoned::named(zone)), as_a_date) {
             vevent = vevent.with(Property::raw("RRULE", &value));
         }
     }
@@ -2259,7 +2262,7 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
         .or_else(|| vevents.first())
         .ok_or(ICalError::NoEvent)?;
 
-    let zones = zone_names(&calendar);
+    let zones = stated_zones(&calendar);
     let mut event = read_vevent(series, &zones);
     event.recurrence_overrides = read_overrides(series, &vevents, &event, &zones);
     // After the overrides, because which definitions the document is carrying for
@@ -2304,21 +2307,42 @@ pub fn names_time_zone(value: &str) -> bool {
     })
 }
 
-/// The zone each `VTIMEZONE` in the document says it describes, by the `TZID`
-/// that refers to it.
+/// What the document states about each zone it defines, by the `TZID` that
+/// refers to it.
 ///
-/// Only components that answer the question are listed: a `TZID` that already
-/// [`names_time_zone`] needs no translating, and an `X-LIC-LOCATION` that names
-/// no zone either is no better than what it would replace.
-fn zone_names(calendar: &Component) -> BTreeMap<String, String> {
+/// Two different questions are asked of the one map, which is why the whole
+/// `VTIMEZONE` is kept rather than the answer to the first alone: which zone a
+/// `TZID` names (see [`zone_of`]), and what the zone's offset was at a given
+/// instant (see [`crate::zone`], and [`read_until`], its one caller).
+type Zones<'a> = BTreeMap<String, Zone<'a>>;
+
+/// One `VTIMEZONE`, and the zone it says it describes.
+struct Zone<'a> {
+    /// Only where the component answers the question: a `TZID` that already
+    /// [`names_time_zone`] needs no translating, and an `X-LIC-LOCATION` that
+    /// names no zone either is no better than what it would replace.
+    name: Option<String>,
+    definition: &'a Component,
+}
+
+/// Every `VTIMEZONE` the document carries, by the `TZID` that refers to it.
+fn stated_zones(calendar: &Component) -> Zones<'_> {
     calendar
         .children
         .iter()
         .filter(|child| child.name == "VTIMEZONE")
         .filter_map(|vtimezone| {
             let tzid = vtimezone.text("TZID")?;
-            let location = vtimezone.text(X_LIC_LOCATION)?;
-            (!names_time_zone(&tzid) && names_time_zone(&location)).then_some((tzid, location))
+            let name = vtimezone
+                .text(X_LIC_LOCATION)
+                .filter(|location| !names_time_zone(&tzid) && names_time_zone(location));
+            Some((
+                tzid,
+                Zone {
+                    name,
+                    definition: vtimezone,
+                },
+            ))
         })
         .collect()
 }
@@ -2544,23 +2568,43 @@ fn read_observance(component: &Component) -> Option<Value> {
 /// and reading the former as it would leave the server's zone cleared by an
 /// edit that never touched it. Refusing to send it is that path's decision to
 /// make, and it needs the value to make it — see `jmap_cal_sync::patch`.
-fn zone_of(tzid: &str, zones: &BTreeMap<String, String>) -> String {
+fn zone_of(tzid: &str, zones: &Zones) -> String {
     match names_time_zone(tzid) {
         true => tzid.to_owned(),
-        false => zones.get(tzid).cloned().unwrap_or_else(|| tzid.to_owned()),
+        false => zones
+            .get(tzid)
+            .and_then(|zone| zone.name.clone())
+            .unwrap_or_else(|| tzid.to_owned()),
     }
 }
 
 /// One `VEVENT` as an event, recurrence rules included and named instances not:
 /// those are the document's, not the component's.
-fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> CalendarEvent {
+fn read_vevent(vevent: &Component, zones: &Zones) -> CalendarEvent {
     let text = |name: &str| vevent.text(name).filter(|value| !value.is_empty());
     let (start, time_zone, show_without_time) = read_start(vevent, zones);
 
+    // Only for a component that is actually *in* the zone: a `TZID` beside a
+    // DATE value states no zone at all (RFC 5545 §3.2.19), and shifting a
+    // floating event's `UNTIL` by it would move an end nothing had placed.
+    let definition = time_zone
+        .is_some()
+        .then(|| {
+            vevent
+                .property("DTSTART")
+                .and_then(|property| property.param("TZID"))
+                .and_then(|tzid| zones.get(tzid))
+                .map(|zone| zone.definition)
+        })
+        .flatten();
+    let ends = Ends::In(Zoned {
+        name: time_zone.as_deref(),
+        definition,
+    });
     let rules: Vec<RecurrenceRule> = vevent
         .all("RRULE")
         .into_iter()
-        .filter_map(|property| rrule_to_rule(&property.raw_value(), Ends::In(time_zone.as_deref())))
+        .filter_map(|property| rrule_to_rule(&property.raw_value(), ends))
         .collect();
 
     CalendarEvent {
@@ -2883,10 +2927,7 @@ fn names_map_entry(value: &str) -> bool {
 /// A timed start yields `None` rather than `Some(false)`: the RFC 8984 default
 /// is false anyway, and the save path reads an edit off a difference from this,
 /// so answering `false` where the server said nothing would invent one.
-fn read_start(
-    vevent: &Component,
-    zones: &BTreeMap<String, String>,
-) -> (Option<String>, Option<String>, Option<bool>) {
+fn read_start(vevent: &Component, zones: &Zones) -> (Option<String>, Option<String>, Option<bool>) {
     let Some(property) = vevent.property("DTSTART") else {
         return (None, None, None);
     };
@@ -2946,7 +2987,7 @@ fn read_overrides(
     series: &Component,
     vevents: &[&Component],
     event: &CalendarEvent,
-    zones: &BTreeMap<String, String>,
+    zones: &Zones,
 ) -> Option<BTreeMap<String, Value>> {
     let mut overrides: BTreeMap<String, Value> = BTreeMap::new();
     let values = |name: &str| series.all(name).into_iter().flat_map(Property::texts);
@@ -3230,7 +3271,7 @@ fn instant(value: &str) -> Option<i64> {
 
 /// Days from 1970-01-01 to a proleptic Gregorian date, by Howard Hinnant's
 /// `days_from_civil`. Exact for every year either format can spell.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     // Count the year as starting in March, which puts a leap day at the end of
     // it and so needs no special case.
     let year = year - i64::from(month <= 2);
@@ -3415,7 +3456,7 @@ fn to_ical_date_time(local: &str) -> Option<String> {
 /// `2026-01-15T13:00:00`. A date without a time is read as midnight:
 /// `showWithoutTime` is not modeled yet, and an all-day event that lost its
 /// start entirely would be worse than one pinned to the top of the day.
-fn to_local_date_time(value: &str) -> Option<String> {
+pub(crate) fn to_local_date_time(value: &str) -> Option<String> {
     let value = value.strip_suffix(['Z', 'z']).unwrap_or(value);
     let (date, time) = match value.split_once('T') {
         Some((date, time)) => (date, time),
@@ -3479,7 +3520,7 @@ fn exists(date: &str, time: &str) -> bool {
 }
 
 /// The length of a month, in the proleptic Gregorian calendar both formats use.
-fn days_in_month(year: u32, month: u32) -> u32 {
+pub(crate) fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -3505,7 +3546,7 @@ fn from_offset(local: &str, offset: &str) -> Option<String> {
 
 /// An RFC 5545 §3.3.14 UTC offset as a count of seconds east of UTC, through
 /// [`utc_offset`] so that only a spelling both formats admit is read at all.
-fn offset_seconds(offset: &str) -> Option<i64> {
+pub(crate) fn offset_seconds(offset: &str) -> Option<i64> {
     let offset = utc_offset(offset)?;
     let (sign, digits) = offset.split_at_checked(1)?;
     let field = |at: usize| digits.get(at..at + 2)?.parse::<i64>().ok();
@@ -3613,7 +3654,7 @@ fn rule_to_rrule(rule: &RecurrenceRule, ends: Ends, as_a_date: bool) -> Option<S
         // nothing. See [`Ends::At`].
         let (stated, suffix) = match ends {
             Ends::At(offset) => (from_offset(until, offset), "Z"),
-            Ends::In(Some(zone)) if is_utc(zone) => (Some(until.to_owned()), "Z"),
+            Ends::In(zone) if zone.name.is_some_and(is_utc) => (Some(until.to_owned()), "Z"),
             Ends::In(_) => (Some(until.to_owned()), ""),
         };
         // Only the conversion can fail here — [`writable`] has already read the
@@ -4027,14 +4068,23 @@ fn weekday_token(day: &str) -> Option<&'static str> {
 /// carries a `TZID`, so a `Z` here is what every conformant producer writes —
 /// an invitation, an imported `.ics`. Reading its digits as a local time would
 /// move the end of the series by the zone's offset, which is a recurrence the
-/// user never edited being shortened on the server. Converting it properly
-/// needs a zone database this crate deliberately does not carry, so the instant
-/// is kept as it was stated, `Z` and all: that is not a LocalDateTime, so
-/// [`writable`] refuses it and [`maps_recurrence_rule`] tells the save path to
-/// leave `recurrenceRules` alone.
+/// user never edited being shortened on the server.
 ///
-/// [`Ends::At`] is the one case where the shift *can* be computed, and is —
-/// see that variant.
+/// Converting it properly needs the offset in force at that instant, which is
+/// normally a zone database's job and this crate carries none. It does not have
+/// to: RFC 5545 §3.6.5 makes the document itself define the zone its `TZID`
+/// refers to, so the answer is in the file wherever the `VTIMEZONE` is — which
+/// is every component Evolution writes and every invitation worth the name.
+/// [`crate::zone`] reads it out, and that is the ordinary case.
+///
+/// What is left is a document that names a zone it does not define, or defines
+/// it in a shape [`crate::zone`] will not guess at. There the instant is kept as
+/// it was stated, `Z` and all: that is not a LocalDateTime, so [`writable`]
+/// refuses it and [`maps_recurrence_rule`] tells the save path to leave
+/// `recurrenceRules` alone.
+///
+/// [`Ends::At`] is the one case where the shift needs no definition at all, an
+/// offset being a number rather than a zone — see that variant.
 ///
 /// The two cases with no offset to shift by are read as they always were: an
 /// event whose zone *is* UTC states the same digits either way, and a floating
@@ -4058,8 +4108,41 @@ fn read_until(value: &str, ends: Ends) -> String {
     }
     match ends {
         Ends::At(offset) => at_offset(&local, offset).unwrap_or_else(|| value.to_owned()),
-        Ends::In(Some(zone)) if !is_utc(zone) => format!("{local}Z"),
-        Ends::In(_) => local,
+        Ends::In(zone) => match zone.offset_at(&local) {
+            Some(offset) => moved(&local, offset).unwrap_or_else(|| value.to_owned()),
+            None if zone.name.is_some_and(|name| !is_utc(name)) => format!("{local}Z"),
+            None => local,
+        },
+    }
+}
+
+/// The zone a component's own times are in, as much of it as is known: the
+/// `TimeZoneId` [`read_start`] resolved, and — where the document defines the
+/// zone rather than merely naming it — the `VTIMEZONE` that says when its
+/// offset changes.
+///
+/// The definition is what [`read_until`] needs and nothing else does, so it is
+/// `None` on the drawing side, which has only a name to go on.
+#[derive(Clone, Copy)]
+struct Zoned<'a> {
+    name: Option<&'a str>,
+    definition: Option<&'a Component>,
+}
+
+impl<'a> Zoned<'a> {
+    /// A zone named and not defined: what the drawing side has, and what a
+    /// document carrying no `VTIMEZONE` for it gives the reading side.
+    fn named(name: Option<&'a str>) -> Self {
+        Self {
+            name,
+            definition: None,
+        }
+    }
+
+    /// The offset from UTC in force in this zone at `utc`, where the document
+    /// said enough for it to be worked out.
+    fn offset_at(&self, utc: &str) -> Option<i64> {
+        crate::zone::offset_at(self.definition?, utc)
     }
 }
 
@@ -4068,8 +4151,8 @@ fn read_until(value: &str, ends: Ends) -> String {
 #[derive(Clone, Copy)]
 enum Ends<'a> {
     /// In the zone the component naming the rule is in, as `read_start`
-    /// resolved it, or `None` for a component in no zone — a floating event.
-    In(Option<&'a str>),
+    /// resolved it — a zone with no name at all being a floating component.
+    In(Zoned<'a>),
     /// At a fixed offset from UTC, which is a `VTIMEZONE` observance: RFC 5545
     /// §3.6.5 dates one in the zone it is defining, resolving its local
     /// `DTSTART` against the `TZOFFSETFROM` in the same component, and RFC 8984

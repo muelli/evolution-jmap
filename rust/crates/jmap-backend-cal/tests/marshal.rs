@@ -389,6 +389,54 @@ fn a_zoned_instance_brings_the_definition_of_its_zone() {
     }
 }
 
+/// The definition the envelope carries is also what says when the zone's offset
+/// changed, which is the one thing a recurrence's end needs: RFC 5545 §3.3.10
+/// states `UNTIL` as a UTC instant beside a zoned `DTSTART`, and RFC 8984
+/// §4.3.3 wants a local time in the event's own zone.
+///
+/// Measured here rather than in `jmap-ical`'s own tests, and against the
+/// definition **libical actually holds** rather than one written for the test:
+/// that mapping is only reached with the transition rules some producer wrote,
+/// and the producer on the save path is libical. A definition it states in a
+/// shape the conversion will not guess at turns this red while every unit test
+/// stays green — and the answer would then be an error dialog for the
+/// commonest recurring appointment there is.
+#[test]
+fn a_recurrence_ending_at_a_utc_instant_converts_through_the_definition_libical_holds() {
+    let component = instance(&format!(
+        "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\r\n\
+         DTSTART;TZID={LIBICAL_TZID}:20260810T090000\r\n\
+         RRULE:FREQ=WEEKLY;UNTIL=20260901T070000Z\r\n\
+         END:VEVENT\r\n"
+    ));
+    let list = instance_list(&[component]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
+        let rules = jmap_ical::ical_to_event(&saved.icalendar)
+            .expect("the envelope is a calendar object")
+            .recurrence_rules
+            .expect("the rule survived the mapping");
+
+        // 07:00 UTC is 09:00 in Berlin at the start of September, and the rule
+        // has to be sendable or the server never hears that the series ends.
+        assert_eq!(
+            rules[0].until.as_deref(),
+            Some("2026-09-01T09:00:00"),
+            "the end of the series did not convert: {}",
+            saved.icalendar
+        );
+        assert!(
+            jmap_ical::maps_recurrence_rule(&rules[0]),
+            "the rule cannot be sent, so a create carrying it is refused: {}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+    }
+}
+
 /// A zone already spelled the way JSCalendar wants it needs no translating, but
 /// it does need defining — and under the identifier the event's properties use,
 /// not libical's, or the envelope refers to one zone and defines another.
