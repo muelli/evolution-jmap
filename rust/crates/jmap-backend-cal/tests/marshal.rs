@@ -649,6 +649,53 @@ fn a_custom_zone_the_calendar_holds_is_defined_out_of_it() {
     }
 }
 
+/// A transition rule that *stopped* keeps the day it stopped on all the way
+/// through EDS.
+///
+/// RFC 5545 §3.6.5's own examples end an observance's `RRULE` at a UTC instant,
+/// beside a `DTSTART` that is a local time — so a zone whose rules changed at
+/// some point in its history, which is most of the ones a real invitation
+/// carries, arrives with a `Z` that has to be read against the
+/// `TZOFFSETFROM` in the same component. Reading its digits as a local time
+/// moves the zone's last spring-forward by an hour, and every event after it
+/// with it.
+///
+/// The measurement this makes that `jmap-ical`'s own tests cannot: that libical
+/// hands the rule back with its end intact, rather than normalising or dropping
+/// it on the way through the calendar's timezone cache.
+#[test]
+fn an_observance_that_stopped_repeating_keeps_its_end_through_the_calendar() {
+    let object = CUSTOM_ZONE_OBJECT.replace(
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU;UNTIL=19730325T010000Z\r\n",
+    );
+    let component = instance(&zoned(CUSTOM_TZID));
+    let list = instance_list(&[component]);
+    let zones = zone_cache(&[(&object, CUSTOM_TZID)]);
+
+    unsafe {
+        let saved = marshal::icalendar_from_instances(list, zones).expect("a master");
+        let event = jmap_ical::ical_to_event(&saved.icalendar).expect("a calendar object");
+        let definition = serde_json::to_value(&event.time_zones).expect("a map of time zones")
+            [CUSTOM_TZID]["daylight"][0]["recurrenceRules"][0]["until"]
+            .clone();
+
+        // 01:00 UTC is 02:00 where the offset before the transition is +0100 —
+        // the wall clock the rule always named, which is what RFC 8984 §4.7.2
+        // states a TimeZoneRule's times in.
+        assert_eq!(
+            definition,
+            serde_json::json!("1973-03-25T02:00:00"),
+            "the end of the transition rule did not survive the trip: {}",
+            saved.icalendar
+        );
+
+        glib_sys::g_slist_free(list);
+        g_object_unref(component.cast());
+        g_object_unref(zones.cast());
+    }
+}
+
 /// And a zone neither the builtin table nor the calendar knows is still left
 /// undefined rather than guessed at — asking the cache adds a place to look, not
 /// a licence to invent.

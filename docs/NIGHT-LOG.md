@@ -24313,3 +24313,106 @@ the editor lets a handle be moved between the Home and Work slots at all is
 unknown; a `VALUE=uri` photo's rendering is unmeasured; and what Evolution's
 contact editor writes for a replaced photo, and into a cleared field, is
 inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixtieth session)
+
+**The same bug one level down, and this one converts.** Last session refused a
+zoned event's UTC `UNTIL` because turning it into RFC 8984 §4.3.3's local time
+needs the offset in effect at that instant — a zone database `jmap-ical` does
+not carry — and left the observance case standing as the next thing to close. A
+`VTIMEZONE` observance's own `RRULE` may carry a UTC `UNTIL` too; RFC 5545
+§3.6.5's `America/New_York` example is exactly that, a `DAYLIGHT` rule ending
+`UNTIL=19730429T070000Z` beside `TZOFFSETFROM:-0500`. Read as local digits that
+is 07:00 where the rule meant 02:00 — the zone's last spring-forward moved five
+hours, and every event drawn in that zone after it out by an hour.
+
+**Why it converts where the event case cannot.** An observance dates itself in
+the zone it is *defining*, not in one it refers to: §3.6.5 resolves its local
+`DTSTART` against the `TZOFFSETFROM` sitting in the same component, and RFC 8984
+§4.7.2 states a TimeZoneRule's `start` the same way. An `UNTIL` bounds that same
+series of local times, so it is stated on the same clock — and that clock is a
+fixed number of seconds, not a zone whose observance rules have to be evaluated.
+The conversion is arithmetic across at most one date boundary and nothing more.
+
+**One type instead of a second parameter.** `read_until` and `rule_to_rrule`
+both took `time_zone: Option<&str>`, where `None` meant two different things —
+a floating event and an observance. Those now take `Ends`, which says which:
+`Ends::In(Option<&str>)` for the zone a component names, `Ends::At(&str)` for
+the fixed offset an observance states. The four call sites each say which they
+are, so the observance case can no longer be reached by forgetting to pass
+something.
+
+**Drawn as UTC, not as the local form §3.3.10 would also admit.** §3.3.10's
+value-type rule says an `UNTIL` beside a local `DTSTART` must itself be local,
+which would make the local spelling the conformant one — and §3.6.5's own
+examples contradict it, as does every producer of a `VTIMEZONE`: tzdata's,
+libical's, Exchange's. Drawing the form readers may never have met, to satisfy a
+rule the RFC breaks in its own text, buys nothing and risks a zone nobody
+resolves; so `Ends::At` converts back and writes the `Z`. It also makes the trip
+through JSCalendar byte-identical, so a save of an untouched component still has
+nothing to report. `rule_to_rrule` now returns `None` when it cannot state an
+`UNTIL` it was given rather than emitting the line without one — an observance
+rule that loses its end is a zone that keeps moving forever, and `observance`
+already gives up the whole definition rather than draw half of one.
+
+**libical measured, not assumed.** The read path only matters if the `Z`
+actually reaches it. `jmap-backend-cal/tests/marshal.rs` now pushes a foreign
+`VTIMEZONE` whose `DAYLIGHT` rule ends at a UTC instant through a real
+`ECalCache` on EDS 3.52 and asserts what the mapping reads back. It survives:
+libical re-renders the rule as `RRULE:FREQ=YEARLY;UNTIL=19730325T010000Z;
+BYDAY=-1SU;BYMONTH=3` — reordered into its own part order, `Z` intact — and with
+the conversion reverted that test fails with `1973-03-25T01:00:00` against the
+`02:00:00` the rule names. So the end does come through EDS, and reading it
+wrongly was reachable from a real invitation.
+
+**Red first, then five mutations run and reverted.** The `jmap-ical` read test
+drives seven rows — the RFC's own example; backwards over a month, a year and
+into both a leap and a non-leap February; forwards over a year end at `+0545`;
+`+0000`, where there is nothing to shift; and a value already local, which is
+what this crate itself writes. The draw test drives the same table reversed and
+asserts the round trip both ways. Both were red on the first run, the read one
+with `07:00:00` where `02:00:00` was wanted. Mutations: dropping the read
+conversion (the original red); drawing the local form instead of the instant;
+removing the backward day carry, which reddens only the boundary rows; making
+February 28 days always, which reddens the leap row and the existing
+`a_leap_day_and_a_leap_second_are_real_and_survive`; and dropping the minutes of
+an offset, which reddens the `+0545` rows.
+
+Tests: +2 in `jmap-ical/tests/event.rs`, +1 in `jmap-backend-cal/tests/
+marshal.rs`. The default set is 1139 → 1141; `marshal.rs` is 49 → 50 and runs
+under `rust-test-eds`.
+
+Verified locally: `cargo test --locked` 1141, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`
+clean for both touched crates; `ninja -C build` then `ctest --test-dir build`
+14/14, all four functional legs included. `ci/checks.sh` still stops at its first
+step on this VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those two
+were reasoned by hand: no file is added or removed, so the SPDX header set is
+unchanged, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it
+gave on the last green run.
+
+**What this still does not do.** `moved` refuses a result outside the four-digit
+years RFC 5545 §3.3.4 admits — a shift off 0000-01-01 or 9999-12-31 — and a
+refused `UNTIL` in an observance is dropped rather than costing the zone, which
+would leave a transition rule unbounded. No real zone ends there, but the
+asymmetry is real: on the way *out* the same failure gives up the whole
+definition, and on the way in it does not. Closing it means `read_observance`
+knowing the text stated an `UNTIL` that did not survive, which is a check worth
+having and was not worth widening this increment for.
+
+No milestone tag. Closed: a `VTIMEZONE` observance's own UTC `UNTIL` read as a
+local time. Unchanged blockers: M10 still has no CI matrix — the one piece left
+of it, and it wants a machine that can pull more than one EDS image; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; an observance `UNTIL` that
+cannot be converted is dropped rather than costing the zone (above); whether
+Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution
+shows only the first" bet is still unverified; the two `LABEL` `TYPE` risks
+stand; a deathday and a birthday stated as a year alone are still invisible; the
+conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified
+and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.
