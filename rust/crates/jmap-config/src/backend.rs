@@ -56,17 +56,15 @@
 //!
 //! ## What is not here yet
 //!
-//! `insert_widgets` now builds four of the five fields
+//! `insert_widgets` now builds every field
 //! [`Connection`](jmap_collection_sync::child_source::Connection) carries —
 //! the server, the port, the login name and whether the connection is
 //! encrypted — bound to the collection the same way `check_complete` and
-//! `commit_changes` already read and write it. Two more things are still
-//! missing, and are recorded here rather than silently absent:
+//! `commit_changes` already read and write it, plus a status label showing
+//! [`Incomplete`](crate::complete::Incomplete)'s refusal reason (empty, and
+//! hidden, once the account is one a commit would accept). What is still
+//! missing is only:
 //!
-//! - **A status label.** [`Incomplete`](crate::complete::Incomplete)'s refusal
-//!   reason is computed by [`is_complete`] and thrown away — there is nowhere
-//!   on the page for it to land, so the user sees *Next* refuse to light up
-//!   with no explanation of why.
 //! - **Verification in a real Evolution.** GTK 3 will not construct a widget
 //!   without a display connection, so nothing on this machine has run
 //!   `insert_widgets` and looked at the result — see its own docs for exactly
@@ -79,8 +77,8 @@
 //! settings page filled in — the address, the server its domain implies and
 //! the login name it offers — and now carries three entries and a check button
 //! to correct any of those from, bound live to the account `check_complete` and
-//! `commit_changes` both read. What is still missing is any explanation on the
-//! page itself for why *Next* refuses to light up when it does.
+//! `commit_changes` both read, and a label underneath that says why *Next*
+//! refuses to light up when it does.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
@@ -95,20 +93,20 @@ use eds_sys::{
 };
 use evo_sys::{
     EMailConfigPage, EMailConfigServiceBackend, EMailConfigServiceBackendClass,
-    EMailConfigServicePage, GtkBox, e_mail_config_page_changed,
+    EMailConfigServicePage, GtkBox, GtkWidget, e_mail_config_page_changed,
     e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_page,
     e_mail_config_service_backend_get_source, e_mail_config_service_backend_get_type,
     e_mail_config_service_page_get_email_address, gtk_box_pack_start,
     gtk_check_button_new_with_mnemonic, gtk_entry_new, gtk_grid_attach, gtk_grid_new,
-    gtk_grid_set_column_spacing, gtk_grid_set_row_spacing, gtk_label_new_with_mnemonic,
-    gtk_label_set_mnemonic_widget, gtk_label_set_xalign, gtk_widget_set_hexpand,
-    gtk_widget_show_all,
+    gtk_grid_set_column_spacing, gtk_grid_set_row_spacing, gtk_label_new,
+    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
+    gtk_label_set_xalign, gtk_widget_set_hexpand, gtk_widget_set_visible, gtk_widget_show_all,
 };
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean, gpointer};
 use gobject_sys::{
     G_BINDING_BIDIRECTIONAL, G_BINDING_SYNC_CREATE, G_CONNECT_DEFAULT, GBinding, GObject,
-    GParamSpec, GValue, g_signal_connect_object, g_value_get_string, g_value_get_uint,
-    g_value_set_string, g_value_set_uint,
+    GParamSpec, GValue, g_object_get_data, g_object_set_data, g_signal_connect_object,
+    g_value_get_string, g_value_get_uint, g_value_set_string, g_value_set_uint,
 };
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate};
@@ -117,7 +115,7 @@ use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
 
 use crate::account::{apply, read};
-use crate::complete::check;
+use crate::complete::{check, status_message};
 use crate::defaults::from_identity;
 use crate::mail::{MAIL_BACKEND_NAME, apply_server};
 
@@ -285,11 +283,6 @@ enum RowKind {
 /// alive as [`i18n::translate_static`](jmap_backend_core::i18n::translate_static)
 /// exists for), the `ESourceAuthentication` property the entry is bound to,
 /// and how that binding is made.
-///
-/// Three rows and not five: neither this nor the security check button below
-/// it has a status label yet, for
-/// [`Incomplete`](crate::complete::Incomplete)'s refusal reason — see
-/// [`insert_widgets`] for why this increment stops there.
 const ENTRY_ROWS: [(&CStr, &CStr, RowKind); 3] = [
     (N_(c"_Server:"), c"host", RowKind::Text),
     (N_(c"_Port:"), c"port", RowKind::Port),
@@ -301,6 +294,13 @@ const ENTRY_ROWS: [(&CStr, &CStr, RowKind); 3] = [
 /// not a label-and-entry pair, and binds to `[Security]`, not
 /// `[Authentication]`.
 const SECURE_LABEL: &CStr = N_(c"Use a _secure connection (TLS)");
+
+/// The keys [`insert_entries`] stashes the status label and the collection it
+/// is computed from under, as `page`'s own qdata — see
+/// [`insert_widgets`]'s docs on why [`on_extension_changed`] needs a way to
+/// reach them that does not depend on a signal argument it is not handed.
+const STATUS_LABEL_KEY: &CStr = c"jmap-config-status-label";
+const STATUS_COLLECTION_KEY: &CStr = c"jmap-config-status-collection";
 
 /// What Evolution calls when the *Receiving Email* page is built for this
 /// provider: put the entries the user corrects an account's server and login
@@ -337,11 +337,17 @@ const SECURE_LABEL: &CStr = N_(c"Use a _secure connection (TLS)");
 /// object's lifetime relative to the other has to be reasoned about for the
 /// connection to stay safe.
 ///
-/// ## What is not here yet
+/// ## Where the status label's own refresh keeps its state
 ///
-/// The status label [`Incomplete`](crate::complete::Incomplete)'s refusal
-/// reason belongs in — the crate's own top-level docs and this module's say
-/// so at length.
+/// The same `notify` handler ([`on_extension_changed`]) is also what keeps
+/// the status label in step after the first fill: it needs the label and the
+/// collection, and it is invoked by GLib with neither — only the extension
+/// that changed and the `page` this was connected against. So both are
+/// stashed as `page`'s own qdata (`g_object_set_data`, already available from
+/// `gobject-sys` — no new FFI for it) the moment the label is built, and
+/// [`on_extension_changed`] reads them back with `g_object_get_data`. `page`
+/// is the right place to hang them: it already outlives every `notify` this
+/// class connects, for the reason above.
 ///
 /// ## Untestable here, like the rest of this vfunc
 ///
@@ -502,6 +508,28 @@ unsafe fn insert_entries(
         );
     }
 
+    // The status label: a single label spanning both columns, on the row
+    // after the check button. `gtk_label_new`, not `_with_mnemonic` — this
+    // text is `Incomplete`'s own and not this module's to add a keyboard
+    // shortcut to.
+    // SAFETY: no arguments.
+    let status_label = unsafe { gtk_label_new(ptr::null()) };
+    // SAFETY: `status_label` was just constructed above and is a `GtkWidget`;
+    // `grid` is the live grid every other row was attached to.
+    unsafe {
+        gtk_grid_attach(
+            grid.cast(),
+            status_label,
+            0,
+            ENTRY_ROWS.len() as i32 + 1,
+            2,
+            1,
+        );
+    }
+    // SAFETY: `status_label` is a live `GtkLabel`, just constructed, and
+    // `collection` is a valid source by this function's contract.
+    unsafe { set_status_text(status_label, collection) };
+
     // SAFETY: `grid` is the live `GtkWidget` constructed above, and `parent`
     // is a valid `GtkBox` by this function's contract.
     unsafe {
@@ -510,6 +538,26 @@ unsafe fn insert_entries(
     }
 
     if !page.is_null() {
+        // The status label's own refresh needs to reach it and the
+        // collection from `on_extension_changed`, which is handed neither —
+        // see `insert_widgets`'s docs on why they are cached as `page`'s own
+        // qdata rather than threaded through the signal.
+        // SAFETY: `page` is a valid, live GObject by this function's
+        // contract, just checked non-NULL; `status_label` and `collection`
+        // both outlive it — the label is owned by `grid`, itself now owned by
+        // `parent`, and `collection` is the backend's own reference, which
+        // outlives the page it built. Neither call transfers ownership (no
+        // `GDestroyNotify` is given): this is a cache of pointers already
+        // kept alive elsewhere, not a new reference either has to be dropped.
+        unsafe {
+            g_object_set_data(page.cast(), STATUS_LABEL_KEY.as_ptr(), status_label.cast());
+            g_object_set_data(
+                page.cast(),
+                STATUS_COLLECTION_KEY.as_ptr(),
+                collection.cast(),
+            );
+        }
+
         // Both extensions get their own connection: `secure` lives on
         // `[Security]`, not `[Authentication]`, and it changes
         // `check_complete`'s answer exactly as much as `host` does — `origin`
@@ -551,7 +599,8 @@ unsafe fn insert_entries(
 
 /// The `notify` handler [`insert_entries`] connects on the collection's
 /// `[Authentication]` and `[Security]` extensions: tell the page an entry or
-/// the security toggle changed, so `check_complete` is asked again.
+/// the security toggle changed, so `check_complete` is asked again, and
+/// refresh the status label to match.
 ///
 /// # Safety
 ///
@@ -562,7 +611,9 @@ unsafe fn insert_entries(
 /// the `GParamSpec` of the property that changed (also unused, for the same
 /// reason), and — because this was connected with `g_signal_connect_object`
 /// against `page` — `page` itself, still alive for the duration of this call
-/// (that object's own guarantee, not this function's).
+/// (that object's own guarantee, not this function's), and the object
+/// [`insert_entries`] stashed the status label and collection pointers on
+/// with `g_object_set_data`.
 unsafe extern "C" fn on_extension_changed(
     _extension: *mut GObject,
     _pspec: *mut GParamSpec,
@@ -575,7 +626,57 @@ unsafe extern "C" fn on_extension_changed(
         // `evo-sys`'s `build.rs` for the upstream reading that makes the
         // cast sound.
         unsafe { e_mail_config_page_changed(page.cast::<EMailConfigPage>()) };
+
+        // SAFETY: `page` is the same object `insert_entries` stashed both
+        // keys on, by this function's contract. `g_object_get_data` answers
+        // NULL for a key nothing set, which this treats the same as "no
+        // label to update" rather than a fault — the only way to reach this
+        // handler at all is through the connection `insert_entries` makes
+        // right after stashing them, but nothing here has to assume that
+        // held.
+        let label = unsafe { g_object_get_data(page.cast(), STATUS_LABEL_KEY.as_ptr()) };
+        if !label.is_null() {
+            // SAFETY: set alongside `label` above, by the same code, so
+            // either both are present or neither is.
+            let collection =
+                unsafe { g_object_get_data(page.cast(), STATUS_COLLECTION_KEY.as_ptr()) };
+            // SAFETY: `label` is non-NULL, just checked, and was a live
+            // `GtkLabel` when stashed; `collection` is NULL or a valid
+            // `ESource`, [`set_status_text`]'s own contract.
+            unsafe { set_status_text(label.cast(), collection.cast()) };
+        }
     });
+}
+
+/// Refreshes `label`'s text from the account `collection` currently says —
+/// called once by [`insert_entries`] to fill the label in, and again by
+/// [`on_extension_changed`] after every keystroke that can change the answer.
+/// Empty, and hidden, once the account is one a commit would accept;
+/// [`Incomplete`](crate::complete::Incomplete)'s own text otherwise.
+///
+/// # Safety
+///
+/// `label` must be a valid `GtkLabel`. `collection` must be NULL or a valid
+/// `ESource`.
+unsafe fn set_status_text(label: *mut GtkWidget, collection: *mut ESource) {
+    let text = if collection.is_null() {
+        // The same silence `is_complete`'s own doc gives for a NULL
+        // collection: `new_collection` having failed already logged a
+        // critical, and this is not a second place to explain it.
+        String::new()
+    } else {
+        // SAFETY: non-NULL and a valid source by this function's contract.
+        status_message(&unsafe { read(collection) })
+    };
+    let visible = !text.is_empty();
+    let text = cstring_lossy(&text);
+    // SAFETY: `label` is a live `GtkLabel` by this function's contract;
+    // `gtk_label_set_text` copies the string it is given, so `text` need not
+    // outlive this call.
+    unsafe {
+        gtk_label_set_text(label.cast(), text.as_ptr());
+        gtk_widget_set_visible(label, if visible { GTRUE } else { GFALSE });
+    }
 }
 
 /// The `port` row's `GBindingTransformFunc` from the `ESourceAuthentication`
@@ -849,9 +950,10 @@ unsafe extern "C" fn check_complete(backend: *mut EMailConfigServiceBackend) -> 
 /// The refusal of a *legitimately* unfinished account is silent for a different
 /// reason: [`Incomplete`](crate::complete::Incomplete) is written to be read by
 /// the person who typed the answer, in the entry they typed it into, and this
-/// vfunc has no entry to put it in — it answers a boolean. The place for it is
-/// the status label `insert_widgets` will add, and until that exists the reason
-/// is produced and dropped rather than logged where nobody is looking for it.
+/// vfunc has no entry to put it in — it answers a boolean. `insert_widgets`'s
+/// status label is where the same reason lands instead, computed separately
+/// there ([`crate::complete::status_message`]) rather than threaded through
+/// this boolean.
 ///
 /// # Safety
 ///
