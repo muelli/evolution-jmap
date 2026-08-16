@@ -49,10 +49,22 @@ pub const DEFAULT_SIZE_REQUEST: u64 = 10_000_000;
 /// nothing knows until the listener exists.
 type MetadataFn = dyn Fn(&str) -> Value + Send + Sync;
 
+/// Builds an RFC 7591 dynamic client registration response, given the
+/// request body the client sent.
+///
+/// A closure rather than a fixed `Value`, unlike [`MetadataFn`] there is no
+/// ephemeral origin to close over here — instead a test typically wants to
+/// assert on what the client asked to register as (`redirect_uris`,
+/// `client_name`) before answering, which only a closure over the request
+/// lets it do. Returns the HTTP status alongside the body so a test can drive
+/// RFC 7591 §3.2.2's error responses too.
+type RegistrationFn = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
+
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
     oauth_metadata: Option<Arc<MetadataFn>>,
+    oauth_registration: Option<Arc<RegistrationFn>>,
     omitted_capabilities: BTreeSet<String>,
     omit_primary_accounts: bool,
     calls_in_request: Option<u64>,
@@ -231,6 +243,24 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer `POST /oauth/register` — the path this crate's own
+    /// [`Self::oauth_authorization_server`] test fixtures name as
+    /// `registration_endpoint` — as an RFC 7591 dynamic client registration
+    /// endpoint, with `handler` deciding the status and body from the
+    /// request body the client sent.
+    ///
+    /// Off by default: a deployment need not offer registration even if it
+    /// does OAuth 2.0 at all (a self-hosted server might hand out a fixed
+    /// `client_id` instead), and a client has to be able to tell "not here"
+    /// from a network failure.
+    pub fn oauth_client_registration(
+        mut self,
+        handler: impl Fn(&Value) -> (u16, Value) + Send + Sync + 'static,
+    ) -> Self {
+        self.oauth_registration = Some(Arc::new(handler));
+        self
+    }
+
     /// Bind to a fixed localhost port instead of an ephemeral one.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
@@ -267,7 +297,18 @@ impl MockServerBuilder {
             let stop = Arc::clone(&stop);
             let origin = origin.clone();
             let oauth_metadata = self.oauth_metadata.clone();
-            move || serve(server, state, self.auth, oauth_metadata, origin, stop)
+            let oauth_registration = self.oauth_registration.clone();
+            move || {
+                serve(
+                    server,
+                    state,
+                    self.auth,
+                    oauth_metadata,
+                    oauth_registration,
+                    origin,
+                    stop,
+                )
+            }
         });
 
         MockServer {
@@ -293,6 +334,7 @@ impl MockServer {
             auth: AuthConfig::default(),
             port: 0,
             oauth_metadata: None,
+            oauth_registration: None,
             omitted_capabilities: BTreeSet::new(),
             omit_primary_accounts: false,
             calls_in_request: Some(DEFAULT_CALLS_IN_REQUEST),
@@ -358,14 +400,20 @@ fn serve(
     state: Arc<Mutex<ServerState>>,
     auth: AuthConfig,
     oauth_metadata: Option<Arc<MetadataFn>>,
+    oauth_registration: Option<Arc<RegistrationFn>>,
     origin: String,
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::SeqCst) {
         match server.recv_timeout(Duration::from_millis(20)) {
-            Ok(Some(request)) => {
-                handle_request(request, &state, &auth, oauth_metadata.as_deref(), &origin)
-            }
+            Ok(Some(request)) => handle_request(
+                request,
+                &state,
+                &auth,
+                oauth_metadata.as_deref(),
+                oauth_registration.as_deref(),
+                &origin,
+            ),
             Ok(None) => {}
             Err(_) => break,
         }
@@ -377,6 +425,7 @@ fn handle_request(
     state: &Mutex<ServerState>,
     auth: &AuthConfig,
     oauth_metadata: Option<&MetadataFn>,
+    oauth_registration: Option<&RegistrationFn>,
     origin: &str,
 ) {
     // Answered before the credential check, and only ever with 200 or 404.
@@ -395,6 +444,35 @@ fn handle_request(
                 request,
                 404,
                 &json!({"status": 404, "detail": "this deployment publishes no OAuth 2.0 metadata"}),
+            ),
+        }
+        return;
+    }
+
+    // Also answered before the credential check, for the reason `discover`'s
+    // module doc gives: registration is how a client obtains an identity, so
+    // it cannot be gated on already having one.
+    if request.method() == &tiny_http::Method::Post
+        && request.url().split('?').next().unwrap_or_default() == "/oauth/register"
+    {
+        let mut body = Vec::new();
+        if request.as_reader().read_to_end(&mut body).is_err() {
+            respond_json(request, 400, &json!({"detail": "unreadable body"}));
+            return;
+        }
+        let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+            respond_json(request, 400, &json!({"detail": "invalid JSON"}));
+            return;
+        };
+        match oauth_registration {
+            Some(handler) => {
+                let (status, response) = handler(&parsed);
+                respond_json(request, status, &response);
+            }
+            None => respond_json(
+                request,
+                404,
+                &json!({"status": 404, "detail": "this deployment offers no client registration"}),
             ),
         }
         return;
