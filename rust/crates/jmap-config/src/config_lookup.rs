@@ -74,6 +74,18 @@
 //! `docs/MILESTONES.md` for exactly that reason, on top of the M7 rule that
 //! GUI-adjacent behaviour needs a human running "Look Up Account Details" in
 //! real Evolution before it is.
+//!
+//! The 307th session (`docs/NIGHT-LOG.md`) hand-drove this dispatch once,
+//! outside the test suite: a scratch C program linking `evolution-shell-3.0`
+//! (which is where `EConfigLookup` actually lives — `e-util`, not any EDS
+//! library), loading this module via `e_module_load_all_in_directory`,
+//! constructing a real `ESourceRegistry`/`EConfigLookup` under
+//! `dbus-run-session`, and running it against a `jmap-mockd --oauth2`
+//! instance produced exactly one positive, complete result. That is evidence
+//! the mechanism works end to end and that `LD_LIBRARY_PATH=/usr/lib/evolution`
+//! is the missing piece a headless client needs (the module's own transitive
+//! `libevolution-mail.so` dependency is not on the default loader path) — not
+//! a standing test, and not a substitute for the automated harness above.
 
 use std::ffi::CStr;
 use std::ptr;
