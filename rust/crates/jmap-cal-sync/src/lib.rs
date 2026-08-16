@@ -23,7 +23,9 @@ pub mod patch;
 use std::collections::BTreeMap;
 
 use jmap_client::{ChangeSet, Client};
-use jmap_ical::{event_to_ical, ical_to_event, maps_time_zone, prune_time_zones};
+use jmap_ical::{
+    event_to_ical, ical_to_event, maps_recurrence_rule, maps_time_zone, prune_time_zones,
+};
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::{Id, State};
 use serde_json::Value;
@@ -121,6 +123,11 @@ impl CalSync {
     /// so the identity any iTIP correspondence already quotes survives the
     /// trip to the server. Otherwise this is an edit, sent as a PatchObject
     /// that names only what the round trip preserved — see [`patch`].
+    ///
+    /// A create is the one of the two that can fail over the component itself:
+    /// there is no server-side value to fall back on, so a recurrence rule this
+    /// mapping cannot state is [`SyncError::Unsendable`] rather than an event
+    /// filed without it. See the comment on that check.
     pub fn save_component(
         &self,
         icalendar: &str,
@@ -131,6 +138,46 @@ impl CalSync {
             let local = event.id.take();
             event.uid = event.uid.take().or_else(|| local.map(|id| id.to_string()));
             event.calendar_ids = Some(BTreeMap::from([(self.calendar_id.clone(), true)]));
+            // A recurrence this mapping cannot state, which is the one thing a
+            // create refuses outright rather than files without.
+            //
+            // The zone below is dropped rather than refused because a
+            // wall-clock time with no zone is still the appointment the person
+            // who typed it sees. There is no such reading here: an event
+            // created without its recurrence is a different event — one
+            // occurrence where the user asked for a series — and nothing says
+            // so. Sending the rule as it stands is worse again, because the
+            // property is not one a server has to accept: a strict one refuses
+            // the whole `CalendarEvent/set`, and a lenient one stores an
+            // `until` that is no RFC 8984 §4.3.3 LocalDateTime, which
+            // [`event_to_ical`] then cannot draw — so Evolution would show a
+            // single appointment while the server ran the series, invited its
+            // guests and fired its alarms.
+            //
+            // So the save fails and Evolution says so. The user can then state
+            // the same series a way that does map — a repeat count rather than
+            // an end date — which is a worse thing to be asked for than a
+            // recurrence that just works, and a better one than a meeting
+            // series that quietly happened once. The rule this actually costs
+            // is `UNTIL` beside a `TZID`: RFC 5545 §3.3.10 requires the UTC
+            // instant there, converting it needs a zone database `jmap-ical`
+            // deliberately does not carry, and until that conversion exists
+            // this is what a create can honestly do. See
+            // [`maps_recurrence_rule`], and [`patch::diff`] for the edit, which
+            // leaves the property alone instead.
+            if !event
+                .recurrence_rules
+                .iter()
+                .flatten()
+                .all(maps_recurrence_rule)
+            {
+                return Err(SyncError::Unsendable(
+                    "this event repeats in a way that cannot be stored on the \
+                     server, so it was not created — an end date stated as a \
+                     UTC instant is the usual cause, and a repeat count works"
+                        .to_owned(),
+                ));
+            }
             // A zone the document gave no JSCalendar spelling for. On an edit
             // the server's own zone stands (see [`patch`]); on a create there is
             // none to stand, so the appointment is filed floating. A

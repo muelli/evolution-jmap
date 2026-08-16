@@ -326,8 +326,10 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
             }
         }
         // An iCalendar object Evolution handed us that the mapping cannot read:
-        // the argument was bad, not the server.
-        SyncError::ICal(_) => invalid_arg(&failure.to_string()),
+        // the argument was bad, not the server. A component it *can* read but
+        // cannot state as JSCalendar is the same answer — the save was refused
+        // over what the component says, and the message names what to change.
+        SyncError::ICal(_) | SyncError::Unsendable(_) => invalid_arg(&failure.to_string()),
     }
 }
 
