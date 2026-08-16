@@ -28786,3 +28786,41 @@ resolution messages, `Collection`'s own noun, the account-less `GError` in
 `jmap-backend-core/src/{connect,oauth2}.rs` to `po/POTFILES.in`, and
 regenerate `po/evolution-jmap.pot` via `po/extract.sh`. `EOAuth2(message)`
 stays untouched — that string is EDS's own, not ours to translate.
+
+**Done, pushed as `96ce444`.** One gotcha worth recording: the first attempt
+wrote `translate(match self { Self::AddressBook => c"address book", ... })` —
+compiles and reads fine, but `potfiles.rs`'s `calls_on_a_literal` (and real
+`xgettext --keyword=translate`, which needs a *literal* in the call's first
+argument position) only recognises `translate(c"…")` directly. Wrapping the
+match around the call rather than inside each arm would have silently
+extracted nothing — caught by re-reading `po/evolution-jmap.pot` after
+`po/extract.sh` and confirming both "address book" and "calendar" actually
+landed in it, not by the test suite (which cannot tell a marker that
+extracted nothing from one that was never there). Rewrote as a `match` whose
+*arms* are each a direct `translate(c"…")` call, matching the
+`jmap-backend-cal/src/ops.rs` precedent; `grep` on the regenerated `.pot`
+confirmed all eight new messages present before committing.
+
+Added a red-then-green unit test for `ConnectError::CredentialsRequired`'s
+message text (previously asserted nowhere, unlike the other two arms), and
+confirmed `Collection::noun`'s only caller is this same file (a public-API
+signature change from `&'static str` to `String` was otherwise safe). Full
+verification: `cargo test -p jmap-backend-core --locked` (potfiles.rs and the
+new unit test both green), `cargo clippy --locked --all-targets -- -D
+warnings` across the default-members set plus `-p jmap-backend-book -p
+jmap-backend-cal -p jmap-backend-collection -p jmap-config` explicitly,
+`cargo fmt --check`, and `cd build && ninja && ctest --output-on-failure` —
+15/15 green, `translations` and all four `functional-*` legs included. No new
+files, so the reuse lint has nothing new to judge; `Cargo.lock` untouched, so
+`cargo deny`'s answer is still the last green CI run's, per
+[[checks-sh-blocked-on-vm]].
+
+Closed the matching `docs/BACKLOG.md` item. This does not touch the blocked
+M7 OAuth2 wiring or the design-decision question — that stays exactly where
+the 299th–302nd sessions left it, still waiting on the maintainer.
+
+**Next session**: check whether the method-chooser-vs-auto-discovery question
+has been answered before re-deriving "blocked" again; if `docs/BACKLOG.md`
+has run dry of current-priority-adjacent items too, that is the point to
+re-examine whether a genuinely new tractable slice exists rather than
+re-surveying from scratch.
