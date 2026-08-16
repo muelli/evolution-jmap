@@ -27626,3 +27626,76 @@ not a re-use of the first. `evo-sys` needs one new GTK entry point,
 `gtk_check_button_new_with_mnemonic` (returns `GtkWidget*` already, like
 `gtk_entry_new`, so no new opaque handle type — confirmed against the
 installed `gtkcheckbutton.h`).
+
+**Delivered, as planned.** `evo-sys` gained the one new entry point
+(`gtk_check_button_new_with_mnemonic`, allowlisted in `build.rs` and named
+back in `tests/gtk.rs`, which also gained a `GtkCheckButton` row in `CLASSES`
+so the existing "is it really a `GtkWidget`" and "does the name match" checks
+cover it for free). `jmap-config`'s `backend.rs` grew a `RowKind` enum so
+`ENTRY_ROWS` can say which of its three rows (`host`, `port`, `user`) binds
+straight through and which (`port`) needs `port_to_text`/`text_to_port`, the
+two new `GBindingTransformFunc`s: `guint16` `0` shows as an empty entry (the
+keyfile's own "not set" spelling, per `crate::account`'s doc), a non-empty
+entry parses as a bare `u16` or the binding refuses with `FALSE` — a `-1`, a
+stray letter, or `65536` all leave `[Authentication] Port` at whatever it was,
+never write a bad one. The check button binds straight through
+(`ESourceSecurity:secure` and `GtkToggleButton:active` are both plain
+booleans, no transform needed) to a `[Security]` extension `insert_entries`
+did not touch before. The `notify` watcher is now a loop over both extensions
+(`on_authentication_changed` renamed `on_extension_changed`, since it is no
+longer authentication-specific) — needed because `secure` genuinely changes
+`check_complete`'s answer (confirmed by reading `jmap_backend_core::source`'s
+`origin()`, which refuses plaintext to a non-loopback host), not assumed.
+
+**Tested where a display isn't needed.** `port_to_text`/`text_to_port` are
+the one piece of `insert_widgets` that touches no widget — only `GValue`s a
+`GBindingTransformFunc` is handed — so they are driven directly with
+hand-built `GValue`s in a `#[cfg(test)] mod tests` inside `backend.rs` itself
+(the pattern `tests/oauth2_service.rs` already uses for a `GValue`, moved
+in-module since `port_to_text`/`text_to_port` are private): zero shown as
+empty, a set port shown as its number, a full round trip across
+`[0, 1, 443, 8080, 65535]`, blank/whitespace-only text accepted as "not set",
+and five different bad strings (`"not a number"`, `"443x"`, `"-1"`,
+`"65536"`, `"1.5"`) all refused. One test bug caught by running the suite
+before trusting it: the first draft asserted the empty-string case through
+`read_string`, which collapses `""` to `None` (the keyfile-absence meaning
+`crate::account` documents) — wrong tool for reading a `GValue`'s exact
+contents, so a `string_of` helper was added that returns the string as
+written, empty included.
+
+Gates: `cargo build -p jmap-config -p evo-sys`, `cargo test -p jmap-config
+--lib` (5 new tests), `sh po/extract.sh` (regenerated the `.pot` with `_Port:`
+and the check button's label, confirmed by `jmap-backend-core`'s
+`potfiles.rs` suite going from one failing to five green), `cargo test
+--workspace --exclude example-module --locked` and `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` both clean;
+the eleven `jmap-functional` failures outside `ctest` are the pre-existing,
+documented ones. `cargo fmt --all --check` clean after one reformat. `cargo
+doc -p jmap-config --no-deps` has five pre-existing warnings in `oauth2.rs`
+(a private `borrowed` linked from public docs, not introduced this session)
+and no new ones. `ninja -C build` (release) then `ctest --test-dir build`
+15/15, `rust-test-eds` and `translations` included, so the rebuilt
+`module-jmap-configuration.so` itself linked, ran its tests, and the `.pot`
+regeneration didn't break the translations test. `cargo clean --profile dev`
+before and after the CMake gate, per the disk-space lesson; `/` stayed at
+58-82% throughout, never near the 97% two sessions ago hit. No new files, so
+no new SPDX headers to check; no new external crates, `Cargo.lock` untouched.
+
+**Still needs human verification in real Evolution — not tagging M7
+complete.** What a human has to confirm, on top of what the previous
+session already listed: the port entry shows empty for a fresh account and a
+number for one with a non-default port, typing a bad port doesn't silently
+clear the field or crash the page, and the check button starts checked
+(TLS is the default) and unchecking it against a non-`localhost` server
+disables *Next* — the same "does `check_complete` actually get asked again"
+question the previous session flagged for the host/user entries, now doubled
+for the toggle.
+
+**Next session**: the status label for `Incomplete`'s refusal reason — the
+one item left on `insert_widgets`' own "what is not here yet" list — or the
+port/security items above, once a maintainer has opened the dialog in a real
+Evolution and reported what it showed. Unchanged blockers: M10 has no CI
+matrix; the calcard directive's two emitters are still ours; M9 has no CI
+job and no GUI tier; the OAuth2 consent page needs a display this VM lacks;
+`docs/BACKLOG.md`'s contact/vCard and calendar/iCal fidelity items are all
+still parked there.

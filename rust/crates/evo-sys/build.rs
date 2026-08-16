@@ -80,6 +80,10 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_entry_new",
     "gtk_widget_set_hexpand",
     "gtk_widget_show_all",
+    // The security toggle: one check button, bound (like the entries) through
+    // a plain property binding rather than a `gtk_toggle_button_.*` call, so
+    // this is the only entry point the toggle needs.
+    "gtk_check_button_new_with_mnemonic",
     // Not called by the module: these are what `tests/gtk.rs` asks the running
     // GTK to confirm the classes above are, since the opaque handles carry no
     // layout to check the way `tests/layout.rs` checks the EDS structs.
@@ -89,6 +93,7 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_grid_get_type",
     "gtk_label_get_type",
     "gtk_entry_get_type",
+    "gtk_check_button_get_type",
 ];
 
 /// Types that already exist, and must not be minted a second time.
