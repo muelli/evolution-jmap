@@ -26203,3 +26203,59 @@ than it saves; the backlog line is struck with the commit that closed it, and th
 one loose end above (an organisation named `""`) is filed there rather than
 implemented. Nothing further was started. **Next session takes M7**, per the new
 CURRENT PRIORITY — not another contact-mapping increment.
+
+## 2026-08-16 (two-hundred-and-seventy-seventh session)
+
+**Claiming: real-server readiness — a `--features live-server` integration
+harness against a real JMAP deployment (Stalwart first, per the roadmap's
+"Integration testing" track), the second half of the current priority's item
+2 (OAuth2 auth is the other half; see below for why that one is not this
+session's).**
+
+Investigated M7 first, per the steer: `jmap-config`/`evo-sys` (the account
+setup backend) already has every vfunc that decides anything implemented and
+tested — `new_collection`, `setup_defaults`/`setup`, `check_complete`/
+`is_complete`, `commit_changes`/`commit` — over a plain `ESource`, no display
+needed. The one gap, `insert_widgets`, is GTK widget construction that GTK 3
+refuses to do without a display connection this VM does not have (confirmed:
+no `Xvfb`/`xvfb-run` installed); the roadmap already documents this as work
+for a session with a real Evolution or M9's Xvfb tier, so there was nothing
+new to claim there tonight without either.
+
+Moved to real-server readiness. Spent real time on OAuth2 first and am
+logging why it is *not* tonight's increment rather than attempting it
+half-verified. Findings, so the next session (or an escalated one) does not
+redo this: the client already carries `Credentials::Bearer` end to end
+(`jmap-client/src/client.rs`) and EDS 3.52 exposes exactly the primitive a
+backend would call — `e_source_get_oauth2_access_token_sync()` on `ESource`
+itself — confirmed by reading the installed headers and by compiling a small
+throwaway C program against the system `libedataserver` to check its real
+behaviour rather than guess it (a bare `e_source_new_with_uid` source answers
+`FALSE` / `G_IO_ERROR_NOT_SUPPORTED`, "does not support OAuth 2.0
+authentication" — expected, since nothing wired `oauth2-support` onto it).
+But *which* accounts EDS will ever call that function for is gated by
+`e_oauth2_services_is_oauth2_alias_static(method)`, and that function (also
+checked against the running library, not assumed) only answers true for the
+three built-in aliases — "Google", "Outlook", "Yahoo" (case-insensitively) —
+not for "OAuth2" itself or anything a JMAP account would plausibly name. A
+real, useful OAuth2 path therefore needs this project to register its own
+`EOAuth2Service` (`e-oauth2-service.h`) — a GObject *interface*
+implementation, not the *class* subclassing `jmap_backend_core::subclass`
+already has tooling for — so that `can_process`/`get_client_id`/
+`get_authentication_uri`/`get_token_uri`/etc. claim a JMAP account and hand it
+real endpoints. That is new GObject-vtable territory this codebase has not
+done yet, for an interface rather than a class, and the one part of it that
+cannot be written test-first here either — the actual browser consent
+exchange a real IdP does — needs a live provider and, per
+`e-credentials-prompter-impl-oauth2.h`, WebKit, i.e. a display. Wiring the
+*detection* (`is_oauth2_alias_static` on "Google"/"Outlook"/"Yahoo") into
+`connect_with`/`authenticate_with` alone would compile and test green while
+serving no real JMAP account, since no real JMAP deployment is Google,
+Outlook or Yahoo's IdP — exactly the "compiles but doesn't solve the problem"
+shape the roadmap warns against. So this is logged as a blocker rather than
+attempted: the `EOAuth2Service` implementation is real work for a session
+that judges it, or escalates it, deliberately — not a side effect of
+tonight's.
+
+Picking the harness instead: independent of OAuth2, well inside what can be
+built and tested here, and named by the same roadmap paragraph.
