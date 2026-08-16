@@ -46,7 +46,9 @@
 use std::env;
 
 use jmap_client::{Client, Credentials};
-use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
+use jmap_proto::session::{
+    CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
+};
 use serde_json::json;
 
 /// The origin and credentials this run was pointed at, or a panic naming the
@@ -134,4 +136,48 @@ fn mail_capable_accounts_list_a_non_empty_mailbox_set() {
         !mailboxes.list.is_empty(),
         "a mail-capable account has at least an Inbox"
     );
+}
+
+/// If the account has the contacts capability, `AddressBook/get` answers —
+/// proof that this client's `AddressBook` type, exercised until now only
+/// against `jmap-mockd`'s own fixtures, deserialises what a real server
+/// actually sends. Deliberately not asserting a non-empty list the way the
+/// mail test asserts an Inbox: unlike a mailbox, nothing requires a fresh
+/// account to have created an address book yet, so the round trip succeeding
+/// is the claim, not what it returns. An account with no contacts capability
+/// at all is reported and skipped, the same tolerance the mail test applies.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn contacts_capable_accounts_can_list_their_address_books() {
+    let client = connect();
+    let Some(account_id) = client
+        .session()
+        .primary_account(CAPABILITY_CONTACTS)
+        .cloned()
+    else {
+        eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
+        return;
+    };
+
+    client.address_books(&account_id).unwrap();
+}
+
+/// The calendars capability's half of the same proof: `Calendar/get`
+/// deserialises against a real server's own JSON. See
+/// `contacts_capable_accounts_can_list_their_address_books` for why this does
+/// not assert a non-empty list either.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn calendars_capable_accounts_can_list_their_calendars() {
+    let client = connect();
+    let Some(account_id) = client
+        .session()
+        .primary_account(CAPABILITY_CALENDARS)
+        .cloned()
+    else {
+        eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
+        return;
+    };
+
+    client.calendars(&account_id).unwrap();
 }
