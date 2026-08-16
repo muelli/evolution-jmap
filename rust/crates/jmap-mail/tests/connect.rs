@@ -21,7 +21,7 @@ use eds_sys::{
 };
 use jmap_backend_core::source::SourceError;
 use jmap_client::{Client, Credentials, Error};
-use jmap_mail::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail};
+use jmap_mail::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail, password_credentials};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::{MailSync, SyncError};
@@ -37,7 +37,10 @@ fn config(server: &MockServer) -> ServerConfig {
 }
 
 fn open(config: &ServerConfig, password: Option<&str>) -> Result<MailSync, StoreError> {
-    open_mail(config, password)
+    open_mail(
+        config,
+        password_credentials(config.user.as_deref(), password),
+    )
 }
 
 /// `MailSync` is not `Debug`, and naming the account it opened is a more useful
@@ -99,6 +102,22 @@ fn the_password_is_sent_as_basic_credentials() {
     config.user = Some("vera".to_owned());
 
     let sync = open(&config, Some("hunter2")).expect("connected");
+    assert_eq!(sync.account_id(), &server.account_id());
+}
+
+/// The other half of the credentials story: an account that authenticates
+/// with OAuth 2.0 reaches the server as `Authorization: Bearer …`, with no
+/// user name involved at all. Which accounts those are, and where the token
+/// comes from, is `jmap_mail::oauth2`'s — what is proved here is that a
+/// resolved bearer credential survives the trip to the wire, the same way
+/// the password does, and the same way `jmap-backend-book`'s
+/// `an_access_token_is_sent_as_bearer_credentials` proves it for the EDS
+/// side.
+#[test]
+fn an_access_token_is_sent_as_bearer_credentials() {
+    let server = MockServer::builder().bearer_token("ya29.a0Af").start();
+
+    let sync = open_mail(&config(&server), Credentials::bearer("ya29.a0Af")).expect("connected");
     assert_eq!(sync.account_id(), &server.account_id());
 }
 
@@ -166,6 +185,11 @@ fn only_a_401_makes_camel_ask_for_the_password_again() {
         StoreError::Client(Error::Transport("down".to_owned())),
         StoreError::Client(Error::Cancelled),
         StoreError::Config(SourceError::MissingHost),
+        // Not a wrong password, and reported the same way: see
+        // `StoreError::OAuth2`'s own doc comment for why a failed token
+        // fetch is `ERROR` rather than `REJECTED` here, the opposite of the
+        // EDS side's choice for the identical failure.
+        StoreError::OAuth2("no token".to_owned()),
     ] {
         assert_eq!(
             error.authentication_result(),
@@ -235,6 +259,12 @@ fn each_failure_carries_the_camel_service_error_code_evolution_routes_on() {
         (
             StoreError::NoIdentity("alice@example.com".to_owned()),
             CAMEL_SERVICE_ERROR_INVALID,
+        ),
+        // The account cannot prove who it is, same as a wrong password —
+        // `CANT_AUTHENTICATE` rather than the generic `INVALID` says so.
+        (
+            StoreError::OAuth2("no token".to_owned()),
+            CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
         ),
     ] {
         let gerror = error.to_gerror();

@@ -34,6 +34,7 @@ use gobject_sys::{
     G_TYPE_INVALID, g_type_class_ref, g_type_class_unref, g_type_from_name, g_type_is_a,
 };
 use jmap_backend_core::subclass::ObjectSubclass;
+use jmap_client::Credentials;
 use jmap_mail::server::ServerConfig;
 use jmap_mail::service::authenticate;
 use jmap_mail::settings::settings_type;
@@ -141,7 +142,7 @@ fn authenticating_a_transport_opens_a_connection() {
     let server = seeded();
     let transport = JmapTransport::detached();
 
-    authenticate(&*transport, &config(&server), None).expect("authenticated");
+    authenticate(&*transport, &config(&server), Credentials::none()).expect("authenticated");
 
     assert!(transport.is_connected());
 }
@@ -156,13 +157,14 @@ fn the_transports_connection_is_its_own_and_not_the_stores() {
     let store = JmapStore::detached();
     let transport = JmapTransport::detached();
 
-    authenticate(&*store, &config(&server), None).expect("the store authenticated");
+    authenticate(&*store, &config(&server), Credentials::none()).expect("the store authenticated");
     assert!(
         !transport.is_connected(),
         "connecting the store connected the transport"
     );
 
-    authenticate(&*transport, &config(&server), None).expect("the transport authenticated");
+    authenticate(&*transport, &config(&server), Credentials::none())
+        .expect("the transport authenticated");
     assert!(store.is_connected() && transport.is_connected());
 
     // And the other way round: Camel disconnects a store on its own schedule —
@@ -183,7 +185,7 @@ fn disconnecting_drops_whatever_the_authentication_installed() {
     let transport = JmapTransport::detached();
     assert!(!transport.drop_connection());
 
-    authenticate(&*transport, &config(&server), None).expect("authenticated");
+    authenticate(&*transport, &config(&server), Credentials::none()).expect("authenticated");
     assert!(transport.drop_connection());
     assert!(!transport.is_connected());
 }
@@ -197,14 +199,15 @@ fn disconnecting_drops_whatever_the_authentication_installed() {
 fn a_failed_attempt_leaves_a_working_connection_alone() {
     let server = seeded();
     let transport = JmapTransport::detached();
-    authenticate(&*transport, &config(&server), None).expect("authenticated");
+    authenticate(&*transport, &config(&server), Credentials::none()).expect("authenticated");
 
     let unreachable = ServerConfig {
         // Port 1 is reserved and nothing listens there.
         origin: "http://127.0.0.1:1".to_owned(),
         user: None,
     };
-    authenticate(&*transport, &unreachable, None).expect_err("nothing listens there");
+    authenticate(&*transport, &unreachable, Credentials::none())
+        .expect_err("nothing listens there");
 
     assert!(transport.is_connected());
 }

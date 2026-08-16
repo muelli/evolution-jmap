@@ -37,7 +37,7 @@ use eds_sys::{
 use glib_sys::GError;
 use jmap_backend_core::source::SourceError;
 use jmap_client::{Client, Credentials, Error};
-use jmap_mail::connect::StoreError;
+use jmap_mail::connect::{StoreError, password_credentials};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::service::{authenticate, describe, report_authentication};
 use jmap_mail::store::JmapStore;
@@ -60,7 +60,11 @@ fn open(
     config: &ServerConfig,
     password: Option<&str>,
 ) -> Result<(), StoreError> {
-    authenticate(store, config, password)
+    authenticate(
+        store,
+        config,
+        password_credentials(config.user.as_deref(), password),
+    )
 }
 
 /// The verdict and the error one attempt produces, with the `GError` owned by

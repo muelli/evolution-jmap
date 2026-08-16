@@ -27,6 +27,11 @@
 //! - [`connect`] turns that origin into a live account: the client, the JMAP
 //!   account id its mail lives in, and the two answers a failure has to give in
 //!   Camel's vocabulary rather than EDS's.
+//! - [`oauth2`] is the other half of what `connect` needs before it can build
+//!   a client: whether the account authenticates with OAuth 2.0 rather than a
+//!   password, read off the same field Evolution's account editor writes
+//!   alongside the `ESource` side of the same choice, and the access token if
+//!   it does.
 //! - [`store`] is `CamelJmapStore`, the `CamelOfflineStore` subclass a JMAP
 //!   account's folders hang off. It names the settings class above, holds the
 //!   connection between `connect_sync` and `disconnect_sync`, and keeps the
@@ -144,6 +149,7 @@ pub mod message;
 pub mod message_info;
 pub mod mime;
 pub mod module;
+pub mod oauth2;
 pub mod provider;
 pub mod refresh;
 pub mod send;
