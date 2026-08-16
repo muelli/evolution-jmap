@@ -29035,3 +29035,68 @@ points, `run()` calling `oauth2_setup::discover_and_register` with
 need the `dbus-run-session`/real-registry environment this session's test
 deliberately avoided — check `cmake/Functional.cmake` for how M9's tests
 already get one before building a second way to.
+
+## 2026-08-16 (three-hundred-and-fifth session)
+
+**Claiming: `jmap-config/src/config_lookup.rs`** — the `JmapConfigLookup`
+`EConfigLookupWorker` extension the 304th session's own "next session"
+note planned, running on Sonnet.
+
+Before writing anything, re-grounded the plan against real upstream source
+rather than the prior session's log alone, since the log's own plan named an
+untested guess. Found two real implementers already in the tree at
+`/tmp/evo-src` (`evolution`, not EDS): `src/modules/config-lookup/e-webdav-config-lookup.c`
+is the concrete reference this session follows almost line for line —
+`extensible_type = E_TYPE_CONFIG_LOOKUP` in `class_init`, `constructed`
+chaining up then calling `e_config_lookup_register_worker`, and `run()`
+building an `EConfigLookupResultSimple` and handing it to
+`e_config_lookup_add_result`. Read `e-config-lookup.c`/`.h` and
+`e-config-lookup-result-simple.c`/`.h` directly (not the header alone) to
+pin ownership: `e_config_lookup_result_simple_new` is `g_object_new`
+(transfer full), every `add_*` copies its arguments, and
+`e_config_lookup_add_result`'s own doc comment says outright "the
+`@config_lookup` assumes ownership of the `@result`" — so a result is built,
+populated, handed over, and never unref'd by this crate. `e_config_lookup_new`
+does require a live `ESourceRegistry` (confirmed by its own
+`g_return_val_if_fail`), which is why the 304th session's own test stopped at
+proving `get_display_name`'s offset — that constraint is real and unchanged.
+
+**Found and fixed a wrong plan before writing any code**: the 304th session's
+"redirect_uri fixed to `urn:ietf:wg:oauth:2.0:oob`" was a guess, and checking
+it against EDS's actual `libedataserverui`/`libedataserver` source (fetched
+from `gitlab.gnome.org/GNOME/evolution-data-server`, `master`, since this VM
+carries no local checkout of EDS itself, only of `evolution`) shows it is the
+wrong guess. `ECredentialsPrompterImplOAuth2`'s navigation handling
+(`e-credentials-prompter-impl-oauth2.c`) does not compare against the
+redirect URI at all: `get_authentication_policy`'s default
+(`e-oauth2-service.c`) unconditionally `ALLOW`s every navigation, and the
+code is only ever extracted from whatever URI the `WebKitWebView` reaches
+`WEBKIT_LOAD_FINISHED` on — `e_oauth2_service_util_extract_from_uri` parses
+`code=`/`error=` out of any URI's query or fragment with no prefix check at
+all. What actually has to work is WebKit finishing (not failing) the
+navigation to whatever `get_redirect_uri` names — and EDS's own shipped
+`e-oauth2-service-google.c` answers that not with the RFC 8252 OOB URN but
+with a private-use URI *scheme* (`«reversed-client-id»:/oauth2redirect`).
+That is real, load-bearing precedent (Google's account setup works today
+against this exact prompter), so this session follows it rather than the
+OOB URN: `config_lookup::REDIRECT_URI` is `"jmap-oauth2:/redirect"`, a plain
+private-use scheme neither RFC 7591 registration nor `get_redirect_uri` need
+be anything else for. Recording the reasoning at this length because the
+alternative — shipping the OOB URN because a previous session's log said to
+— would have been exactly the "plausible-but-wrong answer" these sessions are
+told to escalate rather than commit, discovered only because this session
+checked the actual prompter instead of trusting the plan.
+
+Scope for tonight, deliberately not the whole feature: `evo-sys` gains the
+`EConfigLookupResult`/`EConfigLookupResultSimple` bindings the 304th session
+named as out of scope for it, plus `e_config_lookup_get_type`,
+`_register_worker`, `_add_result`, and the `E_CONFIG_LOOKUP_PARAM_*` string
+macros (`allowlist_var`, new to this crate); `jmap-config` gains
+`config_lookup.rs` implementing `JmapConfigLookup` end to end — pure
+host-selection logic unit-tested directly, the FFI shell built and
+registered but its live dispatch (`run()` actually reached by a real
+`EConfigLookup`) left for M9's `dbus-run-session` harness to exercise, same
+honest limit the 304th session's own test hit. Not tagging M7 or the
+real-server-readiness item complete: this needs a human to actually run
+"Look Up Mail Account" against a real OAuth2 JMAP deployment before either
+claim is true.
