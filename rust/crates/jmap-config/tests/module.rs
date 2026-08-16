@@ -32,7 +32,10 @@ use std::ptr;
 use std::sync::OnceLock;
 
 use eds_sys::EExtensionClass;
-use evo_sys::{EMailConfigServiceBackendClass, e_mail_config_service_backend_get_type};
+use evo_sys::{
+    EMailConfigServiceBackendClass, e_config_lookup_get_type, e_config_lookup_worker_get_type,
+    e_mail_config_service_backend_get_type,
+};
 use glib_sys::{GFALSE, GTRUE, GType, gboolean};
 use gobject_sys::{
     GTypeModule, GTypeModuleClass, g_object_new, g_type_class_ref, g_type_class_unref,
@@ -42,6 +45,7 @@ use gobject_sys::{
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::backend::JmapConfigServiceBackend;
+use jmap_config::config_lookup::JmapConfigLookup;
 use jmap_config::mail::MAIL_BACKEND_NAME;
 use jmap_config::module::{load, unload};
 
@@ -268,5 +272,74 @@ fn the_class_the_module_registers_carries_the_name_and_the_vfuncs() {
     assert!(
         vfuncs.commit_changes.is_some(),
         "no commit_changes: the mail source would be written with no host"
+    );
+}
+
+/// `JmapConfigLookup`'s type, as the module left it in the type system.
+fn lookup_type() -> GType {
+    loaded();
+    // SAFETY: NAME is a 'static NUL-terminated string.
+    unsafe { g_type_from_name(<JmapConfigLookup as ObjectSubclass>::NAME.as_ptr()) }
+}
+
+/// The other type the module registers. Unlike the backend, nothing here
+/// constructs an instance: `JmapConfigLookup::constructed` calls
+/// `e_config_lookup_register_worker` on whatever `e_extension_get_extensible`
+/// answers, and a bare `g_object_new` with no real `EConfigLookup` behind its
+/// construct-only `extensible` property would exercise that with a NULL —
+/// logged as a `CRITICAL` by `e_config_lookup_register_worker`'s own
+/// `g_return_if_fail`, which is not a shape of "passing" this project accepts
+/// (`jmap-config/tests/oauth2_service.rs`'s own `TestSource` comment gives the
+/// same reason for the same avoidance). So these tests stay at the class
+/// level, which needs no instance: `g_type_class_ref` alone runs `class_init`.
+#[test]
+fn the_lookup_worker_type_is_registered_against_the_module() {
+    let loaded = loaded();
+    let gtype = lookup_type();
+    assert_ne!(
+        gtype, 0,
+        "e_module_load did not register the lookup worker type"
+    );
+    assert_eq!(
+        // SAFETY: a registered type.
+        unsafe { g_type_get_plugin(gtype) }.cast::<GTypeModule>(),
+        loaded.module,
+        "the lookup worker type was not registered against the module"
+    );
+}
+
+#[test]
+fn the_lookup_worker_type_implements_econfiglookupworker() {
+    let gtype = lookup_type();
+    assert_ne!(gtype, 0, "the lookup worker type is not registered");
+    assert_ne!(
+        // SAFETY: both are registered types.
+        unsafe { g_type_is_a(gtype, e_config_lookup_worker_get_type()) },
+        0,
+        "the registered type does not implement EConfigLookupWorker"
+    );
+}
+
+/// The one thing that would make Evolution's account assistant never find
+/// this worker at all: an `extensible_type` that is not `EConfigLookup`'s,
+/// the same failure mode `the_registered_type_is_an_extension_of_the_page_
+/// that_will_load_it` above guards against for the backend.
+#[test]
+fn the_lookup_worker_extends_econfiglookup() {
+    let gtype = lookup_type();
+    assert_ne!(gtype, 0, "the lookup worker type is not registered");
+    // SAFETY: the type is registered; JmapConfigLookupClass leads with
+    // EExtensionClass, where `class_init` writes `extensible_type`.
+    let class = unsafe { g_type_class_ref(gtype) }.cast::<EExtensionClass>();
+    let extensible_type = unsafe { (*class).extensible_type };
+    // SAFETY: the reference taken above is given back exactly once.
+    unsafe { g_type_class_unref(class.cast()) };
+
+    assert_eq!(
+        extensible_type,
+        // SAFETY: no arguments, and the type initialises itself.
+        unsafe { e_config_lookup_get_type() },
+        "the lookup worker does not extend EConfigLookup, so no account \
+         assistant would ever instantiate it"
     );
 }
