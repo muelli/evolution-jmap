@@ -27602,3 +27602,27 @@ hand. Unchanged blockers: M10 has no CI matrix; the calcard directive's two
 emitters are still ours; M9 has no CI job and no GUI tier; the OAuth2 consent
 page needs a display this VM lacks; `docs/BACKLOG.md`'s contact/vCard and
 calendar/iCal fidelity items are all still parked there.
+
+## 2026-08-16 (two-hundred-and-ninetieth session)
+
+**Claiming: `jmap-config`'s `insert_widgets` — the port entry and the security
+toggle.** The previous session's own "next session" note, and still M7's top
+open item under the current priority. `git fetch origin` at claim time shows
+`origin/master` unchanged at `d622afc`, so no other agent has this.
+
+Plan: extend `ENTRY_ROWS` with a `_Port:` row bound through
+`e_binding_bind_property_full` (a `GtkEntry` `text` is a string,
+`ESourceAuthentication:port` is a `guint16` — needs a transform pair,
+`port_to_text`/`text_to_port`, in the same shape as `mail_child.rs`'s
+`secure_to_camel_method`), and add a `GtkCheckButton` bound straight through
+(`G_BINDING_BIDIRECTIONAL`, no transform — `ESourceSecurity:secure` and
+`GtkToggleButton:active` are both plain booleans) to the collection's
+`[Security]` extension, which `insert_entries` does not look at yet. The
+existing `notify` watcher is connected on `[Authentication]` only; `secure`
+lives on a different extension object (`[Security]`) and does change
+`check_complete`'s answer (`origin()` in `jmap-backend-core::source` refuses
+plaintext to a non-loopback host), so it needs its own `notify` connection,
+not a re-use of the first. `evo-sys` needs one new GTK entry point,
+`gtk_check_button_new_with_mnemonic` (returns `GtkWidget*` already, like
+`gtk_entry_new`, so no new opaque handle type — confirmed against the
+installed `gtkcheckbutton.h`).
