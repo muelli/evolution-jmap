@@ -678,12 +678,15 @@ version = "0.1.0"
 dependencies = [
  "eds-sys",
  "evo-sys",
+ "evolution-jmap-client",
  "evolution-jmap-collection-sync",
+ "evolution-jmap-mock",
  "glib-sys",
  "gobject-sys",
  "jmap-backend-collection",
  "jmap-backend-core",
  "jmap-mail",
+ "serde_json",
 ]
 
 [[package]]
