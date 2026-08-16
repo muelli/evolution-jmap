@@ -104,21 +104,34 @@ main loop is the whole fix, and it is on the client's side of the contract.
 
 ## Why they are gated behind an option
 
-The shared CI image has the EDS development headers and neither daemon. A
-test registered unconditionally would therefore either fail every CI run, or
-— the tempting fix, and the worse one — be written to skip itself when the
-runtime is missing, and report green on a machine where it never ran.
+`ci.yml`'s ordinary jobs (`checks`, `build`, `reproducible`) run on a bare
+`ubuntu-24.04` runner and install only the EDS **development** headers
+(`ci/install-deps.sh`) — neither daemon. A test registered unconditionally
+would therefore either fail every run, or — the tempting fix, and the worse
+one — be written to skip itself when the runtime is missing, and report
+green on a machine where it never ran.
 
 `ENABLE_FUNCTIONAL_TESTS` keeps "did not run" distinguishable from "passed".
 With it off, the tests do not exist. With it on, a missing runtime is a
 configure error. There is no arrangement in which they quietly pass.
 
-The consequence, stated plainly: **CI does not run these today**, so a change
-that breaks the EDS-facing behaviour they cover goes green until someone runs
-them here. Closing that needs `evolution-data-server` and `dbus-daemon` in
-the CI image (`Containerfile.ci`, rebuilt via `ci-image.yml`) and a
-`workflow_dispatch`-gated job that configures with the option on — a
-maintainer decision, because it grows the image every job pulls.
+CI does run these, in their own gated `functional` job (`.github/workflows/
+ci.yml`): triggered by `workflow_dispatch`, or a pull request labelled
+`run-functional-tests`, rather than every push — this layer is slower than
+the rest of the suite and, being off by default, is the one place a run is
+worth spending deliberately rather than on every commit. The job installs
+`evolution-data-server` and `dbus-daemon` itself (`ci/install-deps-
+functional.sh`) directly on the runner, the same way `ci/install-deps.sh`
+installs the dev headers for the other jobs — it does not touch the shared
+CI image (`Containerfile.ci` / `ci-image.yml`), which `release.yml` alone
+uses, so adding this job does not grow what every other job pulls. `ci/
+functional.sh` is the configure-build-test recipe both the job and a human
+running the same thing locally share.
+
+Not wired into `.gitlab-ci.yml`: that runner's default image is Debian's
+`rust:1.97.1`, not Ubuntu, and this session did not have a GitLab runner to
+verify `apt-get install evolution-data-server dbus-daemon` behaves the same
+there. Left for a session that can check it rather than guessed at.
 
 ## What the address book test asserts
 

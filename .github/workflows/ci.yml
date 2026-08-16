@@ -69,3 +69,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ci/reproducible.sh
+
+  # M9 layer 1 (docs/functional-tests.md): real EDS daemons against
+  # jmap-mockd. Needs evolution-data-server + dbus-daemon, not just the dev
+  # headers `build` installs, so it is its own job rather than a step there.
+  # Gated (workflow_dispatch, or a PR labelled run-functional-tests) rather
+  # than run on every push: slower than the rest of the suite and exercises
+  # a layer (EDS's own runtime) the other jobs do not touch.
+  functional:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-functional-tests')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ci/install-deps.sh
+      - run: ci/install-deps-functional.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: functional
+          workspaces: rust
+      - run: ci/functional.sh
