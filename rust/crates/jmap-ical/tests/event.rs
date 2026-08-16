@@ -5319,6 +5319,126 @@ fn a_custom_zone_the_document_defines_is_read_back_as_a_definition() {
     assert_eq!(event_to_ical(&back), ics);
 }
 
+/// The identifier of the zone [`ending`] defines.
+const ENDING_TZID: &str = "/example.com/America-New_York";
+
+/// A `VTIMEZONE` whose one observance stops repeating, in the shape RFC 5545
+/// §3.6.5's own `America/New_York` example has it: a `DAYLIGHT` rule that ran
+/// until the last Sunday of April 1973 and states that end as the UTC instant
+/// §3.3.10 asks for beside a `DTSTART` that is a local time.
+fn ending(until: &str, offset_from: &str) -> String {
+    format!(
+        "BEGIN:VTIMEZONE\r\n\
+         TZID:{ENDING_TZID}\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         DTSTART:19670430T020000\r\n\
+         TZOFFSETFROM:{offset_from}\r\n\
+         TZOFFSETTO:-0400\r\n\
+         RRULE:FREQ=YEARLY;UNTIL={until};BYDAY=-1SU;BYMONTH=4\r\n\
+         TZNAME:EDT\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n"
+    )
+}
+
+/// The same zone as RFC 8984 §4.7.2 spells one, with `until` stated in
+/// `offset_from` — which is where §4.7.2 puts a TimeZoneRule's `start`, and the
+/// only reading of `until` consistent with it, since the two bound one series of
+/// the same local times.
+fn ending_zone(until: &str, offset_from: &str) -> Value {
+    json!({
+        "@type": "TimeZone",
+        "tzId": ENDING_TZID,
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1967-04-30T02:00:00",
+            "offsetFrom": offset_from,
+            "offsetTo": "-0400",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "until": until,
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+                "byMonth": ["4"],
+            }],
+            "names": {"EDT": true},
+        }],
+    })
+}
+
+/// The same bug as `a_zoned_rules_utc_until_is_not_taken_for_a_local_time`, one
+/// level down — and this one *is* convertible without a zone database, which is
+/// why it is converted rather than refused.
+///
+/// An observance dates itself in the zone it is defining, so the offset that
+/// resolves its `DTSTART` is not a zone whose rules have to be evaluated: it is
+/// the fixed number of seconds `TZOFFSETFROM` states, sitting in the same
+/// component. Reading a UTC `UNTIL` there as local digits moves the end of the
+/// transition rule by that offset — five hours, for the example below — which
+/// puts the zone's last spring-forward in the wrong place and every event after
+/// it an hour out.
+#[test]
+fn an_observances_utc_until_is_read_in_the_offset_it_states() {
+    for (until, offset_from, read) in [
+        // The RFC's own example: 07:00 UTC is 02:00 where the offset is -0500.
+        ("19730429T070000Z", "-0500", "1973-04-29T02:00:00"),
+        // Backwards over a month, a year and into a February — 1973 is not a
+        // leap year and 1972 is, so the day the shift lands on differs.
+        ("19730101T020000Z", "-0500", "1972-12-31T21:00:00"),
+        ("19730301T000000Z", "-0500", "1973-02-28T19:00:00"),
+        ("19720301T000000Z", "-0500", "1972-02-29T19:00:00"),
+        // Forwards over one, at an offset that is not a whole hour.
+        ("19721231T230000Z", "+0545", "1973-01-01T04:45:00"),
+        // No offset to shift by, so the digits are the instant.
+        ("19730429T070000Z", "+0000", "1973-04-29T07:00:00"),
+        // Already the local time §3.3.10 asks for beside a local `DTSTART`,
+        // which is what this crate itself writes — read as itself.
+        ("19730429T020000", "-0500", "1973-04-29T02:00:00"),
+    ] {
+        let ics = zoned(ENDING_TZID, &ending(until, offset_from));
+
+        let event = ical_to_event(&ics).expect("parse");
+
+        assert_eq!(
+            serde_json::to_value(&event.time_zones).expect("a map of time zones"),
+            json!({ENDING_TZID: ending_zone(read, offset_from)}),
+            "{until} at {offset_from}: {ics}"
+        );
+    }
+}
+
+/// The other direction of the same conversion. RFC 5545 §3.6.5's examples state
+/// an observance's `UNTIL` as a UTC instant, which is what every producer of a
+/// `VTIMEZONE` writes — tzdata's, libical's, Exchange's — so that is what this
+/// draws, rather than asking a reader to accept a spelling it may never have
+/// seen. It also makes the trip through JSCalendar and back byte-identical, so
+/// a save of an untouched component still has nothing to report.
+#[test]
+fn an_observances_until_is_drawn_as_the_utc_instant_it_names() {
+    for (until, offset_from, drawn) in [
+        ("1973-04-29T02:00:00", "-0500", "19730429T070000Z"),
+        ("1972-12-31T21:00:00", "-0500", "19730101T020000Z"),
+        ("1973-01-01T04:45:00", "+0545", "19721231T230000Z"),
+        ("1973-04-29T07:00:00", "+0000", "19730429T070000Z"),
+    ] {
+        let event = defining(
+            ENDING_TZID,
+            json!({ENDING_TZID: ending_zone(until, offset_from)}),
+        );
+
+        let ics = event_to_ical(&event);
+
+        assert!(ics.contains(&ending(drawn, offset_from)), "{until}: {ics}");
+        // And back again, unchanged in either half.
+        let back = ical_to_event(&ics).expect("parse");
+        assert_eq!(
+            serde_json::to_value(&back.time_zones).expect("a map of time zones"),
+            json!({ENDING_TZID: ending_zone(until, offset_from)}),
+        );
+        assert_eq!(event_to_ical(&back), ics);
+    }
+}
+
 /// A zone the document *names* is left to the reader on the way back in, as it
 /// was on the way out. `Europe/Berlin` is a zone every database has; the
 /// `VTIMEZONE` beside it is libical's own copy, and carrying it into `timeZones`
