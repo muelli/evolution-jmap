@@ -26774,3 +26774,38 @@ directive's two emitters are still ours; M9 has no CI job and no GUI tier
 (`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
 page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
 fidelity items are all still parked there.
+
+## 2026-08-16 (two-hundred-and-eighty-third session)
+
+**Claiming: OAuth2, slice 1.75 — RFC 6749 §4.1.3 authorization-code token
+exchange (with RFC 7636 PKCE) and §6 refresh-token redemption, in
+`jmap-client`.**
+
+Survey before claiming, per the last several sessions' practice: M7 is
+unchanged (needs a display for `insert_widgets`). M9/M10 are unchanged
+(blocked on the `Containerfile.ci` maintainer decision). The last session's
+own note names the `eds-sys` bindgen slice (`EOAuth2Service` on the allowlist)
+as the only remaining piece before the interface implementation — but that is
+still bindgen/ABI-layout work the escalation rule reserves for a deliberate
+Opus/Fable session, not a routine Sonnet increment, and no session has
+overturned that read. Checked whether it was still true tonight rather than
+taking it on faith: it is (new GObject-vtable surface, `libsoup-3.0` pulled
+into the binding, unverifiable without a live IdP either way). Looked for a
+different Sonnet-sized item instead, and found one the last two sessions'
+"next session" notes did not name: `oauth.rs` now has discovery (RFC 8414)
+and dynamic registration (RFC 7591), so a deployment can be found and a
+`client_id` obtained — but nothing anywhere in this crate turns an
+authorization code (or a stale token) into a usable one. That is a real gap
+in the same file, pure Rust and HTTP against the mock like the two slices
+before it, so it is claimed instead of the escalation.
+
+Claimed here (over pushing this straight to escalation) is deliberate: the
+part of OAuth2 this codebase has flagged as unverifiable and vtable-shaped is
+specifically the `EOAuth2Service` *interface implementation* and the browser
+consent exchange. Turning a code into a token via a POST to `token_endpoint`
+is neither — it is the same shape of work `discover`/`register_client`
+already are, and the interface implementation (slice 3, whenever it lands)
+will need exactly this logic to fill `prepare_get_token_form`/
+`parse_token_response`, so building it now is not wasted regardless of when
+slice 2/3 happen.
+
