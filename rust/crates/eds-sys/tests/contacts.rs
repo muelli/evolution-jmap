@@ -438,6 +438,71 @@ END:VCARD\r\n";
     }
 }
 
+/// How far into an `ORG` value EDS has fields, and what happens to the rest.
+///
+/// The `ORG` line states an employer and then its units, and EDS gives the
+/// first three components a field each: `E_CONTACT_ORG` (the company),
+/// `E_CONTACT_ORG_UNIT` (the department) and `E_CONTACT_OFFICE`. A fourth
+/// component has no field at all — but it is not lost either, because a `set`
+/// rewrites the one component it is the field for and leaves the value's other
+/// components exactly where they were, empties included.
+///
+/// Which is why `jmap-book-sync`'s `merge_units` may take the edited list at
+/// its word: every unit with a name is written onto the line, and every unit on
+/// the line comes back, whether EDS had a field to show it in or not.
+#[test]
+fn an_org_component_past_the_third_has_no_field_but_survives_an_edit_of_the_others() {
+    unsafe {
+        let vcard = c"BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Test Contact\r\n\
+N:Contact;Test;;;\r\n\
+ORG;X-JMAP-KEY=o1:Acme Ltd;Research;Optics;Lenses\r\n\
+END:VCARD\r\n";
+        let contact = e_contact_new_from_vcard(vcard.as_ptr());
+        assert!(!contact.is_null());
+
+        // The first three components have a field each, in that order.
+        for (field, expected) in [
+            (E_CONTACT_ORG, "Acme Ltd"),
+            (E_CONTACT_ORG_UNIT, "Research"),
+            (E_CONTACT_OFFICE, "Optics"),
+        ] {
+            let value = e_contact_get_const(contact, field);
+            assert!(!value.is_null(), "no value for field {field}");
+            assert_eq!(CStr::from_ptr(value.cast()).to_str().unwrap(), expected);
+        }
+        // `Lenses` is in none of them: no field states the fourth component.
+        for field in [E_CONTACT_ORG, E_CONTACT_ORG_UNIT, E_CONTACT_OFFICE] {
+            let value = e_contact_get_const(contact, field);
+            assert_ne!(CStr::from_ptr(value.cast()).to_str().unwrap(), "Lenses");
+        }
+
+        // Editing the department rewrites that component and no other.
+        e_contact_set(contact, E_CONTACT_ORG_UNIT, c"Acoustics".as_ptr().cast());
+        let edited_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let edited = CStr::from_ptr(edited_ptr).to_str().unwrap();
+        assert!(
+            edited.contains("ORG;X-JMAP-KEY=o1:Acme Ltd;Acoustics;Optics;Lenses"),
+            "the components EDS did not edit moved or vanished: {edited}"
+        );
+        g_free(edited_ptr.cast());
+
+        // Clearing a field empties its component in place rather than closing
+        // the gap, so the components after it keep their positions.
+        e_contact_set(contact, E_CONTACT_OFFICE, std::ptr::null());
+        let cleared_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared = CStr::from_ptr(cleared_ptr).to_str().unwrap();
+        assert!(
+            cleared.contains("ORG;X-JMAP-KEY=o1:Acme Ltd;Acoustics;;Lenses"),
+            "clearing the office shifted the components after it: {cleared}"
+        );
+        g_free(cleared_ptr.cast());
+
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
+
 #[test]
 fn contact_address_and_label_field_properties() {
     unsafe {

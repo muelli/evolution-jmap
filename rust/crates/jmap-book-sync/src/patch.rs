@@ -31,9 +31,11 @@
 //!   introduce or remove a preference, never renumber one.
 //! - `name.components` are a *list* with no keys to patch by, so they go back
 //!   whole and are merged the way an address's components are (`merge_named`):
-//!   kinds the `N` value has no field for are carried across the replacement,
-//!   and a component that still says what it said keeps the members that value
-//!   had no field for either — its `phonetic` spelling above all. Their order
+//!   a component the value never stated — of a kind `N` has no field for, or
+//!   saying nothing to put in the field it has — is carried across the
+//!   replacement, and a component that still says what it said keeps the
+//!   members that value had no field for either — its `phonetic` spelling
+//!   above all. Their order
 //!   is the server's, so that opening a contact and closing it again writes
 //!   nothing even when the `N` fields state them in another order. And as with
 //!   an address, matching by value first needs the components that shared one
@@ -125,13 +127,13 @@ use jmap_proto::contacts::{
     Link, Media, Name, Nickname, Note, OnlineService, OrgUnit, Organization, Relation, Title,
 };
 use jmap_vcard::{
-    address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
-    maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
-    restore_name_components, same_photo, same_service, states_a_point_in_time, states_address,
+    address_label, anniversary_date, maps_context, maps_phone_feature, online_service_handle,
+    online_service_uri, restore_address_components, restore_name_components, same_photo,
+    same_service, states_a_point_in_time, states_address, states_address_component,
     states_anniversary, states_calendar, states_context, states_email, states_keyword, states_link,
-    states_media, states_nickname, states_note, states_nothing_but_the_marriage,
-    states_online_service, states_organization, states_phone, states_phone_feature, states_spouse,
-    states_title, title_kind,
+    states_media, states_name_component, states_nickname, states_note,
+    states_nothing_but_the_marriage, states_online_service, states_organization, states_phone,
+    states_phone_feature, states_spouse, states_title, title_kind,
 };
 use serde_json::{Map, Value, json};
 
@@ -375,7 +377,7 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
             edited.components.as_deref().unwrap_or_default(),
         ),
         |component| (&component.kind, &component.value),
-        maps_name_component,
+        states_name_component,
     );
     let merged = (!merged.is_empty()).then_some(merged);
     if current.components != merged {
@@ -886,17 +888,25 @@ fn rekey_keyless<T: Clone>(
 /// [`restore_address_components`]' job: a street name and its house number
 /// come back from the vCard as one street, and would otherwise both read as
 /// deleted and be replaced by their own concatenation.
+///
+/// An address with *no* components on the edited side is merged all the same,
+/// rather than being taken for the user having emptied the address. It is a
+/// reachable state and it does not mean that: an address whose components are
+/// all of kinds `ADR` has no field for is shown on its `LABEL` alone, and an
+/// `ADR` whose every field the user cleared states nothing either. Both come
+/// back with nothing in them, and in both the components that were never on
+/// the line are still not the user's to have deleted.
 fn merge_components(
     current: Option<&[AddressComponent]>,
     edited: Option<&[AddressComponent]>,
 ) -> Option<Vec<AddressComponent>> {
     let current = current.unwrap_or_default();
-    let edited = restore_address_components(current, edited?);
+    let edited = restore_address_components(current, edited.unwrap_or_default());
     let merged = merge_named(
         current,
         &edited,
         |component| (&component.kind, &component.value),
-        maps_address_component,
+        states_address_component,
     );
     (!merged.is_empty()).then_some(merged)
 }
@@ -910,11 +920,18 @@ fn merge_components(
 /// rather than the edited one keeps an invisible part in its place instead of
 /// shuffling it to the end, so that opening a contact and closing it again
 /// writes nothing; parts the vCard added follow in the order it stated them.
+///
+/// `was_stated` is [`diff_flags`]' predicate of the same name, and asked for the
+/// same reason: a part gone from the line was deleted by the user only if the
+/// line ever carried it. It is asked of the whole part rather than of its kind,
+/// because having a field is not the only way to reach the line — a part saying
+/// nothing is left off one it has a field for, and reading *that* absence as a
+/// removal deletes what the user was never shown.
 fn merge_named<T: Clone>(
     current: &[T],
     edited: &[T],
     named: impl Fn(&T) -> (&str, &str),
-    mapped: impl Fn(&str) -> bool,
+    was_stated: impl Fn(&T) -> bool,
 ) -> Vec<T> {
     let mut spare: Vec<&T> = edited.iter().collect();
     let mut merged: Vec<T> = Vec::new();
@@ -927,8 +944,8 @@ fn merge_named<T: Clone>(
                 merged.push(part.clone());
             }
             // Gone from the line — which says the user deleted it only if
-            // the line had a field for it in the first place.
-            None if !mapped(named(part).0) => merged.push(part.clone()),
+            // the line stated it in the first place.
+            None if !was_stated(part) => merged.push(part.clone()),
             None => {}
         }
     }

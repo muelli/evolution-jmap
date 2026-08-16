@@ -454,14 +454,20 @@ fn maps_title_kind(kind: Option<&str>) -> bool {
         .any(|(mapped, _)| *mapped == title_kind(kind))
 }
 
-/// Whether the vCard mapping covers a JSContact `name.components` kind.
+/// Whether the `N` value written for a name states this component.
 ///
 /// Anything that saves a card back to the server has to know exactly which
 /// JSContact fields a vCard can carry, or it will overwrite the ones it
 /// silently dropped on the way in. The predicates below are that knowledge,
 /// kept next to the tables they answer for.
-pub fn maps_name_component(kind: &str) -> bool {
-    name_field(kind).is_some()
+///
+/// Two things keep a component off the line, and the question is the same for
+/// both: `N` has no field for its kind, or it says nothing to put in one.
+/// `name_fields` leaves an empty component out exactly as it leaves an empty
+/// entry off a card, so a save reading absence as a removal must ask about the
+/// value too — the same "was this stated" [`states_context`] asks of a `TYPE`.
+pub fn states_name_component(component: &NameComponent) -> bool {
+    !component.value.is_empty() && name_field(&component.kind).is_some()
 }
 
 /// The position in the vCard `N` value a JSContact name component kind is
@@ -589,9 +595,12 @@ pub fn states_phone_feature(features: Option<&Value>, key: &str) -> bool {
         .any(|(mapped, name)| *mapped == key && *name == slot)
 }
 
-/// Whether the vCard mapping covers a JSContact address component kind.
-pub fn maps_address_component(kind: &str) -> bool {
-    address_field(kind).is_some()
+/// Whether the `ADR` line written for an address states this component —
+/// [`states_name_component`]'s question one property over, and answered the
+/// same way: the seven fields must have room for its kind, and it must say
+/// something to put there. See `address_fields`, which skips both.
+pub fn states_address_component(component: &AddressComponent) -> bool {
+    !component.value.is_empty() && address_field(&component.kind).is_some()
 }
 
 /// The `ADR` field a component of this kind is stated in, whether it has one
