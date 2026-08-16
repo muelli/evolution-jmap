@@ -921,6 +921,88 @@ fn multiple_addresses_with_different_types_and_labels_pair_accurately() {
 }
 
 #[test]
+fn an_address_at_home_and_at_work_states_one_slot_rather_than_both() {
+    let mut addresses = BTreeMap::new();
+    addresses.insert(
+        "a1".to_owned(),
+        Address {
+            contexts: Some(json!({"work": true, "private": true})),
+            components: Some(vec![
+                AddressComponent::new("name", "Hauptstraße 1"),
+                AddressComponent::new("locality", "Berlin"),
+            ]),
+            full: Some("Hauptstraße 1\n10115 Berlin".to_owned()),
+            ..Address::default()
+        },
+    );
+    let card = ContactCard {
+        addresses: Some(addresses),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "ADR"),
+        "ADR;X-JMAP-KEY=a1;TYPE=HOME:;;Hauptstraße 1;Berlin;;;"
+    );
+    assert_eq!(
+        line(&vcard, "LABEL"),
+        "LABEL;X-JMAP-KEY=a1;TYPE=HOME:Hauptstraße 1\\n10115 Berlin"
+    );
+}
+
+#[test]
+fn a_phone_at_home_and_at_work_states_one_slot_rather_than_both() {
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_owned(),
+        ContactPhone {
+            number: "+49 30 111".to_owned(),
+            contexts: Some(json!({"work": true, "private": true})),
+            features: Some(json!({"voice": true})),
+            ..ContactPhone::default()
+        },
+    );
+    let card = ContactCard {
+        phones: Some(phones),
+        ..ContactCard::default()
+    };
+
+    // The feature `TYPE`s are untouched: they pick which *kind* of phone field
+    // the number lands in, not which context's.
+    assert_eq!(
+        line(&card_to_vcard(&card), "TEL"),
+        "TEL;X-JMAP-KEY=p1;TYPE=HOME,VOICE:+49 30 111"
+    );
+}
+
+#[test]
+fn an_email_at_home_and_at_work_still_states_both() {
+    let mut emails = BTreeMap::new();
+    emails.insert(
+        "e1".to_owned(),
+        ContactEmail {
+            address: "vera@example.com".to_owned(),
+            contexts: Some(json!({"work": true, "private": true})),
+            ..ContactEmail::default()
+        },
+    );
+    let card = ContactCard {
+        emails: Some(emails),
+        ..ContactCard::default()
+    };
+
+    // EDS files an `EMAIL` line by its *position* — `E_CONTACT_EMAIL_1` to
+    // `_4` — rather than by its `TYPE`, so a line wearing both contexts
+    // reaches one field rather than two and there is nothing to protect the
+    // user from. Stating both is what lets the save read either back.
+    assert_eq!(
+        line(&card_to_vcard(&card), "EMAIL"),
+        "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,HOME:vera@example.com"
+    );
+}
+
+#[test]
 fn unlabelled_second_address_of_same_type_is_not_corrupted_by_label() {
     let eds_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",

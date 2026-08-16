@@ -1958,3 +1958,90 @@ fn structured_address_and_office_vcard_lines_and_modification_in_eds() {
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other() {
+    let vcard_str = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:pas-id-test-both-contexts-001\r\n",
+        "FN:Vera Olden\r\n",
+        "ADR;TYPE=WORK,HOME;X-JMAP-KEY=a1:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
+        "TEL;TYPE=WORK,HOME,VOICE;X-JMAP-KEY=p1:+49 30 111\r\n",
+        "END:VCARD\r\n"
+    );
+
+    unsafe {
+        let vcard_c = CString::new(vcard_str).unwrap();
+        let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
+        assert!(!contact.is_null());
+
+        // One `ADR` line, and both of the two per-context fields Evolution's
+        // contact editor shows read it. `E_CONTACT_ADDRESS_OTHER` — the field a
+        // line with no `TYPE` lands in — stays empty.
+        let work = e_contact_get(contact, E_CONTACT_ADDRESS_WORK) as *mut EContactAddress;
+        let home = e_contact_get(contact, E_CONTACT_ADDRESS_HOME) as *mut EContactAddress;
+        let other = e_contact_get(contact, E_CONTACT_ADDRESS_OTHER) as *mut EContactAddress;
+        assert!(!work.is_null() && !home.is_null());
+        assert_eq!(
+            CStr::from_ptr((*work).street).to_str().unwrap(),
+            "Hauptstraße 1"
+        );
+        assert_eq!(
+            CStr::from_ptr((*home).street).to_str().unwrap(),
+            "Hauptstraße 1",
+            "the work address is also the home address"
+        );
+        assert!(other.is_null());
+        e_contact_address_free(home);
+
+        // The same for the telephone: `E_CONTACT_PHONE_BUSINESS` wants
+        // `WORK`+`VOICE` and `E_CONTACT_PHONE_HOME` wants `HOME`+`VOICE`, and a
+        // line carrying all three satisfies both.
+        let business = e_contact_get_const(contact, E_CONTACT_PHONE_BUSINESS);
+        let home_phone = e_contact_get_const(contact, E_CONTACT_PHONE_HOME);
+        assert!(!business.is_null() && !home_phone.is_null());
+        assert_eq!(
+            CStr::from_ptr(business.cast()).to_str().unwrap(),
+            "+49 30 111"
+        );
+        assert_eq!(
+            CStr::from_ptr(home_phone.cast()).to_str().unwrap(),
+            "+49 30 111"
+        );
+
+        // Which is why the mapping never writes both: the user retypes the
+        // *work* address, and the one line behind both fields is rewritten, so
+        // their *home* address silently becomes the new work one.
+        glib_sys::g_free((*work).street.cast());
+        (*work).street = glib_sys::g_strdup(c"Nebenstraße 2".as_ptr().cast());
+        e_contact_set(contact, E_CONTACT_ADDRESS_WORK, work.cast());
+        e_contact_address_free(work);
+
+        let edited_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let edited = CStr::from_ptr(edited_ptr).to_str().unwrap();
+        assert_eq!(
+            edited.matches("\r\nADR").count(),
+            1,
+            "still one line, not one per slot: {edited}"
+        );
+        assert!(
+            edited.contains("ADR;X-JMAP-KEY=a1;TYPE=WORK,HOME:;;Nebenstraße 2;"),
+            "{edited}"
+        );
+        let edited_c = CString::new(edited).unwrap();
+        g_free(edited_ptr.cast());
+
+        let after = e_contact_new_from_vcard(edited_c.as_ptr().cast());
+        let home_after = e_contact_get(after, E_CONTACT_ADDRESS_HOME) as *mut EContactAddress;
+        assert_eq!(
+            CStr::from_ptr((*home_after).street).to_str().unwrap(),
+            "Nebenstraße 2",
+            "the home address the user never touched moved with the work one"
+        );
+        e_contact_address_free(home_after);
+
+        gobject_sys::g_object_unref(after.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
