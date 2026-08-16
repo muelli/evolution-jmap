@@ -29100,3 +29100,83 @@ honest limit the 304th session's own test hit. Not tagging M7 or the
 real-server-readiness item complete: this needs a human to actually run
 "Look Up Mail Account" against a real OAuth2 JMAP deployment before either
 claim is true.
+
+**Delivered, gates green.** `evo-sys`: `EConfigLookupResult`/
+`EConfigLookupResultSimple` join `ALLOWED_TYPES`; `e_config_lookup_get_type`,
+`_register_worker`, `_add_result`, `e_config_lookup_result_simple_new`,
+`_add_string`, `_add_boolean` join `ALLOWED_FUNCTIONS`;
+`E_CONFIG_LOOKUP_PARAM_*` join a new `ALLOWED_VARS`/`allowlist_var` (this
+crate's first). `jmap-config/src/config_lookup.rs` (new, ~380 lines):
+`JmapConfigLookup`, an `EExtension` implementing `EConfigLookupWorker` via
+`InterfaceDecl::filled_by` exactly as `oauth2_service.rs` does for
+`EOAuth2Service`; `class_init` sets `extensible_type = E_TYPE_CONFIG_LOOKUP`
+and overrides `GObjectClass::constructed` (this crate's first — no existing
+`ObjectSubclass` impl needed one, so this is a direct `g_type_class_peek`
+chain-up in `class_init`, not a new trait hook, following
+`example-module`'s already-established pattern rather than growing
+`jmap_backend_core::subclass` for a single caller); `run()` reads the email/
+servers parameters, calls `oauth2_setup::discover_and_register` through a
+`CancelBridge`-derived `CancelFlag` and a real `UreqTransport`, and on
+success builds a complete-account `EConfigLookupResultSimple` —
+`[Collection]`/`[Authentication]`/`[Security]` the same properties
+`account::apply` writes, `[JMAP OAuth2]` the same properties `oauth2::apply`
+writes — silent on any failure, matching `e-webdav-config-lookup.c`'s own
+"most lookup workers won't match" convention. Registered in `module.rs`'s
+`load()` alongside the backend. `po/POTFILES.in`/`po/evolution-jmap.pot`
+gained the three new user-visible strings (the worker's own display name,
+plus the result's display name and description), caught red by
+`jmap-backend-core/tests/potfiles.rs` before the catalogue was regenerated.
+
+**Tests, and the honest split behind them.** `probe_host` (host selection:
+`servers` wins, else the email domain, blank/absent `servers` falls back) is
+six plain unit tests, red-then-green confirmed by breaking `only_the_first_
+servers_entry_is_tried` first. `jmap-config/tests/module.rs` gained three
+class-level checks — registered against the module, implements
+`EConfigLookupWorker`, `extensible_type` is `E_TYPE_CONFIG_LOOKUP` — proven
+red by temporarily zeroing the `extensible_type` assignment and watching the
+third one fail before restoring it. What is deliberately *not* tested here,
+stated rather than glossed: `run()`'s live dispatch through a real
+`EConfigLookup`, `add_result`'s actual property-writing (both need a real
+`ESourceRegistry`/D-Bus session `e_config_lookup_new`'s own
+`g_return_val_if_fail` requires — even `EConfigLookupResultSimple`'s
+`configure_source` takes a `config_lookup` argument it only type-checks, not
+uses, so there is no way around needing a live one), and whether
+`REDIRECT_URI` actually round-trips through EDS's WebKit prompter in a real
+consent flow. The first two are M9's `dbus-run-session` harness's job, next
+session or later; the third is the M7 GUI-verification rule's.
+
+**The redirect URI correction is the night's real finding**, not the
+increment itself. `docs/BACKLOG.md` is unchanged — nothing here is deferred
+fidelity work, so nothing was added there.
+
+**Next session, concretely**: run the M9 functional harness (`cmake
+--build build && ctest --test-dir build -L functional`, or a hand-built
+`dbus-run-session` invocation) against a real `EConfigLookup` to exercise
+`run()`'s live dispatch for the first time — registering a real
+`ESourceRegistry`, constructing `EConfigLookup::new(registry)`, and driving
+`e_config_lookup_run_worker` with a `jmap-mockd`-backed OAuth2-capable
+deployment (the mock does not speak RFC 8414/7591 yet — check whether adding
+that is in scope before or after this test). If that lands, this becomes the
+point to also settle whether `REDIRECT_URI` actually works end to end, which
+still needs a human and a real identity provider to confirm — record that
+under M7's "needs human verification in real Evolution" the moment there is
+something concrete to verify.
+
+Gates this session: `cargo test -p jmap-config -p evo-sys -p eds-sys
+--offline` green (config_lookup's 6 unit tests + 3 new module tests, evo-sys
+unchanged); `cargo test --workspace --exclude example-module --offline`
+green except the same eleven pre-existing `JMAP_FUNCTIONAL_BOOK_CLIENT`-unset
+`jmap-functional` failures every prior session's gate has documented.
+`cargo clippy --workspace --exclude example-module --all-targets --offline
+-- -D warnings` clean (one `collapsible_if` fixed with a `let`-chain).
+`cargo fmt --all -- --check` clean. `ninja -C build` (release) then `ctest
+--test-dir build` 15/15 — the first run hit
+[[disk-fills-from-cargo-target]] again (`rust-test-eds` failed on "No space
+left on device" with `/` at 100%); `cargo clean --profile dev` recovered
+24 GiB and the rerun was clean, including `package-deb`/
+`package-deb-reproducible`, which the first run's disk exhaustion had also
+taken down. `rust/Cargo.lock` gained one line (`gio-sys` under
+`jmap-config`'s own dependency list, a version already pinned elsewhere in
+the workspace). `ci/checks.sh` still cannot run on this VM
+([[checks-sh-blocked-on-vm]]); the new file carries its SPDX header, checked
+by hand.
