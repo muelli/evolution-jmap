@@ -112,6 +112,17 @@
 //! set rewrites the first line of that name in place and leaves its parameters
 //! alone, and any further line of the same name passes through untouched.
 //!
+//! `contexts` is the one member that crosses on four different properties, and
+//! the one narrowed by what EDS does with the parameter rather than by what
+//! vCard can spell. RFC 9553 §1.5.1 lets an entry name every context it belongs
+//! to; an `ADR` and a `TEL` state exactly one, because EDS picks the field a
+//! line lands in by matching `TYPE`, and a line wearing both matches two — one
+//! address filling both the Home and the Work block of Evolution's contact
+//! editor, with one line behind them, so retyping either rewrites the other.
+//! See `context_slot` for the measurement and [`states_context`] for what the
+//! save then does about the context left off. An `EMAIL` is not narrowed: EDS
+//! files it by position rather than by `TYPE`.
+//!
 //! `onlineServices` is the one property vCard 3.0 has no line for at all. RFC
 //! 9553 §2.3.2 names the contact as one service or protocol knows them; RFC
 //! 4770's `IMPP` is vCard 4.0, which is not the format
@@ -227,6 +238,10 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
 ];
 
 /// JSContact `contexts` keys and their vCard `TYPE` spelling.
+///
+/// A line states at most *one* of them — see [`context_slot`] — because EDS
+/// files a line by its `TYPE` into whichever per-context field matches, and
+/// matches more than one when the line carries more than one.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
 /// JSContact phone `features` and their vCard `TYPE` spelling.
@@ -453,6 +468,61 @@ fn name_field(kind: &str) -> Option<usize> {
 /// Whether the vCard mapping covers a JSContact `contexts` key.
 pub fn maps_context(key: &str) -> bool {
     CONTEXTS.iter().any(|(mapped, _)| *mapped == key)
+}
+
+/// The one context `TYPE` a line carries, or `None` for an entry whose
+/// contexts vCard 3.0 can spell none of.
+///
+/// **One and only one**, and that is the whole point of the function. EDS
+/// picks the field a line lands in by matching the field's `TYPE` set against
+/// the line's, so a single `ADR;TYPE=WORK,HOME` satisfies both
+/// `E_CONTACT_ADDRESS_WORK` and `E_CONTACT_ADDRESS_HOME`, and one address shows
+/// up in two of the blocks Evolution's contact editor lets the user edit
+/// separately. There is only one line behind them: retyping the work address
+/// rewrites it, and the home address the user never touched becomes the new
+/// work one. Measured against libebook-contacts 3.52 — `eds-sys`'
+/// `a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other`
+/// drives exactly that sequence — and the same holds for `TEL`, where
+/// `E_CONTACT_PHONE_BUSINESS` wants `WORK`+`VOICE` and `E_CONTACT_PHONE_HOME`
+/// wants `HOME`+`VOICE`, so a line carrying all three satisfies both.
+///
+/// So an entry at work *and* privately lands in [`DEFAULT_SLOT`], where the
+/// user looks first — the choice [`service_slot`] already makes for a handle,
+/// for the same reason. An entry with no context vCard can spell carries no
+/// `TYPE` at all, which is a slot of its own: EDS reads such a line as
+/// `E_CONTACT_ADDRESS_OTHER`.
+///
+/// What is *not* narrowed is a phone's `features`, which pick which kind of
+/// phone field the number lands in rather than which context's, and an
+/// `EMAIL`, which EDS files by position (`E_CONTACT_EMAIL_1` to `_4`) and not
+/// by `TYPE` at all.
+///
+/// The context left off the line is the save's problem, and
+/// [`states_context`] is the answer.
+fn context_slot(contexts: Option<&Value>) -> Option<&'static str> {
+    let stated = type_names(&CONTEXTS, contexts);
+    match stated.len() {
+        0 => None,
+        1 => Some(stated[0]),
+        _ => Some(DEFAULT_SLOT),
+    }
+}
+
+/// Whether the line written for an entry with these `contexts` states this
+/// context.
+///
+/// The question the save path asks before reading a context's absence from an
+/// edited line as the user having removed it. `context_slot` leaves one of two
+/// contexts off the line, and a context the user was never shown is not one
+/// they can have cleared — the same treatment [`maps_context`] already gives a
+/// context vCard 3.0 has no `TYPE` for at all.
+pub fn states_context(contexts: Option<&Value>, key: &str) -> bool {
+    let Some(slot) = context_slot(contexts) else {
+        return false;
+    };
+    CONTEXTS
+        .iter()
+        .any(|(mapped, name)| *mapped == key && *name == slot)
 }
 
 /// Whether the vCard mapping covers a JSContact phone `features` key.
@@ -1276,7 +1346,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         if !states_phone(phone) {
             continue;
         }
-        let mut types = type_names(&CONTEXTS, phone.contexts.as_ref());
+        let mut types: Vec<&str> = context_slot(phone.contexts.as_ref()).into_iter().collect();
         types.extend(type_names(&PHONE_FEATURES, phone.features.as_ref()));
         if phone.pref.is_some() {
             types.push("PREF");
@@ -1289,7 +1359,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     for (key, address) in card.addresses.iter().flatten() {
-        let types = type_names(&CONTEXTS, address.contexts.as_ref());
+        let types: Vec<&str> = context_slot(address.contexts.as_ref())
+            .into_iter()
+            .collect();
         if let Some(fields) = address_fields(address) {
             properties.push(
                 Property::structured("ADR", fields)

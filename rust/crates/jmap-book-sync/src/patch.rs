@@ -23,7 +23,9 @@
 //!   loses the entry's unmapped properties and its identity server-side.
 //! - `contexts` and `features` are boolean maps of which vCard 3.0 can spell
 //!   only some members. A context of `school` has no `TYPE`, so it is merged
-//!   back in rather than being replaced away.
+//!   back in rather than being replaced away. On an `ADR` and a `TEL` one of
+//!   the two contexts vCard *can* spell is left off the line as well, so which
+//!   members are merged back depends on the entry — see `slotted_context`.
 //! - `pref` is a rank from 1 to 100 and vCard 3.0 has only a flag. An
 //!   address that was already preferred keeps its rank; the flag can only
 //!   introduce or remove a preference, never renumber one.
@@ -126,9 +128,10 @@ use jmap_vcard::{
     address_label, anniversary_date, maps_address_component, maps_context, maps_name_component,
     maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
     restore_name_components, same_photo, same_service, states_a_point_in_time, states_address,
-    states_anniversary, states_calendar, states_email, states_keyword, states_link, states_media,
-    states_nickname, states_note, states_nothing_but_the_marriage, states_online_service,
-    states_organization, states_phone, states_spouse, states_title, title_kind,
+    states_anniversary, states_calendar, states_context, states_email, states_keyword, states_link,
+    states_media, states_nickname, states_note, states_nothing_but_the_marriage,
+    states_online_service, states_organization, states_phone, states_spouse, states_title,
+    title_kind,
 };
 use serde_json::{Map, Value, json};
 
@@ -457,7 +460,7 @@ fn diff_phones(
                 "contexts",
                 &old.contexts,
                 &new.contexts,
-                maps_context,
+                slotted_context(&old.contexts),
             );
             diff_flags(
                 patch,
@@ -559,7 +562,7 @@ fn diff_addresses(
                 "contexts",
                 &old.contexts,
                 &new.contexts,
-                maps_context,
+                slotted_context(&old.contexts),
             );
         },
     );
@@ -1032,6 +1035,25 @@ fn free_key(wanted: &str, taken: &BTreeSet<String>) -> String {
         .map(|index| format!("{wanted}-{index}"))
         .find(|candidate| !taken.contains(candidate))
         .expect("an unbounded sequence has a free element")
+}
+
+/// Whether an edited line could have said anything about this JSContact
+/// `contexts` key — the test [`diff_flags`] applies before reading a context's
+/// absence as a removal.
+///
+/// Two reasons it might not have. vCard 3.0 has no `TYPE` for a context of
+/// `school` at all, which is [`maps_context`]; and of the two it *does* have,
+/// an `ADR` or a `TEL` states only one, because EDS reads a line wearing both
+/// into two of the contact editor's per-context fields at once and the next
+/// edit of either rewrites the single line behind them. Which one is left off
+/// depends on the entry, so the predicate does too. See
+/// [`jmap_vcard::states_context`].
+///
+/// `EMAIL` is not narrowed this way and keeps the plain [`maps_context`]: EDS
+/// files an email line by its position (`E_CONTACT_EMAIL_1` to `_4`) rather
+/// than by its `TYPE`, so both contexts cross and both come back.
+fn slotted_context(contexts: &Option<Value>) -> impl Fn(&str) -> bool + '_ {
+    move |key| maps_context(key) && states_context(contexts.as_ref(), key)
 }
 
 /// Replace the members of a boolean map this mapping can spell, keep the
