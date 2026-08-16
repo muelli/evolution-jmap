@@ -28708,3 +28708,52 @@ log entry. Tests/clippy/fmt not re-run; nothing in the tree changed.
 method-chooser-vs-auto-discovery question before re-deriving the same
 "everything is blocked" conclusion again; if answered, the GTK wiring item is
 still a live escalation candidate for the concurrency reasoning alone.
+
+## 2026-08-16 (three-hundred-and-second session)
+
+**Survey, no claim.** `git fetch origin` at the start shows `origin/master`
+unchanged at `30be12a` (the 301st session's tag). Running on Sonnet.
+
+Checked, before re-deriving anything, whether the maintainer has answered the
+method-chooser-vs-auto-discovery question the last three sessions have been
+waiting on — the one thing that would actually change this session's
+outcome. `grep -rn "method-chooser\|auto-discovery"` across every `.md`/`.rs`
+file in the tree turns up nothing outside `docs/NIGHT-LOG.md` itself: no
+answer has landed anywhere a session could read it. Re-read
+`jmap-config/src/backend.rs`'s `insert_widgets`/`commit_changes` and
+`jmap-config/src/oauth2_setup.rs` directly (not just the log's description)
+to confirm the finding still holds against the actual code rather than four
+sessions' agreement: `insert_widgets` binds host/port/user/TLS to the
+collection and is otherwise unchanged; `discover_and_register` still takes
+`redirect_uri` as a plain argument with its own doc comment saying the
+consent-flow increment has to settle on one — nothing new to wire up.
+
+Looked for a way to make the redirect-URI half of this concrete without the
+trigger decision — RFC 7591 registration has to name the URI the actual
+consent exchange will use, and the 301st session established that exchange
+is EDS's `ECredentialsPrompterImplOAuth2`'s job, not this project's. What
+URI that prompter registers against is fixed by its own (`.c`, not header)
+implementation in `libedataserverui`, which this VM has no source for, only
+the vfunc declaration in the installed header
+(`e-credentials-prompter-impl-oauth2.h`/`e-oauth2-service.h` — checked, no
+default documented there). Guessing it would be exactly the kind of
+plausible-but-wrong answer these sessions are told to escalate rather than
+commit; it is also not the blocking question anyway, since the trigger
+decision has to land first regardless. Not a new tractable slice, just a
+dead end worth recording so a future session does not walk it again looking
+for one.
+
+**Conclusion: unchanged.** Current-priority band still blocked on the same
+maintainer decision. M9 stays tagged complete; M10 stays out of scope
+(distinct pinned container images per EDS version is `ci-image.yml`'s job,
+which these hard rules forbid touching). `docs/BACKLOG.md` re-read, no new
+items line up with current-priority work.
+
+No commits to `rust/`; tests/clippy/fmt not re-run, nothing in the tree
+changed besides this entry. Surfaced the open question to the maintainer
+directly in this session's chat, concretely enough to answer in one line,
+rather than leaving it as a fifth log entry nobody but the next agent reads.
+
+**Next session**: same as the last three. Check whether the question below
+has been answered before re-deriving "everything is blocked" from scratch
+again.
