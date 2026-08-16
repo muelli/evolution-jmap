@@ -66,6 +66,12 @@
 //!   per-account ones are filled in. Not yet registered with an
 //!   `EOAuth2Services` registry or reachable from any module load path —
 //!   also the setup UI's job, once it exists.
+//! - [`oauth2_setup`] is the network half neither of the above can be: RFC
+//!   8414 discovery and RFC 7591 registration, turning a host name into the
+//!   [`oauth2::Config`] [`oauth2::apply`] stores. Deliberately not reachable
+//!   from the dialog yet — driving the user to the authorization endpoint and
+//!   choosing a redirect URI is the consent exchange itself, `insert_widgets`'
+//!   job once it exists.
 //! - [`backend`] is the GObject the four above are reached through: the
 //!   `EMailConfigServiceBackend` subclass Evolution's *Receiving Email* page
 //!   instantiates for the JMAP provider. It carries the name the page finds
@@ -143,3 +149,4 @@ pub mod mail;
 pub mod module;
 pub mod oauth2;
 pub mod oauth2_service;
+pub mod oauth2_setup;

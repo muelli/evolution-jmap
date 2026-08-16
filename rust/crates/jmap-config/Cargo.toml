@@ -28,6 +28,10 @@ eds-sys = { workspace = true }
 evo-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
 evolution-jmap-collection-sync = { workspace = true }
+# `oauth2_setup`'s discovery and registration calls: the RFC 8414/7591 client
+# `jmap_backend_collection` also links, and the only piece of this crate that
+# talks to the network directly rather than through an `ESource`.
+evolution-jmap-client = { workspace = true }
 glib-sys = { workspace = true }
 # For the `GTypeModule` the module entry point registers the class against, and
 # nothing else: every other GObject call this crate makes is behind
@@ -45,3 +49,7 @@ jmap-backend-collection = { workspace = true }
 # needed for is the `CamelJmapSettings` GType an `ESourceCamel` subtype is
 # generated from — which is a reader of this crate's output, not a part of it.
 jmap-mail = { workspace = true }
+# `oauth2_setup`'s tests drive discovery and registration against a served
+# deployment rather than mocking the transport by hand.
+evolution-jmap-mock = { workspace = true }
+serde_json = { workspace = true }
