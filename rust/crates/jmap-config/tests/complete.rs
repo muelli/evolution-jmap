@@ -42,6 +42,7 @@ fn account() -> Account {
             contacts: true,
             calendars: true,
         },
+        oauth2_registered: false,
     }
 }
 

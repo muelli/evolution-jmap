@@ -68,6 +68,11 @@
 //! - **the mail sources** — see [`crate`]. A JMAP account's `[Mail Account]`,
 //!   `[Mail Identity]` and `[Mail Transport]` are three further sources, not
 //!   three more groups in this one.
+//! - **[`Account::oauth2_registered`]** — [`crate::oauth2`]'s own extension is
+//!   [`crate::oauth2_setup::discover_and_register`]'s to write, not this
+//!   function's; [`read`] reads it back because [`crate::complete::check`]
+//!   needs to, but [`apply`] leaves it alone the same way it leaves the mail
+//!   sources alone.
 //!
 //! The three links above go to `jmap-backend-collection`, which is a
 //! dev-dependency here — the tests link it, the library must not — so they are
@@ -137,6 +142,16 @@ pub struct Account {
     /// Which of mail, contacts and calendars the account offers — the three
     /// check boxes, and what the collection backend fans out to.
     pub parts: Parts,
+    /// Whether `[JMAP OAuth2]` already names a registered client id.
+    ///
+    /// Read-only from a setup's point of view: [`apply`] never writes it —
+    /// [`crate::oauth2_setup::discover_and_register`] is the one thing that
+    /// does, onto its own extension, independently of the entries this
+    /// crate's widgets bind. This field exists so [`crate::complete::check`]
+    /// can tell "OAuth 2.0 picked, client registered" from "OAuth 2.0
+    /// picked, nothing behind it yet" without reaching past a plain
+    /// [`Account`] for an `ESource` it was not handed.
+    pub oauth2_registered: bool,
 }
 
 /// Writes `account` onto `source`, which afterwards says exactly that account.
@@ -323,6 +338,11 @@ pub unsafe fn read(source: *mut ESource) -> Account {
         }
     };
 
+    // SAFETY: a valid source by this function's contract; `oauth2::read`
+    // creates nothing and answers `Config::default()` (client id absent) for
+    // a source with no `[JMAP OAuth2]` extension yet.
+    let oauth2_registered = unsafe { crate::oauth2::read(source) }.client_id.is_some();
+
     Account {
         identity: identity.unwrap_or_default(),
         connection: Connection {
@@ -337,6 +357,7 @@ pub unsafe fn read(source: *mut ESource) -> Account {
         // `true` rather than the source's own flag: see the note above on the
         // one place this and the registry's reader disagree by design.
         parts: Parts::from_collection(true, parts),
+        oauth2_registered,
     }
 }
 
