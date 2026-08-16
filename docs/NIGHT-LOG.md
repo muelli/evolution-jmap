@@ -30071,3 +30071,86 @@ hand with no `[JMAP OAuth2]` client registered is incomplete; registering
 one via `oauth2::apply` on the same source makes it complete again) plus a
 `complete.rs` unit test with the new field set/unset, both written before
 the implementation.
+
+**Delivered**, exactly the plan above. `Account` gains `oauth2_registered:
+bool`; `account::read` populates it from `oauth2::read(source).client_id
+.is_some()`; `account::apply` deliberately leaves it alone (the module doc
+gained a line next to the mail-sources exception saying so). `complete::check`
+gates on it after the server check, with a new `Incomplete::OAuth2NotRegistered`
+and a translated status message pointing at "Look Up Account Details" by
+name. Every other `Account { .. }` literal in the crate either inherits the
+field through struct-update syntax already or was the small number of base
+fixtures (`defaults.rs`, and the four `account()`/`finished()` functions
+across `src/complete.rs` and `tests/{account,backend,complete,mail}.rs`)
+that needed one line added — no behavioural change to any of them, since a
+plain `false` is what every existing fixture already meant before this field
+existed. `docs/manual-test-account-setup.md`'s "What this does not cover"
+section is rewritten: the specific gap it flagged (an account committed with
+OAuth 2.0 and no client) can no longer be reached, so what is left to
+eyeball by hand is only the status label's live repaint, which is unrelated
+to this fix and already named above it in the same document.
+
+**TDD, in the order written.** `tests/backend.rs::oauth2_picked_by_hand_with
+_no_registered_client_is_refused` was red against pre-fix `complete::check`
+(compiled, since `Incomplete::OAuth2NotRegistered` did not exist yet — the
+literal first red state was "does not compile", then a stub variant with no
+gate, confirmed failing, before the real gate went in) and green after,
+alongside `oauth2_with_a_registered_client_is_accepted` for the other half
+and two `complete.rs` unit tests for the same two cases at the pure-`Account`
+level. One correction mid-implementation: the first draft of
+`oauth2_with_no_registered_client_is_reported` asserted `status_message ==
+check(...).unwrap_err().to_string()`, copying `an_unusable_server_is_reported`'s
+pattern — wrong here, because `status_message`'s `OAuth2NotRegistered` arm is
+a translated, differently-worded string from `Display`'s, unlike `Server`'s
+arm which reuses `Display` verbatim. Caught by the test itself failing
+immediately, fixed to assert the actual translated string.
+
+**Gates.** Hit [[disk-fills-from-cargo-target]] again partway through this
+session's `ctest --test-dir build` — the dev-profile `rust/target` had
+refilled since the 313th session's clean, and `rustc-LLVM ERROR: IO failure
+on output stream: No space left on device` briefly looked like a
+build-linking regression from this change before `df -h /` (then at 85%,
+later confirmed the real cause) explained it. `cargo clean --profile dev`
+(recovered 23.9 GiB) and a rerun made it a non-issue; recorded here mainly
+because the failure signature (an LLVM linker crash, not a Rust compile
+error) is not the one that memo's title suggests and is worth recognising
+faster next time. After that: `cargo fmt --all -- --check` clean; `cargo
+clippy -p jmap-config --all-targets --locked -- -D warnings` and the same
+across `--workspace --exclude example-module` both clean; `cargo test
+--workspace --exclude example-module --locked` green except the same eleven
+pre-existing `JMAP_FUNCTIONAL_BOOK_CLIENT`-unset `jmap-functional` failures
+every prior session has documented (confirmed unchanged by also running
+`--exclude jmap-functional` clean). `sh po/extract.sh` regenerated
+`po/evolution-jmap.pot` for the one new translatable string (caught red by
+`jmap-backend-core/tests/potfiles.rs`'s `every_marked_literal_reached_the
+_catalogue` before the regeneration, green after) — the standing directive
+on marking UI strings translatable at introduction, carried out rather than
+deferred. `ninja -C build` (release) then `ctest --test-dir build` — **16/16**
+after the disk-space rerun, `functional-*` and both `rust-test`/`rust-test-eds`
+legs included. `rust/Cargo.lock` untouched — no new dependency. No new source
+files, so no new SPDX headers to add.
+
+**Not tagging any milestone.** M7 is still not `COMPLETE` — its GUI still
+needs a human running `docs/manual-test-account-setup.md` in real Evolution,
+unchanged by this session. This closes one specific, previously-logged
+correctness gap inside it.
+
+**A note on process, for whoever reads the 310th–313rd entries next to this
+one.** Those three sessions surveyed the same ground and each concluded
+"nothing to do", citing this exact OAuth2-combo gap as something needing a
+maintainer decision. That conclusion does not fully hold up: the gap had a
+narrow, decidable fix once "does a client id exist" was separated from
+"which manual-entry design should exist eventually" — the second question
+is still open and still the maintainer's, but it does not block the first.
+Worth remembering next time a session's answer is "this needs a human" for
+something that touches a design question: check whether the *specific* bug
+found is actually downstream of an *unopened* part of that question, or
+only looks like it is.
+
+**Next session.** Unchanged from the 313th's survey otherwise: real-server
+readiness and M9 stay closed/complete; M10 stays blocked on
+`Containerfile.ci`/`ci-image.yml` growth, off-limits to this stream; the
+calcard directive's two emitters remain deliberately ours (`docs/NIGHT-LOG.md`'s
+own design rationale in `jmap-vcard`/`jmap-ical`'s `syntax.rs` module docs,
+not an unfinished migration) and out of tonight's priority scope regardless.
+M7's remaining gap is the GUI human-verification pass itself.
