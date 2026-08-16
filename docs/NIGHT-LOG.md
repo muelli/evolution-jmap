@@ -26809,3 +26809,121 @@ will need exactly this logic to fill `prepare_get_token_form`/
 `parse_token_response`, so building it now is not wasted regardless of when
 slice 2/3 happen.
 
+**Delivered:** `jmap-client/src/oauth.rs` gains `PkceVerifier` (RFC 7636 §4.1
+verifier generation from OS randomness, §4.2 S256 challenge), `TokenResponse`,
+`exchange_code` and `refresh_access_token`, plus `limits::MAX_OAUTH_TOKEN_BYTES`
+and a new `Error::OAuthTokenRefused { error, description }` variant.
+`MockServerBuilder::oauth_token` in `jmap-mock` answers `POST /oauth/token`,
+parsing the `application/x-www-form-urlencoded` body RFC 6749 §4.1.3 sends
+(new `parse_form_body` in `server.rs`, sibling to the existing `percent_decode`
+the blob-URL path segments already use). Two new direct dependencies:
+`getrandom` (already resolved transitively via `ring`, so no new major version
+entered the lock file — only its own transitive tree changed) for the
+verifier's randomness, and `sha2` (RustCrypto, MIT/Apache-2.0, checked by
+hand along with its own new transitive dependencies —
+`digest`/`block-buffer`/`crypto-common`/`generic-array`/`typenum`/
+`cpufeatures`, all MIT or MIT/Apache-2.0) for the S256 challenge — this
+project does not hand-roll hashing.
+
+Decisions worth the ink:
+
+- **`Error::OAuthTokenRefused` is a new variant, not `Error::Http` with no
+  problem.** RFC 6749 §5.2 answers *every* refusal at this endpoint with the
+  same HTTP 400 (401 only for a confidential client's bad credentials, which
+  this client never is) — so the status code alone cannot distinguish
+  `invalid_grant` (the refresh token is dead, re-authenticate) from
+  `invalid_client` (the registration itself is gone) from `invalid_request`
+  (a bug here). `discover`/`register_client` were right not to parse RFC 7591
+  §3.2.2's error object because their status codes already carry the
+  distinction that matters (404 vs other); here they do not, so leaving this
+  one unparsed would mean every failure at this endpoint reads identically.
+  Pinned by `distinct_error_codes_are_distinguishable`.
+- **A non-`bearer` `token_type` is refused.** RFC 6749 §7.1 allows other
+  token types (`mac`, etc.), each with its own per-request signing scheme this
+  client does not implement — `Credentials::Bearer` is the only shape that
+  reaches the wire (`client.rs`). Accepting the token and using it as a bearer
+  token anyway would silently send credentials the wrong way to a server that
+  meant something else by them; refusing it up front is the honest answer to
+  "this client cannot use what it was handed" (`a_non_bearer_token_type_is_refused`;
+  the check is case-insensitive per §7.1, pinned separately).
+- **PKCE is S256 only, never `plain`.** RFC 7636 §4.3 allows `plain` for a
+  client that cannot hash; this one can (`sha2` is now a dependency), so
+  there is no reason to fall back to sending the verifier itself as the
+  challenge, which defeats the point of hashing it at all.
+- **`refresh_access_token` sends no PKCE verifier.** The verifier proves who
+  redeemed the *original* code; a refresh grant is authenticated by
+  possessing the refresh token itself (RFC 6749 §6), and no RFC ties a
+  verifier to it — `refresh_access_token_sends_the_grant_type_refresh_token_and_client_id_and_no_verifier`
+  asserts the form body carries no `code_verifier` field at all.
+- **Form-body encoding reuses `url::encode_template_value`** (the RFC 3986
+  unreserved-set percent-encoder the F14 blob-URL fix already built and
+  tested) rather than a second encoder, on the reasoning that a space encoded
+  as `%20` and one encoded as `+` decode identically under any correct
+  `application/x-www-form-urlencoded` parser.
+
+Tests: 13 new unit tests in `oauth.rs` (verifier length/alphabet against RFC
+7636 §4.1, two verifiers never coincide, challenge equals an independently
+computed SHA-256 base64url encoding, missing/empty `access_token`, missing or
+non-bearer `token_type` refused with the bearer check case-insensitive,
+optional fields carried through, unused fields parsed past, a refused
+grant's `error` surfaces distinctly per code, an unparseable error body falls
+back to the HTTP status) — `parse_token_response` was factored out of
+`token_request` specifically so these can drive hostile bodies directly,
+mirroring why `AuthorizationServer::parse` is already separate from
+`discover`. Plus 6 integration tests in the new
+`jmap-client/tests/oauth_token.rs` against the mock: the exact form fields an
+authorization-code exchange and a refresh both send (and that a refresh sends
+no verifier), a refreshed token rotating its refresh token, a deployment
+refusing the grant, a deployment offering no token endpoint, and — the one
+that needed a server rather than a unit test — the mock independently
+recomputing SHA-256 of the `code_verifier` it received and checking it
+against the challenge value a simulated "authorization step" had embedded
+earlier, proving the verifier/challenge pairing end to end rather than only
+self-consistently.
+
+Also fixed along the way, not part of the increment itself: wiring the third
+OAuth mock handler into `serve`/`handle_request` pushed both past clippy's
+`too_many_arguments` (8 with `oauth_token` added); bundled the three
+`Option<Arc<...Fn>>` handler slots into one `OAuthHandlers` struct rather than
+suppressing the lint, which also shortened every call site.
+
+`cargo test --locked` green across every crate (`jmap-client`'s own suite —
+lib plus every integration test file — went from 119 to 138 tests total;
+`oauth.rs`'s lib tests alone went from 16 to 29, plus the 6 new integration
+tests in `oauth_token.rs`); `cargo clippy --all-targets --locked -- -D
+warnings` clean, same with `-p evolution-jmap-client --features
+live-server`; `cargo fmt --all --check`
+clean. Housekeeping hit before any of this could run:
+`rust/target/debug` had again grown to 25G against a nearly-full root
+filesystem, which crashed the linker with a bus error partway through the
+first full test run — `cargo clean --profile dev` first
+(`[[memory:disk-fills-from-cargo-target]]`), then a clean rerun was green.
+`ninja -C build` then `ctest --test-dir build` 15/15, including all four
+`functional-*` legs (the mock's routing changed, and those drive it).
+`ci/checks.sh` still stops at its first step on this VM (no
+`reuse`/`pipx`/`uvx`/`cargo-deny`); the one new source file carries an SPDX
+`GPL-3.0-or-later` header, checked by hand; the new crates `sha2` pulls in
+were checked by hand for license compatibility (all MIT or MIT/Apache-2.0)
+in `cargo-deny`'s absence.
+
+No milestone tag — a further slice of OAuth2, not a milestone of its own.
+
+**Next session:** the `eds-sys` bindgen slice (`EOAuth2Service`/
+`EOAuth2Services`/`EOAuth2ServiceBase` on the allowlist, `g_type_query`
+layout checks, the `libsoup-3.0` generation-time check) is now the only
+remaining piece before the `EOAuth2Service` interface implementation itself —
+every pure-Rust, no-FFI seam this session could find in the OAuth2 track
+(discovery, registration, token exchange, refresh) is now built and tested.
+A session picking this up next should treat it as a real escalation
+candidate rather than re-surveying from scratch, unless M7/M9/M10 have
+changed (a display or a `Containerfile.ci` decision landing would reopen
+those first).
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier
+(both need `Containerfile.ci` growth, a maintainer decision); M7 still
+**needs human verification in real Evolution**, and its one remaining vfunc
+(`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
+page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
+fidelity items are all still parked there.
+

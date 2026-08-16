@@ -58,6 +58,15 @@ pub const MAX_OAUTH_METADATA_BYTES: u64 = 1024 * 1024;
 /// metadata fields, read from a server this client has only just discovered.
 pub const MAX_OAUTH_REGISTRATION_BYTES: u64 = 1024 * 1024;
 
+/// The most octets an RFC 6749 §5 token endpoint response (success or error)
+/// may be.
+///
+/// Same reasoning and the same number as [`MAX_OAUTH_METADATA_BYTES`]: a flat
+/// JSON object of a handful of token fields, or of an `error`/
+/// `error_description` pair, from an endpoint this client has by definition
+/// not yet finished authenticating to.
+pub const MAX_OAUTH_TOKEN_BYTES: u64 = 1024 * 1024;
+
 /// The most octets one blob download may be when the caller has no better
 /// number.
 ///

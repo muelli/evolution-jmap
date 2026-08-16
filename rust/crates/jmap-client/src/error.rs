@@ -58,6 +58,18 @@ pub enum Error {
     /// the two limits above because those are refusals of something this client
     /// was about to *send*.
     ResponseTooLarge { limit: u64 },
+    /// An OAuth 2.0 token endpoint refused a grant (RFC 6749 §5.2).
+    ///
+    /// Its own variant rather than [`Self::Http`] with no problem: every
+    /// refusal at a token endpoint answers the same HTTP 400 (401 only for a
+    /// confidential client's bad credentials, which this client never is), so
+    /// the status carries none of the reason — only the body's `error` does,
+    /// and `invalid_grant` (re-authenticate) is not `invalid_client`
+    /// (the registration itself is gone).
+    OAuthTokenRefused {
+        error: String,
+        description: Option<String>,
+    },
 }
 
 impl Error {
@@ -115,6 +127,11 @@ impl std::fmt::Display for Error {
             Error::ResponseTooLarge { limit } => write!(
                 f,
                 "the server's answer is larger than the {limit} bytes this request allowed for it"
+            ),
+            Error::OAuthTokenRefused { error, description } => write!(
+                f,
+                "OAuth 2.0 token request refused: {error} ({})",
+                description.as_deref().unwrap_or("no description")
             ),
         }
     }
