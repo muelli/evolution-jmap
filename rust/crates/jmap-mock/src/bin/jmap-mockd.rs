@@ -4,7 +4,7 @@
 //! Standalone mock JMAP server for manual testing (curl, Evolution).
 //!
 //! ```text
-//! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN]
+//! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
 //! ```
 //!
 //! Serves one account (`A1`, alice@example.com) pre-seeded with an inbox
@@ -12,9 +12,16 @@
 //! calendar.
 
 use jmap_mock::{EmailSeed, MockServer};
+use serde_json::json;
+
+/// The fixed `client_id` `--oauth2`'s registration endpoint hands back —
+/// this binary has no accounts to distinguish clients by, so one constant is
+/// as good as a generated one and is easier to grep for in a log.
+const OAUTH2_CLIENT_ID: &str = "jmap-mockd-oauth2-client";
 
 fn main() {
     let mut port: u16 = 8080;
+    let mut oauth2 = false;
     let mut builder = MockServer::builder();
 
     let mut arguments = std::env::args().skip(1);
@@ -41,9 +48,33 @@ fn main() {
                     .unwrap_or_else(|| usage("--bearer needs a token"));
                 builder = builder.bearer_token(&token);
             }
+            "--oauth2" => oauth2 = true,
             "--help" | "-h" => usage(""),
             other => usage(&format!("unknown argument: {other}")),
         }
+    }
+
+    // Off by default, matching every other opt-in behaviour here: a mock
+    // that always advertised OAuth 2.0 would leave a manual test with no way
+    // to check the "this deployment offers none" path. RFC 8414's document
+    // and RFC 7591 registration are both real network round trips a client
+    // can drive end to end against this one process — see
+    // `jmap_config::oauth2_setup::discover_and_register`, which this mirrors
+    // for a standalone run rather than an in-process `MockServer`.
+    if oauth2 {
+        builder = builder
+            .oauth_authorization_server(|origin| {
+                json!({
+                    "issuer": origin,
+                    "authorization_endpoint": format!("{origin}/oauth/authorize"),
+                    "token_endpoint": format!("{origin}/oauth/token"),
+                    "registration_endpoint": format!("{origin}/oauth/register"),
+                    "response_types_supported": ["code"],
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
+                    "code_challenge_methods_supported": ["S256"],
+                })
+            })
+            .oauth_client_registration(|_request| (201, json!({"client_id": OAUTH2_CLIENT_ID})));
     }
 
     let server = builder.port(port).start();
@@ -91,6 +122,6 @@ fn usage(error: &str) -> ! {
     if !error.is_empty() {
         eprintln!("error: {error}\n");
     }
-    eprintln!("usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN]");
+    eprintln!("usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]");
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }
