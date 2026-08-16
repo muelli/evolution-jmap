@@ -27395,3 +27395,35 @@ CI job and no GUI tier; M7 still needs human verification in real
 Evolution and its `insert_widgets` vfunc needs a display this VM lacks; the
 OAuth2 consent page needs one too; `docs/BACKLOG.md`'s contact/vCard and
 calendar/iCal fidelity items are all still parked there.
+
+## 2026-08-16 (two-hundred-and-eighty-eighth session)
+
+**Claiming: wire `jmap_config::oauth2_service::Service` into a module load
+path** — last session's own "next session" note, and the real-server-readiness
+half of the current priority.
+
+Before writing anything, checked which module should do the registering
+against evolution-ews's actual working implementation
+(`gitlab.gnome.org/GNOME/evolution-ews`) rather than guessing, since a wrong
+guess here is invisible on this headless VM either way. Its
+`src/EWS/registry/module-ews-backend.c` — the `ECollectionBackend` module
+`evolution-source-registry` loads — calls
+`e_oauth2_service_office365_type_register(type_module)` right beside its
+backend/factory registrations, and nothing else: no
+`g_object_new`/`e_oauth2_services_add` anywhere in that codebase. Reading
+`e-oauth2-service-base.c` explains why that one call is the whole of it:
+`EOAuth2ServiceBase` is itself an `EExtension` whose `extensible_type` is
+`E_TYPE_OAUTH2_SERVICES` (`e_oauth2_service_base_class_init`), and
+`e-oauth2-services.c`'s own constructor calls
+`e_extensible_load_extensions()` on itself before returning. So the type only
+has to be *registered* by the time anything in a process constructs the
+`EOAuth2Services` singleton (`e_oauth2_services_new()`) — the same
+"registration is instantiation" idiom this project's own `jmap-config`
+module docs already describe for `EMailConfigServiceBackend`, not a special
+case for OAuth2. Claiming the increment on that basis: register
+`jmap_config::oauth2_service::Service` in `jmap-backend-collection`'s module
+load (`module-jmap-backend.so`, loaded into `evolution-source-registry`),
+not `jmap-config`'s own module — the account-setup module is never the
+process that refreshes a token in the background, and `evolution-source-registry`
+is where OAuth2 credential handling actually lives, matching evolution-ews's
+own placement exactly.
