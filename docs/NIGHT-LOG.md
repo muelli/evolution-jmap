@@ -27900,3 +27900,40 @@ Unchanged blockers: M10 has no CI matrix; the calcard directive's two
 emitters are still ours; M9 has no CI job and no GUI tier;
 `docs/BACKLOG.md`'s contact/vCard and calendar/iCal fidelity items are all
 still parked there.
+
+## 2026-08-16 — OPERATOR HUMAN VERIFICATION (M7 setup UI, real Evolution)
+
+Tobias ran the JMAP account-setup assistant in real Evolution 3.52.3 on the
+evo-test VM against an installed build of commit `9999932`. (That tree predates
+the status-label and `oauth2_setup.rs` work; see the note at the end.) Results
+against the M7 "still needs human verification in real Evolution" items:
+
+- **Port entry — VERIFIED.** Empty on a fresh account; a set port persists and
+  redisplays on reopening the editor; invalid input (`443x`, `-1`, `65536`,
+  `abc`) neither crashes the page nor clears the other fields.
+- **TLS toggle / live `check_complete` — VERIFIED.** Starts checked. Unchecking
+  against a non-`localhost` server disables *Next*/*Finish*; against `localhost`
+  it stays enabled. So the `notify` handler on `[Security]` does get
+  `check_complete` re-asked live — the open question the recent sessions kept
+  flagging ("does `check_complete` actually get asked again") is answered: yes.
+- **Server entry / defaults / live re-check — VERIFIED.** A valid identity
+  (`alice@example.com`) prefills `[Server]` with `example.com`; clearing
+  `[Server]` disables both *Next* and *Finish*; refilling re-enables. (Identity
+  address-format rejection is gated by Evolution's own identity page, so it is
+  not separately observable on the Receiving Email page — expected.)
+- **Authentication — OBSERVATION / OPEN DESIGN QUESTION.** No
+  authentication-method selector appears on the Receiving Email page: only
+  Server, Port, Username, and the TLS toggle. No password entry, no OAuth2
+  choice. This build predates `oauth2_setup.rs`, but even at current HEAD
+  (`1be63f0`) `insert_widgets` adds only a status label — no auth-method
+  chooser. Decide and surface the intent: is a method selector meant to appear
+  in the assistant, or will OAuth2 be auto-discovered (`oauth2_setup.rs`) and
+  used transparently with a password fallback? As of now nothing tells the user
+  which authentication will be used, which is the last user-facing hole in M7.
+
+Net: M7's connection widgets (server/port/username/TLS) and the live
+completeness gating are **human-confirmed working**. M7 is **not** complete —
+the remaining setup-UI question is authentication (surfacing method/OAuth2 and,
+if applicable, a password entry). Not yet re-verified in real Evolution: the
+incompleteness **status label** (`993e24c`) and any user-visible effect of the
+OAuth2 discovery/registration work (`a121a3b`); worth a re-test after a rebuild.
