@@ -28151,3 +28151,32 @@ autonomous increment); M10 has no CI matrix; the calcard directive's two
 emitters are still ours; the OAuth2 consent page needs a display this VM
 lacks; `docs/BACKLOG.md`'s contact/vCard and calendar/iCal fidelity items are
 all still parked there.
+
+## 2026-08-16 (two-hundred-and-ninety-fifth session)
+
+**Claiming: M9 Tier 2's GUI smoke test.** `git fetch origin` at claim time
+shows `origin/master` unchanged at `1a62693`, so no other agent has this.
+
+Re-surveyed the priority queue before picking: M7's `insert_widgets` is
+functionally complete pending human sign-off in real Evolution, which this
+session cannot provide; the OAuth2 GTK-wiring
+(`oauth2_setup::discover_and_register` into `insert_widgets`) is both blocked
+on the maintainer's open auth-method design question and flagged by the
+293rd session as a genuine background-thread/main-loop escalation candidate,
+so attempting it here would be exactly the "plausible-but-wrong" risk the
+escalation rule warns against; M10's per-EDS-version matrix needs new pinned
+container images, which means growing `Containerfile.ci`/`ci-image.yml` —
+off-limits by this session's own hard rules. That leaves M9 Tier 2: the
+294th session's note flagged it as the next open half of M9 and specifically
+asked whether a bare CI runner's `apt-get install evolution` suffices instead
+of growing the shared image.
+
+Checked rather than assumed: `apt-cache policy evolution xvfb python3-dogtail
+python3-pyatspi` on this VM (an `ubuntu-24.04` box matching the CI runner)
+shows all four resolve from `noble`/`noble-updates` — no custom image needed,
+same as the existing `functional` job's `evolution-data-server`. Proceeding
+to implement the smoke test: launch Evolution under `Xvfb` with a JMAP
+account pre-seeded against `jmap-mockd`, drive it via AT-SPI/dogtail, assert
+the account appears and the inbox is non-empty, capture a screenshot/AT-SPI
+tree only on failure. Scoping to ONE test, as the roadmap specifies — a
+canary, not coverage.
