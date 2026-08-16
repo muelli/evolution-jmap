@@ -3,7 +3,7 @@
 
 //! HTTP surface: routing, session document, server lifecycle.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -60,11 +60,32 @@ type MetadataFn = dyn Fn(&str) -> Value + Send + Sync;
 /// RFC 7591 §3.2.2's error responses too.
 type RegistrationFn = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
 
+/// Answers an RFC 6749 §5 token-endpoint request, given the
+/// `application/x-www-form-urlencoded` fields the client sent
+/// (`grant_type`, `code`/`refresh_token`, `client_id`, `code_verifier`, …).
+///
+/// A closure over the parsed fields, like [`RegistrationFn`], so a test can
+/// assert on exactly what a client sent (the PKCE verifier a code exchange
+/// carries, in particular) before deciding the status and JSON body to
+/// answer with.
+type TokenFn = dyn Fn(&BTreeMap<String, String>) -> (u16, Value) + Send + Sync;
+
+/// The three OAuth 2.0 endpoint handlers a test may configure, bundled so
+/// [`serve`]/[`handle_request`] take one argument for all of them rather than
+/// three.
+#[derive(Clone, Default)]
+struct OAuthHandlers {
+    metadata: Option<Arc<MetadataFn>>,
+    registration: Option<Arc<RegistrationFn>>,
+    token: Option<Arc<TokenFn>>,
+}
+
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
     oauth_metadata: Option<Arc<MetadataFn>>,
     oauth_registration: Option<Arc<RegistrationFn>>,
+    oauth_token: Option<Arc<TokenFn>>,
     omitted_capabilities: BTreeSet<String>,
     omit_primary_accounts: bool,
     calls_in_request: Option<u64>,
@@ -261,6 +282,23 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer `POST /oauth/token` — the path this crate's own
+    /// [`Self::oauth_authorization_server`] test fixtures name as
+    /// `token_endpoint` — as an RFC 6749 §4.1.3/§6 token endpoint, with
+    /// `handler` deciding the status and body from the form fields the
+    /// client sent.
+    ///
+    /// Off by default, matching [`Self::oauth_client_registration`]: a
+    /// deployment need not answer requests here at all until a test asks it
+    /// to.
+    pub fn oauth_token(
+        mut self,
+        handler: impl Fn(&BTreeMap<String, String>) -> (u16, Value) + Send + Sync + 'static,
+    ) -> Self {
+        self.oauth_token = Some(Arc::new(handler));
+        self
+    }
+
     /// Bind to a fixed localhost port instead of an ephemeral one.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
@@ -292,23 +330,16 @@ impl MockServerBuilder {
         let origin = format!("http://127.0.0.1:{port}");
 
         let stop = Arc::new(AtomicBool::new(false));
+        let oauth = OAuthHandlers {
+            metadata: self.oauth_metadata.clone(),
+            registration: self.oauth_registration.clone(),
+            token: self.oauth_token.clone(),
+        };
         let handle = std::thread::spawn({
             let state = Arc::clone(&state);
             let stop = Arc::clone(&stop);
             let origin = origin.clone();
-            let oauth_metadata = self.oauth_metadata.clone();
-            let oauth_registration = self.oauth_registration.clone();
-            move || {
-                serve(
-                    server,
-                    state,
-                    self.auth,
-                    oauth_metadata,
-                    oauth_registration,
-                    origin,
-                    stop,
-                )
-            }
+            move || serve(server, state, self.auth, oauth, origin, stop)
         });
 
         MockServer {
@@ -335,6 +366,7 @@ impl MockServer {
             port: 0,
             oauth_metadata: None,
             oauth_registration: None,
+            oauth_token: None,
             omitted_capabilities: BTreeSet::new(),
             omit_primary_accounts: false,
             calls_in_request: Some(DEFAULT_CALLS_IN_REQUEST),
@@ -399,21 +431,13 @@ fn serve(
     server: tiny_http::Server,
     state: Arc<Mutex<ServerState>>,
     auth: AuthConfig,
-    oauth_metadata: Option<Arc<MetadataFn>>,
-    oauth_registration: Option<Arc<RegistrationFn>>,
+    oauth: OAuthHandlers,
     origin: String,
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::SeqCst) {
         match server.recv_timeout(Duration::from_millis(20)) {
-            Ok(Some(request)) => handle_request(
-                request,
-                &state,
-                &auth,
-                oauth_metadata.as_deref(),
-                oauth_registration.as_deref(),
-                &origin,
-            ),
+            Ok(Some(request)) => handle_request(request, &state, &auth, &oauth, &origin),
             Ok(None) => {}
             Err(_) => break,
         }
@@ -424,8 +448,7 @@ fn handle_request(
     mut request: tiny_http::Request,
     state: &Mutex<ServerState>,
     auth: &AuthConfig,
-    oauth_metadata: Option<&MetadataFn>,
-    oauth_registration: Option<&RegistrationFn>,
+    oauth: &OAuthHandlers,
     origin: &str,
 ) {
     // Answered before the credential check, and only ever with 200 or 404.
@@ -438,7 +461,7 @@ fn handle_request(
         && request.url().split('?').next().unwrap_or_default()
             == "/.well-known/oauth-authorization-server"
     {
-        match oauth_metadata {
+        match oauth.metadata.as_deref() {
             Some(metadata) => respond_json(request, 200, &metadata(origin)),
             None => respond_json(
                 request,
@@ -464,7 +487,7 @@ fn handle_request(
             respond_json(request, 400, &json!({"detail": "invalid JSON"}));
             return;
         };
-        match oauth_registration {
+        match oauth.registration.as_deref() {
             Some(handler) => {
                 let (status, response) = handler(&parsed);
                 respond_json(request, status, &response);
@@ -473,6 +496,35 @@ fn handle_request(
                 request,
                 404,
                 &json!({"status": 404, "detail": "this deployment offers no client registration"}),
+            ),
+        }
+        return;
+    }
+
+    // Also answered before the credential check: this client always
+    // registers as a public, PKCE-only client (RFC 8252 §8.4), so it sends no
+    // separate client authentication to this endpoint either — the
+    // `client_id` in the form body, and the PKCE verifier or refresh token
+    // proving possession, are all the identification RFC 6749 §3.2.1 asks a
+    // public client for.
+    if request.method() == &tiny_http::Method::Post
+        && request.url().split('?').next().unwrap_or_default() == "/oauth/token"
+    {
+        let mut body = Vec::new();
+        if request.as_reader().read_to_end(&mut body).is_err() {
+            respond_json(request, 400, &json!({"error": "invalid_request"}));
+            return;
+        }
+        let fields = parse_form_body(&body);
+        match oauth.token.as_deref() {
+            Some(handler) => {
+                let (status, response) = handler(&fields);
+                respond_json(request, status, &response);
+            }
+            None => respond_json(
+                request,
+                404,
+                &json!({"status": 404, "detail": "this deployment offers no token endpoint"}),
             ),
         }
         return;
@@ -647,6 +699,27 @@ fn path_segments(path: &str) -> Vec<String> {
     path.trim_start_matches('/')
         .split('/')
         .map(percent_decode)
+        .collect()
+}
+
+/// Parse an `application/x-www-form-urlencoded` body (RFC 6749 §4.1.3's
+/// request shape for the token endpoint) into its key/value pairs.
+///
+/// A literal `+` is decoded as a space before the percent-escapes are undone,
+/// which is this media type's own historical convention for it — even though
+/// this crate's own client never sends one (it percent-encodes a space as
+/// `%20`, which the fallthrough case below already handles).
+fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
+    String::from_utf8_lossy(body)
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(key, value)| {
+            (
+                percent_decode(&key.replace('+', " ")),
+                percent_decode(&value.replace('+', " ")),
+            )
+        })
         .collect()
 }
 
