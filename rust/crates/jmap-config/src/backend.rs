@@ -58,27 +58,35 @@
 //!
 //! `insert_widgets` now builds every field
 //! [`Connection`](jmap_collection_sync::child_source::Connection) carries —
-//! the server, the port, the login name and whether the connection is
-//! encrypted — bound to the collection the same way `check_complete` and
-//! `commit_changes` already read and write it, plus a status label showing
-//! [`Incomplete`](crate::complete::Incomplete)'s refusal reason (empty, and
-//! hidden, once the account is one a commit would accept). What is still
-//! missing is only:
+//! the server, the port, the login name, the authentication method and
+//! whether the connection is encrypted — bound to the collection the same way
+//! `check_complete` and `commit_changes` already read and write it, plus a
+//! status label showing [`Incomplete`](crate::complete::Incomplete)'s refusal
+//! reason (empty, and hidden, once the account is one a commit would accept).
+//! What is still missing is only:
 //!
 //! - **Verification in a real Evolution.** GTK 3 will not construct a widget
 //!   without a display connection, so nothing on this machine has run
 //!   `insert_widgets` and looked at the result — see its own docs for exactly
 //!   what a human still has to confirm, and `docs/NIGHT-LOG.md` for the
 //!   session that wrote it saying so.
+//! - **The consent browser round trip.** The authentication combo lets a
+//!   user *say* an account is OAuth 2.0; it does not by itself prove EDS's
+//!   `ECredentialsPrompterImplOAuth2` reaches a real provider and back for
+//!   this project's registered client — that needs a human and a real
+//!   deployment, the same gap
+//!   [`config_lookup`](crate::config_lookup)'s own docs name for its half of
+//!   OAuth 2.0 setup.
 //!
 //! ## The state this leaves the dialog in, said plainly
 //!
 //! An account whose address the assistant already knows arrives on the server
 //! settings page filled in — the address, the server its domain implies and
-//! the login name it offers — and now carries three entries and a check button
-//! to correct any of those from, bound live to the account `check_complete` and
-//! `commit_changes` both read, and a label underneath that says why *Next*
-//! refuses to light up when it does.
+//! the login name it offers — and now carries three entries, an
+//! authentication-method combo and a check button to correct any of those
+//! from, bound live to the account `check_complete` and `commit_changes` both
+//! read, and a label underneath that says why *Next* refuses to light up when
+//! it does.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
@@ -97,10 +105,11 @@ use evo_sys::{
     e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_page,
     e_mail_config_service_backend_get_source, e_mail_config_service_backend_get_type,
     e_mail_config_service_page_get_email_address, gtk_box_pack_start,
-    gtk_check_button_new_with_mnemonic, gtk_entry_new, gtk_grid_attach, gtk_grid_new,
-    gtk_grid_set_column_spacing, gtk_grid_set_row_spacing, gtk_label_new,
-    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
-    gtk_label_set_xalign, gtk_widget_set_hexpand, gtk_widget_set_visible, gtk_widget_show_all,
+    gtk_check_button_new_with_mnemonic, gtk_combo_box_text_append, gtk_combo_box_text_new,
+    gtk_entry_new, gtk_grid_attach, gtk_grid_new, gtk_grid_set_column_spacing,
+    gtk_grid_set_row_spacing, gtk_label_new, gtk_label_new_with_mnemonic,
+    gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign,
+    gtk_widget_set_hexpand, gtk_widget_set_visible, gtk_widget_show_all,
 };
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean, gpointer};
 use gobject_sys::{
@@ -118,6 +127,7 @@ use crate::account::{apply, read};
 use crate::complete::{check, status_message};
 use crate::defaults::from_identity;
 use crate::mail::{MAIL_BACKEND_NAME, apply_server};
+use crate::oauth2_service;
 
 /// The JMAP account setup backend.
 #[repr(C)]
@@ -295,6 +305,33 @@ const ENTRY_ROWS: [(&CStr, &CStr, RowKind); 3] = [
 /// `[Authentication]`.
 const SECURE_LABEL: &CStr = N_(c"Use a _secure connection (TLS)");
 
+/// The mnemonic label of the authentication-method combo — its own constant
+/// for the same reason [`SECURE_LABEL`] is one: a single combo, not a
+/// label-and-entry pair.
+const AUTH_LABEL: &CStr = N_(c"A_uthentication:");
+
+/// The combo's entries: the id [`insert_entries`] writes to
+/// `ESourceAuthentication:method` paired with the translatable text the combo
+/// shows for it.
+///
+/// Both ids are load-bearing elsewhere, not chosen for this dialog: `"none"`
+/// is `ESourceAuthentication:method`'s own default and the one
+/// `crate::account`'s own doc pins as "ask for a password the ordinary way",
+/// and [`oauth2_service::NAME`] is the exact string
+/// `EOAuth2Service::can_process`'s default implementation compares `method`
+/// against (see that module's own doc) — the only spelling of "use OAuth 2.0"
+/// `e_source_get_oauth2_access_token_sync` will actually honour for this
+/// account, as opposed to the generic `"OAuth2"` alias
+/// [`jmap_backend_core::oauth2::method_is_oauth2`] also accepts but
+/// `can_process` does not. This is the manual counterpart to
+/// [`config_lookup`](crate::config_lookup)'s automatic discovery: a user who
+/// skips or fails "Look Up Account Details" still has a way to say a server
+/// is OAuth 2.0, and one who used it sees here what it chose.
+const AUTH_CHOICES: [(&CStr, &CStr); 2] = [
+    (c"none", N_(c"Password")),
+    (oauth2_service::NAME, N_(c"OAuth 2.0")),
+];
+
 /// The keys [`insert_entries`] stashes the status label and the collection it
 /// is computed from under, as `page`'s own qdata — see
 /// [`insert_widgets`]'s docs on why [`on_extension_changed`] needs a way to
@@ -356,10 +393,11 @@ const STATUS_COLLECTION_KEY: &CStr = c"jmap-config-status-collection";
 /// one `evo-sys`'s `tests/gtk.rs` and `tests/page.rs` already hold against the
 /// linked library and the types it takes; what no test here can do is run
 /// this function and see the result. It needs a real Evolution session (or
-/// M9's Xvfb tier) to confirm the page actually shows three entries and a
-/// check button filled with what `setup_defaults` offered, and that editing
-/// any of them toggles *Next* — recorded in `docs/NIGHT-LOG.md` as exactly
-/// that, and not tagged complete until a human confirms it.
+/// M9's Xvfb tier) to confirm the page actually shows three entries, an
+/// authentication combo and a check button filled with what `setup_defaults`
+/// offered, and that editing any of them toggles *Next* — recorded in
+/// `docs/NIGHT-LOG.md` as exactly that, and not tagged complete until a human
+/// confirms it.
 ///
 /// ## Failure
 ///
@@ -485,15 +523,58 @@ unsafe fn insert_entries(
         }
     }
 
+    // The authentication-method combo: a label-and-widget row like the three
+    // entries above, on the row right after them, but bound by `active-id`
+    // rather than `text` — see `AUTH_CHOICES`'s own doc for what the two ids
+    // mean and why they are the whole list.
+    let auth_row = ENTRY_ROWS.len() as i32;
+    let label_text = cstring_lossy(&translate(AUTH_LABEL));
+    // SAFETY: `label_text` outlives the call, which is all
+    // `gtk_label_new_with_mnemonic` needs — it copies the string.
+    let auth_label = unsafe { gtk_label_new_with_mnemonic(label_text.as_ptr()) };
+    // SAFETY: `auth_label` was just constructed above and is a `GtkLabel`.
+    unsafe { gtk_label_set_xalign(auth_label.cast(), 1.0) };
+
+    // SAFETY: no arguments.
+    let auth_combo = unsafe { gtk_combo_box_text_new() };
+    for (id, text) in AUTH_CHOICES {
+        let text = cstring_lossy(&translate(text));
+        // SAFETY: `auth_combo` was just constructed above and is a
+        // `GtkComboBoxText`; `id` is a `'static` C string and `text` outlives
+        // the call — `_append` copies both.
+        unsafe { gtk_combo_box_text_append(auth_combo.cast(), id.as_ptr(), text.as_ptr()) };
+    }
+    // SAFETY: `auth_label` and `auth_combo` were both just constructed above.
+    unsafe {
+        gtk_label_set_mnemonic_widget(auth_label.cast(), auth_combo.cast());
+        gtk_widget_set_hexpand(auth_combo.cast(), GTRUE);
+        gtk_grid_attach(grid.cast(), auth_label.cast(), 0, auth_row, 1, 1);
+        gtk_grid_attach(grid.cast(), auth_combo.cast(), 1, auth_row, 1, 1);
+    }
+    // SAFETY: `authentication` is NULL or the collection's own extension
+    // (created above, and owned by `collection`); `auth_combo` is a live
+    // `GtkComboBox` (a `GtkComboBoxText` is one) with a string `active-id`
+    // property, and `AUTH_CHOICES` gave it exactly the two ids `method` can
+    // hold, so no transform is needed here either.
+    unsafe {
+        e_binding_bind_property(
+            authentication,
+            c"method".as_ptr(),
+            auth_combo.cast(),
+            c"active-id".as_ptr(),
+            G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
+        );
+    }
+
     // The security toggle: one check button spanning both columns, on the row
-    // after the three entries above.
+    // after the authentication combo.
     // SAFETY: `label_text` outlives the call, which is all
     // `gtk_check_button_new_with_mnemonic` needs — it copies the string.
     let label_text = cstring_lossy(&translate(SECURE_LABEL));
     let check = unsafe { gtk_check_button_new_with_mnemonic(label_text.as_ptr()) };
     // SAFETY: `check` was just constructed above and is a `GtkWidget`; `grid`
     // is the live grid every other row was attached to.
-    unsafe { gtk_grid_attach(grid.cast(), check, 0, ENTRY_ROWS.len() as i32, 2, 1) };
+    unsafe { gtk_grid_attach(grid.cast(), check, 0, auth_row + 1, 2, 1) };
     // SAFETY: `security` is NULL or the collection's own extension (created
     // above, and owned by `collection`), and `check` is a live
     // `GtkToggleButton` with a boolean `active` property — the same shape as
@@ -517,14 +598,7 @@ unsafe fn insert_entries(
     // SAFETY: `status_label` was just constructed above and is a `GtkWidget`;
     // `grid` is the live grid every other row was attached to.
     unsafe {
-        gtk_grid_attach(
-            grid.cast(),
-            status_label,
-            0,
-            ENTRY_ROWS.len() as i32 + 1,
-            2,
-            1,
-        );
+        gtk_grid_attach(grid.cast(), status_label, 0, auth_row + 2, 2, 1);
     }
     // SAFETY: `status_label` is a live `GtkLabel`, just constructed, and
     // `collection` is a valid source by this function's contract.
