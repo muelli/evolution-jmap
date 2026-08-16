@@ -1122,6 +1122,35 @@ fn a_date_that_names_no_single_day_gets_no_line() {
 }
 
 #[test]
+fn a_date_before_the_year_eds_can_write_gets_no_line() {
+    // `e_contact_date_to_string()` CLAMPs the year to 1000..=9999 — measured
+    // against libebook-contacts 3.52 in `eds-sys/tests/contacts.rs`. The line
+    // is only rewritten when the field is set, so a card merely passing
+    // through keeps the year it arrived with; but the contact editor sets
+    // every field it shows, so the first time the user opens Charlemagne and
+    // presses Save, `BDAY:0800-06-21` becomes `BDAY:1000-06-21` — the same day
+    // of the same month, moved two centuries. Stating nothing keeps the
+    // server's date the server's; `diff_entries` then leaves an anniversary no
+    // line states alone.
+    for date in [
+        json!({"year": 800, "month": 6, "day": 21}),
+        json!({"year": 999, "month": 12, "day": 31}),
+        json!({"year": 1, "month": 1, "day": 1}),
+        json!({"@type": "Timestamp", "utc": "0800-06-21T09:00:00Z"}),
+    ] {
+        let vcard = card_to_vcard(&one_anniversary("birth", date.clone()));
+        assert!(!vcard.contains("\r\nBDAY"), "{date}: {vcard}");
+    }
+
+    // The first year it can write is written.
+    let vcard = card_to_vcard(&one_anniversary(
+        "birth",
+        json!({"year": 1000, "month": 6, "day": 21}),
+    ));
+    assert_eq!(line(&vcard, "BDAY"), "BDAY;X-JMAP-KEY=y1:1000-06-21");
+}
+
+#[test]
 fn an_anniversary_stated_as_a_point_in_time_crosses_as_the_day_it_names() {
     // The other shape RFC 9553 §2.8.1 allows. A vCard 3.0 date line states a
     // day, so the hour is left behind — and, being left behind rather than
