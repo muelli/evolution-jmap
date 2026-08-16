@@ -40,6 +40,12 @@ set(CARGO_ENV
 	"EVOLUTION_JMAP_LOCALEDIR=${LANGUAGE_SUPPORT_DIRECTORY}"
 	"RUSTFLAGS=--remap-path-prefix=${CMAKE_SOURCE_DIR}=/build --remap-path-prefix=$ENV{HOME}/.cargo=/cargo"
 )
+
+find_program(SCCACHE_EXECUTABLE sccache)
+if(SCCACHE_EXECUTABLE)
+	list(APPEND CARGO_ENV "RUSTC_WRAPPER=${SCCACHE_EXECUTABLE}")
+endif()
+
 if(SOURCE_DATE_EPOCH MATCHES "^[0-9]+$")
 	list(APPEND CARGO_ENV "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}")
 else()
@@ -67,9 +73,11 @@ add_test(
 	COMMAND ${CARGO_EXECUTABLE} test --locked
 	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 )
-set_tests_properties(rust-test PROPERTIES
-	ENVIRONMENT "CARGO_INCREMENTAL=0"
-)
+set(_test_env "CARGO_INCREMENTAL=0")
+if(SCCACHE_EXECUTABLE)
+	list(APPEND _test_env "RUSTC_WRAPPER=${SCCACHE_EXECUTABLE}")
+endif()
+set_tests_properties(rust-test PROPERTIES ENVIRONMENT "${_test_env}")
 
 # Crates kept out of the workspace's default-members because they need the
 # EDS/Evolution development headers, so plain `cargo test` skips them. CMake
@@ -84,9 +92,7 @@ add_test(
 		-p jmap-backend-collection -p jmap-config
 	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 )
-set_tests_properties(rust-test-eds PROPERTIES
-	ENVIRONMENT "CARGO_INCREMENTAL=0"
-)
+set_tests_properties(rust-test-eds PROPERTIES ENVIRONMENT "${_test_env}")
 
 # Install a cdylib built by `rust-build` as a loadable module of some host —
 # EDS names its address book backends libebookbackend<name>.so and looks for
