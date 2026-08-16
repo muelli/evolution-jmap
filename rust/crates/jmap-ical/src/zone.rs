@@ -23,10 +23,15 @@
 //! whole. A wrong offset moves the end of a series by an hour or by twelve with
 //! nothing downstream able to tell; refusing costs only the conversion.
 //!
-//! What "actually written" means is measured rather than guessed at:
-//! `jmap-backend-cal/tests/zones.rs` drives every zone libical ships — which is
+//! What "actually written" means is measured rather than guessed at, on both of
+//! the populations a definition can come from. On the save path the producer is
+//! libical, and `jmap-backend-cal/tests/zones.rs` drives every zone it ships —
 //! every zone an appointment saved from Evolution can be in — through this
-//! module and checks the answer against libical's own.
+//! module and checks the answer against libical's own. On the receive path the
+//! producer is whatever wrote the invitation: the 83 distinct definitions in
+//! calcard 0.3.9's 301-file iCalendar corpus were run through this module once,
+//! by hand, and the parts they wrote that it did not read are the ones the
+//! tests named for Exchange, Zimbra and Lotus Notes now cover.
 
 use crate::event::{WEEKDAYS, days_from_civil, days_in_month, offset_seconds, to_local_date_time};
 use crate::syntax::{Component, Property};
@@ -128,6 +133,7 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
     let mut interval: i64 = 1;
     let (mut count, mut until, mut until_year) = (None, None, None);
     let (mut by_month, mut by_month_day, mut by_day): (_, Option<&str>, _) = (None, None, None);
+    let (mut by_hour, mut by_minute, mut by_second) = (None, None, None);
     for part in rule.split(';') {
         let (key, value) = part.split_once('=')?;
         match key.to_ascii_uppercase().as_str() {
@@ -148,6 +154,18 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
             "BYMONTH" => by_month = Some(value.parse::<i64>().ok()?),
             "BYMONTHDAY" => by_month_day = Some(value),
             "BYDAY" => by_day = Some(value),
+            "BYHOUR" => by_hour = Some(value),
+            "BYMINUTE" => by_minute = Some(value),
+            "BYSECOND" => by_second = Some(value),
+            // §3.3.10 gives `WKST` a meaning in two rules and no others: a
+            // `WEEKLY` one repeating at an interval, and a `YEARLY` one
+            // carrying a `BYWEEKNO`. This counts neither — an `INTERVAL` other
+            // than 1 is refused below, and a `BYWEEKNO` falls to the arm under
+            // this one — so no value of it can move a transition read here, and
+            // its value is not read for exactly that reason. Exchange and
+            // Zimbra both write it, and refusing it cost their invitations the
+            // whole definition.
+            "WKST" => {}
             _ => return None,
         }
     }
@@ -168,6 +186,7 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
     .min()?;
     let month = by_month.unwrap_or(start_month);
     let names = Day::named(by_day, by_month_day, start_day)?;
+    let of_day = restated(of_day, by_hour, by_minute, by_second)?;
 
     let earliest = start_year.max(last - SEARCH + 1);
     let mut onsets = Vec::new();
@@ -190,6 +209,41 @@ fn rule_onsets(rule: &str, start: &str, from: i64, year: i64) -> Option<Vec<i64>
     }
     // Nothing found, and years the search did not reach: see the note above.
     (!onsets.is_empty() || earliest == start_year).then_some(onsets)
+}
+
+/// The time of day a rule's occurrences happen at: the `DTSTART`'s own,
+/// `of_day` seconds after its midnight, with each field the rule restates
+/// replaced by what the rule says.
+///
+/// In a `YEARLY` rule §3.3.10 makes `BYHOUR`, `BYMINUTE` and `BYSECOND` expand,
+/// and a field expanded from one value to one value is a replacement. Lotus
+/// Notes writes all of its transition rules this way, restating the hour and
+/// the minute the `DTSTART` beside them already gives; where the two disagree
+/// the rule is the one §3.3.10 asks be taken.
+///
+/// `None` for a field stating more than one value, or a value outside the range
+/// §3.3.10 gives it: two hours is two transitions in the day, which this module
+/// refuses like any other set rather than choosing from. A `BYSECOND` of 60 —
+/// the leap second §3.3.10 admits — is refused with them, because placing it
+/// would mean pushing the onset into the minute after the one it names.
+fn restated(
+    of_day: i64,
+    hour: Option<&str>,
+    minute: Option<&str>,
+    second: Option<&str>,
+) -> Option<i64> {
+    let only = |value: Option<&str>, last| match value {
+        None => Some(None),
+        Some(value) => {
+            let field: i64 = value.parse().ok()?;
+            (0..=last).contains(&field).then_some(Some(field))
+        }
+    };
+    Some(
+        only(hour, 23)?.unwrap_or(of_day / 3_600) * 3_600
+            + only(minute, 59)?.unwrap_or(of_day / 60 % 60) * 60
+            + only(second, 59)?.unwrap_or(of_day % 60),
+    )
 }
 
 /// How far back [`rule_onsets`] searches for a rule's occurrences.
