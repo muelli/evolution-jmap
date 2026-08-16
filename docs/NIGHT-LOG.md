@@ -28180,3 +28180,35 @@ account pre-seeded against `jmap-mockd`, drive it via AT-SPI/dogtail, assert
 the account appears and the inbox is non-empty, capture a screenshot/AT-SPI
 tree only on failure. Scoping to ONE test, as the roadmap specifies — a
 canary, not coverage.
+
+## 2026-08-16 — OPERATOR HUMAN VERIFICATION, round 2 (M7 setup UI, latest master)
+
+Follow-up to the round-1 operator entry above, now against an installed build of
+current master (`c3cac2d`) on the evo-test VM. New confirmations:
+
+- **Incompleteness status label — VERIFIED.** Unchecking the TLS toggle against
+  a non-`localhost` server shows the refusal reason live ("refusing to contact
+  example.com …"), matching `complete::Incomplete`'s Display. It clears on a
+  valid account (setup completes).
+- **Server settings round-trip AND persist across a restart — VERIFIED.** A
+  created JMAP account's server / port / username / TLS read back correctly in
+  the account editor, and survive `evolution --force-shutdown` + relaunch — the
+  strongest form of the `account::read` round-trip check.
+- **Invalid ports on the created account — VERIFIED graceful.** `8080xx`, `abc`,
+  etc. are handled without crashing or clearing other fields.
+
+One edge case found and parked in `docs/BACKLOG.md` ("M7 setup UI … identity
+address whitespace"): Evolution's identity page accepts `alice@ example.com`
+(embedded space) and our `check_complete` does not block advancing either.
+`is_address` rejects whitespace in unit tests, so the string is being normalised
+before our guard sees it; whether the space survives into the account's `From:`
+address is the open question to settle before deciding on a fix. Per the
+operator: if a safety net is added, comment it as compensating for an Evolution
+identity-page bug and file that bug upstream. Deferred edge case, not a blocker.
+
+Net after both rounds: M7's setup UI — connection widgets, live completeness
+gating, the status label, defaults/prefill, and persistence across restart — is
+human-verified working. The remaining M7 work is the authentication story (no
+method chooser / OAuth2 surfacing yet — see round-1 item D), plus the parked
+whitespace edge case. Every other item on M7's "needs human verification in real
+Evolution" list is now cleared.

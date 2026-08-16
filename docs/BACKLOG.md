@@ -34,3 +34,19 @@ to polish a completed backend. A later hardening pass works through them.
   iCal/vCard text layers; robustness/liability, not a functional gap.
 - Contact-editor behavioural unknowns generally: many "needs human
   verification in real Evolution" notes in `docs/NIGHT-LOG.md`.
+
+## M7 setup UI (account assistant)
+- **Whitespace in the identity address slips through setup.** Evolution's own
+  identity page accepts `alice@ example.com` (embedded space) and lets the
+  assistant advance; on the JMAP server-settings page our `check_complete` does
+  not block it either, so setup can complete. `complete::is_address` *does*
+  reject embedded whitespace (unit-tested), so the malformed string is not
+  reaching it — Evolution normalises the address, or we read it post-
+  normalisation, before our guard runs. **First settle the open question**:
+  does the space actually survive into the created account's identity (the
+  `From:` address), or is it stripped? If it survives it is a real defect (a
+  `From:` header containing a space); if stripped it is benign and needs
+  nothing. If a safety net is added in `check_complete`, comment it as
+  compensating for Evolution's lenient identity page and file an upstream bug
+  against Evolution (its identity page should reject an address with
+  whitespace). Deferred edge case, not a release blocker.
