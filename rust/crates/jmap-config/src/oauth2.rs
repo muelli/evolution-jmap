@@ -50,7 +50,7 @@
 //! doors onto one storage — its own callers, and `get_property`/
 //! `set_property`, which is what EDS's serialisation calls.
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 use std::sync::{Mutex, PoisonError};
 
@@ -401,4 +401,101 @@ pub unsafe fn read(source: *mut ESource) -> Config {
             .as_ref()
             .map(|value| value.to_string_lossy().into_owned()),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Borrowed access, for `EOAuth2Service`'s vfuncs.
+
+/// One field of `source`'s `[JMAP OAuth2]` extension, borrowed rather than
+/// copied — a `const gchar *` into the extension's own storage, or NULL for a
+/// source nothing has written to (or that field of) yet.
+///
+/// This is not [`read`]'s shape on purpose. `EOAuth2Service`'s vfuncs —
+/// `get_client_id` and its four siblings this module exists for — return
+/// `const gchar *`, and [`read`]'s owned `String`s are dropped the moment the
+/// vfunc returns, which would leave the caller holding a dangling pointer the
+/// instant it looked at it. What is returned here instead is a pointer into
+/// the `CString` [`Fields`] already owns: stable for as long as the
+/// extension is, i.e. for as long as the account's `ESource` is, which is far
+/// longer than any single vfunc dispatch needs. That is the same contract
+/// EDS's own extensions keep for their string accessors (`
+/// e_source_authentication_get_host` and the rest) with no lock of their own
+/// either — mutating a source concurrently with reading it is a caller error
+/// generally, not a hazard specific to this one.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+unsafe fn borrowed(
+    source: *mut ESource,
+    field: impl FnOnce(&Fields) -> &Option<CString>,
+) -> *const c_char {
+    ensure_registered();
+
+    // SAFETY: `source` is valid by this function's contract.
+    if unsafe { e_source_has_extension(source, EXTENSION_NAME.as_ptr()) } == GFALSE {
+        return ptr::null();
+    }
+
+    // SAFETY: the extension is present, so this returns the source's own,
+    // whose `instance_init` has already run.
+    let extension =
+        unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) }.cast::<Extension>();
+    let fields = unsafe { &*extension }
+        .fields
+        .get()
+        .expect("e_source_get_extension returned an instance instance_init did not run on");
+    let fields = fields.lock().unwrap_or_else(PoisonError::into_inner);
+    field(&fields).as_deref().map_or(ptr::null(), CStr::as_ptr)
+}
+
+/// `source`'s stored RFC 7591 `client_id`, or NULL before registration has
+/// run. See [`borrowed`] for the pointer's lifetime.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+pub unsafe fn client_id(source: *mut ESource) -> *const c_char {
+    unsafe { borrowed(source, |fields| &fields.client_id) }
+}
+
+/// `source`'s stored RFC 7591 `client_secret`, or NULL — absent for the
+/// ordinary case of a public client, and before registration has run. See
+/// [`borrowed`] for the pointer's lifetime.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+pub unsafe fn client_secret(source: *mut ESource) -> *const c_char {
+    unsafe { borrowed(source, |fields| &fields.client_secret) }
+}
+
+/// `source`'s stored RFC 8414 `authorization_endpoint`, or NULL before
+/// discovery has run. See [`borrowed`] for the pointer's lifetime.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+pub unsafe fn authorization_endpoint(source: *mut ESource) -> *const c_char {
+    unsafe { borrowed(source, |fields| &fields.authorization_endpoint) }
+}
+
+/// `source`'s stored RFC 8414 `token_endpoint`, or NULL before discovery has
+/// run. See [`borrowed`] for the pointer's lifetime.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+pub unsafe fn token_endpoint(source: *mut ESource) -> *const c_char {
+    unsafe { borrowed(source, |fields| &fields.token_endpoint) }
+}
+
+/// `source`'s registered `redirect_uri`, or NULL before registration has run.
+/// See [`borrowed`] for the pointer's lifetime.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+pub unsafe fn redirect_uri(source: *mut ESource) -> *const c_char {
+    unsafe { borrowed(source, |fields| &fields.redirect_uri) }
 }

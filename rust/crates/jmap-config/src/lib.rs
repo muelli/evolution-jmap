@@ -58,8 +58,14 @@
 //!   real-server-readiness track needs beside it: a fifth `ESource`
 //!   extension, `[JMAP OAuth2]`, holding a deployment's discovered endpoints
 //!   and this client's registered id — the answer the `EOAuth2Service`
-//!   interface will read out synchronously once it exists, since discovering
-//!   and registering both need the network and its vfuncs cannot.
+//!   interface reads out synchronously, since discovering and registering
+//!   both need the network and its vfuncs cannot.
+//! - [`oauth2_service`] is that interface: a service that answers every
+//!   per-account vfunc out of [`oauth2`]'s storage and leaves every other
+//!   vfunc at EDS's own default, which already does the right thing once the
+//!   per-account ones are filled in. Not yet registered with an
+//!   `EOAuth2Services` registry or reachable from any module load path —
+//!   also the setup UI's job, once it exists.
 //! - [`backend`] is the GObject the four above are reached through: the
 //!   `EMailConfigServiceBackend` subclass Evolution's *Receiving Email* page
 //!   instantiates for the JMAP provider. It carries the name the page finds
@@ -133,3 +139,4 @@ pub mod defaults;
 pub mod mail;
 pub mod module;
 pub mod oauth2;
+pub mod oauth2_service;
