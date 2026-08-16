@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Where a JMAP deployment's OAuth 2.0 endpoints come from (RFC 8414).
+//! Where a JMAP deployment's OAuth 2.0 endpoints and client id come from
+//! (RFC 8414 discovery, RFC 7591 dynamic client registration).
 //!
 //! EDS authenticates an OAuth 2.0 account through an `EOAuth2Service`, whose
 //! vfuncs are asked for an authorization URI, a token URI, a client id and a
@@ -18,8 +19,11 @@
 //! PKCE methods the server does, and — where the server supports RFC 7591
 //! dynamic client registration — where to register for a client id.
 //!
-//! This module is the half of that which can be built and tested here: fetch,
-//! validate, and hand back the document. Nothing in it performs a flow. The
+//! This module is the half of that which can be built and tested here: fetch
+//! and validate the metadata document ([`discover`]), and where a deployment
+//! offers it, register this client for a `client_id`
+//! ([`register_client`]) — nothing here is a compiled-in constant, unlike
+//! EDS's Google/Outlook/Yahoo services. Nothing in it performs a flow. The
 //! consent exchange needs a browser and a real provider, and the vfuncs that
 //! wrap this need EDS; both are for later slices.
 //!
@@ -41,7 +45,7 @@
 //! while making the plaintext mock untestable. Where TLS gets required it has
 //! to be required of the account as a whole; that is its own piece of work.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::limits;
@@ -223,6 +227,159 @@ pub fn discover(
     AuthorizationServer::parse(&issuer, &response.body)
 }
 
+/// The grant types this client asks a registration endpoint to register it
+/// for. Fixed rather than a parameter: every account this client drives is
+/// the same kind of client, so there is nothing here for a caller to
+/// legitimately vary.
+const CLIENT_GRANT_TYPES: [&str; 2] = ["authorization_code", "refresh_token"];
+
+/// The response types this client asks to be registered for — the
+/// authorization-code grant only; this client does no implicit flow.
+const CLIENT_RESPONSE_TYPES: [&str; 1] = ["code"];
+
+/// RFC 8252 §8.4: a native application cannot keep a client secret
+/// confidential, so it registers as a public client and relies on PKCE
+/// (RFC 7636) rather than one. Requested here, not merely hoped for: a
+/// server that ignores it and issues a secret anyway is handled too (see
+/// [`ClientRegistration::client_secret`]), but the client never behaves as if
+/// it can keep one.
+const CLIENT_AUTH_METHOD: &str = "none";
+
+/// What this client asks an RFC 7591 registration endpoint to register it
+/// as. `client_name` and `redirect_uris` are the only fields that vary
+/// between deployments; grant types, response types and the auth method
+/// follow from this being one native EDS client talking the
+/// authorization-code grant, and are not parameters.
+#[derive(Debug, Clone)]
+pub struct ClientRegistrationRequest<'a> {
+    /// Shown to the user on the consent page a real IdP renders — RFC 7591
+    /// §2's `client_name`.
+    pub client_name: &'a str,
+    /// Where the authorization code is delivered back to — RFC 7591 §2's
+    /// `redirect_uris`. At least one is required by RFC 6749 §3.1.2 for the
+    /// authorization-code grant this client registers for.
+    pub redirect_uris: &'a [&'a str],
+}
+
+/// A client registered with a deployment, as RFC 7591 §3.2.1 hands one back.
+///
+/// Only [`ClientRegistration::parse`] and [`register_client`] construct one,
+/// so a value of this type has already been checked for the one thing this
+/// client cannot proceed without — a `client_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientRegistration {
+    /// RFC 7591 §3.2.1's one required response field.
+    pub client_id: String,
+    /// Present if the server issued one despite this client asking to
+    /// register as public (see [`CLIENT_AUTH_METHOD`]) — a server is free to
+    /// ignore that request, and a secret this client never sends back is not
+    /// a reason to refuse the account.
+    pub client_secret: Option<String>,
+    /// RFC 7591 §3.2.1: required if `client_secret` was issued, `0` meaning
+    /// it never expires. Left as the server stated it, including absent,
+    /// rather than defaulted — a missing expiry on an issued secret is a
+    /// malformed response, not one this client should guess about.
+    pub client_secret_expires_at: Option<u64>,
+}
+
+/// The registration request body, RFC 7591 §2's fields this client sends and
+/// no others.
+#[derive(Serialize)]
+struct RegistrationBody<'a> {
+    client_name: &'a str,
+    redirect_uris: &'a [&'a str],
+    grant_types: &'a [&'a str],
+    response_types: &'a [&'a str],
+    token_endpoint_auth_method: &'a str,
+}
+
+/// The response as it arrives, before it has been checked for a `client_id`.
+#[derive(Debug, Deserialize)]
+struct RegistrationResponse {
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    client_secret_expires_at: Option<u64>,
+}
+
+impl ClientRegistration {
+    /// Parse and validate a registration response.
+    fn parse(body: &[u8]) -> Result<Self, Error> {
+        let response: RegistrationResponse = serde_json::from_slice(body)?;
+        let client_id = response
+            .client_id
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                Error::Protocol(
+                    "the registration response states no client_id; RFC 7591 §3.2.1 requires one"
+                        .to_owned(),
+                )
+            })?;
+        Ok(Self {
+            client_id,
+            client_secret: response.client_secret,
+            client_secret_expires_at: response.client_secret_expires_at,
+        })
+    }
+}
+
+/// Register this client with a deployment's RFC 7591 endpoint, discovered as
+/// [`AuthorizationServer::registration_endpoint`].
+///
+/// Sent with no credentials, matching [`discover`]: registration is how a
+/// client *obtains* an identity with the server, so there is nothing to
+/// authenticate with yet.
+pub fn register_client(
+    transport: &dyn Transport,
+    registration_endpoint: &str,
+    request: &ClientRegistrationRequest<'_>,
+    cancel: Option<&CancelFlag>,
+) -> Result<ClientRegistration, Error> {
+    if cancel.is_some_and(CancelFlag::is_cancelled) {
+        return Err(Error::Cancelled);
+    }
+
+    let body = serde_json::to_vec(&RegistrationBody {
+        client_name: request.client_name,
+        redirect_uris: request.redirect_uris,
+        grant_types: &CLIENT_GRANT_TYPES,
+        response_types: &CLIENT_RESPONSE_TYPES,
+        token_endpoint_auth_method: CLIENT_AUTH_METHOD,
+    })?;
+
+    let headers = [
+        ("Accept".to_owned(), "application/json".to_owned()),
+        ("Content-Type".to_owned(), "application/json".to_owned()),
+    ];
+    let response = transport
+        .execute(HttpRequest {
+            method: HttpMethod::Post,
+            url: registration_endpoint,
+            headers: &headers,
+            body: Some(&body),
+            cancel,
+            max_response_bytes: limits::MAX_OAUTH_REGISTRATION_BYTES,
+        })
+        .map_err(|error| match error {
+            TransportError::Cancelled => Error::Cancelled,
+            TransportError::Failed(message) => Error::Transport(message),
+            TransportError::ResponseTooLarge { limit } => Error::ResponseTooLarge { limit },
+        })?;
+
+    if !(200..300).contains(&response.status) {
+        // RFC 7591 §3.2.2 has its own error object (`error`/
+        // `error_description`) rather than RFC 7807 problem details — a
+        // different shape than the JMAP API answers with, and not parsed out
+        // here for the same reason `discover` does not: the status already
+        // says registration was refused.
+        return Err(Error::Http {
+            status: response.status,
+            problem: None,
+        });
+    }
+
+    ClientRegistration::parse(&response.body)
+}
+
 /// The URL `issuer`'s metadata document lives at.
 ///
 /// RFC 8414 §3.1 *inserts* the well-known path between the host and the path
@@ -295,7 +452,7 @@ fn endpoint(name: &str, value: Option<String>) -> Result<Option<String>, Error> 
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthorizationServer, metadata_url};
+    use super::{AuthorizationServer, ClientRegistration, metadata_url};
     use crate::error::Error;
 
     #[test]
@@ -413,5 +570,55 @@ mod tests {
         )
         .expect("a valid document");
         assert!(!discovered.supports_authorization_code());
+    }
+
+    fn registration(body: &str) -> Result<ClientRegistration, Error> {
+        ClientRegistration::parse(body.as_bytes())
+    }
+
+    #[test]
+    fn a_registration_response_with_no_client_id_is_refused() {
+        assert!(matches!(
+            registration(r#"{"client_secret": "s3cret"}"#),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn a_registration_response_with_an_empty_client_id_is_refused() {
+        assert!(matches!(
+            registration(r#"{"client_id": ""}"#),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn a_public_client_registration_needs_no_secret() {
+        let registered = registration(r#"{"client_id": "abc123"}"#).expect("a valid response");
+        assert_eq!(registered.client_id, "abc123");
+        assert_eq!(registered.client_secret, None);
+        assert_eq!(registered.client_secret_expires_at, None);
+    }
+
+    #[test]
+    fn a_server_that_issues_a_secret_anyway_is_read_but_not_required() {
+        let registered = registration(
+            r#"{"client_id": "abc123", "client_secret": "s3cret",
+                "client_secret_expires_at": 0}"#,
+        )
+        .expect("a valid response");
+        assert_eq!(registered.client_secret.as_deref(), Some("s3cret"));
+        assert_eq!(registered.client_secret_expires_at, Some(0));
+    }
+
+    #[test]
+    fn fields_a_registration_response_carries_that_this_client_has_no_use_for_are_parsed_past() {
+        let registered = registration(
+            r#"{"client_id": "abc123", "client_id_issued_at": 1700000000,
+                "redirect_uris": ["https://client.example.org/cb"],
+                "grant_types": ["authorization_code", "refresh_token"]}"#,
+        )
+        .expect("unknown/echoed fields are not an error");
+        assert_eq!(registered.client_id, "abc123");
     }
 }
