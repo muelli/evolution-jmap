@@ -26325,3 +26325,31 @@ vfunc (`insert_widgets`) needs a display this VM does not have (confirmed
 tonight: no `Xvfb`/`xvfb-run` installed) — a real OAuth2 flow would need one
 too, for the credentials prompter's consent page; the docs/BACKLOG.md
 contact/vCard and calendar/iCal fidelity items are all still parked there.
+
+## 2026-08-16 (two-hundred-and-seventy-eighth session)
+
+**Claiming: capability-negotiation robustness — the item last session's log
+named as unsurveyed (roadmap "real-server readiness", item 2's second half).**
+
+Survey: `jmap_proto::session::Session` is tolerant of unknown capabilities as
+already noted, but the three per-service `connect.rs` sites
+(`jmap-backend-book`, `jmap-backend-cal`, `jmap-mail`) resolve their account
+via the bare `Client::primary_account`, which reads only
+`Session.primary_accounts` — it does not fall back to inferring the account
+from a sole personal account offering the capability the way
+`jmap-collection-sync::layout::service` already does for the collection
+backend (RFC 8620 §2: a server "MAY" omit `primaryAccounts`, so this is a
+real, spec-legal server shape, not a hypothetical one). Net effect: against
+such a server with exactly one personal mail/contacts/calendars account, the
+collection backend (M6) would successfully fan out a child source for it, but
+the book/cal/mail backend opening that same source would fail every time with
+"no primary account for …" — a source that can never connect. Reachable,
+not hypothetical; invisible to the existing suite because `jmap-mockd` always
+sets `primaryAccounts` for every capability it offers.
+
+Claiming the fix: move the inference (already correct and already tested at
+the `CollectionLayout` layer) down into `jmap_proto::session::Session` as the
+one place that answers "which account serves capability X", and have both
+`Client::primary_account` and `CollectionLayout`'s resolution call it, so the
+three connect sites get the same inference the collection backend already
+relies on, for free.
