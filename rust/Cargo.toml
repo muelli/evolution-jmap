@@ -28,6 +28,7 @@ default-members = [
     "crates/jmap-cal-sync",
     "crates/jmap-mail-sync",
     "crates/jmap-collection-sync",
+    "crates/po-compile",
 ]
 
 [workspace.package]

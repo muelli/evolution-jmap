@@ -307,6 +307,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "evolution-jmap-po-compile"
+version = "0.1.0"
+
+[[package]]
 name = "evolution-jmap-proto"
 version = "0.1.0"
 dependencies = [
