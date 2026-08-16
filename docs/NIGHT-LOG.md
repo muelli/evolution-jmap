@@ -25737,3 +25737,120 @@ unmeasured; whether the editor lets a handle be moved between the Home and Work
 slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; and what
 Evolution's contact editor writes for a replaced photo, and into a cleared
 field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-seventy-third session)
+
+**One JSContact entry reachable both at work and privately became one vCard
+line wearing both `TYPE`s — and EDS files a line by matching `TYPE`, so that
+line landed in *two* of the contact editor's per-context fields at once. There
+is only one line behind them. Retyping the work address rewrote the home
+address the user never touched. Measured, then closed.**
+
+The defect was found by asking what `type_names(&CONTEXTS, …)` produces when a
+card states both contexts, and then asking libebook-contacts 3.52 what it does
+with the answer:
+
+```
+ADR;TYPE=WORK,HOME:;;Hauptstraße 1;Berlin;;10115;DE
+  E_CONTACT_ADDRESS_WORK  -> Hauptstraße 1
+  E_CONTACT_ADDRESS_HOME  -> Hauptstraße 1
+  E_CONTACT_ADDRESS_OTHER -> (null)
+```
+
+`e_contact_set(E_CONTACT_ADDRESS_WORK, "Nebenstraße 2")` then rewrites that one
+line — the vCard still holds exactly one `ADR`, now `TYPE=WORK,HOME` with the
+new street — and `E_CONTACT_ADDRESS_HOME` reads back `Nebenstraße 2`. The user
+changed their work address; their home address moved with it. The same holds
+for `TEL`, one field-shape down: `E_CONTACT_PHONE_BUSINESS` wants `WORK`+`VOICE`
+and `E_CONTACT_PHONE_HOME` wants `HOME`+`VOICE`, so `TYPE=WORK,HOME,VOICE`
+satisfies both.
+
+**The fix is the refusal `service_slot` has always made, generalised.** The
+online-services mapping has stated exactly one slot per line since it was
+written, for this reason in those words — "a handle wearing both `TYPE`s shows
+up in two fields the user can edit independently, and nothing would say which
+edit wins". The new `context_slot` is that rule for `contexts` proper: no
+context vCard can spell → no `TYPE` (which EDS reads as the `OTHER` field, a
+slot of its own); one → that one; both → `DEFAULT_SLOT`, where the user looks
+first. `ADR`, its paired `LABEL` and `TEL` go through it.
+
+**`EMAIL` is deliberately left stating both, and that is not an oversight.**
+EDS files an email line by its *position* — `E_CONTACT_EMAIL_1` to `_4` — and
+not by its `TYPE` at all, measured on the same card, so both contexts reach one
+field rather than two and there is nothing to protect the user from. Narrowing
+it would only make the save's job harder for no gain.
+`an_email_at_home_and_at_work_still_states_both` pins the difference, and
+mutating the email emitter to use `context_slot` reddens exactly it.
+
+**The hard half was again the save.** Once the line states one context,
+`read_flags` reads one back, and `diff_flags(…, maps_context)` would have seen
+the other missing from the edited card and *deleted it server-side* — trading a
+display bug for data loss. The answer is the sentence this module already says
+about a context of `school`: a context the line never stated is not one the user
+can have cleared. `slotted_context` is `maps_context` narrowed by the entry's
+own slot, so which members are merged back now depends on the entry rather than
+on the key alone. The context the line *does* carry stays the user's to change,
+which is what `moving_an_entry_to_the_other_slot_still_reclassifies_it` asserts:
+clearing `TYPE=HOME` off the number leaves `{"work": true}`, not both.
+
+**The measurement is committed, not just cited.** `eds-sys`'
+`a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other`
+drives the whole sequence — both fields reading one line, `OTHER` staying empty,
+the `TEL` pair, and the edited work address coming back as the home one. It runs
+in the EDS-linked leg, so an EDS that changes how it matches `TYPE` shows up as a
+red test rather than as a limitation nobody re-checked.
+
+**Mutation-checked three ways, each run and reverted.** The emitter restored to
+`type_names(&CONTEXTS, …)` reddens all four new mapping/save tests; the save
+narrowing dropped back to `maps_context` reddens the two save tests only; and
+`EMAIL` narrowed too reddens the one test that says it must not be.
+
+Tests: +3 in `jmap-vcard/tests/mapping.rs`, +2 in `jmap-book-sync/tests/save.rs`,
++1 in `eds-sys/tests/contacts.rs` (outside the default set). The default set is
+1188 → 1193.
+
+Verified locally: `cargo test --locked` 1193, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS=-D warnings cargo doc --no-deps -p
+evolution-jmap-vcard -p evolution-jmap-book-sync` clean; `ninja -C build` then
+`ctest --test-dir build` 15/15, functional, EDS-linked and packaging legs
+included. `ci/checks.sh` still stops at its first step on this VM (no `reuse`,
+no `pipx`, no `uvx`, no `cargo-deny`), so those were reasoned by hand: no file is
+added, so no SPDX header is missing, and `Cargo.lock` is untouched, so `cargo
+deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Closed: **an entry in two contexts no longer occupies two of
+the contact editor's fields with one line behind them.**
+
+**What this does not settle, said plainly.** Which of the two slots a
+both-contexts entry *should* land in is a judgement, not a measurement:
+`DEFAULT_SLOT` follows `service_slot`'s precedent, and a user whose shared
+address is really the work one will find it under Home. Nothing here asks
+Evolution — the reasoning is about which EDS field the line reaches, which is
+measured, not about what the editor draws, which is not. And the *same*
+duplication exists one axis over, unclosed: a phone's `features` also pick the
+field, so `TEL;TYPE=WORK,VOICE,FAX` satisfies `E_CONTACT_PHONE_BUSINESS`
+(`WORK`+`VOICE`) and `E_CONTACT_PHONE_BUSINESS_FAX` (`WORK`+`FAX`) alike. That
+is the next thing of this shape to close; it was left out because "which feature
+wins when a line names several" has no precedent to follow the way the contexts
+did, and a wrong pick there loses the distinction between a voice line and a fax.
+A stray copy-paste in this log's blocker list also reinstated "the two `LABEL`
+`TYPE` risks stand" after the two-hundred-and-twenty-first session closed them;
+it is dropped below.
+
+Unchanged blockers: no `.po` exists, and whether this repository's first
+translation should be written by an autonomous session is a maintainer's call;
+`gettext` is not in `Containerfile.ci`, so the `.pot` in the tree is trusted to
+have come from `po/extract.sh`; **a phone wearing several feature `TYPE`s still
+fills several fields** (above); M10 still has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; an `UNTIL` the parser
+itself refuses is invisible to `jmap-ical`; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is
+still unverified; a deathday and a birthday stated as a year alone are still
+invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.

@@ -117,6 +117,82 @@ fn editing_preserves_contexts_the_vcard_cannot_express() {
 }
 
 #[test]
+fn editing_preserves_the_context_a_line_could_state_only_one_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A phone and an address the contact is reachable at both at work and
+    // privately. Each line carries one slot, because EDS reads a line wearing
+    // both `TYPE`s into two of the contact editor's fields at once and the
+    // next edit of either rewrites the one line behind them — see
+    // `eds-sys`' `a_line_wearing_both_context_types_fills_two_slots_that_
+    // overwrite_each_other`.
+    fixture.patch(
+        &id,
+        json!({
+            "phones/p1": {
+                "number": "+49 30 111",
+                "contexts": {"work": true, "private": true},
+                "features": {"voice": true},
+            },
+            "addresses/a1": {
+                "components": [{"kind": "name", "value": "Hauptstraße 1"}],
+                "contexts": {"work": true, "private": true},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p1;TYPE=HOME,VOICE:"),
+        "{vcard}"
+    );
+    assert!(vcard.contains("ADR;X-JMAP-KEY=a1;TYPE=HOME:"), "{vcard}");
+
+    // The user edits something else entirely.
+    let edited = vcard.replace("Vera Oldenburg", "Vera Oldenburg-Schmidt");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let both = json!({"private": true, "work": true});
+    assert_eq!(
+        card.phones.as_ref().unwrap()["p1"].contexts,
+        Some(both.clone()),
+        "the context the line had no slot for must not be read as removed",
+    );
+    assert_eq!(card.addresses.as_ref().unwrap()["a1"].contexts, Some(both));
+}
+
+#[test]
+fn moving_an_entry_to_the_other_slot_still_reclassifies_it() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "phones/p1": {
+                "number": "+49 30 111",
+                "contexts": {"work": true, "private": true},
+                "features": {"voice": true},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    // The slot the line does carry is still the user's to change: moving the
+    // number out of the home field says the contact is no longer reached
+    // there privately, and only the context the line never stated is kept.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("TYPE=HOME,VOICE", "TYPE=VOICE");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).phones.as_ref().unwrap()["p1"].contexts,
+        Some(json!({"work": true})),
+    );
+}
+
+#[test]
 fn editing_preserves_a_preference_ranking_the_vcard_flattens() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
