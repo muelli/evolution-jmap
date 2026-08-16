@@ -1018,6 +1018,52 @@ never happened. That is the difference between a mistake a user fixes by adding
 a line to a keyfile and one they fix by also deleting a message they did not
 write.
 
+## What the config lookup test asserts
+
+`rust/crates/jmap-functional/tests/config-lookup.rs`, against
+`tests/functional/config-lookup-client.c`, is the odd one out among these
+five: it is not a daemon opening a book, calendar or mail store from a
+`.source` keyfile, because a config lookup happens *before* any account
+exists. It exercises `JmapConfigLookup` (`jmap-config/src/config_lookup.rs`),
+the `EConfigLookupWorker` behind the account assistant's "Look Up Account
+Details" step — M7's OAuth 2.0 autodiscovery path.
+
+The client loads `module-jmap-configuration.so` itself, via
+`e_module_load_all_in_directory`, rather than pointing a factory's module
+directory at it: nothing scans for this module the way the address book and
+calendar factories scan theirs (see `jmap_config::module`'s own doc comment
+for why — briefly, `JmapConfigLookup` registers itself the moment a real
+`EConfigLookup` is *constructed*, which only a client does). It then builds a
+real `ESourceRegistry` and `EConfigLookup`, runs the lookup against the
+mock's RFC 8414/7591 OAuth 2.0 endpoints (`MockServer::builder()
+.oauth_authorization_server(...).oauth_client_registration(...)`), and
+applies the one result it gets onto a scratch `ESource` via
+`e_config_lookup_result_configure_source` — the same call the account
+assistant makes when the user picks a result, and the only way to read a
+"simple" result's added values back at all (`e-config-lookup-result-
+simple.c` keeps them private).
+
+Asserted:
+
+- exactly one, complete, `jmap`-protocol result came back;
+- the scratch source's `[Collection]` extension names the `jmap` backend and
+  the email address as its identity;
+- `[Authentication]` names the mock's own host and port (proving the 307th
+  session's `parse_target` fix — a bare `scheme://host:port` `servers`
+  value, the only way to name a plaintext, non-default-port deployment at
+  all — actually reaches a real `EConfigLookup`, not just `config_lookup.rs`'s
+  own unit tests) and this crate's own `EOAuth2Service` (`JMAP`) as the
+  authentication method;
+- `[Security] method` is `none`, matching the mock's plaintext origin.
+
+What this does not, and cannot, cover: the actual browser consent exchange.
+That is `ECredentialsPrompterImplOAuth2`'s job, not this worker's — `run()`
+only has to leave behind a `client_id` and the discovered endpoints before a
+prompter ever opens, and this test's assertions stop at exactly that
+boundary. `docs/NIGHT-LOG.md`'s 307th session hand-drove this same dispatch
+once with a throwaway client before this test existed; this is that spike
+made permanent and repeatable.
+
 ## Debugging a failure
 
 The failure message carries the client's whole stdout and stderr, including

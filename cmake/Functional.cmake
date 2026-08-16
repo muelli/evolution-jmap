@@ -104,6 +104,20 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		target_link_directories(functional-${_client}-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 	endforeach()
 
+	# The config-lookup client is the odd one out in a different way: it does
+	# not open a `.source` keyfile at all, because a lookup happens *before*
+	# an account exists. It links evolution-shell-3.0 rather than a libe*
+	# client library — EConfigLookup lives in e-util (Evolution's own
+	# library, not EDS's) — which the top-level CMakeLists.txt already
+	# requires unconditionally for module-jmap-configuration.so itself, so
+	# EVOLUTION_SHELL's variables are already populated here with nothing new
+	# to check for.
+	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
+	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
+	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
+	target_link_libraries(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_LIBRARIES})
+	target_link_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_LIBRARY_DIRS})
+
 	# The mail client is the odd one out and does not link a client library
 	# at all: there is no libecamel to match libebook and libecal, because a
 	# Camel provider is loaded into the mail client's own process. This
@@ -170,6 +184,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_EDIT_CLIENT=$<TARGET_FILE:functional-cal-edit-client>;JMAP_FUNCTIONAL_CAL_ZONE_CLIENT=$<TARGET_FILE:functional-cal-zone-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# module-jmap-configuration.so, not one of the four EDS/Camel backends:
+	# the client loads it itself (see config-lookup-client.c), so it needs the
+	# built module's own path rather than a daemon's module-directory
+	# variable.
+	add_test(
+		NAME functional-config-lookup
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test config-lookup
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-config-lookup PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CONFIG_LOOKUP_CLIENT=$<TARGET_FILE:functional-config-lookup-client>;JMAP_FUNCTIONAL_CONFIG_LOOKUP_MODULE=${CARGO_TARGET_DIR}/release/libjmap_config_module.so"
 	)
 
 	# The mail leg needs a third path the other two do not: the `.urls` file,
