@@ -26441,3 +26441,61 @@ mock — have never been proven against a real server's actual JSON, which is
 the entire point of this file (a real deployment's own quirks, not the
 mock's fixtures). Small, read-only, no display, no new GObject surface —
 tractable tonight.
+
+**Delivered:** two tests in `jmap-client/tests/live_server.rs` —
+`contacts_capable_accounts_can_list_their_address_books` and
+`calendars_capable_accounts_can_list_their_calendars`, mirroring the existing
+mail test's shape (skip and report if the server names no primary account for
+the capability) but deliberately *not* mirroring its non-empty assertion:
+unlike a mailbox, nothing in RFC 9610 or `draft-ietf-jmap-calendars` requires
+a fresh account to have created an address book or a calendar yet, so
+asserting non-empty would be asserting a guarantee neither spec makes — the
+round trip succeeding (the response deserialises as `Vec<AddressBook>` /
+`Vec<Calendar>`) is the whole claim, matching what `echo_round_trips_...`
+already established for `Core/echo`. `docs/manual-test-live-server.md`
+documents the two new tests and the reasoning for the weaker assertion.
+
+Smoke-tested against `jmap-mockd` itself, the same way the harness's first
+three tests were: all five tests in the file pass with the mock standing in
+for a "live" server (`jmap-mockd`'s one seeded account carries mail, contacts
+and calendars, so no capability was skipped in this run).
+
+Tests: +2 in `jmap-client/tests/live_server.rs` (feature-gated; `cargo test
+--locked` unaffected, still every crate's suite green with none of them
+compiled). `cargo clippy -p evolution-jmap-client --all-targets --features
+live-server --locked -- -D warnings` clean; `cargo clippy --all-targets
+--locked -- -D warnings` (default-members) clean; `cargo fmt --all --check`
+clean. `ninja -C build` then `ctest --test-dir build` 15/15, including the
+four `functional-*` legs (this VM already has the EDS runtime and
+`dbus-run-session` installed, so the build directory has
+`ENABLE_FUNCTIONAL_TESTS` on). `ci/checks.sh` still stops at its first step
+on this VM (no `reuse`, `pipx`, `uvx`, `cargo-deny`); no new source file was
+added — `live_server.rs` already carried its SPDX header — so `reuse lint`
+has nothing new to check by hand either.
+
+No milestone tag — a further increment on real-server readiness's harness,
+not a milestone of its own. **Next session**: OAuth2 (`EOAuth2Service`) is
+still the one substantial piece of real-server readiness left, and still
+reads as an escalation candidate rather than a routine Sonnet item, for the
+reasons the two prior sessions recorded — an actual live IdP account to test
+against would also be needed before attempting it here, mock or no mock. If a
+Sonnet-sized item is wanted first, M9/M10 remain blocked on the same
+maintainer-decision image growth noted above; M7 remains blocked on a
+display. Absent those, the next tractable seam in this same harness would be
+a *write* path against a disposable server (Stalwart via
+`infra/gcp/create-stalwart.sh`) rather than read-only discovery — deliberately
+not started tonight, since this file's own header explains why writes are
+out of scope for it (a real account may be someone's actual mailbox), and
+doing that safely needs its own design (a dedicated disposable account/test
+fixture the harness creates and tears down), not a small extension of what
+is here.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier
+(both need `Containerfile.ci` growth, judged a maintainer decision, not an
+autonomous one — see this session's survey above); M7 still **needs human
+verification in real Evolution**, and its one remaining vfunc
+(`insert_widgets`) needs a display this VM does not have; a real OAuth2 flow
+would need one too, for the credentials prompter's consent page; the
+docs/BACKLOG.md contact/vCard and calendar/iCal fidelity items are all still
+parked there.
