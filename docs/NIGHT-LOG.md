@@ -26703,3 +26703,74 @@ already parses a `registration_endpoint` out of the metadata document but
 nothing calls it, so a self-hosted deployment still has no way to get a
 `client_id` without one being compiled in or pasted in by the user. The
 bindgen slice is left for the next escalation, not attempted here.
+
+**Delivered:** `oauth::register_client` in `jmap-client/src/oauth.rs`, plus
+`limits::MAX_OAUTH_REGISTRATION_BYTES` (same reasoning and number as the
+metadata ceiling), and a `MockServerBuilder::oauth_client_registration` knob
+in `jmap-mock` that answers `POST /oauth/register`.
+
+Decisions worth the ink:
+
+- **Registers as a public, PKCE-only native client.** RFC 8252 §8.4: a
+  desktop application cannot keep a client secret confidential, so
+  `register_client` always asks for `token_endpoint_auth_method: "none"`,
+  `grant_types: ["authorization_code", "refresh_token"]`,
+  `response_types: ["code"]` — none of these are parameters, because every
+  account this client drives is the same kind of client and there is nothing
+  legitimate for a caller to vary except `client_name` and `redirect_uris`.
+  A server that hands back a `client_secret` anyway is read (RFC 7591 does
+  not forbid it) but never required or relied on —
+  `a_server_that_issues_a_secret_anyway_is_read_but_not_required` pins that.
+- **Only `client_id` is required back.** RFC 7591 §3.2.1 makes it the one
+  mandatory response field; everything else (`client_secret_expires_at`,
+  echoed metadata, `client_id_issued_at`) is parsed past for the same reason
+  `AuthorizationServer::parse` parses past unused fields in the discovery
+  document — a field this client cannot use is not a reason to refuse an
+  account. An empty-string `client_id` is refused alongside a missing one
+  (`a_registration_response_with_an_empty_client_id_is_refused`): technically
+  present, but as useless as absent.
+- **No credentials sent, and RFC 7591 §3.2.2 error bodies not parsed.**
+  Mirrors `discover`'s two documented non-decisions for the same reasons:
+  registering is how a client obtains an identity, so authenticating for it
+  is circular; and the endpoint's own error shape (`error`/
+  `error_description`) is OAuth's, not RFC 8620's, so nothing here tries to
+  read it — the HTTP status already says refused.
+
+Tests: 5 new unit tests in `oauth.rs` (missing/empty `client_id`, a public
+client needing no secret, a secret read but not required, unused fields
+parsed past) and 4 integration tests in
+`jmap-client/tests/oauth_discovery.rs` against the mock (reads the
+`client_id` back; asserts on the actual request body — `client_name`,
+`redirect_uris`, and the fixed public-client metadata; needs no credentials;
+a deployment offering no registration answers 404). `cargo test --locked`
+green across every crate (287 in `jmap-client` alone); `cargo clippy
+--all-targets --locked -- -D warnings` and the same with `-p
+evolution-jmap-client --features live-server` both clean; `cargo fmt --all
+--check` clean. `ninja -C build` then `ctest --test-dir build` 15/15,
+including all four `functional-*` legs. `ci/checks.sh` still stops at its
+first step on this VM (no `reuse`/`pipx`/`uvx`/`cargo-deny`, per the
+recorded blocker); no new source file was added, so nothing new needs an
+SPDX header checked by hand either.
+
+No milestone tag — a further slice of OAuth2, not a milestone of its own.
+
+**Next session:** the `eds-sys` bindgen slice the last session named
+(`EOAuth2Service`/`EOAuth2Services`/`EOAuth2ServiceBase` on the allowlist,
+`g_type_query` layout checks, checking what `libsoup-3.0` does to generation
+time) is now the only piece of the endpoint-and-identity groundwork left
+before the interface implementation itself, and it is genuinely
+bindgen/ABI-layout work — a good escalation candidate rather than a routine
+Sonnet item, per the escalation rule's own listed criteria. If a Sonnet-sized
+item is preferred first: M7 and M9/M10 are unchanged from prior sessions'
+surveys (still blocked on a display and a maintainer decision on
+`Containerfile.ci`, respectively), and no other read-only, no-FFI seam in the
+OAuth2 or live-server tracks was found this session — registration was the
+last one.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier
+(both need `Containerfile.ci` growth, a maintainer decision); M7 still
+**needs human verification in real Evolution**, and its one remaining vfunc
+(`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
+page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
+fidelity items are all still parked there.
