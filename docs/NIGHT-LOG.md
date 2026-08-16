@@ -28320,3 +28320,82 @@ verification, are all still parked there. The GitLab pipeline was not
 touched for either M9 tier (both note the same unverified-elsewhere
 reasoning), so a future session with GitLab runner access could close that
 gap if it becomes relevant.
+
+## 2026-08-16 (two-hundred-and-ninety-seventh session)
+
+**Survey, no claim.** `git fetch origin` at the start shows `origin/master`
+unchanged at `29e2f58` (the 296th session's tag), so no other agent moved
+since. Re-walked the whole current-priority queue rather than trusting the
+296th session's "next session" note on faith, since M9 completing removes a
+whole milestone from the board and the queue underneath it deserved a fresh
+look, not an assumption:
+
+- **M9**: both tiers landed and tagged; nothing left per the roadmap's own
+  acceptance text (which names a GitHub gated job, not GitLab parity).
+- **M10**: still needs a per-EDS-version container image matrix, which means
+  growing `Containerfile.ci`/`.github/workflows/ci-image.yml` — this
+  session's own hard rules say "Never touch infra/ or
+  `.github/workflows/ci-image.yml`", no carve-out, so still off the table.
+- **M7**: `insert_widgets` is functionally complete and human-verified
+  (round 1 and round 2 above) except one thing — no authentication-method
+  surfacing, the open design question the operator raised and no session
+  since has had the standing to answer.
+- **Real-server readiness / OAuth2**: re-checked from the code rather than
+  the log summaries, to make sure "wire the toggle in" wasn't secretly
+  smaller than three sessions in a row assumed. Confirmed present and
+  correct: `jmap_client::oauth` (discovery + registration, tested against
+  the mock), `jmap_config::oauth2` (the `[JMAP OAuth2]` `ESource` extension,
+  registered at both `e_module_load` entry points per the 293rd session),
+  `jmap_config::oauth2_setup::discover_and_register` (the network glue, the
+  292nd session), and `jmap_config::oauth2_service::Service` (the
+  `EOAuth2Service` implementation, filling exactly the vfuncs
+  `e-oauth2-service.c`/`e-oauth2-service-google.c` say a JMAP-shaped service
+  needs) *and its registration* — checked in detail because the module docs'
+  own "what this does not yet do" note reads as if registration were still
+  outstanding, but `jmap-backend-collection/src/module.rs:114` already calls
+  `register_dynamic::<jmap_config::oauth2_service::Service>(type_module)`,
+  landed by the 288th session against evolution-ews's own
+  `module-ews-backend.c` as the reference, with a red-then-green test
+  (`tests/oauth2_service.rs`) driving `e_oauth2_services_find`. So that piece
+  is done, not merely documented as pending — the module docs' phrasing is
+  stale and worth a future session tidying, not a functional gap.
+- What is left, and only this, is what three sessions running have called
+  the same thing: **wiring `oauth2_setup::discover_and_register` into
+  `insert_widgets`** — a blocking RFC 8414/7591 network round trip that has
+  to run off the GTK main thread (an `EMailConfigServiceBackend` page cannot
+  block on it), with its result marshalled back onto raw `*mut GtkWidget`/
+  `*mut ESource` pointers the page handed `insert_widgets` and cached, safely
+  across whatever the user does to the dialog while the request is in
+  flight (closes it, changes the field again, hits *Cancel*). That is
+  genuinely thread/lifetime reasoning over raw FFI pointers this codebase
+  has not done anywhere else — every other `unsafe` here is single-threaded,
+  called synchronously from whichever GLib main loop owns it — and it is
+  gated on the same open design question (method chooser vs. transparent
+  auto-discovery) besides. Re-derived this independently from the current
+  code (`oauth2_setup.rs`'s doc comments, `backend.rs`'s `insert_widgets`
+  pointer-caching notes) rather than accepting the 293rd/294th/295th/296th
+  sessions' shared conclusion unread, and reached the same place.
+
+Per the escalation rule: `claude-opus-5` written to `~/.night-shift-escalate`
+for the next iteration. Reason: **the one open real-server-readiness/M7 item
+— threading `discover_and_register`'s blocking network call off the GTK main
+loop and marshalling its result back onto cached raw widget/`ESource`
+pointers inside `insert_widgets` — is subtle cross-thread FFI/lifetime
+reasoning this codebase has not attempted before, plausible-but-wrong risk
+is high, and it also cannot be exercised end-to-end here (no display), so a
+wrong commit would not be caught by any test this VM can run.** This also
+still needs the maintainer's method-chooser-vs-auto-discovery decision
+first; whichever model picks it up next should flag that rather than guess.
+
+No commits to `rust/`, `docs/BACKLOG.md`, or `docs/MILESTONES.md` this
+session — only this log entry. Tests/clippy/fmt were not re-run, since
+nothing in the tree changed.
+
+Unchanged blockers: M10's container matrix (needs `Containerfile.ci`/
+`ci-image.yml` growth, out of this session's hard rules); the maintainer's
+open M7 auth-method design question; the calcard directive's two emitters
+are still ours; `docs/BACKLOG.md`'s contact/vCard and calendar/iCal fidelity
+items and the parked identity-address-whitespace edge case are all still
+parked there; the GitLab pipeline still lacks the M9 functional/GUI-smoke
+jobs GitHub's has, not required by the roadmap's own M9 acceptance text but
+worth a future session's look if GitLab parity becomes relevant.
