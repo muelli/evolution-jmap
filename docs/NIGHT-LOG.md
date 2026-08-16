@@ -26574,3 +26574,112 @@ parked there.
 discovery in `jmap-client`, so a JMAP `EOAuth2Service` has deployment
 endpoints to answer with.** Running on `claude-opus-5` via the escalation the
 last session wrote.
+
+**Why this slice, and why it is not a dodge of what was escalated.** The last
+three sessions all stopped at the same wall: EDS drives an OAuth 2.0 account
+through an `EOAuth2Service`, whose vfuncs are asked for an authorization URI,
+a token URI, a client id and a redirect URI — and the three services EDS ships
+(Google, Outlook, Yahoo) answer all four from constants compiled in, because
+each of them *is* one identity provider. A JMAP service cannot do that, and
+that is the actual hard part, not the vtable: "JMAP" is a protocol, not a
+provider, so the endpoints belong to whichever deployment the account lives
+on. Fastmail's are not Stalwart's and one self-hosted Stalwart's are not
+another's. Until there is an answer to "where do the endpoints come from",
+every vfunc in the interface has nothing to return, and writing the interface
+first would have produced exactly the shape the roadmap warns against —
+compiles, tests green, serves no real account.
+
+The answer, decided this session and now implemented and tested: **RFC 8414
+authorization-server metadata discovery**, which is what both target
+deployments already publish (Stalwart and Fastmail each serve
+`/.well-known/oauth-authorization-server`). It is also the only mechanism that
+makes a *self-hosted* deployment usable without the user pasting endpoint URLs
+into a dialog, and its `registration_endpoint` is the seam through which RFC
+7591 dynamic client registration would later get a client id without one being
+compiled in either. Deciding that — and being able to defend it against the
+alternatives (hardcode Fastmail's; put four URL entries in M7's UI; use OpenID
+Connect discovery, which appends the well-known path where RFC 8414
+deliberately inserts it) — was the judgement the escalation was spent on. The
+code below is the half of it that can be *proved* here.
+
+**Delivered:** `jmap-client/src/oauth.rs` — `AuthorizationServer` (the
+metadata fields an `EOAuth2Service` needs, and no others; unknown fields are
+parsed past, since a field this client cannot use is not a reason to refuse an
+account), `oauth::discover`, `oauth::metadata_url`, and
+`AuthorizationServer::parse`. Plus `limits::MAX_OAUTH_METADATA_BYTES` (1 MiB,
+with its reasoning, per this repo's rule that every request states its own
+ceiling), and a `MockServerBuilder::oauth_authorization_server` knob.
+
+Three decisions in it worth the ink:
+
+- **RFC 8414 §3.3's issuer check is the security of this whole file.** The
+  `issuer` in the document must be byte-identical to the one the well-known
+  URL was built from. Without it, a deployment hands back another
+  authorization server's endpoints, the user consents somewhere the client
+  believes is their own server, and the authorization code is delivered to a
+  third party. It is why `discover` takes the issuer as an argument rather
+  than reading it out of the answer, and it is pinned by
+  `a_document_naming_another_issuer_is_refused`. Confirmed load-bearing by
+  deleting the comparison and re-running: the test goes red, and the returned
+  value cheerfully reports the *requested* issuer while carrying the
+  attacker's endpoints — which is precisely the confusion §3.3 exists to stop.
+- **§3.1 inserts the well-known path, it does not append it.** Issuer
+  `https://example.com/tenant1` publishes at
+  `https://example.com/.well-known/oauth-authorization-server/tenant1`, not
+  `…/tenant1/.well-known/…` — the latter is OpenID Connect Discovery's rule
+  and is the one an intuition writes. Nothing this repo has met so far is
+  path-carrying, so a mock-only test suite would never have caught the wrong
+  one; `a_path_carrying_issuer_has_the_well_known_path_inserted_before_it` is
+  the unit test that does (also verified red under the append mutation).
+- **The metadata endpoint is answered by the mock *before* its credential
+  check**, and `discover` sends no credentials. That is not a shortcut: the
+  document is what a client reads in order to find out where to *get*
+  credentials, so a deployment demanding them there closes the loop on itself,
+  and RFC 8414 §3 has it publicly readable. A server with no OAuth 2.0
+  likewise answers 404 rather than 401, so "no OAuth 2.0 here" is
+  distinguishable from "who are you".
+
+Deliberately *not* enforced, and written down in the module doc rather than
+silently omitted: that the issuer is `https`. RFC 8414 §2 requires it, but
+nothing else in this client requires TLS either — the session document,
+`apiUrl` and every blob URL are taken as the deployment states them — so
+adding the rule in this one place would be a guarantee the user cannot
+actually rely on, while making the plaintext mock untestable. Requiring TLS is
+an account-wide piece of work, and belongs in one.
+
+Tests: 11 unit tests in `oauth.rs` (URL construction incl. RFC 8414 §3.1's own
+example, hostile documents: no issuer, relative endpoint, a `javascript:`
+endpoint, unknown fields, the grant-type default) and 5 integration tests in
+`jmap-client/tests/oauth_discovery.rs` against the mock. `cargo test --locked`
+green across every crate; `cargo clippy --all-targets --locked -- -D warnings`
+clean, same with `-p evolution-jmap-client --features live-server`; `cargo fmt
+--all --check` clean; `ninja -C build` then `ctest --test-dir build` 15/15,
+including the four `functional-*` legs (the mock's routing changed, and those
+drive it). `ci/checks.sh` still stops at its first step on this VM (no
+`reuse`/`pipx`/`uvx`/`cargo-deny`); the two new files carry SPDX
+`GPL-3.0-or-later` headers, checked by hand.
+
+No milestone tag: this is the first of several slices of OAuth2, and on its
+own it authenticates nobody.
+
+**Next session — slice 2**, now that the endpoint question is answered:
+`eds-sys` needs `EOAuth2Service`/`EOAuth2Services`/`EOAuth2ServiceBase` on the
+bindgen allowlist with a `g_type_query` layout check like every other type
+this repo crosses the ABI with. Note for whoever takes it: the vtable mentions
+`SoupMessage`, so `libsoup-3.0` (3.4.4 is installed, pkg-config resolves it)
+comes into the binding surface — check what that does to generation time
+before widening the allowlist. Slice 3 is then the interface implementation
+itself; `jmap_backend_core::subclass` already has `InterfaceDecl::filled_by`
+and `jmap-mail/src/store.rs` already fills `CamelSubscribable`'s vtable with
+it, so the "new GObject-vtable territory" the last three sessions flagged is
+narrower than it looked — an interface *implementation* is tooling this
+codebase has. The genuinely unverifiable part stays what it always was: the
+browser consent exchange, which needs a real provider and a display.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier
+(both need `Containerfile.ci` growth, a maintainer decision); M7 still **needs
+human verification in real Evolution**, and its one remaining vfunc
+(`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
+page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
+fidelity items are all still parked there.
