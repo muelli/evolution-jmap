@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-16 13:13+0000\n"
+"POT-Creation-Date: 2026-08-16 13:39+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -40,19 +40,19 @@ msgid ""
 "always works."
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:288
+#: rust/crates/jmap-config/src/backend.rs:287
 msgid "_Server:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:289
+#: rust/crates/jmap-config/src/backend.rs:288
 msgid "_Port:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:290
+#: rust/crates/jmap-config/src/backend.rs:289
 msgid "_Username:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:297
+#: rust/crates/jmap-config/src/backend.rs:296
 msgid "Use a _secure connection (TLS)"
 msgstr ""
 
@@ -73,6 +73,11 @@ msgstr ""
 #: rust/crates/jmap-config/src/oauth2_service.rs:162
 #: rust/crates/jmap-mail/src/provider.rs:58
 msgid "JMAP"
+msgstr ""
+
+#. TRANSLATORS: this client's name, shown on the consent page a real identity provider renders.
+#: rust/crates/jmap-config/src/oauth2_setup.rs:107
+msgid "Evolution"
 msgstr ""
 
 #. TRANSLATORS: the one-line description of the "JMAP" account type, shown
