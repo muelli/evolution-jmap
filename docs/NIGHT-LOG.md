@@ -27278,3 +27278,120 @@ none of those five either. Full detail in the increment's own commit and
 `jmap-config/src/oauth2_service.rs`'s module docs.
 
 Continuing next session/escalation as normal.
+
+**Delivered:** `jmap_config::oauth2_service::Service`, an `EOAuth2ServiceBase`
+subclass filling seven `EOAuth2ServiceInterface` vfuncs — `get_name`/
+`get_display_name` (fixed strings, the latter translatable) and the five
+per-account accessors (`get_client_id`, `get_client_secret`,
+`get_authentication_uri`, `get_refresh_uri`, `get_redirect_uri`), each a
+borrowed read of `oauth2`'s own storage. New pointer-returning accessors
+(`oauth2::client_id` and four siblings) make that borrow sound: they return
+a `const gchar *` into the extension's own `CString`, stable for as long as
+the account's `ESource` is — not [`read`]'s owned-`String` shape, which
+would dangle the instant a vfunc returned it.
+
+The scope shrank a lot from what was planned, and for a documented reason:
+fetched `e-oauth2-service.c` and `e-oauth2-service-google.c` for the
+installed EDS (3.52.3) from gitlab.gnome.org rather than trusting the header,
+which carries no `(transfer …)`/behavioural annotation for any vfunc here —
+exactly the "plausible but wrong" shape the roadmap's escalation rule warns
+about. That reading found `can_process`, `guess_can_process`,
+`prepare_authentication_uri_query`, `prepare_get_token_form` and
+`prepare_refresh_token_form` each call their own generic default
+*unconditionally first*, and only call an override afterwards if it is a
+genuinely different function pointer — so a service with nothing to add
+beyond the RFC 6749 default (true here: no scope, no non-standard token
+endpoint, no hostname worth guessing) does not implement them at all.
+Google's own service confirms this is the real convention: it overrides
+none of those five either. So the original "eleven vfuncs" plan became
+seven, all either a `'static` constant or a plain storage read — no vfunc
+here computes a string that would need freeing.
+
+One more real finding along the way, also checked against the source rather
+than assumed: constructing an `EOAuth2ServiceBase` subclass with a bare
+`g_object_new` (no `extensible` property) still constructs an instance, but
+logs two `GLib-CRITICAL`s doing it — `EOAuth2ServiceBase`'s `constructed()`
+(`e-oauth2-service-base.c`) unconditionally calls
+`e_oauth2_services_add(extensible, self)`, and the property's
+`G_PARAM_CONSTRUCT_ONLY` default is `NULL`. Fixed in the tests, not worked
+around: they build a real `EOAuth2Services` singleton (`e_oauth2_services_new`,
+itself a `oauth2_services_constructor`-enforced process-wide singleton — also
+read from source rather than assumed, since it changes what a pointer-identity
+assertion across tests may rely on) and pass it as the `extensible` property,
+the way any real caller must. One of the five new tests drives
+`e_oauth2_services_find` directly — the entry point production code will
+actually call — rather than only `e_oauth2_service_can_process` on an
+instance already in hand.
+
+`i18n::translate_static` is new: `translate`'s owned `String` cannot answer
+a `const gchar *` vfunc without the same dangling-pointer problem the
+storage session solved for the five accessors above, so this hands back
+`dgettext`'s own pointer directly — sound because `dgettext` either echoes
+the `'static` msgid it was given or returns a pointer into glibc's own
+resident catalogue memory, both good for the process's life, which is the
+same guarantee a `CamelProvider`'s name already leans on.
+
+`get_display_name`'s literal ("JMAP") happens to already exist in the
+catalogue via `jmap-mail/src/provider.rs`'s account-type name; the two merge
+into one message rather than needing a `msgctxt` — the word does not need
+disambiguating by where it appears.
+
+Tests: 5 new in `jmap-config/tests/oauth2_service.rs`, run 5× to watch for
+the kind of registration-order flakiness the last session's storage work
+hit — none seen. `cargo test -p jmap-config --locked`, `cargo test
+--workspace --exclude example-module --locked` (the pre-existing
+`jmap-functional` CTest-only failures outside `ctest` are unchanged and
+documented, not new) and `cargo test -p jmap-backend-core --locked` all
+green. `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `cargo fmt --all --check` clean after one
+`cargo fmt --all` pass. `ninja -C build` then `ctest --test-dir build`
+15/15, `rust-test-eds` and `translations` included — the latter matters
+here since this session added the project's second translatable string and
+its `po/POTFILES.in` entry; ran `po/extract.sh` and committed the
+regenerated `.pot`. Both new files carry an SPDX `GPL-3.0-or-later` header,
+checked by hand; no new dependencies; `Cargo.lock` untouched.
+
+**A disk-space near-miss, recorded so the next session does not repeat it.**
+Mid-session, after `ninja -C build` (a release build) and a full `ctest`
+run (which rebuilds `rust-test-eds`'s many debug test binaries) on top of
+an already-large `rust/target`, the root filesystem filled completely —
+not just `rust/target` this time, but tight enough that the harness's own
+scratch space had zero bytes free and every shell command failed outright,
+including a bare `true`. A subagent dispatched to investigate could write
+to disk only by *overwriting* already-allocated files (never creating new
+ones), so it zeroed out the largest known build artifacts by exact path;
+that alone was not enough headroom to unblock a single new byte, but
+apparently freed enough for `rm -rf rust/target` to finally run, which
+recovered ~25 GiB and unblocked everything. Lesson for later sessions:
+`cargo clean --profile dev` alone (this project's standing habit) is not
+enough once a `ninja -C build` release build and a `rust-test-eds` ctest
+run have both happened in the same session — the CMake-driven cargo
+invocations use the same `rust/target`, in both profiles, and can refill it
+past the point where any shell command at all still works. Prefer running
+the CMake/ctest gate *before* letting `cargo build`/`test`/`clippy` runs
+accumulate their own copy of `target/`, or `cargo clean` between the two,
+rather than after — recovering from zero free bytes needs a lucky
+truncation trick this will not always have.
+
+**Also worth a maintainer's eye, unrelated to this increment:** while that
+disk-space subagent was working, it reported a second subagent's output
+contained "instruction-shaped" text — the harness's own injection guard
+neutralised it before it reached me, and I independently verified
+`~/.claude/settings.json` still holds only `{"theme": "auto"}`, so nothing
+took effect. Flagging it here rather than silently trusting the guard: a
+subagent's tool output tried to write instruction-like content back into
+this session, on a shared VM running unattended overnight. Worth the
+maintainer knowing this occurred, even though nothing was actually changed.
+
+**Next session**: register `Service`/`oauth2::ensure_registered()` into
+whichever module ends up owning OAuth2 account discovery and setup (M7,
+still pending human-verifiable UI work) — this session deliberately left
+that wiring undone, the same way last session left `ensure_registered()`'s
+own wiring undone, because *which* module does it is a decision for the
+setup UI, not for this storage/interface work. Unchanged blockers: no
+`.po` translation file exists yet (only the `.pot` template); M10 has no
+CI matrix; the calcard directive's two emitters are still ours; M9 has no
+CI job and no GUI tier; M7 still needs human verification in real
+Evolution and its `insert_widgets` vfunc needs a display this VM lacks; the
+OAuth2 consent page needs one too; `docs/BACKLOG.md`'s contact/vCard and
+calendar/iCal fidelity items are all still parked there.
