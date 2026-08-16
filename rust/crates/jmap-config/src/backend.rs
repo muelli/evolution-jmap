@@ -56,17 +56,13 @@
 //!
 //! ## What is not here yet
 //!
-//! `insert_widgets` now builds two of the five fields
+//! `insert_widgets` now builds four of the five fields
 //! [`Connection`](jmap_collection_sync::child_source::Connection) carries —
-//! the server and the login name — bound to the collection the same way
-//! `check_complete` and `commit_changes` already read and write it. Three
-//! more things are still missing, and are recorded here rather than silently
-//! absent:
+//! the server, the port, the login name and whether the connection is
+//! encrypted — bound to the collection the same way `check_complete` and
+//! `commit_changes` already read and write it. Two more things are still
+//! missing, and are recorded here rather than silently absent:
 //!
-//! - **A port entry and a security toggle.** `port` and `secure` stay at
-//!   [`from_identity`]'s offer (443, TLS) for
-//!   every account this dialog can create; a deployment on a non-standard
-//!   port or without TLS cannot be set up here yet.
 //! - **A status label.** [`Incomplete`](crate::complete::Incomplete)'s refusal
 //!   reason is computed by [`is_complete`] and thrown away — there is nowhere
 //!   on the page for it to land, so the user sees *Next* refuse to light up
@@ -81,11 +77,10 @@
 //!
 //! An account whose address the assistant already knows arrives on the server
 //! settings page filled in — the address, the server its domain implies and
-//! the login name it offers — and now carries two entries to correct either
-//! of those from, bound live to the account `check_complete` and
-//! `commit_changes` both read. What is still missing is a way to correct the
-//! port or turn TLS off, and any explanation on the page itself for why *Next*
-//! refuses to light up when it does.
+//! the login name it offers — and now carries three entries and a check button
+//! to correct any of those from, bound live to the account `check_complete` and
+//! `commit_changes` both read. What is still missing is any explanation on the
+//! page itself for why *Next* refuses to light up when it does.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
@@ -94,23 +89,26 @@ use std::mem::MaybeUninit;
 use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, ESource, e_binding_bind_property,
-    e_source_authentication_get_type, e_source_get_extension, e_source_new,
+    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_SECURITY, ESource,
+    e_binding_bind_property, e_binding_bind_property_full, e_source_authentication_get_type,
+    e_source_get_extension, e_source_new, e_source_security_get_type,
 };
 use evo_sys::{
     EMailConfigPage, EMailConfigServiceBackend, EMailConfigServiceBackendClass,
     EMailConfigServicePage, GtkBox, e_mail_config_page_changed,
     e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_page,
     e_mail_config_service_backend_get_source, e_mail_config_service_backend_get_type,
-    e_mail_config_service_page_get_email_address, gtk_box_pack_start, gtk_entry_new,
-    gtk_grid_attach, gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing,
-    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_xalign,
-    gtk_widget_set_hexpand, gtk_widget_show_all,
+    e_mail_config_service_page_get_email_address, gtk_box_pack_start,
+    gtk_check_button_new_with_mnemonic, gtk_entry_new, gtk_grid_attach, gtk_grid_new,
+    gtk_grid_set_column_spacing, gtk_grid_set_row_spacing, gtk_label_new_with_mnemonic,
+    gtk_label_set_mnemonic_widget, gtk_label_set_xalign, gtk_widget_set_hexpand,
+    gtk_widget_show_all,
 };
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean, gpointer};
 use gobject_sys::{
-    G_BINDING_BIDIRECTIONAL, G_BINDING_SYNC_CREATE, G_CONNECT_DEFAULT, GObject, GParamSpec,
-    g_signal_connect_object,
+    G_BINDING_BIDIRECTIONAL, G_BINDING_SYNC_CREATE, G_CONNECT_DEFAULT, GBinding, GObject,
+    GParamSpec, GValue, g_signal_connect_object, g_value_get_string, g_value_get_uint,
+    g_value_set_string, g_value_set_uint,
 };
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate};
@@ -266,19 +264,43 @@ unsafe extern "C" fn new_collection(backend: *mut EMailConfigServiceBackend) -> 
     })
 }
 
-/// The two `[Authentication]` fields this dialog lets the user correct, in the
+/// Whether an [`ENTRY_ROWS`] row is bound straight through or needs a
+/// transform first.
+///
+/// [`Text`](RowKind::Text) covers `host` and `user`: both the entry's `text`
+/// and the `ESourceAuthentication` property are strings, so
+/// [`e_binding_bind_property`] joins them with no transform function at all.
+/// `port` is the one row that is not — a `GtkEntry` has no integer property to
+/// bind a `guint16` to — so it is its own case, bound with
+/// [`e_binding_bind_property_full`] and [`port_to_text`]/[`text_to_port`].
+enum RowKind {
+    Text,
+    Port,
+}
+
+/// The `[Authentication]` fields this dialog lets the user correct, in the
 /// order they appear on the page: the mnemonic label's translatable text
 /// (marked with [`N_`], looked up with [`translate`] since a `GtkLabel`
 /// copies the string GTK's own way and there is no per-call pointer to keep
 /// alive as [`i18n::translate_static`](jmap_backend_core::i18n::translate_static)
-/// exists for) and the `ESourceAuthentication` property the entry is bound
-/// to.
+/// exists for), the `ESourceAuthentication` property the entry is bound to,
+/// and how that binding is made.
 ///
-/// Two rows and not five: [`crate::account::Connection`]'s `port` and
-/// `secure` have no entry yet, and neither does a status label for
+/// Three rows and not five: neither this nor the security check button below
+/// it has a status label yet, for
 /// [`Incomplete`](crate::complete::Incomplete)'s refusal reason — see
-/// [`insert_widgets`] for why this increment stops here.
-const ENTRY_ROWS: [(&CStr, &CStr); 2] = [(N_(c"_Server:"), c"host"), (N_(c"_Username:"), c"user")];
+/// [`insert_widgets`] for why this increment stops there.
+const ENTRY_ROWS: [(&CStr, &CStr, RowKind); 3] = [
+    (N_(c"_Server:"), c"host", RowKind::Text),
+    (N_(c"_Port:"), c"port", RowKind::Port),
+    (N_(c"_Username:"), c"user", RowKind::Text),
+];
+
+/// The mnemonic label of the security check button — its own constant rather
+/// than a fourth [`ENTRY_ROWS`] entry, since it is a single check button and
+/// not a label-and-entry pair, and binds to `[Security]`, not
+/// `[Authentication]`.
+const SECURE_LABEL: &CStr = N_(c"Use a _secure connection (TLS)");
 
 /// What Evolution calls when the *Receiving Email* page is built for this
 /// provider: put the entries the user corrects an account's server and login
@@ -317,13 +339,9 @@ const ENTRY_ROWS: [(&CStr, &CStr); 2] = [(N_(c"_Server:"), c"host"), (N_(c"_User
 ///
 /// ## What is not here yet
 ///
-/// A port entry, a security toggle, and the status label
-/// [`Incomplete`](crate::complete::Incomplete)'s refusal reason belongs in —
-/// the crate's own top-level docs and this module's say so at length. Port and
-/// security stay at [`from_identity`]'s defaults (443, TLS) for this
-/// increment; a deployment that genuinely needs a different port cannot be
-/// set up through this dialog yet, and that is a real gap this records
-/// rather than works around.
+/// The status label [`Incomplete`](crate::complete::Incomplete)'s refusal
+/// reason belongs in — the crate's own top-level docs and this module's say
+/// so at length.
 ///
 /// ## Untestable here, like the rest of this vfunc
 ///
@@ -332,10 +350,10 @@ const ENTRY_ROWS: [(&CStr, &CStr); 2] = [(N_(c"_Server:"), c"host"), (N_(c"_User
 /// one `evo-sys`'s `tests/gtk.rs` and `tests/page.rs` already hold against the
 /// linked library and the types it takes; what no test here can do is run
 /// this function and see the result. It needs a real Evolution session (or
-/// M9's Xvfb tier) to confirm the page actually shows two entries filled with
-/// what `setup_defaults` offered, and that editing either toggles *Next* —
-/// recorded in `docs/NIGHT-LOG.md` as exactly that, and not tagged complete
-/// until a human confirms it.
+/// M9's Xvfb tier) to confirm the page actually shows three entries and a
+/// check button filled with what `setup_defaults` offered, and that editing
+/// any of them toggles *Next* — recorded in `docs/NIGHT-LOG.md` as exactly
+/// that, and not tagged complete until a human confirms it.
 ///
 /// ## Failure
 ///
@@ -380,15 +398,22 @@ unsafe fn insert_entries(
     page: *mut EMailConfigServicePage,
     parent: *mut GtkBox,
 ) {
-    // SAFETY: no arguments; registers the extension type the lookup below
-    // needs, the same call `crate::account::apply`/`read` make before every
+    // SAFETY: no arguments; registers the extension types the lookups below
+    // need, the same calls `crate::account::apply`/`read` make before every
     // lookup of their own.
-    unsafe { e_source_authentication_get_type() };
-    // SAFETY: `collection` is valid by this function's contract, and a
-    // header constant naming an extension whose type is registered above;
-    // the extension is created on demand and owned by the source.
-    let authentication =
-        unsafe { e_source_get_extension(collection, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) };
+    unsafe {
+        e_source_authentication_get_type();
+        e_source_security_get_type();
+    }
+    // SAFETY: `collection` is valid by this function's contract, and header
+    // constants naming extensions whose types are registered above; each
+    // extension is created on demand and owned by the source.
+    let (authentication, security) = unsafe {
+        (
+            e_source_get_extension(collection, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()),
+            e_source_get_extension(collection, E_SOURCE_EXTENSION_SECURITY.as_ptr()),
+        )
+    };
 
     // SAFETY: no arguments; every GTK call in this function is one
     // `evo-sys`'s `tests/gtk.rs` already resolves against the linked
@@ -400,7 +425,7 @@ unsafe fn insert_entries(
         gtk_grid_set_column_spacing(grid.cast(), 6);
     }
 
-    for (row, (label_text, property)) in ENTRY_ROWS.into_iter().enumerate() {
+    for (row, (label_text, property, kind)) in ENTRY_ROWS.into_iter().enumerate() {
         let label_text = cstring_lossy(&translate(label_text));
         // SAFETY: `label_text` outlives this call, which is all
         // `gtk_label_new_with_mnemonic` needs — it copies the string into
@@ -424,16 +449,57 @@ unsafe fn insert_entries(
         // (created above, and owned by `collection`), and `entry` is a live
         // `GtkEntry` with a string `text` property; the binding this creates
         // is `(transfer none)`, owned by the two objects it joins, and
-        // outlives this call on its own.
-        unsafe {
-            e_binding_bind_property(
-                authentication,
-                property.as_ptr(),
-                entry.cast(),
-                c"text".as_ptr(),
-                G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
-            );
+        // outlives this call on its own. For `RowKind::Port` the target
+        // property is `guint16`, not a string, which is exactly what
+        // `port_to_text`/`text_to_port` bridge — their own docs give the
+        // `GBindingTransformFunc` contract this satisfies.
+        match kind {
+            RowKind::Text => unsafe {
+                e_binding_bind_property(
+                    authentication,
+                    property.as_ptr(),
+                    entry.cast(),
+                    c"text".as_ptr(),
+                    G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
+                );
+            },
+            RowKind::Port => unsafe {
+                e_binding_bind_property_full(
+                    authentication,
+                    property.as_ptr(),
+                    entry.cast(),
+                    c"text".as_ptr(),
+                    G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
+                    Some(port_to_text),
+                    Some(text_to_port),
+                    ptr::null_mut(),
+                    None,
+                );
+            },
         }
+    }
+
+    // The security toggle: one check button spanning both columns, on the row
+    // after the three entries above.
+    // SAFETY: `label_text` outlives the call, which is all
+    // `gtk_check_button_new_with_mnemonic` needs — it copies the string.
+    let label_text = cstring_lossy(&translate(SECURE_LABEL));
+    let check = unsafe { gtk_check_button_new_with_mnemonic(label_text.as_ptr()) };
+    // SAFETY: `check` was just constructed above and is a `GtkWidget`; `grid`
+    // is the live grid every other row was attached to.
+    unsafe { gtk_grid_attach(grid.cast(), check, 0, ENTRY_ROWS.len() as i32, 2, 1) };
+    // SAFETY: `security` is NULL or the collection's own extension (created
+    // above, and owned by `collection`), and `check` is a live
+    // `GtkToggleButton` with a boolean `active` property — the same shape as
+    // `ESourceSecurity:secure`, so no transform is needed here either.
+    unsafe {
+        e_binding_bind_property(
+            security,
+            c"secure".as_ptr(),
+            check.cast(),
+            c"active".as_ptr(),
+            G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
+        );
     }
 
     // SAFETY: `grid` is the live `GtkWidget` constructed above, and `parent`
@@ -443,36 +509,49 @@ unsafe fn insert_entries(
         gtk_widget_show_all(grid);
     }
 
-    if !page.is_null() && !authentication.is_null() {
-        // SAFETY: `authentication` is the collection's own live extension,
-        // just checked non-NULL, and `page` is a valid page by this
-        // function's contract, also just checked non-NULL. The callback's
-        // signature matches what a `notify` handler is actually invoked
-        // with (the emitting `GObject`, the changed property's
-        // `GParamSpec`, and the connection's own data pointer), so the
-        // transmute of its type to `GCallback` — an erased function pointer
-        // — is the same one every GObject binding spells this, `cancel.rs`'s
-        // own `g_cancellable_connect` call included.
-        // `g_signal_connect_object` rather than `g_signal_connect_data`: see
-        // `insert_widgets`'s docs on why nothing here tracks the handler id.
-        unsafe {
-            g_signal_connect_object(
-                authentication,
-                c"notify".as_ptr(),
-                Some(std::mem::transmute::<
-                    unsafe extern "C" fn(*mut GObject, *mut GParamSpec, gpointer),
-                    unsafe extern "C" fn(),
-                >(on_authentication_changed)),
-                page.cast(),
-                G_CONNECT_DEFAULT,
-            );
+    if !page.is_null() {
+        // Both extensions get their own connection: `secure` lives on
+        // `[Security]`, not `[Authentication]`, and it changes
+        // `check_complete`'s answer exactly as much as `host` does — `origin`
+        // (`jmap_backend_core::source`) refuses plaintext to a non-loopback
+        // host, so turning the toggle off can turn a complete account
+        // incomplete. One handler covers both; see its own docs.
+        for extension in [authentication, security] {
+            if extension.is_null() {
+                continue;
+            }
+            // SAFETY: `extension` is the collection's own live extension,
+            // just checked non-NULL, and `page` is a valid page by this
+            // function's contract, also just checked non-NULL. The
+            // callback's signature matches what a `notify` handler is
+            // actually invoked with (the emitting `GObject`, the changed
+            // property's `GParamSpec`, and the connection's own data
+            // pointer), so the transmute of its type to `GCallback` — an
+            // erased function pointer — is the same one every GObject
+            // binding spells this, `cancel.rs`'s own `g_cancellable_connect`
+            // call included.
+            // `g_signal_connect_object` rather than `g_signal_connect_data`:
+            // see `insert_widgets`'s docs on why nothing here tracks the
+            // handler id.
+            unsafe {
+                g_signal_connect_object(
+                    extension,
+                    c"notify".as_ptr(),
+                    Some(std::mem::transmute::<
+                        unsafe extern "C" fn(*mut GObject, *mut GParamSpec, gpointer),
+                        unsafe extern "C" fn(),
+                    >(on_extension_changed)),
+                    page.cast(),
+                    G_CONNECT_DEFAULT,
+                );
+            }
         }
     }
 }
 
 /// The `notify` handler [`insert_entries`] connects on the collection's
-/// `[Authentication]` extension: tell the page an entry changed, so
-/// `check_complete` is asked again.
+/// `[Authentication]` and `[Security]` extensions: tell the page an entry or
+/// the security toggle changed, so `check_complete` is asked again.
 ///
 /// # Safety
 ///
@@ -484,12 +563,12 @@ unsafe fn insert_entries(
 /// reason), and — because this was connected with `g_signal_connect_object`
 /// against `page` — `page` itself, still alive for the duration of this call
 /// (that object's own guarantee, not this function's).
-unsafe extern "C" fn on_authentication_changed(
-    _authentication: *mut GObject,
+unsafe extern "C" fn on_extension_changed(
+    _extension: *mut GObject,
     _pspec: *mut GParamSpec,
     page: gpointer,
 ) {
-    guard("on_authentication_changed", (), || {
+    guard("on_extension_changed", (), || {
         // SAFETY: `page` is the `EMailConfigServicePage` this was connected
         // against, by this function's contract, and every `EMailConfigPage`
         // implementor answers to `e_mail_config_page_changed` — see
@@ -497,6 +576,95 @@ unsafe extern "C" fn on_authentication_changed(
         // cast sound.
         unsafe { e_mail_config_page_changed(page.cast::<EMailConfigPage>()) };
     });
+}
+
+/// The `port` row's `GBindingTransformFunc` from the `ESourceAuthentication`
+/// side: a `guint16` becomes the text a `GtkEntry` shows, with 0 — the
+/// keyfile's spelling of "not set", per `crate::account`'s own doc — shown as
+/// an empty entry rather than a literal `0` nobody chose.
+///
+/// A panic becomes `FALSE`, which is how a `GBindingTransformFunc` says "no
+/// value": the binding leaves the entry's text alone rather than writing a
+/// half-computed one, and a panic must not cross from here into GLib's
+/// binding machinery.
+///
+/// # Safety
+///
+/// The arguments are `GBindingTransformFunc`'s: `from_value` holds the source
+/// property's value — a `guint`, since this is only ever installed on
+/// `ESourceAuthentication:port` — and `to_value` is initialised to the target
+/// property's type, a string.
+unsafe extern "C" fn port_to_text(
+    binding: *mut GBinding,
+    from_value: *const GValue,
+    to_value: *mut GValue,
+    user_data: gpointer,
+) -> gboolean {
+    let _ = (binding, user_data);
+
+    guard("port_to_text", GFALSE, || {
+        // SAFETY: a `GValue` holding the guint this binding's source
+        // property is, by the contract above.
+        let port = unsafe { g_value_get_uint(from_value) };
+        let text = if port == 0 {
+            String::new()
+        } else {
+            port.to_string()
+        };
+        let text = cstring_lossy(&text);
+        // SAFETY: a `GValue` initialised to the string type the target
+        // property is; `g_value_set_string` copies the string it is given,
+        // so `text` need not outlive this call.
+        unsafe { g_value_set_string(to_value, text.as_ptr()) };
+        GTRUE
+    })
+}
+
+/// The `port` row's `GBindingTransformFunc` from the `GtkEntry` side: the
+/// text back to a `guint16`, the inverse of [`port_to_text`].
+///
+/// An empty entry is `0` — "not set", the same as [`port_to_text`] shows it —
+/// and anything that is not a bare number in `guint16`'s range is refused by
+/// returning `FALSE`, which is how a `GBindingTransformFunc` says "no value":
+/// the binding leaves `ESourceAuthentication:port` at whatever it already was
+/// rather than writing a port nobody typed. A panic becomes the same `FALSE`,
+/// for the reason [`port_to_text`] gives.
+///
+/// # Safety
+///
+/// The arguments are `GBindingTransformFunc`'s: `from_value` holds the
+/// target property's value — a string, since this is only ever installed
+/// with `text` as the target of the binding [`port_to_text`] is the other
+/// half of — and `to_value` is initialised to the source property's type, a
+/// `guint`.
+unsafe extern "C" fn text_to_port(
+    binding: *mut GBinding,
+    from_value: *const GValue,
+    to_value: *mut GValue,
+    user_data: gpointer,
+) -> gboolean {
+    let _ = (binding, user_data);
+
+    guard("text_to_port", GFALSE, || {
+        // SAFETY: a `GValue` holding a NUL-terminated string this binding's
+        // target property is, by the contract above; the string is the
+        // entry's own and outlives only this call, so it is copied rather
+        // than held.
+        let text = unsafe { read_string(g_value_get_string(from_value)) }.unwrap_or_default();
+        let text = text.trim();
+        let port: u16 = if text.is_empty() {
+            0
+        } else {
+            match text.parse() {
+                Ok(port) => port,
+                Err(_) => return GFALSE,
+            }
+        };
+        // SAFETY: a `GValue` initialised to the guint type the source
+        // property is.
+        unsafe { g_value_set_uint(to_value, u32::from(port)) };
+        GTRUE
+    })
 }
 
 /// What Evolution calls when the user reaches the server settings page: fill in
@@ -823,4 +991,176 @@ unsafe fn take_message(error: *mut GError) -> String {
     unsafe { g_error_free(error) };
 
     message.unwrap_or_else(|| "EDS gave no message".to_owned())
+}
+
+/// [`port_to_text`] and [`text_to_port`], driven directly with hand-built
+/// `GValue`s rather than through a real `GBinding` — which is what lets these
+/// run here at all: they are the one piece of `insert_widgets` that touches no
+/// widget, so unlike the rest of this module they need no display connection.
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+    use std::mem::zeroed;
+
+    use gobject_sys::{G_TYPE_STRING, G_TYPE_UINT, g_value_init, g_value_unset};
+
+    use super::*;
+
+    /// A zeroed, initialised `GValue` of the given type — the C
+    /// `GValue value = G_VALUE_INIT; g_value_init(&value, type);` idiom,
+    /// as `tests/oauth2_service.rs` also spells it.
+    ///
+    /// # Safety
+    ///
+    /// `gtype` must be a `GType` `g_value_init` accepts; the caller must
+    /// `g_value_unset` the result when done with it.
+    unsafe fn value_of(gtype: glib_sys::GType) -> GValue {
+        // SAFETY: a fresh `GValue` has no prior contents to unset, so
+        // zero-initialising it before `g_value_init` is exactly the C idiom.
+        unsafe {
+            let mut value: GValue = zeroed();
+            g_value_init(&mut value, gtype);
+            value
+        }
+    }
+
+    /// A string `GValue`'s contents, exactly — unlike [`read_string`], which
+    /// this module otherwise uses throughout, an empty string here is not the
+    /// same absence a keyfile's unwritten key is; `port_to_text` writes a real
+    /// empty string for "no port", which is exactly what these tests need to
+    /// tell apart from a NULL one.
+    ///
+    /// # Safety
+    ///
+    /// `value` must hold a string, as `g_value_get_string` requires.
+    unsafe fn string_of(value: &GValue) -> Option<String> {
+        // SAFETY: by this function's contract.
+        let ptr = unsafe { g_value_get_string(value) };
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: a NUL-terminated string owned by `value`, copied out here.
+        Some(
+            unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    #[test]
+    fn port_to_text_shows_zero_as_an_empty_entry() {
+        // SAFETY: `from` is a `guint` GValue, as `port_to_text` requires; `to`
+        // is a string GValue, as it fills in; both are unset before the test
+        // ends.
+        unsafe {
+            let mut from = value_of(G_TYPE_UINT);
+            g_value_set_uint(&mut from, 0);
+            let mut to = value_of(G_TYPE_STRING);
+
+            let ok = port_to_text(ptr::null_mut(), &from, &mut to, ptr::null_mut());
+
+            assert_eq!(ok, GTRUE, "port_to_text refused a plain zero");
+            assert_eq!(string_of(&to), Some(String::new()));
+
+            g_value_unset(&mut from);
+            g_value_unset(&mut to);
+        }
+    }
+
+    #[test]
+    fn port_to_text_shows_a_set_port_as_its_number() {
+        // SAFETY: as above.
+        unsafe {
+            let mut from = value_of(G_TYPE_UINT);
+            g_value_set_uint(&mut from, 443);
+            let mut to = value_of(G_TYPE_STRING);
+
+            let ok = port_to_text(ptr::null_mut(), &from, &mut to, ptr::null_mut());
+
+            assert_eq!(ok, GTRUE);
+            assert_eq!(string_of(&to), Some("443".to_owned()));
+
+            g_value_unset(&mut from);
+            g_value_unset(&mut to);
+        }
+    }
+
+    /// The round trip [`port_to_text`]/[`text_to_port`] is meant to be: what
+    /// one shows is what the other reads back to the same port.
+    #[test]
+    fn text_to_port_reverses_port_to_text() {
+        for port in [0u16, 1, 443, 8080, u16::MAX] {
+            // SAFETY: as above.
+            unsafe {
+                let mut from = value_of(G_TYPE_UINT);
+                g_value_set_uint(&mut from, u32::from(port));
+                let mut text = value_of(G_TYPE_STRING);
+                assert_eq!(
+                    port_to_text(ptr::null_mut(), &from, &mut text, ptr::null_mut()),
+                    GTRUE
+                );
+                g_value_unset(&mut from);
+
+                let mut back = value_of(G_TYPE_UINT);
+                let ok = text_to_port(ptr::null_mut(), &text, &mut back, ptr::null_mut());
+                g_value_unset(&mut text);
+
+                assert_eq!(ok, GTRUE, "text_to_port refused {port}'s own text");
+                assert_eq!(
+                    g_value_get_uint(&back),
+                    u32::from(port),
+                    "port {port} did not round-trip"
+                );
+                g_value_unset(&mut back);
+            }
+        }
+    }
+
+    #[test]
+    fn text_to_port_treats_blank_or_whitespace_only_text_as_unset() {
+        for text in ["", "   ", "\t"] {
+            // SAFETY: as above; `text` is NUL-terminated for the C string
+            // `g_value_set_string` copies.
+            unsafe {
+                let text_c = CString::new(text).unwrap();
+                let mut from = value_of(G_TYPE_STRING);
+                g_value_set_string(&mut from, text_c.as_ptr());
+                let mut to = value_of(G_TYPE_UINT);
+
+                let ok = text_to_port(ptr::null_mut(), &from, &mut to, ptr::null_mut());
+
+                assert_eq!(ok, GTRUE, "{text:?} should be accepted as \"not set\"");
+                assert_eq!(g_value_get_uint(&to), 0);
+
+                g_value_unset(&mut from);
+                g_value_unset(&mut to);
+            }
+        }
+    }
+
+    #[test]
+    fn text_to_port_refuses_what_is_not_a_bare_port_number() {
+        for text in ["not a number", "443x", "-1", "65536", "1.5"] {
+            // SAFETY: as above.
+            unsafe {
+                let text_c = CString::new(text).unwrap();
+                let mut from = value_of(G_TYPE_STRING);
+                g_value_set_string(&mut from, text_c.as_ptr());
+                let mut to = value_of(G_TYPE_UINT);
+                // A sentinel the binding must leave alone on refusal — this
+                // test only checks the return value, but a real bidirectional
+                // `GBinding` relies on exactly this: `text_to_port` returning
+                // `FALSE` is what keeps a bad keystroke from ever reaching
+                // `g_object_set_property`.
+                g_value_set_uint(&mut to, 12345);
+
+                let ok = text_to_port(ptr::null_mut(), &from, &mut to, ptr::null_mut());
+
+                assert_eq!(ok, GFALSE, "{text:?} should not be a valid port");
+
+                g_value_unset(&mut from);
+                g_value_unset(&mut to);
+            }
+        }
+    }
 }

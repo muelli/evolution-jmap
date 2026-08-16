@@ -36,6 +36,7 @@ const CLASSES: &[(&str, unsafe extern "C" fn() -> GType)] = &[
     ("GtkGrid", gtk_grid_get_type),
     ("GtkLabel", gtk_label_get_type),
     ("GtkEntry", gtk_entry_get_type),
+    ("GtkCheckButton", gtk_check_button_get_type),
 ];
 
 /// The classes, registered exactly once — which has to be arranged, because on
@@ -176,6 +177,10 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
             gtk_widget_set_hexpand as *const (),
         ),
         ("gtk_widget_show_all", gtk_widget_show_all as *const ()),
+        (
+            "gtk_check_button_new_with_mnemonic",
+            gtk_check_button_new_with_mnemonic as *const (),
+        ),
     ];
     for (name, address) in entry_points {
         assert!(!address.is_null(), "{name} resolved to NULL");
