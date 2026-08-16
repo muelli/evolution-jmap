@@ -2885,6 +2885,217 @@ fn an_observance_moving_off_a_sub_minute_offset_west_of_utc_still_describes_the_
 }
 
 #[test]
+fn a_transition_rule_naming_the_start_of_its_workweek_is_counted_all_the_same() {
+    // Exchange's `VTIMEZONE`, verbatim from an invitation it sent: the rule
+    // carries a `WKST`, and Zimbra writes the same part in the same place. Both
+    // reach an Evolution user as an invitation, which is precisely the
+    // `VTIMEZONE` this module cannot fall back to a database for.
+    //
+    // §3.3.10 gives `WKST` a meaning in exactly two rules — a `WEEKLY` one
+    // repeating at an interval, and a `YEARLY` one carrying a `BYWEEKNO` —
+    // neither of which this module counts. So no value of it can move a
+    // transition this module reads, and refusing the whole definition over it
+    // cost the invitation its recurring appointment for nothing.
+    //
+    // The `DTSTART` is Exchange's own: year 1601 and the first of January, a
+    // date the rule then overrides down to the month and the day, leaving only
+    // the time of day to come from it.
+    let definition = "BEGIN:VTIMEZONE\r\n\
+         TZID:GMT +0100 (Standard) / GMT +0200 (Daylight)\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:16010101T030000\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0100\r\n\
+         RRULE:FREQ=YEARLY;WKST=MO;INTERVAL=1;BYMONTH=10;BYDAY=-1SU\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         DTSTART:16010101T020000\r\n\
+         TZOFFSETFROM:+0100\r\n\
+         TZOFFSETTO:+0200\r\n\
+         RRULE:FREQ=YEARLY;WKST=MO;INTERVAL=1;BYMONTH=3;BYDAY=-1SU\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n";
+    for (until, read) in [
+        // Summer, past the last Sunday of March: +0200.
+        ("20260331T120000Z", "2026-03-31T14:00:00"),
+        // Winter, past the last Sunday of October: +0100.
+        ("20261130T120000Z", "2026-11-30T13:00:00"),
+    ] {
+        let ics = recurring_in(
+            "GMT +0100 (Standard) / GMT +0200 (Daylight)",
+            definition,
+            until,
+        );
+
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+    }
+}
+
+#[test]
+fn a_transition_rule_stating_its_own_time_of_day_is_counted() {
+    // Lotus Notes' `VTIMEZONE`, verbatim: the hour and the minute the clocks
+    // move at are stated in the rule as well as in the `DTSTART`, which
+    // §3.3.10 admits — in a `YEARLY` rule `BYHOUR` and `BYMINUTE` expand, so
+    // they replace that part of the `DTSTART`'s time of day rather than adding
+    // to the days the rule names. Here they agree with it, as they do in every
+    // Notes definition; agreeing or not, a part that was not understood cost
+    // the whole zone.
+    let definition = "BEGIN:VTIMEZONE\r\n\
+         TZID:Eastern\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:19501029T020000\r\n\
+         TZOFFSETFROM:-0400\r\n\
+         TZOFFSETTO:-0500\r\n\
+         RRULE:FREQ=YEARLY;BYMINUTE=0;BYHOUR=2;BYDAY=-1SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         DTSTART:19500402T020000\r\n\
+         TZOFFSETFROM:-0500\r\n\
+         TZOFFSETTO:-0400\r\n\
+         RRULE:FREQ=YEARLY;BYMINUTE=0;BYHOUR=2;BYDAY=1SU;BYMONTH=4\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n";
+    for (until, read) in [
+        // Summer, past the first Sunday of April: -0400.
+        ("20260715T120000Z", "2026-07-15T08:00:00"),
+        // January, whose offset was put in force by the *previous* October.
+        ("20260115T120000Z", "2026-01-15T07:00:00"),
+    ] {
+        let ics = recurring_in("Eastern", definition, until);
+
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+    }
+}
+
+/// A zone that goes forward on the last Sunday of March and back on the last
+/// Sunday of October, with the time of day the spring transition happens at
+/// stated by `rule` rather than by the `DTSTART` beside it — which says
+/// midnight, two hours before what a real definition of this shape says.
+fn at_the_hour_the_rule_states(rule: &str) -> String {
+    format!(
+        "BEGIN:VTIMEZONE\r\n\
+         TZID:Example/StatedHour\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0100\r\n\
+         TZOFFSETTO:+0000\r\n\
+         TZNAME:XST\r\n\
+         DTSTART:19701025T000000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+0000\r\n\
+         TZOFFSETTO:+0100\r\n\
+         TZNAME:XDT\r\n\
+         DTSTART:19700329T000000\r\n\
+         RRULE:{rule}\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n"
+    )
+}
+
+#[test]
+fn a_time_of_day_the_rule_states_is_the_one_the_transition_happens_at() {
+    // The discriminating case for the part above, which no producer writes
+    // because they all restate what the `DTSTART` already says: an hour in the
+    // rule that *differs* from the `DTSTART`'s. §3.3.10's expansion makes the
+    // rule's the answer, and an instant in the two hours between the two is
+    // where the difference is visible — reading the hour off the `DTSTART`
+    // there answers with an offset the zone does not take up until later.
+    for (until, read) in [
+        // Between the `DTSTART`'s midnight and the rule's two o'clock: the
+        // clocks have not moved yet.
+        ("20260329T010000Z", "2026-03-29T01:00:00"),
+        // And after the transition the rule does state.
+        ("20260329T030000Z", "2026-03-29T04:00:00"),
+    ] {
+        let ics = recurring_in(
+            "Example/StatedHour",
+            &at_the_hour_the_rule_states("FREQ=YEARLY;BYMINUTE=0;BYHOUR=2;BYDAY=-1SU;BYMONTH=3"),
+            until,
+        );
+
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+    }
+}
+
+#[test]
+fn a_rule_stating_more_than_one_time_of_day_is_refused() {
+    // The same reason a `BYMONTHDAY` listing dates is refused: two hours is two
+    // transitions in the day, and this module counts the one a transition
+    // rule has. Choosing between them would be a guess, and a guess about an
+    // offset is invisible from here on.
+    let ics = recurring_in(
+        "Example/StatedHour",
+        &at_the_hour_the_rule_states("FREQ=YEARLY;BYMINUTE=0;BYHOUR=2,3;BYDAY=-1SU;BYMONTH=3"),
+        "20260329T010000Z",
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-29T01:00:00Z"));
+    assert!(!maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn a_time_of_day_outside_the_range_it_is_stated_in_is_refused() {
+    // A field is only a replacement for the `DTSTART`'s while it is a value
+    // that field can hold: an hour of 25 carried into the arithmetic would move
+    // the transition into the following day rather than being noticed, and the
+    // day is the one thing about a transition the rule *has* stated.
+    //
+    // Over the top of each of §3.3.10's ranges — and the leap second a
+    // `BYSECOND` may name, which is in range for §3.3.10 and out of it here,
+    // because placing it means pushing the onset into the next minute. Only
+    // that end of each range is reachable from a document: calcard's parser
+    // drops a negative `BYHOUR` before this layer sees the rule, which arrives
+    // here as a rule that does not state an hour at all.
+    for rule in [
+        "FREQ=YEARLY;BYHOUR=25;BYDAY=-1SU;BYMONTH=3",
+        "FREQ=YEARLY;BYMINUTE=60;BYDAY=-1SU;BYMONTH=3",
+        "FREQ=YEARLY;BYSECOND=60;BYDAY=-1SU;BYMONTH=3",
+    ] {
+        let ics = recurring_in(
+            "Example/StatedHour",
+            &at_the_hour_the_rule_states(rule),
+            "20260329T010000Z",
+        );
+
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert_eq!(
+            rules[0].until.as_deref(),
+            Some("2026-03-29T01:00:00Z"),
+            "{rule}"
+        );
+        assert!(!maps_recurrence_rule(&rules[0]), "{rule}");
+    }
+}
+
+#[test]
 fn a_weekday_and_a_run_of_dates_naming_two_of_them_is_refused() {
     // The pair is a single transition only while the run holds one occurrence
     // of the weekday, and eight consecutive dates hold two: 2026-03-22 and
