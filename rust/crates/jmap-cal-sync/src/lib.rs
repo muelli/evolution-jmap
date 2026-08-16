@@ -25,8 +25,9 @@ use std::collections::BTreeMap;
 use jmap_client::{ChangeSet, Client};
 use jmap_ical::{
     event_to_ical, ical_to_event, maps_recurrence_rule, maps_time_zone, prune_time_zones,
+    unstateable_until,
 };
-use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
+use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
 use jmap_proto::{Id, State};
 use serde_json::Value;
 
@@ -159,24 +160,24 @@ impl CalSync {
             // an end date — which is a worse thing to be asked for than a
             // recurrence that just works, and a better one than a meeting
             // series that quietly happened once. The rule this actually costs
-            // is `UNTIL` beside a `TZID`: RFC 5545 §3.3.10 requires the UTC
-            // instant there, converting it needs a zone database `jmap-ical`
-            // deliberately does not carry, and until that conversion exists
-            // this is what a create can honestly do. See
-            // [`maps_recurrence_rule`], and [`patch::diff`] for the edit, which
-            // leaves the property alone instead.
-            if !event
+            // is `UNTIL` beside a `TZID` the document does not define, or
+            // defines in a shape `jmap-ical`'s zone evaluator will not guess
+            // at: RFC 5545 §3.3.10 requires the UTC instant there and RFC 8984
+            // §4.3.3 wants a local time in the event's zone, and what converts
+            // between them is the document's own `VTIMEZONE` — where there is
+            // one. See [`maps_recurrence_rule`], [`unsendable_recurrence`] for
+            // what the user is then told, and [`patch::diff`] for the edit,
+            // which leaves the property alone instead.
+            if let Some(rule) = event
                 .recurrence_rules
                 .iter()
                 .flatten()
-                .all(maps_recurrence_rule)
+                .find(|rule| !maps_recurrence_rule(rule))
             {
-                return Err(SyncError::Unsendable(
-                    "this event repeats in a way that cannot be stored on the \
-                     server, so it was not created — an end date stated as a \
-                     UTC instant is the usual cause, and a repeat count works"
-                        .to_owned(),
-                ));
+                return Err(SyncError::Unsendable(unsendable_recurrence(
+                    rule,
+                    event.time_zone.as_deref(),
+                )));
             }
             // A zone the document gave no JSCalendar spelling for. On an edit
             // the server's own zone stands (see [`patch`]); on a create there is
@@ -304,6 +305,44 @@ impl CalSync {
             .into_iter()
             .next()
             .ok_or_else(|| SyncError::NotFound(uid.to_owned()))
+    }
+}
+
+/// What a user is told when a create is refused over its recurrence.
+///
+/// Two messages, because there are two things worth saying and only one of them
+/// is actionable. Where the rule's end is what could not be stated — see
+/// [`unstateable_until`] — the message names the instant and the zone it could
+/// not be stated in, which between them identify the appointment to change and
+/// the `VTIMEZONE` to look at. Every other refusal gets the general message:
+/// the mapping knows the rule cannot be written back, but nothing about *which*
+/// part of it would help someone reading a dialog.
+///
+/// Naming the zone matters more than it looks. Since the document's own
+/// `VTIMEZONE` became the conversion, an end date stated as a UTC instant is
+/// the case that *works*; what is left is a calendar entry whose zone is
+/// missing or written unreadably, and a message that did not say which zone
+/// would leave the user with an error they cannot tell apart from the one this
+/// code used to give for the ordinary case.
+///
+/// Not marked for translation. `jmap-backend-core`'s `i18n` is where that
+/// happens and this crate does not depend on it — an EDS-linked crate is not
+/// something the sync layer's tests can pull in — so making these translatable
+/// means moving the phrasing to the GObject layer and giving
+/// [`SyncError::Unsendable`] a reason to carry instead of prose. Logged as a
+/// blocker rather than done here.
+fn unsendable_recurrence(rule: &RecurrenceRule, time_zone: Option<&str>) -> String {
+    match (unstateable_until(rule), time_zone) {
+        (Some(until), Some(zone)) => format!(
+            "this event repeats until {until}, and the time zone it is in, \
+             {zone}, is not defined in this calendar entry in a way that \
+             instant can be converted out of — so the event was not created. \
+             Stating the recurrence as a repeat count works instead."
+        ),
+        _ => "this event repeats in a way that cannot be stored on the server, \
+              so it was not created — stating the recurrence as a repeat count \
+              is the spelling that always works"
+            .to_owned(),
     }
 }
 
