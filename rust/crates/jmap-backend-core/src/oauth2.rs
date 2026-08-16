@@ -73,6 +73,7 @@ use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, g_error_free, g_free};
 
 use crate::connect::ConnectError;
+use crate::i18n::translate;
 use crate::marshal::read_string;
 
 /// The generic spelling of "this source authenticates with OAuth 2.0", as
@@ -201,7 +202,11 @@ pub unsafe fn access_token(
         // path — but a NULL message is not worth turning into a panic in a
         // backend, so it becomes a sentence that says exactly what is known.
         return Err(ConnectError::OAuth2(message.unwrap_or_else(|| {
-            "the account has no OAuth 2.0 access token".to_owned()
+            translate(
+                // TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
+                // access token but did not say why.
+                c"the account has no OAuth 2.0 access token",
+            )
         })));
     }
 
@@ -218,8 +223,10 @@ pub unsafe fn access_token(
     // saying so here is better than sending `Authorization: Bearer `.
     match value {
         Some(value) if !value.is_empty() => Ok(value),
-        _ => Err(ConnectError::OAuth2(
-            "the OAuth 2.0 service returned an empty access token".to_owned(),
-        )),
+        _ => Err(ConnectError::OAuth2(translate(
+            // TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
+            // token that was empty rather than absent.
+            c"the OAuth 2.0 service returned an empty access token",
+        ))),
     }
 }

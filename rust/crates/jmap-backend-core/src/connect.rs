@@ -34,6 +34,7 @@ use jmap_proto::Id;
 
 use crate::cancel::observe;
 use crate::error::{cstring_lossy, set_raw_gerror};
+use crate::i18n::{translate, translate_with};
 use crate::marshal::password as stored_password;
 use crate::oauth2::{access_token, source_uses_oauth2};
 use crate::source::SourceConfig;
@@ -54,18 +55,29 @@ pub enum Collection {
 }
 
 impl Collection {
-    /// How to name this collection in a message shown to the user.
-    pub fn noun(self) -> &'static str {
+    /// How to name this collection in a message shown to the user, in the
+    /// user's language.
+    pub fn noun(self) -> String {
         match self {
-            Self::AddressBook => "address book",
-            Self::Calendar => "calendar",
+            Self::AddressBook => translate(
+                // TRANSLATORS: names one of an account's two kinds of
+                // server-side collection, inside a sentence describing an
+                // account error.
+                c"address book",
+            ),
+            Self::Calendar => translate(
+                // TRANSLATORS: names one of an account's two kinds of
+                // server-side collection, inside a sentence describing an
+                // account error.
+                c"calendar",
+            ),
         }
     }
 }
 
 impl fmt::Display for Collection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.noun())
+        f.write_str(&self.noun())
     }
 }
 
@@ -103,16 +115,25 @@ impl From<Error> for ConnectError {
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CredentialsRequired => f.write_str("the account has no password yet"),
+            Self::CredentialsRequired => f.write_str(&translate(
+                // TRANSLATORS: shown when an account configured with a user
+                // name has no password stored for it yet.
+                c"the account has no password yet",
+            )),
             Self::OAuth2(message) => f.write_str(message),
             Self::Client(error) => error.fmt(f),
-            Self::NoSuchCollection(kind, id) => write!(
-                f,
-                "the account names {kind} \"{id}\", which the server does not have"
-            ),
-            Self::NoDefaultCollection(kind) => {
-                write!(f, "the server offers no default {kind} for this account")
-            }
+            Self::NoSuchCollection(kind, id) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is
+                // the identifier this account is configured to use for it,
+                // which the server does not have.
+                c"the account names %1$s \"%2$s\", which the server does not have",
+                &[kind.noun().as_str(), id.as_str()],
+            )),
+            Self::NoDefaultCollection(kind) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is "address book" or "calendar".
+                c"the server offers no default %1$s for this account",
+                &[kind.noun().as_str()],
+            )),
         }
     }
 }
@@ -353,7 +374,11 @@ where
 }
 
 fn no_source_gerror(kind: Collection) -> *mut GError {
-    let message = cstring_lossy(&format!("the {kind} backend has no account to connect to"));
+    let message = cstring_lossy(&translate_with(
+        // TRANSLATORS: %1$s is "address book" or "calendar".
+        c"the %1$s backend has no account to connect to",
+        &[kind.noun().as_str()],
+    ));
     // SAFETY: the code is one of the enum's own values and the message is
     // copied by the call.
     unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
@@ -429,6 +454,17 @@ mod tests {
             ConnectError::NoSuchCollection(Collection::AddressBook, "Ab1".to_owned())
                 .to_string()
                 .contains("names address book \"Ab1\"")
+        );
+    }
+
+    /// The one arm with no collection or server text of its own to lean on —
+    /// pinned down separately so the translation retrofit could not quietly
+    /// turn it into an empty string.
+    #[test]
+    fn credentials_required_names_the_missing_password() {
+        assert_eq!(
+            ConnectError::CredentialsRequired.to_string(),
+            "the account has no password yet"
         );
     }
 
