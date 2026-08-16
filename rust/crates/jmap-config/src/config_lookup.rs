@@ -88,8 +88,8 @@ use evo_sys::{
     E_CONFIG_LOOKUP_RESULT_COLLECTION, EConfigLookup, EConfigLookupResult, EConfigLookupWorker,
     EConfigLookupWorkerInterface, e_config_lookup_add_result, e_config_lookup_get_type,
     e_config_lookup_register_worker, e_config_lookup_result_simple_add_boolean,
-    e_config_lookup_result_simple_add_string, e_config_lookup_result_simple_new,
-    e_config_lookup_worker_get_type,
+    e_config_lookup_result_simple_add_string, e_config_lookup_result_simple_add_uint,
+    e_config_lookup_result_simple_new, e_config_lookup_worker_get_type,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GTRUE, GType, gchar};
@@ -124,6 +124,10 @@ pub const REDIRECT_URI: &str = "jmap-oauth2:/redirect";
 /// which tries every listed server because non-JMAP servers may sit at some
 /// and not others), a JMAP deployment names exactly one issuer, so a second
 /// entry would be trying a second server the first one failing.
+///
+/// What this returns is not yet a host `discover_and_register` can use as-is
+/// — a `servers` entry may carry a scheme and a port, which [`parse_target`]
+/// reads back out.
 pub(crate) fn probe_host(email_address: &str, servers: Option<&str>) -> Option<String> {
     if let Some(servers) = servers
         && let Some(first) = servers.split(';').map(str::trim).find(|s| !s.is_empty())
@@ -132,6 +136,52 @@ pub(crate) fn probe_host(email_address: &str, servers: Option<&str>) -> Option<S
     }
     let (_, domain) = email_address.split_once('@')?;
     (!domain.is_empty()).then(|| domain.to_owned())
+}
+
+/// Where [`probe_host`]'s answer is actually reached: a bare host, an
+/// explicit port when one was named, and whether to speak TLS.
+struct Target {
+    host: String,
+    port: u16,
+    secure: bool,
+}
+
+/// Reads a `scheme://host:port` override out of [`probe_host`]'s answer, the
+/// same convention real upstream's own `e-webdav-config-lookup.c` uses for its
+/// `servers` values (read against `/tmp/evo-src`'s copy, not assumed): a bare
+/// host defaults to HTTPS and no explicit port — right for the email-domain
+/// fallback, which is always a bare domain — and an `http://`/`https://`
+/// prefix, with an optional `:port` suffix, overrides both. That override is
+/// what lets a `servers` entry name a locally-run, plaintext, non-default-port
+/// test deployment at all; the email-domain path never needs it.
+///
+/// A bare, unbracketed IPv6 literal (more than one colon, no `[...]`) is left
+/// whole rather than split on its last colon — [`jmap_backend_core::source`]
+/// accepts a host in that shape, and splitting one on `:` would cut it apart
+/// as though the last group were a port.
+fn parse_target(host: &str) -> Option<Target> {
+    let (secure, authority) = match host.strip_prefix("https://") {
+        Some(rest) => (true, rest),
+        None => match host.strip_prefix("http://") {
+            Some(rest) => (false, rest),
+            None => (true, host),
+        },
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    let (bare_host, port) = match authority.rsplit_once(':') {
+        Some((bare_host, port)) if !bare_host.contains(':') => (bare_host, port.parse().ok()?),
+        _ => (authority, 0),
+    };
+    if bare_host.is_empty() {
+        return None;
+    }
+    Some(Target {
+        host: bare_host.to_owned(),
+        port,
+        secure,
+    })
 }
 
 /// The instance struct: nothing but [`EExtension`]'s own state — everything
@@ -286,16 +336,22 @@ unsafe fn add_optional_string(
 /// # Safety
 ///
 /// `config_lookup` must be a valid `EConfigLookup`.
-unsafe fn add_result(config_lookup: *mut EConfigLookup, email: &str, host: &str, config: &Config) {
+unsafe fn add_result(
+    config_lookup: *mut EConfigLookup,
+    email: &str,
+    target: &Target,
+    config: &Config,
+) {
     let protocol = cstring_lossy(BACKEND_NAME);
     let description = cstring_lossy(&translate_with(
         // TRANSLATORS: %1$s is the server this account was discovered
         // against, shown in the account assistant's list of lookup results.
         c"JMAP account at %1$s, using OAuth 2.0",
-        &[host],
+        &[target.host.as_str()],
     ));
     let email_c = cstring_lossy(email);
-    let host_c = cstring_lossy(host);
+    let host_c = cstring_lossy(&target.host);
+    let security_method = if target.secure { c"tls" } else { c"none" };
 
     // SAFETY: every string argument is a live, NUL-terminated `CString`'s
     // pointer, valid for this one call; `_new` copies each of them
@@ -346,6 +402,14 @@ unsafe fn add_result(config_lookup: *mut EConfigLookup, email: &str, host: &str,
             c"host".as_ptr(),
             host_c.as_ptr(),
         );
+        if target.port != 0 {
+            e_config_lookup_result_simple_add_uint(
+                result,
+                E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr(),
+                c"port".as_ptr(),
+                u32::from(target.port),
+            );
+        }
         e_config_lookup_result_simple_add_string(
             result,
             E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr(),
@@ -362,7 +426,7 @@ unsafe fn add_result(config_lookup: *mut EConfigLookup, email: &str, host: &str,
             result,
             E_SOURCE_EXTENSION_SECURITY.as_ptr(),
             c"method".as_ptr(),
-            c"tls".as_ptr(),
+            security_method.as_ptr(),
         );
 
         add_optional_string(
@@ -428,6 +492,9 @@ unsafe extern "C" fn run(
         let Some(host) = probe_host(&email, servers.as_deref()) else {
             return;
         };
+        let Some(target) = parse_target(&host) else {
+            return;
+        };
 
         // SAFETY: `cancellable` is NULL or a valid `GCancellable` that EDS
         // keeps alive for the duration of this call, per `run`'s own
@@ -436,19 +503,24 @@ unsafe extern "C" fn run(
         let cancel_flag = bridge.flag().clone();
         let transport = UreqTransport::default();
 
-        let Ok(config) =
-            discover_and_register(&transport, &host, 0, true, REDIRECT_URI, Some(&cancel_flag))
-        else {
+        let Ok(config) = discover_and_register(
+            &transport,
+            &target.host,
+            target.port,
+            target.secure,
+            REDIRECT_URI,
+            Some(&cancel_flag),
+        ) else {
             return;
         };
 
-        add_result(config_lookup, &email, &host, &config);
+        add_result(config_lookup, &email, &target, &config);
     });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::probe_host;
+    use super::{parse_target, probe_host};
 
     #[test]
     fn uses_the_email_domain_when_no_servers_are_given() {
@@ -490,5 +562,55 @@ mod tests {
     #[test]
     fn an_address_with_an_empty_domain_has_no_host_to_probe() {
         assert_eq!(probe_host("vera@", None), None);
+    }
+
+    #[test]
+    fn a_bare_host_defaults_to_tls_and_no_explicit_port() {
+        let target = parse_target("example.com").expect("a bare host parses");
+        assert_eq!(target.host, "example.com");
+        assert_eq!(target.port, 0);
+        assert!(target.secure);
+    }
+
+    #[test]
+    fn an_explicit_scheme_and_port_override_both() {
+        let target = parse_target("http://127.0.0.1:40565").expect("scheme and port parse");
+        assert_eq!(target.host, "127.0.0.1");
+        assert_eq!(target.port, 40565);
+        assert!(!target.secure);
+    }
+
+    #[test]
+    fn an_explicit_https_scheme_with_a_port_stays_secure() {
+        let target = parse_target("https://jmap.example.net:8443").expect("scheme and port parse");
+        assert_eq!(target.host, "jmap.example.net");
+        assert_eq!(target.port, 8443);
+        assert!(target.secure);
+    }
+
+    #[test]
+    fn a_scheme_with_no_port_leaves_the_port_unset() {
+        let target = parse_target("http://localhost").expect("a scheme alone parses");
+        assert_eq!(target.host, "localhost");
+        assert_eq!(target.port, 0);
+        assert!(!target.secure);
+    }
+
+    #[test]
+    fn a_bare_unbracketed_ipv6_literal_is_not_split_on_its_last_colon() {
+        let target = parse_target("::1").expect("a bare IPv6 literal parses");
+        assert_eq!(target.host, "::1");
+        assert_eq!(target.port, 0);
+        assert!(target.secure);
+    }
+
+    #[test]
+    fn a_non_numeric_port_suffix_has_no_target_to_reach() {
+        assert!(parse_target("example.com:not-a-port").is_none());
+    }
+
+    #[test]
+    fn an_empty_authority_has_no_target_to_reach() {
+        assert!(parse_target("https://").is_none());
     }
 }
