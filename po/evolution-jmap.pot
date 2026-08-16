@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-16 13:39+0000\n"
+"POT-Creation-Date: 2026-08-16 17:22+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -38,6 +38,58 @@ msgid ""
 "This event repeats in a way that cannot be stored on the server, so it was "
 "not created. Stating the recurrence as a repeat count is the spelling that "
 "always works."
+msgstr ""
+
+#. TRANSLATORS: names one of an account's two kinds of
+#. server-side collection, inside a sentence describing an
+#. account error.
+#: rust/crates/jmap-backend-core/src/connect.rs:66
+msgid "address book"
+msgstr ""
+
+#. TRANSLATORS: names one of an account's two kinds of
+#. server-side collection, inside a sentence describing an
+#. account error.
+#: rust/crates/jmap-backend-core/src/connect.rs:72
+msgid "calendar"
+msgstr ""
+
+#. TRANSLATORS: shown when an account configured with a user
+#. name has no password stored for it yet.
+#: rust/crates/jmap-backend-core/src/connect.rs:121
+msgid "the account has no password yet"
+msgstr ""
+
+#. TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is
+#. the identifier this account is configured to use for it,
+#. which the server does not have.
+#: rust/crates/jmap-backend-core/src/connect.rs:129
+#, c-format
+msgid "the account names %1$s \"%2$s\", which the server does not have"
+msgstr ""
+
+#. TRANSLATORS: %1$s is "address book" or "calendar".
+#: rust/crates/jmap-backend-core/src/connect.rs:134
+#, c-format
+msgid "the server offers no default %1$s for this account"
+msgstr ""
+
+#. TRANSLATORS: %1$s is "address book" or "calendar".
+#: rust/crates/jmap-backend-core/src/connect.rs:379
+#, c-format
+msgid "the %1$s backend has no account to connect to"
+msgstr ""
+
+#. TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
+#. access token but did not say why.
+#: rust/crates/jmap-backend-core/src/oauth2.rs:208
+msgid "the account has no OAuth 2.0 access token"
+msgstr ""
+
+#. TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
+#. token that was empty rather than absent.
+#: rust/crates/jmap-backend-core/src/oauth2.rs:229
+msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
 #: rust/crates/jmap-config/src/backend.rs:287
@@ -70,7 +122,7 @@ msgstr ""
 #. TRANSLATORS: the name of an account type, in the list of account types
 #. Evolution offers when adding an account. A protocol name — leave it as it is
 #. unless your language writes it in another script.
-#: rust/crates/jmap-config/src/oauth2_service.rs:162
+#: rust/crates/jmap-config/src/oauth2_service.rs:170
 #: rust/crates/jmap-mail/src/provider.rs:58
 msgid "JMAP"
 msgstr ""
