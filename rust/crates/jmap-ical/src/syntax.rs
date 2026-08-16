@@ -486,6 +486,16 @@ fn value_text(value: &ICalendarValue) -> Option<(String, bool)> {
 /// pre-standard-time observances (`+001932` for Amsterdam before 1937), which no
 /// appointment is in; the [`event`](crate::event) mapping reads and writes the
 /// six-digit form regardless, so nothing above here assumes minutes.
+///
+/// Dropping them from a *western* sub-minute offset is the one case where the
+/// narrowing does not merely lose precision: `-000052`, local mean time in
+/// Accra, comes back as `-0000`, which §3.3.14 forbids outright — the sign says
+/// which side of UTC the zone is on and there is no negative zero. So it is
+/// written the way the truncated value reads, `+0000`. Not a rounding decision
+/// this layer is making: the seconds are gone before it sees them, and zero is
+/// what is left. Writing the forbidden spelling instead would leave the reader
+/// above with a value it can only refuse, and one unreadable observance costs a
+/// whole `VTIMEZONE`.
 fn date_time_text(stamp: &PartialDateTime) -> String {
     let kind = match (stamp.year.is_some(), stamp.hour.is_some()) {
         (true, true) => ICalendarValueType::DateTime,
@@ -496,7 +506,10 @@ fn date_time_text(stamp: &PartialDateTime) -> String {
     let mut out = String::new();
     // Writing into a String cannot fail.
     let _ = stamp.format_as_ical(&mut out, &kind);
-    out
+    match out == "-0000" {
+        true => "+0000".to_owned(),
+        false => out,
+    }
 }
 
 /// A parameter value as the mapping reads it. Everything this crate writes is

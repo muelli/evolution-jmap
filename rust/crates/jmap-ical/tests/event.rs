@@ -2724,6 +2724,221 @@ fn a_transition_rule_that_has_stopped_stops_being_counted() {
 }
 
 #[test]
+fn a_transition_named_by_a_weekday_and_a_run_of_dates_is_counted() {
+    // The shape libical's tzdata renderer writes for tzdata's own commonest
+    // idiom, "the first Sunday on or after the 25th": a `BYDAY` with no ordinal
+    // beside a `BYMONTHDAY` listing the run of dates that Sunday can fall on.
+    // §3.3.10 makes `BYMONTHDAY` expand and `BYDAY` limit, so the two together
+    // name exactly one day — the run is seven long, and a weekday occurs once
+    // in any seven consecutive dates.
+    //
+    // Ireland, whose autumn transition tzdata states as `Sun>=23`. Measured
+    // against libical's own definition in `jmap-backend-cal/tests/zones.rs`;
+    // spelled out here so the arithmetic has a test that needs no EDS.
+    let definition = "BEGIN:VTIMEZONE\r\n\
+         TZID:Europe/Dublin\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+0000\r\n\
+         TZOFFSETTO:+0100\r\n\
+         TZNAME:IST\r\n\
+         DTSTART:19810329T010000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=25,26,27,28,29,30,31;BYMONTH=3\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0100\r\n\
+         TZOFFSETTO:+0000\r\n\
+         TZNAME:GMT\r\n\
+         DTSTART:19811025T020000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+    for (until, read) in [
+        // 2026-03-29 is the last Sunday of March, so summer time is in force by
+        // the 31st and the clock reads an hour past UTC.
+        ("20260331T120000Z", "2026-03-31T13:00:00"),
+        // And on the 25th it is not: that year's transition is on the 29th.
+        ("20260325T120000Z", "2026-03-25T12:00:00"),
+        // The autumn rule is the one whose run of dates crosses a month end in
+        // other years; here it puts the zone back to +0000 from the 25th.
+        ("20261101T120000Z", "2026-11-01T12:00:00"),
+    ] {
+        let ics = recurring_in("Europe/Dublin", definition, until);
+
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+    }
+}
+
+/// A zone whose one transition is stated by a rule that does not fire every
+/// year: the 25th of March, but only when it is a Sunday — 1990, 2001, 2007,
+/// 2012, 2018 and then nothing until 2029. Nothing moves the clocks back, so
+/// whatever the rule last did is still in force.
+fn sparsely(rule: &str) -> String {
+    format!(
+        "BEGIN:VTIMEZONE\r\n\
+         TZID:Example/Sparse\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0100\r\n\
+         TZOFFSETTO:+0000\r\n\
+         TZNAME:XST\r\n\
+         DTSTART:19700101T000000\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+0000\r\n\
+         TZOFFSETTO:+0100\r\n\
+         TZNAME:XDT\r\n\
+         DTSTART:19840325T000000\r\n\
+         RRULE:{rule}\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n"
+    )
+}
+
+#[test]
+fn a_transition_rule_that_skips_years_is_searched_for_further_back_than_two() {
+    // Looking at the target's year and the one before it is enough for a rule
+    // that fires every year, which a transition rule almost always is. A rule
+    // that skips years is the case that pair cannot answer: the last time the
+    // 25th of March was a Sunday was 2018, so a search two years deep finds
+    // nothing in a rule that has fired five times — and "found nothing" is
+    // indistinguishable, from inside the search, from a rule that never fires.
+    //
+    // The clocks went forward in 2018 and nothing here puts them back, so the
+    // end of March 2026 is an hour past UTC.
+    let ics = recurring_in(
+        "Example/Sparse",
+        &sparsely("FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=25;BYMONTH=3"),
+        "20260331T120000Z",
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T13:00:00"));
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn a_rule_the_search_found_no_occurrence_of_is_refused_rather_than_read_as_silent() {
+    // The other end of the same search. A rule whose shape is understood but
+    // which fired in none of the years looked at is not a rule that never
+    // fired: it may have fired before them, and reading it as silent would
+    // leave the zone described by whichever *other* observance was latest —
+    // here the 1970 one, which would answer +0000 and be an hour out for every
+    // instant since the rule last ran.
+    //
+    // The 30th of February is the flat case of it: no year has one, the rule
+    // reaches back to 1970, and forty years of searching does not get there.
+    let ics = recurring_in(
+        "Example/Sparse",
+        &sparsely("FREQ=YEARLY;BYMONTHDAY=30;BYMONTH=2"),
+        "20260331T120000Z",
+    );
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T12:00:00Z"));
+    assert!(!maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn an_observance_moving_off_a_sub_minute_offset_west_of_utc_still_describes_the_zone() {
+    // Accra, whose earliest observance leaves local mean time — 52 seconds west
+    // of Greenwich — for GMT in 1915. calcard's offset parser reads four digits
+    // and no more, so the value arrives with its seconds dropped, and dropping
+    // them from a *western* one leaves `-0000`: a spelling §3.3.14 forbids
+    // outright, because the sign says which side of UTC the zone is on and
+    // there is no negative zero.
+    //
+    // So the observance's offset was unreadable, and an observance whose offset
+    // cannot be read costs the whole definition. A zone that has not moved its
+    // clocks since 1915 was refused over the offset it moved away from then —
+    // which is not something an appointment in Accra today is in any way about.
+    let definition = "BEGIN:VTIMEZONE\r\n\
+         TZID:Africa/Accra\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:-000052\r\n\
+         TZOFFSETTO:+0000\r\n\
+         TZNAME:GMT\r\n\
+         DTSTART:19151102T000000\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+    let ics = recurring_in("Africa/Accra", definition, "20260331T120000Z");
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T12:00:00"));
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn a_weekday_and_a_run_of_dates_naming_two_of_them_is_refused() {
+    // The pair is a single transition only while the run holds one occurrence
+    // of the weekday, and eight consecutive dates hold two: 2026-03-22 and
+    // 2026-03-29 are both Sundays. That is a rule stating a set — the thing
+    // this module refuses — and taking the earlier or the later of them would
+    // be a guess.
+    //
+    // Which of the two it is depends on the year, so the refusal has to be
+    // decided per year rather than from the shape of the rule: 2025's March has
+    // exactly one Sunday in the same run, and reading the rule off *that* year
+    // would answer with an offset 2026 does not have.
+    let definition = berlin("Europe/Berlin").replace(
+        "FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3",
+        "FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=22,23,24,25,26,27,28,29;BYMONTH=3",
+    );
+    let ics = recurring_in("Europe/Berlin", &definition, "20260331T120000Z");
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T12:00:00Z"));
+    assert!(!maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
+fn a_year_a_transition_rule_does_not_happen_in_is_a_year_it_does_not_happen_in() {
+    // A run holding no occurrence of its weekday is not a rule to throw out:
+    // §3.3.10 reads it as a year without an occurrence, and a zone whose clocks
+    // did not go forward that spring is a zone still on winter time. Which is
+    // only answerable because the search goes back over the years rather than
+    // looking at the target's own and the one before it.
+    //
+    // The run below skips 2026-03-29, the only Sunday it spans, so Berlin never
+    // leaves +0100 that year and the 31st of March reads an hour past UTC
+    // rather than two. The autumn rule is untouched and still ran in 2025, so
+    // the offset in force is the one it moved to.
+    let definition = berlin("Europe/Berlin").replace(
+        "FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3",
+        "FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=25,26,27,28,30,31;BYMONTH=3",
+    );
+    let ics = recurring_in("Europe/Berlin", &definition, "20260331T120000Z");
+
+    let rules = ical_to_event(&ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T13:00:00"));
+    assert!(maps_recurrence_rule(&rules[0]));
+}
+
+#[test]
 fn a_zone_whose_transitions_cannot_be_worked_out_leaves_the_until_alone() {
     // The conversion is only as good as the definition it reads, so a rule this
     // cannot count occurrences of takes the whole zone with it and the `UNTIL`
