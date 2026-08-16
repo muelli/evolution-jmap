@@ -32,8 +32,9 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
+use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
-use jmap_cal_sync::{CalSync, SyncError};
+use jmap_cal_sync::{CalSync, SyncError, Unsendable};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -326,10 +327,55 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
             }
         }
         // An iCalendar object Evolution handed us that the mapping cannot read:
-        // the argument was bad, not the server. A component it *can* read but
-        // cannot state as JSCalendar is the same answer — the save was refused
-        // over what the component says, and the message names what to change.
-        SyncError::ICal(_) | SyncError::Unsendable(_) => invalid_arg(&failure.to_string()),
+        // the argument was bad, not the server. The message is the mapping's
+        // own account of what it could not parse — developer-facing text, and
+        // deliberately not translated, because a user cannot act on it and a
+        // bug report should quote it in the language it was written in.
+        SyncError::ICal(_) => invalid_arg(&failure.to_string()),
+        // A component we could read but cannot state as JSCalendar. The same
+        // code — the save was refused over what the component says, so the
+        // argument was bad rather than the server — and the one message here a
+        // user is expected to read and act on, so this one is translated.
+        SyncError::Unsendable(reason) => invalid_arg(&refusal(reason)),
+    }
+}
+
+/// What the user is told when a create was refused over its recurrence.
+///
+/// The sentence lives here rather than in `jmap-cal-sync` because this is where
+/// it can be translated: gettext is bound on this side of the FFI, and the sync
+/// layer — whose tests link no EDS — cannot reach it. So the refusal arrives as
+/// an [`Unsendable`] naming what could not be stated, and the wording is chosen
+/// here, at the point where the user's language is also consulted.
+///
+/// Both messages end by naming the spelling that does work. A refusal that only
+/// says no leaves the user to guess which part of an appointment offended, and
+/// the answer — state the recurrence as a repeat count rather than an end date —
+/// is one sentence long.
+fn refusal(reason: &Unsendable) -> String {
+    match reason {
+        Unsendable::RecurrenceEnd { until, zone } => translate_with(
+            // TRANSLATORS: shown when a new recurring appointment could not be
+            // saved. %1$s is the date and time the series ends, as it was
+            // written in the appointment; %2$s is a time zone identifier such
+            // as "Europe/Berlin".
+            c"This event repeats until %1$s, and the time zone it is in, \
+              %2$s, is not defined in this calendar entry in a way that \
+              instant can be converted out of — so the event was not \
+              created. Stating the recurrence as a repeat count works \
+              instead.",
+            &[until.as_str(), zone.as_str()],
+        ),
+        // No placeholders, so no arguments: the mapping knows the rule cannot
+        // be written back and nothing more precise than that is true.
+        Unsendable::Recurrence => translate(
+            // TRANSLATORS: shown when a new recurring appointment could not be
+            // saved, and the reason is not something the user can be pointed
+            // at more precisely than this.
+            c"This event repeats in a way that cannot be stored on the \
+              server, so it was not created. Stating the recurrence as a \
+              repeat count is the spelling that always works.",
+        ),
     }
 }
 

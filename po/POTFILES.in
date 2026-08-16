@@ -11,8 +11,14 @@
 # convention and what the extraction has to be run from:
 #
 #   xgettext --files-from=po/POTFILES.in -L C --from-code=UTF-8 \
-#            --keyword=N_ --keyword=translate --add-comments=TRANSLATORS \
+#            --keyword=N_ --keyword=translate --keyword=translate_with \
+#            --add-comments=TRANSLATORS \
 #            --package-name=evolution-jmap -o po/evolution-jmap.pot
+#
+# Every function in `jmap-backend-core`'s `i18n` that takes a msgid is a
+# keyword here, `translate_with` included — its first argument is the message
+# and its later ones are the values filled into the message's `%1$s`
+# placeholders, which is the position `--keyword` defaults to.
 #
 # `-L C` because gettext 0.21 has no Rust parser. It extracts our markers
 # correctly — `N_(c"…")` reads as a call with a string argument either way — but
@@ -40,4 +46,5 @@
 #   them deliberately: translating them makes bug reports unreadable and gains
 #   no user anything.
 
+rust/crates/jmap-backend-cal/src/ops.rs
 rust/crates/jmap-mail/src/provider.rs

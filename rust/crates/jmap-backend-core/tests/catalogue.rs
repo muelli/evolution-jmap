@@ -44,7 +44,7 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use jmap_backend_core::i18n::{DOMAIN, bind_to, translate};
+use jmap_backend_core::i18n::{DOMAIN, bind_to, translate, translate_with};
 
 /// The message the catalogue translates, and what it translates it to.
 ///
@@ -54,6 +54,17 @@ use jmap_backend_core::i18n::{DOMAIN, bind_to, translate};
 /// mangle it.
 const MSGID: &CStr = c"For reading and storing mail on JMAP servers.";
 const MSGSTR: &str = "Zum Lesen und Speichern von E-Mail auf JMAP-Servern.";
+
+/// A message whose arguments the translation puts in the other order.
+///
+/// This is the whole reason the placeholders are numbered rather than being a
+/// bare `%s` each: word order is not a property a sentence keeps across
+/// languages, and a translator who cannot move the arguments has to choose
+/// between a natural sentence and a correct one. Sorts before [`MSGID`] — `%`
+/// is below `F` — which the `.mo` format needs, there being no hash table to
+/// find an entry by any other route.
+const ORDERED_MSGID: &CStr = c"%1$s could not be stated in %2$s";
+const ORDERED_MSGSTR: &str = "In %2$s ließ sich %1$s nicht ausdrücken";
 
 /// The language the catalogue is filed under.
 ///
@@ -79,7 +90,7 @@ fn install_catalogue(root: &Path) -> PathBuf {
     root.to_path_buf()
 }
 
-/// The two entries of the catalogue, as a `.mo` file.
+/// The entries of the catalogue, as a `.mo` file.
 ///
 /// The header entry — msgid `""` — is not decoration: its msgstr is where the
 /// charset is declared, and without it gettext has no idea what encoding the
@@ -88,8 +99,12 @@ fn install_catalogue(root: &Path) -> PathBuf {
 /// (`0` in both hash fields) gettext binary-searches the original table, so
 /// the entries have to be in ascending msgid order.
 fn compile_mo() -> Vec<u8> {
-    let entries: [(&str, &str); 2] = [
+    let entries: [(&str, &str); 3] = [
         ("", "Content-Type: text/plain; charset=UTF-8\n"),
+        (
+            ORDERED_MSGID.to_str().expect("an ASCII msgid"),
+            ORDERED_MSGSTR,
+        ),
         (MSGID.to_str().expect("an ASCII msgid"), MSGSTR),
     ];
 
@@ -182,6 +197,14 @@ fn a_catalogue_under_the_bound_directory_is_the_one_gettext_reads() {
         Some(locale) => {
             println!("catalogue lookup exercised under locale {locale}");
             assert_eq!(translate(MSGID), MSGSTR);
+            // The translation moved the arguments, and the arguments went
+            // where it moved them to — the property numbered placeholders
+            // exist for, and one only a real catalogue can show: with no `.mo`
+            // to find, the template is the msgid and the order never changes.
+            assert_eq!(
+                translate_with(ORDERED_MSGID, &["an end date", "Europe/Berlin"]),
+                "In Europe/Berlin ließ sich an end date nicht ausdrücken"
+            );
         }
         None => {
             println!(
@@ -189,6 +212,10 @@ fn a_catalogue_under_the_bound_directory_is_the_one_gettext_reads() {
                  leaves the message alone instead"
             );
             assert_eq!(translate(MSGID), MSGID.to_str().expect("an ASCII msgid"));
+            assert_eq!(
+                translate_with(ORDERED_MSGID, &["an end date", "Europe/Berlin"]),
+                "an end date could not be stated in Europe/Berlin"
+            );
         }
     }
 

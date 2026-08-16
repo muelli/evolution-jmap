@@ -31,7 +31,7 @@ use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter, RecurrenceR
 use jmap_proto::{Id, State};
 use serde_json::Value;
 
-pub use error::SyncError;
+pub use error::{SyncError, Unsendable};
 
 /// One event, as the meta backend wants it: an identifier, a change token and
 /// the object itself.
@@ -308,41 +308,34 @@ impl CalSync {
     }
 }
 
-/// What a user is told when a create is refused over its recurrence.
+/// Why a create was refused over its recurrence.
 ///
-/// Two messages, because there are two things worth saying and only one of them
+/// Two answers, because there are two things worth saying and only one of them
 /// is actionable. Where the rule's end is what could not be stated — see
-/// [`unstateable_until`] — the message names the instant and the zone it could
+/// [`unstateable_until`] — the reason carries the instant and the zone it could
 /// not be stated in, which between them identify the appointment to change and
-/// the `VTIMEZONE` to look at. Every other refusal gets the general message:
-/// the mapping knows the rule cannot be written back, but nothing about *which*
+/// the `VTIMEZONE` to look at. Every other refusal is the general one: the
+/// mapping knows the rule cannot be written back, but nothing about *which*
 /// part of it would help someone reading a dialog.
 ///
 /// Naming the zone matters more than it looks. Since the document's own
 /// `VTIMEZONE` became the conversion, an end date stated as a UTC instant is
 /// the case that *works*; what is left is a calendar entry whose zone is
-/// missing or written unreadably, and a message that did not say which zone
+/// missing or written unreadably, and a refusal that did not say which zone
 /// would leave the user with an error they cannot tell apart from the one this
 /// code used to give for the ordinary case.
 ///
-/// Not marked for translation. `jmap-backend-core`'s `i18n` is where that
-/// happens and this crate does not depend on it — an EDS-linked crate is not
-/// something the sync layer's tests can pull in — so making these translatable
-/// means moving the phrasing to the GObject layer and giving
-/// [`SyncError::Unsendable`] a reason to carry instead of prose. Logged as a
-/// blocker rather than done here.
-fn unsendable_recurrence(rule: &RecurrenceRule, time_zone: Option<&str>) -> String {
+/// The sentence the user reads is `jmap_backend_cal::ops`'s, over these two
+/// values — that is where gettext is bound and where the string can therefore
+/// be translated, which is the whole reason this hands back a reason rather
+/// than prose.
+fn unsendable_recurrence(rule: &RecurrenceRule, time_zone: Option<&str>) -> Unsendable {
     match (unstateable_until(rule), time_zone) {
-        (Some(until), Some(zone)) => format!(
-            "this event repeats until {until}, and the time zone it is in, \
-             {zone}, is not defined in this calendar entry in a way that \
-             instant can be converted out of — so the event was not created. \
-             Stating the recurrence as a repeat count works instead."
-        ),
-        _ => "this event repeats in a way that cannot be stored on the server, \
-              so it was not created — stating the recurrence as a repeat count \
-              is the spelling that always works"
-            .to_owned(),
+        (Some(until), Some(zone)) => Unsendable::RecurrenceEnd {
+            until: until.to_owned(),
+            zone: zone.to_owned(),
+        },
+        _ => Unsendable::Recurrence,
     }
 }
 

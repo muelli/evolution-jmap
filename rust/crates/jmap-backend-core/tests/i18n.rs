@@ -12,7 +12,7 @@
 //!
 //! [`bind`]: jmap_backend_core::i18n::bind
 
-use jmap_backend_core::i18n::{DOMAIN, LOCALE_DIR, bind, translate};
+use jmap_backend_core::i18n::{DOMAIN, LOCALE_DIR, bind, translate, translate_with};
 
 /// The binding gettext reports is the directory the build put in the binary.
 ///
@@ -55,6 +55,59 @@ fn a_message_with_no_catalogue_is_returned_untranslated() {
     bind();
     let msgid = c"For reading and storing mail on JMAP servers.";
     assert_eq!(translate(msgid), msgid.to_str().expect("ASCII"));
+}
+
+/// A message with arguments in it comes back with the arguments in it.
+///
+/// The plain case, and the one every caller writes: no catalogue, so the
+/// template is the msgid, and each `%N$s` becomes the argument it numbers.
+#[test]
+fn a_messages_placeholders_are_filled_from_its_arguments() {
+    bind();
+    assert_eq!(
+        translate_with(c"%1$s is in %2$s", &["a meeting", "Europe/Berlin"]),
+        "a meeting is in Europe/Berlin"
+    );
+}
+
+/// The arguments are read in one pass, not substituted one after another.
+///
+/// The values here are a server's, a user's, or a time zone database's — never
+/// this code's — so one of them can perfectly well contain something that looks
+/// like a placeholder. Substituting argument by argument would then let the
+/// first argument's text be rewritten by the second, which is how a value from
+/// outside starts choosing what the message says. A single left-to-right scan
+/// over the template cannot do that: what an argument expands to is output, not
+/// input.
+#[test]
+fn an_argument_that_looks_like_a_placeholder_is_not_expanded_again() {
+    bind();
+    assert_eq!(
+        translate_with(c"%1$s, %2$s", &["%2$s", "Berlin"]),
+        "%2$s, Berlin"
+    );
+}
+
+/// A placeholder no argument answers is left standing, and so is a stray `%`.
+///
+/// Both are a broken translation rather than a broken program, and there is
+/// nothing sensible to put in their place — so the marker is shown as it is
+/// written. That is the visible failure a translator can be told about, where
+/// dropping it silently would leave a sentence missing a word, and panicking
+/// would take a module down over a `.mo` file.
+///
+/// The wider point is that none of this is `printf`. Handing a translated
+/// string to a real format function is the classic way a catalogue becomes an
+/// attack on the program that loads it — a `%n` in the translation, and the
+/// arguments the caller passed are not what gets read. Here the only thing that
+/// means anything is `%N$s`, and everything else is a character.
+#[test]
+fn a_placeholder_with_no_argument_stays_as_written() {
+    bind();
+    assert_eq!(
+        translate_with(c"%1$s, %7$s, 50%, %d, %n", &["one"]),
+        "one, %7$s, 50%, %d, %n"
+    );
 }
 
 /// The domain is the one Camel and gettext file a catalogue under.
