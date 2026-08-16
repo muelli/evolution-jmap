@@ -23,6 +23,13 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
         clang \
         cmake \
         curl \
+        # `file` is what dpkg-shlibdeps (hence cpack -G DEB) uses to find the
+        # binaries whose sonames become the package's Depends. Without it,
+        # CPackDeb aborts with "file utility is not available" — which the
+        # stock-runner CI never hit, but the pinned release image did on the
+        # first tag. gettext gives msgfmt for the po/ catalogue rule.
+        file \
+        gettext \
         git \
         libclang-dev \
         ninja-build \
