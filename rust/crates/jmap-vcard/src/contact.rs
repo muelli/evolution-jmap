@@ -57,8 +57,11 @@
 //! vCard date line states one calendar day and nothing else, so a date that
 //! names no single day gets no line — not because the line has nowhere to put
 //! it, but because EDS reads anything short of a whole date as *no* date and
-//! would show the user 1000-01-01. A point in time crosses as the day it
-//! falls on, leaving the hour behind for the save to patch around
+//! would show the user 1000-01-01. A whole date before the year 1000 gets no
+//! line for the neighbouring reason: EDS reads it correctly and writes it back
+//! clamped, so the line would come home naming a different millennium — see
+//! `Day::survives_the_field_it_lands_in`. A point in time crosses as the
+//! day it falls on, leaving the hour behind for the save to patch around
 //! ([`states_a_point_in_time`]). Of the three kinds, `birth` goes on RFC 2426
 //! §3.1.5's `BDAY` and `wedding` on the line EDS reads `E_CONTACT_ANNIVERSARY`
 //! off; `death` has no line at all, so `anniversaries` too is a map of which
@@ -1091,15 +1094,17 @@ pub fn anniversary_date(anniversary: &Anniversary) -> Option<String> {
     let date = anniversary.date.as_ref()?;
     // A `Timestamp` states a point in time. The day it falls on is read in
     // UTC, which is the only zone the card names.
-    if let Some(utc) = date.get("utc").and_then(Value::as_str) {
-        return read_day(utc).map(|day| day.text());
-    }
-    let day = Day {
-        year: member(date, "year")?,
-        month: member(date, "month")?,
-        day: member(date, "day")?,
+    let day = if let Some(utc) = date.get("utc").and_then(Value::as_str) {
+        read_day(utc)?
+    } else {
+        let day = Day {
+            year: member(date, "year")?,
+            month: member(date, "month")?,
+            day: member(date, "day")?,
+        };
+        day.is_a_date().then_some(day)?
     };
-    day.is_a_date().then(|| day.text())
+    day.survives_the_field_it_lands_in().then(|| day.text())
 }
 
 /// Whether an anniversary is dated by a point in time (RFC 9553 §2.8.1's
@@ -1124,6 +1129,10 @@ fn anniversary_property(kind: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
+/// The earliest year `e_contact_date_to_string()` will write, measured against
+/// libebook-contacts 3.52. See [`Day::survives_the_field_it_lands_in`].
+const EARLIEST_YEAR: u32 = 1000;
+
 /// One calendar day: the whole of what a vCard 3.0 date line can state.
 struct Day {
     year: u32,
@@ -1145,6 +1154,26 @@ impl Day {
         (1..=9999).contains(&self.year)
             && (1..=12).contains(&self.month)
             && (1..=31).contains(&self.day)
+    }
+
+    /// Whether EDS will hand this day back the day it is, so that a line
+    /// stating it can be believed when it comes home.
+    ///
+    /// `e_contact_date_to_string()` CLAMPs each part into the range it can
+    /// print — the year to [`EARLIEST_YEAR`]`..=9999`, the month to `1..=12`,
+    /// the day to `1..=31`. Reading is not clamped, so a line whose year is
+    /// under a thousand parses back correctly and is *written* back as the
+    /// year 1000: `eds-sys/tests/contacts.rs` measures both halves, up to the
+    /// `BDAY:0800-06-21` that becomes `BDAY:1000-06-21` the moment the field
+    /// is set.
+    ///
+    /// The month and the day need no check of their own — [`Self::is_a_date`]
+    /// already refuses everything outside the ranges the clamp keeps — so this
+    /// is the year alone. A day it refuses is stated on no line, which leaves
+    /// it invisible to the user but leaves the server's date alone: an
+    /// anniversary no line states is one `diff_entries` will not patch.
+    fn survives_the_field_it_lands_in(&self) -> bool {
+        self.year >= EARLIEST_YEAR
     }
 
     /// The day as the `PartialDate` a save writes when the user retyped one.

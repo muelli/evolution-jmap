@@ -13,7 +13,7 @@
 //! synthetic per-slot fields. This test suite verifies these field properties
 //! directly against the EDS type system and vCard field mappings.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 
 use eds_sys::*;
 
@@ -213,6 +213,86 @@ fn e_contact_date_parsing_and_formatting() {
         assert_eq!((*compact).month, 3);
         assert_eq!((*compact).day, 27);
         e_contact_date_free(compact);
+    }
+}
+
+#[test]
+fn a_date_before_the_year_1000_is_written_back_as_the_year_1000() {
+    // `e_contact_date_to_string()` CLAMPs each part into the range it can
+    // print: the year to 1000..=9999, the month to 1..=12, the day to 1..=31.
+    // Reading is not clamped, so the round trip is lossy in one direction
+    // only, and silently.
+    //
+    // This is why `jmap-vcard` states no date line for a year under 1000: the
+    // month and the day survive, the millennium does not.
+    unsafe {
+        for (text, written) in [
+            ("0800-06-21", "1000-06-21"),
+            ("0999-12-31", "1000-12-31"),
+            ("0001-01-01", "1000-01-01"),
+            // The first year it can state, and the last, both unchanged.
+            ("1000-01-01", "1000-01-01"),
+            ("9999-12-31", "9999-12-31"),
+        ] {
+            let stated = CString::new(text).expect("no interior NUL");
+            let parsed = e_contact_date_from_string(stated.as_ptr());
+            assert!(!parsed.is_null(), "{text} did not parse");
+            let formatted = e_contact_date_to_string(parsed);
+            assert!(!formatted.is_null());
+            assert_eq!(
+                CStr::from_ptr(formatted).to_str().unwrap(),
+                written,
+                "{text} was written back as something else"
+            );
+            g_free(formatted.cast());
+            e_contact_date_free(parsed);
+        }
+    }
+}
+
+#[test]
+fn setting_a_birthday_before_the_year_1000_rewrites_the_bday_line() {
+    // The clamp reaching a whole card, which is the shape the hazard actually
+    // takes: a line merely passing through keeps the year it arrived with,
+    // because `EVCard` hands back the attribute it parsed. It is *setting* the
+    // field — which the contact editor does to every field it shows, every
+    // time the user presses Save — that rebuilds the line from the clamped
+    // numbers.
+    unsafe {
+        let contact = e_contact_new_from_vcard(
+            c"BEGIN:VCARD\r\nVERSION:3.0\r\nUID:k8\r\nFN:Karl\r\nBDAY:0800-06-21\r\nEND:VCARD\r\n"
+                .as_ptr(),
+        );
+
+        let untouched = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        assert!(
+            CStr::from_ptr(untouched)
+                .to_str()
+                .unwrap()
+                .contains("BDAY:0800-06-21"),
+            "an untouched line was rewritten"
+        );
+        g_free(untouched.cast());
+
+        // What the editor does: read the field out and put it back.
+        let date = e_contact_get(contact, E_CONTACT_BIRTH_DATE).cast::<EContactDate>();
+        assert!(!date.is_null());
+        assert_eq!((*date).year, 800, "reading is not clamped");
+        e_contact_set(contact, E_CONTACT_BIRTH_DATE, date.cast());
+
+        let rewritten = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        assert!(
+            CStr::from_ptr(rewritten)
+                .to_str()
+                .unwrap()
+                .contains("BDAY:1000-06-21"),
+            "the clamp did not reach the line: {}",
+            CStr::from_ptr(rewritten).to_str().unwrap()
+        );
+        g_free(rewritten.cast());
+
+        e_contact_date_free(date);
+        g_object_unref(contact.cast());
     }
 }
 

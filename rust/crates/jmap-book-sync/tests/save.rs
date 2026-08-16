@@ -1551,6 +1551,39 @@ fn a_date_the_vcard_could_not_state_survives_a_save_it_was_never_part_of() {
 }
 
 #[test]
+fn a_birthday_eds_would_move_to_the_year_1000_is_not_stated_and_not_lost() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Karl der Grosse", "karl@example.com");
+    // `e_contact_date_to_string()` CLAMPs the year to 1000..=9999, so a date
+    // before that comes back off the contact editor as the year 1000 — see
+    // `eds-sys/tests/contacts.rs`, where it is measured. Were the line
+    // written, the first save the user made for any reason at all would patch
+    // 800 to 1000 behind their back.
+    fixture.patch(
+        &id,
+        json!({"anniversaries": {"k8": {
+            "kind": "birth",
+            "date": {"@type": "PartialDate", "year": 800, "month": 6, "day": 21},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("BDAY"), "{vcard}");
+
+    // An edit somewhere else entirely, which is how the user reaches this.
+    let edited = vcard.replace("karl@example.com", "karl@aachen.example");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let anniversaries = fixture.card(&id).anniversaries.expect("anniversaries");
+    assert_eq!(
+        anniversaries["k8"].date,
+        Some(json!({"@type": "PartialDate", "year": 800, "month": 6, "day": 21})),
+        "a date the vCard never stated was rewritten: {anniversaries:?}"
+    );
+}
+
+#[test]
 fn a_save_that_changes_nothing_sends_no_patch() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
