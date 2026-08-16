@@ -27834,3 +27834,69 @@ the consent exchange, which needs a display this VM lacks, and is
 `insert_widgets`'s job in a later, GUI-verified increment. Tested against
 `jmap-mock` the same way `jmap-client`'s own discovery tests are, with no
 `ESource` and no display needed.
+
+**Delivered as scoped.** `jmap_config::oauth2_setup::discover_and_register`
+takes a `Transport`, a host/port/secure triple and a redirect URI, and: builds
+the issuer with `jmap_backend_core::source::origin` (the same host validation
+and TLS-for-non-loopback rule every other JMAP connection in this project is
+held to, so a hand-typed OAuth2 host gets the same refusal a Basic-auth one
+would); calls `jmap_client::oauth::discover`; refuses a deployment that does
+not offer the authorization-code grant (`Error::UnsupportedGrant`) or no RFC
+7591 registration endpoint (`Error::NoRegistration`, since JMAP has no
+registry of pre-issued client ids the way EDS's compiled-in Google/Outlook/
+Yahoo services do); and otherwise calls `jmap_client::oauth::register_client`
+with this client's name (translated — the one string here a user reads, on
+whichever consent page the real IdP renders) and the caller's redirect URI,
+returning a `Config` ready for `oauth2::apply` to store unchanged.
+
+Deliberately does not choose the redirect URI or touch a browser: that is the
+consent exchange, still blocked on a display this VM lacks, and is
+`insert_widgets`'s job in a later increment once it exists. This function is
+therefore not reachable from the dialog yet either — it is the network glue
+the next increment (an OAuth2 toggle plus a "discover and register" action in
+`insert_widgets`) will call, not the wiring itself.
+
+**Tested against `jmap-mock`**, the same fixtures `jmap-client`'s own
+`oauth_discovery.rs` already drives, one layer up: a full discover+register
+round trip, the registration request naming this client and the given
+redirect URI, a server that issues a secret anyway, a 404 (no OAuth2 at all),
+no authorization-code grant, no registration endpoint, and an insecure
+non-loopback host refused before any network call. No `ESource`, no GTK, no
+display needed — the same reason the lower two layers this composes were
+themselves buildable and testable here.
+
+Gates: `cargo build -p jmap-config`, `cargo test -p jmap-config --test
+oauth2_setup` (7 new tests), `sh po/extract.sh` (one new msgid, "Evolution",
+with a TRANSLATORS comment; `jmap-backend-core`'s `potfiles.rs` suite back to
+5/5 green after listing the new file). `cargo test --workspace --exclude
+example-module --locked` and `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` both clean; the eleven
+`jmap-functional` failures outside `ctest` are the pre-existing, documented
+ones (`JMAP_FUNCTIONAL_BOOK_CLIENT` unset). `cargo fmt --all --check` clean
+after one reformat. `cargo doc -p jmap-config --no-deps` has the same five
+pre-existing warnings in `oauth2.rs` as every prior session and no new ones.
+`ninja -C build` (release) then `ctest --test-dir build` 15/15, `rust-test-eds`
+and `translations` included. `cargo clean --profile dev` after the CMake gate,
+per the disk-space lesson; `/` stayed at 58-82% throughout. Two new files, both
+carrying the SPDX header; `reuse lint` itself is not runnable on this VM (no
+`pipx`/`uvx`), so this was checked by hand rather than by the tool. One new
+dependency edge, `jmap-config` on `evolution-jmap-client` (already linked
+transitively via `jmap-backend-collection`'s dev-dependency, so nothing new to
+vendor) — `Cargo.lock`'s diff is three added lines, no version bumps.
+
+**Not a milestone claim.** This is real-server readiness (roadmap priority
+2), not M7, and it is one increment of it, not the whole of "OAuth2 auth via
+EDS's OAuth2 source support" — the consent flow and the dialog wiring remain.
+
+**Next session**: wire an OAuth2 choice into `insert_widgets` — a toggle or a
+second server-settings shape, a "discover and register" action that calls
+this session's `discover_and_register` off the GTK main thread (a blocking
+network call cannot run on it) and stores the result via `oauth2::apply`, and
+`[Authentication] Method` set to `oauth2_service::NAME` when it succeeds. The
+actual consent step (sending the user to `authorization_endpoint`, capturing
+the redirect) still needs a browser and a display this VM lacks, so that part
+stays "needs human verification in real Evolution" whenever it lands.
+Unchanged blockers: M10 has no CI matrix; the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier;
+`docs/BACKLOG.md`'s contact/vCard and calendar/iCal fidelity items are all
+still parked there.
