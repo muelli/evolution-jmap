@@ -28518,3 +28518,72 @@ the account-creation half is missing. M10 still needs `Containerfile.ci`
 growth, out of these sessions' hard rules. `docs/BACKLOG.md` gained one
 cross-cutting item (`ConnectError`'s messages are not marked translatable —
 pre-existing, widened by two strings, not a regression).
+
+## 2026-08-16 (two-hundred-and-ninety-ninth session)
+
+**Claiming: verify and tag M9 COMPLETE.** `git fetch origin` at claim time
+shows `origin/master` unchanged at `0ba07dc` (the 298th session's tag). Running
+on Sonnet.
+
+Re-surveyed the priority queue from the code rather than the log's word before
+claiming anything. Real-server readiness's live-server harness and
+capability-negotiation robustness are closed; OAuth 2.0 on the connect path
+landed last session. M7's `insert_widgets` module doc (`jmap-config/src/
+backend.rs`) lists only "verification in a real Evolution" as outstanding —
+the OAuth2 discover-and-register wiring three prior sessions escalated for is
+gated on the maintainer's still-unanswered method-chooser-vs-auto-discovery
+question and is, independently, subtle cross-thread FFI/lifetime reasoning
+over raw widget/`ESource` pointers; nothing changed that assessment, so it
+stays un-attempted rather than guessed at on Sonnet. That leaves M9/M10.
+M10 still needs `Containerfile.ci` growth (off-limits). M9's own log entry
+two sessions ago ("M9 milestone tag: both tiers now done") turned out to be
+inaccurate: `docs/MILESTONES.md` has no `M9` line at all, only M1–M6 and M8.
+Whether that gap was a real one or just an unwritten tag was worth settling
+properly rather than either trusting the log's word or re-doing the
+milestone's work from scratch.
+
+**Verified both tiers actually pass on this VM, not just re-read the log.**
+This VM turns out to have every package both M9 CI jobs install
+(`evolution`, `evolution-data-server`, `dbus-daemon`, `Xvfb`,
+`python3-pyatspi` already present) — a rerun of `ci/checks.sh`'s prerequisite
+disk-clean note applied first (`rust/target` was back at 24 GiB from the
+298th session's build; `cargo clean --profile dev` freed it, release
+artifacts survived):
+- `cmake -S . -B build -G Ninja -DENABLE_FUNCTIONAL_TESTS=ON && cmake --build
+  build && ctest --test-dir build -L functional` — **4/4 passed**
+  (`functional-book`, `functional-cal`, `functional-mail`,
+  `functional-transport`), the exact recipe `ci/functional.sh` runs.
+- `sudo cmake --install build --component camel-provider` then
+  `JMAP_MOCKD=.../jmap-mockd GUI_SMOKE_ARTIFACTS=/tmp/gui-smoke-artifacts
+  ci/gui-smoke.sh` — **passed on the first attempt**: `PASS: account 'JMAP
+  mock mail' appeared, inbox has 2 message(s)`. No artifacts left behind (a
+  green run stores nothing, per the script's own design).
+
+Both jobs also exist in `.github/workflows/ci.yml` (`functional`, `gui-smoke`)
+gated on `workflow_dispatch`/a PR label, matching `docs/ROADMAP.md`'s M9
+acceptance text exactly (two layers, headless functional + one GUI smoke
+test, gated rather than on every push). Nothing here needed fixing — this
+was a from-scratch local rerun to have first-hand evidence, not a re-read of
+a green GitHub Actions run this VM cannot see.
+
+**Tagging `M9 COMPLETE`.** Appended to `docs/MILESTONES.md`, dated to the
+commit that landed the milestone's last piece (`bd3ae60`, "ci: run M9 Tier
+2's GUI smoke test in a gated job" — the Tier 2 CI job; layer 1's job
+(`eb5411f`) predates it). This closes a real bookkeeping gap: the milestone
+tracker is supposed to be the machine-readable record the re-audit watcher
+(and any future session) trusts instead of re-deriving milestone status from
+a 28,000-line log by hand every time; it was silently wrong until now.
+
+**No source changes.** `cargo test`/`clippy`/`fmt` were not re-run beyond the
+functional/GUI legs above since no `rust/` file changed; `git status` is
+clean apart from this log and `docs/MILESTONES.md`.
+
+**Next session.** M7's `insert_widgets` OAuth2 wiring remains the one
+substantive item in the current-priority queue, and remains gated on the
+same two things: the maintainer's method-chooser-vs-auto-discovery decision,
+and (independently of that decision) genuinely hard cross-thread FFI
+reasoning this codebase has not attempted before — escalate to
+`claude-opus-5` if it is the best next step and no other tractable Sonnet
+item has turned up by then. M10's container matrix and the GitLab-parity gap
+for M9's two jobs remain out of scope for these hard rules. `docs/
+BACKLOG.md`'s items are all still parked there, unchanged.
