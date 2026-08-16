@@ -647,6 +647,7 @@ dependencies = [
  "glib-sys",
  "gobject-sys",
  "jmap-backend-core",
+ "jmap-config",
  "jmap-mail",
 ]
 

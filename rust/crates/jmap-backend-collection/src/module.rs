@@ -19,6 +19,22 @@
 //! owns every data source in the session — every account, of every kind, not
 //! just this one.
 //!
+//! ## Why the OAuth2 service registers here too
+//!
+//! `evolution-source-registry` (this module's own process) is where a JMAP
+//! account's OAuth2 token actually gets refreshed, not the account-setup
+//! module — checked against evolution-ews's own working implementation
+//! (`src/EWS/registry/module-ews-backend.c`) rather than guessed: it registers
+//! `EOAuth2ServiceOffice365` in exactly this module, beside its own backend
+//! and factory, and nowhere else. One registration is the whole of it because
+//! `EOAuth2ServiceBase` (`jmap_config::oauth2_service`'s own docs point at
+//! `e-oauth2-service-base.c`) is itself an `EExtension` whose
+//! `extensible_type` is `E_TYPE_OAUTH2_SERVICES`; `EOAuth2Services`'s
+//! constructor calls `e_extensible_load_extensions()` on itself before
+//! returning, so any process that later constructs that singleton
+//! instantiates every service registered by then — no manual `g_object_new`
+//! or `e_oauth2_services_add` call needed here.
+//!
 //! ## The C symbols are not here
 //!
 //! [`load`] and [`unload`] are the bodies; the `#[unsafe(no_mangle)]`
@@ -68,6 +84,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
         unsafe {
             remember_backend_type(register_dynamic::<JmapCollectionBackend>(type_module));
             register_dynamic::<JmapCollectionFactory>(type_module);
+            register_dynamic::<jmap_config::oauth2_service::Service>(type_module);
         }
     });
 }

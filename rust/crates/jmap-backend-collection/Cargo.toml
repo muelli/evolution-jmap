@@ -29,6 +29,12 @@ evolution-jmap-collection-sync = { workspace = true }
 gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
+# The `EOAuth2Service` implementation the module load registers alongside the
+# backend and its factory — see module.rs. `jmap-config` dev-depends on this
+# crate for its own account/collection round-trip tests, which is a
+# dev-dependency back-edge and not a cycle: nothing this crate's *library*
+# needs depends on `jmap-config`'s tests.
+jmap-config = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
