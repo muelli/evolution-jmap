@@ -10,7 +10,7 @@
 mod common;
 
 use common::Fixture;
-use jmap_cal_sync::SyncError;
+use jmap_cal_sync::{SyncError, Unsendable};
 use jmap_proto::calendars::NDay;
 use serde_json::{Value, json};
 
@@ -1194,14 +1194,20 @@ fn a_new_event_whose_series_end_cannot_be_stated_is_not_created_at_all() {
 
 #[test]
 fn a_series_end_that_cannot_be_stated_is_refused_by_naming_the_zone_and_the_date() {
-    // The refusal above, read by the person it happens to. What is left of it
-    // after the document's own `VTIMEZONE` became the conversion (see below) is
-    // narrow — a zone the entry names and does not define, or defines in a
-    // shape `jmap-ical`'s evaluator will not guess at — and a message that
-    // blames "an end date stated as a UTC instant" now describes the case that
-    // *works*. So it says which instant and which zone instead: the two facts
-    // that tell the user which appointment to change, and tell whoever reads
-    // the bug report which zone definition to look at.
+    // The refusal above, carrying what the person it happens to has to be
+    // told. What is left of it after the document's own `VTIMEZONE` became the
+    // conversion (see below) is narrow — a zone the entry names and does not
+    // define, or defines in a shape `jmap-ical`'s evaluator will not guess at —
+    // and a message that blames "an end date stated as a UTC instant" now
+    // describes the case that *works*. So the refusal names which instant and
+    // which zone instead: the two facts that tell the user which appointment to
+    // change, and tell whoever reads the bug report which zone definition to
+    // look at.
+    //
+    // Two facts rather than a sentence, because the sentence is written where
+    // it can be translated — `jmap_backend_cal::ops`, over this reason. The
+    // instant is the value as it was *kept*, normalised out of the component's
+    // `20260331T120000Z`, which is the form the user is shown.
     let fixture = Fixture::start();
     let icalendar = NEW_EVENT.replace(
         "DURATION:PT90M",
@@ -1210,14 +1216,12 @@ fn a_series_end_that_cannot_be_stated_is_refused_by_naming_the_zone_and_the_date
 
     let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
 
-    let message = failure.to_string();
-    assert!(
-        message.contains("Europe/Berlin"),
-        "the zone the instant could not be stated in has to be named: {message}"
-    );
-    assert!(
-        message.contains("2026-03-31T12:00:00Z"),
-        "the end the user typed has to be quoted back: {message}"
+    assert_eq!(
+        failure_reason(&failure),
+        &Unsendable::RecurrenceEnd {
+            until: "2026-03-31T12:00:00Z".to_owned(),
+            zone: "Europe/Berlin".to_owned(),
+        }
     );
 }
 
@@ -1246,10 +1250,13 @@ fn a_zone_defined_in_a_shape_the_evaluator_refuses_is_named_in_the_refusal_too()
 
     let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
 
-    let message = failure.to_string();
-    assert!(
-        message.contains("Europe/Berlin"),
-        "a zone the entry defines unreadably is still the zone to name: {message}"
+    assert_eq!(
+        failure_reason(&failure),
+        &Unsendable::RecurrenceEnd {
+            until: "2026-03-31T12:00:00Z".to_owned(),
+            zone: "Europe/Berlin".to_owned(),
+        },
+        "a zone the entry defines unreadably is still the zone to name"
     );
 }
 
@@ -1314,15 +1321,22 @@ fn a_new_event_whose_rule_the_rrule_narrowed_is_not_created_at_all() {
 
     let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
 
-    assert!(matches!(failure, SyncError::Unsendable(_)), "{failure:?}");
     // And it must not be reported as a time-zone problem: this rule has no end
-    // at all, so a message naming the event's zone would send the user to
+    // at all, so a refusal naming the event's zone would send the user to
     // change something that is not what stopped the save.
-    let message = failure.to_string();
-    assert!(
-        !message.contains("Europe/Berlin"),
-        "a refusal that is not about the zone must not name one: {message}"
+    assert_eq!(
+        failure_reason(&failure),
+        &Unsendable::Recurrence,
+        "a refusal that is not about the zone must not name one"
     );
+}
+
+/// The reason a refused save carries, or a panic naming what came instead.
+fn failure_reason(failure: &SyncError) -> &Unsendable {
+    match failure {
+        SyncError::Unsendable(reason) => reason,
+        other => panic!("{other:?} — expected a refusal"),
+    }
 }
 
 #[test]

@@ -24856,3 +24856,110 @@ unmapped and their contact-editor behaviour unmeasured; whether the editor lets 
 handle be moved between the Home and Work slots at all is unknown; a `VALUE=uri`
 photo's rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-fifth session)
+
+**The calendar backend's refusal is now a string a translator can reach.** The
+last session wrote the message that names the instant and the zone, and wrote
+down in the same breath why it could not be marked: `jmap-cal-sync` builds the
+sentence, `jmap-backend-core`'s `i18n` is where gettext is bound, and the sync
+layer cannot depend on an EDS-linked crate without dragging EDS into its tests.
+That entry named the fix — give `SyncError::Unsendable` a *reason* to carry and
+phrase it in `jmap-backend-cal::ops` — and this session is that fix. It is the
+first string in the project that this code both writes and looks up; the only
+translated text before it was the Camel provider's name and description, which
+Camel translates on our behalf.
+
+**The reason, not the prose.** `SyncError::Unsendable` now carries an
+`Unsendable`, which is `RecurrenceEnd { until, zone }` or `Recurrence`. Two
+variants because there are two answers worth giving: one names something the
+user can go and change, and the other admits it cannot. The enum's `Display` is
+kept — it is what a log gets, in English, deliberately untranslated so a bug
+report quotes the same words whoever files it. The user's sentence is a second,
+separate string in `ops::refusal`, and the two are allowed to differ because
+they are read by different people.
+
+**`translate_with`, and why it is not `printf`.** A message that has to name a
+time zone needs arguments, and gettext's answer is `%1$s`-style positional
+placeholders — numbered, because word order does not survive translation
+("in %2$s cannot %1$s" is the natural German shape of a sentence English writes
+the other way round). What it must not be is a real format call: a catalogue is
+data loaded at run time from a file this program did not write, and handing a
+translated string to `printf` is the textbook way that data becomes control over
+the process — a `%n` nobody wrote in the source, read against arguments that are
+not there. So `i18n::translate_with` substitutes by hand, knows exactly one
+construct, and copies every other byte through. `50%` needs no ceremony and
+`%d` is two characters.
+
+The substitution is **one left-to-right pass**, not one `replace` per argument,
+and that is a correctness property rather than a performance one. The arguments
+are a server's, a user's, or a time zone database's — never ours — so one of
+them can perfectly well contain `%2$s`; replacing argument by argument would let
+the first argument's text choose where the second goes. A single scan cannot:
+what an argument expands to is output and is never read again. Mutation-checked
+against the naive version, which reddens that test and only that test.
+
+**The extraction check turned out to be a line-at-a-time match**, and this
+string is the one that breaks it. `tests/potfiles.rs` looked for `N_(c"` and
+`translate(c"` on one line; `rustfmt` moves a literal to the next line as soon
+as the call is too wide, which is what a message long enough to be worth
+translating does. `xgettext` lexes and does not care, so the two would have
+disagreed exactly about the longest strings — silently, the failure mode that
+file exists to prevent. The matcher now skips the whitespace between the keyword
+and the literal the way the lexer does, `translate_with` joins the keyword list
+in `po/POTFILES.in`, and the check was mutation-tested both ways: with the
+line-bound matcher restored, `ops.rs` reads as marking nothing and the
+stale-entry test reddens.
+
+**What is asserted where.** `jmap-cal-sync`'s tests now assert the *reason* —
+`RecurrenceEnd { until: "2026-03-31T12:00:00Z", zone: "Europe/Berlin" }`,
+including the normalised spelling of the instant, which is what the user is
+shown — and `jmap-backend-cal`'s assert the sentence: both facts present, no
+unfilled placeholder left in it, and the general refusal naming neither a time
+zone nor anything but the repeat count that does work. The reordering property
+is proved end to end in `tests/catalogue.rs` against a `.mo` the test compiles
+itself, with a translation that puts `%2$s` first; that leg reported
+`catalogue lookup exercised under locale en_US.UTF-8`, so the lookup really ran
+rather than falling through to the untranslated contract.
+
+Tests: +3 in `jmap-backend-core/tests/i18n.rs`, +2 in
+`jmap-backend-cal/tests/ops.rs`, +1 assertion and a third catalogue entry in
+`jmap-backend-core/tests/catalogue.rs`, and three tests in
+`jmap-cal-sync/tests/save.rs` restated against the reason. The default set is
+unchanged at 1157 — everything added is in the `rust-test-eds` leg, this being
+where gettext is.
+
+Verified locally: `cargo test --locked` 1157, no failures; the EDS leg
+(`eds-sys`, `evo-sys`, `jmap-backend-*`, `jmap-mail`, `jmap-config`) green;
+`cargo fmt --all --check` clean; `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` clean; `RUSTDOCFLAGS="-D
+warnings" cargo doc --no-deps` clean for the three crates touched; `ninja -C
+build` then `ctest --test-dir build` 14/14, functional and EDS-linked legs
+included. `ci/checks.sh` still stops at its first step on this VM (no `reuse`,
+no `pipx`, no `uvx`, no `cargo-deny`), so those were reasoned by hand: no file
+is added, so no SPDX header is missing, and `Cargo.lock` is untouched — no
+dependency changed, so `cargo deny`'s answer is the one it gave on the last
+green run.
+
+No milestone tag. Closed: **the calendar backend's user-visible refusals are
+marked, extractable and looked up in the user's language**, which was the
+specific blocker the last session left. New blockers of its own: there is still
+no `.pot` in the tree and nothing in the build generates one — the check that a
+string is *listed* is not the same as a catalogue existing, and until `xgettext`
+actually runs in CI the claim "a translator can reach this" rests on the
+documented command line rather than on a file; and `-L C` on Rust sources
+remains the crude tool `po/POTFILES.in` already warns about. Unchanged blockers:
+a transition rule outside the counted shape still costs the whole zone, and
+whether any zone Evolution ships is in that state is unmeasured beyond Berlin;
+M10 still has no CI matrix; the calcard directive's two emitters are still ours;
+M9 has no CI job and no GUI tier; M7 still **needs human verification in real
+Evolution**; an `UNTIL` the parser itself refuses is invisible to `jmap-ical`;
+whether Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE`
+"Evolution shows only the first" bet is still unverified; the two `LABEL` `TYPE`
+risks stand; a deathday and a birthday stated as a year alone are still
+invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.

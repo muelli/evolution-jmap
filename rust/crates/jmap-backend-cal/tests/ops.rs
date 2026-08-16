@@ -27,7 +27,7 @@ use glib_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_backend_cal::ops::{self, Outcome};
-use jmap_cal_sync::{CalSync, SyncError};
+use jmap_cal_sync::{CalSync, SyncError, Unsendable};
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -789,7 +789,7 @@ fn each_sync_error_carries_the_code_evolution_routes_on() {
         // as failed rather than shelve it for a retry that would fail the same
         // way, and the message names what the user has to change.
         (
-            SyncError::Unsendable("it repeats in a way we cannot send".to_owned()),
+            SyncError::Unsendable(Unsendable::Recurrence),
             unsafe { e_client_error_quark() },
             E_CLIENT_ERROR_INVALID_ARG as i32,
         ),
@@ -799,5 +799,76 @@ fn each_sync_error_carries_the_code_evolution_routes_on() {
         let mut gerror = ops::to_gerror(&error);
         // SAFETY: to_gerror hands ownership of a fresh GError over.
         unsafe { assert_error(&mut gerror, domain, code) };
+    }
+}
+
+/// The sentence a user reads when a create was refused over its recurrence.
+///
+/// It is written here rather than in `jmap-cal-sync` for one reason: this is
+/// where it can be translated. The sync layer decides *that* the save cannot go
+/// out and what about it could not be stated; turning that into a sentence is a
+/// user-interface act, and gettext lives on this side of the FFI. So the
+/// refusal travels as a reason and is phrased at the point where the message
+/// can also be looked up in the user's language — which is why the two facts
+/// that identify the appointment have to survive the trip.
+///
+/// Untranslated here, this test's process having no catalogue: what is asserted
+/// is that both facts reach the message, in a form the user can act on. The
+/// instant is the one the mapping kept, so its spelling is pinned too.
+#[test]
+fn a_recurrence_refused_over_its_time_zone_names_the_zone_and_the_instant() {
+    let failure = SyncError::Unsendable(Unsendable::RecurrenceEnd {
+        until: "2026-03-31T12:00:00Z".to_owned(),
+        zone: "Europe/Berlin".to_owned(),
+    });
+
+    let message = gerror_message(&failure);
+
+    assert!(
+        message.contains("Europe/Berlin"),
+        "the zone the instant could not be stated in has to be named: {message}"
+    );
+    assert!(
+        message.contains("2026-03-31T12:00:00Z"),
+        "the end the user typed has to be quoted back: {message}"
+    );
+    assert!(
+        !message.contains("%1$s") && !message.contains("%2$s"),
+        "an unfilled placeholder means the user reads the template: {message}"
+    );
+}
+
+/// And a refusal that is not about a time zone must not invent one.
+///
+/// The opposite mistake to the message above, and the more misleading of the
+/// two: a rule refused for a month the `RRULE` cannot carry has no end date at
+/// all, so a sentence about the calendar entry's time zone would send the user
+/// to change something that is not what stopped the save.
+#[test]
+fn a_recurrence_refused_for_anything_else_says_nothing_about_a_time_zone() {
+    let message = gerror_message(&SyncError::Unsendable(Unsendable::Recurrence));
+
+    assert!(
+        !message.contains("time zone"),
+        "a refusal that is not about the zone must not mention one: {message}"
+    );
+    assert!(
+        message.contains("repeat count"),
+        "the user is owed the spelling that does work: {message}"
+    );
+}
+
+/// The message of the `GError` `failure` maps to, the error freed after.
+fn gerror_message(failure: &SyncError) -> String {
+    let error = ops::to_gerror(failure);
+    assert!(!error.is_null(), "a failure has to map to an error");
+    // SAFETY: to_gerror hands ownership of a fresh GError over, and a GError's
+    // message is a NUL-terminated string it owns.
+    unsafe {
+        let message = CStr::from_ptr((*error).message)
+            .to_string_lossy()
+            .into_owned();
+        g_error_free(error);
+        message
     }
 }

@@ -29,7 +29,63 @@ pub enum SyncError {
     /// no value to leave standing, and the choices are an event the user did
     /// not describe or no event at all. Refusing is the one of those the user
     /// finds out about.
-    Unsendable(String),
+    Unsendable(Unsendable),
+}
+
+/// What a component said that could not be stated as JSCalendar.
+///
+/// A reason rather than a sentence, and the difference is the point. The
+/// sentence a user reads has to be translated, and gettext is bound on the
+/// other side of the FFI — `jmap_backend_core`'s `i18n`, which an EDS-linked
+/// crate can reach and the sync layer cannot, its tests having no EDS to link
+/// against. So this crate says what happened and `jmap_backend_cal::ops` says
+/// it in the user's language, over these values.
+///
+/// The variants are the two answers worth giving rather than every distinction
+/// the code could draw: one of them names something the user can go and change,
+/// and the other admits it cannot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unsendable {
+    /// A recurrence whose end is an instant that could not be restated in the
+    /// event's own time zone, because the entry defines that zone nowhere or
+    /// defines it in a shape the evaluator will not guess at.
+    ///
+    /// `until` is the instant as the mapping kept it — normalised, so it is the
+    /// digits the user is shown rather than the component's own spelling — and
+    /// `zone` is the identifier the event names. Between them they say which
+    /// appointment to change and which `VTIMEZONE` a bug report should quote.
+    RecurrenceEnd {
+        /// The end of the series, as the mapping kept it.
+        until: String,
+        /// The time zone the event is in.
+        zone: String,
+    },
+    /// A recurrence rule this mapping cannot state, for any other reason.
+    ///
+    /// Deliberately carries nothing. The mapping knows the rule will not
+    /// survive the round trip; which part of it is at fault is a question about
+    /// our own narrowing rather than about the user's calendar, and a dialog is
+    /// no place to answer it.
+    Recurrence,
+}
+
+impl std::fmt::Display for Unsendable {
+    /// The developer's account of the refusal, in English and untranslated.
+    ///
+    /// This is what reaches a log, and what a [`SyncError`] renders as. The
+    /// user's sentence is the one in `jmap_backend_cal::ops`; keeping the two
+    /// apart is what stops a translated string from being the text a bug report
+    /// quotes, and stops one phrasing from having to serve both audiences.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RecurrenceEnd { until, zone } => write!(
+                f,
+                "a recurrence ending {until}, which the time zone {zone} is not \
+                 defined well enough to convert"
+            ),
+            Self::Recurrence => write!(f, "a recurrence rule that cannot be stated"),
+        }
+    }
 }
 
 impl SyncError {
@@ -56,7 +112,7 @@ impl std::fmt::Display for SyncError {
             Self::Client(error) => write!(f, "{error}"),
             Self::ICal(error) => write!(f, "{error}"),
             Self::NotFound(uid) => write!(f, "no calendar event with identifier {uid}"),
-            Self::Unsendable(what) => write!(f, "{what}"),
+            Self::Unsendable(reason) => write!(f, "{reason}"),
         }
     }
 }
