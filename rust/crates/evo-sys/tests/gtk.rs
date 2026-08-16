@@ -181,6 +181,12 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
             "gtk_check_button_new_with_mnemonic",
             gtk_check_button_new_with_mnemonic as *const (),
         ),
+        ("gtk_label_new", gtk_label_new as *const ()),
+        ("gtk_label_set_text", gtk_label_set_text as *const ()),
+        (
+            "gtk_widget_set_visible",
+            gtk_widget_set_visible as *const (),
+        ),
     ];
     for (name, address) in entry_points {
         assert!(!address.is_null(), "{name} resolved to NULL");
