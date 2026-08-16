@@ -28413,3 +28413,108 @@ service alias → Bearer token from `e_source_get_oauth2_access_token_sync`,
 otherwise Basic — closes that. Headless, no display, no open design question;
 deliberately *not* the `insert_widgets` GTK-threading item the 297th session
 escalated for.
+
+**Done: the backends now authenticate with OAuth 2.0.** New
+`jmap-backend-core/src/oauth2.rs`, wired into `connect_with`, plus
+`ConnectError::OAuth2`.
+
+**The rule was transcribed from EDS, not designed here.** This is the piece
+that made the increment safe to do on a schedule: rather than reason from
+first principles about how an `ESource` announces OAuth 2.0, I read
+evolution-data-server 3.52.3's own
+`e_soup_session_setup_message_credentials` — the function every WebDAV,
+CalDAV and CardDAV account in Evolution authenticates through — and copied
+its two lines. It reads `[Authentication] Method` and sends a Bearer token
+when that string is `"OAuth2"` or the name of a registered `EOAuth2Service`
+(`e_oauth2_services_is_oauth2_alias_static`), and Basic otherwise; the
+bearer branch's token is `e_source_get_oauth2_access_token_sync`. Copying
+rather than approximating matters because that is the rule an account
+*written* by anything else — the setup UI, a hand-edited keyfile, a future
+EDS — will have been written to satisfy.
+
+Three things fell out of reading the real sources that I would have got
+wrong from memory, and each is now pinned by a test:
+- **`e-source-credentials-provider-impl-oauth2.c` has no `lookup_sync` at
+  all.** It answers `can_process`/`can_store`/`can_prompt` and nothing else,
+  and `can_store` is FALSE. So no access token ever arrives in the
+  `ENamedParameters` the way a password does — believing otherwise would have
+  produced a plausible, entirely non-working implementation. The token has to
+  be *pulled* off the `ESource`.
+- **`Some("none")`, not `None`, is what an ordinary password account reads
+  back as.** `ESourceAuthentication:method` has no unset state (jmap-config's
+  `account` module already documents this), so a classifier that only
+  special-cased the absent method would have called every existing account
+  OAuth 2.0. `e_oauth2_services_can_check_auth_method` rejects `""`, `"none"`
+  and `"plain/password"` outright, which the alias call applies for us;
+  `the_password_methods_are_not_oauth2` pins all four.
+- **The alias lookup is a live registry query, not a compile-time list of
+  Google/Outlook/Yahoo.** It iterates the registered services and compares
+  `e_oauth2_service_get_name`, so our own `"JMAP"` service matches exactly
+  when `module-jmap-backend.so` has registered it — which the 288th session
+  already made true. That is also why the test asserts against a name nobody
+  can register rather than against `"JMAP"`: this crate's service may really
+  be installed on the machine running the tests, so a `"JMAP"`-is-not-an-alias
+  assertion would pass or fail depending on the EDS module directory.
+
+**`REQUIRED`, not `REJECTED`, for a token failure** — the one genuine judgement
+call. `REJECTED` additionally tells EDS to discard the stored secret, and for
+OAuth 2.0 that secret is the *refresh* token, which a network blip during the
+exchange has not invalidated; discarding it turns a transient failure into a
+re-consent the user has to click through. `REQUIRED` still opens the consent
+window (`can_prompt` is TRUE). Same safe direction the existing
+"only a 401 is REJECTED" rule takes.
+
+**Shape.** `connect_with` now resolves the credentials itself and hands
+`open` a `Credentials` instead of a password, so the scheme choice lives in
+the one place the module docs already reserve for decisions two backends must
+not disagree about. `open_book`/`open_calendar` lost their `credentials()`
+call; their test files' `open()` helper took it over, which kept every
+existing connect test intact.
+
+**Tests, and a mutation check rather than a claim.** New
+`jmap-backend-core/tests/oauth2.rs` (5) plus a bearer end-to-end test in each
+backend against the mock's `bearer_token`. Because the module and its tests
+were necessarily written together, I checked they actually bite instead of
+asserting TDD happened: forcing `method_is_oauth2` to `false` fails 2 tests,
+to `true` fails 3, and classifying an OAuth2 failure as `REJECTED` fails the
+5th. All restored, all green after.
+
+**What this does NOT deliver, plainly.** (1) Nothing writes
+`[Authentication] Method` yet — that is still M7's, behind the maintainer's
+open method-chooser-vs-auto-discovery question — so the path is reachable
+today only via a hand-edited `.source` keyfile, the way the
+`docs/manual-test-*.md` recipes already work. (2) The token fetch itself
+cannot be exercised here: `e_source_get_oauth2_access_token_sync` needs a
+registry and a consented account, so the test pins only the no-token failure
+(an ordinary `Err`, `REQUIRED`, no crash). The success path needs a real
+server and a human. **Not tagging any milestone COMPLETE.**
+
+Also corrected `jmap-config::oauth2_service`'s stale "what this does not yet
+do" note, which the 297th session flagged: registration has been done since
+the 288th session; only writing the method remains.
+
+**Gates.** `cargo fmt --all --check` clean; `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean;
+`cargo test --workspace --exclude example-module --locked` — 149 green suites,
+the only failures the 11 pre-existing `JMAP_FUNCTIONAL_BOOK_CLIENT`-unset
+ones; `ninja -C build` then `ctest --test-dir build` **15/15**. `ci/checks.sh`
+still cannot run on this VM (no `reuse`/`pipx`/`uvx`/`cargo-deny`); both new
+files carry SPDX `GPL-3.0-or-later` headers, checked by hand. No new
+dependencies, `Cargo.lock` untouched.
+
+**Detour worth recording: ctest first reported 4 failures that were not real.**
+`functional-mail`, `functional-transport` and both `package-deb` legs failed
+with `collect2: fatal error: ld terminated with signal 7 [Bus error]` — the
+disk was 100% full (`rust/target/debug` at 24 GiB). `cargo clean --profile dev`
+freed 24 GiB and the same tree then passed 15/15. Recorded because a linker
+bus error reads like a toolchain or codegen fault and is neither.
+
+**Next session.** The priority queue is unchanged apart from this: M7's
+`insert_widgets` still needs the maintainer's auth-method design decision
+before the `discover_and_register` GTK-threading work the 297th session
+escalated for is worth attempting — and note that that work is now *less*
+urgent than it looked, because the account→token→wire half is done and only
+the account-creation half is missing. M10 still needs `Containerfile.ci`
+growth, out of these sessions' hard rules. `docs/BACKLOG.md` gained one
+cross-cutting item (`ConnectError`'s messages are not marked translatable —
+pre-existing, widened by two strings, not a regression).

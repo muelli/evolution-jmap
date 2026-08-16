@@ -50,3 +50,15 @@ to polish a completed backend. A later hardening pass works through them.
   compensating for Evolution's lenient identity page and file an upstream bug
   against Evolution (its identity page should reject an address with
   whitespace). Deferred edge case, not a release blocker.
+
+## Cross-cutting, noticed while wiring OAuth 2.0 onto the connect path
+- **`ConnectError`'s own messages are not marked for translation.** Every arm
+  of `jmap_backend_core::connect::ConnectError`'s `Display` — "the account has
+  no password yet", the two collection-resolution sentences, and now the two
+  `OAuth2` fallbacks — becomes a `GError` message Evolution can show the user,
+  which the ROADMAP's *Mark UI strings translatable* directive covers. None of
+  them were marked, so the new ones were left consistent with the old rather
+  than translating one arm of an enum and not the rest. Retrofit the whole
+  enum in one pass, and add `jmap-backend-core/src/connect.rs` to
+  `po/POTFILES.in` when doing it. Pre-existing, widened slightly; not a
+  regression.
