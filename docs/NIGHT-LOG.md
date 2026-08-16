@@ -29577,3 +29577,80 @@ none. That is the actual unblocked, incomplete item the roadmap's dependency
 graph currently offers: not more Rust, but closing the one gap that keeps
 the agent-scaffolds/maintainer-verifies loop the roadmap's CURRENT PRIORITY
 describes from actually being walkable for this milestone.
+
+**Delivered, pushed as `e9687d3`.** `docs/manual-test-account-setup.md`,
+in the same shape as the other four `manual-test-*.md` recipes: what
+`cargo test` already proves without a display (every vfunc in
+`jmap-config/tests/backend.rs` except `insert_widgets` itself, plus
+`oauth2_module.rs` and `jmap-functional/tests/config-lookup.rs` for the
+"Look Up Account Details" step's network behaviour), prerequisites, starting
+`jmap-mockd --oauth2`, building and installing `module-jmap-configuration.so`
+(`--component config-module`), opening Evolution's account assistant,
+exercising the config-lookup step, and — the part nothing here could see
+before — what the *Receiving Email* page should show: three entries and a
+check button (`_Server`/`_Port`/`_Username`/TLS, read verbatim off
+`backend.rs`'s `ENTRY_ROWS`/`SECURE_LABEL` constants, not paraphrased) filled
+from `setup_defaults`, a status line reading `complete::status_message`'s
+exact strings, and *Next* toggling live as the fields are edited — the one
+behaviour `insert_entries`'s `notify` handler exists for and no `cargo test`
+here can watch fire. Closed with an explicit "What this does not cover"
+section naming the two gaps this recipe should *not* be mistaken for finding:
+OAuth2 as a `[Authentication] Method` on this page (still gated on the
+maintainer's design decision) and the consent browser round trip (needs a
+real provider).
+
+**Every claim in it checked against the current source, not remembered from
+the log.** Read `jmap-config/src/{backend,defaults,complete,config_lookup,
+module}.rs` and `jmap-mail/src/provider.rs` fresh rather than trusting
+earlier sessions' descriptions, which is why the entry-row labels, the two
+status-message strings, and the provider's `NAME`/`DESCRIPTION` constants are
+quoted rather than summarised — a paraphrase is exactly the kind of thing
+that drifts from the code silently. Confirmed `--component config-module` and
+`EVOLUTION_MODULE_DIR` (`cmake/Backends.cmake`) are the real install
+destination and component name, not guessed by analogy with the other four
+recipes.
+
+**This is a docs-only increment**, so the usual code gates apply only where
+they touch what changed: `git diff` adds one new file under `docs/**`, which
+`REUSE.toml`'s existing aggregate annotation covers (checked the file
+directly — no per-file SPDX header needed, unlike a source file). Still ran
+the full gate anyway, to prove nothing else regressed while this was
+written: `cargo fmt --all -- --check` clean; `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean;
+`cargo test --workspace --exclude example-module --locked` — the same
+twenty pre-existing `JMAP_FUNCTIONAL_*_CLIENT`-unset `jmap-functional`
+failures every prior session has documented (eleven book, five calendar, one
+mail, one config-lookup, two transport), `--exclude jmap-functional` fully
+green; `cmake -S . -B build
+-G Ninja -DENABLE_FUNCTIONAL_TESTS=ON && ninja -C build && ctest --test-dir
+build` — **16/16**, unchanged from the 308th session's run.
+
+Hit [[disk-fills-from-cargo-target]] again during this gate (`rust/target`
+at 100% of `/`, mid-`cargo test`, a linker bus error the same shape the
+308th session already flagged as a full-disk symptom rather than a
+toolchain fault); `cargo clean --profile dev` recovered 23.8 GiB and every
+number above is from the clean rerun. Recording it again because it is now
+two sessions running into the same thing — worth the maintainer's attention
+if it keeps recurring, though not something these hard rules let this
+stream fix (no infra/ changes).
+
+`ci/checks.sh` still cannot run on this VM ([[checks-sh-blocked-on-vm]]). No source files
+touched, no new dependencies, `Cargo.lock` untouched.
+
+**Not tagging any milestone.** This closes a real gap in M7's
+human-verification story but does not itself verify anything — the recipe
+still needs a human with a display to actually run it, which is exactly the
+point of the roadmap's rule that GUI work stays untagged until a human
+confirms it. M7 stays exactly as gated as the 308th session left it.
+
+**Next session.** Unchanged from the 308th's note: the `insert_widgets`
+OAuth2-wiring item is gated on the maintainer's method-chooser-vs-auto-
+discovery decision and, independently, on cross-thread FFI/lifetime
+reasoning — an escalation candidate once the design question is answered,
+not before. M10 still needs `Containerfile.ci` growth (off-limits).
+`docs/BACKLOG.md` is unchanged. Worth flagging for the maintainer
+specifically: this session's manual-test doc is now the concrete thing to
+run through once there is a spare few minutes at a real Evolution session —
+it is the fastest way to find out whether `insert_widgets` actually works
+before spending any more effort on the OAuth2 wiring that builds on top of
+it.
