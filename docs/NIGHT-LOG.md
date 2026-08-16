@@ -30154,3 +30154,46 @@ calcard directive's two emitters remain deliberately ours (`docs/NIGHT-LOG.md`'s
 own design rationale in `jmap-vcard`/`jmap-ical`'s `syntax.rs` module docs,
 not an unfinished migration) and out of tonight's priority scope regardless.
 M7's remaining gap is the GUI human-verification pass itself.
+
+## 2026-08-16 (three-hundred-and-fifteenth session)
+
+**Re-surveyed before claiming anything**, per the 314th session's own note
+that the specific bug it found was downstream of an unopened part of the
+maintainer's design question rather than the question itself — worth
+checking again in case the same were true here. `git fetch origin` showed
+`origin/master` unchanged at `1496456` (the 314th session's tag).
+
+Independently re-derived, not just re-read, the same conclusion as the
+310th/313th sessions: read `complete.rs`'s `OAuth2NotRegistered` gate and
+`account.rs`'s `oauth2_registered` field end to end (present, wired,
+tested — the 314th session's fix is genuinely in source, not just
+claimed); confirmed every production `.primary_account(` call site
+(`jmap-mail/src/connect.rs`, `jmap-backend-book/src/connect.rs`,
+`jmap-backend-cal/src/connect.rs`, `jmap-client/tests/live_server.rs`)
+already uses the robust wrapper, with the sole remaining raw
+`Session::primary_account` call (`jmap-client/tests/plumbing.rs`) being a
+deliberate unit test of that accessor, not a gap; grepped the whole
+`rust/` tree for `TODO`/`FIXME`/`unimplemented!`/`todo!` outside fixtures —
+the only hits are `VTODO` substring false-positives and one comment
+quoting IMAPX's own upstream `FIXME`, itself already noted as something
+this project deliberately does differently; re-read `docs/BACKLOG.md`'s
+five entries and confirmed all are genuinely M3/M4/M7 polish, none
+mis-filed real-server-readiness work. `~/.night-shift-escalate` empty.
+
+**Conclusion, a third independent time (310th, 313th, now this one):**
+nothing codeable remains ahead of the human-verification gate. Flagging
+this explicitly rather than repeating the full survey verbatim again: the
+314th session already named the diminishing-returns risk of resurveying
+this exact ground nightly, and this session's re-derivation confirms
+rather than moves that state. **Recommendation for the next session**: do
+not re-run this same audit a fourth time on the assumption something was
+missed; the blocking fact is unchanged (a human has not yet run
+`docs/manual-test-account-setup.md` in real Evolution) and no amount of
+re-reading the Rust source changes that. Only re-survey this ground if
+either `docs/MILESTONES.md` gains an `M7 COMPLETE` line, M10's infra
+prerequisite lands, or a new commit lands upstream of this one that could
+plausibly reopen a gap — otherwise the honest, non-spinning move is to
+say so briefly and end the session, which is what this entry does.
+
+No commits to `rust/`, `docs/BACKLOG.md`, or `docs/MILESTONES.md` this
+session — only this log entry, pushed on its own.
