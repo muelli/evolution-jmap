@@ -28057,3 +28057,97 @@ rule. Unchanged blockers: M10 has no CI matrix; the calcard directive's two
 emitters are still ours; M9 has no CI job and no GUI tier; the OAuth2 consent
 page needs a display this VM lacks; `docs/BACKLOG.md`'s contact/vCard and
 calendar/iCal fidelity items are all still parked there.
+
+## 2026-08-16 (two-hundred-and-ninety-fourth session)
+
+**Claiming: M9 layer 1's gated CI job.** `git fetch origin` at claim time
+shows `origin/master` unchanged at `e199227`, so no other agent has this.
+
+Re-surveyed the current priority before picking: M7's remaining gap is a
+maintainer design question (auth-method chooser vs. transparent OAuth2
+discovery) this session cannot decide unilaterally; real-server readiness's
+one remaining piece (wiring `oauth2_setup::discover_and_register` into
+`insert_widgets`) needs a background-thread/GTK-main-loop marshalling design
+the 293rd session already flagged as a genuine escalation candidate rather
+than something to attempt speculatively; M10 needs a per-EDS-version
+container image matrix, which means growing `Containerfile.ci`/
+`ci-image.yml` — off-limits by this session's own hard rules. That left M9
+layer 1: `docs/functional-tests.md` already documents the harness
+(`jmap-functional`, `tests/functional/*.c`, `ctest -L functional`) as
+implemented and gated behind `-DENABLE_FUNCTIONAL_TESTS=ON`, but its own
+"Why they are gated" section says plainly **"CI does not run these
+today"** — exactly the unblocked, correctly-scoped gap the roadmap's M9
+acceptance criteria name: "a gated CI job (`workflow_dispatch`/label)".
+
+That section also claimed closing the gap needed growing the *shared* CI
+image (`Containerfile.ci`, via `ci-image.yml`) — which would have made this
+untouchable under this session's hard rules. Checked rather than took on
+faith: `ci.yml`'s existing `checks`/`build`/`reproducible` jobs all run on a
+bare `ubuntu-24.04` runner and install headers via `apt-get` directly
+(`ci/install-deps.sh`) — none of them reference `Containerfile.ci` at all.
+Grepped every workflow and `.gitlab-ci.yml` for `ci-image`/`ghcr.io`/
+`Containerfile` to confirm: the shared image is used by exactly one
+consumer, `release.yml`, for reproducible release builds. So a new job that
+installs its own extra runtime packages the same way `install-deps.sh`
+already does does not grow that image at all, and the "maintainer decision"
+premise in the doc no longer holds once the job is scoped this way.
+
+**Delivered:** two new scripts mirroring the existing `ci/*.sh` pattern —
+`ci/install-deps-functional.sh` (installs `evolution-data-server` and
+`dbus-daemon`, on top of what `ci/install-deps.sh` already installs) and
+`ci/functional.sh` (configures with `-DENABLE_FUNCTIONAL_TESTS=ON`, builds,
+runs `ctest -L functional`) — plus a `functional` job in
+`.github/workflows/ci.yml`, gated on `workflow_dispatch` or a pull request
+labelled `run-functional-tests` (not on every push/PR: this layer is slower
+than the rest of the suite and, being opt-in, is worth spending deliberately
+rather than on every commit). `docs/functional-tests.md`'s "Why they are
+gated" section is rewritten to describe the job that now exists rather than
+the stale "CI does not run these" state, and says plainly that GitLab parity
+was **not** attempted — `.gitlab-ci.yml`'s runner is Debian's `rust:1.97.1`
+image, not Ubuntu, and this session had no GitLab runner to verify
+`apt-get install evolution-data-server dbus-daemon` behaves the same there,
+so it is left rather than guessed at.
+
+**Verified locally, as close to CI as this VM allows.** This VM already
+carries `evolution-data-server`, `evolution-dev` and `dbus-daemon` (a prior
+session's functional-test work depends on them), so both new scripts were
+run for real rather than only read: `ci/install-deps-functional.sh` (idempotent,
+confirms both packages already present), then `ci/functional.sh` end to end —
+configure, build, and `ctest --test-dir build -L functional --output-on-failure`,
+4/4 functional tests passed. `python3 -c "import yaml; yaml.safe_load(...)"`
+confirms `ci.yml` still parses; no `actionlint` available on this VM to check
+the `if:`/label-gating expression more deeply, so that expression mirrors
+GitHub's own documented `contains(github.event.pull_request.labels.*.name,
+...)` idiom rather than anything novel.
+
+Gates: `cargo fmt --all --check` clean (no Rust source touched). `cargo test
+--workspace --exclude example-module --locked` — the eleven `jmap-functional`
+failures outside `ctest` are the pre-existing, documented ones
+(`JMAP_FUNCTIONAL_BOOK_CLIENT` unset), confirmed unchanged by also running
+`--exclude jmap-functional` clean. `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` clean. `ninja -C build`
+(release) then `ctest --test-dir build` 15/15, `functional-*` included.
+`cargo clean --profile dev` after, recovering ~23 GiB; `/` stayed at 58%
+throughout, no near-miss. `ci/checks.sh` still stops at its first step on
+this VM (no `reuse`/`pipx`/`uvx`/`cargo-deny`); the two new scripts and the
+new workflow job all carry SPDX `GPL-3.0-or-later` headers (shell scripts
+inline, checked by hand; YAML has no header convention in this repo's
+existing workflows either, matching `ci.yml`'s/`ci-image.yml`'s own top-of-file
+comments in place of one). No new external crates, `Cargo.lock` untouched.
+No new translatable strings.
+
+No milestone tag — M9 also needs its Tier 2 GUI smoke test (`Xvfb` +
+AT-SPI/dogtail), which this increment does not touch, so M9 stays open.
+
+**Next session:** M9's Tier 2 GUI smoke test is the other open half of M9,
+but it needs `Xvfb`, a full Evolution install, and AT-SPI/dogtail driving it
+under CI — a bigger increment, and one that may again brush up against
+`Containerfile.ci` (does the CI image need `evolution` itself, or does a
+bare runner's `apt-get install evolution` suffice the way this session's
+`evolution-data-server` did? — worth checking the same way before assuming).
+Unchanged blockers: the M7 auth-method design question and the OAuth2
+GTK-wiring escalation candidate (both need the maintainer, not another
+autonomous increment); M10 has no CI matrix; the calcard directive's two
+emitters are still ours; the OAuth2 consent page needs a display this VM
+lacks; `docs/BACKLOG.md`'s contact/vCard and calendar/iCal fidelity items are
+all still parked there.
