@@ -394,6 +394,7 @@ fn account() -> Account {
             secure: true,
         },
         parts: Parts::ALL,
+        oauth2_registered: false,
     }
 }
 

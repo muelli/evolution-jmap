@@ -64,6 +64,17 @@
 //!   Reaching the server belongs in the assistant's own "look up account
 //!   details" step, which is a later increment and a different vfunc.
 //!
+//! ## What *is* checked about OAuth 2.0, and why it is the exception
+//!
+//! [`Incomplete::OAuth2NotRegistered`] looks like the network check the list
+//! above just ruled out, but it is not one: it asks whether
+//! [`crate::oauth2`]'s extension already holds a client id, which is local,
+//! stored state — no different in kind from asking whether the host entry is
+//! empty. The reason it earns its own variant rather than folding into "the
+//! server is there" is that a *missing* client is not a server being
+//! unreachable; it is an account that would never even try, because
+//! `EOAuth2Service::get_client_id` has nothing to answer with.
+//!
 //! [`origin`]: jmap_backend_core::source::origin
 
 use std::fmt;
@@ -72,6 +83,7 @@ use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::source::{SourceError, origin};
 
 use crate::account::Account;
+use crate::oauth2_service;
 
 /// Why an account cannot be committed yet.
 ///
@@ -100,6 +112,18 @@ pub enum Incomplete {
     ///
     /// [`origin`]: jmap_backend_core::source::origin
     Server(SourceError),
+    /// The account picks OAuth 2.0 (`[Authentication] Method` names
+    /// [`crate::oauth2_service::NAME`]) but has no `[JMAP OAuth2]` client
+    /// registered yet.
+    ///
+    /// `insert_widgets`'s Authentication combo lets OAuth 2.0 be picked
+    /// directly, with nothing wiring registration to it — only "Look Up
+    /// Account Details" (`config_lookup.rs`) does that. Picking it by hand
+    /// without running that first would leave `EOAuth2Service::get_client_id`
+    /// answering NULL and the account unable to ever fetch a token — a fact
+    /// this checks for, not a guess at whatever a future manual client-id
+    /// entry should look like.
+    OAuth2NotRegistered,
 }
 
 impl fmt::Display for Incomplete {
@@ -110,6 +134,9 @@ impl fmt::Display for Incomplete {
                 write!(f, "\"{identity}\" is not an email address")
             }
             Self::Server(error) => error.fmt(f),
+            Self::OAuth2NotRegistered => {
+                f.write_str("OAuth 2.0 is selected but no client is registered for it")
+            }
         }
     }
 }
@@ -117,7 +144,7 @@ impl fmt::Display for Incomplete {
 impl std::error::Error for Incomplete {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::MissingIdentity | Self::InvalidIdentity(_) => None,
+            Self::MissingIdentity | Self::InvalidIdentity(_) | Self::OAuth2NotRegistered => None,
             Self::Server(error) => Some(error),
         }
     }
@@ -148,6 +175,10 @@ pub fn status_message(account: &Account) -> String {
             &[&identity],
         ),
         Err(Incomplete::Server(error)) => error.to_string(),
+        Err(Incomplete::OAuth2NotRegistered) => translate(
+            // TRANSLATORS: shown when OAuth 2.0 is picked as the authentication method but "Look Up Account Details" has not registered a client for it yet.
+            c"OAuth 2.0 needs \"Look Up Account Details\" to run first.",
+        ),
     }
 }
 
@@ -171,6 +202,13 @@ pub fn check(account: &Account) -> Result<(), Incomplete> {
     // in the keyfile the registry will read, and `origin` takes the latter.
     let host = (!connection.host.is_empty()).then_some(&*connection.host);
     origin(host, connection.port.unwrap_or(0), connection.secure).map_err(Incomplete::Server)?;
+
+    let oauth2_method = oauth2_service::NAME
+        .to_str()
+        .expect("oauth2_service::NAME is a fixed ASCII string");
+    if connection.auth_method.as_deref() == Some(oauth2_method) && !account.oauth2_registered {
+        return Err(Incomplete::OAuth2NotRegistered);
+    }
 
     Ok(())
 }
@@ -222,6 +260,7 @@ mod tests {
                 secure: true,
             },
             parts: Parts::ALL,
+            oauth2_registered: false,
         }
     }
 
@@ -252,6 +291,36 @@ mod tests {
             status_message(&account),
             "\"not an address\" is not an email address."
         );
+    }
+
+    #[test]
+    fn oauth2_with_no_registered_client_is_reported() {
+        let account = Account {
+            connection: Connection {
+                auth_method: Some(crate::oauth2_service::NAME.to_str().unwrap().to_owned()),
+                ..complete_account().connection
+            },
+            oauth2_registered: false,
+            ..complete_account()
+        };
+        assert_eq!(check(&account), Err(Incomplete::OAuth2NotRegistered));
+        assert_eq!(
+            status_message(&account),
+            "OAuth 2.0 needs \"Look Up Account Details\" to run first."
+        );
+    }
+
+    #[test]
+    fn oauth2_with_a_registered_client_has_no_status_message() {
+        let account = Account {
+            connection: Connection {
+                auth_method: Some(crate::oauth2_service::NAME.to_str().unwrap().to_owned()),
+                ..complete_account().connection
+            },
+            oauth2_registered: true,
+            ..complete_account()
+        };
+        assert_eq!(status_message(&account), "");
     }
 
     #[test]

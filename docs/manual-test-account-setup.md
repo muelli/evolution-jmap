@@ -197,13 +197,15 @@ Anything short of the above is a bug in this repository, not in the recipe;
   `[Authentication] Method`, which is what `EOAuth2Service::can_process`'s
   default implementation and `e_source_get_oauth2_access_token_sync` key
   off of — but nothing on this page drives `discover_and_register` (that is
-  what step 4's "Look Up Account Details" does), so an account committed
-  with **OAuth 2.0** picked by hand here and no `[JMAP OAuth2]` client
-  registered has said what it wants to authenticate with, not proven it
-  can. Combining "pick OAuth 2.0 here" with "never ran discovery" is a real
-  path a user can reach; whether Evolution's own credentials machinery
-  fails it usefully (a clear prompt or error) or silently is unverified —
-  worth checking on the first real run.
+  what step 4's "Look Up Account Details" does). Picking **OAuth 2.0** by
+  hand without running that step no longer reaches a committed account
+  though: `check_complete` (`complete::check`) now refuses to go sensitive
+  while `[Authentication] Method` names OAuth 2.0 and no `[JMAP OAuth2]`
+  client is registered, with the status label saying so
+  (`OAuth2NotRegistered`, tested in `tests/backend.rs`). What is still
+  worth eyeballing on the first real run is the label actually appearing —
+  the `notify` wiring that repaints it is real-Evolution-only, per the
+  section above.
 - **The consent browser round trip.** Even once discovery has registered a
   client, watching a real authorization prompt and `REDIRECT_URI` land back
   in Evolution needs a real OAuth2 provider, not the mock, and is out of

@@ -106,6 +106,8 @@ pub fn from_identity(identity: &str) -> Account {
             contacts: true,
             calendars: true,
         },
+        // A fresh account: nothing has run discovery against it yet.
+        oauth2_registered: false,
     }
 }
 

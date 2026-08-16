@@ -140,6 +140,7 @@ fn account() -> Account {
             secure: true,
         },
         parts: Parts::ALL,
+        oauth2_registered: false,
     }
 }
 
@@ -302,6 +303,7 @@ fn committing_an_account_that_dropped_its_user_clears_the_one_that_was_there() {
             secure: true,
         },
         parts: Parts::NONE,
+        oauth2_registered: false,
     };
     let source = source.written(&second);
 
@@ -457,6 +459,9 @@ fn a_source_that_says_nothing_reads_as_an_account_with_nothing_in_it() {
             // says nothing — the dialog has to show the account the registry
             // sees, not an emptier one.
             parts: Parts::ALL,
+            // Absent `[JMAP OAuth2]` reads as `Config::default()`, whose
+            // `client_id` is `None`.
+            oauth2_registered: false,
         }
     );
 }
