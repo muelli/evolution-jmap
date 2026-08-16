@@ -29448,3 +29448,107 @@ outside this log) — unchanged, so that item stays exactly where the
 299th–307th sessions left it. This test needs none of that: it drives
 `JmapConfigLookup` directly, which is already wired and already
 human-independent.
+
+**Delivered, pushed as `ec3b19a`.** Followed the 307th session's own recipe
+almost exactly, verifying every step against the real EDS 3.52.3 headers on
+this VM rather than trusting the log's word:
+
+- `tests/functional/config-lookup-client.c`: loads
+  `module-jmap-configuration.so` itself via `e_module_load_all_in_directory`
+  + `g_type_module_use` (nothing scans for this module — see
+  `jmap_config::module`'s own doc comment for why), builds a real
+  `ESourceRegistry`/`EConfigLookup`, runs the lookup with a `GMainLoop`
+  (plus a 30-second timeout source, since `e_config_lookup_run`'s callback
+  contract has no deadline of its own), and — the one piece the 307th
+  session's spike had not reached — applies the one result it gets onto a
+  **scratch `ESource`** via `e_config_lookup_result_configure_source`, the
+  same call the account assistant makes when a user picks a result and the
+  only way to read a "simple" result's added values back at all
+  (`e-config-lookup-result-simple.c` keeps them in a private `GSList`, no
+  getters).
+- `jmap_functional::Session::stage_config_lookup_module`: new method,
+  because this module is not scanned by any daemon the way the other three
+  are — it registers the moment a real `EConfigLookup` is *constructed*,
+  which only a client does — so the directory has to be handed to the
+  client as an argument, and the method returns it rather than pointing an
+  environment variable at it. Also sets `LD_LIBRARY_PATH=/usr/lib/evolution`,
+  the 307th session's own finding (the module's transitive
+  `libevolution-mail.so` dependency is off the default loader path for a
+  `dlopen`, unlike a binary linked against `evolution-shell-3.0` directly).
+- `cmake/Functional.cmake`: a `functional-config-lookup-client` executable
+  linking `evolution-shell-3.0` — already required unconditionally by the
+  top-level `CMakeLists.txt` for `module-jmap-configuration.so` itself, so
+  this added no new pkg-config dependency to check for — and a
+  `functional-config-lookup` ctest alongside the other four, passing
+  `JMAP_FUNCTIONAL_CONFIG_LOOKUP_CLIENT`/`_MODULE`.
+- `rust/crates/jmap-functional/tests/config-lookup.rs`: builds the mock the
+  same way `jmap-config/tests/oauth2_setup.rs` does
+  (`oauth_authorization_server`/`oauth_client_registration`), passes the
+  mock's own `origin()` (already `http://127.0.0.1:<port>`) as `servers` —
+  exactly the shape the 307th session's `parse_target` fix reads — and
+  asserts the full chain: one complete `jmap` result,
+  `[Collection]`/`[Authentication]`/`[Security]` correct on the configured
+  scratch source, including the host/port naming the mock's own plaintext,
+  non-default-port origin and the authentication method naming this crate's
+  own `JMAP` `EOAuth2Service`.
+
+**Spiked against real headers before writing the permanent version.** Wrote
+the client to `/tmp` first, compiled it standalone with
+`pkg-config --cflags --libs evolution-shell-3.0` (no warnings), and ran it
+by hand under `dbus-run-session` against a real `jmap-mockd --oauth2` before
+touching the repository — the same discipline the 307th session used, and
+worth repeating because it caught the exact shape of
+`e_config_lookup_dup_results`'s ownership (`(transfer full)`, both container
+and elements — confirmed by reading `e-config-lookup.c`'s own doc comment)
+before it became a leak or a use-after-free in committed code, and confirmed
+`e_config_lookup_result_configure_source`'s reachability from a `simple`
+result at all (also read from `e-config-lookup-result-simple.c`, which is
+not installed as a header comment anywhere — the `.c` file, from
+`/tmp/evo-src`).
+
+**A mutation check, not just a green run.** Temporarily reverted `run()`'s
+port/secure arguments to the 306th session's original bug (hardcoded `0`,
+`true`) and rebuilt: `functional-config-lookup` failed exactly as expected
+(`result-count=0` against `result-count=1`), then reverted the mutation and
+confirmed `config_lookup.rs` was back to a byte-for-byte match with `git
+diff` before rebuilding green. This test would have caught the bug the
+307th session found and fixed, which is the bar a regression test for that
+fix has to clear.
+
+**Gates.** `cargo fmt --all -- --check` clean. `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean.
+`cargo test --workspace --exclude example-module --locked` — the same
+twenty pre-existing `JMAP_FUNCTIONAL_*_CLIENT`-unset `jmap-functional`
+failures every prior session's gate has documented (eleven book, five
+calendar, one mail, two transport) plus this session's own new one
+(`config-lookup`, same cause, same message) under plain `cargo test`;
+`cargo test --workspace --exclude example-module --exclude jmap-functional
+--locked` — fully green, confirming nothing outside `jmap-functional`
+regressed. `cmake -S . -B build -G Ninja -DENABLE_FUNCTIONAL_TESTS=ON &&
+ninja -C build && ctest --test-dir build` — **16/16**, `functional-config-
+lookup` among them, from a from-scratch `rm -rf build` reconfigure. Hit
+[[disk-fills-from-cargo-target]] once before the first build (`rust/target`
+at 24 GiB, `/` at 100%); `cargo clean --profile dev` recovered it and every
+number above is from the clean rerun. `ci/checks.sh` still cannot run on
+this VM ([[checks-sh-blocked-on-vm]]); the two new files carry SPDX
+`GPL-3.0-or-later` headers by hand, and `docs/functional-tests.md`'s
+addition is covered by `REUSE.toml`'s existing `docs/**` aggregate
+annotation (checked, not assumed). No new dependencies, `Cargo.lock`
+untouched.
+
+**Not tagging any milestone.** This is M9-layer-1-shaped real-server-
+readiness tooling under M7, same as the 306th/307th sessions' work — it
+proves `JmapConfigLookup` on every green CI run instead of only once by
+hand, but M7 itself is still gated on the maintainer's open method-chooser-
+vs-auto-discovery question, unchanged.
+
+**Next session.** The `insert_widgets` OAuth2-wiring item stays exactly
+where the 297th–307th sessions left it: gated on the maintainer's design
+decision, and independently on cross-thread FFI/lifetime reasoning this
+codebase has not attempted elsewhere — an escalation candidate once the
+design question is answered, not before. `docs/BACKLOG.md` is unchanged.
+M10 is unchanged (needs `Containerfile.ci`/`ci-image.yml` growth, out of
+these hard rules). Worth a look for whoever picks up the design question
+next: this session's `config-lookup.rs` is now the concrete, human-readable
+example of what a complete `EConfigLookupResult` looks like on the wire,
+which may help ground that decision.
