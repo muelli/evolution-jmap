@@ -35,6 +35,21 @@
 //! instantiates every service registered by then — no manual `g_object_new`
 //! or `e_oauth2_services_add` call needed here.
 //!
+//! ## Why the `[JMAP OAuth2]` extension registers here too
+//!
+//! `jmap_config::oauth2::ensure_registered`'s own doc names this module load
+//! as "the one caller that *does* have to think about it": EDS's own
+//! `.source` keyfile parser restores an account's extensions by the same
+//! `e_source_get_extension` name lookup `jmap_config::oauth2::apply`/`read`
+//! use, and this process is where a saved account's source is first parsed
+//! from disk. `apply`/`read` register the type themselves, but nothing calls
+//! either from a bare module load — so without this, a `.source` file naming
+//! `[JMAP OAuth2]`, read here before anything else in this process has
+//! touched that particular source, would have the group silently dropped
+//! rather than restored. `tests/oauth2_extension.rs` drives exactly that
+//! path: `e_source_get_extension` on a fresh source, straight after loading
+//! the module, with no `apply`/`read` call in between.
+//!
 //! ## The C symbols are not here
 //!
 //! [`load`] and [`unload`] are the bodies; the `#[unsafe(no_mangle)]`
@@ -73,6 +88,18 @@ use crate::factory::{JmapCollectionFactory, remember_backend_type};
 /// The backend then goes before the factory, because the factory's `class_init`
 /// needs the type it produced.
 ///
+/// [`jmap_config::oauth2::ensure_registered`] is called last and does not take
+/// `type_module`: unlike the three types above, `[JMAP OAuth2]`'s extension
+/// type is registered statically, once, for the life of the process — the
+/// same way EDS's own `.source`-parsing extension types are — rather than
+/// against this module, because `e_source_get_extension`'s lookup does not
+/// care which `GTypeModule` an `ESourceExtension` subclass belongs to, only
+/// that one is registered under the name asked for. Calling it here, rather
+/// than leaving it to the first `jmap_config::oauth2::apply`/`read`, is what
+/// closes the gap that function's own doc names: this process parses a saved
+/// account's `.source` file before anything else here has a reason to call
+/// either.
+///
 /// # Safety
 ///
 /// `type_module` must be the `GTypeModule *` the registry passed to
@@ -86,6 +113,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
             register_dynamic::<JmapCollectionFactory>(type_module);
             register_dynamic::<jmap_config::oauth2_service::Service>(type_module);
         }
+        jmap_config::oauth2::ensure_registered();
     });
 }
 
