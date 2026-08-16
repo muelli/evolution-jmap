@@ -29217,3 +29217,64 @@ first: a new integration test spawning the actual `jmap-mockd` binary
 raw-`TcpStream` HTTP client rather than adding a new dependency) proving the
 well-known endpoint answers 404 without the flag and 200 with it, and that
 registration actually returns a `client_id`.
+
+**Delivered.** `rust/crates/jmap-mock/tests/mockd_oauth2.rs` (new): spawns
+`jmap-mockd --port 0` (plus `--oauth2` where relevant) as a real child
+process, reads its startup line for the ephemeral origin it bound, and drives
+it over a raw `TcpStream` exactly as `upload.rs` already does — three tests:
+the metadata endpoint 404s with no flag, 200s with it and matches the origin
+(`issuer`, `registration_endpoint`, `grant_types_supported`), and
+`/oauth/register` answers 201 with a `client_id`. Confirmed red first: before
+adding the flag, the two `--oauth2` tests failed with `jmap-mockd`'s own
+"unknown argument" usage error (an argument-parsing failure, not a
+missing-feature 404 — worth noting only because it is a *different* red than
+the one intended, and both are equally valid evidence the feature did not
+exist yet). `jmap-mockd.rs` gained the `--oauth2` flag itself: off by
+default, wiring the exact `MockServerBuilder::oauth_authorization_server`/
+`oauth_client_registration` calls `jmap-config/tests/oauth2_setup.rs` already
+proves work end to end with `discover_and_register`, just exposed on this
+binary's own command line for the first time. `OAUTH2_CLIENT_ID` is a fixed
+constant — this binary has no notion of distinct clients, so there is
+nothing for a generated id to distinguish.
+
+**What this unblocks, concretely.** A human can now run
+`jmap-mockd --oauth2` and drive `JmapConfigLookup`'s discovery path (or
+`oauth2_setup::discover_and_register` directly) against a real listening
+process — useful for the M7 "needs human verification" step once the
+maintainer or a future session wants to exercise "Look Up Account Details"
+by hand rather than only through `MockServer`'s in-process builder. It also
+gives the M9 `EConfigLookup`-dispatch functional test the 305th session
+planned next a real server to discover against, rather than that session
+having to build mock OAuth2 support and the EDS-dispatch harness in the same
+sitting.
+
+**Gates.** `cargo test -p evolution-jmap-mock --test mockd_oauth2 --locked`
+green (3 tests); `cargo test --workspace --exclude example-module --locked`
+green except the same eleven pre-existing `JMAP_FUNCTIONAL_BOOK_CLIENT`-unset
+`jmap-functional` failures every prior session's gate has documented.
+`cargo clippy --workspace --exclude example-module --all-targets --locked
+-- -D warnings` clean. `cargo fmt --all -- --check` clean (one auto-format
+applied and reverified). `ninja -C build` (release) then `ctest --test-dir
+build` 15/15. Hit [[disk-fills-from-cargo-target]] before the workspace test
+run (`rust/target` at 24 GiB, `/` at 100%); `cargo clean --profile dev`
+recovered it and the rerun above is the clean one. No new dependencies
+(`serde_json` was already this crate's own dependency), so `rust/Cargo.lock`
+is untouched. `ci/checks.sh` still cannot run on this VM
+([[checks-sh-blocked-on-vm]]); the one new file carries its SPDX
+`GPL-3.0-or-later` header, checked by hand.
+
+**Not tagging any milestone.** This is real-server-readiness tooling, not a
+milestone's acceptance criterion by itself.
+
+**Next session.** The EConfigLookup-against-a-real-registry functional test
+the 305th session planned is now more tractable than it was: the mock side
+of OAuth2 discovery no longer needs building alongside it. What that test
+still needs, unchanged: new `evo-sys` bindings for a live `EConfigLookup`
+(`e_config_lookup_new` needs a real `ESourceRegistry`) and for inspecting an
+`EConfigLookupResult`, plus registering the test under `cmake/
+Functional.cmake`'s `dbus-run-session` environment the way `functional-book`/
+`functional-cal`/`functional-mail` already are — `jmap-mockd --oauth2` (this
+session) is the server side that test can now point at instead of inventing
+one. M10's container matrix and M7's remaining `insert_widgets` OAuth2-
+triggering question are unchanged and out of scope for the reasons the
+296th–304th sessions already recorded.
