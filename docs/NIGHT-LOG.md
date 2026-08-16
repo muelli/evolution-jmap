@@ -26567,3 +26567,10 @@ vfunc (`insert_widgets`) needs a display this VM does not have; a real OAuth2
 flow needs one too, for the credentials prompter's consent page; the
 docs/BACKLOG.md contact/vCard and calendar/iCal fidelity items are all still
 parked there.
+
+## 2026-08-16 (two-hundred-and-eighty-first session)
+
+**Claiming: OAuth2, slice 1 — RFC 8414 authorization-server metadata
+discovery in `jmap-client`, so a JMAP `EOAuth2Service` has deployment
+endpoints to answer with.** Running on `claude-opus-5` via the escalation the
+last session wrote.
