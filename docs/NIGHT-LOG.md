@@ -29861,3 +29861,50 @@ performable from this VM. If both come back clean, M7's UI surface is
 complete-in-substance and the milestone tag is the human confirmation away,
 not more code. `docs/BACKLOG.md` is unchanged; nothing tonight was
 edge-case polish of a closed backend.
+
+## 2026-08-16 (three-hundred-and-twelfth session)
+
+**Claiming: `live_server.rs` still calls the naive `Session::primary_account`
+instead of the robust `Client::primary_account`.** Running on Sonnet.
+`git fetch origin` shows `origin/master` unchanged at `5e0fa0c` (the 311th
+session's tag), so no other agent has this.
+
+Rather than re-running the same "survey the priority queue" pass several
+sessions in a row already had, this session had a read-only Explore
+subagent independently re-derive, from current source rather than the
+log's summary of itself, whether the "real-server readiness" leaf items
+really are as closed as the 309th/310th sessions concluded. It found a
+real, concrete gap: `rust/crates/jmap-client/tests/live_server.rs` lines
+129, 155, and 175 call `client.session().primary_account(CAPABILITY_*)` —
+`jmap-proto/src/session.rs`'s `Session::primary_account`, which reads only
+`primaryAccounts` and returns `None` the moment a server omits it — instead
+of `client.primary_account(CAPABILITY_*)` (`jmap-client/src/client.rs:173`),
+the robust wrapper around `Session::resolve_primary_account` that also
+infers the sole personal account offering the capability when
+`primaryAccounts` is (permittedly, per RFC 8620 §2) absent.
+
+Confirmed independently rather than trusting the subagent: `git log`
+shows `abca418` ("infer the primary account when the server omits it",
+today) already carried this exact fix into `jmap-mail/src/connect.rs`,
+`jmap-backend-book/src/connect.rs`, `jmap-backend-cal/src/connect.rs`, and
+`jmap-collection-sync/src/layout.rs`, but not into `live_server.rs` —
+grepped for every remaining `.primary_account(` call in the workspace and
+confirmed `live_server.rs` is the only file still on the naive path. This
+is exactly the current priority's capability-negotiation-robustness item:
+the one test file whose entire purpose is proving robustness against a
+real server does not exercise the robustness fix, so a real server that
+(spec-legally) omits `primaryAccounts` would make these three tests print
+"skipping" and pass green while silently never touching the code path that
+handles that server correctly.
+
+**Increment**: swap the three `live_server.rs` call sites from
+`client.session().primary_account(...).cloned()` (returns `Option<&Id>`)
+to `client.primary_account(...)` (returns `Result<Id, Error>`), matching
+what the production connect paths do, and update the doc comments that
+currently describe the naive accessor. TDD: `jmap-proto`'s existing
+`resolve_primary_account` unit tests already cover the underlying fallback
+logic (that is what `abca418` added tests for), so this increment's own
+red/green is the `live_server.rs` compile+`--ignored` run before/after —
+there is no new unit to add here, only routing three real-server smoke
+tests through the already-tested robust path instead of the untested-by-
+comparison naive one.
