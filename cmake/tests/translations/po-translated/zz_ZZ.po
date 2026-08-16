@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The second fixture language; its marker differs from xx.po's so a build
+# that compiled one catalogue twice would be caught.
+msgid ""
+msgstr ""
+"Project-Id-Version: evolution-jmap\n"
+"Language: zz_ZZ\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "JMAP"
+msgstr "FIXTURE-ZZ-PROTOCOL"

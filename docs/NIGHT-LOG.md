@@ -25301,3 +25301,98 @@ their contact-editor behaviour unmeasured; whether the editor lets a handle be
 moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-ninth session)
+
+**The build now compiles and installs the catalogues, which is what the last
+session named as the next increment.** `cmake/AddTranslations.cmake` defines
+`add_translations()`: it reads `<PO_DIR>/LINGUAS`, compiles each language's
+`.po` with the `po-compile` binary the workspace already builds, and installs
+the result as `<DESTINATION>/<lang>/LC_MESSAGES/<domain>.mo` — the path
+`jmap-backend-core`'s `LOCALE_DIR` points at. `cmake/Translations.cmake` makes
+the one real call, over `po/` with the `evolution-jmap` domain into
+`${LANGUAGE_SUPPORT_DIRECTORY}`, and registers the check.
+
+**The two files exist separately for a reason.** The check builds a fixture
+project that includes the function under test; if the function and this
+project's own call lived in one file, that fixture would inherit our
+catalogues and re-register the very test running it.
+
+**Vacuity was the problem to solve, not the wiring.** `po/LINGUAS` is empty,
+so any assertion about what this build installs is today equally true of a
+build that installs nothing — the last session flagged exactly that, and it is
+why the check does not test the real call. `cmake/tests/check-translations.cmake`
+configures, builds and installs the fixture project in
+`cmake/tests/translations/` four times over four fixture `po/` directories:
+
+- **two languages** (`xx`, `zz_ZZ` — the underscored form included on
+  purpose), asserting each `.mo` is where gettext looks, starts with the
+  format's magic number, holds *its own* marker and not the other's, and that
+  the list the function reports back to packaging names exactly the two files
+  that arrived;
+- **a language with no `.po`** — configuring must fail and must name `qq`,
+  because a skipped language is a build that ships one fewer than `LINGUAS`
+  promises and looks from the outside exactly like a translated one;
+- **an empty `LINGUAS`**, this repository today — configure, build and install
+  must all succeed and produce no `share/locale` at all;
+- **a `.po` the compiler refuses** (a `msgctxt` entry) — the build must go
+  red and carry the compiler's reason, since a swallowed compile failure is
+  the worst outcome available here: a green build showing English to a user
+  who has a translation installed.
+
+Mutation-checked three ways: skip a missing `.po` instead of stopping → the
+missing scenario fails; install into `<lang>/` without `LC_MESSAGES` → the
+catalogue is not found; compile every language from `xx.po` → the zz_ZZ
+marker assertion fails.
+
+**A real bug the fixtures caught, in the parser and not in the fixture.**
+`file(STRINGS)` without `ENCODING UTF-8` reads a file the way `strings(1)`
+does: a non-ASCII byte is binary and *ends the line there*. So a comment
+holding an em dash arrives as two lines, and the second no longer starts with
+`#` — it is read as a list of languages. The first run of the missing-`.po`
+scenario failed with "names a, but there is no a.po", the word `a` coming out
+of the middle of a sentence. This project's own `po/LINGUAS` holds em dashes,
+so this would have hit the real call the moment a language was added; the
+fixture `LINGUAS` files keep one deliberately.
+
+Packaging is wired too, and its branch is honestly dead today: the
+`translations` component is appended to `CPACK_COMPONENTS_ALL` only when there
+are catalogues (an empty component is not a component CPack can be asked
+for), and `INSTALLED_CATALOGUES` is appended to `EXPECTED_PACKAGE_FILES`, so
+the first `.po` that lands makes `package-deb`'s equality require the package
+to carry it. Untested until then, and said here rather than implied.
+
+Tests: +1 CTest (`translations`, four scenarios), 14 → 15. No Rust change:
+`cargo test --locked` 1175 as before, `cargo fmt --all --check` clean,
+`cargo clippy --workspace --exclude example-module --all-targets --locked --
+-D warnings` clean; `ninja -C build` then `ctest --test-dir build` 15/15,
+functional, EDS-linked and packaging legs included. `ci/checks.sh` still stops
+at its first step on this VM (no `reuse`/`pipx`/`uvx`/`cargo-deny`), so those
+were reasoned by hand: every new file carries an SPDX `GPL-3.0-or-later`
+header, and `rust/` is untouched — `Cargo.lock` unchanged, so `cargo deny`'s
+answer is the one it gave on the last green run.
+
+No milestone tag. Closed: "CMake does not call it" — the chain from a marked
+string to an installed `.mo` is now complete except for its input. **Still
+open, and unchanged from last session: no `.po` exists.** Whether this
+repository's first translation should be written by an autonomous session is
+still a maintainer's call, not one to take in the dark; the machinery is now
+ready for one, and adding a language is `po/LINGUAS` plus the `.po` and
+nothing else.
+
+Unchanged blockers: `gettext` is not in `Containerfile.ci`, so the `.pot` in
+the tree is trusted to have come from `po/extract.sh`; a transition rule
+outside the counted shape still costs the whole zone, and whether any zone
+Evolution ships is in that state is unmeasured beyond Berlin; M10 still has no
+CI matrix; the calcard directive's two emitters are still ours; M9 has no CI
+job and no GUI tier; M7 still **needs human verification in real Evolution**;
+an `UNTIL` the parser itself refuses is invisible to `jmap-ical`; whether
+Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution
+shows only the first" bet is still unverified; the two `LABEL` `TYPE` risks
+stand; a deathday and a birthday stated as a year alone are still invisible;
+the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are
+unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.

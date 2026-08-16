@@ -35,6 +35,17 @@ set(CPACK_COMPONENTS_ALL
 	config-module
 )
 
+# The catalogues, when there are any. Conditional because CPack is asked for
+# a list of components and an empty one is not a component: with po/LINGUAS
+# empty — this repository's state today — there is nothing to package and
+# naming it anyway would be asking CPack for a component no install rule
+# creates. The first `.po` that lands turns this on, and the equality below
+# is what then requires the package to carry it rather than build a package
+# that is quietly untranslated.
+if(INSTALLED_CATALOGUES)
+	list(APPEND CPACK_COMPONENTS_ALL translations)
+endif()
+
 # `<name>_<version>_<arch>.deb`, which is what every tool that reads a
 # directory of packages expects; CPack's own default is a CMake-ish name.
 set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
@@ -112,6 +123,10 @@ set(EXPECTED_PACKAGE_FILES
 	${EDS_REGISTRY_MODULE_DIR}/module-jmap-backend.so
 	${EVOLUTION_MODULE_DIR}/module-jmap-configuration.so
 )
+
+# Named by add_translations() rather than spelled out again, so a catalogue
+# cannot be installed under a path the package check does not know about.
+list(APPEND EXPECTED_PACKAGE_FILES ${INSTALLED_CATALOGUES})
 
 string(REPLACE ";" "|" _expected_package_files "${EXPECTED_PACKAGE_FILES}")
 

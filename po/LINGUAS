@@ -3,7 +3,12 @@
 #
 # The languages this project has a translation for, one code per line, as
 # gettext's own build machinery expects. A language listed here must have a
-# `<code>.po` beside this file.
+# `<code>.po` beside this file: the build compiles each one with `po-compile`
+# and installs it as
+# `${LANGUAGE_SUPPORT_DIRECTORY}/<code>/LC_MESSAGES/evolution-jmap.mo`, and
+# refuses to configure for a language whose `.po` is missing rather than
+# shipping one language fewer than this file promises. Adding a language is
+# therefore this file plus the `.po`; nothing else has to be edited.
 #
 # Empty on purpose: there are no translations yet. That is not the same as
 # translation being unsupported — the modules bind the `evolution-jmap` domain
