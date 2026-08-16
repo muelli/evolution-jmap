@@ -28587,3 +28587,57 @@ reasoning this codebase has not attempted before — escalate to
 item has turned up by then. M10's container matrix and the GitLab-parity gap
 for M9's two jobs remain out of scope for these hard rules. `docs/
 BACKLOG.md`'s items are all still parked there, unchanged.
+
+## 2026-08-16 (three-hundredth session)
+
+**Survey, no claim.** `git fetch origin` at the start shows `origin/master`
+unchanged at `66c4e39` (the 299th session's tag). Running on Sonnet.
+
+Re-walked the whole current-priority queue from the code rather than trusting
+the log's word, the same discipline the 296th/297th/299th sessions used, to
+make sure four sessions in a row agreeing wasn't just four sessions in a row
+not re-checking. Confirmed independently:
+- **M7** (`jmap-config/src/backend.rs`'s `insert_widgets`): functionally
+  complete for password auth (server/port/username/TLS entries, live status
+  label, all bound to the collection). The only gap is OAuth2
+  discover-and-register wiring, unchanged from the last four sessions' finding
+  — gated on the maintainer's still-unanswered method-chooser-vs-
+  auto-discovery question, and independently on cross-thread FFI/GObject
+  reasoning (a blocking network call off the GTK main thread, marshalled back
+  onto cached raw widget/`ESource` pointers) this codebase has not attempted
+  anywhere else.
+- **Real-server readiness**: re-checked, not re-read. `jmap-client/tests/
+  live_server.rs` (183 lines, `#[ignore]`d, session/Core-echo/read-only
+  Mailbox-AddressBook-Calendar-get, each tolerating capability absence) is a
+  complete harness; `jmap-proto/src/session.rs`'s capability negotiation
+  (`resolve_primary_account`, the four `max_*` limits) is implemented AND
+  consumed (`jmap-client/src/client.rs`, `jmap-client/src/mail.rs`,
+  `jmap-mail-sync/src/lib.rs:1027`) — no TODO/unimplemented anywhere in
+  `oauth2*.rs`/`account.rs`/`connect.rs`/`backend.rs`. Nothing left here.
+- **M9**: tagged complete (299th session). **M10**: still needs
+  `Containerfile.ci`/CI-image growth, still off-limits.
+- **`docs/BACKLOG.md`** (64 lines, read in full): every item is genuinely
+  M3/M4 vCard/iCal fidelity polish, one explicitly-deferred M7 edge case, or
+  the `ConnectError` translatable-strings retrofit — none of them are
+  current-priority work wearing a disguise.
+
+**Conclusion: the entire current-priority band is blocked**, on either human
+GUI verification (nothing new to verify — the human-verification rounds
+already happened), the maintainer's open design decision, or M10's
+out-of-scope infra. Not escalating: the one open item (M7's OAuth2 GTK
+wiring) needs the design decision made *first* — no model, however capable,
+should guess a user-facing auth-flow design, so writing `claude-opus-5` to
+`~/.night-shift-escalate` now would just spend the escalation on a task that
+would still be blocked afterward. Surfaced the open question directly to the
+maintainer in this session's chat instead, since four sessions of logging it
+in a file nobody but the next agent reads has not moved it.
+
+No commits to `rust/`, `docs/BACKLOG.md`, or `docs/MILESTONES.md` — only this
+log entry. Tests/clippy/fmt not re-run, nothing in the tree changed.
+
+**Next session**: unchanged until the maintainer answers the method-chooser-
+vs-auto-discovery question. If it arrives, that unblocks the GTK wiring item
+(still an escalation candidate for the concurrency reasoning alone, once the
+design is fixed). If it does not, re-surveying from scratch each session adds
+little; a future session should check whether the question has been answered
+before re-deriving the same "everything is blocked" conclusion again.
