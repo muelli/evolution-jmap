@@ -81,6 +81,10 @@
 //! `DTSTART` where RFC 8984 §4.3.3 wants a local time in the event's own zone,
 //! and the two differ by exactly the offset this crate cannot compute. Such a
 //! rule is therefore read as unmappable rather than shifted — see `read_until`.
+//! A `VTIMEZONE` observance's own `UNTIL` is the same shape one level down and
+//! *is* converted, because an observance dates itself in the zone it defines:
+//! the offset is the fixed one `TZOFFSETFROM` states in the same component,
+//! not a zone whose rules have to be evaluated. See `Ends`.
 //!
 //! An all-day event has no property of its own in iCalendar; it is a `DTSTART`
 //! written as a date rather than a date-time, which puts JSCalendar's
@@ -1416,7 +1420,7 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     let mut vevent = vevent_of(event, as_a_date, zone, None);
 
     for rule in event.recurrence_rules.iter().flatten() {
-        if let Some(value) = rule_to_rrule(rule, zone, as_a_date) {
+        if let Some(value) = rule_to_rrule(rule, Ends::In(zone), as_a_date) {
             vevent = vevent.with(Property::raw("RRULE", &value));
         }
     }
@@ -1648,23 +1652,21 @@ fn vtimezone_of(tzid: &str, definition: &Value) -> Option<Component> {
 /// why an observance can date itself in the zone it is defining.
 fn observance(name: &str, rule: &Value) -> Option<Component> {
     let member = |name: &str| rule.get(name).and_then(Value::as_str);
+    // The offset this observance's own local times are stated in, which its
+    // `UNTIL` needs as well as its `DTSTART` — see [`Ends::At`].
+    let offset_from = member("offsetFrom").and_then(utc_offset)?;
     let mut observance = Component::new(name)
         .with(Property::raw(
             "DTSTART",
             &member("start").and_then(to_ical_date_time)?,
         ))
-        .with(Property::raw(
-            "TZOFFSETFROM",
-            &member("offsetFrom").and_then(utc_offset)?,
-        ))
+        .with(Property::raw("TZOFFSETFROM", &offset_from))
         .with(Property::raw(
             "TZOFFSETTO",
             &member("offsetTo").and_then(utc_offset)?,
         ));
 
-    // When the transition repeats. `rule_to_rrule` is asked for the local
-    // spelling of an `UNTIL` — no zone, no date — which is what RFC 5545 §3.3.10
-    // requires beside a `DTSTART` that is a local time, as every observance's is.
+    // When the transition repeats.
     //
     // Whole or not at all, which is [`maps_recurrence_rule`] asked ahead of the
     // spelling rather than after it: `rule_to_rrule` leaves off a `BYxxx` part it
@@ -1685,7 +1687,7 @@ fn observance(name: &str, rule: &Value) -> Option<Component> {
         }
         observance = observance.with(Property::raw(
             "RRULE",
-            &rule_to_rrule(&recurrence, None, false)?,
+            &rule_to_rrule(&recurrence, Ends::At(&offset_from), false)?,
         ));
     }
 
@@ -2479,23 +2481,25 @@ fn read_observance(component: &Component) -> Option<Value> {
             &component.property("DTSTART")?.raw_value()
         )?),
     );
-    for (name, member) in [("TZOFFSETFROM", "offsetFrom"), ("TZOFFSETTO", "offsetTo")] {
-        // Through `utc_offset` rather than verbatim: it is the same grammar on
-        // both sides, so a value it refuses is one no reader resolves, and a
-        // zone described by an offset nobody can read is not a zone.
-        rule.insert(
-            member.to_owned(),
-            json!(utc_offset(&component.text(name)?)?),
-        );
-    }
+    // Through `utc_offset` rather than verbatim: it is the same grammar on both
+    // sides, so a value it refuses is one no reader resolves, and a zone
+    // described by an offset nobody can read is not a zone.
+    let offset_from = utc_offset(&component.text("TZOFFSETFROM")?)?;
+    rule.insert("offsetFrom".to_owned(), json!(offset_from));
+    rule.insert(
+        "offsetTo".to_owned(),
+        json!(utc_offset(&component.text("TZOFFSETTO")?)?),
+    );
 
     let rules = component
         .all("RRULE")
         .into_iter()
         .map(|property| {
-            // No zone: an observance dates itself in the zone it is defining,
-            // not in one it refers to — see [`read_until`].
-            let recurrence = rrule_to_rule(&property.raw_value(), None)?;
+            // Not a zone but the offset beside it: an observance dates itself in
+            // the zone it is defining rather than in one it refers to, so a UTC
+            // `UNTIL` here converts with nothing but arithmetic — see
+            // [`Ends::At`].
+            let recurrence = rrule_to_rule(&property.raw_value(), Ends::At(&offset_from))?;
             serde_json::to_value(recurrence).ok()
         })
         .collect::<Option<Vec<Value>>>()?;
@@ -2551,7 +2555,7 @@ fn read_vevent(vevent: &Component, zones: &BTreeMap<String, String>) -> Calendar
     let rules: Vec<RecurrenceRule> = vevent
         .all("RRULE")
         .into_iter()
-        .filter_map(|property| rrule_to_rule(&property.raw_value(), time_zone.as_deref()))
+        .filter_map(|property| rrule_to_rule(&property.raw_value(), Ends::In(time_zone.as_deref())))
         .collect();
 
     CalendarEvent {
@@ -3482,17 +3486,97 @@ fn days_in_month(year: u32, month: u32) -> u32 {
     }
 }
 
+/// `("1973-04-29T07:00:00", "-0500")` → `1973-04-29T02:00:00`: the instant a
+/// UTC date-time names, restated where the offset from UTC is fixed at
+/// `offset`.
+fn at_offset(utc: &str, offset: &str) -> Option<String> {
+    moved(utc, offset_seconds(offset)?)
+}
+
+/// The inverse: the UTC date-time a local time in a fixed-offset zone names.
+fn from_offset(local: &str, offset: &str) -> Option<String> {
+    moved(local, -offset_seconds(offset)?)
+}
+
+/// An RFC 5545 §3.3.14 UTC offset as a count of seconds east of UTC, through
+/// [`utc_offset`] so that only a spelling both formats admit is read at all.
+fn offset_seconds(offset: &str) -> Option<i64> {
+    let offset = utc_offset(offset)?;
+    let (sign, digits) = offset.split_at_checked(1)?;
+    let field = |at: usize| digits.get(at..at + 2)?.parse::<i64>().ok();
+    let magnitude = field(0)? * 3600 + field(2)? * 60 + field(4).unwrap_or(0);
+    Some(match sign {
+        "-" => -magnitude,
+        _ => magnitude,
+    })
+}
+
+/// A LocalDateTime moved by `seconds`, in the proleptic Gregorian calendar both
+/// formats count in.
+///
+/// The carry is a day either way and no more, because [`utc_offset`] holds an
+/// offset under 24 hours — which is why this is [`days_in_month`] and a borrow
+/// rather than a conversion to a count of days since some epoch and back. A
+/// leap second is carried into the following minute, the shift being arithmetic
+/// on the instant; and a result outside the four-digit years RFC 5545 §3.3.4
+/// admits is no date-time either format can state, so it is refused rather than
+/// written with a year no reader would parse.
+fn moved(local: &str, seconds: i64) -> Option<String> {
+    let (date, time) = local.split_once('T')?;
+    let field = |value: Option<&str>| value?.parse::<i64>().ok();
+    let (mut year, mut month, mut day) = (
+        field(date.get(..4))?,
+        field(date.get(5..7))?,
+        field(date.get(8..10))?,
+    );
+    let of_day =
+        field(time.get(..2))? * 3600 + field(time.get(3..5))? * 60 + field(time.get(6..8))?;
+
+    const DAY: i64 = 24 * 60 * 60;
+    let of_day = match of_day + seconds {
+        moved if moved < 0 => {
+            (year, month, day) = match (month, day) {
+                (1, 1) => (year - 1, 12, 31),
+                (_, 1) => (year, month - 1, days_in_month_of(year, month - 1)?),
+                _ => (year, month, day - 1),
+            };
+            moved + DAY
+        }
+        moved if moved >= DAY => {
+            (year, month, day) = match day == days_in_month_of(year, month)? {
+                false => (year, month, day + 1),
+                true if month == 12 => (year + 1, 1, 1),
+                true => (year, month + 1, 1),
+            };
+            moved - DAY
+        }
+        moved => moved,
+    };
+
+    (0..=9999).contains(&year).then(|| {
+        format!(
+            "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}",
+            of_day / 3600,
+            of_day / 60 % 60,
+            of_day % 60,
+        )
+    })
+}
+
+/// [`days_in_month`] on the signed fields [`moved`] carries, refusing the year
+/// that has stepped outside what a date-time can state rather than wrapping it.
+fn days_in_month_of(year: i64, month: i64) -> Option<i64> {
+    let length = days_in_month(u32::try_from(year).ok()?, u32::try_from(month).ok()?);
+    (length > 0).then_some(i64::from(length))
+}
+
 /// An `RRULE` value, or `None` for a rule [`writable`] refuses.
 ///
 /// A rule carrying unmodeled parts in `extra` *is* written, narrowed to what an
 /// `RRULE` holds — showing a weekly event on the wrong days beats showing none
 /// — and [`maps_recurrence_rule`] is how the save path knows not to write that
 /// narrowing back.
-fn rule_to_rrule(
-    rule: &RecurrenceRule,
-    time_zone: Option<&str>,
-    as_a_date: bool,
-) -> Option<String> {
+fn rule_to_rrule(rule: &RecurrenceRule, ends: Ends, as_a_date: bool) -> Option<String> {
     if !writable(rule) {
         return None;
     }
@@ -3504,7 +3588,7 @@ fn rule_to_rrule(
     if let Some(count) = rule.count {
         parts.push(format!("COUNT={count}"));
     }
-    if let Some(until) = rule.until.as_deref().and_then(to_ical_date_time) {
+    if let Some(until) = rule.until.as_deref() {
         // JSCalendar's `until` is a local time in the event's own zone, so it
         // is spelled the way DTSTART is — which RFC 5545 §3.3.10 also requires
         // of its value *type*, hence the date-only form for an event written as
@@ -3515,15 +3599,25 @@ fn rule_to_rrule(
         // converting one would need a zone database, which this crate
         // deliberately does not depend on, so a zoned event's UNTIL stays
         // local. It round-trips, and libical reads it in the event's zone.
+        //
+        // An observance's does convert, and is converted: RFC 5545 §3.6.5's own
+        // examples state one as a UTC instant, which is what every producer of
+        // a `VTIMEZONE` writes — tzdata's, libical's, an Exchange invitation's
+        // — so drawing the local form §3.3.10's value-type rule would also
+        // admit means handing readers a spelling they may never have met, for
+        // nothing. See [`Ends::At`].
+        let (stated, suffix) = match ends {
+            Ends::At(offset) => (from_offset(until, offset), "Z"),
+            Ends::In(Some(zone)) if is_utc(zone) => (Some(until.to_owned()), "Z"),
+            Ends::In(_) => (Some(until.to_owned()), ""),
+        };
+        // Only the conversion can fail here — [`writable`] has already read the
+        // value — and a rule that loses the end it was given is one that never
+        // stops, so the whole line goes rather than an unbounded one.
+        let until = stated.as_deref().and_then(to_ical_date_time)?;
         parts.push(match as_a_date {
             true => format!("UNTIL={}", &until[..8]),
-            false => {
-                let suffix = match time_zone {
-                    Some(zone) if is_utc(zone) => "Z",
-                    _ => "",
-                };
-                format!("UNTIL={until}{suffix}")
-            }
+            false => format!("UNTIL={until}{suffix}"),
         });
     }
     // INTERVAL=1 is the RFC 5545 default and only makes the line longer.
@@ -3922,9 +4016,7 @@ fn weekday_token(day: &str) -> Option<&'static str> {
 }
 
 /// A rule's `UNTIL` as RFC 8984 §4.3.3's `until`, which is a local time in the
-/// event's own zone — `time_zone` being the zone the rule's component named, as
-/// `read_start` resolved it, and `None` a floating event or a `VTIMEZONE`
-/// observance.
+/// zone [`Ends`] names.
 ///
 /// RFC 5545 §3.3.10 requires the value to be a UTC instant whenever `DTSTART`
 /// carries a `TZID`, so a `Z` here is what every conformant producer writes —
@@ -3936,28 +4028,50 @@ fn weekday_token(day: &str) -> Option<&'static str> {
 /// [`writable`] refuses it and [`maps_recurrence_rule`] tells the save path to
 /// leave `recurrenceRules` alone.
 ///
-/// The three cases with no offset to shift by are read as they always were. An
-/// event whose zone *is* UTC states the same digits either way; a floating one
-/// has no zone to resolve an instant against, and RFC 5545 admits no `Z` beside
-/// a floating `DTSTART` at all, so its digits are the best reading of a
-/// producer being loose; and an observance's own `UNTIL` belongs to the zone
-/// being defined rather than to one being referred to.
-fn read_until(value: &str, time_zone: Option<&str>) -> Option<String> {
+/// [`Ends::At`] is the one case where the shift *can* be computed, and is —
+/// see that variant.
+///
+/// The two cases with no offset to shift by are read as they always were: an
+/// event whose zone *is* UTC states the same digits either way, and a floating
+/// one has no zone to resolve an instant against — RFC 5545 admits no `Z`
+/// beside a floating `DTSTART` at all, so its digits are the best reading of a
+/// producer being loose.
+fn read_until(value: &str, ends: Ends) -> Option<String> {
     let local = to_local_date_time(value)?;
-    let shifted = value.ends_with(['Z', 'z']) && time_zone.is_some_and(|zone| !is_utc(zone));
-    Some(match shifted {
-        true => format!("{local}Z"),
-        false => local,
-    })
+    if !value.ends_with(['Z', 'z']) {
+        return Some(local);
+    }
+    match ends {
+        Ends::At(offset) => at_offset(&local, offset),
+        Ends::In(Some(zone)) if !is_utc(zone) => Some(format!("{local}Z")),
+        Ends::In(_) => Some(local),
+    }
+}
+
+/// What a recurrence rule's `UNTIL` is stated against — the one thing mapping a
+/// rule needs beyond the rule itself, in either direction.
+#[derive(Clone, Copy)]
+enum Ends<'a> {
+    /// In the zone the component naming the rule is in, as `read_start`
+    /// resolved it, or `None` for a component in no zone — a floating event.
+    In(Option<&'a str>),
+    /// At a fixed offset from UTC, which is a `VTIMEZONE` observance: RFC 5545
+    /// §3.6.5 dates one in the zone it is defining, resolving its local
+    /// `DTSTART` against the `TZOFFSETFROM` in the same component, and RFC 8984
+    /// §4.7.2 does the same for the TimeZoneRule's `start`. An `UNTIL` bounds
+    /// that same series of local times, so it is stated the same way on each
+    /// side — and unlike a `TZID`, an offset is a number of seconds rather than
+    /// a zone whose observance rules have to be evaluated, so the two spellings
+    /// convert into one another with nothing but arithmetic.
+    At(&'a str),
 }
 
 /// The reverse. Parts outside the modeled set are dropped rather than parked
 /// in `extra`: an `RSCALE=CHINESE` copied verbatim into JSCalendar would be
 /// rejected by the server, whose `rscale` is a lowercase calendar-system name.
 ///
-/// `time_zone` is the zone the component naming the rule is in, which only
-/// `UNTIL` needs — see [`read_until`].
-fn rrule_to_rule(value: &str, time_zone: Option<&str>) -> Option<RecurrenceRule> {
+/// `ends` is what only `UNTIL` needs — see [`read_until`].
+fn rrule_to_rule(value: &str, ends: Ends) -> Option<RecurrenceRule> {
     let mut rule = RecurrenceRule::default();
     for part in value.split(';') {
         let Some((key, value)) = part.split_once('=') else {
@@ -3967,7 +4081,7 @@ fn rrule_to_rule(value: &str, time_zone: Option<&str>) -> Option<RecurrenceRule>
             "FREQ" => rule.frequency = value.to_ascii_lowercase(),
             "INTERVAL" => rule.interval = value.parse().ok(),
             "COUNT" => rule.count = value.parse().ok(),
-            "UNTIL" => rule.until = read_until(value, time_zone),
+            "UNTIL" => rule.until = read_until(value, ends),
             "BYDAY" => rule.by_day = Some(value.split(',').map(to_nday).collect()),
             "BYMONTHDAY" => {
                 rule.by_month_day = Some(value.split(',').map(to_month_day).collect());
