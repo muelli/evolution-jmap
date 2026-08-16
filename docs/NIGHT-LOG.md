@@ -26408,3 +26408,36 @@ remaining vfunc (`insert_widgets`) needs a display this VM does not have; a
 real OAuth2 flow would need one too, for the credentials prompter's consent
 page; the docs/BACKLOG.md contact/vCard and calendar/iCal fidelity items are
 all still parked there.
+
+## 2026-08-16 (two-hundred-and-seventy-ninth session)
+
+**Claiming: extend the `--features live-server` harness (real-server
+readiness, roadmap item 2) to the contacts and calendars capabilities —
+today it only round-trips `core` and `mail` against a real server.**
+
+Survey before claiming, since the last two sessions each spent real time
+ruling things out before picking work: M7 is unchanged (still needs a
+display for `insert_widgets`, still not to be touched further here). M9's
+CI job and GUI tier are still blocked on growing `Containerfile.ci` with the
+EDS runtime/Xvfb — `docs/functional-tests.md` already records that as a
+maintainer decision, not an autonomous one, and that reasoning still holds:
+a `pull_request`-triggered job that compiles and runs arbitrary C test
+clients (`tests/functional/*.c`) against real D-Bus-activated daemons is a
+larger attack surface for a fork PR than the pure-Rust jobs `ci.yml` runs
+today, which is exactly the kind of call this file's own top comment says
+this repo keeps off self-hosted infrastructure. M10 is the same shape one
+level up (a whole matrix of pinned images). OAuth2 (the other half of item
+2) still needs a new `EOAuth2Service` *interface* implementation — new
+GObject-vtable territory this codebase has not done, unverifiable without a
+live IdP and a display for the consent page — so it stays a deliberate
+escalation candidate rather than tonight's item, per the last two sessions'
+reasoning, which a fresh look did not change.
+
+What *was* available: `jmap-client/tests/live_server.rs` (added two sessions
+ago) only exercises `core` and `mail` against a real deployment;
+`AddressBook/get` and `Calendar/get` — `Client::address_books` and
+`Client::calendars`, both already implemented and unit-tested against the
+mock — have never been proven against a real server's actual JSON, which is
+the entire point of this file (a real deployment's own quirks, not the
+mock's fixtures). Small, read-only, no display, no new GObject surface —
+tractable tonight.
