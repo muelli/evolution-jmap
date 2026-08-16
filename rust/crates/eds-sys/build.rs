@@ -24,6 +24,39 @@ const ALLOWED_TYPES: &[&str] = &[
     "E(Book|Cal)Cache.*",
     "ECache.*",
     "ESource.*",
+    // How an account authenticates with a token rather than a password, in the
+    // three shapes it takes. `EOAuth2Service` is the *interface* a service
+    // implements and `EOAuth2ServiceInterface` its vtable, which is what the
+    // plugin fills in; `EOAuth2Services` is the registry EDS keeps the known
+    // services in; `EOAuth2ServiceBase` is the `EExtension` a service module
+    // subclasses so that the registry finds it.
+    //
+    // The vtable mentions `SoupMessage`, which arrives as an opaque forward
+    // declaration — the headers already reach libsoup through
+    // `libedataserver.h`, and `libebackend-1.2` already puts
+    // `-I/usr/include/libsoup-3.0` and `-lsoup-3.0` on the line, so nothing new
+    // is probed for and no libsoup layout is claimed.
+    //
+    // Exact names rather than an `EOAuth2Service.*` prefix, for the reason
+    // `CamelFolder` is spelled out below: the prefix also matches
+    // `EOAuth2ServiceGoogle`, `-Outlook` and `-Yahoo`, EDS's own three
+    // built-in services, and emitting their class structs would be this layer
+    // claiming to have layout-checked three types nothing here will ever
+    // subclass. Their `get_type` accessors do ride in on the function prefix
+    // below, which claims nothing: a `GType` is an integer.
+    //
+    // The interface is absent from tests/layout.rs because `g_type_query`
+    // reports nothing about an interface. tests/oauth2.rs stands in, pinning
+    // the vtable's slot offsets by dispatching through every one of them.
+    "EOAuth2Service",
+    "EOAuth2ServiceInterface",
+    "EOAuth2ServiceFlags",
+    "EOAuth2ServiceNavigationPolicy",
+    "EOAuth2ServiceRefSourceFunc",
+    "EOAuth2ServiceBase",
+    "EOAuth2ServiceBaseClass",
+    "EOAuth2Services",
+    "EOAuth2ServicesClass",
     "ECollectionBackend.*",
     "EModule.*",
     "EExtension.*",
@@ -262,6 +295,14 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_(book|cal)_cache_.*",
     "e_cache_.*",
     "e_source_.*",
+    // The token path's own calls, in two prefixes because `e_oauth2_services_*`
+    // does not start with `e_oauth2_service_`. The first brings the wrappers a
+    // service is dispatched through — which is what tests/oauth2.rs calls to
+    // prove the vtable offsets agree — the `util_` helpers that build the form
+    // bodies, and the four `*_sync` entry points that talk to libsecret; the
+    // second brings the registry a service is added to.
+    "e_oauth2_service_.*",
+    "e_oauth2_services_.*",
     // EDS's own `g_object_bind_property`, which is what every collection
     // backend keeps a child's connection following its account's with. Named
     // rather than reached for through gobject-sys because the two are not the
@@ -548,6 +589,11 @@ const ALLOWED_VARS: &[&str] = &[
     "eds_m(ajor|inor|icro)_version",
     "E_SOURCE_EXTENSION_.*",
     "E_SOURCE_CREDENTIAL_.*",
+    // And the three keys EDS files a token under in libsecret. Same class of
+    // hazard again, one step further along: a typo here is not a password that
+    // reads back as absent but a refresh token written where nothing looks for
+    // it, so the account asks for consent again on every start.
+    "E_OAUTH2_SECRET_.*",
     "EDS_CAMEL_PROVIDER_DIR",
     "CAMEL_FOLDER_TYPE_BIT",
     "CAMEL_FOLDER_TYPE_MASK",

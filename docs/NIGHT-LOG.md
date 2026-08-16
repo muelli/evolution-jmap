@@ -26991,3 +26991,122 @@ the *binding surface only*, not the interface implementation: put
 against `g_type_query`, and — because `g_type_query` reports nothing about an
 interface — pin the vtable's field offsets behaviourally, by registering a
 throwaway implementer and calling EDS's own C wrappers through it.
+
+**Done.** `eds-sys` now binds `EOAuth2Service`, its vtable, the
+`EOAuth2Services` registry and the `EOAuth2ServiceBase` extension, with the
+new `rust/crates/eds-sys/tests/oauth2.rs` (6 tests) standing behind them.
+
+*No new pkg-config probe was needed*, which was the session's first surprise
+and worth writing down: the vtable takes a `SoupMessage`, and the previous
+sessions' notes assumed that meant `libsoup-3.0` had to be added to
+`build.rs`'s probe list. It does not. `wrapper.h` already reaches
+`e-oauth2-service.h` through `libebackend.h` → `libedataserver.h`, so clang
+has been parsing that header all along, and `pkg-config --cflags/--libs
+libebackend-1.2` already carries `-I/usr/include/libsoup-3.0` and
+`-lsoup-3.0`. `SoupMessage` comes out as an opaque forward declaration, so no
+libsoup layout is claimed either. The bindgen surface grew by exactly the
+nine allowlisted type names, two function prefixes and one var prefix.
+
+*Exact type names, not an `EOAuth2Service.*` prefix.* The prefix was written
+first and it was wrong: it also matches `EOAuth2ServiceGoogle`, `-Outlook`
+and `-Yahoo`, EDS's three built-in services, whose class structs were duly
+emitted — which, by this crate's own standing rule (the same one that keeps
+`CamelFolderSearch` out from behind `CamelFolder.*`), would be the FFI layer
+claiming to have layout-checked three types nothing here will ever subclass.
+Nine exact names instead; verified afterwards that the three concrete service
+structs are gone from `bindings.rs`. Their `get_type` accessors still ride in
+on `e_oauth2_service_.*`, which claims nothing — a `GType` is an integer.
+
+*How an interface gets pinned when `g_type_query` will not size it.* This is
+the substance of the increment. `EOAuth2Service` is a `GTypeInterface`, and
+`tests/layout.rs`'s whole method — compare `size_of` against
+`g_type_query()` — reports nothing for one (the test asserts that outright:
+the query comes back zeroed). `CamelSubscribable` and `ETimezoneCache` hit
+this before and were covered with structural assertions. That is weaker than
+what is actually at stake here: what can go wrong is not the *size* of the
+vtable but the *offsets* within it, because EDS's `e_oauth2_service_*()`
+wrappers read a function pointer out at an offset the compiled library chose
+while this crate writes one in at an offset bindgen computed. A disagreement
+is a call through whatever pointer happens to sit at the wrong slot, at
+authentication time, in a user's session.
+
+So the check is behavioural rather than structural: register a throwaway
+`GObject` implementing the interface, fill every slot, and then call EDS's own
+C wrappers and assert both *which* of our functions ran (a bit per slot, an
+`AtomicU32`) and *what it returned* (a distinct sentinel string per getter).
+A dispatch that arrives at the function we put in a slot is proof the two
+sides agree about where that slot is — which a size comparison would only
+have been circumstantial evidence for. 16 of the 18 vfuncs are driven this
+way. The two that are not, `prepare_get_token_message` and
+`prepare_refresh_token_message`, need a real `SoupMessage`, and
+`soup_message_new` is deliberately not on the allowlist; their offsets are
+pinned transitively instead, because `prepare_refresh_token_form` sits
+immediately after the first and `extract_error_message` — the *last* declared
+vfunc — immediately after the second, so a wrong size at either would move a
+slot that is dispatched. Dispatching through the last vfunc is what makes
+that argument cover the whole struct rather than a prefix of it.
+
+Every test passed on the first run, which for an ABI test is a reason for
+suspicion rather than confidence, so the dispatch test was falsified before
+being believed: swapping `get_client_id` and `get_client_secret` in the
+interface initialiser (same signature, adjacent slots) makes it fail on the
+returned value, `left: "probe-client-secret" right: "probe-client-id"`. It is
+offset-sensitive, not merely a check that some function ran. Reverted after.
+
+Also learned and recorded in the tests, because it is the list the
+implementation to come is written against: EDS leaves `get_name`,
+`get_display_name`, `get_client_id` and `get_authentication_uri` NULL in the
+default vtable — their wrappers `g_return_val_if_fail` and answer nothing, so
+leaving one empty is not "behave conservatively" but "this service cannot be
+used" — and puts a default behind the rest. `EOAuth2Service`'s only
+prerequisite is `G_TYPE_OBJECT`, so subclassing `EOAuth2ServiceBase` is a
+module-discovery convention rather than a requirement of the interface. And
+`e_oauth2_services_is_supported()` is TRUE on this EDS, which the test
+asserts: it is a compile-time decision of the distribution's package, and a
+FALSE would mean the whole token path is unavailable here however correct the
+code is. `EExtension` itself is now size-checked too — until now nothing
+named it and the factories covered it only as their own leading bytes, and
+`EOAuth2ServiceBase` is an `EExtension` and nothing else.
+
+Tests: 6 new in `eds-sys/tests/oauth2.rs`; `cargo test -p eds-sys` 15 → 21
+across the crate's files, and `cargo test --workspace --exclude
+example-module` green at 142 legs. `cargo clippy --all-targets --locked -- -D
+warnings` clean for the workspace and for `-p eds-sys` separately (eds-sys is
+out of `default-members`, so the workspace run does not reach it); `cargo fmt
+--all --check` clean. `ninja -C build` then `ctest --test-dir build` 15/15,
+all four `functional-*` legs included.
+
+Two pre-existing conditions confirmed rather than introduced, both checked
+against a stashed tree: `cargo test -p example-module` fails to link
+(`undefined symbol: e_mail_shell_view_get_type`, Evolution shell symbols a
+test binary cannot resolve — it is a cdylib loaded by Evolution), and
+`cargo test -p jmap-functional` outside CTest fails 11 tests by design, with
+the crate's own message saying to run it through `ctest -L functional`.
+`ci/checks.sh` still stops at its first step on this VM (no
+`reuse`/`pipx`/`uvx`/`cargo-deny`); the one new source file carries an SPDX
+`GPL-3.0-or-later` header, checked by hand; no new dependencies, so nothing
+for `cargo-deny` to weigh. `rust/target/debug` hit 100% of the root
+filesystem partway through and had to be `cargo clean --profile dev`'d again
+— the third session in a row, so this is a standing tax rather than an
+incident.
+
+No milestone tag. This is the binding surface, not the `EOAuth2Service`
+implementation, and M7 is what it eventually serves.
+
+**Next session:** implementing the interface itself — a GObject that fills
+the four mandatory slots plus the JMAP-specific `get_authentication_uri` /
+`get_refresh_uri` from the RFC 8414 discovery `jmap-client/src/oauth.rs`
+already does, registered from a module so `EOAuth2Services` finds it. The
+ABI risk that motivated escalating this session is now retired: the vtable
+offsets are pinned by a test, so the next increment is ordinary Rust against
+a proven surface plus a `.source`-level integration question, and does not
+obviously need Opus. What it *cannot* do here is the consent exchange, which
+needs a display and a live IdP — that stays a human-verification item.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier
+(both need `Containerfile.ci` growth, a maintainer decision); M7 still
+**needs human verification in real Evolution**, and its one remaining vfunc
+(`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
+page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
+fidelity items are all still parked there.
