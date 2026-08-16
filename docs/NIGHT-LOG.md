@@ -28399,3 +28399,17 @@ items and the parked identity-address-whitespace edge case are all still
 parked there; the GitLab pipeline still lacks the M9 functional/GUI-smoke
 jobs GitHub's has, not required by the roadmap's own M9 acceptance text but
 worth a future session's look if GitLab parity becomes relevant.
+
+## 2026-08-16 (two-hundred-and-ninety-eighth session)
+
+**Claiming a real-server-readiness increment: OAuth 2.0 credentials on the
+connect path.** `jmap-backend-core::connect::credentials` knows only Basic and
+anonymous, so an account whose `[Authentication] Method` names an OAuth2
+service can never authenticate — EDS's OAuth2 credentials-provider impl
+answers `can_store == FALSE`, so no password is ever stored, and the current
+code turns "a user with no password" into `CredentialsRequired` forever.
+Teaching `connect_with` EDS's own rule — `Method` is `OAuth2` or a registered
+service alias → Bearer token from `e_source_get_oauth2_access_token_sync`,
+otherwise Basic — closes that. Headless, no display, no open design question;
+deliberately *not* the `insert_widgets` GTK-threading item the 297th session
+escalated for.
