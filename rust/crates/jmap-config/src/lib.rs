@@ -54,6 +54,12 @@
 //!   each case and reading it back, because a setup that accepts what the
 //!   registry rejects has written an account that fails everywhere except in
 //!   the dialog it was typed into.
+//! - [`oauth2`] is not part of the setup dialog at all, but the storage the
+//!   real-server-readiness track needs beside it: a fifth `ESource`
+//!   extension, `[JMAP OAuth2]`, holding a deployment's discovered endpoints
+//!   and this client's registered id — the answer the `EOAuth2Service`
+//!   interface will read out synchronously once it exists, since discovering
+//!   and registering both need the network and its vfuncs cannot.
 //! - [`backend`] is the GObject the four above are reached through: the
 //!   `EMailConfigServiceBackend` subclass Evolution's *Receiving Email* page
 //!   instantiates for the JMAP provider. It carries the name the page finds
@@ -126,3 +132,4 @@ pub mod complete;
 pub mod defaults;
 pub mod mail;
 pub mod module;
+pub mod oauth2;
