@@ -6,6 +6,14 @@
 # prompt, pushing each green increment. Deployed to ~/ on the runner VM
 # and started inside tmux BY THE OPERATOR (deliberately not automated).
 #
+# Swapping this driver losslessly: `touch ~/.night-shift-stop`, wait for
+# the log to show it exited between iterations, then cp the new script and
+# relaunch the tmux session. Do NOT gate a swap on
+# `pgrep -f dangerously-skip-permissions` from a shell whose OWN command
+# line contains that string — pgrep -f matches the waiting shell itself and
+# the wait never ends. If you must poll for the session, match the process,
+# not your own argv: `pgrep -f '[c]laude --dangerously-skip-permissions'`.
+#
 # Lifecycle & cost: the driver does NOT loop forever. It exits when it
 # can no longer make progress — a drained backlog (several no-op
 # iterations) or a usage limit — so the idle watchdog can nap the VM and

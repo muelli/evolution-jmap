@@ -9,6 +9,34 @@ Round 1 (done): protocol crate, blocking client, stateful mock server,
 42-test TDD suite, dual CI with reproducible builds and provenance. See
 README.
 
+## CURRENT PRIORITY: make it usable by a normal person (2026-08-16)
+
+The four backends work end-to-end in real Evolution (M1–M6, M8 done) and
+v0.1.0 is released — but a real user still cannot use it: there is no
+account-setup UI, and it has never talked to a real JMAP server. Those two
+gaps, not more polish, are what stand between "works for us, hand-configured,
+against a mock" and "works for a user against their own account." So, until
+they close, prioritise in this order:
+
+1. **M7 — account-setup UI** (`module-jmap-configuration.so`). The single
+   biggest blocker. Build it even though its GUI cannot be verified headless:
+   implement, mark it *needs human verification in real Evolution* in the
+   night log, and do NOT tag it COMPLETE until a human confirms it. This is
+   the agent↔human loop — you scaffold, the maintainer verifies in the VM.
+2. **Real-server readiness** — OAuth2 auth (real providers use it; the client
+   only does Basic/Bearer today) via EDS's OAuth2 source support, plus a
+   `--features live-server` integration harness and capability-negotiation
+   robustness, all buildable/testable against the mock now so a real server
+   (Stalwart, then Fastmail) is a config change, not a rewrite.
+3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
+
+**Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
+are closed. The contact-editor fidelity items, extra vCard/iCal corner
+cases, and similar refinements are real but LOW-LEVERAGE right now — record
+them in `docs/BACKLOG.md` for a later hardening pass and move on. Correctness
+still governs *how* the priority work is done (TDD, honest verification); this
+directive governs *what* to work on.
+
 ## Milestones (in order)
 
 ### M1 — `eds-sys`: bindgen FFI layer

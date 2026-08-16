@@ -1,6 +1,7 @@
 Autonomous night session. Repo: ~/evolution-jmap (cwd).
 
 Task: read docs/ROADMAP.md, docs/NIGHT-LOG.md (if present), git log --oneline -15. 
+0. Priority (see ROADMAP "CURRENT PRIORITY"): work on what makes the plugin usable — M7 (account-setup UI) first, then real-server readiness (OAuth2, --features live-server harness), then M9/M10. Do NOT reopen completed backends (M1–M6, M8) to polish edge cases; log any such idea to docs/BACKLOG.md and pick priority work instead. If the only thing you can find to do is edge-case polish of a done backend, that is a signal to switch to M7/real-server work, not to do the polish.
 1. Dependency Analysis: Treat ROADMAP.md as a dependency graph (e.g. M3, M4, M5 can be built in parallel after M2). Identify all currently unblocked and incomplete milestones.
 2. Claiming: Select ONE unblocked task. Before writing code, append a lock entry to `docs/NIGHT-LOG.md` (e.g., "Claiming M3 increment: [description]") and `git push` it. If the push fails, another agent claimed it; pull, rebase, and pick a different unblocked task. **Deadlock handling**: If a task was claimed more than 24 hours ago (check git log for the lock commit timestamp) and shows no subsequent progress, consider the lock expired and claim it.
 3. Execution: Implement ONE focused increment (~30-90 min of work): TDD, red test first, then green.
