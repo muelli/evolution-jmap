@@ -30,8 +30,14 @@ PROMPT_FILE="$HOME/night-prompt.md"
 LIMIT_FILE="$HOME/.claude-limited-until"   # epoch seconds; present only while limited
 STOP_FILE="$HOME/.night-shift-stop"        # one-shot: stop cleanly once, then cleared
 PAUSE_FILE="$HOME/.night-shift-paused"     # durable: stay stopped across reboots until removed
+ESCALATE_FILE="$HOME/.night-shift-escalate"  # one-shot: model to use for the NEXT iteration only
+DEFAULT_MODEL="claude-sonnet-5"            # the shared subscription's workhorse; escalate by exception
 DRAIN_LIMIT=3          # consecutive no-op iterations that mean "backlog drained"
 UNKNOWN_RESET_BACKOFF=21600   # 6h, if a limit is seen but its reset can't be parsed
+
+# Only these models may be escalated to — a typo or junk in the escalate
+# file must not reach the CLI. Anything else falls back to the default.
+is_known_model() { case "$1" in claude-sonnet-5|claude-opus-5|claude-fable-5) return 0;; *) return 1;; esac; }
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
 
@@ -93,13 +99,31 @@ while true; do
         exit 0
     fi
     git pull --rebase --quiet >> "$LOG" 2>&1 || true
+
+    # Model for this iteration: the shared subscription's Sonnet by default,
+    # or a one-shot escalation to Opus/Fable for a single hard item. The
+    # escalation is requested either by a human (`echo claude-opus-5 >
+    # ~/.night-shift-escalate`) or by the agent itself, which the prompt tells
+    # to defer an increment beyond Sonnet's reliable reach rather than botch it.
+    model="$DEFAULT_MODEL"; escalated=0
+    if [ -s "$ESCALATE_FILE" ]; then
+        want=$(head -1 "$ESCALATE_FILE" | tr -dc 'a-z0-9-')
+        if is_known_model "$want"; then model="$want"; escalated=1; log "escalating this iteration to $model"
+        else log "ignoring unknown escalation model '$want'; using $DEFAULT_MODEL"; rm -f "$ESCALATE_FILE"; fi
+    fi
+
     start=$(date +%s)
     out=$(mktemp)
-    claude --dangerously-skip-permissions -p "$(cat "$PROMPT_FILE")" > "$out" 2>&1
+    claude --model "$model" --dangerously-skip-permissions -p "$(cat "$PROMPT_FILE")" > "$out" 2>&1
     status=$?
     cat "$out" >> "$LOG"
     duration=$(( $(date +%s) - start ))
-    log "iteration finished: exit=$status duration=${duration}s"
+    log "iteration finished: model=$model exit=$status duration=${duration}s"
+
+    # Consume a one-shot escalation only after it was actually used, so an
+    # escalation the *agent* just wrote (on a default-model triage pass) still
+    # applies to the next iteration rather than being cleared unused.
+    [ "$escalated" = 1 ] && rm -f "$ESCALATE_FILE"
 
     reset_epoch=$(limit_reset_epoch "$out")
     rm -f "$out"
