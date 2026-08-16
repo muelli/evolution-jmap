@@ -199,6 +199,29 @@ pub fn translate(msgid: &CStr) -> String {
         .into_owned()
 }
 
+/// [`translate`], but handing back gettext's own pointer instead of a copy.
+///
+/// For the one shape of caller [`translate`] cannot serve: a `const gchar *`
+/// vfunc — `EOAuth2Service::get_display_name` is the first — that must answer
+/// synchronously and cannot return an owned `String` a caller a language
+/// barrier away would have no way to free. `dgettext` itself is what makes
+/// this sound rather than a fresh hazard: with nothing to translate it hands
+/// back the very `msgid` pointer it was given, and with a catalogue loaded it
+/// hands back a pointer into memory glibc keeps resident for the domain's
+/// binding, which nothing in this process frees either. Both are good for the
+/// life of the process — the same guarantee a `CamelProvider`'s `'static`
+/// name already leans on when Camel calls `dgettext` on it directly instead of
+/// through this module.
+///
+/// Callers must have called [`bind`] first, as [`translate`] must.
+pub fn translate_static(msgid: &'static CStr) -> *const c_char {
+    // SAFETY: `msgid` outlives the call. `dgettext` never returns NULL — with
+    // nothing to translate it returns the `msgid` pointer unchanged — and the
+    // result is not copied because the whole point is to keep the pointer
+    // gettext itself considers good for the process's life.
+    unsafe { dgettext(DOMAIN.as_ptr(), msgid.as_ptr()) }.cast_const()
+}
+
 /// [`translate`], with `%1$s`-style placeholders filled from `arguments`.
 ///
 /// The form of a message that has to name something — a time zone, a folder, a
