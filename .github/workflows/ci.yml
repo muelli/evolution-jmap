@@ -90,3 +90,35 @@ jobs:
           shared-key: functional
           workspaces: rust
       - run: ci/functional.sh
+
+  # M9 Tier 2 (docs/gui-smoke-test.md): a real Evolution under Xvfb against
+  # jmap-mockd, driven via AT-SPI. Needs the full `evolution` package plus a
+  # virtual X server, not just the EDS runtime `functional` installs, so it
+  # is its own job. Gated the same way and for the same reason: slower than
+  # the rest of the suite, and worth spending deliberately.
+  gui-smoke:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ci/install-deps.sh
+      - run: ci/install-deps-gui-smoke.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gui-smoke
+          workspaces: rust
+      - run: cmake -S . -B build -G Ninja
+      - run: cmake --build build
+      - run: sudo cmake --install build --component camel-provider
+      - run: ci/gui-smoke.sh
+        env:
+          JMAP_MOCKD: ${{ github.workspace }}/build/cargo-target/release/jmap-mockd
+          GUI_SMOKE_ARTIFACTS: ${{ runner.temp }}/gui-smoke-artifacts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gui-smoke-artifacts
+          path: ${{ runner.temp }}/gui-smoke-artifacts
+          if-no-files-found: ignore
