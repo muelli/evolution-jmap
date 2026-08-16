@@ -26979,3 +26979,15 @@ directive's two emitters are still ours; M9 has no CI job and no GUI tier
 (`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
 page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
 fidelity items are all still parked there.
+
+
+## 2026-08-16 (two-hundred-and-eighty-fifth session)
+
+**Claiming the escalated `eds-sys` `EOAuth2Service` bindgen slice** — running
+on `claude-opus-5` as last session's `~/.night-shift-escalate` asked. Scope is
+the *binding surface only*, not the interface implementation: put
+`EOAuth2Service`/`EOAuth2ServiceInterface`, `EOAuth2Services` and
+`EOAuth2ServiceBase` on the allowlist, layout-check the two classed types
+against `g_type_query`, and — because `g_type_query` reports nothing about an
+interface — pin the vtable's field offsets behaviourally, by registering a
+throwaway implementer and calling EDS's own C wrappers through it.
