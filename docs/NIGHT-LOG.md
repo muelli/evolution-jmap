@@ -27723,3 +27723,89 @@ already watches. `evo-sys` needs two new GTK entry points, `gtk_label_new` and
 `gtk_label_set_text` (plain `GtkLabel` calls, already-opaque handle, no new
 type or layout claim), plus `gtk_widget_set_visible` to hide the row when the
 account is complete.
+
+**Delivered, as planned, plus one thing the plan under-stated.** The status
+label is a plain (non-mnemonic) `GtkLabel` on the row under the security check
+button, filled once by `insert_entries` from the account already in scope and
+refreshed by `on_extension_changed` on every `notify` that already re-asks
+`check_complete` — reached there via `g_object_set_data`/`g_object_get_data`
+on `page` (both already in `gobject-sys`; no new FFI for the caching itself).
+`evo-sys` gained three GTK entry points for this: `gtk_label_new`,
+`gtk_label_set_text`, `gtk_widget_set_visible` (allowlisted in `build.rs`,
+named back in `tests/gtk.rs`, which now also resolves and asserts on them —
+`gtk_widget_set_visible` needed no new `CLASSES` row, since it takes the
+already-covered `GtkWidget`). The label is hidden as well as emptied once the
+account is complete, so a working account does not show a blank row.
+
+**What the plan did not say, found while writing it**: `Incomplete`'s own
+`Display` is not what the label shows. It predates this session, is plain
+English, and is used as `check_complete`'s and `commit_changes`'s internal/log
+text — reused as-is by every other backend's connect-time failures too
+(`SourceError`, `jmap_backend_core::source`). But the roadmap's standing
+translatable-strings directive is explicit that account-setup text is
+user-facing "from the moment it is shown", and this label is the first place
+`Incomplete`'s reason is actually shown to a user rather than computed and
+dropped (`is_complete`'s own doc, until now). So `crate::complete` gained a
+separate `status_message(&Account) -> String`, translated per case with
+`jmap_backend_core::i18n::translate`/`translate_with` rather than built from
+`Display` — except for the `Server(SourceError)` case, left as
+`SourceError`'s own untranslated text on purpose: that error is shared with
+every M3–M6 backend's own connect failures, already shipped untranslated, and
+reopening *that* boundary is exactly the low-leverage backend polish this
+session's own priority says not to do. `complete.rs` joined `po/POTFILES.in`
+and `po/extract.sh` regenerated the `.pot` with the two new msgids (verified
+by `jmap-backend-core`'s `potfiles.rs` suite, unchanged at 5/5 green — it
+holds the list in both directions, so a file present but wrongly extracted
+would also have shown up there).
+
+**Tested at both levels that do not need a display.** `status_message` is
+driven with four plain `Account` fixtures in a new `#[cfg(test)] mod tests`
+inside `complete.rs` itself (complete account, missing identity, invalid
+identity, unusable server) — no `ESource` needed, the same reason
+`port_to_text`/`text_to_port`'s own tests in `backend.rs` need none; this is
+the pure half of the decision. The GTK half — the three new entry points
+resolving and typing correctly — is what `evo-sys/tests/gtk.rs` checks, the
+same way it already does for every other widget call this module makes.
+**Still untestable, and still not tagged, is the widget actually appearing
+and disappearing on screen**: GTK 3 needs a display this VM does not have.
+
+Gates: `cargo build -p jmap-config -p evo-sys`, `cargo test -p jmap-config
+--lib` (4 new tests, 9 total), `cargo test -p evo-sys` (`tests/gtk.rs` now
+7 entry points), `sh po/extract.sh` regenerated the `.pot`, `cargo test
+--workspace --exclude example-module --locked` and `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` both clean;
+the eleven `jmap-functional` failures outside `ctest` are the pre-existing,
+documented ones (`JMAP_FUNCTIONAL_BOOK_CLIENT` unset), unchanged and not new.
+`cargo fmt --all --check` clean. `cargo doc -p jmap-config --no-deps` has the
+same five pre-existing warnings in `oauth2.rs` as last session and no new
+ones. `ninja -C build` (release) then `ctest --test-dir build` 15/15,
+`rust-test-eds` and `translations` included, so the rebuilt
+`module-jmap-configuration.so` itself linked, ran its tests, and the `.pot`
+regeneration didn't break the translations test. `cargo clean --profile dev`
+run before and after the CMake gate, per the disk-space lesson; `/` stayed at
+58-83% throughout. No new files, so no new SPDX headers to check; no new
+external crates, `Cargo.lock` untouched.
+
+**Still needs human verification in real Evolution — not tagging M7
+complete.** On top of what the previous two sessions already listed: the
+label shows nothing (and takes no space) for a fresh, complete account,
+shows the right sentence for each of the three ways an account can be
+incomplete, and updates live as the host/port/username entries or the
+security toggle are edited — the same "does the `notify` wiring actually
+fire" question those sessions flagged for the widgets themselves, now
+extended to the label's own refresh.
+
+**`insert_widgets`' own "what is not here yet" list is now empty** except for
+that human-verification line — every field `Connection` carries is on the
+page, bound, and explained. The remaining M7 work is the verification itself,
+which needs a maintainer and a real Evolution, not another increment here.
+
+**Next session**: with `insert_widgets` functionally complete pending human
+sign-off, the current priority's next unblocked item is real-server readiness
+— OAuth2 auth via EDS's `EOAuth2Service` support (the collection-module side
+registered two sessions ago; the account-setup side, `EOAuth2Service`
+discovery UI, is still open) or the `--features live-server` integration
+harness. Unchanged blockers: M10 has no CI matrix; the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier; the OAuth2 consent
+page needs a display this VM lacks; `docs/BACKLOG.md`'s contact/vCard and
+calendar/iCal fidelity items are all still parked there.
