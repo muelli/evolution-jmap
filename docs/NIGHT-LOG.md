@@ -30272,3 +30272,128 @@ not in `docs/BACKLOG.md` (which is M3/M4/M7 polish only, not this), and not
 mentioned by any of the four "nothing to do" sessions before this one — a
 real gap in the roadmap's stated priority 2, previously unnoticed because
 those sessions checked the *EDS* backends' OAuth2 wiring but not Camel's.
+
+**Researched before writing any code**, because Camel's authentication model
+is not the ESource one, and guessing wrong here risked a subtly broken
+commit rather than a missing feature. Cloned upstream evolution-data-server
+3.52.3 and evolution 3.52.3 (`/tmp/evo-data-src`, `/tmp/evo-src` — the
+latter already used by the 316th session) to answer three questions from
+source rather than assumption:
+
+1. **Is there a direct Camel equivalent of `e_source_get_oauth2_access_token_sync`?**
+   Yes: `camel_session_get_oauth2_access_token_sync` (`camel/camel-session.h`,
+   already bound by `eds-sys`'s existing `camel_session_.*`/
+   `camel_network_settings_.*` bindgen wildcards — no new allowlist entry, no
+   new FFI surface). `EMailSession`'s real implementation of it
+   (`libemail-engine/e-mail-session.c`,
+   `mail_session_get_oauth2_access_token_sync`) is a straight relay to
+   `e_source_get_oauth2_access_token_sync`, looked up by matching the
+   service's uid in the source registry — so this is not a second,
+   independently-fallible answer to "is this token good", it is a longer path
+   to the one the EDS backends already trust.
+2. **Does a `NULL` Camel SASL mechanism (this provider's own choice, since JMAP
+   authenticates over HTTP and has none) block the OAuth 2.0 consent dialog
+   from appearing?** No: read `mail/e-mail-ui-session.c`'s
+   `mail_ui_session_authenticate_sync` and `libedataserverui/e-credentials-
+   prompter*.c` — the consent-dialog dispatch is keyed off the account's own
+   `ESource` `[Authentication] Method` (`ECredentialsPrompter` registers one
+   implementation per authentication-method string), not off the Camel
+   mechanism the failing service passed in. evolution-ews's own OAuth 2.0
+   support registers a dedicated `CamelSasl` subclass for a different
+   reason (IMAP's own XOAUTH2 wire format, irrelevant to JMAP's plain HTTP
+   Bearer header) — not because `NULL` blocks the prompt.
+3. **What `CamelAuthenticationResult` should a failed token fetch report?**
+   This is the one genuine judgment call, and it is answered conservatively
+   rather than guessed: `CamelAuthenticationResult` has three values where
+   `ESourceAuthenticationResult` has four, missing exactly `REQUIRED`, so
+   `REJECTED` is Camel's only way to ask for a retry — but reused for OAuth 2.0
+   it would pop the interactive re-consent dialog on a transient token-fetch
+   failure (a network blip), not only on a genuinely revoked grant, every
+   time it happens (traced through `ECredentialsPrompterImplOAuth2`'s dialog
+   path, which shows unconditionally once invoked). Chose `ERROR` — the same
+   classification every other non-401 failure in this file already gets —
+   over introducing that risk, documented at length on `StoreError::OAuth2`
+   itself so the tradeoff is visible rather than buried. `docs/BACKLOG.md` is
+   not the right place for this open question because it is not
+   deferred-until-later polish; it is now recorded in the variant's own doc
+   comment as a considered, revisit-if-real-world-UX-disagrees choice, not a
+   TODO.
+
+**Implemented, TDD.** New `jmap_mail::oauth2` module: `uses_oauth2` (reads
+`CamelNetworkSettings:auth-mechanism`, delegates to the already-tested
+`jmap_backend_core::oauth2::method_is_oauth2` — the same rule, the field
+Camel actually carries it on) and `access_token` (the FFI call above, same
+GError-conversion shape as `jmap_backend_core::oauth2::access_token`).
+`StoreError::OAuth2` variant added. `open_mail`/`authenticate` now take a
+resolved `Credentials` rather than a bare password, with the OAuth2-vs-
+password decision moved into `service.rs`'s `attempt` — mirroring
+`jmap_backend_core::connect::connect_with`'s "decide once" shape for the
+same reason: a store and a transport on one account must not disagree.
+`password_credentials` extracted as the password half so every existing
+test call site keeps compiling. Red first: added
+`an_access_token_is_sent_as_bearer_credentials` (mirrors
+`jmap-backend-book`'s test of the same name) before wiring `attempt`, then
+the OAuth2 branch made it green; new `jmap-mail/tests/oauth2.rs` covers
+`uses_oauth2` against a real `CamelJmapSettings` instance (four cases: no
+mechanism, `"PLAIN"`, `"OAuth2"`, NULL settings) — genuinely driven, not
+mocked, the same pattern `jmap-backend-core/tests/oauth2.rs` uses for the
+ESource side.
+
+**What is deliberately not tested, and why.** `oauth2::access_token`'s raw
+FFI call — unlike `jmap-backend-core/tests/oauth2.rs`'s equivalent, which
+drives `e_source_get_oauth2_access_token_sync` against a real (if
+registry-less) `ESource` and gets a graceful `GError` back.
+`camel_session_get_oauth2_access_token_sync` is a `CamelSessionClass`
+vtable slot the base `CamelSession` leaves unimplemented (confirmed by
+reading `camel-session.c`: no `class->get_oauth2_access_token_sync` is
+assigned in `camel_session_class_init`, unlike `authenticate_sync`, which
+does get a — explicitly-labelled "not for production" — example
+implementation). This crate's own test double
+(`tests/common::Account::open`) constructs a plain `CamelSession`, so
+calling the real function on it would trip Camel's own
+`g_return_val_if_fail` on a NULL vfunc rather than exercise a failure path —
+a property of the test double, not of production Evolution, which always
+runs a real `EMailUISession`. Documented in `oauth2.rs`'s module docs and
+`tests/oauth2.rs`'s header rather than left implicit, so a future session
+does not read the absence of that test as an oversight.
+
+**Gates.** `cargo fmt --all -- --check`, `cargo clippy -p jmap-mail
+--all-targets --locked -- -D warnings` and the same across `--workspace
+--exclude example-module --locked` both clean. `cargo test --workspace
+--exclude example-module --exclude jmap-functional --locked` fully green;
+`jmap-functional`'s eleven `JMAP_FUNCTIONAL_BOOK_CLIENT`-unset failures are
+the same pre-existing, already-documented ones every prior session has
+hit running outside `ctest`. Also ran the CMake path directly rather than
+trusting `cargo test` alone, since this touches a crate CMake builds as a
+`cdylib`: `ninja -C build` (release) succeeded, and `ctest --test-dir build
+-R '^rust-test-eds$'` — the leg that actually covers `jmap-mail` —
+passed (65.8s). Did not run the `functional-*` legs or the full `ctest`
+suite: they need a real EDS/D-Bus runtime and `JMAP_FUNCTIONAL_BOOK_CLIENT`,
+unrelated to this change's own correctness, and re-confirming them was not
+this increment's job. `rust/Cargo.lock` untouched — no new dependency, no
+new `eds-sys` bindgen allowlist entry (both new FFI calls were already
+covered by existing `camel_session_.*`/`camel_network_settings_.*`
+wildcards). Two new source files
+(`jmap-mail/src/oauth2.rs`, `jmap-mail/tests/oauth2.rs`), both carrying the
+SPDX header every other file in the crate does; `reuse` itself is not
+installable on this VM (per the standing note), checked by hand instead.
+Hit [[disk-fills-from-cargo-target]] again mid-session (dev profile target
+had grown to 17G against 7.7G free before the release `ninja` build) —
+`cargo clean --profile dev` recovered 15.9 GiB before continuing, and
+`cargo clean --profile release` afterwards to leave the disk the way this
+session found it.
+
+**Not tagging any milestone.** This closes one concrete piece of the
+roadmap's still-open "real-server readiness" priority item (OAuth 2.0), not
+the whole of it — real-server readiness was never a milestone with its own
+`docs/MILESTONES.md` tag to begin with. M7 is unaffected and still needs its
+human-verification pass.
+
+**Next session**: re-run the same "does every real-server-readiness item
+actually cover all three backends" check the 317th applied to OAuth2 against
+the *other* items in that priority bullet (capability-negotiation
+robustness, the `--features live-server` harness) before assuming they are
+complete just because two of three backends were checked previously — this
+session found the OAuth2 gap precisely because that check had not been done
+before. M7's own gap (human verification) and M10's (infra) are unchanged.
+`~/.night-shift-escalate` empty.
