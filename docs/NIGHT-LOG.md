@@ -27110,3 +27110,145 @@ directive's two emitters are still ours; M9 has no CI job and no GUI tier
 (`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
 page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
 fidelity items are all still parked there.
+
+
+## 2026-08-16 (two-hundred-and-eighty-sixth session)
+
+**Claiming: the storage the `EOAuth2Service` implementation needs before it
+can be ordinary Rust** — last session's own "next session" note, re-scoped.
+Running on Sonnet.
+
+Re-surveyed rather than starting from that note on faith: M7 is unchanged
+(still needs a display for `insert_widgets`); M9/M10 are unchanged (still
+need the `Containerfile.ci` growth only the maintainer can decide on); the
+live-server harness and capability-negotiation robustness are both closed.
+That leaves the `EOAuth2Service` interface as the one open item in the
+current priority's queue.
+
+Read the interface header (`e-oauth2-service.h`) and `eds-sys/tests/oauth2.rs`
+end to end before deciding what this session was for. The vtable's four
+mandatory string vfuncs (`get_name`, `get_display_name`, `get_client_id`,
+`get_authentication_uri`) and `get_refresh_uri` all return `const gchar *` —
+transfer-none, valid for as long as the caller needs it, which for a value
+the interface *computes* per call (rather than one it merely stores and
+hands back) is exactly the ownership question the roadmap's escalation rule
+names: a returned pointer into memory this crate freed before EDS read it is
+a use-after-free at authentication time, in a real user's session, and EDS's
+own headers carry no `(transfer …)` annotation to check the answer against.
+Deciding *not* to write that vtable this session is the point of this
+increment: designing storage such that every vfunc either answers a
+`'static` constant or forwards a pointer some other GObject already owns
+turns the eventual implementation from "compute and hand back a string" into
+"read a field", which is the shape `eds-sys/tests/oauth2.rs`'s own note
+already predicted ("ordinary Rust... none of the per-call ownership
+questions"). Attempting the vtable *before* that storage exists would have
+been reopening exactly the question last session retired the ABI half of,
+without retiring the ownership half.
+
+**Delivered:** `jmap-config::oauth2` — a new `ESourceExtension` subclass,
+registered under `[JMAP OAuth2]`, holding the five values RFC 8414 discovery
+and RFC 7591 registration produce (`client_id`, `client_secret`,
+`authorization_endpoint`, `token_endpoint`, `redirect_uri`) as
+`E_SOURCE_PARAM_SETTING`-flagged GObject string properties — the flag that
+is the only path a value here has to the `.source` file on disk, not a
+convenience (`e-source.h`'s own doc comment for it, read rather than
+assumed). `apply`/`read` are this crate's own door onto it, direct rather
+than through `g_object_get`/`_set` — there is no pre-existing typed accessor
+to forward to, unlike `account.rs`'s fields — and `get_property`/
+`set_property` are the second door, the one EDS's own `.source`
+(de)serialisation will use, both reading and writing the same
+`Slot<Mutex<Fields>>` storage. Verified against each other, not only against
+themselves: `every_field_is_reachable_through_the_gobject_property_it_was_-
+installed_as` reads back what `apply` wrote through the raw
+`g_object_get_property` call, and `a_value_set_through_the_gobject_property_-
+is_read_back_through_this_crates_own_door` writes through raw
+`g_object_set_property` and reads it back with `read` — the direction EDS's
+parser actually writes in, and the one a test that only called this crate's
+own two functions could never catch drifting.
+
+*The custom-extension mechanism, checked against upstream rather than
+assumed.* `e_source_get_extension` matches a name against the running
+process's registered `ESourceExtension` subclasses by walking
+`g_type_children` and hashing each concrete subclass's `ESourceExtensionClass
+name` field (`e-source.c`'s `source_find_extension_classes_rec`, fetched from
+gitlab.gnome.org and read rather than guessed at) — open to a third party's
+own extension type the same way it is to EDS's own, and requiring only that
+the type be registered (referenced) before the first lookup for its name.
+`ESourceExtension`/`ESourceExtensionClass` were already on `eds-sys`'s
+`ESource.*` allowlist and already bound; no bindgen change was needed.
+
+*A real, reproducible race, caught by running the new tests dozens of times
+rather than once.* One test failed roughly one run in five under the default
+parallel test runner (never under `--test-threads=1`), with a
+`GLib-GObject-CRITICAL`: `g_object_setv: assertion 'G_IS_OBJECT (object)'
+failed`, and `e_source_get_extension` returning NULL. Root cause, found by
+instrumenting the call rather than guessing: the one test that touches the
+extension via the raw GObject property API *before* ever calling this
+crate's `apply` or `read` never registered the `Extension` `GType` at all —
+`apply`/`read` both call the new `oauth2::ensure_registered()` first, but the
+test's own `property`/`set_property` helpers did not, and if that test's
+thread reached `e_source_get_extension` before any other
+concurrently-running test's `apply`/`read` had registered the type, EDS's
+lookup found nothing to match. Not a bug in the module's vtable-adjacent
+code, and not the ABI/offset class of risk the roadmap's escalation rule is
+really about — a missing registration call in the *test harness*, fixed by
+having `TestSource::new` call `ensure_registered()` up front, the way a real
+module's load function would once, before any source is ever read. Worth
+recording anyway: it is the same shape of hazard
+`jmap_backend_core::subclass`'s own lock-ordering tests exist for, and the
+reason this was chased down with instrumentation to a root cause rather than
+accepted as one-in-five flakiness or silenced with a retry.
+
+*What this does not yet do.* `oauth2::ensure_registered()`'s own doc comment
+names the one integration step this increment could not do here: whatever
+eventually loads this project's EDS module has to call it once, at load
+time, alongside registering the module's other types — otherwise EDS's own
+`.source` parser will not recognise a `[JMAP OAuth2]` group it reads back
+from disk, the same way it would not recognise an unregistered
+`[Collection]`. That is a one-line addition to whichever module ends up
+owning it (most plausibly `jmap-config-module`, alongside the account-setup
+backend type), deferred rather than guessed at here because which module
+discovers/registers the client and writes this extension — M7's setup UI,
+most plausibly, but not decided in this session — is exactly what the
+`EOAuth2Service` vfuncs this storage exists for will need to be written
+against.
+
+Tests: 6 new in `jmap-config/tests/oauth2.rs`. `cargo test -p jmap-config
+--locked` and `cargo test --workspace --exclude example-module --locked`
+both green (25 repeated runs of the new file alone, to catch the race above
+before trusting a single green run); the pre-existing `jmap-functional`
+CTest-only failures outside `ctest` are unchanged and documented, not new.
+`cargo clippy --workspace --exclude example-module --all-targets --locked --
+-D warnings` and `cargo clippy -p jmap-config --all-targets --locked -- -D
+warnings` both clean; `cargo fmt --all --check` clean. `ninja -C build` then
+`ctest --test-dir build` 15/15, `rust-test-eds` included. `ci/checks.sh`
+still stops at its first step on this VM (no `reuse`/`pipx`/`uvx`/
+`cargo-deny`); both new files carry an SPDX `GPL-3.0-or-later` header,
+checked by hand; no new dependencies, so nothing for `cargo-deny` to weigh;
+`Cargo.lock` untouched. `rust/target/debug` was again at 22G before this
+session's first build — `cargo clean --profile dev` first, the same
+standing tax the last several sessions have hit.
+
+No milestone tag — this is storage the `EOAuth2Service` implementation needs,
+not the interface itself. **Next session**: the interface implementation
+proper — the four mandatory vfuncs plus `get_refresh_uri` reading straight
+out of `jmap_config::oauth2::read`, `can_process` matching the account's
+`[Collection] BackendName` (`jmap_config::account::BACKEND_NAME`),
+`prepare_authentication_uri_query`/`prepare_get_token_form`/
+`prepare_refresh_token_form` filling their `GHashTable`s via
+`e_oauth2_service_util_set_to_form` (which copies, so no ownership question
+there either), and `extract_authorization_code`/`extract_error_message` via
+`e_oauth2_service_util_extract_from_uri` — every one of them now either a
+`'static` constant or a read of storage this session gave it, which is the
+condition last session's note and this one's both name as the point at which
+Sonnet, not only Opus, can write the vtable safely. Also still open, and
+smaller: wiring `oauth2::ensure_registered()` into whichever module ends up
+owning discovery/registration, once that module is chosen.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier
+(both need `Containerfile.ci` growth, a maintainer decision); M7 still
+**needs human verification in real Evolution**, and its one remaining vfunc
+(`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
+page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
+fidelity items are all still parked there.
