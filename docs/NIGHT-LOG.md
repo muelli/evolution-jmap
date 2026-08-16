@@ -29434,3 +29434,17 @@ unchanged; nothing here was deferred, it was fixed. M7's `insert_widgets`
 OAuth2-triggering question and the maintainer's method-chooser-vs-
 auto-discovery decision remain exactly where the 292nd–306th sessions left
 them.
+
+## 2026-08-16 (three-hundred-and-eighth session)
+
+**Claiming: the permanent `EConfigLookup` functional test the 307th
+session's own "next session" note scoped** — `tests/functional/
+config-lookup-client.c` plus the `jmap_functional::Session`/
+`cmake/Functional.cmake` wiring around it. Running on Sonnet. Checked first
+that the method-chooser-vs-auto-discovery question (the one thing blocking
+`insert_widgets`'s OAuth2 wiring) is still unanswered anywhere in the
+tree (`grep -rn "method-chooser\|auto-discovery"` still turns up nothing
+outside this log) — unchanged, so that item stays exactly where the
+299th–307th sessions left it. This test needs none of that: it drives
+`JmapConfigLookup` directly, which is already wired and already
+human-independent.
