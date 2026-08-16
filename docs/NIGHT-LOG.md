@@ -24762,3 +24762,97 @@ the editor lets a handle be moved between the Home and Work slots at all is
 unknown; a `VALUE=uri` photo's rendering is unmeasured; and what Evolution's
 contact editor writes for a replaced photo, and into a cleared field, is
 inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-fourth session)
+
+**The refusal the last session left behind now says which time zone it is
+about.** Small increment, and the one the previous entry named as its own new
+blocker: a create refused over its recurrence produced a message blaming "an end
+date stated as a UTC instant", which — since the document's own `VTIMEZONE`
+became the conversion — is now the case that *works*. What is left is a calendar
+entry whose zone is named and not defined, or defined in a shape
+`jmap-ical/src/zone.rs` refuses whole, and the old message pointed the user at
+neither.
+
+**Why the sync layer could not simply say so.** At the point of refusal the
+event is JSCalendar, and `maps_recurrence_rule` answers only yes or no. The fact
+that identifies the problem — the `until` that stayed a UTC instant because
+nothing could resolve it — had been computed and discarded. So `jmap-ical` grew
+one function, `unstateable_until`, which hands the value back rather than merely
+denying the rule: `rule.until` filtered by the same `to_ical_date_time` check
+`writable` already makes, so the two cannot disagree about what is sendable.
+
+**The message names the instant and the zone**, which between them are what a
+user needs to find the appointment and what a bug report needs to name the
+`VTIMEZONE` to look at:
+
+> this event repeats until 2026-03-31T12:00:00Z, and the time zone it is in,
+> Europe/Berlin, is not defined in this calendar entry in a way that instant can
+> be converted out of — so the event was not created. Stating the recurrence as
+> a repeat count works instead.
+
+The quoted instant is the value as it was *kept*, `2026-03-31T12:00:00Z` rather
+than the `20260331T120000Z` the component carried: `read_until` normalises the
+digits before finding it cannot move them. That is the form the user is shown,
+and the tests assert it, so a later change to the kept spelling reddens rather
+than silently rewording an error message.
+
+**One message covers both causes on purpose.** "Names a zone it does not define"
+and "defines it unreadably" are one problem from where the user sits — their
+entry's time zone — and splitting them would mean explaining our evaluator's
+limits in a dialog. The two are tested separately anyway (`Europe/Berlin` with
+no `VTIMEZONE`, and libical's Berlin with `INTERVAL=2` grafted onto its
+transition rules, which is the shape the evaluator refuses whole).
+
+**What must not happen is the opposite mistake**: dressing an unrelated refusal
+up as a time-zone problem. A rule refused for a `byMonth` the `RRULE` cannot
+carry has no `until` at all, `unstateable_until` answers `None`, and the general
+message stands. The existing leap-month test now asserts the message does *not*
+name `Europe/Berlin`, which is the assertion that keeps a future rewrite from
+collapsing the two arms into one.
+
+Mutation-checked: forcing the classifier's first arm to `None` reddens both new
+sync tests and nothing else.
+
+**Not translated, and that is now a sharper blocker than it was.** The standing
+directive wants every user-visible string marked, and this string is the most
+user-visible one the calendar backend has. It cannot be marked where it is
+written: `jmap-backend-core`'s `i18n` is the gettext binding, and `jmap-cal-sync`
+does not depend on it — an EDS-linked crate is not something the sync layer's
+tests can pull in. Doing it properly means giving `SyncError::Unsendable` a
+*reason* to carry rather than prose, and phrasing it in `jmap-backend-cal::ops`
+where `to_gerror` already runs and `N_`/`translate` are available; the two arms
+here are exactly the two reasons that enum would have. Written down rather than
+started, because it is a three-crate refactor and this session's rule is one
+increment.
+
+Tests: +1 in `jmap-ical/tests/event.rs`, +2 in `jmap-cal-sync/tests/save.rs`,
+and one existing test strengthened. The default set is 1154 → 1157.
+
+Verified locally: `cargo test --locked` 1157, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+clean for both crates touched; `ninja -C build` then `ctest --test-dir build`
+14/14, the functional and EDS-linked legs included. `ci/checks.sh` still stops at
+its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so
+those were reasoned by hand: no file is added, so no SPDX header is missing, and
+`Cargo.lock` is untouched — no dependency changed, so `cargo deny`'s answer is
+the one it gave on the last green run.
+
+No milestone tag. Closed: **a refused recurring create now names the zone and
+the instant.** New blocker: none of its own. The translation of this message is
+now a specific, scoped piece of work rather than a general "not marked yet" —
+see above. Unchanged blockers: a transition rule outside the counted shape still
+costs the whole zone, and whether any zone Evolution ships is in that state is
+unmeasured beyond Berlin; M10 still has no CI matrix; the calcard directive's
+two emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs
+human verification in real Evolution**; an `UNTIL` the parser itself refuses is
+invisible to this crate; whether Evolution renders an `IMAGE` is unmeasured; the
+multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified; the
+two `LABEL` `TYPE` risks stand; a deathday and a birthday stated as a year alone
+are still invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN
+and Yahoo are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are
+unmapped and their contact-editor behaviour unmeasured; whether the editor lets a
+handle be moved between the Home and Work slots at all is unknown; a `VALUE=uri`
+photo's rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.

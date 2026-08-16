@@ -1192,6 +1192,67 @@ fn a_new_event_whose_series_end_cannot_be_stated_is_not_created_at_all() {
     );
 }
 
+#[test]
+fn a_series_end_that_cannot_be_stated_is_refused_by_naming_the_zone_and_the_date() {
+    // The refusal above, read by the person it happens to. What is left of it
+    // after the document's own `VTIMEZONE` became the conversion (see below) is
+    // narrow — a zone the entry names and does not define, or defines in a
+    // shape `jmap-ical`'s evaluator will not guess at — and a message that
+    // blames "an end date stated as a UTC instant" now describes the case that
+    // *works*. So it says which instant and which zone instead: the two facts
+    // that tell the user which appointment to change, and tell whoever reads
+    // the bug report which zone definition to look at.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace(
+        "DURATION:PT90M",
+        "DURATION:PT90M\r\nRRULE:FREQ=WEEKLY;UNTIL=20260331T120000Z",
+    );
+
+    let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
+
+    let message = failure.to_string();
+    assert!(
+        message.contains("Europe/Berlin"),
+        "the zone the instant could not be stated in has to be named: {message}"
+    );
+    assert!(
+        message.contains("2026-03-31T12:00:00Z"),
+        "the end the user typed has to be quoted back: {message}"
+    );
+}
+
+#[test]
+fn a_zone_defined_in_a_shape_the_evaluator_refuses_is_named_in_the_refusal_too() {
+    // The other half, and the one that survives a document doing everything
+    // right: Berlin, defined, but with a transition rule written in a shape
+    // `jmap-ical`'s zone evaluator refuses whole — here an `INTERVAL` other
+    // than 1. The conversion is unavailable for the same reason as above and
+    // the user gets the same answer, which is the point: one message covering
+    // "not defined" and "defined unreadably", because from where the user sits
+    // those are one problem with their calendar entry's time zone.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT
+        .replace(
+            "BEGIN:VEVENT",
+            &format!(
+                "{}BEGIN:VEVENT",
+                BERLIN.replace("FREQ=YEARLY", "FREQ=YEARLY;INTERVAL=2")
+            ),
+        )
+        .replace(
+            "DURATION:PT90M",
+            "DURATION:PT90M\r\nRRULE:FREQ=WEEKLY;UNTIL=20260331T120000Z",
+        );
+
+    let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
+
+    let message = failure.to_string();
+    assert!(
+        message.contains("Europe/Berlin"),
+        "a zone the entry defines unreadably is still the zone to name: {message}"
+    );
+}
+
 /// Berlin as libical writes it, and as every component Evolution hands a save
 /// carries it: the `VTIMEZONE` RFC 5545 §3.6.5 says defines the `TZID` beside
 /// it.
@@ -1254,6 +1315,14 @@ fn a_new_event_whose_rule_the_rrule_narrowed_is_not_created_at_all() {
     let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
 
     assert!(matches!(failure, SyncError::Unsendable(_)), "{failure:?}");
+    // And it must not be reported as a time-zone problem: this rule has no end
+    // at all, so a message naming the event's zone would send the user to
+    // change something that is not what stopped the save.
+    let message = failure.to_string();
+    assert!(
+        !message.contains("Europe/Berlin"),
+        "a refusal that is not about the zone must not name one: {message}"
+    );
 }
 
 #[test]

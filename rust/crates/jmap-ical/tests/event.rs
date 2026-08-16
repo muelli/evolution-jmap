@@ -10,7 +10,7 @@
 use jmap_ical::{
     ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
-    names_time_zone, prune_time_zones, sends_recurrence_override,
+    names_time_zone, prune_time_zones, sends_recurrence_override, unstateable_until,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -2512,6 +2512,58 @@ fn a_zoned_rules_utc_until_is_converted_through_the_documents_own_vtimezone() {
         ical_to_event(&ics).expect("parse").recurrence_rules,
         event.recurrence_rules
     );
+}
+
+#[test]
+fn a_series_end_no_zone_could_state_is_the_one_thing_a_refusal_can_quote() {
+    // `maps_recurrence_rule` says *whether* a rule can be sent; a save that
+    // refuses over it has to tell the user *what to change*, and the only
+    // refusal there is anything useful to say about is this one — the end that
+    // stayed a UTC instant because the document did not say how to move it into
+    // the event's zone. So the value is handed back rather than merely denied,
+    // and the save path quotes it beside the zone's name.
+    let named_and_not_defined = recurring_in("Europe/Berlin", "", "20260331T120000Z");
+    let rules = ical_to_event(&named_and_not_defined)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(
+        unstateable_until(&rules[0]),
+        Some("2026-03-31T12:00:00Z"),
+        "the instant kept verbatim is what the user gets told about"
+    );
+
+    // A zone the document defines converts the end, and then there is nothing
+    // to report: the rule goes out as the series it is.
+    let defined = recurring_in(
+        "Europe/Berlin",
+        &berlin("Europe/Berlin"),
+        "20260331T120000Z",
+    );
+    let rules = ical_to_event(&defined)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(unstateable_until(&rules[0]), None);
+
+    // And a rule refused for a reason that is not its end reports none either,
+    // so a caller cannot phrase an unrelated refusal as a time-zone problem.
+    // RFC 7529's leap month is the same one `jmap-cal-sync`'s save tests use.
+    let leap_month = "BEGIN:VCALENDAR\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:E1\r\n\
+         DTSTART;TZID=Europe/Berlin:20260115T130000\r\n\
+         RRULE:FREQ=YEARLY;BYMONTH=5L\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n";
+    let rules = ical_to_event(leap_month)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(unstateable_until(&rules[0]), None);
 }
 
 #[test]
