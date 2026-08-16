@@ -40,6 +40,9 @@
 //!   nothing, which is right for every provider whose server was typed on this
 //!   page and wrong for one whose server is on the account: it leaves the mail
 //!   source naming a protocol and no host.
+//! - **`insert_widgets`** — see `insert_widgets` below. Evolution's own is an
+//!   empty function, which is a server settings page with nothing on it to
+//!   correct a wrong offer with.
 //! - **`get_selectable`** is left alone on purpose. Its default answers "yes,
 //!   unless this provider is both a store and a transport, in which case only
 //!   on the receiving page" — and the JMAP provider *is* both
@@ -53,36 +56,36 @@
 //!
 //! ## What is not here yet
 //!
-//! `insert_widgets`, the one vfunc that has to *build* something rather than
-//! decide something: the entries the user types a server and a login name into.
+//! `insert_widgets` now builds two of the five fields
+//! [`Connection`](jmap_collection_sync::child_source::Connection) carries —
+//! the server and the login name — bound to the collection the same way
+//! `check_complete` and `commit_changes` already read and write it. Three
+//! more things are still missing, and are recorded here rather than silently
+//! absent:
 //!
-//! The bindings for it are there — [`evo-sys`] generates the GTK calls a page of
-//! labels and entries is made of (its `ALLOWED_GTK_FUNCTIONS`) — and the reason
-//! it is still unwritten is not the bindings but the machine: GTK 3 refuses to
-//! construct a widget without a display connection, so an `insert_widgets` body
-//! would be code no test here runs, which is the opposite of the order the rest
-//! of this crate was built in and of the roadmap's rule about this milestone. It
-//! is work for a session that can drive a real Evolution, or for M9's Xvfb tier.
-//!
-//! The four that are installed are the four whose answer is a function of an
-//! `ESource` — three of them of the collection alone, and `setup_defaults` of
-//! the collection plus one string off the page — which is why they could be
-//! written, and tested, first.
+//! - **A port entry and a security toggle.** `port` and `secure` stay at
+//!   [`from_identity`]'s offer (443, TLS) for
+//!   every account this dialog can create; a deployment on a non-standard
+//!   port or without TLS cannot be set up here yet.
+//! - **A status label.** [`Incomplete`](crate::complete::Incomplete)'s refusal
+//!   reason is computed by [`is_complete`] and thrown away — there is nowhere
+//!   on the page for it to land, so the user sees *Next* refuse to light up
+//!   with no explanation of why.
+//! - **Verification in a real Evolution.** GTK 3 will not construct a widget
+//!   without a display connection, so nothing on this machine has run
+//!   `insert_widgets` and looked at the result — see its own docs for exactly
+//!   what a human still has to confirm, and `docs/NIGHT-LOG.md` for the
+//!   session that wrote it saying so.
 //!
 //! ## The state this leaves the dialog in, said plainly
 //!
-//! An account whose address the assistant already knows now arrives on the
-//! server settings page filled in — the address, the server its domain implies
-//! and the login name it offers — so for the ordinary case *Next* is sensitive
-//! on a page the user need not touch, and `commit_changes` is reached with an
-//! account it will write.
-//!
-//! What is missing is the ability to *change* any of it: with no
-//! `insert_widgets` there are no entries, so an account whose server is not at
-//! the address's domain, or whose login name is not the address, cannot be
-//! corrected in the dialog — `check_complete` will refuse what it must refuse
-//! and there is nothing on screen to fix it with. That is the remaining slot,
-//! and it is the honest state.
+//! An account whose address the assistant already knows arrives on the server
+//! settings page filled in — the address, the server its domain implies and
+//! the login name it offers — and now carries two entries to correct either
+//! of those from, bound live to the account `check_complete` and
+//! `commit_changes` both read. What is still missing is a way to correct the
+//! port or turn TLS off, and any explanation on the page itself for why *Next*
+//! refuses to light up when it does.
 //!
 //! [`evo-sys`]: ../../evo_sys/index.html
 
@@ -90,14 +93,27 @@ use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::ptr;
 
-use eds_sys::{ESource, e_source_new};
+use eds_sys::{
+    E_SOURCE_EXTENSION_AUTHENTICATION, ESource, e_binding_bind_property,
+    e_source_authentication_get_type, e_source_get_extension, e_source_new,
+};
 use evo_sys::{
-    EMailConfigServiceBackend, EMailConfigServiceBackendClass,
+    EMailConfigPage, EMailConfigServiceBackend, EMailConfigServiceBackendClass,
+    EMailConfigServicePage, GtkBox, e_mail_config_page_changed,
     e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_page,
     e_mail_config_service_backend_get_source, e_mail_config_service_backend_get_type,
-    e_mail_config_service_page_get_email_address,
+    e_mail_config_service_page_get_email_address, gtk_box_pack_start, gtk_entry_new,
+    gtk_grid_attach, gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing,
+    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_xalign,
+    gtk_widget_set_hexpand, gtk_widget_show_all,
 };
-use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean};
+use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean, gpointer};
+use gobject_sys::{
+    G_BINDING_BIDIRECTIONAL, G_BINDING_SYNC_CREATE, G_CONNECT_DEFAULT, GObject, GParamSpec,
+    g_signal_connect_object,
+};
+use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::i18n::{N_, translate};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
@@ -170,6 +186,7 @@ unsafe impl ObjectSubclass for JmapConfigServiceBackend {
         // never frees this.
         class.backend_name = MAIL_BACKEND_NAME.as_ptr();
         class.new_collection = Some(new_collection);
+        class.insert_widgets = Some(insert_widgets);
         class.setup_defaults = Some(setup_defaults);
         class.check_complete = Some(check_complete);
         class.commit_changes = Some(commit_changes);
@@ -247,6 +264,239 @@ unsafe extern "C" fn new_collection(backend: *mut EMailConfigServiceBackend) -> 
         unsafe { apply(source, &from_identity("")) };
         source
     })
+}
+
+/// The two `[Authentication]` fields this dialog lets the user correct, in the
+/// order they appear on the page: the mnemonic label's translatable text
+/// (marked with [`N_`], looked up with [`translate`] since a `GtkLabel`
+/// copies the string GTK's own way and there is no per-call pointer to keep
+/// alive as [`i18n::translate_static`](jmap_backend_core::i18n::translate_static)
+/// exists for) and the `ESourceAuthentication` property the entry is bound
+/// to.
+///
+/// Two rows and not five: [`crate::account::Connection`]'s `port` and
+/// `secure` have no entry yet, and neither does a status label for
+/// [`Incomplete`](crate::complete::Incomplete)'s refusal reason — see
+/// [`insert_widgets`] for why this increment stops here.
+const ENTRY_ROWS: [(&CStr, &CStr); 2] = [(N_(c"_Server:"), c"host"), (N_(c"_Username:"), c"user")];
+
+/// What Evolution calls when the *Receiving Email* page is built for this
+/// provider: put the entries the user corrects an account's server and login
+/// name with into `parent`.
+///
+/// ## Why this binds to the collection, not to `get_settings()`
+///
+/// Evolution's own service backends (`e-mail-config-remote-accounts.c`,
+/// upstream 3.52.3, read rather than assumed) bind their entries to
+/// `e_mail_config_service_backend_get_settings(backend)` — a `CamelSettings`
+/// of the *scratch mail source* the page is building. That is right for a
+/// provider whose server lives on that source. JMAP's does not:
+/// [`check_complete`] and [`commit_changes`] both read and write the
+/// *collection* (see their docs for why), so an entry bound to the mail
+/// source's settings would show and edit a value neither vfunc looks at. The
+/// widgets have to be bound to the same source the rest of this class
+/// already agreed the account is.
+///
+/// ## Why the page is told about a change by hand
+///
+/// The same upstream file's `mail_config_service_page_new_candidate` connects
+/// a `notify` handler on `get_settings()` that calls
+/// `e_mail_config_page_changed`, which is how the assistant's *Next* button
+/// (and the account editor's *Apply*) learns to ask [`check_complete`] again
+/// after a keystroke. That handler watches `get_settings()`, which is exactly
+/// the object this class deliberately does not bind to, so this connects its
+/// own `notify` handler on the collection's `[Authentication]` extension
+/// instead and calls `e_mail_config_page_changed` from it — the same effect,
+/// aimed at the object this dialog actually edits.
+///
+/// `g_signal_connect_object`, not a plain `g_signal_connect`: it disconnects
+/// itself the instant either the extension or `page` is finalized, which is
+/// what lets this skip a stored handler id and a `dispose` override — neither
+/// object's lifetime relative to the other has to be reasoned about for the
+/// connection to stay safe.
+///
+/// ## What is not here yet
+///
+/// A port entry, a security toggle, and the status label
+/// [`Incomplete`](crate::complete::Incomplete)'s refusal reason belongs in —
+/// the crate's own top-level docs and this module's say so at length. Port and
+/// security stay at [`from_identity`]'s defaults (443, TLS) for this
+/// increment; a deployment that genuinely needs a different port cannot be
+/// set up through this dialog yet, and that is a real gap this records
+/// rather than works around.
+///
+/// ## Untestable here, like the rest of this vfunc
+///
+/// GTK 3 will not construct a widget without a display connection this
+/// machine does not have (see [`evo_sys`]'s module docs). Every call below is
+/// one `evo-sys`'s `tests/gtk.rs` and `tests/page.rs` already hold against the
+/// linked library and the types it takes; what no test here can do is run
+/// this function and see the result. It needs a real Evolution session (or
+/// M9's Xvfb tier) to confirm the page actually shows two entries filled with
+/// what `setup_defaults` offered, and that editing either toggles *Next* —
+/// recorded in `docs/NIGHT-LOG.md` as exactly that, and not tagged complete
+/// until a human confirms it.
+///
+/// ## Failure
+///
+/// Nothing: the vfunc returns void. A NULL collection ([`new_collection`]
+/// having failed, which already logged why) leaves the page with no entries
+/// at all rather than entries bound to nothing; a panic is caught by the
+/// guard and leaves the page in whatever state it reached first.
+unsafe extern "C" fn insert_widgets(backend: *mut EMailConfigServiceBackend, parent: *mut GtkBox) {
+    guard("insert_widgets", (), || {
+        // SAFETY: a live backend of this class, which is what Evolution
+        // dispatches through this slot. Both come back `(transfer none)` —
+        // the backend's own references, which outlive this call.
+        let (collection, page) = unsafe {
+            (
+                e_mail_config_service_backend_get_collection(backend),
+                e_mail_config_service_backend_get_page(backend),
+            )
+        };
+        if collection.is_null() {
+            return;
+        }
+
+        // SAFETY: `collection` is non-NULL and a valid source, just checked;
+        // `page` is NULL or the backend's own live page; `parent` is the
+        // `GtkBox` Evolution handed this vfunc, which is exactly what
+        // `insert_entries` documents it takes.
+        unsafe { insert_entries(collection, page, parent) };
+    });
+}
+
+/// The half of [`insert_widgets`] that touches real objects rather than
+/// deciding whether to — see that vfunc's docs for the design this follows.
+///
+/// # Safety
+///
+/// `collection` must be a valid `ESource` — the backend's collection, kept
+/// alive by the backend for at least the life of the page. `page` must be
+/// NULL or a valid `EMailConfigServicePage`. `parent` must be a valid
+/// `GtkBox`, the container Evolution handed `insert_widgets`.
+unsafe fn insert_entries(
+    collection: *mut ESource,
+    page: *mut EMailConfigServicePage,
+    parent: *mut GtkBox,
+) {
+    // SAFETY: no arguments; registers the extension type the lookup below
+    // needs, the same call `crate::account::apply`/`read` make before every
+    // lookup of their own.
+    unsafe { e_source_authentication_get_type() };
+    // SAFETY: `collection` is valid by this function's contract, and a
+    // header constant naming an extension whose type is registered above;
+    // the extension is created on demand and owned by the source.
+    let authentication =
+        unsafe { e_source_get_extension(collection, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) };
+
+    // SAFETY: no arguments; every GTK call in this function is one
+    // `evo-sys`'s `tests/gtk.rs` already resolves against the linked
+    // library and holds the types of against the running GTK.
+    let grid = unsafe { gtk_grid_new() };
+    // SAFETY: `grid` was just constructed above and is a `GtkGrid`.
+    unsafe {
+        gtk_grid_set_row_spacing(grid.cast(), 6);
+        gtk_grid_set_column_spacing(grid.cast(), 6);
+    }
+
+    for (row, (label_text, property)) in ENTRY_ROWS.into_iter().enumerate() {
+        let label_text = cstring_lossy(&translate(label_text));
+        // SAFETY: `label_text` outlives this call, which is all
+        // `gtk_label_new_with_mnemonic` needs — it copies the string into
+        // the label it returns.
+        let label = unsafe { gtk_label_new_with_mnemonic(label_text.as_ptr()) };
+        // SAFETY: `label` was just constructed above and is a `GtkLabel`.
+        unsafe { gtk_label_set_xalign(label.cast(), 1.0) };
+
+        // SAFETY: no arguments.
+        let entry = unsafe { gtk_entry_new() };
+        // SAFETY: `label` and `entry` were both just constructed above and
+        // are, respectively, a `GtkLabel` and a `GtkWidget`.
+        unsafe {
+            gtk_label_set_mnemonic_widget(label.cast(), entry);
+            gtk_widget_set_hexpand(entry, GTRUE);
+            gtk_grid_attach(grid.cast(), label, 0, row as i32, 1, 1);
+            gtk_grid_attach(grid.cast(), entry, 1, row as i32, 1, 1);
+        }
+
+        // SAFETY: `authentication` is NULL or the collection's own extension
+        // (created above, and owned by `collection`), and `entry` is a live
+        // `GtkEntry` with a string `text` property; the binding this creates
+        // is `(transfer none)`, owned by the two objects it joins, and
+        // outlives this call on its own.
+        unsafe {
+            e_binding_bind_property(
+                authentication,
+                property.as_ptr(),
+                entry.cast(),
+                c"text".as_ptr(),
+                G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
+            );
+        }
+    }
+
+    // SAFETY: `grid` is the live `GtkWidget` constructed above, and `parent`
+    // is a valid `GtkBox` by this function's contract.
+    unsafe {
+        gtk_box_pack_start(parent, grid, GFALSE, GFALSE, 0);
+        gtk_widget_show_all(grid);
+    }
+
+    if !page.is_null() && !authentication.is_null() {
+        // SAFETY: `authentication` is the collection's own live extension,
+        // just checked non-NULL, and `page` is a valid page by this
+        // function's contract, also just checked non-NULL. The callback's
+        // signature matches what a `notify` handler is actually invoked
+        // with (the emitting `GObject`, the changed property's
+        // `GParamSpec`, and the connection's own data pointer), so the
+        // transmute of its type to `GCallback` — an erased function pointer
+        // — is the same one every GObject binding spells this, `cancel.rs`'s
+        // own `g_cancellable_connect` call included.
+        // `g_signal_connect_object` rather than `g_signal_connect_data`: see
+        // `insert_widgets`'s docs on why nothing here tracks the handler id.
+        unsafe {
+            g_signal_connect_object(
+                authentication,
+                c"notify".as_ptr(),
+                Some(std::mem::transmute::<
+                    unsafe extern "C" fn(*mut GObject, *mut GParamSpec, gpointer),
+                    unsafe extern "C" fn(),
+                >(on_authentication_changed)),
+                page.cast(),
+                G_CONNECT_DEFAULT,
+            );
+        }
+    }
+}
+
+/// The `notify` handler [`insert_entries`] connects on the collection's
+/// `[Authentication]` extension: tell the page an entry changed, so
+/// `check_complete` is asked again.
+///
+/// # Safety
+///
+/// Called by GLib's signal-emission machinery with the arguments a `notify`
+/// handler is always invoked with: the object whose property changed
+/// (unused — this handler answers for the connection as a whole, the same
+/// way upstream's own `mail_config_service_page_settings_notify_cb` does),
+/// the `GParamSpec` of the property that changed (also unused, for the same
+/// reason), and — because this was connected with `g_signal_connect_object`
+/// against `page` — `page` itself, still alive for the duration of this call
+/// (that object's own guarantee, not this function's).
+unsafe extern "C" fn on_authentication_changed(
+    _authentication: *mut GObject,
+    _pspec: *mut GParamSpec,
+    page: gpointer,
+) {
+    guard("on_authentication_changed", (), || {
+        // SAFETY: `page` is the `EMailConfigServicePage` this was connected
+        // against, by this function's contract, and every `EMailConfigPage`
+        // implementor answers to `e_mail_config_page_changed` — see
+        // `evo-sys`'s `build.rs` for the upstream reading that makes the
+        // cast sound.
+        unsafe { e_mail_config_page_changed(page.cast::<EMailConfigPage>()) };
+    });
 }
 
 /// What Evolution calls when the user reaches the server settings page: fill in

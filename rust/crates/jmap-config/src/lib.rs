@@ -114,19 +114,22 @@
 //! shell which dlopens the installed `.so` then offers JMAP in the account type
 //! list, and that the page it opens behaves, needs a running Evolution and a
 //! display this machine has neither of. See [`backend`] for the state the
-//! missing two vfuncs leave that dialog in.
+//! dialog is left in and exactly what a human still has to confirm.
 //!
-//! **The one vfunc that has to build something**: `insert_widgets`, the entries
-//! themselves, which cannot be written test-first on a machine where GTK will
-//! not construct a widget. The other four are compositions of the modules above
-//! and are installed — `setup_defaults` is [`defaults::from_identity`] narrowed
-//! onto the collection, `check_complete` is [`account::read`] and
-//! [`complete::check`] over it, and `commit_changes` is that same reader
-//! followed by [`mail::apply_server`] onto the one scratch mail source a backend
-//! holds. What a test here can drive is those compositions rather than the
-//! vfuncs Evolution dispatches. [`backend`] says so slot by slot, including what
-//! it means for the dialog that an account now arrives filled in but cannot yet
-//! be corrected, and which source a commit still leaves without a server.
+//! **The one vfunc that has to build something**: `insert_widgets`, now written
+//! but — like everything else GUI in this milestone — not run on this machine.
+//! It puts two of [`Connection`](jmap_collection_sync::child_source::Connection)'s five fields on screen, the server
+//! and the login name, bound to the same collection the other four vfuncs
+//! already read and write; a port entry, a security toggle and a status label
+//! for [`complete::Incomplete`]'s refusal reason are not there yet. The other
+//! four vfuncs are compositions of the modules above — `setup_defaults` is
+//! [`defaults::from_identity`] narrowed onto the collection, `check_complete` is
+//! [`account::read`] and [`complete::check`] over it, and `commit_changes` is
+//! that same reader followed by [`mail::apply_server`] onto the one scratch mail
+//! source a backend holds. What a test here can drive is those compositions
+//! rather than the vfuncs Evolution dispatches, and `insert_widgets` itself not
+//! at all. [`backend`] says so slot by slot, including which source a commit
+//! still leaves without a server.
 //!
 //! Like the backends, this crate needs the installed EDS headers and so stays
 //! out of the workspace's `default-members`; CMake runs its tests via the
