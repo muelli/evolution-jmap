@@ -26353,3 +26353,58 @@ one place that answers "which account serves capability X", and have both
 `Client::primary_account` and `CollectionLayout`'s resolution call it, so the
 three connect sites get the same inference the collection backend already
 relies on, for free.
+
+**Delivered:** `jmap_proto::session::Session::resolve_primary_account` — the
+inference `jmap-collection-sync::layout::service` already had (server
+capability check → `primaryAccounts` → sole personal account fallback →
+contradiction check) moved down to the one place both callers can share.
+`Client::primary_account` (jmap-client) now calls it instead of the raw
+`primaryAccounts` lookup, which is the actual fix: all three connect sites
+(`jmap-backend-book`, `jmap-backend-cal`, `jmap-mail`) route through
+`Client::primary_account` and needed no changes of their own.
+`jmap-collection-sync::layout::service` was refactored to call the same
+method rather than duplicate the logic — a simplification, not a behaviour
+change, and its existing `CollectionLayout` test suite (fallback, ambiguity,
+shared-account, read-only, etc.) still passes unchanged, so the refactor is
+covered by tests that predate this session.
+
+Added `MockServerBuilder::without_primary_accounts()` (`jmap-mock`) — distinct
+from `without_capability`, it leaves `primaryAccounts` out of the session
+document entirely while every account still lists its own capabilities,
+which is the exact RFC-legal shape the gap was invisible against. One
+red-then-green regression test per backend (`jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`'s `tests/connect.rs`): each opens a source
+against such a server with exactly one personal account and asserts it
+connects — all three failed with `Client(Protocol("no primary account for
+…"))` before the fix and pass after.
+
+Tests: `cargo test --locked` (full workspace) 0 failed; the three new
+backend tests plus `jmap-proto`/`jmap-client`/`jmap-collection-sync` suites
+specifically re-run and green. `cargo clippy --locked --all-targets -- -D
+warnings` clean on default-members; `cargo clippy --locked -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail --all-targets -- -D
+warnings` clean for the EDS-header crates touched. `cargo fmt --all --check`
+clean. `ninja -C build` then `ctest --test-dir build` 15/15 (after `cargo
+clean --profile dev` first — `rust/target/debug` was again at 24G with the
+root filesystem down to 147M free, the same
+`[[memory:disk-fills-from-cargo-target]]` housekeeping as last session).
+`ci/checks.sh` still stops at its first step on this VM (no `reuse`,
+`pipx`, `uvx`, `cargo-deny`); no new files were added, only existing
+SPDX-headed files edited, so `reuse lint` has nothing new to check.
+
+No milestone tag — this closes out item 2 ("real-server readiness") of the
+current priority's capability-negotiation-robustness sub-item, not a
+milestone of its own. **Next session**: the `EOAuth2Service` implementation
+(OAuth2 auth, the other half of item 2) is the remaining real-server-readiness
+work — my read from last session stands, that it's likely a deliberate
+escalation candidate (new GObject *interface*, unverifiable end-to-end
+without a live IdP and a display) rather than a routine Sonnet increment; or,
+if a Sonnet-sized item is wanted first, M9/M10 per the roadmap's ordering.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier;
+M7 still **needs human verification in real Evolution**, and its one
+remaining vfunc (`insert_widgets`) needs a display this VM does not have; a
+real OAuth2 flow would need one too, for the credentials prompter's consent
+page; the docs/BACKLOG.md contact/vCard and calendar/iCal fidelity items are
+all still parked there.
