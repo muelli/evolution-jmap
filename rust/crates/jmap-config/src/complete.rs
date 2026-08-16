@@ -68,18 +68,18 @@
 
 use std::fmt;
 
+use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::source::{SourceError, origin};
 
 use crate::account::Account;
 
 /// Why an account cannot be committed yet.
 ///
-/// The [`Display`](fmt::Display) text is written to be read by the person who
-/// typed the answer in, in the place they typed it: it names the field, not the
-/// function. `check_complete` itself has nowhere to put a message — the
-/// vfunc answers a boolean — so this exists for the tooltip, the status label,
-/// and for the log line when a commit is refused from somewhere without a
-/// display.
+/// The [`Display`](fmt::Display) text names the field, not the function, but is
+/// deliberately *not* what the status label shows — it is developer-facing
+/// (English, and not marked for translation), the same text a log line gets
+/// when a commit is refused from somewhere without a display. [`status_message`]
+/// is the translated, user-facing form of the same decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Incomplete {
     /// The account names no address for its identity.
@@ -120,6 +120,34 @@ impl std::error::Error for Incomplete {
             Self::MissingIdentity | Self::InvalidIdentity(_) => None,
             Self::Server(error) => Some(error),
         }
+    }
+}
+
+/// The status label's text for `account`: empty when it may be committed, a
+/// translated account of [`Incomplete`]'s reason if not.
+///
+/// The one caller with anywhere to put a message — `check_complete` itself
+/// answers a boolean and has nowhere to show one; `insert_widgets`'s status
+/// label does, and this is the whole of what it displays. Translated rather
+/// than [`Incomplete`]'s own `Display`, per the roadmap's standing directive
+/// that account-setup text is user-facing from the moment it is shown: the
+/// two identity messages are this crate's own wording and are marked here;
+/// [`SourceError`]'s own text is not, because it is shared with every other
+/// backend's connection failures (M3–M6), already shipped untranslated, and
+/// not this increment's to reopen.
+pub fn status_message(account: &Account) -> String {
+    match check(account) {
+        Ok(()) => String::new(),
+        Err(Incomplete::MissingIdentity) => translate(
+            // TRANSLATORS: shown on the account setup page when no email address has been typed in yet.
+            c"This account has no email address yet.",
+        ),
+        Err(Incomplete::InvalidIdentity(identity)) => translate_with(
+            // TRANSLATORS: %1$s is exactly what was typed into the email address field.
+            c"\"%1$s\" is not an email address.",
+            &[&identity],
+        ),
+        Err(Incomplete::Server(error)) => error.to_string(),
     }
 }
 
@@ -168,4 +196,78 @@ fn is_address(identity: &str) -> bool {
         && !domain.is_empty()
         && !domain.contains('@')
         && !identity.contains(char::is_whitespace)
+}
+
+/// [`status_message`], driven with plain [`Account`] fixtures — no `ESource`
+/// needed, unlike `tests/complete.rs`'s own suite: the account this crate
+/// commits from is a Rust struct, and `status_message` never reaches EDS
+/// either.
+#[cfg(test)]
+mod tests {
+    use jmap_collection_sync::Parts;
+    use jmap_collection_sync::child_source::Connection;
+
+    use super::*;
+
+    /// The account every case starts from: complete, per the module doc's own
+    /// order of checks.
+    fn complete_account() -> Account {
+        Account {
+            identity: "vera@example.com".to_owned(),
+            connection: Connection {
+                host: "jmap.example.com".to_owned(),
+                port: Some(8443),
+                user: Some("vera".to_owned()),
+                auth_method: None,
+                secure: true,
+            },
+            parts: Parts::ALL,
+        }
+    }
+
+    #[test]
+    fn a_complete_account_has_no_status_message() {
+        assert_eq!(status_message(&complete_account()), "");
+    }
+
+    #[test]
+    fn a_missing_identity_is_reported() {
+        let account = Account {
+            identity: String::new(),
+            ..complete_account()
+        };
+        assert_eq!(
+            status_message(&account),
+            "This account has no email address yet."
+        );
+    }
+
+    #[test]
+    fn an_invalid_identity_is_reported() {
+        let account = Account {
+            identity: "not an address".to_owned(),
+            ..complete_account()
+        };
+        assert_eq!(
+            status_message(&account),
+            "\"not an address\" is not an email address."
+        );
+    }
+
+    #[test]
+    fn an_unusable_server_is_reported() {
+        let account = Account {
+            connection: Connection {
+                host: String::new(),
+                secure: false,
+                ..complete_account().connection
+            },
+            ..complete_account()
+        };
+        assert_eq!(
+            status_message(&account),
+            check(&account).unwrap_err().to_string()
+        );
+        assert!(!status_message(&account).is_empty());
+    }
 }
