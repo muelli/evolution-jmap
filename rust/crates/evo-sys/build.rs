@@ -84,6 +84,14 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // a plain property binding rather than a `gtk_toggle_button_.*` call, so
     // this is the only entry point the toggle needs.
     "gtk_check_button_new_with_mnemonic",
+    // The status label: a plain (non-mnemonic) label, since `Incomplete`'s
+    // text is not the module's own to add a keyboard shortcut to, and the two
+    // calls that keep it in step with the account — filled once, then
+    // rewritten on every keystroke `on_extension_changed` reacts to, and
+    // hidden while there is nothing to say.
+    "gtk_label_new",
+    "gtk_label_set_text",
+    "gtk_widget_set_visible",
     // Not called by the module: these are what `tests/gtk.rs` asks the running
     // GTK to confirm the classes above are, since the opaque handles carry no
     // layout to check the way `tests/layout.rs` checks the EDS structs.
