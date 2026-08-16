@@ -28824,3 +28824,121 @@ has been answered before re-deriving "blocked" again; if `docs/BACKLOG.md`
 has run dry of current-priority-adjacent items too, that is the point to
 re-examine whether a genuinely new tractable slice exists rather than
 re-surveying from scratch.
+
+## 2026-08-16 (three-hundred-and-fourth session)
+
+**Claiming: evo-sys bindings for `EConfigLookupWorker`, plus a dispatch-pinning
+test.** `git fetch origin` at claim time shows `origin/master` unchanged at
+`70f5f44`, so no other agent has this. Running on Sonnet, with live internet
+access confirmed this session (`curl` to `gitlab.gnome.org` succeeds) — the
+last five sessions' dead ends were reached using only the headers installed
+on this VM, so before re-deriving "still blocked" a sixth time, this session
+spent its budget reading the actual GNOME sources the VM lacks.
+
+**The method-chooser-vs-auto-discovery question has a precedented answer,
+found in evolution-ews rather than guessed.** `src/EWS/evolution/
+e-ews-config-lookup.c` (gitlab.gnome.org/GNOME/evolution-ews, `master`) is
+EWS's autodiscovery: a small `EExtension` (`EEwsConfigLookup`) whose
+`extensible_type` is `E_TYPE_CONFIG_LOOKUP`, implementing the
+`EConfigLookupWorker` interface (`e-util/e-config-lookup-worker.h`,
+installed locally at `/usr/include/evolution/e-util/`). Its `constructed()`
+calls `e_config_lookup_register_worker()` on the extensible it was handed —
+the same "putting the type in the type system is the registration, there is
+nowhere else to add it" idiom `jmap-config/src/module.rs` already documents
+for `JmapConfigServiceBackend` itself. Evolution's mail-config assistant runs
+every registered worker automatically once the user has typed an email
+address (and, for EWS, a password) — **there is no manual chooser/checkbox
+in the stock idiom**; the "method selector vs. transparent auto-discovery"
+framing four prior sessions treated as an open maintainer decision is not
+actually a fork in Evolution's own convention. An `EConfigLookupWorker` *is*
+the transparent-auto-discovery answer, not a competing design to weigh
+against a chooser.
+
+**The GTK-main-thread concurrency concern dissolves for the same reason.**
+`EConfigLookupWorkerInterface::run` (`e-config-lookup-worker.h`) is a plain
+synchronous vfunc — `GCancellable *cancellable, GError **error`, no
+`GAsyncReadyCallback` — and EWS's implementation calls a genuinely blocking
+network function (`e_ews_autodiscover_ws_url_sync`) directly from it, no
+threading of its own. `EConfigLookup`'s own machinery (`e_config_lookup_run`,
+async, in `e-util/e-config-lookup.h`) is what dispatches each registered
+worker off the main thread — that is the entire reason the class exists.
+So "marshal a blocking network call onto the GTK thread" was never this
+project's problem to solve; nothing here would write a thread or an idle
+source, because `EConfigLookup` already has.
+
+**The `redirect_uri` dead end (301st/302nd sessions) also resolves.** Those
+sessions found `discover_and_register` needs a `redirect_uri` before RFC 7591
+registration is meaningful, and could not find, in the installed headers,
+what URI EDS's own consent-flow dialog (`ECredentialsPrompterImplOAuth2`)
+uses. Its actual source
+(`gitlab.gnome.org/GNOME/evolution-data-server/-/raw/master/src/
+libedataserverui/e-credentials-prompter-impl-oauth2.c`) shows it does not
+fix one: the embedded `WebKitWebView`'s `load-changed` handler calls
+`extract_authorization_code()` — a vfunc our own `oauth2_service.rs` already
+leaves at `EOAuth2Service`'s *default* implementation, deliberately, per that
+file's own doc comment ("nothing account-specific to add") — against
+whatever page loads, and `e-oauth2-service.c`'s own default `get_redirect_uri`
+is literally `"urn:ietf:wg:oauth:2.0:oob"` (RFC 8252's out-of-band flow: the
+provider displays the code as text rather than issuing a real HTTP redirect).
+Since our `oauth2::redirect_uri(source)` already answers whatever
+`discover_and_register` stored, registering `"urn:ietf:wg:oauth:2.0:oob"` — the
+same constant EDS itself falls back to — is self-consistent with the generic
+prompter and needs no bespoke redirect listener, which is what the 301st
+session had already ruled out building.
+
+**What this means for M7/real-server readiness**: the open item was never a
+maintainer-only policy call plus an unattempted concurrency problem. It is a
+concrete, precedented port of a pattern Evolution ships for exactly this
+(EWS's own autodiscovery) onto machinery this repository has already used
+once (`jmap-config/src/oauth2_service.rs`'s `InterfaceDecl::filled_by` for
+`EOAuth2Service` is the identical shape `EConfigLookupWorker` needs — small
+interface, `GObject`-only prerequisite, filled from a throwaway probe type in
+a test exactly like `eds-sys/tests/oauth2.rs` does for the 18-slot
+`EOAuth2ServiceInterface`, here 2 slots).
+
+**Scoping tonight's actual increment narrowly**, per "prefer a small,
+fully-tested increment over a large, partly-verified one": adding the full
+`JmapConfigLookup` extension (result construction, transport wiring, module
+registration, `discover_and_register`'s redirect-uri default) in one sitting
+is a bigger unit than 30-90 minutes and stacks several new things at once.
+Tonight is just the FFI foundation — `evo-sys` bindings for
+`EConfigLookupWorker`/`EConfigLookupWorkerInterface` and a dispatch-pinning
+test mirroring `eds-sys/tests/oauth2.rs`'s method (register a throwaway probe
+type, fill the vtable, dispatch through EDS's own wrappers, assert the right
+function answered) — the same shape M1's own acceptance criterion described
+("class struct layouts spot-checked against `g_type_query` sizes in a unit
+test"). `EConfigLookup` itself joins `EVO_HANDLES` as an opaque handle (never
+subclassed, only ever a pointer this code is handed); `ENamedParameters` is
+already `eds-sys`'s (its `e_named_parameters_.*` functions are allowlisted
+there already) and is blocklisted here for the same reason `ESource`/
+`CamelSettings` already are — one type, not two competing generated copies.
+`EConfigLookupResult`/`EConfigLookupResultSimple` are NOT touched this
+session — the actual worker's `run()` body (next increment) needs them to
+report a result, but the interface itself does not.
+
+**Next session, concretely** (no longer "survey and rule out" — an actual
+implementation plan): write `jmap-config/src/config_lookup.rs`, an
+`EExtension` (`extensible_type = E_TYPE_CONFIG_LOOKUP`) named e.g.
+`JmapConfigLookup`, implementing `EConfigLookupWorker` via
+`InterfaceDecl::filled_by` exactly as `oauth2_service.rs` does for
+`EOAuth2Service` — `get_display_name` a static translated string,
+`run()` reading `E_CONFIG_LOOKUP_PARAM_EMAIL_ADDRESS`/`_SERVERS` out of its
+`ENamedParameters`, calling `oauth2_setup::discover_and_register` with
+redirect_uri fixed to `"urn:ietf:wg:oauth:2.0:oob"`, and on success building an
+`EConfigLookupResultSimple` (`e_config_lookup_result_simple_new`, plain
+`g_object_new`-style constructor, no subclassing needed — JMAP's one-source-
+per-account shape from M6 needs none of the mail-account/transport copying
+EWS's own `configure_source` override does) naming the JMAP collection
+backend and writing `[JMAP OAuth2]`'s fields via
+`e_config_lookup_result_simple_add_string`/`_add_uint`. Register it in both
+`e_module_load` entry points the same way `oauth2::ensure_registered()` was
+added (293rd session) — `e_config_lookup_register_worker` needs a live
+`EConfigLookup`, though, so check at that point whether registration truly
+belongs in `constructed()` (as EWS does it, extension-instantiation time) or
+needs deferring; EWS's own placement is the default to follow unless a
+concrete reason not to turns up. Needs a `Transport` impl for the real
+network call — check what `jmap-client`'s live-server harness already uses
+for one before inventing a second.
+
+Claim only above this line; gates and outcome to follow once the increment
+is actually implemented and verified.
