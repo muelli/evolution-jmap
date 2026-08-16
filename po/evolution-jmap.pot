@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-16 21:25+0000\n"
+"POT-Creation-Date: 2026-08-16 22:32+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -121,14 +121,19 @@ msgid "OAuth 2.0"
 msgstr ""
 
 #. TRANSLATORS: shown on the account setup page when no email address has been typed in yet.
-#: rust/crates/jmap-config/src/complete.rs:143
+#: rust/crates/jmap-config/src/complete.rs:170
 msgid "This account has no email address yet."
 msgstr ""
 
 #. TRANSLATORS: %1$s is exactly what was typed into the email address field.
-#: rust/crates/jmap-config/src/complete.rs:147
+#: rust/crates/jmap-config/src/complete.rs:174
 #, c-format
 msgid "\"%1$s\" is not an email address."
+msgstr ""
+
+#. TRANSLATORS: shown when OAuth 2.0 is picked as the authentication method but "Look Up Account Details" has not registered a client for it yet.
+#: rust/crates/jmap-config/src/complete.rs:180
+msgid "OAuth 2.0 needs \"Look Up Account Details\" to run first."
 msgstr ""
 
 #: rust/crates/jmap-config/src/config_lookup.rs:297
