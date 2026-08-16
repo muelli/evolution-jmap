@@ -27699,3 +27699,27 @@ matrix; the calcard directive's two emitters are still ours; M9 has no CI
 job and no GUI tier; the OAuth2 consent page needs a display this VM lacks;
 `docs/BACKLOG.md`'s contact/vCard and calendar/iCal fidelity items are all
 still parked there.
+
+## 2026-08-16 (two-hundred-and-ninety-first session)
+
+**Claiming: `jmap-config`'s `insert_widgets` — the status label for
+`Incomplete`'s refusal reason.** The previous session's "next session" note
+lists this as the one item left on `insert_widgets`' own "what is not here
+yet" list, and M7 is still the current priority. `git fetch origin` at claim
+time shows `origin/master` unchanged at `9999932`, so no other agent has
+this.
+
+Plan: `crate::complete` gains a small pure function, `status_message(&Account)
+-> String` (empty when `check` accepts the account, `Incomplete`'s `Display`
+text otherwise) — testable with plain `Account` fixtures, no `ESource`
+needed, the same way `tests/complete.rs` already builds them. `backend.rs`
+adds a `GtkLabel` row below the security check button, filled once from the
+account `insert_entries` already has in scope, and refreshed by
+`on_extension_changed` on every keystroke that already re-asks
+`check_complete` — which needs the label and the collection to reach that
+handler, stashed via `g_object_set_data`/`g_object_get_data` (already in
+`gobject-sys`, no new FFI) on `page`, the same object the `notify` connection
+already watches. `evo-sys` needs two new GTK entry points, `gtk_label_new` and
+`gtk_label_set_text` (plain `GtkLabel` calls, already-opaque handle, no new
+type or layout claim), plus `gtk_widget_set_visible` to hide the row when the
+account is complete.
