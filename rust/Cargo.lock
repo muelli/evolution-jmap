@@ -266,6 +266,8 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "eds-sys",
+ "glib-sys",
+ "gobject-sys",
  "pkg-config",
 ]
 
