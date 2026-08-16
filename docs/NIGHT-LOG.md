@@ -26927,3 +26927,55 @@ directive's two emitters are still ours; M9 has no CI job and no GUI tier
 page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
 fidelity items are all still parked there.
 
+
+## 2026-08-16 (two-hundred-and-eighty-fourth session)
+
+**No increment claimed — escalating the `eds-sys` `EOAuth2Service` bindgen
+slice, per last session's own note, after re-confirming the rest of the
+priority queue is unchanged.**
+
+Re-ran the survey rather than taking last session's "next session" note on
+faith:
+
+- **M7**: unchanged. `Xvfb`/`xvfb-run` still not installed on this VM
+  (checked again), so `insert_widgets` is still unreachable here.
+- **M9/M10**: unchanged — still blocked on the maintainer decision to grow
+  `Containerfile.ci` with the EDS runtime/Xvfb; `git log` on that file stops
+  at the night-shift driver work, nothing roadmap-related has touched it.
+- **Real-server readiness / OAuth2**: read through `jmap-client/src/oauth.rs`
+  and `jmap-proto/src/session.rs` end to end. Discovery (RFC 8414), dynamic
+  registration (RFC 7591), token exchange and refresh (RFC 6749 §4.1.3/§6,
+  RFC 7636 PKCE) are all implemented and tested against the mock.
+  `Session::resolve_primary_account` and `sole_personal_account` cover
+  capability-negotiation robustness, with `jmap-collection-sync::layout`
+  exercising the mismatched-capability case. The `--features live-server`
+  harness covers core/mail/contacts/calendars read paths. Nothing pure-Rust
+  is left in this track.
+
+That leaves the one piece the last three OAuth2 sessions all deferred
+specifically because it is not pure Rust: `eds-sys` needs
+`EOAuth2Service`/`EOAuth2Services`/`EOAuth2ServiceBase` on the bindgen
+allowlist with a `g_type_query` layout check (the vtable pulls in
+`SoupMessage`, so `libsoup-3.0` enters the binding surface), and then the
+interface implementation itself — new GObject-vtable FFI surface this
+codebase has not attempted before, over a real consent exchange that cannot
+be verified without a live IdP and a display. That is exactly the shape the
+escalation rule names (new unsafe/FFI/bindgen-layout, ABI/GObject-vtable
+correctness) and is not one to attempt on Sonnet and risk a subtly-wrong
+`size_of`/vtable commit. `claude-opus-5` is written to
+`~/.night-shift-escalate` for the next iteration; reason: **the remaining
+OAuth2 work is `eds-sys` bindgen for a new GObject interface
+(`EOAuth2Service`) plus its implementation — FFI/ABI-layout work this
+codebase has not done before, unverifiable here without a live IdP and a
+display.**
+
+No commits to `rust/`; tests/clippy/fmt were not re-run since nothing in the
+tree changed besides this log entry.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier
+(both need `Containerfile.ci` growth, a maintainer decision); M7 still
+**needs human verification in real Evolution**, and its one remaining vfunc
+(`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
+page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
+fidelity items are all still parked there.
