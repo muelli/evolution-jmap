@@ -37,6 +37,7 @@ const CLASSES: &[(&str, unsafe extern "C" fn() -> GType)] = &[
     ("GtkLabel", gtk_label_get_type),
     ("GtkEntry", gtk_entry_get_type),
     ("GtkCheckButton", gtk_check_button_get_type),
+    ("GtkComboBoxText", gtk_combo_box_text_get_type),
 ];
 
 /// The classes, registered exactly once — which has to be arranged, because on
@@ -54,7 +55,7 @@ const CLASSES: &[(&str, unsafe extern "C" fn() -> GType)] = &[
 /// It is GTK behaving as documented (GTK 3 is to be called from one thread), not
 /// a bug to route around, so the tests are what changes: every one of them
 /// reaches the type system through here, and `OnceLock` makes the first caller
-/// register all six while the others wait.
+/// register every class in [`CLASSES`] while the others wait.
 fn classes() -> &'static Vec<(&'static str, GType)> {
     static CLASS_TYPES: OnceLock<Vec<(&'static str, GType)>> = OnceLock::new();
     CLASS_TYPES.get_or_init(|| {
@@ -140,6 +141,11 @@ fn the_widget_handles_carry_no_layout() {
     assert_eq!(size_of::<GtkGrid>(), 0, "GtkGrid is no longer opaque");
     assert_eq!(size_of::<GtkLabel>(), 0, "GtkLabel is no longer opaque");
     assert_eq!(size_of::<GtkEntry>(), 0, "GtkEntry is no longer opaque");
+    assert_eq!(
+        size_of::<GtkComboBoxText>(),
+        0,
+        "GtkComboBoxText is no longer opaque"
+    );
 }
 
 /// Every call the page needs, named once. The load-bearing half of this test is
@@ -186,6 +192,14 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
         (
             "gtk_widget_set_visible",
             gtk_widget_set_visible as *const (),
+        ),
+        (
+            "gtk_combo_box_text_new",
+            gtk_combo_box_text_new as *const (),
+        ),
+        (
+            "gtk_combo_box_text_append",
+            gtk_combo_box_text_append as *const (),
         ),
     ];
     for (name, address) in entry_points {

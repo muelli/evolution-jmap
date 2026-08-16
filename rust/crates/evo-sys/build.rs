@@ -144,6 +144,13 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_label_new",
     "gtk_label_set_text",
     "gtk_widget_set_visible",
+    // The authentication-method row: a plain combo, populated with the fixed
+    // choices `insert_widgets` offers (`ESourceAuthentication:method`'s
+    // `"none"` and this project's own `EOAuth2Service` name) rather than
+    // queried from the server, so `_append` is the only mutator this crate
+    // needs — no `_remove`/`_insert` a dynamic list would call for.
+    "gtk_combo_box_text_new",
+    "gtk_combo_box_text_append",
     // Not called by the module: these are what `tests/gtk.rs` asks the running
     // GTK to confirm the classes above are, since the opaque handles carry no
     // layout to check the way `tests/layout.rs` checks the EDS structs.
@@ -154,6 +161,7 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_label_get_type",
     "gtk_entry_get_type",
     "gtk_check_button_get_type",
+    "gtk_combo_box_text_get_type",
 ];
 
 /// Types that already exist, and must not be minted a second time.
@@ -286,7 +294,14 @@ const EVO_HANDLES: &[&str] = &["EMailConfigServicePage", "EMailConfigPage", "ECo
 /// prevent. What licenses the casts that remain is that GTK really does relate
 /// the classes this way, which is the one thing `tests/gtk.rs` asks the running
 /// type system rather than assuming.
-const GTK_HANDLES: &[&str] = &["GtkWidget", "GtkBox", "GtkGrid", "GtkLabel", "GtkEntry"];
+const GTK_HANDLES: &[&str] = &[
+    "GtkWidget",
+    "GtkBox",
+    "GtkGrid",
+    "GtkLabel",
+    "GtkEntry",
+    "GtkComboBoxText",
+];
 
 fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");

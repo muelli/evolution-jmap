@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-16 18:47+0000\n"
+"POT-Creation-Date: 2026-08-16 21:25+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -92,20 +92,32 @@ msgstr ""
 msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:287
+#: rust/crates/jmap-config/src/backend.rs:297
 msgid "_Server:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:288
+#: rust/crates/jmap-config/src/backend.rs:298
 msgid "_Port:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:289
+#: rust/crates/jmap-config/src/backend.rs:299
 msgid "_Username:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:296
+#: rust/crates/jmap-config/src/backend.rs:306
 msgid "Use a _secure connection (TLS)"
+msgstr ""
+
+#: rust/crates/jmap-config/src/backend.rs:311
+msgid "A_uthentication:"
+msgstr ""
+
+#: rust/crates/jmap-config/src/backend.rs:331
+msgid "Password"
+msgstr ""
+
+#: rust/crates/jmap-config/src/backend.rs:332
+msgid "OAuth 2.0"
 msgstr ""
 
 #. TRANSLATORS: shown on the account setup page when no email address has been typed in yet.
@@ -119,18 +131,18 @@ msgstr ""
 msgid "\"%1$s\" is not an email address."
 msgstr ""
 
-#: rust/crates/jmap-config/src/config_lookup.rs:235
+#: rust/crates/jmap-config/src/config_lookup.rs:297
 msgid "Look up JMAP account details"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the server this account was discovered
 #. against, shown in the account assistant's list of lookup results.
-#: rust/crates/jmap-config/src/config_lookup.rs:290
+#: rust/crates/jmap-config/src/config_lookup.rs:361
 #, c-format
 msgid "JMAP account at %1$s, using OAuth 2.0"
 msgstr ""
 
-#: rust/crates/jmap-config/src/config_lookup.rs:309
+#: rust/crates/jmap-config/src/config_lookup.rs:381
 msgid "JMAP account (OAuth 2.0)"
 msgstr ""
 
