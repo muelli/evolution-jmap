@@ -19,13 +19,16 @@
 //! PKCE methods the server does, and — where the server supports RFC 7591
 //! dynamic client registration — where to register for a client id.
 //!
-//! This module is the half of that which can be built and tested here: fetch
-//! and validate the metadata document ([`discover`]), and where a deployment
-//! offers it, register this client for a `client_id`
-//! ([`register_client`]) — nothing here is a compiled-in constant, unlike
-//! EDS's Google/Outlook/Yahoo services. Nothing in it performs a flow. The
-//! consent exchange needs a browser and a real provider, and the vfuncs that
-//! wrap this need EDS; both are for later slices.
+//! This module is the part of that which can be built and tested here: fetch
+//! and validate the metadata document ([`discover`]), where a deployment
+//! offers it, register this client for a `client_id` ([`register_client`]),
+//! and redeem an authorization code or a refresh token for an access token
+//! ([`exchange_code`], [`refresh_access_token`]) — nothing here is a
+//! compiled-in constant, unlike EDS's Google/Outlook/Yahoo services. What is
+//! still missing is the consent exchange itself: sending the user to
+//! `authorization_endpoint` and getting a code back needs a browser and a
+//! real provider, and the vfuncs that wire any of this to EDS need the
+//! `EOAuth2Service` interface, which is a later slice.
 //!
 //! ## What is enforced, and what is not
 //!
@@ -45,11 +48,14 @@
 //! while making the plaintext mock untestable. Where TLS gets required it has
 //! to be required of the account as a whole; that is its own piece of work.
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::error::Error;
 use crate::limits;
 use crate::transport::{CancelFlag, HttpMethod, HttpRequest, Transport, TransportError};
+use crate::url::encode_template_value;
 
 /// The path RFC 8414 §3 reserves for the metadata document.
 const WELL_KNOWN: &str = "/.well-known/oauth-authorization-server";
@@ -380,6 +386,242 @@ pub fn register_client(
     ClientRegistration::parse(&response.body)
 }
 
+/// RFC 7636 Proof Key for Code Exchange: a secret generated fresh for one
+/// authorization attempt, whose SHA-256 hash — not the secret itself — is
+/// sent with the authorization request, and whose plaintext is sent only
+/// once, later, to the token endpoint. Redeeming the code then proves
+/// possession of the same secret that produced the challenge the
+/// authorization request carried.
+///
+/// Without this, an authorization code intercepted in transit — a real risk
+/// for a native app's redirect URI, RFC 8252 §8.1 — is redeemable by whoever
+/// captured it; PKCE is what makes a stolen code alone insufficient.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PkceVerifier(String);
+
+impl PkceVerifier {
+    /// A fresh verifier: 32 octets from the OS random source, base64url
+    /// (no padding) encoded — 43 characters, within RFC 7636 §4.1's required
+    /// 43-to-128 and drawn from an alphabet that is a subset of the
+    /// `unreserved` characters §4.1 requires a verifier be built from.
+    pub fn generate() -> Self {
+        let mut octets = [0u8; 32];
+        getrandom::fill(&mut octets).expect("the operating system's random source is unavailable");
+        Self(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(octets))
+    }
+
+    /// The verifier itself — sent to the token endpoint alongside the code it
+    /// challenged ([`exchange_code`]), and nowhere else.
+    pub fn secret(&self) -> &str {
+        &self.0
+    }
+
+    /// The S256 challenge (RFC 7636 §4.2) to send in the authorization
+    /// request: `BASE64URL-ENCODE(SHA256(verifier))`. This client only ever
+    /// offers S256 — `plain` exists in the RFC for a client that cannot hash,
+    /// which is not this one.
+    pub fn challenge(&self) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(self.0.as_bytes()))
+    }
+}
+
+/// A successful token response (RFC 6749 §5.1) — the fields an
+/// `EOAuth2Service` needs to hand back to EDS's credential store, and no
+/// others.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenResponse {
+    /// RFC 6749 §5.1's one required field.
+    pub access_token: String,
+    /// RFC 6749 §7.1's token type, checked rather than merely recorded — see
+    /// the module-level note on why a non-`bearer` value is refused.
+    pub token_type: String,
+    /// Seconds until `access_token` expires, if the server states one.
+    pub expires_in: Option<u64>,
+    /// A new refresh token, present only if the server issued one — RFC 6749
+    /// §6 lets a server rotate it, omit it from a refresh response (meaning
+    /// the old one is still valid), or never issue one at all.
+    pub refresh_token: Option<String>,
+    /// The scope actually granted, if the server states it (RFC 6749 §5.1:
+    /// required only if it differs from what was requested).
+    pub scope: Option<String>,
+}
+
+/// The success document as it arrives, before it has been checked for the
+/// fields this client cannot proceed without.
+#[derive(Debug, Deserialize)]
+struct TokenDocument {
+    access_token: Option<String>,
+    token_type: Option<String>,
+    expires_in: Option<u64>,
+    refresh_token: Option<String>,
+    scope: Option<String>,
+}
+
+/// RFC 6749 §5.2's error object — the one thing this client parses out of a
+/// token-endpoint failure, and the reason [`Error::OAuthTokenRefused`] exists
+/// (see its doc comment for why the status code alone is not enough here).
+#[derive(Debug, Deserialize)]
+struct TokenErrorDocument {
+    error: String,
+    error_description: Option<String>,
+}
+
+/// Redeem an authorization code for tokens (RFC 6749 §4.1.3), proving with
+/// `verifier` that this is the same client the authorization request came
+/// from (RFC 7636 §4.5).
+///
+/// `redirect_uri` must be byte-identical to the one the authorization request
+/// named — RFC 6749 §4.1.3 requires the token endpoint to check it, and a
+/// mismatch here is the server refusing to trust that this exchange follows
+/// the same authorization the user consented to.
+pub fn exchange_code(
+    transport: &dyn Transport,
+    token_endpoint: &str,
+    client_id: &str,
+    code: &str,
+    redirect_uri: &str,
+    verifier: &PkceVerifier,
+    cancel: Option<&CancelFlag>,
+) -> Result<TokenResponse, Error> {
+    let body = form_body(&[
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("client_id", client_id),
+        ("code_verifier", verifier.secret()),
+    ]);
+    token_request(transport, token_endpoint, body, cancel)
+}
+
+/// Redeem a refresh token for a new access token (RFC 6749 §6).
+///
+/// No PKCE verifier here: a verifier proves who redeemed the *original*
+/// code, not who is refreshing it, and no RFC ties one to a refresh grant —
+/// this request is only as trustworthy as `refresh_token` itself.
+pub fn refresh_access_token(
+    transport: &dyn Transport,
+    token_endpoint: &str,
+    client_id: &str,
+    refresh_token: &str,
+    cancel: Option<&CancelFlag>,
+) -> Result<TokenResponse, Error> {
+    let body = form_body(&[
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", client_id),
+    ]);
+    token_request(transport, token_endpoint, body, cancel)
+}
+
+/// POST a token request and parse whichever of RFC 6749 §5.1/§5.2 comes back.
+///
+/// Sent with no separate client authentication: this client registers as a
+/// public, PKCE-only client (see [`CLIENT_AUTH_METHOD`]), so `client_id` in
+/// the body is all the identification RFC 6749 §3.2.1 asks of one.
+fn token_request(
+    transport: &dyn Transport,
+    token_endpoint: &str,
+    body: String,
+    cancel: Option<&CancelFlag>,
+) -> Result<TokenResponse, Error> {
+    if cancel.is_some_and(CancelFlag::is_cancelled) {
+        return Err(Error::Cancelled);
+    }
+
+    let headers = [
+        ("Accept".to_owned(), "application/json".to_owned()),
+        (
+            "Content-Type".to_owned(),
+            "application/x-www-form-urlencoded".to_owned(),
+        ),
+    ];
+    let response = transport
+        .execute(HttpRequest {
+            method: HttpMethod::Post,
+            url: token_endpoint,
+            headers: &headers,
+            body: Some(body.as_bytes()),
+            cancel,
+            max_response_bytes: limits::MAX_OAUTH_TOKEN_BYTES,
+        })
+        .map_err(|error| match error {
+            TransportError::Cancelled => Error::Cancelled,
+            TransportError::Failed(message) => Error::Transport(message),
+            TransportError::ResponseTooLarge { limit } => Error::ResponseTooLarge { limit },
+        })?;
+
+    parse_token_response(response.status, &response.body)
+}
+
+/// Parse whichever of RFC 6749 §5.1 (success) or §5.2 (error) a token-endpoint
+/// response turns out to be, from the status and body alone — separate from
+/// [`token_request`] so it can be exercised directly against hostile bodies,
+/// the same reason [`AuthorizationServer::parse`] is separate from
+/// [`discover`].
+fn parse_token_response(status: u16, body: &[u8]) -> Result<TokenResponse, Error> {
+    if (200..300).contains(&status) {
+        let document: TokenDocument = serde_json::from_slice(body)?;
+        let access_token = document
+            .access_token
+            .filter(|token| !token.is_empty())
+            .ok_or_else(|| {
+                Error::Protocol(
+                    "the token response states no access_token; RFC 6749 §5.1 requires one"
+                        .to_owned(),
+                )
+            })?;
+        let token_type = document.token_type.ok_or_else(|| {
+            Error::Protocol(
+                "the token response states no token_type; RFC 6749 §5.1 requires one".to_owned(),
+            )
+        })?;
+        // Every credential this client carries end to end is a bearer token
+        // (`Credentials::Bearer`); a server naming any other type is handing
+        // back something this client has no per-request scheme for, and
+        // using it as a bearer token anyway would send it the wrong way.
+        if !token_type.eq_ignore_ascii_case("bearer") {
+            return Err(Error::Protocol(format!(
+                "the token response names token_type {token_type}, which this client cannot use \
+                 (only bearer tokens are supported end to end)"
+            )));
+        }
+        Ok(TokenResponse {
+            access_token,
+            token_type,
+            expires_in: document.expires_in,
+            refresh_token: document.refresh_token,
+            scope: document.scope,
+        })
+    } else {
+        match serde_json::from_slice::<TokenErrorDocument>(body) {
+            Ok(error) => Err(Error::OAuthTokenRefused {
+                error: error.error,
+                description: error.error_description,
+            }),
+            Err(_) => Err(Error::Http {
+                status,
+                problem: None,
+            }),
+        }
+    }
+}
+
+/// Build an `application/x-www-form-urlencoded` body (RFC 6749 §4.1.3's
+/// request shape).
+///
+/// Reuses [`encode_template_value`]'s RFC 3986 unreserved-set percent-encoding
+/// rather than a second encoder: it escapes a space as `%20` where this media
+/// type's own history prefers `+`, but a percent-decoder — which any correct
+/// parser of it applies before treating `+` as space — reads the two
+/// identically, so nothing this client sends is lost or misread.
+fn form_body(pairs: &[(&str, &str)]) -> String {
+    pairs
+        .iter()
+        .map(|(key, value)| format!("{key}={}", encode_template_value(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 /// The URL `issuer`'s metadata document lives at.
 ///
 /// RFC 8414 §3.1 *inserts* the well-known path between the host and the path
@@ -452,7 +694,12 @@ fn endpoint(name: &str, value: Option<String>) -> Result<Option<String>, Error> 
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthorizationServer, ClientRegistration, metadata_url};
+    use base64::Engine as _;
+    use sha2::{Digest, Sha256};
+
+    use super::{
+        AuthorizationServer, ClientRegistration, PkceVerifier, metadata_url, parse_token_response,
+    };
     use crate::error::Error;
 
     #[test]
@@ -620,5 +867,157 @@ mod tests {
         )
         .expect("unknown/echoed fields are not an error");
         assert_eq!(registered.client_id, "abc123");
+    }
+
+    #[test]
+    fn a_pkce_verifier_meets_rfc_7636s_length_and_alphabet() {
+        let verifier = PkceVerifier::generate();
+        let secret = verifier.secret();
+        assert!(
+            (43..=128).contains(&secret.len()),
+            "RFC 7636 §4.1 requires 43 to 128 characters, got {}",
+            secret.len()
+        );
+        assert!(
+            secret
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
+            "a base64url verifier must be drawn from RFC 7636 §4.1's unreserved set: {secret}"
+        );
+    }
+
+    #[test]
+    fn two_verifiers_are_never_the_same() {
+        // Not a proof of randomness, but a regression test against the bug
+        // that would defeat PKCE entirely: a verifier that is constant or
+        // derived from something predictable.
+        assert_ne!(
+            PkceVerifier::generate().secret(),
+            PkceVerifier::generate().secret()
+        );
+    }
+
+    #[test]
+    fn the_challenge_is_the_verifiers_sha256_base64url_encoded() {
+        let verifier = PkceVerifier::generate();
+        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(verifier.secret().as_bytes()));
+        assert_eq!(verifier.challenge(), expected);
+    }
+
+    #[test]
+    fn a_token_response_with_no_access_token_is_refused() {
+        assert!(matches!(
+            parse_token_response(200, br#"{"token_type": "bearer"}"#),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn a_token_response_with_an_empty_access_token_is_refused() {
+        assert!(matches!(
+            parse_token_response(200, br#"{"access_token": "", "token_type": "bearer"}"#),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn a_token_response_naming_no_token_type_is_refused() {
+        assert!(matches!(
+            parse_token_response(200, br#"{"access_token": "tok"}"#),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn a_non_bearer_token_type_is_refused() {
+        let error = parse_token_response(200, br#"{"access_token": "tok", "token_type": "mac"}"#)
+            .expect_err("this client cannot use a mac token");
+        assert!(
+            matches!(&error, Error::Protocol(message) if message.contains("mac")),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn the_bearer_token_type_check_is_case_insensitive() {
+        let response =
+            parse_token_response(200, br#"{"access_token": "tok", "token_type": "Bearer"}"#)
+                .expect("RFC 6749 §7.1: token_type is case-insensitive");
+        assert_eq!(response.access_token, "tok");
+    }
+
+    #[test]
+    fn a_successful_response_carries_the_optional_fields_it_states() {
+        let response = parse_token_response(
+            200,
+            br#"{"access_token": "tok", "token_type": "bearer", "expires_in": 3600,
+                "refresh_token": "rtok", "scope": "urn:ietf:params:jmap:mail"}"#,
+        )
+        .expect("a valid response");
+        assert_eq!(response.access_token, "tok");
+        assert_eq!(response.expires_in, Some(3600));
+        assert_eq!(response.refresh_token.as_deref(), Some("rtok"));
+        assert_eq!(response.scope.as_deref(), Some("urn:ietf:params:jmap:mail"));
+    }
+
+    #[test]
+    fn fields_a_token_response_carries_that_this_client_has_no_use_for_are_parsed_past() {
+        let response = parse_token_response(
+            200,
+            br#"{"access_token": "tok", "token_type": "bearer", "id_token": "eyJ..."}"#,
+        )
+        .expect("unknown fields are not an error");
+        assert_eq!(response.access_token, "tok");
+    }
+
+    #[test]
+    fn a_refused_grant_surfaces_its_own_error_code() {
+        let error = parse_token_response(
+            400,
+            br#"{"error": "invalid_grant", "error_description": "refresh token expired"}"#,
+        )
+        .expect_err("the server refused the grant");
+        assert!(
+            matches!(&error, Error::OAuthTokenRefused { error, description }
+                if error == "invalid_grant"
+                    && description.as_deref() == Some("refresh token expired")),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn distinct_error_codes_are_distinguishable() {
+        // The whole reason `OAuthTokenRefused` parses the body: every
+        // refusal here answers the same HTTP 400, so two different failures
+        // must not collapse into the same error.
+        let invalid_grant =
+            parse_token_response(400, br#"{"error": "invalid_grant"}"#).expect_err("refused");
+        let invalid_client =
+            parse_token_response(400, br#"{"error": "invalid_client"}"#).expect_err("refused");
+        assert!(matches!(
+            invalid_grant,
+            Error::OAuthTokenRefused { error, .. } if error == "invalid_grant"
+        ));
+        assert!(matches!(
+            invalid_client,
+            Error::OAuthTokenRefused { error, .. } if error == "invalid_client"
+        ));
+    }
+
+    #[test]
+    fn an_unparseable_error_body_falls_back_to_the_http_status() {
+        let error =
+            parse_token_response(500, b"internal server error").expect_err("a failed request");
+        assert!(
+            matches!(
+                error,
+                Error::Http {
+                    status: 500,
+                    problem: None
+                }
+            ),
+            "got {error:?}"
+        );
     }
 }
