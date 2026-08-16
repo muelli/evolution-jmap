@@ -31,6 +31,19 @@
 //! load-everything-at-startup arranges, and why this is a module in Evolution's
 //! directory rather than something the mail provider brings with it.
 //!
+//! ## One thing *is* registered here: the `[JMAP OAuth2]` extension type
+//!
+//! `jmap_config::oauth2::ensure_registered`'s own doc names this module load
+//! as the one caller that has to think about it. `apply`/`read` register
+//! `[JMAP OAuth2]`'s extension type themselves, so the account editor's own
+//! reads and writes are covered — but Evolution's shell (this process) parses
+//! every `ESource` it receives from the registry into its own local objects
+//! using the same `e_source_get_extension` name lookup, and it does that
+//! before the account editor ever opens a dialog on one. Left unregistered,
+//! an existing OAuth2 account's `[JMAP OAuth2]` group would be silently
+//! dropped by this process's own source parsing, not merely unread by this
+//! crate's code. `tests/oauth2_module.rs` drives exactly that path.
+//!
 //! ## Guarded, like the others
 //!
 //! Nothing here should be able to panic, but a panic that unwound out of
@@ -74,6 +87,12 @@ use crate::backend::JmapConfigServiceBackend;
 /// goes wrong: the account setup page's labels, which
 /// [`insert_widgets`](crate::backend) has yet to put on screen.
 ///
+/// [`crate::oauth2::ensure_registered`] does not take `type_module`: unlike
+/// the backend above, `[JMAP OAuth2]`'s extension type is registered
+/// statically, once, for the life of the process, the same way EDS's own
+/// `.source`-parsing extension types are — see the module docs for why this
+/// load path has to be the one to do it.
+///
 /// # Safety
 ///
 /// `type_module` must be the `GTypeModule *` Evolution passed to
@@ -83,6 +102,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
         bind();
         // SAFETY: the module is Evolution's, by this function's contract.
         unsafe { register_dynamic::<JmapConfigServiceBackend>(type_module) };
+        crate::oauth2::ensure_registered();
     });
 }
 
