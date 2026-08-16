@@ -72,9 +72,11 @@ use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::guard_bool;
+use jmap_client::Credentials;
 use jmap_mail_sync::MailSync;
 
-use crate::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail};
+use crate::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail, password_credentials};
+use crate::oauth2;
 use crate::server::{ServerConfig, network, take_string};
 
 /// A service of this provider that holds a JMAP connection: the store, and the
@@ -129,9 +131,9 @@ pub unsafe trait Connected: ObjectSubclass<Instance = Self> {
 pub fn authenticate<T: Connected>(
     service: &T,
     config: &ServerConfig,
-    password: Option<&str>,
+    credentials: Credentials,
 ) -> Result<(), StoreError> {
-    let sync = open_mail(config, password)?;
+    let sync = open_mail(config, credentials)?;
     service.hold_connection(sync);
     Ok(())
 }
@@ -370,23 +372,51 @@ unsafe fn attempt<T: Connected>(
     // `from_settings` requires.
     let settings = unsafe { camel_service_ref_settings(service) };
     let config = unsafe { ServerConfig::from_settings(settings) };
+    // SAFETY: as above; read before `settings` is given back, exactly like
+    // `config` itself.
+    let uses_oauth2 = unsafe { oauth2::uses_oauth2(settings) };
     if !settings.is_null() {
         // SAFETY: the reference `ref_settings` handed over.
         unsafe { g_object_unref(settings.cast::<GObject>()) };
     }
     let config = config?;
 
-    // The session put it there before calling us, and it is the only credential
-    // this code ever sees: nothing reads a password out of the settings object,
-    // which Evolution serialises into a config file.
-    // SAFETY: a borrowed, NULL-or-NUL-terminated string owned by the service;
-    // `read_string` copies what it needs.
-    let password = unsafe { read_string(camel_service_get_password(service)) };
-
     // SAFETY: the cancellable is Camel's, and it outlives the call — which is
     // exactly the scope this observation wants.
     let _cancel = unsafe { observe(cancellable) };
-    authenticate(connected, &config, password.as_deref())
+
+    // Which authentication scheme this account uses is decided here, the same
+    // way `jmap_backend_core::connect::connect_with` decides it for the EDS
+    // backends — off the same field Evolution's account editor writes
+    // alongside the `ESource` side of the same choice. See `oauth2`'s module
+    // docs for why asking a second time here cannot disagree with them.
+    let credentials = if uses_oauth2 {
+        // The one object allowed to fetch an OAuth 2.0 token, as it is the
+        // only object allowed to fetch a password.
+        // SAFETY: `service` is a valid CamelService by this function's
+        // contract.
+        let session = unsafe { camel_service_ref_session(service) };
+        if session.is_null() {
+            return Err(StoreError::Disconnected);
+        }
+        // SAFETY: `session` just checked non-NULL, `service` valid by this
+        // function's contract, and `cancellable` satisfies `access_token`'s
+        // contract by this function's own.
+        let token = unsafe { oauth2::access_token(session, service, cancellable) };
+        // SAFETY: the reference `ref_session` handed over.
+        unsafe { g_object_unref(session.cast::<GObject>()) };
+        Credentials::bearer(token?)
+    } else {
+        // The session put it there before calling us, and it is the only
+        // credential this code ever sees: nothing reads a password out of the
+        // settings object, which Evolution serialises into a config file.
+        // SAFETY: a borrowed, NULL-or-NUL-terminated string owned by the
+        // service; `read_string` copies what it needs.
+        let password = unsafe { read_string(camel_service_get_password(service)) };
+        password_credentials(config.user.as_deref(), password.as_deref())
+    };
+
+    authenticate(connected, &config, credentials)
 }
 
 /// Drops the connection, then lets `CamelService` do its half.
