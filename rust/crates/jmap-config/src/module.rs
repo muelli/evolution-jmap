@@ -8,9 +8,12 @@
 //! startup, wraps each `.so` it finds in an `EModule` and `g_type_module_use`s
 //! it; `EModule`'s `load` dlopens the file, resolves `e_module_load`, and calls
 //! it with itself as the `GTypeModule`. Whatever types are registered against
-//! that module by the time the call returns are the module's contribution — for
-//! us, one: the [`EMailConfigServiceBackend`
-//! subclass](crate::backend::JmapConfigServiceBackend).
+//! that module by the time the call returns are the module's contribution —
+//! for us, two: the [`EMailConfigServiceBackend`
+//! subclass](crate::backend::JmapConfigServiceBackend), and
+//! [`JmapConfigLookup`](crate::config_lookup::JmapConfigLookup), an
+//! `EConfigLookupWorker` the account assistant's "Look Up Account Details"
+//! step finds the same way.
 //!
 //! ## Nothing is registered *with* anything
 //!
@@ -19,12 +22,14 @@
 //! omission. The address book, calendar and collection backends each register
 //! a *factory* as well, because their hosts look a backend up by name in a
 //! table the factory puts it in. Evolution's account editor has no such table.
-//! `EMailConfigServicePage` is an `EExtensible`, and its `constructed` calls
-//! `e_extensible_load_extensions`, which walks the children of `EExtension`
-//! that exist at that moment and instantiates every one whose class
-//! `extensible_type` is the page's own type. Our class inherits that field from
-//! `EMailConfigServiceBackend`, so putting the type in the type system *is* the
-//! registration — there is nowhere to add it and nobody to tell.
+//! `EMailConfigServicePage` and `EConfigLookup` are both `EExtensible`s whose
+//! `constructed` calls `e_extensible_load_extensions`, which walks the
+//! children of `EExtension` that exist at that moment and instantiates every
+//! one whose class `extensible_type` is the extensible's own type. Our
+//! backend class inherits that field from `EMailConfigServiceBackend`, and
+//! `JmapConfigLookup`'s own `class_init` sets it explicitly to
+//! `E_TYPE_CONFIG_LOOKUP` — either way, putting the type in the type system
+//! *is* the registration; there is nowhere to add it and nobody to tell.
 //!
 //! The consequence is a timing one rather than a wiring one: the module has to
 //! be loaded before the page is constructed, which is what the shell's
@@ -67,6 +72,7 @@ use jmap_backend_core::subclass::register_dynamic;
 use jmap_backend_core::trampoline::guard;
 
 use crate::backend::JmapConfigServiceBackend;
+use crate::config_lookup::JmapConfigLookup;
 
 /// Binds this project's gettext domain, and registers the setup backend against
 /// `type_module`.
@@ -93,6 +99,13 @@ use crate::backend::JmapConfigServiceBackend;
 /// `.source`-parsing extension types are — see the module docs for why this
 /// load path has to be the one to do it.
 ///
+/// [`JmapConfigLookup`] is registered dynamically, like the backend: its
+/// `EExtension` is instantiated per `EConfigLookup` (Evolution's account
+/// assistant, not this module's own `GTypeModule`), but it still has to be a
+/// type that module can find, which means registered against it before the
+/// assistant's own `e_extensible_load_extensions` walk runs — the same
+/// loaded-before-constructed timing the backend relies on.
+///
 /// # Safety
 ///
 /// `type_module` must be the `GTypeModule *` Evolution passed to
@@ -101,7 +114,10 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
         bind();
         // SAFETY: the module is Evolution's, by this function's contract.
-        unsafe { register_dynamic::<JmapConfigServiceBackend>(type_module) };
+        unsafe {
+            register_dynamic::<JmapConfigServiceBackend>(type_module);
+            register_dynamic::<JmapConfigLookup>(type_module);
+        }
         crate::oauth2::ensure_registered();
     });
 }

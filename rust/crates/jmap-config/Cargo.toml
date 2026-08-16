@@ -33,6 +33,9 @@ evolution-jmap-collection-sync = { workspace = true }
 # talks to the network directly rather than through an `ESource`.
 evolution-jmap-client = { workspace = true }
 glib-sys = { workspace = true }
+# `EConfigLookupWorker::run`'s `GCancellable` argument, bridged onto a
+# `CancelFlag` via `jmap_backend_core::cancel::CancelBridge`.
+gio-sys = { workspace = true }
 # For the `GTypeModule` the module entry point registers the class against, and
 # nothing else: every other GObject call this crate makes is behind
 # `jmap-backend-core`'s subclass helpers.
