@@ -130,8 +130,8 @@ use jmap_vcard::{
     restore_name_components, same_photo, same_service, states_a_point_in_time, states_address,
     states_anniversary, states_calendar, states_context, states_email, states_keyword, states_link,
     states_media, states_nickname, states_note, states_nothing_but_the_marriage,
-    states_online_service, states_organization, states_phone, states_spouse, states_title,
-    title_kind,
+    states_online_service, states_organization, states_phone, states_phone_feature, states_spouse,
+    states_title, title_kind,
 };
 use serde_json::{Map, Value, json};
 
@@ -433,6 +433,7 @@ fn diff_emails(
                 &old.contexts,
                 &new.contexts,
                 maps_context,
+                maps_context,
             );
             diff_pref(patch, path, old.pref, new.pref);
         },
@@ -460,6 +461,7 @@ fn diff_phones(
                 "contexts",
                 &old.contexts,
                 &new.contexts,
+                maps_context,
                 slotted_context(&old.contexts),
             );
             diff_flags(
@@ -469,6 +471,7 @@ fn diff_phones(
                 &old.features,
                 &new.features,
                 maps_phone_feature,
+                slotted_feature(&old.features),
             );
             diff_pref(patch, path, old.pref, new.pref);
         },
@@ -562,6 +565,7 @@ fn diff_addresses(
                 "contexts",
                 &old.contexts,
                 &new.contexts,
+                maps_context,
                 slotted_context(&old.contexts),
             );
         },
@@ -1037,7 +1041,7 @@ fn free_key(wanted: &str, taken: &BTreeSet<String>) -> String {
         .expect("an unbounded sequence has a free element")
 }
 
-/// Whether an edited line could have said anything about this JSContact
+/// Whether the line the user was handed said anything about this JSContact
 /// `contexts` key — the test [`diff_flags`] applies before reading a context's
 /// absence as a removal.
 ///
@@ -1056,8 +1060,31 @@ fn slotted_context(contexts: &Option<Value>) -> impl Fn(&str) -> bool + '_ {
     move |key| maps_context(key) && states_context(contexts.as_ref(), key)
 }
 
+/// [`slotted_context`] for a phone's `features`: whether the `TEL` the user
+/// was handed said this one.
+///
+/// A `TEL` states one feature for the reason an `ADR` states one context — EDS
+/// picks the phone field by `TYPE` too, so a number that is both a voice line
+/// and a fax fills two fields the user edits separately, and with no context
+/// it fills none at all. See [`jmap_vcard::states_phone_feature`].
+fn slotted_feature(features: &Option<Value>) -> impl Fn(&str) -> bool + '_ {
+    move |key| maps_phone_feature(key) && states_phone_feature(features.as_ref(), key)
+}
+
 /// Replace the members of a boolean map this mapping can spell, keep the
 /// rest.
+///
+/// The two predicates are not the same question, and conflating them loses
+/// data. `was_stated` says whether the line the user was handed *said* this
+/// member, and so whether its absence from the edited line is a removal;
+/// `is_mapped` says whether the mapping can read the member back at all, and
+/// so whether its presence is an addition. They differ exactly where a line
+/// states only one of several members it holds — [`slotted_context`] and
+/// [`slotted_feature`] — and there the narrower one must not also gate the
+/// addition: a user moving a number from the Home field to the Business one
+/// types in a context the old line never stated, and gating on `was_stated`
+/// would drop the one they removed *and* ignore the one they typed, leaving
+/// the number with no context at all.
 fn diff_flags(
     patch: &mut Map<String, Value>,
     path: &str,
@@ -1065,12 +1092,13 @@ fn diff_flags(
     current: &Option<Value>,
     edited: &Option<Value>,
     is_mapped: impl Fn(&str) -> bool,
+    was_stated: impl Fn(&str) -> bool,
 ) {
     let mut merged: Map<String, Value> = match current {
         Some(Value::Object(flags)) => flags.clone(),
         _ => Map::new(),
     };
-    merged.retain(|key, _| !is_mapped(key));
+    merged.retain(|key, _| !was_stated(key));
     if let Some(Value::Object(flags)) = edited {
         merged.extend(
             flags

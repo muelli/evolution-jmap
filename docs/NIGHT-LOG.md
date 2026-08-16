@@ -25854,3 +25854,126 @@ their contact-editor behaviour unmeasured; whether the editor lets a handle be
 moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-seventy-fourth session)
+
+**The same defect one axis over, and it turned out to have a second, worse
+face. A number that is both a voice line and a fax filled two of the contact
+editor's phone fields with one `TEL` behind them — and with no context at all
+it filled *none*, so the number was simply not in the contact editor. Measured
+across every feature pair, closed, and a pre-existing data-loss bug in the
+contexts fix from last session fell out of the same machinery.**
+
+Last session closed `contexts` and named this as the next thing of its shape,
+while declining to do it: "which feature wins when a line names several has no
+precedent to follow the way the contexts did, and a wrong pick there loses the
+distinction between a voice line and a fax". Both halves of that turned out to
+be answerable rather than a judgement call, once EDS was actually asked.
+
+**What libebook-contacts 3.52 does with a multi-feature `TEL`**, probed over
+all ten unordered pairs of `VOICE`/`FAX`/`CELL`/`PAGER`/`VIDEO`, bare and with
+a context:
+
+```
+TYPE=WORK,VOICE,FAX  -> business, business_fax     two fields, one line
+TYPE=CELL,PAGER      -> mobile, pager              two fields, no context needed
+TYPE=VOICE,FAX       -> (nothing)                  the number is in no field
+TYPE=VOICE,CELL      -> mobile        TYPE=FAX,CELL   -> mobile
+TYPE=VOICE,PAGER     -> pager         TYPE=FAX,PAGER  -> pager
+TYPE=VOICE,VIDEO     -> other         TYPE=CELL,VIDEO -> mobile
+TYPE=VIDEO           -> (nothing)     TYPE=WORK       -> business
+```
+
+The middle row is the surprise and the reason this is worse than the address
+case: `E_CONTACT_PHONE_OTHER` (`VOICE`) and `E_CONTACT_PHONE_OTHER_FAX` (`FAX`)
+are *exclusive* — each is matched only when the line names no other feature EDS
+knows — so a card saying "this number takes calls and faxes" and nothing else
+disappears from Evolution entirely. Not duplicated, not mis-filed: absent.
+
+**The precedence is mostly EDS's, not ours.** The four rows where EDS resolves a
+pair to a single field all say the same thing: a feature naming a device beats
+the two unqualified ones. So `PHONE_FEATURES` is reordered `CELL`, `PAGER`,
+`FAX`, `VOICE`, `VIDEO` and `feature_slot` takes the first the card states.
+`VIDEO` is last because this EDS knows no such `TYPE` at all — alone it reaches
+nothing, so it must never displace a feature that would have reached a field.
+`VOICE` is second-to-last because it is the unmarked default: `TEL;TYPE=WORK`
+with no feature already fills the *voice* field, so `voice` is the feature still
+said when it is left off. Exactly two ties are ours and are labelled as such in
+`feature_slot`'s doc: `mobile` over `pager`, and `fax` over `voice`.
+
+**And the previous session's worry — that a wrong pick loses the fax-ness — is
+answered by the save, not by the pick.** `states_phone_feature`/`slotted_feature`
+mirror `states_context`: a feature the line never stated is not one the user can
+have cleared. The card keeps saying the number is both; only which field of the
+editor shows it is at stake, which makes the two tie-breaks cheap to get wrong.
+
+**The bug that fell out.** Writing `slotted_feature` meant reading `diff_flags`
+closely, and its single `is_mapped` predicate gates two different questions:
+whether a member's *absence* from the edited line is a removal, and whether its
+*presence* is an addition. Narrowing both to the slot is wrong, and it was
+already wrong on master for contexts as of last session:
+`reclassifying_an_entry_that_had_only_one_context_gives_it_the_other` is red
+before this commit. A phone with `contexts: {"private": true}` alone gets
+`TYPE=HOME,VOICE`; the user drags it to the Business field, the edited line says
+`WORK`, and `slotted_context({private})` admits only `private` — so the removal
+went through and the addition was filtered out, leaving the number with **no
+context at all**. `moving_an_entry_to_the_other_slot_still_reclassifies_it` did
+not catch it because its card held *both* contexts, so the surviving one was
+already there. `diff_flags` now takes `is_mapped` for additions and `was_stated`
+for removals, and the four call sites say which they mean.
+
+**Mutation-checked three ways, each run and reverted.** The emitter restored to
+`type_names(&PHONE_FEATURES, …)` reddens the three new mapping tests and
+`editing_preserves_the_feature_a_line_could_state_only_one_of`; the removal gate
+widened back to `is_mapped` reddens all four "the line stated only one" tests,
+contexts and features alike; and the addition gate narrowed to `was_stated`
+reddens exactly the two reclassification tests. (The first pass of
+`moving_a_number_to_another_kind_of_phone_field_reclassifies_it` survived
+mutation 1 because its `str::replace` target was still a substring of the
+un-narrowed line; it now asserts the whole line first.)
+
+Tests: +4 in `jmap-vcard/tests/mapping.rs`, +3 in `jmap-book-sync/tests/save.rs`,
++2 in `eds-sys/tests/contacts.rs` (outside the default set). The default set is
+1193 → 1200.
+
+Verified locally: `cargo test --locked` 1200, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS=-D warnings cargo doc --no-deps -p
+evolution-jmap-vcard -p evolution-jmap-book-sync` clean; `ninja -C build` then
+`ctest --test-dir build` 15/15, functional, EDS-linked and packaging legs
+included. `ci/checks.sh` still stops at its first step on this VM (no `reuse`,
+no `pipx`, no `uvx`, no `cargo-deny`), so those were reasoned by hand: no file is
+added, so no SPDX header is missing, and `Cargo.lock` is untouched, so `cargo
+deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Closed: **a phone wearing several feature `TYPE`s no longer
+fills several fields, or none**, and **reclassifying an entry that stated one
+context no longer strips the context off it**.
+
+**What this does not settle.** The two tie-breaks are judgements and are
+recorded as such — a user whose office fax is also answered by a person will
+find the number under Business Fax, and one who has a mobile that also pages
+will not see the pager. A phone whose only feature is `video` still reaches no
+EDS field, and that is not fixable here: no field exists, and dropping the
+`VIDEO` would tell EDS the number is a voice line the card never claimed it was.
+Nothing here asks Evolution what it *draws*; the reasoning is about which EDS
+field the line reaches, which is measured. And the same two-questions-one-
+predicate shape `diff_flags` had may exist elsewhere in `patch.rs` — the other
+mergers (`merge_units`, the `extra` passthroughs) were not re-read with this in
+mind.
+
+Unchanged blockers: no `.po` exists, and whether this repository's first
+translation should be written by an autonomous session is a maintainer's call;
+`gettext` is not in `Containerfile.ci`, so the `.pot` in the tree is trusted to
+have come from `po/extract.sh`; M10 still has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; an `UNTIL` the parser
+itself refuses is invisible to `jmap-ical`; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is
+still unverified; a deathday and a birthday stated as a year alone are still
+invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.
