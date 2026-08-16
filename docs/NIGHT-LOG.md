@@ -26499,3 +26499,71 @@ verification in real Evolution**, and its one remaining vfunc
 would need one too, for the credentials prompter's consent page; the
 docs/BACKLOG.md contact/vCard and calendar/iCal fidelity items are all still
 parked there.
+
+## 2026-08-16 (two-hundred-and-eightieth session)
+
+**No increment claimed — escalating OAuth2, and logging why nothing else in
+the priority queue was tractable tonight either, rather than manufacturing
+busywork.**
+
+Re-surveyed the whole priority queue fresh before concluding that, since three
+sessions running had already converged on the same read and a fourth
+independent look should either find something they missed or say plainly that
+it did not:
+
+- **M7**: unchanged. `xvfb-run`/`Xvfb` still not installed on this VM
+  (checked again tonight), so `insert_widgets` is still unreachable here — the
+  same gap the last several sessions recorded.
+- **Real-server readiness**: the `--features live-server` harness now covers
+  `core`, `mail`, `contacts` and `calendars` read paths (prior two sessions);
+  a *write* path was deliberately ruled out again for the reason already on
+  record (needs a disposable test account/fixture design, not a small
+  extension). Capability-negotiation robustness — flagged two sessions ago as
+  "unsurveyed" — turned out to already be closed: `Session::resolve_primary_account`
+  (added last session) is the one inference path every connect site uses, and
+  `jmap-collection-sync::layout` already has full test coverage (including a
+  mismatched mail/submission account) for "does a call site assume a
+  capability that is not there." Nothing left to add.
+- **M9/M10**: still blocked on the same maintainer decision (growing
+  `Containerfile.ci` with the EDS runtime/Xvfb), unchanged from the last two
+  sessions' survey.
+- **A new idea checked and ruled out**: folding `module-jmap-backend.so` (M6's
+  `ECollectionBackend` fan-out) into `jmap-functional` as a fifth automated
+  test, since `docs/manual-test-collection-backend.md` currently makes this a
+  by-hand recipe. Investigated via a research subagent: `evolution-source-registry`
+  loads registry modules from `EDS_REGISTRY_MODULES`, so `stage_collection_backend`
+  would be a trivial addition to `jmap-functional`'s `Session` — but observing
+  the fan-out needs an `ESourceRegistry` client, and no crate anywhere binds
+  that surface (`eds-sys` only exposes `e_collection_backend_*`) and no C
+  client program like `book-client.c` exists for it. That is new FFI-binding
+  and new-client-program work comparable to standing up one of the original
+  four functional tests from scratch — not a 30–90 minute increment, and the
+  existing manual-test doc already reasons through why this stayed manual. Not
+  started.
+
+That leaves **OAuth2** (`EOAuth2Service`) as the one remaining piece of item 2,
+already investigated in detail two sessions ago: a GObject *interface*
+implementation (not the *class* subclassing this codebase's tooling covers),
+whose one part that cannot be written test-first here — the real IdP consent
+exchange — needs a live provider and a display (WebKit, per
+`e-credentials-prompter-impl-oauth2.h`). Three sessions running have reached
+the same conclusion independently rather than attempting a half-verified,
+plausible-but-wrong implementation of GObject-vtable territory this codebase
+has never done. Per the escalation rule, `claude-opus-5` is written to
+`~/.night-shift-escalate` for the next iteration, with this paragraph as the
+one-line reason: **OAuth2's `EOAuth2Service` is a new GObject interface
+implementation with unsafe FFI/vtable surface this codebase has not attempted
+before, and correctness there cannot be cheaply verified on Sonnet without a
+live IdP and a display.**
+
+No commits to `rust/` or `docs/BACKLOG.md`/`docs/MILESTONES.md` this session —
+only this log entry. Tests/clippy/fmt were not re-run, since nothing in the
+tree changed.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**, and its one remaining
+vfunc (`insert_widgets`) needs a display this VM does not have; a real OAuth2
+flow needs one too, for the credentials prompter's consent page; the
+docs/BACKLOG.md contact/vCard and calendar/iCal fidelity items are all still
+parked there.
