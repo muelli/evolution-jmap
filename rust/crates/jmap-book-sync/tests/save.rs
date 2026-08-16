@@ -193,6 +193,106 @@ fn moving_an_entry_to_the_other_slot_still_reclassifies_it() {
 }
 
 #[test]
+fn editing_preserves_the_feature_a_line_could_state_only_one_of() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A work number that is both a voice line and a fax. The line states one
+    // feature, because EDS reads `TYPE=WORK,VOICE,FAX` into both the Business
+    // Phone and the Business Fax field and the next edit of either rewrites
+    // the one line behind them.
+    fixture.patch(
+        &id,
+        json!({
+            "phones/p1": {
+                "number": "+49 30 111",
+                "contexts": {"work": true},
+                "features": {"voice": true, "fax": true},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p1;TYPE=WORK,FAX:"),
+        "{vcard}"
+    );
+
+    // The user edits something else entirely.
+    let edited = vcard.replace("Vera Oldenburg", "Vera Oldenburg-Schmidt");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).phones.as_ref().unwrap()["p1"].features,
+        Some(json!({"voice": true, "fax": true})),
+        "the feature the line had no slot for must not be read as removed",
+    );
+}
+
+#[test]
+fn moving_a_number_to_another_kind_of_phone_field_reclassifies_it() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "phones/p1": {
+                "number": "+49 30 111",
+                "contexts": {"work": true},
+                "features": {"voice": true, "fax": true},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    // The user retypes the number into the Mobile field: the number is no
+    // longer the office fax, and it is now a mobile. The feature the line
+    // never stated — that it is also a voice line — is not theirs to have
+    // cleared, so it stays.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("TEL;X-JMAP-KEY=p1;TYPE=WORK,FAX:"),
+        "{vcard}"
+    );
+    let edited = vcard.replace("TYPE=WORK,FAX:", "TYPE=CELL:");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).phones.as_ref().unwrap()["p1"].features,
+        Some(json!({"voice": true, "mobile": true})),
+    );
+}
+
+#[test]
+fn reclassifying_an_entry_that_had_only_one_context_gives_it_the_other() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Only one context, so the line states it and nothing is held back.
+    fixture.patch(
+        &id,
+        json!({
+            "phones/p1": {
+                "number": "+49 30 111",
+                "contexts": {"private": true},
+                "features": {"voice": true},
+            },
+        }),
+    );
+    let sync = fixture.sync();
+
+    // The user moves the number from the Home field to the Business one.
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard.replace("TYPE=HOME,VOICE", "TYPE=WORK,VOICE");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(
+        fixture.card(&id).phones.as_ref().unwrap()["p1"].contexts,
+        Some(json!({"work": true})),
+        "the context the user typed in must arrive, not vanish with the old one",
+    );
+}
+
+#[test]
 fn editing_preserves_a_preference_ranking_the_vcard_flattens() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");

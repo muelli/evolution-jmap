@@ -968,11 +968,99 @@ fn a_phone_at_home_and_at_work_states_one_slot_rather_than_both() {
         ..ContactCard::default()
     };
 
-    // The feature `TYPE`s are untouched: they pick which *kind* of phone field
-    // the number lands in, not which context's.
+    // One feature is stated here anyway, so the feature `TYPE` is the same
+    // either way; `a_number_that_is_a_voice_line_and_a_fax_states_one_feature`
+    // is where the feature side of the narrowing is pinned.
     assert_eq!(
         line(&card_to_vcard(&card), "TEL"),
         "TEL;X-JMAP-KEY=p1;TYPE=HOME,VOICE:+49 30 111"
+    );
+}
+
+/// A phone with these `contexts` and `features`, written out.
+fn phone_line(contexts: Option<Value>, features: Option<Value>) -> String {
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_owned(),
+        ContactPhone {
+            number: "+49 30 111".to_owned(),
+            contexts,
+            features,
+            ..ContactPhone::default()
+        },
+    );
+    let vcard = card_to_vcard(&ContactCard {
+        phones: Some(phones),
+        ..ContactCard::default()
+    });
+    line(&vcard, "TEL").to_owned()
+}
+
+#[test]
+fn a_number_that_is_a_voice_line_and_a_fax_states_one_feature() {
+    // `TEL;TYPE=VOICE,FAX` reaches *no* field of libebook-contacts 3.52 at
+    // all — the number is simply not in the contact editor — and with a
+    // context it reaches two that overwrite each other. See `eds-sys`'
+    // `a_line_wearing_several_feature_types_reaches_two_fields_or_none`.
+    assert_eq!(
+        phone_line(None, Some(json!({"voice": true, "fax": true}))),
+        "TEL;X-JMAP-KEY=p1;TYPE=FAX:+49 30 111"
+    );
+    assert_eq!(
+        phone_line(
+            Some(json!({"work": true})),
+            Some(json!({"voice": true, "fax": true}))
+        ),
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,FAX:+49 30 111"
+    );
+}
+
+#[test]
+fn a_mobile_that_is_also_a_pager_states_the_mobile() {
+    // The one pair EDS itself files into two fields with no context needed.
+    assert_eq!(
+        phone_line(None, Some(json!({"mobile": true, "pager": true}))),
+        "TEL;X-JMAP-KEY=p1;TYPE=CELL:+49 30 111"
+    );
+    // A mobile outranks the unmarked `voice` and the fax alike.
+    assert_eq!(
+        phone_line(
+            None,
+            Some(json!({"voice": true, "fax": true, "mobile": true}))
+        ),
+        "TEL;X-JMAP-KEY=p1;TYPE=CELL:+49 30 111"
+    );
+}
+
+#[test]
+fn a_video_number_that_is_also_a_voice_line_states_the_voice_line() {
+    // `VIDEO` is the one feature no EDS field matches, so it can never be the
+    // slot while another feature is there to be stated.
+    assert_eq!(
+        phone_line(None, Some(json!({"voice": true, "video": true}))),
+        "TEL;X-JMAP-KEY=p1;TYPE=VOICE:+49 30 111"
+    );
+    // On its own it is still written — dropping it would say the number is a
+    // voice line, which the card never claimed.
+    assert_eq!(
+        phone_line(None, Some(json!({"video": true}))),
+        "TEL;X-JMAP-KEY=p1;TYPE=VIDEO:+49 30 111"
+    );
+}
+
+#[test]
+fn a_line_with_several_features_is_still_read_as_all_of_them() {
+    // Narrowing is about what *we* write. A card that arrives from elsewhere
+    // saying the number is both keeps saying so.
+    let card = vcard_to_card(concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,VOICE,FAX:+49 30 111\r\n",
+        "END:VCARD\r\n"
+    ))
+    .expect("parse");
+    assert_eq!(
+        card.phones.unwrap()["p1"].features,
+        Some(json!({"voice": true, "fax": true}))
     );
 }
 

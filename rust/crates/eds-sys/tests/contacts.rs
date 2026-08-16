@@ -2045,3 +2045,118 @@ fn a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other()
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+/// Which of the phone fields a `TEL` line wearing these `TYPE`s reaches.
+fn phone_fields_reached(types: &str) -> Vec<&'static str> {
+    const FIELDS: [(u32, &str); 6] = [
+        (E_CONTACT_PHONE_BUSINESS, "business"),
+        (E_CONTACT_PHONE_BUSINESS_FAX, "business_fax"),
+        (E_CONTACT_PHONE_MOBILE, "mobile"),
+        (E_CONTACT_PHONE_OTHER, "other"),
+        (E_CONTACT_PHONE_OTHER_FAX, "other_fax"),
+        (E_CONTACT_PHONE_PAGER, "pager"),
+    ];
+    let vcard = format!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:pas-id-test-features-001\r\nFN:Vera Olden\r\n\
+         TEL;TYPE={types}:+49 30 111\r\nEND:VCARD\r\n"
+    );
+    unsafe {
+        let vcard_c = CString::new(vcard).unwrap();
+        let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
+        assert!(!contact.is_null());
+        let reached = FIELDS
+            .into_iter()
+            .filter(|(id, _)| !e_contact_get_const(contact, *id).is_null())
+            .map(|(_, name)| name)
+            .collect();
+        gobject_sys::g_object_unref(contact.cast());
+        reached
+    }
+}
+
+#[test]
+fn a_line_wearing_several_feature_types_reaches_two_fields_or_none() {
+    // The same defect as `a_line_wearing_both_context_types_fills_two_slots_
+    // that_overwrite_each_other`, one axis over: a phone's features also pick
+    // the field, so a number that is both a voice line and a fax fills the
+    // Business Phone field and the Business Fax field alike, and there is one
+    // `TEL` behind both.
+    assert_eq!(
+        phone_fields_reached("WORK,VOICE,FAX"),
+        ["business", "business_fax"]
+    );
+    // A mobile that is also a pager needs no context to reach two.
+    assert_eq!(phone_fields_reached("CELL,PAGER"), ["mobile", "pager"]);
+    // And with no context at all the pair reaches *neither* field: the two
+    // unqualified fields are exclusive, so a number that is both a voice line
+    // and a fax is in no field of the contact editor whatsoever.
+    assert_eq!(phone_fields_reached("VOICE,FAX"), [] as [&str; 0]);
+    assert_eq!(phone_fields_reached("VOICE"), ["other"]);
+    assert_eq!(phone_fields_reached("FAX"), ["other_fax"]);
+
+    // Which feature the mapping keeps when it can state only one follows from
+    // what EDS does with the pair where it resolves it itself: the feature
+    // naming a device wins over the unqualified `VOICE`/`FAX` fields.
+    assert_eq!(phone_fields_reached("VOICE,CELL"), ["mobile"]);
+    assert_eq!(phone_fields_reached("FAX,CELL"), ["mobile"]);
+    assert_eq!(phone_fields_reached("VOICE,PAGER"), ["pager"]);
+    assert_eq!(phone_fields_reached("FAX,PAGER"), ["pager"]);
+
+    // `VIDEO` is not a `TYPE` this EDS knows: on its own it reaches nothing,
+    // and beside another feature it is ignored — which is why it is the last
+    // feature the mapping would ever state.
+    assert_eq!(phone_fields_reached("VIDEO"), [] as [&str; 0]);
+    assert_eq!(phone_fields_reached("VOICE,VIDEO"), ["other"]);
+    assert_eq!(phone_fields_reached("FAX,VIDEO"), ["other_fax"]);
+    assert_eq!(phone_fields_reached("CELL,VIDEO"), ["mobile"]);
+
+    // A `TEL` that names no feature at all is a voice line to EDS, which is
+    // what makes `voice` the unmarked one: it is still said when left off.
+    assert_eq!(phone_fields_reached("WORK"), ["business"]);
+}
+
+#[test]
+fn editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other() {
+    let vcard_str = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:pas-id-test-features-002\r\n",
+        "FN:Vera Olden\r\n",
+        "TEL;TYPE=WORK,VOICE,FAX;X-JMAP-KEY=p1:+49 30 111\r\n",
+        "END:VCARD\r\n"
+    );
+
+    unsafe {
+        let vcard_c = CString::new(vcard_str).unwrap();
+        let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
+        assert!(!contact.is_null());
+
+        // The user retypes the office phone number.
+        e_contact_set(
+            contact,
+            E_CONTACT_PHONE_BUSINESS,
+            c"+49 30 222".as_ptr().cast::<std::ffi::c_void>().cast_mut(),
+        );
+        let edited_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let edited = CStr::from_ptr(edited_ptr).to_str().unwrap();
+        assert_eq!(
+            edited.matches("\r\nTEL").count(),
+            1,
+            "still one line, not one per field: {edited}"
+        );
+        let edited_c = CString::new(edited).unwrap();
+        g_free(edited_ptr.cast());
+
+        let after = e_contact_new_from_vcard(edited_c.as_ptr().cast());
+        let fax = e_contact_get_const(after, E_CONTACT_PHONE_BUSINESS_FAX);
+        assert!(!fax.is_null());
+        assert_eq!(
+            CStr::from_ptr(fax.cast()).to_str().unwrap(),
+            "+49 30 222",
+            "the fax number the user never touched moved with the phone one"
+        );
+
+        gobject_sys::g_object_unref(after.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
