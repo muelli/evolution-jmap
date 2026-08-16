@@ -25627,3 +25627,113 @@ unmeasured; whether the editor lets a handle be moved between the Home and Work
 slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; and what
 Evolution's contact editor writes for a replaced photo, and into a cleared
 field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-seventy-second session)
+
+**`e_contact_date_to_string()` CLAMPs the year it prints to 1000..=9999.
+Reading is not clamped. So a birthday before the year 1000 crossed onto a
+`BDAY` line, was read back correctly, and came home as the year 1000 the first
+time the contact editor rewrote the field — and the save patched the server's
+`year` to match. Measured, then closed.**
+
+The hazard was found by probing the other end of a limitation this repository
+had already written down. `a_date_that_names_no_single_day_gets_no_line` refuses
+a `PartialDate` naming less than a whole day, on the grounds that
+`e_contact_date_from_string()` reads it as nothing and the user is shown
+`1000-01-01`. Asking where that `1000` comes from gives EDS's formatter:
+
+```c
+g_strdup_printf ("%04d-%02d-%02d",
+                 CLAMP (dt->year, 1000, 9999),
+                 CLAMP (dt->month, 1, 12),
+                 CLAMP (dt->day, 1, 31));
+```
+
+The month and the day clamps are harmless here — `Day::is_a_date` already
+refuses everything outside those two ranges, so nothing this mapping writes can
+reach them. The year's lower bound is the one that bites, because `is_a_date`
+accepted `1..=9999`: RFC 9553 lets a card date Charlemagne's birthday
+`{"year": 800, "month": 6, "day": 21}`, and that was written out as
+`BDAY:0800-06-21`.
+
+**Which is not, on its own, a corruption — and the shape of that matters.**
+Measured against libebook-contacts 3.52: a line merely *passing through* keeps
+the year it arrived with, because `EVCard` hands back the attribute it parsed
+rather than rebuilding it. `e_contact_get(E_CONTACT_BIRTH_DATE)` is not clamped
+either — it reads back `y=800`. The clamp only reaches the line when the field
+is **set**, which is what the contact editor does to every field it shows, every
+time the user presses Save. So the failing path is: open Karl, change the email
+address, Save; EDS emits `BDAY:1000-06-21`; `diff_anniversaries` sees a date
+that differs from the server's and patches `year` from 800 to 1000. A date the
+user never touched, moved two centuries, by a save about something else.
+
+**The fix is the same refusal its neighbour already makes.** `anniversary_date`
+now states nothing for a day EDS would hand back as a different day, which
+leaves the anniversary invisible in Evolution but leaves the server's date the
+server's: `diff_entries`' `hides_something` path does not delete an entry no
+line stated, and the new `save.rs` test drives exactly that — seed year 800,
+assert the vCard carries no `BDAY`, edit the email, assert the anniversary is
+still 800-06-21. Both branches of `anniversary_date` go through the check now;
+the `Timestamp` branch used to `return` before reaching it, and mutating that
+`return` back reddens the mapping test.
+
+The alternative — write `0800-06-21` and teach the save to ignore a year of
+exactly 1000 coming back — was not taken. It cannot tell a clamp from a user
+who typed 1000, and it would need the same special case in every future field
+EDS keeps an `EContactDate` in.
+
+**The measurement is committed, not just cited.** `eds-sys/tests/contacts.rs`
+gains two: the parse/format table (`0800-06-21` → `1000-06-21`, `0999-12-31` →
+`1000-12-31`, `0001-01-01` → `1000-01-01`, and 1000 and 9999 unchanged), and the
+whole-card one that shows the untouched line surviving and the set field not.
+They run in the EDS-linked leg, so a future EDS that drops the clamp shows up as
+a red test rather than as a limitation nobody re-checked.
+
+**Mutation-checked, two ways, each run and reverted.** The year check made
+unconditional; the `Timestamp` branch returned early as before. Each reddens
+exactly the tests it should — the first both new ones, the second the mapping
+one.
+
+Tests: +1 in `jmap-vcard/tests/mapping.rs`, +1 in `jmap-book-sync/tests/save.rs`,
++2 in `eds-sys/tests/contacts.rs` (outside the default set). The default set is
+1186 → 1188.
+
+Verified locally: `cargo test --locked` 1188, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `cargo doc -p evolution-jmap-vcard --no-deps`
+warning-free; `ninja -C build` then `ctest --test-dir build` 15/15, functional,
+EDS-linked and packaging legs included. `ci/checks.sh` still stops at its first
+step on this VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those were
+reasoned by hand: no file is added, so no SPDX header is missing, and
+`Cargo.lock` is untouched, so `cargo deny`'s answer is the one it gave on the
+last green run.
+
+No milestone tag. Closed: **a date EDS would write back as a different date is
+no longer stated on a line.**
+
+**What this does not settle.** Whether Evolution's contact editor shows anything
+at all for a contact whose birthday the vCard omits — a blank field, or the
+field absent — is unmeasured, and it is what the user actually sees here; the
+save is safe either way, which is the part that was worth fixing in the dark.
+The clamp's *upper* bound (9999) is untested against a card that exceeds it,
+because `is_a_date` refuses those before this check is reached. And the same
+formatter serves `X-EVOLUTION-ANNIVERSARY`, so a wedding day before the year
+1000 is refused by the same code path, but no test drives that line
+specifically.
+
+Unchanged blockers: no `.po` exists, and whether this repository's first
+translation should be written by an autonomous session is a maintainer's call;
+`gettext` is not in `Containerfile.ci`, so the `.pot` in the tree is trusted to
+have come from `po/extract.sh`; M10 still has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; an `UNTIL` the parser
+itself refuses is invisible to `jmap-ical`; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is
+still unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday
+stated as a year alone are still invisible; the conventional URI schemes for
+AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled;
+`X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour
+unmeasured; whether the editor lets a handle be moved between the Home and Work
+slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; and what
+Evolution's contact editor writes for a replaced photo, and into a cleared
+field, is inferred rather than measured.
