@@ -24416,3 +24416,108 @@ contact-editor behaviour unmeasured; whether the editor lets a handle be moved
 between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-first session)
+
+**The asymmetry the last session named, closed — and it turned out to be one
+line, not a guard.** Reading a `VTIMEZONE` observance whose `RRULE` states an
+`UNTIL` this mapping cannot restate dropped the end and kept the rule: a
+transition that stopped in 1973 came back as one that repeats for ever, and that
+unbounded zone was what got sent to the server as the document's description of
+it. The drawing has refused this for as long as `observance` has existed — it
+gives up the whole `VTIMEZONE` rather than write a rule it cannot bound — so
+reading was the half that could still produce the wrong zone.
+
+**`read_until` never yields nothing now.** A value it cannot state as RFC 8984
+§4.3.3's local time — digits in the right places that name no instant
+(`20261315T000000Z`), a shift that steps off either end of the four-digit years
+RFC 5545 §3.3.4 admits — is kept **verbatim** instead of being dropped. That is
+exactly what the zoned-UTC case has done since two sessions ago and for the same
+reason: what is kept is no LocalDateTime, so `writable` refuses it and
+`maps_recurrence_rule` is how every caller learns the end did not survive. The
+function returns `String` rather than `Option<String>`, which is the claim in the
+type: an `UNTIL` that was stated cannot come back as an `UNTIL` that was not.
+
+**The guard I wrote first was dead code, and the mutation run is what said so.**
+The obvious fix looked like a `maps_recurrence_rule` check in `read_observance`,
+mirroring `observance`'s. It was written, it was green — and reverting it changed
+nothing, because `read_time_zones` already *draws every definition it reads and
+keeps only what came back*. Once the unstateable end is kept, that existing
+round-trip check refuses the zone on its own; asking a second time was the same
+question twice. So the guard came out and a comment saying where the refusal
+actually happens went in. Worth recording as a method note: the mutation was not
+a formality here, it deleted a function's worth of code.
+
+**What the tests pin.** `an_observance_whose_until_cannot_be_read_costs_the_whole
+_zone` drives four values through a `VTIMEZONE` in RFC 5545 §3.6.5's own
+`America/New_York` shape and asserts the zone is not described *and* that the
+event still names the identifier — the pair matters, since
+`jmap_cal_sync::patch` drops a property naming a zone the save cannot define, so
+the server's own zone stands rather than being replaced by a wrong one.
+`a_rules_unreadable_until_is_kept_rather_than_read_as_no_end_at_all` is the same
+defect one level up, where the sentinel rather than the refusal is the answer.
+Four mutations, each run and reverted: the original bug restored at the call site
+(reddens both new tests and the existing
+`a_zoned_rules_utc_until_is_not_taken_for_a_local_time`); the `Ends::At` failure
+falling back to the unshifted local time, which reddens only the two
+year-boundary rows and is what pins them; the observance conversion dropped
+entirely, which reddens last session's two tests as well; and the redundant guard
+above, which reddened nothing.
+
+**A case that cannot be closed here, measured and left as a canary.** An `UNTIL`
+the *parser* refuses — `UNTIL=whenever` — never reaches this mapping at all: the
+rule arrives as its frequency alone, with the parts written beside the bad value
+gone too, and nothing here can tell that from a rule written that way. So the
+observance test drives only values that get through, and
+`an_until_no_parser_can_read_never_reaches_this_mapping` asserts the narrowing
+itself. If a parser change starts passing the value through, that test goes red
+and the refusal should be widened to cover it. A test asserting the frequency
+alone is a poor substitute for the fix; it is, at least, not a claim that the
+case is handled.
+
+**The open hole this sits next to, stated plainly.** `jmap_cal_sync::save_component`'s
+*create* branch sends `event.recurrence_rules` with no `maps_recurrence_rule`
+guard at all. The patch branch has one (`diff_recurrence` refuses when either
+side holds a rule that does not map), and the create branch has the equivalent
+for zones (`maps_time_zone` files the appointment floating rather than let the
+server refuse it) — but not for recurrence. So a create whose `until` is
+unmappable sends a value that is no JSCalendar LocalDateTime, and a strict server
+is entitled to refuse the whole `CalendarEvent/set` over it. This is **not new**:
+the far commoner zoned-UTC `UNTIL` has gone out that way since two sessions ago,
+which means every recurring event with an end date created in a zoned calendar
+may be affected. Tonight's change widens it only to values that are malformed
+besides. It was not folded in because "what a create should do with a rule it
+cannot state" is its own decision — drop the recurrence, or refuse the create —
+and deserves its own red test against a server that validates, which the mock
+does not. **It is the next thing to close, and it is more urgent than what was
+closed tonight.**
+
+Tests: +3 in `jmap-ical/tests/event.rs`. The default set is 1141 → 1144.
+
+Verified locally: `cargo test --locked` 1144, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS=-D warnings cargo doc --no-deps -p
+evolution-jmap-ical` clean; `ninja -C build` then `ctest --test-dir build` 14/14,
+all four functional legs included. `ci/checks.sh` still stops at its first step on
+this VM (no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those two were
+reasoned by hand: no file is added or removed, so the SPDX header set is
+unchanged, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the one it
+gave on the last green run.
+
+No milestone tag. Closed: an observance `UNTIL` that could not be converted was
+dropped rather than costing the zone. Unchanged blockers: **a create sends a
+recurrence rule whose `until` does not map, with no guard** (above — the next
+item); M10 still has no CI matrix — the one piece left of it, and it wants a
+machine that can pull more than one EDS image; the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; an `UNTIL` the parser itself refuses is
+invisible to this crate (above); whether Evolution renders an `IMAGE` is
+unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; and what Evolution's
+contact editor writes for a replaced photo, and into a cleared field, is
+inferred rather than measured.

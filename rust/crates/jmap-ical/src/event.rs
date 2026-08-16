@@ -2500,6 +2500,11 @@ fn read_observance(component: &Component) -> Option<Value> {
             // `UNTIL` here converts with nothing but arithmetic — see
             // [`Ends::At`].
             let recurrence = rrule_to_rule(&property.raw_value(), Ends::At(&offset_from))?;
+            // A rule that survives this but not the trip back — an end this
+            // could not restate, a month `month_token` will not write — costs
+            // the whole definition, and does so at [`read_time_zones`], which
+            // draws every definition it reads and keeps only what came back.
+            // Asking it a second time here would be the same question twice.
             serde_json::to_value(recurrence).ok()
         })
         .collect::<Option<Vec<Value>>>()?;
@@ -4036,15 +4041,25 @@ fn weekday_token(day: &str) -> Option<&'static str> {
 /// one has no zone to resolve an instant against — RFC 5545 admits no `Z`
 /// beside a floating `DTSTART` at all, so its digits are the best reading of a
 /// producer being loose.
-fn read_until(value: &str, ends: Ends) -> Option<String> {
-    let local = to_local_date_time(value)?;
+///
+/// Every other failure — a value that names no instant, a shift that steps off
+/// the years RFC 5545 §3.3.4 admits — keeps the value **verbatim** for the same
+/// reason, and never yields nothing: a rule that arrives with an end and is read
+/// without one is one that never stops, and it would be sent to the server
+/// looking like a recurrence the user had deliberately left unbounded. What is
+/// kept is no LocalDateTime either, so [`writable`] refuses it and
+/// [`maps_recurrence_rule`] is how each caller learns the end did not survive.
+fn read_until(value: &str, ends: Ends) -> String {
+    let Some(local) = to_local_date_time(value) else {
+        return value.to_owned();
+    };
     if !value.ends_with(['Z', 'z']) {
-        return Some(local);
+        return local;
     }
     match ends {
-        Ends::At(offset) => at_offset(&local, offset),
-        Ends::In(Some(zone)) if !is_utc(zone) => Some(format!("{local}Z")),
-        Ends::In(_) => Some(local),
+        Ends::At(offset) => at_offset(&local, offset).unwrap_or_else(|| value.to_owned()),
+        Ends::In(Some(zone)) if !is_utc(zone) => format!("{local}Z"),
+        Ends::In(_) => local,
     }
 }
 
@@ -4081,7 +4096,7 @@ fn rrule_to_rule(value: &str, ends: Ends) -> Option<RecurrenceRule> {
             "FREQ" => rule.frequency = value.to_ascii_lowercase(),
             "INTERVAL" => rule.interval = value.parse().ok(),
             "COUNT" => rule.count = value.parse().ok(),
-            "UNTIL" => rule.until = read_until(value, ends),
+            "UNTIL" => rule.until = Some(read_until(value, ends)),
             "BYDAY" => rule.by_day = Some(value.split(',').map(to_nday).collect()),
             "BYMONTHDAY" => {
                 rule.by_month_day = Some(value.split(',').map(to_month_day).collect());
