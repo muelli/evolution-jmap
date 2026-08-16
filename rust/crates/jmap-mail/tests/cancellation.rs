@@ -293,7 +293,7 @@ fn an_authentication_the_user_stopped_does_not_reach_the_server() {
             flag.cancel();
             flag
         });
-        authenticate(&*store, &config, None)
+        authenticate(&*store, &config, Credentials::none())
     };
 
     assert!(
@@ -331,7 +331,7 @@ fn a_connection_does_not_inherit_the_cancellation_of_the_call_that_opened_it() {
     let flag = CancelFlag::new();
     {
         let _scope = CancelScope::install(&flag);
-        authenticate(&*store, &config, None).expect("the authentication succeeded");
+        authenticate(&*store, &config, Credentials::none()).expect("the authentication succeeded");
         // The user stops the operation *after* it opened the connection — the
         // race the store lives with, since Camel cancels asynchronously and
         // the vfunc has already installed what it stored.

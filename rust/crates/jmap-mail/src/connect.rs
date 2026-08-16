@@ -75,6 +75,26 @@ pub enum StoreError {
     Config(SourceError),
     /// The server refused, failed, or is unreachable.
     Client(Error),
+    /// The account authenticates with OAuth 2.0 and no access token could be
+    /// had — nobody has consented to it yet, or the refresh did not work. The
+    /// string is EDS's own message for the failure.
+    ///
+    /// Reported as `CAMEL_AUTHENTICATION_ERROR`, the opposite of the choice
+    /// `jmap_backend_core::connect::ConnectError::OAuth2` makes for the same
+    /// failure on the EDS side. That side has a fourth
+    /// `ESourceAuthenticationResult` value, `REQUIRED`, which opens the
+    /// consent window without discarding the stored refresh token —
+    /// `CamelAuthenticationResult` has only three, and `REJECTED` is both
+    /// "ask again" *and* "the credentials were wrong" at once here, the same
+    /// overload [`Self::authentication_result`] already accepts for an
+    /// ordinary wrong password. Reporting a token fetch failure as `REJECTED`
+    /// would mean a transient failure — a network blip fetching a fresh
+    /// access token, not a revoked grant — pops the same interactive
+    /// re-consent dialog a genuinely expired refresh token would, every time
+    /// it happens; `ERROR` is the conservative choice already made for every
+    /// other non-401 failure in this file, and this is one of those rather
+    /// than a new kind of prompt this backend has never asked for.
+    OAuth2(String),
     /// The store was asked to do something that needs a server, and it has no
     /// connection.
     ///
@@ -179,6 +199,7 @@ impl fmt::Display for StoreError {
         match self {
             Self::Config(error) => error.fmt(f),
             Self::Client(error) => error.fmt(f),
+            Self::OAuth2(message) => f.write_str(message),
             Self::Disconnected => f.write_str("not connected to the JMAP server"),
             Self::NoFolder(path) => write!(f, "no such folder: {path}"),
             Self::NoRole(role) => {
@@ -210,6 +231,9 @@ impl StoreError {
     pub fn authentication_result(&self) -> CamelAuthenticationResult {
         match self {
             Self::Client(error) if is_wrong_password(error) => CAMEL_AUTHENTICATION_REJECTED,
+            // `Self::OAuth2` falls in here on purpose — see its own doc
+            // comment for why this is the safer of the two values Camel has
+            // to choose between.
             _ => CAMEL_AUTHENTICATION_ERROR,
         }
     }
@@ -293,6 +317,11 @@ impl StoreError {
             Self::Client(error) if is_wrong_password(error) => {
                 CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE
             }
+            // Not a wrong password, but the same shape of problem: the
+            // account cannot prove who it is, which is what this code — not
+            // `INVALID`'s generic "something about this account is wrong" — is
+            // for.
+            Self::OAuth2(_) => CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
             // A 403, a method error, a malformed response: the server answered,
             // so it is reachable and the credentials were taken. The message
             // carries the detail.
@@ -301,21 +330,31 @@ impl StoreError {
     }
 }
 
+/// What to authenticate as, given the account's user name and whatever Camel
+/// got out of its session — the password half of the decision `attempt`
+/// makes once per connect, alongside [`crate::oauth2::access_token`] for the
+/// OAuth 2.0 half.
+///
+/// `password` is `None` for an account nobody has been prompted for yet — and,
+/// deliberately, for an account that names no user at all. The two cases
+/// produce the same request, because there is nothing to send in either: a
+/// user name with an empty password is not a weaker credential, it is a wrong
+/// one, and a server that counts failed attempts would count it.
+pub fn password_credentials(user: Option<&str>, password: Option<&str>) -> Credentials {
+    match (user, password) {
+        (Some(user), Some(password)) => Credentials::basic(user, password),
+        _ => Credentials::none(),
+    }
+}
+
 /// Connects to the server `config` names and resolves the account its mail
 /// lives in.
 ///
-/// `password` is whatever Camel got out of the session, which is `None` for an
-/// account nobody has been prompted for yet — and, deliberately, for an account
-/// that names no user at all. The two cases produce the same request, because
-/// there is nothing to send in either: a user name with an empty password is
-/// not a weaker credential, it is a wrong one, and a server that counts failed
-/// attempts would count it.
-pub fn open_mail(config: &ServerConfig, password: Option<&str>) -> Result<MailSync, StoreError> {
-    let credentials = match (config.user.as_deref(), password) {
-        (Some(user), Some(password)) => Credentials::basic(user, password),
-        _ => Credentials::none(),
-    };
-
+/// `credentials` are already resolved: whether this account authenticates
+/// with a password out of Camel's session or an OAuth 2.0 bearer token is
+/// `attempt`'s decision, taken once so that a store and a transport on one
+/// account cannot disagree about it — see [`crate::oauth2`].
+pub fn open_mail(config: &ServerConfig, credentials: Credentials) -> Result<MailSync, StoreError> {
     // No cancellation flag is built into the client, and that is deliberate: a
     // client lives as long as the account and a flag can only ever be set, so
     // one taken from the operation that opened the connection would be a Stop
