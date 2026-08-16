@@ -132,8 +132,8 @@ use jmap_vcard::{
     same_service, states_a_point_in_time, states_address, states_address_component,
     states_anniversary, states_calendar, states_context, states_email, states_keyword, states_link,
     states_media, states_name_component, states_nickname, states_note,
-    states_nothing_but_the_marriage, states_online_service, states_organization, states_phone,
-    states_phone_feature, states_spouse, states_title, title_kind,
+    states_nothing_but_the_marriage, states_online_service, states_org_unit, states_organization,
+    states_phone, states_phone_feature, states_spouse, states_title, title_kind,
 };
 use serde_json::{Map, Value, json};
 
@@ -962,10 +962,25 @@ fn merge_named<T: Clone>(
 /// is left behind when the name is gone. Renaming a unit therefore drops its
 /// hint — which is right, because a hint for the old name is not one for the
 /// new.
+///
+/// A unit gone from the line was dissolved by the user only if the line ever
+/// carried it — [`merge_named`]'s `was_stated` rule, which this side needs for
+/// its own reason: a unit that names nothing has no `ORG` component, so the
+/// edited list cannot mention it and matching by name could never claim it.
+/// Only the units the line stated are the edited ones to have deleted; the
+/// rest are put back where they were, at their index among the server's units,
+/// so that opening a contact and closing it again writes nothing. That is also
+/// why an edited list of *no* units is merged rather than read as the user
+/// having dissolved them all: an organisation whose every unit is unnamed
+/// states none of them, and the line is then the employer's name alone.
 fn merge_units(current: Option<&[OrgUnit]>, edited: Option<&[OrgUnit]>) -> Option<Vec<OrgUnit>> {
-    let edited = edited?;
-    let mut spare: Vec<&OrgUnit> = current.unwrap_or_default().iter().collect();
-    let merged: Vec<OrgUnit> = edited
+    let current = current.unwrap_or_default();
+    let mut spare: Vec<&OrgUnit> = current
+        .iter()
+        .filter(|unit| states_org_unit(unit))
+        .collect();
+    let mut merged: Vec<OrgUnit> = edited
+        .unwrap_or_default()
         .iter()
         .map(
             |unit| match spare.iter().position(|old| old.name == unit.name) {
@@ -974,6 +989,11 @@ fn merge_units(current: Option<&[OrgUnit]>, edited: Option<&[OrgUnit]>) -> Optio
             },
         )
         .collect();
+    for (index, unit) in current.iter().enumerate() {
+        if !states_org_unit(unit) {
+            merged.insert(index.min(merged.len()), unit.clone());
+        }
+    }
     (!merged.is_empty()).then_some(merged)
 }
 

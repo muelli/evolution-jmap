@@ -16,11 +16,18 @@ to polish a completed backend. A later hardening pass works through them.
 - Photo handling: `VALUE=uri` rendering, what the editor writes for a
   replaced or cleared photo (currently inferred, not measured).
 - Birthday/deathday/anniversary stated as a bare year (EDS clamps).
+- An organisation whose `name` is `""` rather than absent: the `ORG` line
+  writes an empty first component, the reader reads back no name, and the
+  save patches `name: null` on every save of that entry. Loses nothing a
+  user can see — normalising `""` to absent may be right — but it writes a
+  needless patch. Maintainer's call which.
 
 ## Calendar / iCal fidelity (M4 area, backend already works)
 - `UNTIL` values the parser itself refuses (invisible to `jmap-ical`).
 - Windows time-zone names (unsendable by design — confirm the refusal path).
-- `merge_units` degenerate case: a unit with an empty name is dropped.
+- ~~`merge_units` degenerate case: a unit with an empty name is dropped.~~
+  Fixed 2026-08-16 (`jmap-book-sync: keep an org unit the ORG line has no
+  name to state`) — the work was finished and green before this file landed.
 
 ## Cross-cutting
 - calcard migration (ROADMAP standing directive) — replace the hand-rolled

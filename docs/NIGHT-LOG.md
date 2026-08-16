@@ -26089,3 +26089,117 @@ behaviour unmeasured; whether the editor lets a handle be moved between the Home
 and Work slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured;
 and what Evolution's contact editor writes for a replaced photo, and into a
 cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-seventy-sixth session)
+
+**The blocker the last session left named and open: a unit an `ORG` line cannot
+carry was deleted by the next save. `merge_units` was the one merger with no
+was-stated gate at all — and, in the degenerate case, with the same `edited?`
+short-circuit that had just been taken out of `merge_components`.**
+
+`organization_components` writes the employer's name and then every unit that
+*has* a name, filtering the rest exactly as the emitter drops an entry that says
+nothing. `read_organization` filters the empty components back out. So a unit
+whose `name` is `""` — one holding a `sortAs` and nothing else, say — is on no
+line the user was ever handed, and `merge_units`, which matched the edited list
+against the server's by name and kept only what matched, dropped it on the first
+save of anything else in the entry. Two shapes, and both are ordinary:
+
+- `units: [{"name": "Research"}, {"name": "", "sortAs": "Optics"}]` — the line is
+  `ORG:Acme;Research`, the user renames the employer, and the second unit is
+  gone with the rename.
+- `units: [{"name": "", "sortAs": "Optics"}]` alone — the line is `ORG:Acme`,
+  the edited card states no units whatsoever, `edited?` returned `None` and the
+  patch wrote `units: null`. Same short-circuit, same misreading of "the line
+  says nothing" as "the user emptied it", one property over from where it was
+  fixed yesterday.
+
+**The gate, and where it had to differ from `merge_named`'s.** `states_org_unit`
+now lives in `jmap-vcard` next to the other `states_*` predicates, and its
+question has only one half: a unit with a name is *always* written, because `ORG`
+takes as many components as the entry has units — there is no
+"the mapping has no field for this kind" case the way `N` and `ADR` have one.
+Only the units the line stated take part in the matching, and the rest are put
+back **at their index among the server's units** rather than appended. That
+placement is not tidiness: an unnamed unit sitting first would otherwise move to
+the end on every save, so opening a contact and closing it again would rewrite
+the list and wake every other client for nothing. Ascending insertion with a
+clamp reproduces the original positions exactly, which the third test pins by
+comparing `list_existing`'s state across an untouched save.
+
+Reusing `merge_named` wholesale was considered and rejected: it walks the
+*server's* order and appends what the line added, which for units would silently
+swallow a reordering — and the `ORG` components are positional, `E_CONTACT_ORG`,
+`E_CONTACT_ORG_UNIT` and `E_CONTACT_OFFICE` in that order (measured in `eds-sys`'
+`an_org_component_past_the_third_has_no_field_but_survives_an_edit_of_the_others`),
+so swapping the department and the office is a real edit that must reach the
+server. The edited order therefore stays the merged list's order for every unit
+the line carried.
+
+**Mutation-checked three times, each run and reverted.** Dropping the
+reinsertion loop reddens exactly the two loss tests and not the untouched-save
+one; restoring `let edited = edited?` reddens exactly the degenerate one;
+appending instead of inserting in place reddens exactly the untouched-save one.
+The `states_org_unit` filter on the server side is, by the reader's own
+filtering, unreachable today — an edited unit's name is never empty, so it could
+not match an unnamed one — and it is kept because that invariant belongs written
+at the matching rather than trusted from two files away.
+
+Tests: +3 in `jmap-book-sync/tests/save.rs`. The default set is 1204 → 1207.
+
+Verified locally: `cargo test --locked` 1207, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS=-D warnings cargo doc --no-deps -p
+evolution-jmap-vcard -p evolution-jmap-book-sync` clean (it caught the new
+doc comment linking to a private `organization_components`, now unlinked);
+`ninja -C build` then `ctest --test-dir build` 15/15, functional, EDS-linked and
+packaging legs included. `ci/checks.sh` still stops at its first step on this VM
+(no `reuse`, no `pipx`, no `uvx`, no `cargo-deny`), so those were reasoned by
+hand: no file is added, so no SPDX header is missing, and `Cargo.lock` is
+untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Closed: **a unit with an empty name is no longer dropped by a
+save** — the blocker carried in this log since yesterday.
+
+**What this does not settle.** An organisation whose `name` is `""` rather than
+absent is the same shape unclosed: the emitter writes an empty first component,
+the reader reads it back as no name, and `diff_organizations` patches
+`name: null` — which loses nothing a user could see (an empty string and no
+string say the same thing) but does write a needless patch on every save of that
+entry. Left deliberately: normalising `""` to absent may well be the *right*
+answer rather than a bug, and it is the maintainer's call which. Nothing here
+asks Evolution what it draws for a unit past the third. And the reachability of
+an unnamed unit at all rests on a server sending one — no JMAP server this
+repository has driven does, so the tests reach the state through
+`fixture.patch`, as the empty-component tests before them do.
+
+Unchanged blockers: no `.po` exists, and whether this repository's first
+translation should be written by an autonomous session is a maintainer's call;
+`gettext` is not in `Containerfile.ci`, so the `.pot` in the tree is trusted to
+have come from `po/extract.sh`; M10 still has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; an `UNTIL` the parser
+itself refuses is invisible to `jmap-ical`; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is
+still unverified; a deathday and a birthday stated as a year alone are still
+invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.
+
+**Postscript — the priority steer landed mid-session.** `origin/master` gained
+`5774938` ("Steer the shift to usability") while this was being written: the
+completed backends are closed, contact-fidelity refinements go to
+`docs/BACKLOG.md`, and the queue is M7, then real-server readiness, then M9/M10.
+The new backlog names this very item ("`merge_units` degenerate case: a unit with
+an empty name is dropped"), so it was parked on the same morning it was fixed —
+this session started from `2f744f4` and the work was finished and green before
+the steer arrived. It is pushed rather than dropped because it is a data-loss
+fix with three mutation-checked tests, not a fidelity refinement, and because
+throwing away a verified fix to re-fix it in a later hardening pass costs more
+than it saves; the backlog line is struck with the commit that closed it, and the
+one loose end above (an organisation named `""`) is filed there rather than
+implemented. Nothing further was started. **Next session takes M7**, per the new
+CURRENT PRIORITY — not another contact-mapping increment.
