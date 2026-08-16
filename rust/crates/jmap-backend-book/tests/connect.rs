@@ -151,6 +151,20 @@ fn an_account_that_offers_no_contacts_is_refused() {
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
 }
 
+/// RFC 8620 §2: a server "MAY" omit `primaryAccounts` entirely. Such a
+/// server is still usable when exactly one personal account offers the
+/// capability — the same inference the collection backend (M6) already
+/// relies on to decide whether to fan out an address-book child at all, so a
+/// source that backend created must be able to connect, not fail forever
+/// with "no primary account".
+#[test]
+fn a_server_with_no_primary_accounts_resolves_the_sole_personal_contacts_account() {
+    let fixture = Fixture::start_with(MockServer::builder().without_primary_accounts(), true);
+
+    let sync = open(&fixture.config(), None).expect("connected");
+    assert_eq!(sync.account_id(), &fixture.server.account_id());
+}
+
 #[test]
 fn a_user_name_with_no_password_asks_evolution_for_credentials() {
     let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);

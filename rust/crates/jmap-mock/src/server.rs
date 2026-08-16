@@ -45,6 +45,7 @@ pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
     omitted_capabilities: BTreeSet<String>,
+    omit_primary_accounts: bool,
     calls_in_request: Option<u64>,
     changes_page_size: Option<u64>,
     objects_in_get: Option<u64>,
@@ -76,6 +77,19 @@ impl MockServerBuilder {
     /// right one, because every account here answers to all four.
     pub fn without_capability(mut self, capability: &str) -> Self {
         self.omitted_capabilities.insert(capability.to_owned());
+        self
+    }
+
+    /// Leave `primaryAccounts` out of the session document entirely, while
+    /// every capability still lists its accounts as usual.
+    ///
+    /// RFC 8620 §2 permits this outright ("a server that does not support
+    /// this concept MUST omit this property") — distinct from
+    /// [`Self::without_capability`], which removes the capability itself. A
+    /// client that only ever reads `primaryAccounts` cannot find an account
+    /// on a server shaped this way, however unambiguous the account is.
+    pub fn without_primary_accounts(mut self) -> Self {
+        self.omit_primary_accounts = true;
         self
     }
 
@@ -203,6 +217,7 @@ impl MockServerBuilder {
         let mut state = ServerState::new();
         state.add_account(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME);
         state.omitted_capabilities = self.omitted_capabilities.clone();
+        state.omit_primary_accounts = self.omit_primary_accounts;
         state.calls_in_request = self.calls_in_request;
         state.changes_page_size = self.changes_page_size;
         state.objects_in_get = self.objects_in_get;
@@ -251,6 +266,7 @@ impl MockServer {
             auth: AuthConfig::default(),
             port: 0,
             omitted_capabilities: BTreeSet::new(),
+            omit_primary_accounts: false,
             calls_in_request: Some(DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
             objects_in_get: None,
@@ -588,15 +604,19 @@ fn session_document(state: &ServerState, origin: &str) -> Session {
     }
 
     let first_account = state.accounts.iter().next();
-    let primary_accounts = first_account
-        .map(|(id, _)| {
-            ACCOUNT_CAPABILITIES
-                .iter()
-                .filter(|capability| !state.omitted_capabilities.contains(**capability))
-                .map(|capability| ((*capability).to_owned(), id.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let primary_accounts = if state.omit_primary_accounts {
+        std::collections::BTreeMap::new()
+    } else {
+        first_account
+            .map(|(id, _)| {
+                ACCOUNT_CAPABILITIES
+                    .iter()
+                    .filter(|capability| !state.omitted_capabilities.contains(**capability))
+                    .map(|capability| ((*capability).to_owned(), id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
 
     // Built as an object rather than written out whole because one of its
     // properties may be absent: a server that names no `maxSizeUpload` is what

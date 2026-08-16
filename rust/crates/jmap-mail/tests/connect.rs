@@ -78,6 +78,20 @@ fn an_account_that_offers_no_mail_is_refused() {
     assert_eq!(error.authentication_result(), CAMEL_AUTHENTICATION_ERROR);
 }
 
+/// RFC 8620 §2: a server "MAY" omit `primaryAccounts` entirely. Such a
+/// server is still usable when exactly one personal account offers the
+/// capability — the same inference the collection backend (M6) already
+/// relies on to decide whether to fan out a mail child at all, so a source
+/// that backend created must be able to connect, not fail forever with "no
+/// primary account".
+#[test]
+fn an_account_opens_on_the_sole_personal_mail_account_when_the_server_names_none() {
+    let server = MockServer::builder().without_primary_accounts().start();
+    let sync = open(&config(&server), None).expect("connected");
+
+    assert_eq!(sync.account_id(), &server.account_id());
+}
+
 #[test]
 fn the_password_is_sent_as_basic_credentials() {
     let server = MockServer::builder().basic_auth("vera", "hunter2").start();

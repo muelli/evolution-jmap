@@ -40,6 +40,58 @@ impl Session {
         self.primary_accounts.get(capability)
     }
 
+    /// Which account serves `capability`, resolved the way RFC 8620 actually
+    /// allows rather than by `primaryAccounts` alone.
+    ///
+    /// `None` when `capability` names no server capability at all (a `using`
+    /// naming it would be answered `unknownCapability`, so nothing behind it
+    /// is reachable), or when nothing in the document can be believed there —
+    /// but before giving up, two more sources are tried:
+    ///
+    /// - `primaryAccounts` (RFC 8620 §2), taken as given when it has an entry
+    ///   — including one naming an account outside [`Account::is_personal`],
+    ///   because a server that designates a shared account as primary has
+    ///   said something deliberate.
+    /// - Failing that, §2 permits a server to omit `primaryAccounts`
+    ///   outright ("a server that does not support this concept MUST omit
+    ///   this property"), so the account is inferred from a position where
+    ///   there is nothing to guess: exactly one of the user's own accounts
+    ///   (`isPersonal`) offers the capability. Two of them and the answer is
+    ///   `None` — guessing wrong is worse than admitting the document does
+    ///   not say.
+    ///
+    /// Either way, a `primaryAccounts` entry naming an account that is absent
+    /// from `accounts`, or one that does not itself claim the capability, is
+    /// a contradiction in the document and is not believed.
+    pub fn resolve_primary_account(&self, capability: &str) -> Option<&Id> {
+        if !self.capabilities.contains_key(capability) {
+            return None;
+        }
+
+        let id = match self.primary_accounts.get(capability) {
+            Some(id) => id,
+            None => self.sole_personal_account(capability)?,
+        };
+        let account = self.accounts.get(id)?;
+        if !account.account_capabilities.contains_key(capability) {
+            return None;
+        }
+        Some(id)
+    }
+
+    /// The one account of the user's own that offers `capability` — `None`
+    /// when there is none, or more than one to choose between.
+    fn sole_personal_account(&self, capability: &str) -> Option<&Id> {
+        let mut candidates = self.accounts.iter().filter(|(_, account)| {
+            account.is_personal && account.account_capabilities.contains_key(capability)
+        });
+        let (id, _) = candidates.next()?;
+        match candidates.next() {
+            None => Some(id),
+            Some(_) => None,
+        }
+    }
+
     /// How many ids one `/get` call may name (RFC 8620 §2, the core
     /// capability's `maxObjectsInGet`).
     ///

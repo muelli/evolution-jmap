@@ -167,10 +167,12 @@ impl Client {
         Ok(())
     }
 
-    /// The primary account id for a capability URN.
+    /// The account id serving a capability URN — `primaryAccounts` where the
+    /// server states one, else the sole personal account offering it (see
+    /// [`jmap_proto::session::Session::resolve_primary_account`]).
     pub fn primary_account(&self, capability: &str) -> Result<jmap_proto::Id, Error> {
         self.session()
-            .primary_account(capability)
+            .resolve_primary_account(capability)
             .cloned()
             .ok_or_else(|| Error::Protocol(format!("no primary account for {capability}")))
     }
