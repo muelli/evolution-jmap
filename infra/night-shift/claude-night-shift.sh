@@ -28,6 +28,7 @@ cd "$HOME/evolution-jmap" || exit 1
 LOG="$HOME/night-shift.log"
 PROMPT_FILE="$HOME/night-prompt.md"
 LIMIT_FILE="$HOME/.claude-limited-until"   # epoch seconds; present only while limited
+STOP_FILE="$HOME/.night-shift-stop"        # touch to stop cleanly after the current iteration
 DRAIN_LIMIT=3          # consecutive no-op iterations that mean "backlog drained"
 UNKNOWN_RESET_BACKOFF=21600   # 6h, if a limit is seen but its reset can't be parsed
 
@@ -69,6 +70,17 @@ fi
 log "=== night shift starting ==="
 consecutive_noop=0
 while true; do
+    # Graceful stop: checked only between iterations, never mid-session, so a
+    # running increment always finishes and pushes before the driver exits —
+    # `touch ~/.night-shift-stop` costs no work and no tokens. One-shot: the
+    # flag is cleared here so the next relaunch is not immediately stopped.
+    # This is how to swap the driver losslessly: touch the flag, wait for the
+    # log to show the shift exited, then replace the script and relaunch.
+    if [ -f "$STOP_FILE" ]; then
+        rm -f "$STOP_FILE"
+        log "stop requested; exiting cleanly between iterations (no work lost)"
+        exit 0
+    fi
     git pull --rebase --quiet >> "$LOG" 2>&1 || true
     start=$(date +%s)
     out=$(mktemp)
