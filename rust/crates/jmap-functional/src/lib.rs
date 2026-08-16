@@ -180,6 +180,37 @@ impl Session {
             .unwrap_or_else(|error| panic!("copy {} beside the provider: {error}", urls.display()));
     }
 
+    /// Stage a built cdylib in a scratch directory of its own and return that
+    /// directory, for a client program that loads it itself via
+    /// `e_module_load_all_in_directory` rather than a directory a daemon
+    /// scans. `module-jmap-configuration.so`'s `JmapConfigLookup` is not found
+    /// by any daemon this crate stages against elsewhere — it registers
+    /// against a live `EConfigLookup`, which only a client constructs — so
+    /// the directory has to be handed to that client rather than passed
+    /// through the environment the way `EDS_ADDRESS_BOOK_MODULES` and its
+    /// siblings are.
+    ///
+    /// Also sets `LD_LIBRARY_PATH` to `/usr/lib/evolution`: the module's
+    /// transitive `libevolution-mail.so` dependency lives there, off the
+    /// default loader path, and `dlopen`ing the module later does not inherit
+    /// `evolution-shell-3.0`'s own `-Wl,-R` rpath the way linking against it
+    /// directly would — found by the 307th session's hand-driven spike
+    /// (`docs/NIGHT-LOG.md`) before this method existed.
+    pub fn stage_config_lookup_module(&mut self, built_module: &Path) -> PathBuf {
+        let directory = self.root.join("config-lookup-module");
+        fs::create_dir_all(&directory).expect("create the config-lookup module directory");
+        let installed = directory.join("libjmap_config_module.so");
+        fs::copy(built_module, &installed).unwrap_or_else(|error| {
+            panic!(
+                "copy {} into the session's config-lookup module directory: {error}",
+                built_module.display()
+            )
+        });
+        self.environment
+            .insert("LD_LIBRARY_PATH".into(), "/usr/lib/evolution".into());
+        directory
+    }
+
     /// Copy `built_module` into a scratch directory of this session's and
     /// point `variable` at it.
     ///
