@@ -8,17 +8,9 @@
 # the sources in both directions so that cannot happen quietly.
 #
 # Paths are relative to the directory holding this `po/`, which is gettext's
-# convention and what the extraction has to be run from:
-#
-#   xgettext --files-from=po/POTFILES.in -L C --from-code=UTF-8 \
-#            --keyword=N_ --keyword=translate --keyword=translate_with \
-#            --add-comments=TRANSLATORS \
-#            --package-name=evolution-jmap -o po/evolution-jmap.pot
-#
-# Every function in `jmap-backend-core`'s `i18n` that takes a msgid is a
-# keyword here, `translate_with` included — its first argument is the message
-# and its later ones are the values filled into the message's `%1$s`
-# placeholders, which is the position `--keyword` defaults to.
+# convention and what the extraction has to be run from. `po/extract.sh` runs
+# it, with the arguments that produced the committed `po/evolution-jmap.pot`;
+# run that script after touching a translatable string.
 #
 # `-L C` because gettext 0.21 has no Rust parser. It extracts our markers
 # correctly — `N_(c"…")` reads as a call with a string argument either way — but
@@ -26,10 +18,13 @@
 #
 #   provider.rs:125: warning: unterminated character constant
 #
-# Harmless where it stands today, and not something to leave unwatched: the
-# lexer resumes at the next `'`, so a marked string between two lifetimes could
-# in principle be swallowed. Whoever wires the extraction into the build should
-# either check the `.pot` against this list or use a Rust-aware extractor.
+# That is not cosmetic. The lexer gives up at the end of the line, so a marked
+# string sharing a line with an odd number of apostrophes is dropped from the
+# catalogue outright — measured, not feared: `const NAME: &'static CStr =
+# N_(c"JMAP");` extracts nothing but that warning. Which is why the committed
+# `.pot` is compared against these sources in both directions rather than
+# trusted; the check is in the test file named above, and it catches the rest
+# of the class this instance belongs to as well.
 #
 # `-L C` costs one more thing, which the test file above also enforces: a
 # marked literal must be written on a single line. A backslash at the end of a

@@ -32,6 +32,9 @@ path = [
     "rust/crates/jmap-mail/libcameljmap.urls",
     "README.md",
     "docs/**",
+    # Written by xgettext, which puts its own boilerplate at the top of the
+    # file and would have the header rewritten on every regeneration.
+    "po/evolution-jmap.pot",
     "infra/night-shift/*.md",
 ]
 precedence = "aggregate"
