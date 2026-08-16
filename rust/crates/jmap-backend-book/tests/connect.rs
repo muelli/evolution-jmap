@@ -20,8 +20,9 @@ use eds_sys::{
 use glib_sys::GError;
 use gobject_sys::g_object_unref;
 use jmap_backend_book::connect;
-use jmap_backend_core::connect::{Collection, ConnectError};
+use jmap_backend_core::connect::{Collection, ConnectError, credentials};
 use jmap_backend_core::source::SourceConfig;
+use jmap_client::Credentials;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 
@@ -68,11 +69,19 @@ impl Fixture {
     }
 }
 
+/// `open_book` takes resolved credentials; this stands in for the caller that
+/// resolves them, which is `connect_with`. It takes the password path
+/// deliberately — the OAuth 2.0 path needs an `ESource` and a consented
+/// account, and *which* path an account takes is
+/// `jmap-backend-core/tests/oauth2.rs`'s question, not this file's. What is
+/// this file's is that whatever credentials come out reach the server, which
+/// `the_password_is_sent_as_basic_credentials` and
+/// `an_access_token_is_sent_as_bearer_credentials` are the two halves of.
 fn open(
     config: &SourceConfig,
     password: Option<&str>,
 ) -> Result<jmap_book_sync::BookSync, ConnectError> {
-    connect::open_book(config, password)
+    connect::open_book(config, credentials(config.user.as_deref(), password)?)
 }
 
 /// `BookSync` is not `Debug`, and naming the address book it opened is a more
@@ -183,6 +192,20 @@ fn the_password_is_sent_as_basic_credentials() {
     config.user = Some("vera".to_owned());
 
     let sync = open(&config, Some("hunter2")).expect("connected");
+    assert_eq!(sync.address_book_id(), &fixture.default_book.unwrap());
+}
+
+/// The other half of the credentials story: an account that authenticates with
+/// OAuth 2.0 reaches the server as `Authorization: Bearer …`, with no user name
+/// involved at all. Which accounts those are, and where the token comes from,
+/// is `jmap-backend-core`'s — what is proved here is that a resolved bearer
+/// credential survives the trip to the wire, the same way the password does.
+#[test]
+fn an_access_token_is_sent_as_bearer_credentials() {
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"), true);
+
+    let sync =
+        connect::open_book(&fixture.config(), Credentials::bearer("ya29.a0Af")).expect("connected");
     assert_eq!(sync.address_book_id(), &fixture.default_book.unwrap());
 }
 

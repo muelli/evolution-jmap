@@ -35,6 +35,7 @@ use jmap_proto::Id;
 use crate::cancel::observe;
 use crate::error::{cstring_lossy, set_raw_gerror};
 use crate::marshal::password as stored_password;
+use crate::oauth2::{access_token, source_uses_oauth2};
 use crate::source::SourceConfig;
 
 /// What `connect_sync` writes into `out_auth_result` when it succeeds.
@@ -73,6 +74,18 @@ impl fmt::Display for Collection {
 pub enum ConnectError {
     /// The account names a user but EDS has no password for it yet.
     CredentialsRequired,
+    /// The account authenticates with OAuth 2.0 and no access token could be
+    /// had — nobody has consented to it yet, or the refresh did not work. The
+    /// string is EDS's own message for the failure.
+    ///
+    /// Classified as [`E_SOURCE_AUTHENTICATION_REQUIRED`] rather than
+    /// `REJECTED` on purpose, and the distinction matters more here than on
+    /// the password path: `REQUIRED` is what opens the consent window, while
+    /// `REJECTED` additionally tells EDS to throw the stored secret away. For
+    /// OAuth 2.0 that secret is the *refresh* token, which a network blip
+    /// during the exchange has not invalidated — discarding it would turn a
+    /// transient failure into a re-consent the user has to click through.
+    OAuth2(String),
     /// The server refused, failed, or is unreachable.
     Client(Error),
     /// The account names a collection the server does not have.
@@ -91,6 +104,7 @@ impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CredentialsRequired => f.write_str("the account has no password yet"),
+            Self::OAuth2(message) => f.write_str(message),
             Self::Client(error) => error.fmt(f),
             Self::NoSuchCollection(kind, id) => write!(
                 f,
@@ -115,7 +129,7 @@ impl ConnectError {
     /// server that is down is not either.
     pub fn auth_result(&self) -> ESourceAuthenticationResult {
         match self {
-            Self::CredentialsRequired => E_SOURCE_AUTHENTICATION_REQUIRED,
+            Self::CredentialsRequired | Self::OAuth2(_) => E_SOURCE_AUTHENTICATION_REQUIRED,
             Self::Client(error) if is_wrong_password(error) => E_SOURCE_AUTHENTICATION_REJECTED,
             _ => E_SOURCE_AUTHENTICATION_ERROR,
         }
@@ -135,7 +149,7 @@ impl ConnectError {
 
     fn client_error_code(&self) -> EClientError {
         match self {
-            Self::CredentialsRequired => E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
+            Self::CredentialsRequired | Self::OAuth2(_) => E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
             // Both collection failures are fixed by editing the account (or by
             // creating the collection on the server), never by retrying, so
             // they are reported the same way a malformed host is.
@@ -260,7 +274,7 @@ pub unsafe fn connect_with<T, F>(
     open: F,
 ) -> Option<T>
 where
-    F: FnOnce(&SourceConfig, Option<&str>) -> Result<T, ConnectError>,
+    F: FnOnce(&SourceConfig, Credentials) -> Result<T, ConnectError>,
 {
     // A backend without a source cannot be configured, so no prompt helps. It
     // should not happen — EDS constructs the backend *from* a source — but a
@@ -297,7 +311,31 @@ where
     // alive for the duration of the vfunc, which outlives this scope.
     let _cancel = unsafe { observe(cancellable) };
 
-    match open(&config, password.as_deref()) {
+    // Which authentication scheme this account uses is decided here, once, for
+    // the same reason the `out_auth_result` classification is: an address book
+    // and a calendar on one account must not disagree about how to log in.
+    // SAFETY: `source` is a valid ESource, checked non-NULL above, and
+    // `cancellable` satisfies `access_token`'s contract by this function's.
+    let resolved = unsafe {
+        if source_uses_oauth2(source) {
+            access_token(source, cancellable).map(Credentials::bearer)
+        } else {
+            self::credentials(config.user.as_deref(), password.as_deref())
+        }
+    };
+    let resolved = match resolved {
+        Ok(resolved) => resolved,
+        Err(failure) => {
+            // SAFETY: as above.
+            unsafe {
+                write_auth_result(out_auth_result, failure.auth_result());
+                set_raw_gerror(error, failure.to_gerror());
+            }
+            return None;
+        }
+    };
+
+    match open(&config, resolved) {
         Ok(opened) => {
             // SAFETY: as above.
             unsafe { write_auth_result(out_auth_result, ACCEPTED_AUTH_RESULT) };

@@ -61,11 +61,19 @@
 //!
 //! ## What this does not yet do
 //!
-//! Register this type with an `EOAuth2Services` registry, or set
-//! `[Authentication] method` to [`NAME`] anywhere — both are the setup UI's
-//! job (M7), which does not write OAuth2 accounts yet. Tested here the way
-//! `eds-sys/tests/oauth2.rs` tests the raw ABI: a throwaway instance,
-//! dispatched through EDS's own `e_oauth2_service_*()` wrappers.
+//! Set `[Authentication] method` to [`NAME`] anywhere. That is the setup UI's
+//! job (M7), which does not write OAuth2 accounts yet, so an account reaches
+//! this service only through a hand-edited `.source` keyfile today.
+//!
+//! Registering the type is no longer on that list: both `e_module_load` entry
+//! points call `register_dynamic::<Service>()`, so an `EOAuth2Services` built
+//! in a process that loaded either module finds it — which is the condition
+//! [`jmap_backend_core::oauth2`] needs for a source naming [`NAME`] to be
+//! recognised as OAuth 2.0 and for its access token to be fetchable at all.
+//!
+//! Tested here the way `eds-sys/tests/oauth2.rs` tests the raw ABI: a
+//! throwaway instance, dispatched through EDS's own `e_oauth2_service_*()`
+//! wrappers.
 
 use std::ffi::{CStr, c_char};
 use std::ptr;

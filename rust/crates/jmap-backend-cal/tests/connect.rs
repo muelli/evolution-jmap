@@ -25,9 +25,10 @@ use eds_sys::{
 use glib_sys::GError;
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::connect;
-use jmap_backend_core::connect::{Collection, ConnectError};
+use jmap_backend_core::connect::{Collection, ConnectError, credentials};
 use jmap_backend_core::source::SourceConfig;
 use jmap_cal_sync::CalSync;
+use jmap_client::Credentials;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 
@@ -74,8 +75,12 @@ impl Fixture {
     }
 }
 
+/// `open_calendar` takes resolved credentials; this stands in for the caller
+/// that resolves them, which is `connect_with`. See the address book backend's
+/// copy of this helper for why it takes the password path, and
+/// `jmap-backend-core/tests/oauth2.rs` for the choice between the two.
 fn open(config: &SourceConfig, password: Option<&str>) -> Result<CalSync, ConnectError> {
-    connect::open_calendar(config, password)
+    connect::open_calendar(config, credentials(config.user.as_deref(), password)?)
 }
 
 /// `CalSync` is not `Debug`, and naming the calendar it opened is a more useful
@@ -175,6 +180,17 @@ fn a_user_name_with_no_password_asks_evolution_for_credentials() {
     let error = expect_error(open(&config, None));
     assert!(matches!(error, ConnectError::CredentialsRequired));
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
+}
+
+/// The mirror of the address book backend's bearer test — see it for what this
+/// is proving and what it deliberately is not.
+#[test]
+fn an_access_token_is_sent_as_bearer_credentials() {
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"), true);
+
+    let sync = connect::open_calendar(&fixture.config(), Credentials::bearer("ya29.a0Af"))
+        .expect("connected");
+    assert_eq!(sync.calendar_id(), &fixture.default_calendar.unwrap());
 }
 
 #[test]
