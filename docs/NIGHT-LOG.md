@@ -28940,5 +28940,98 @@ concrete reason not to turns up. Needs a `Transport` impl for the real
 network call — check what `jmap-client`'s live-server harness already uses
 for one before inventing a second.
 
-Claim only above this line; gates and outcome to follow once the increment
-is actually implemented and verified.
+**Delivered**, scoped exactly as claimed. `evo-sys/build.rs`: `EConfigLookupWorker.*`
+joins `ALLOWED_TYPES` (a real, generated vtable — this crate will fill it);
+`e_config_lookup_worker_.*` joins `ALLOWED_FUNCTIONS`; `EConfigLookup` itself
+is blocked from generation (`BLOCKED_EVO_TYPES`) and re-added as an opaque
+handle (`EVO_HANDLES`), the same treatment `EMailConfigServicePage` already
+gets and for the same reason — nothing here subclasses it; `ENamedParameters`
+is blocked outright since `eds-sys` already generates it (its
+`e_named_parameters_.*` functions were allowlisted there before tonight) and
+a second copy would be two incompatible types with the same name. `evo-sys`
+gained `glib-sys`/`gobject-sys` dev-dependencies, matching `eds-sys`'s own
+`Cargo.toml`, for the raw type-system calls the new test makes.
+
+`evo-sys/tests/config_lookup.rs` (new file): confirms `EConfigLookupWorker`
+is a `G_TYPE_OBJECT`-only interface with no `g_type_query` size (as
+`eds-sys/tests/oauth2.rs` does for `EOAuth2Service`); confirms, against the
+real default_init this session fetched from `e-config-lookup-worker.c`
+(`gitlab.gnome.org/GNOME/evolution/-/raw/master/src/e-util/`), that neither
+`get_display_name` nor `run` has a default — both must be filled; and
+dispatches through `e_config_lookup_worker_get_display_name` with a
+throwaway probe type, proving that slot's offset by real EDS dispatch, the
+same method as the 18-slot `EOAuth2ServiceInterface` test.
+
+**One honest gap, found while writing the test rather than assumed away**:
+`run`'s offset is filled but not independently dispatch-tested. Reading
+`e_config_lookup_worker_run`'s actual body (same source fetch) shows it
+`g_return_if_fail`s `E_IS_CONFIG_LOOKUP (config_lookup)` before dispatching —
+a real `EConfigLookup` only comes from `e_config_lookup_new(ESourceRegistry
+*)`, and a real `ESourceRegistry` needs a live D-Bus session with an
+activatable `evolution-source-registry` (checked interactively with `python3
+-c 'EDataServer.SourceRegistry.new_sync(None)'`, which does work on *this*
+VM's persistent session bus — but `cmake/Rust.cmake`'s `rust-test-eds` target,
+unlike `cmake/Functional.cmake`'s gated tests, does not wrap its `cargo test`
+in `dbus-run-session`, so a plain CI run of this target has no such session
+and this test would hang or fail there). Writing a test that happens to pass
+here but is environment-dependent in a way CI cannot satisfy is exactly the
+kind of quiet-in-one-place, broken-in-another test the roadmap's "never
+weaken or fake a check" rule is about, so this session did not write one.
+Confirmed red-then-green the honest way instead: commenting out the
+`get_display_name` fill turns the wrapper's own `g_return_val_if_fail` into a
+`SIGSEGV` in this test (the wrapper answers NULL, and dereferencing that NULL
+is what actually crashes) rather than a silent pass, which is the proof this
+slot is truly load-bearing. `run`'s offset is one field after
+`get_display_name`'s proven one in a plain three-pointer struct
+(`parent_interface`, `get_display_name`, `run` — bindgen's own layout,
+confirmed by reading the generated `bindings.rs`), so a wrong offset for it
+would already have had to shift `get_display_name`'s for this test to still
+pass; it is real coverage, stated at the strength it actually has, not the
+strength the test's name could be misread to claim. Real dispatch of `run`
+will happen for the first time when `JmapConfigLookup` (next increment) is
+exercised under M9's `dbus-run-session`-wrapped functional harness, which
+already has exactly the D-Bus/registry environment this file does not.
+
+**Gates**: `cargo test -p evo-sys --locked` green (10 tests, including the
+three new ones); confirmed red-then-green as above. `cargo test --workspace
+--exclude example-module --locked` green except the same eleven pre-existing
+`JMAP_FUNCTIONAL_BOOK_CLIENT`-unset `jmap-functional` failures every prior
+session's gate has documented (unchanged, not new — confirmed by rerunning
+with `-p evo-sys -p eds-sys -p jmap-config` alone first, all green, before
+the full-workspace run). `cargo clippy --workspace --exclude example-module
+--all-targets --locked -- -D warnings` clean. `cargo fmt --all --check`
+clean (one auto-reformat applied and reverified). `cargo doc -p evo-sys
+--no-deps` has no warnings. `ninja -C build` (release) then `ctest
+--test-dir build` 15/15, including `rust-test-eds` and all four
+`functional-*` legs — confirming this change did not disturb anything the
+CMake-built `.so`s exercise. `rust/Cargo.lock` gained two lines
+(`glib-sys`/`gobject-sys` under `evo-sys`'s own dependency list) resolved
+from versions already pinned elsewhere in the workspace — nothing new to ask
+`cargo deny` about. Both the new test file and the touched `build.rs`/
+`lib.rs` carry their existing SPDX `GPL-3.0-or-later` headers.
+
+**A repeat of [[disk-fills-from-cargo-target]] mid-session**: the first
+`cargo test --workspace` run and the first `ninja`+`ctest` run both hit "No
+space left on device" partway through (rust/target had grown past 24 GiB
+twice). `cargo clean --profile dev` both times recovered it (~24 GiB each);
+the gate re-run clean afterwards is the one whose results are recorded
+above. Not a code issue, and not new — logged again only because it recurred
+twice in one session, which may be worth a standing pre-session `cargo
+clean` for future night sessions if it keeps happening.
+
+No milestone tag: this is FFI groundwork underneath M7's real-server-
+readiness item, not the item itself. The night's real find is upstream of
+the code — that the whole "maintainer must choose a chooser-vs-auto-discovery
+UX" framing four prior sessions treated as a blocking design question was
+answering the wrong question, evidenced by evolution-ews's own shipped
+solution — and this increment is the first concrete step of the plan that
+finding produced, not a milestone completion in itself.
+
+**Next session**: implement `jmap-config/src/config_lookup.rs` per the plan
+above (a `JmapConfigLookup` `EExtension` implementing `EConfigLookupWorker`
+via `InterfaceDecl::filled_by`, registered in both `e_module_load` entry
+points, `run()` calling `oauth2_setup::discover_and_register` with
+`redirect_uri` fixed to `"urn:ietf:wg:oauth:2.0:oob"`). Its own test will
+need the `dbus-run-session`/real-registry environment this session's test
+deliberately avoided — check `cmake/Functional.cmake` for how M9's tests
+already get one before building a second way to.
