@@ -34,6 +34,11 @@ const ALLOWED_TYPES: &[&str] = &["EMailConfigServiceBackend.*"];
 const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_mail_config_service_backend_.*",
     "e_mail_config_service_page_get_email_address",
+    // The one call `insert_widgets` needs back onto the page rather than the
+    // backend: telling the assistant an entry changed, so `check_complete` is
+    // asked again. See `EMailConfigPage` below on why the type it takes joins
+    // the handles rather than being generated.
+    "e_mail_config_page_changed",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -154,12 +159,27 @@ const BLOCKED_EVO_TYPES: &[&str] = &["_?EMailConfig(Page|ActivityPage|ServicePag
 /// Evolution's classes reached only through a pointer, as opaque handles — the
 /// same zero-sized `#[repr(C)]` treatment, and the same claim, as [`GTK_HANDLES`].
 ///
-/// One entry: the page a service backend extends. `tests/page.rs` asserts it
-/// stayed zero-sized, and that it is the one type both
-/// `e_mail_config_service_backend_get_page` and
-/// `e_mail_config_service_page_get_email_address` speak of — which is the whole
-/// of what `setup_defaults` does with a page.
-const EVO_HANDLES: &[&str] = &["EMailConfigServicePage"];
+/// The page a service backend extends, and the interface it implements.
+///
+/// `EMailConfigServicePage` is `tests/page.rs`'s subject: it stays zero-sized,
+/// and is the one type both `e_mail_config_service_backend_get_page` and
+/// `e_mail_config_service_page_get_email_address` speak of — the whole of what
+/// `setup_defaults` does with a page.
+///
+/// `EMailConfigPage` is the interface `insert_widgets` needs instead:
+/// `e_mail_config_page_changed` takes one, not a service page, because the
+/// "tell the assistant an entry changed" call is on the interface every config
+/// page implements, not on this provider's own subclass. Read against
+/// `e-mail-config-service-page.c` (tag 3.52.3) rather than assumed —
+/// `E_MAIL_CONFIG_SERVICE_PAGE_TYPE`'s `G_IMPLEMENT_INTERFACE (
+/// E_TYPE_MAIL_CONFIG_PAGE, …)` is where that relationship is actually stated —
+/// so the page handle `e_mail_config_service_backend_get_page` returns is one
+/// `insert_widgets` may cast straight to this handle and hand to the call, the
+/// same pointer-is-the-same-object cast `E_MAIL_CONFIG_PAGE()` is in C.
+/// `BLOCKED_EVO_TYPES`'s pattern already covers this name, so it joins the
+/// handle list rather than being bindgen's own guess at its layout — nothing
+/// here subclasses it or reads a field of it either.
+const EVO_HANDLES: &[&str] = &["EMailConfigServicePage", "EMailConfigPage"];
 
 /// The GTK classes the calls above mention, as opaque handles.
 ///
