@@ -28212,3 +28212,111 @@ human-verified working. The remaining M7 work is the authentication story (no
 method chooser / OAuth2 surfacing yet — see round-1 item D), plus the parked
 whitespace edge case. Every other item on M7's "needs human verification in real
 Evolution" list is now cleared.
+
+## 2026-08-16 (two-hundred-and-ninety-sixth session)
+
+**Continuing: M9 Tier 2's GUI smoke test**, claimed by the 295th session
+above (`227c4d3`, unchanged on `origin/master` at this session's start — no
+other agent picked it up in the interim). The 295th session's own note left
+the implementation in progress in the working tree, uncommitted; this
+session picked that tree back up rather than re-implementing, read it in
+full, and finished it.
+
+**What was already there, verified rather than assumed correct:** the four
+files matching the 295th session's plan — `ci/gui-smoke.sh` (Xvfb, a private
+D-Bus session, a scratch `HOME`/XDG tree per attempt, the standalone
+`.source` recipe copied in, one retry on failure with artifacts saved),
+`ci/gui-smoke-assert.py` (polls the AT-SPI tree for the account and a
+non-empty `Inbox (N)` cell, dismissing the two one-time credential dialogs
+along the way), `ci/install-deps-gui-smoke.sh`, and `docs/gui-smoke-test.md`
+describing all of it. All four already carried correct SPDX headers.
+
+**One real bug found and fixed before the first run:** `ci/gui-smoke.sh`
+defaulted `GUI_SMOKE_PORT` to `8123`, but the three fixture files it copies
+in verbatim (`docs/examples/jmap-mock-standalone-{mail,identity,transport}.source`,
+shared with `docs/manual-test-mail-provider.md`) hardcode `Port=8080` — the
+script would have started `jmap-mockd` on a port the account never asks for.
+Neither file is templated at copy time, so the default has to match the
+fixtures' own hardcoded value, which also happens to be `jmap-mockd`'s own
+default port. Fixed by changing the default to `8080`.
+
+**Ran it for real, not just read it.** This VM already carries `evolution`,
+`xvfb`, `python3-pyatspi` and `imagemagick` from confirming `apt-cache
+policy` in the prior session, so `ci/gui-smoke.sh` was run end to end against
+a real `ninja -C build` release binary and an installed `camel-provider`
+component: passed on the first attempt, `PASS: account 'JMAP mock mail'
+appeared, inbox has 2 message(s)`. This is the red-then-green for this
+increment — before the port fix the script could not have reached that
+state at all (the account would fail to connect, and the assertion would
+time out at 90s reporting the account never appeared), so this was the
+correctness bar rather than a separate unit test.
+
+**Second gap found against the roadmap text itself, not just the working
+tree: no video capture.** `docs/ROADMAP.md`'s M9 Tier 2 bullet asks for the
+X session to be recorded to tmpfs with `ffmpeg -f x11grab`, kept only if the
+attempt failed — the 295th session's in-progress script had the screenshot
+and AT-SPI dump but not this. Added: `ffmpeg` records each attempt's
+`Xvfb` display into `$GUI_SMOKE_RECORDING_ROOT` (default `/dev/shm`,
+tmpfs), stopped with `SIGINT` (not `SIGKILL`, so the mp4's `moov` atom
+flushes and the file is playable rather than truncated) right after the
+assertion returns; copied into `$GUI_SMOKE_ARTIFACTS` only when the
+attempt's verdict is non-zero, deleted from tmpfs unconditionally otherwise.
+Added `ffmpeg` to `ci/install-deps-gui-smoke.sh`. Verified both branches by
+hand: a real passing run left `$GUI_SMOKE_ARTIFACTS` empty (recording
+discarded); a run with a scratch copy of `ci/gui-smoke-assert.py` whose
+`ACCOUNT_NAME` was swapped to a name that cannot appear (the file itself is
+untracked, so its original content was saved to `/tmp` before the swap and
+restored byte-for-byte after) failed both attempts as expected and left a
+`recording.mp4` in the artifacts directory that `file` identifies as a valid
+ISO Media / MP4 container, alongside the screenshot, AT-SPI tree and logs.
+
+**Delivered the remaining piece the 295th session's plan named but had not
+reached: the gated CI job.** Added `gui-smoke` to `.github/workflows/ci.yml`,
+mirroring the `functional` job's shape and gating
+(`workflow_dispatch` or a PR labelled `run-gui-smoke-test`, not every push —
+slower than the rest of the suite, same reasoning `docs/functional-tests.md`
+already gives for layer 1). Checked rather than assumed it does not grow the
+shared image: `ci/install-deps-gui-smoke.sh` installs `evolution` via
+`apt-get` on the bare `ubuntu-24.04` runner exactly as `ci/install-deps-functional.sh`
+installs `evolution-data-server`, so `Containerfile.ci`/`ci-image.yml` are
+untouched (confirmed with `git diff --stat`, only `ci.yml` changed). The job
+sets `GUI_SMOKE_ARTIFACTS` to a fixed path under `runner.temp` (rather than
+the script's own random-`mktemp` default) so a failing run's screenshot,
+AT-SPI tree dump, and both logs can be uploaded with `actions/upload-artifact`
+on failure. `docs/gui-smoke-test.md`'s existing "CI" section already
+described this job's name and gating correctly — written ahead of the job
+existing — so it needed no edit.
+
+Gates: `cargo fmt --all --check` clean (no Rust source touched). `cargo test
+--workspace --exclude example-module --locked` — the same eleven
+pre-existing `jmap-functional` failures (`JMAP_FUNCTIONAL_BOOK_CLIENT`
+unset), unchanged. `cargo clippy --workspace --exclude example-module
+--all-targets --locked -- -D warnings` clean. `ninja -C build` (release) then
+`ctest --test-dir build` 15/15. `python3 -c "import yaml;
+yaml.safe_load(...)"` confirms `ci.yml` still parses; no `actionlint` on this
+VM, same limitation the 294th session noted for the `functional` job's
+gating expression. `ci/checks.sh` still stops at its first step on this VM
+(no `reuse`/`pipx`/`uvx`/`cargo-deny`); all three new scripts and the new doc
+carry SPDX headers or are covered by `REUSE.toml`'s existing `docs/**`
+aggregate annotation, checked by hand. No new Rust dependencies, `Cargo.lock`
+untouched. No new translatable strings (shell/Python/YAML only).
+
+**M9 milestone tag: both tiers now done.** Layer 1 (real EDS daemons, gated
+CI job, from the 294th session) and Tier 2 (real Evolution under Xvfb, gated
+CI job, this session) are both implemented, tested locally, and wired into
+CI. `docs/ROADMAP.md`'s M9 acceptance criteria are met as written.
+
+**Next session:** M9 being done removes it from the unblocked-and-incomplete
+list; the remaining priority-queue items are the same ones every recent
+session has deferred for the same reasons — the maintainer's open M7
+auth-method design question, the OAuth2 GTK-wiring escalation candidate
+flagged by the 293rd session, and M10's per-EDS-version container matrix
+(needs `Containerfile.ci`/`ci-image.yml`, off-limits by this session's own
+hard rules, so a future session should check whether it is still off-limits
+under the rules active then rather than assume). Unchanged blockers:
+`docs/BACKLOG.md`'s contact/vCard and calendar/iCal fidelity items, and the
+parked identity-address-whitespace edge case from the operator's round-2
+verification, are all still parked there. The GitLab pipeline was not
+touched for either M9 tier (both note the same unverified-elsewhere
+reasoning), so a future session with GitLab runner access could close that
+gap if it becomes relevant.
