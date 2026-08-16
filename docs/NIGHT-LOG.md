@@ -28757,3 +28757,32 @@ rather than leaving it as a fifth log entry nobody but the next agent reads.
 **Next session**: same as the last three. Check whether the question below
 has been answered before re-deriving "everything is blocked" from scratch
 again.
+
+## 2026-08-16 (three-hundred-and-third session)
+
+**Claiming**: the `ConnectError`/`access_token` translatable-strings retrofit
+`docs/BACKLOG.md` records under "Cross-cutting, noticed while wiring OAuth 2.0
+onto the connect path". Running on Sonnet.
+
+Checked first, as the last four sessions did, whether the method-chooser-vs-
+auto-discovery question has been answered anywhere in the tree —
+`grep -rn "method-chooser\|auto-discovery"` still turns up nothing outside
+this log, so the `insert_widgets` OAuth2 wiring stays blocked exactly as the
+299th–302nd sessions found. Rather than log a fifth "still blocked" entry,
+looked for a tractable slice that is genuinely unblocked and is not M1–M6/M8
+polish. `docs/BACKLOG.md`'s "Cross-cutting" item fits: `ConnectError`'s
+`Display` (in `jmap-backend-core/src/connect.rs`) and `access_token`'s two
+fallback messages (`jmap-backend-core/src/oauth2.rs`) are on the OAuth2/
+connect path this priority band covers, and the ROADMAP's *Mark UI strings
+translatable* standing directive already obliges marking them — this is not
+new scope, it is a directive violation sitting unfixed. No GTK/concurrency
+reasoning involved: `translate`/`translate_with` are safe wrappers the
+calendar backend (`jmap-backend-cal/src/ops.rs`) already established the
+pattern for.
+
+Claiming this increment; will mark `CredentialsRequired`, the two collection-
+resolution messages, `Collection`'s own noun, the account-less `GError` in
+`no_source_gerror`, and `access_token`'s two fallback strings, add
+`jmap-backend-core/src/{connect,oauth2}.rs` to `po/POTFILES.in`, and
+regenerate `po/evolution-jmap.pot` via `po/extract.sh`. `EOAuth2(message)`
+stays untouched — that string is EDS's own, not ours to translate.
