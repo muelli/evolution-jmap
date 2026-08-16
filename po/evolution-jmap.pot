@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-16 12:19+0000\n"
+"POT-Creation-Date: 2026-08-16 12:48+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -40,12 +40,20 @@ msgid ""
 "always works."
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:281
+#: rust/crates/jmap-config/src/backend.rs:294
 msgid "_Server:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:281
+#: rust/crates/jmap-config/src/backend.rs:295
+msgid "_Port:"
+msgstr ""
+
+#: rust/crates/jmap-config/src/backend.rs:296
 msgid "_Username:"
+msgstr ""
+
+#: rust/crates/jmap-config/src/backend.rs:303
+msgid "Use a _secure connection (TLS)"
 msgstr ""
 
 #. TRANSLATORS: the name of an account type, in the list of account types
