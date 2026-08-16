@@ -29552,3 +29552,28 @@ these hard rules). Worth a look for whoever picks up the design question
 next: this session's `config-lookup.rs` is now the concrete, human-readable
 example of what a complete `EConfigLookupResult` looks like on the wire,
 which may help ground that decision.
+
+## 2026-08-16 (three-hundred-and-ninth session)
+
+**Claiming: write `docs/manual-test-account-setup.md`, the M7 human-
+verification recipe.** Running on Sonnet. Re-surveyed the priority queue
+from the code before claiming anything, the way the 299th session's note
+about not trusting the log's word says to: M1–M6, M8, M9 are all tagged
+`COMPLETE` in `docs/MILESTONES.md`, M10 needs `Containerfile.ci` growth
+(off-limits to these sessions), and M7's one remaining piece —
+`insert_widgets`'s OAuth2 discover-and-register wiring — is gated on the
+maintainer's still-unanswered method-chooser-vs-auto-discovery question,
+independently flagged since the 297th session as subtle cross-thread
+FFI/lifetime reasoning this codebase has not attempted elsewhere. Nothing
+changed either fact, so that item stays un-attempted.
+
+What *had* changed, and what the 306th–308th sessions' own work exposed: M7
+is otherwise essentially built — `backend.rs`'s own module doc says the only
+thing left outstanding for `insert_widgets` is "verification in a real
+Evolution" — but every other backend in this repository
+(`docs/manual-test-{book,cal,collection,mail-provider}.md`,
+`manual-test-live-server.md`) has a recipe for that verification, and M7 had
+none. That is the actual unblocked, incomplete item the roadmap's dependency
+graph currently offers: not more Rust, but closing the one gap that keeps
+the agent-scaffolds/maintainer-verifies loop the roadmap's CURRENT PRIORITY
+describes from actually being walkable for this milestone.
