@@ -77,6 +77,14 @@ in the invocation, worth failing loudly on.
   no mail capability at all is reported and skipped rather than failed: this
   test is about tolerating what a real deployment does and does not offer,
   which cuts both ways.
+- `contacts_capable_accounts_can_list_their_address_books` and
+  `calendars_capable_accounts_can_list_their_calendars` — if the account has
+  the respective capability, `AddressBook/get` or `Calendar/get` deserialises
+  without error. Unlike the mailbox test, neither asserts a non-empty list: a
+  fresh account is not guaranteed to have created an address book or a
+  calendar yet, so the round trip succeeding — proving this client's types
+  read what a real server actually sends, not just `jmap-mockd`'s fixtures —
+  is the claim. An account with no such capability is reported and skipped.
 
 Anything short of that is a finding, not a nuisance — write it down in
 `docs/NIGHT-LOG.md`.
