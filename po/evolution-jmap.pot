@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-16 12:48+0000\n"
+"POT-Creation-Date: 2026-08-16 13:13+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -40,20 +40,31 @@ msgid ""
 "always works."
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:294
+#: rust/crates/jmap-config/src/backend.rs:288
 msgid "_Server:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:295
+#: rust/crates/jmap-config/src/backend.rs:289
 msgid "_Port:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:296
+#: rust/crates/jmap-config/src/backend.rs:290
 msgid "_Username:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:303
+#: rust/crates/jmap-config/src/backend.rs:297
 msgid "Use a _secure connection (TLS)"
+msgstr ""
+
+#. TRANSLATORS: shown on the account setup page when no email address has been typed in yet.
+#: rust/crates/jmap-config/src/complete.rs:143
+msgid "This account has no email address yet."
+msgstr ""
+
+#. TRANSLATORS: %1$s is exactly what was typed into the email address field.
+#: rust/crates/jmap-config/src/complete.rs:147
+#, c-format
+msgid "\"%1$s\" is not an email address."
 msgstr ""
 
 #. TRANSLATORS: the name of an account type, in the list of account types
