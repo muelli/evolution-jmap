@@ -137,7 +137,9 @@ it should show, top to bottom:
 - **Server**, **Port**, **Username** entries, in that order, each with a
   mnemonic label (`_Server`, `_Port`, `_Username` — <kbd>Alt</kbd>+the
   underlined letter should focus the entry).
-- A **Use a secure connection (TLS)** check button below them.
+- An **Authentication** combo below them, defaulting to **Password**, with
+  **OAuth 2.0** as its other choice.
+- A **Use a secure connection (TLS)** check button below that.
 - A status line below that, blank when the account is one *Next* would
   accept.
 
@@ -152,10 +154,19 @@ Edit the fields to point at the mock and clear its refusal:
 
 **What "it worked" means:**
 
-- The three entries and the check button appear at all, filled in with what
-  the identity's address implied (`Server` starts as the address's domain,
-  `Username` as the address itself) — `jmap-config`'s `setup_defaults`
-  doing its job, now visible rather than only asserted in `tests/backend.rs`.
+- The three entries, the authentication combo and the check button appear at
+  all, filled in with what the identity's address implied (`Server` starts
+  as the address's domain, `Username` as the address itself, and
+  **Authentication** starts on **Password** for a fresh account) —
+  `jmap-config`'s `setup_defaults` doing its job, now visible rather than
+  only asserted in `tests/backend.rs`.
+- Switching **Authentication** to **OAuth 2.0** and finishing the assistant
+  writes `Method=JMAP` under `[Authentication]` in the committed account's
+  `.source` file (find it under
+  `$XDG_CONFIG_HOME/evolution/sources/*.source` — the one whose
+  `BackendName=jmap`); switching back to **Password** and finishing writes
+  `Method=none` there instead. Nothing here proves the OAuth 2.0 sign-in
+  itself works — see "What this does not cover" below.
 - The status line reads `This account has no email address yet.` if you
   clear the identity page's address and come back, or
   `"<whatever you typed>" is not an email address.` for something that is
@@ -182,17 +193,18 @@ Anything short of the above is a bug in this repository, not in the recipe;
 
 ## What this does not cover
 
-- **OAuth 2.0 as an authentication *method* on this page.** Nothing here
-  writes `[Authentication] Method` for OAuth 2.0 yet — `insert_widgets`
-  offers only the plain server/port/username/TLS fields above. The
-  discover-and-register network flow (`oauth2_setup`) is complete and
-  covered by `config-lookup.rs`, and `oauth2_service` answers every
-  per-account OAuth2 vfunc once a `[JMAP OAuth2]` group exists on the
-  account — but nothing in this UI creates that group, and wiring it to a
-  method chooser here is still gated on the maintainer's open
-  method-chooser-vs-auto-discovery question (`docs/NIGHT-LOG.md`). Not a
-  bug this recipe should find; a known gap.
-- **The consent browser round trip.** Even once something drives
-  `discover_and_register`, watching a real authorization prompt and
-  `REDIRECT_URI` land back in Evolution needs a real OAuth2 provider, not
-  the mock, and is out of scope for this document.
+- **Whether choosing OAuth 2.0 here actually connects.** The combo writes
+  `[Authentication] Method`, which is what `EOAuth2Service::can_process`'s
+  default implementation and `e_source_get_oauth2_access_token_sync` key
+  off of — but nothing on this page drives `discover_and_register` (that is
+  what step 4's "Look Up Account Details" does), so an account committed
+  with **OAuth 2.0** picked by hand here and no `[JMAP OAuth2]` client
+  registered has said what it wants to authenticate with, not proven it
+  can. Combining "pick OAuth 2.0 here" with "never ran discovery" is a real
+  path a user can reach; whether Evolution's own credentials machinery
+  fails it usefully (a clear prompt or error) or silently is unverified —
+  worth checking on the first real run.
+- **The consent browser round trip.** Even once discovery has registered a
+  client, watching a real authorization prompt and `REDIRECT_URI` land back
+  in Evolution needs a real OAuth2 provider, not the mock, and is out of
+  scope for this document.
