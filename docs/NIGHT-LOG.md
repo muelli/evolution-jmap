@@ -26259,3 +26259,69 @@ tonight's.
 
 Picking the harness instead: independent of OAuth2, well inside what can be
 built and tested here, and named by the same roadmap paragraph.
+
+**Delivered:** `rust/crates/jmap-client` gets an opt-in `live-server` feature
+(`Cargo.toml`) and `tests/live_server.rs`: three read-only tests — the session
+names the core capability and at least one account, `Core/echo` round-trips
+through the real API endpoint, and a mail-capable account lists a non-empty
+mailbox set (an account with no mail capability is reported and skipped, not
+failed — the point is tolerating what a real deployment does and does not
+offer, both directions of "capability-negotiation robustness"). Credentials
+come from `JMAP_LIVE_SERVER_URL` plus either `JMAP_LIVE_SERVER_USER`/
+`_PASSWORD` or `JMAP_LIVE_SERVER_TOKEN` (Bearer — the client already carries
+that end to end, unexercised outside unit tests until now). Gated twice over
+— the feature, so a plain `cargo test` never compiles the file, and
+`#[ignore]`, so `cargo test --features live-server` still does not reach the
+network without `--ignored` — so this can never turn a routine run into a
+network call. `docs/manual-test-live-server.md` is the recipe, including
+provisioning `infra/gcp/create-stalwart.sh`'s VM.
+
+Smoke-tested against `jmap-mockd` itself (not a substitute for a real
+deployment, but proof the harness's own plumbing is right): all three tests
+pass with the mock as the "live" server, and the missing-environment-variable
+panics read as intended. One thing this smoke test corrected before it was
+committed: the first draft of `the_session_names_the_core_capability` asserted
+a primary account for the core capability itself, which `jmap-mockd` does not
+set (only the four `ACCOUNT_CAPABILITIES` get one) — RFC 8620 §2 does not
+require it either, so the assertion was over-reaching rather than the mock
+being wrong, and was replaced with a check that the session names at least one
+account at all.
+
+Tests: +3 in `jmap-client/tests/live_server.rs` (feature-gated, so outside the
+default 1207). `cargo test --locked` still 1207 green with none of them
+compiled; `cargo clippy -p evolution-jmap-client --all-targets --features
+live-server --locked -- -D warnings` clean; `cargo fmt --all --check` clean;
+`ninja -C build` then `ctest --test-dir build` 15/15. `ci/checks.sh` still
+stops at its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no
+`cargo-deny`); reasoned by hand instead — `docs/**` is a blanket
+`REUSE.toml` annotation so the new doc needs no header of its own, the new
+Rust test file carries one, and `Cargo.lock` is untouched.
+
+Housekeeping hit along the way and not part of this increment:
+`rust/target/debug` had grown to 24G and the root filesystem was down to
+296M free, which crashed the linker with a bus error on the first build
+attempt (`[[memory:ninja-before-ctest]]`'s sibling issue,
+`[[memory:disk-fills-from-cargo-target]]`) — `cargo clean --profile dev`
+before anything else in this session, as that memory note already prescribes.
+
+No milestone tag — this is a sub-item of the current priority's item 2, not a
+milestone of its own. **Next session**: either the `EOAuth2Service`
+implementation above, deliberately (and, per the model-escalation rule, only
+after judging whether it is Sonnet-sized — my read tonight is that it likely
+is not: a new GObject *interface* implementation, unverifiable end-to-end
+without a live IdP and a display for the WebKit consent flow), or
+capability-negotiation robustness proper (this session's harness *tests*
+negotiation against a real server but does not add any new client-side
+tolerance — `jmap_proto::session::Session`'s reader is already tolerant of
+unknown capability keys via its `extra`/`BTreeMap<String, Value>` fields, so
+what remains, if anything, is likely in how capability *absence* is handled
+by call sites that assume mail/contacts/calendars are always there — unsurveyed
+tonight), or M9/M10 if both are judged not to be it.
+
+Unchanged blockers: no `.po` exists; M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**, and its one remaining
+vfunc (`insert_widgets`) needs a display this VM does not have (confirmed
+tonight: no `Xvfb`/`xvfb-run` installed) — a real OAuth2 flow would need one
+too, for the credentials prompter's consent page; the docs/BACKLOG.md
+contact/vCard and calendar/iCal fidelity items are all still parked there.
