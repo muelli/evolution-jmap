@@ -10,6 +10,7 @@
 mod common;
 
 use common::Fixture;
+use jmap_cal_sync::SyncError;
 use jmap_proto::calendars::NDay;
 use serde_json::{Value, json};
 
@@ -1129,6 +1130,83 @@ fn a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence() {
         Some("2026-09-01T09:00:00"),
         "the end of the series moved on a save that never edited it"
     );
+}
+
+#[test]
+fn a_new_events_recurrence_reaches_the_server() {
+    // The ordinary series, so that the refusal below is known to be about the
+    // rule it cannot state rather than about recurrence on a create at all.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace(
+        "DURATION:PT90M",
+        "DURATION:PT90M\r\nRRULE:FREQ=WEEKLY;COUNT=10;BYDAY=TH",
+    );
+
+    let saved = fixture.sync().save_component(&icalendar, None).unwrap();
+
+    let rules = fixture
+        .event(&saved.uid.as_str().into())
+        .recurrence_rules
+        .unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].count, Some(10));
+    assert_eq!(
+        rules[0].by_day.as_deref(),
+        Some([NDay::new("th")].as_slice())
+    );
+}
+
+#[test]
+fn a_new_event_whose_series_end_cannot_be_stated_is_not_created_at_all() {
+    // RFC 5545 §3.3.10 requires `UNTIL` to be a UTC instant wherever `DTSTART`
+    // names a zone, and turning that instant into RFC 8984 §4.3.3's local time
+    // needs a zone database `jmap-ical` deliberately does not carry — so the
+    // value is kept as it was stated and `maps_recurrence_rule` reports that the
+    // rule cannot be sent. This is the commonest such rule there is: every
+    // "repeat until <date>" a conformant editor writes in a zoned calendar.
+    //
+    // An edit leaves `recurrenceRules` alone and the server's own rule stands
+    // (see `a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence`).
+    // A create has no rule to leave standing, so the save is refused instead:
+    // sending it invites a strict server to reject the whole set, and a lenient
+    // one to store a `until` that is no LocalDateTime — which this mapping then
+    // cannot draw, so Evolution would show a single appointment while the
+    // server ran a series.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace(
+        "DURATION:PT90M",
+        "DURATION:PT90M\r\nRRULE:FREQ=WEEKLY;UNTIL=20260331T120000Z",
+    );
+
+    let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
+
+    assert!(
+        matches!(failure, SyncError::Unsendable(_)),
+        "{failure:?} — the user has to be told, not given a lesser event"
+    );
+    let (_, events) = fixture.sync().list_existing().unwrap();
+    assert!(
+        events.is_empty(),
+        "a refused create must leave nothing behind: {events:?}"
+    );
+}
+
+#[test]
+fn a_new_event_whose_rule_the_rrule_narrowed_is_not_created_at_all() {
+    // The other half of the same refusal, and the one that is not about time
+    // zones: RFC 7529's leap-month spelling is a month JSCalendar states only
+    // beside the `rscale` this mapping drops, so the rule that would go out
+    // names a month the server is entitled to reject.
+    let fixture = Fixture::start();
+    let icalendar = NEW_EVENT.replace(
+        "DURATION:PT90M",
+        "DURATION:PT90M\r\nRRULE:FREQ=YEARLY;BYMONTH=5L",
+    );
+
+    let failure = fixture.sync().save_component(&icalendar, None).unwrap_err();
+
+    assert!(matches!(failure, SyncError::Unsendable(_)), "{failure:?}");
 }
 
 #[test]
