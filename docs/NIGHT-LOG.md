@@ -30197,3 +30197,14 @@ say so briefly and end the session, which is what this entry does.
 
 No commits to `rust/`, `docs/BACKLOG.md`, or `docs/MILESTONES.md` this
 session — only this log entry, pushed on its own.
+
+## 2026-08-16 (three-hundred-and-sixteenth session)
+
+**Claiming**: settle the open question `docs/BACKLOG.md`'s "Whitespace in
+the identity address slips through setup" item asks first — does a space
+typed into Evolution's identity page (which itself does not reject it)
+survive into the committed account's `From:` address, or does this
+crate's own `check_complete` stop it first? Not new code yet: reading
+Evolution's own upstream C source (checked out locally) plus this
+project's `backend.rs`/`complete.rs` to trace the actual vfunc call
+order, which is answerable without a human in the GUI.
