@@ -25071,3 +25071,110 @@ their contact-editor behaviour unmeasured; whether the editor lets a handle be
 moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-seventh session)
+
+**The catalogue is now a file, and it is checked against the sources.** The
+last two sessions established that a marked string has to be *listed* and has
+to be spelled so `xgettext` reads it as `rustc` does. Both are reasoning about
+what the extractor will do. This session stops reasoning and reads what it
+did: `po/evolution-jmap.pot` is committed, and
+`jmap-backend-core/tests/potfiles.rs` compares the messages in it against the
+marked literals in both directions.
+
+**The reason to stop reasoning is that `-L C` is crude in ways nobody has
+enumerated.** The previous session left the note that gettext's C lexer treats
+`'` as opening a character constant, that this is why
+`provider.rs:125: warning: unterminated character constant` appears on every
+run, and that "a marked string between two lifetimes could in principle be
+swallowed" — flagged as unwatched, and left unmeasured. Measured now, against
+the tool:
+
+```
+fn a() { let x: &'static CStr = N_(c"one lifetime then a string"); }
+fn b<'a>() { let x: &'a CStr = N_(c"two lifetimes then a string"); }
+```
+
+The second extracts. The first does not. It is *parity*, not enclosure — the
+lexer gives up at the end of the line, so an **odd** number of apostrophes
+before the marker eats the rest of the line, marker and message with it. Two
+lifetimes pair up and the string survives; one lifetime and it is gone. What
+comes out is the warning, naming the line and not saying what was lost.
+
+And `const NAME: &'static CStr = N_(c"JMAP");` is not a strange thing to
+write. `jmap-mail/src/provider.rs:58` spells it without the `'static` — it is
+a `const`, so the lifetime is redundant — and that is the only reason the name
+of this project's account type is in the catalogue at all. One tidy-up away
+from silently untranslatable.
+
+**So the rule could not be "no lifetime near a marked string".** That is one
+member of a class whose other members are unknown; a rule per member is a rule
+per bug already found. Comparing against the bytes the extractor emitted
+covers the class — the apostrophe case, Rust's `\u{2014}` against C's four-hex
+`\u`, and whatever the next one turns out to be — without anyone having to
+predict it.
+
+**Both directions, because both failures are silent.** Marked but absent from
+the catalogue: swallowed, or the catalogue is stale, and the string ships in
+English. Present but no longer marked: translators spend effort on text no
+user will ever read. The second is not redundant — an *edited* string shows up
+as one loss and one orphan, and without the orphan half a stale catalogue
+would keep a plausible near-miss of the current message and look fine.
+
+Mutation-checked all three ways: `'static` added to `provider.rs:58` and
+re-extracted, the check names `["JMAP"]` as lost; a full stop removed from the
+description without re-extracting, and it names the new spelling lost and the
+old one orphaned; restored, green.
+
+**`po/extract.sh` now holds the command.** It was a comment in
+`po/POTFILES.in`, which is where a command drifts from the one that actually
+produced the file — nobody executes a comment. The script is the single
+spelling, the committed `.pot` is its output, and forgetting to re-run it is a
+red test rather than a missing translation. `--copyright-holder` is passed so
+the boilerplate at the top of the file is not a stranger's.
+
+Not checked, deliberately: the `#:` source references. They move whenever
+anything above them moves and no lookup depends on them, so holding them exact
+would redden every unrelated edit in a listed file.
+
+`REUSE.toml` gains the `.pot` under the machine-generated annotation — its
+header is xgettext's and is rewritten on every regeneration, so a hand-written
+SPDX comment there would not survive.
+
+Tests: +2 in `jmap-backend-core/tests/potfiles.rs` (5 there now). The default
+set is unchanged at 1157; these live in the `rust-test-eds` leg with the rest
+of the i18n rules.
+
+Verified locally: `cargo test --locked` 1157, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module
+--all-targets --locked -- -D warnings` clean; `ninja -C build` then `ctest
+--test-dir build` 14/14, functional and EDS-linked legs included. `ci/checks.sh`
+still stops at its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no
+`cargo-deny`), so those were reasoned by hand: `po/extract.sh` carries an SPDX
+header, `po/evolution-jmap.pot` is annotated in `REUSE.toml`, and `Cargo.lock`
+is untouched, so `cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Closed: **the other half of the blocker the last two
+sessions left** — there is a `.pot` in the tree, one command generates it, and
+something checks it against the sources. Also closed: the `-L C` apostrophe
+risk is no longer unwatched, and is measured rather than feared. New blocker:
+`gettext` is not in `Containerfile.ci`, so the check reads the committed
+catalogue rather than running `xgettext` itself; that is the right shape
+anyway (CI should not need the extractor), but it does mean the tree's `.pot`
+is trusted to have come from the script. Unchanged blockers: nothing in
+CMake generates or installs the catalogue, and no `.po` exists for any
+language, so `LINGUAS` is still empty; a transition rule outside the counted
+shape still costs the whole zone, and whether any zone Evolution ships is in
+that state is unmeasured beyond Berlin; M10 still has no CI matrix; the
+calcard directive's two emitters are still ours; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**; an `UNTIL` the
+parser itself refuses is invisible to `jmap-ical`; whether Evolution renders
+an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the
+first" bet is still unverified; the two `LABEL` `TYPE` risks stand; a deathday
+and a birthday stated as a year alone are still invisible; the conventional
+URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and
+therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their
+contact-editor behaviour unmeasured; whether the editor lets a handle be moved
+between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.
