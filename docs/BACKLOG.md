@@ -36,20 +36,32 @@ to polish a completed backend. A later hardening pass works through them.
   verification in real Evolution" notes in `docs/NIGHT-LOG.md`.
 
 ## M7 setup UI (account assistant)
-- **Whitespace in the identity address slips through setup.** Evolution's own
-  identity page accepts `alice@ example.com` (embedded space) and lets the
-  assistant advance; on the JMAP server-settings page our `check_complete` does
-  not block it either, so setup can complete. `complete::is_address` *does*
-  reject embedded whitespace (unit-tested), so the malformed string is not
-  reaching it — Evolution normalises the address, or we read it post-
-  normalisation, before our guard runs. **First settle the open question**:
-  does the space actually survive into the created account's identity (the
-  `From:` address), or is it stripped? If it survives it is a real defect (a
-  `From:` header containing a space); if stripped it is benign and needs
-  nothing. If a safety net is added in `check_complete`, comment it as
-  compensating for Evolution's lenient identity page and file an upstream bug
-  against Evolution (its identity page should reject an address with
-  whitespace). Deferred edge case, not a release blocker.
+- ~~**Whitespace in the identity address slips through setup.**~~
+  **Settled 2026-08-16, no code change needed.** The open question this entry
+  asked — does a space typed into Evolution's (lenient) identity page survive
+  into the committed account, or is it stopped? — is answerable from
+  Evolution's own call order, not just this crate's source: `GtkAssistant`'s
+  `prepare` vfunc
+  (`e-mail-config-assistant.c:969`, `mail_config_assistant_prepare`) calls
+  `e_mail_config_page_setup_defaults` synchronously the first time the JMAP
+  server-settings page is visited, before the user can interact with it;
+  `mail_config_service_page_setup_defaults`
+  (`e-mail-config-service-page.c:585-613`) runs every candidate backend's
+  `setup_defaults` (this project's `backend.rs:873`, which writes the
+  identity string — space included — via `apply()`) and then activates the
+  page's combo box, whose `"changed"` handler
+  (`e-mail-config-service-page.c:576`) fires `e_mail_config_page_changed` →
+  `mail_config_assistant_page_changed`
+  (`e-mail-config-assistant.c:279-285`) → `check_complete`
+  (`backend.rs:990`), all inside that one `prepare` call. So by the time the
+  JMAP page is interactive, `complete::check`'s `is_address` has already seen
+  the space-containing identity and refused it — `check_complete` returns
+  `FALSE`, *Next*/*Apply* stays insensitive, and there is no path through the
+  assistant or the account editor that commits an account with a space in its
+  identity. The space is stopped, not stripped, but the practical answer is
+  the same as "stripped": benign, nothing to fix. (Verified against the
+  upstream Evolution 3.52.3 source, not by running the GUI — the call chain
+  above is deterministic and does not depend on timing.)
 
 ## Cross-cutting, noticed while wiring OAuth 2.0 onto the connect path
 - ~~**`ConnectError`'s own messages are not marked for translation.**~~

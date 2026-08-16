@@ -30208,3 +30208,48 @@ crate's own `check_complete` stop it first? Not new code yet: reading
 Evolution's own upstream C source (checked out locally) plus this
 project's `backend.rs`/`complete.rs` to trace the actual vfunc call
 order, which is answerable without a human in the GUI.
+
+**Settled, not a bug.** Read Evolution 3.52.3's own upstream source (a
+local checkout, not part of this repo) to trace the actual vfunc call
+order rather than trust the backlog's guess. `GtkAssistant`'s `prepare`
+override (`e-mail-config-assistant.c:969`,
+`mail_config_assistant_prepare`) calls `e_mail_config_page_setup_defaults`
+synchronously, on first visit, before the JMAP server-settings page is
+interactive. `mail_config_service_page_setup_defaults`
+(`e-mail-config-service-page.c:585-613`) runs this project's
+`setup_defaults` (`backend.rs:873`, which writes the identity string —
+whitespace included — via `apply()`) for every candidate backend and then
+activates the page's type combo, whose `"changed"` handler
+(`e-mail-config-service-page.c:576`) fires `e_mail_config_page_changed` →
+`mail_config_assistant_page_changed` (`e-mail-config-assistant.c:279-285`)
+→ this project's `check_complete` (`backend.rs:990`) — all inside that
+one `prepare` call, before the page can be typed into. So `complete::check`'s
+`is_address` (already whitespace-rejecting and unit-tested, per
+`complete.rs`'s own module docs) sees the space-containing identity
+before the user can act, `check_complete` returns `FALSE`, and *Next*
+stays insensitive on both the assistant and the account editor's *Apply*.
+No account with a space in its identity can ever be committed. Updated
+`docs/BACKLOG.md`'s entry to record this rather than leave the question
+open a further session — closed with strikethrough, matching the file's
+existing convention for settled items.
+
+**Why this is different from the three "nothing to do" sessions before
+it**: 310th/313th/315th each re-read this crate's own source and
+concluded the fix path was blocked on a human running real Evolution.
+That was correct for *this crate's* source alone — the ordering guarantee
+lives in Evolution's C code, which a local checkout at `/tmp/evo-src`
+makes readable without a GUI. The 314th session's OAuth2 fix and this
+session's finding share the same shape: a backlog item phrased as
+"needs a human" can still have a decidable sub-question once the right
+source is read.
+
+**No `rust/` changes** — this was a documentation-only finding, so no
+cargo test/clippy/reuse gate applies; `git status` confirms only
+`docs/BACKLOG.md` and this log changed. Not tagging any milestone: M7
+still needs its GUI human-verification pass, unchanged by this entry.
+
+**Next session**: same standing state as the 315th's — M7's remaining
+gap is the human verification pass; real-server readiness, M9 closed;
+M10 blocked on infra, off-limits. `docs/BACKLOG.md`'s other four entries
+are still genuine M3/M4/M7 polish, not re-surveyed again tonight since
+nothing changed upstream to reopen them. `~/.night-shift-escalate` empty.
