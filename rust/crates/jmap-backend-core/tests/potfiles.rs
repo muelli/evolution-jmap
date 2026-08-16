@@ -44,6 +44,31 @@
 //!   quietly stopped recognising exactly the longest strings, so the whitespace
 //!   between the two is skipped the way the lexer skips it.
 //!
+//! ## And a marked literal must be written on one line
+//!
+//! The list being right is necessary and not sufficient: `xgettext` still has
+//! to read the literal the way `rustc` does, or the msgid in the catalogue is
+//! not the msgid the program looks up and the translation is never found. The
+//! two lex the same bytes and they differ on exactly one construct we can
+//! write — a backslash at the end of a line. Rust drops the newline *and* the
+//! indentation that follows it; C's line splicing drops only the newline. So
+//!
+//! ```text
+//! c"This event repeats until %1$s, and the time zone it is in, \
+//!   %2$s, …"
+//! ```
+//!
+//! is looked up with one space before `%2$s` and extracted with fifteen. The
+//! failure is completely silent: the extraction succeeds, the catalogue looks
+//! right, the translator translates it, and the user still reads English.
+//!
+//! Hence the rule enforced here — no marked literal spans lines — rather than
+//! the narrower "no *indentation* after the continuation". A column-zero
+//! continuation would read alike today and quietly stop doing so the moment
+//! someone re-indents the block, which is the same silent failure one edit
+//! away. A long line is the price; `rustfmt` does not touch the inside of a
+//! string literal, so it stays a long line.
+//!
 //! ## Why this crate
 //!
 //! `i18n` is here, so the rule about how translatable strings are spelled is
@@ -126,18 +151,38 @@ fn sources(root: &Path) -> Vec<String> {
     found
 }
 
+/// A source with its comments blanked out, ready to be matched against.
+///
+/// Comments are not code to `xgettext` either, and a doc comment may spell a
+/// marker out — this file's own module docs do. Whole-line only: a marker never
+/// shares a line with the `//` that would precede it.
+///
+/// The lines are *emptied* rather than dropped, so that an index into the
+/// result still names the line it came from. A check that reports where a
+/// problem is has to be able to count.
+fn code_of(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            if line.trim_start().starts_with("//") {
+                ""
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The text of a source `po/POTFILES.in` names.
+fn source_text(root: &Path, path: &str) -> String {
+    fs::read_to_string(root.join(path)).unwrap_or_else(|error| {
+        panic!("po/POTFILES.in lists {path}, which cannot be read ({error})")
+    })
+}
+
 /// Whether `path` holds a string marked for extraction.
 fn marks_a_string(root: &Path, path: &str) -> bool {
-    let text = fs::read_to_string(root.join(path)).unwrap_or_else(|error| {
-        panic!("po/POTFILES.in lists {path}, which cannot be read ({error})")
-    });
-    let code: String = text
-        .lines()
-        // Comments are not code to `xgettext` either. Whole-line only: a
-        // marker never shares a line with the `//` that would precede it.
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let code = code_of(&source_text(root, path));
     MARKERS
         .iter()
         .any(|marker| calls_on_a_literal(&code, marker))
@@ -154,6 +199,58 @@ fn marks_a_string(root: &Path, path: &str) -> bool {
 fn calls_on_a_literal(code: &str, marker: &str) -> bool {
     code.match_indices(marker)
         .any(|(at, _)| code[at + marker.len()..].trim_start().starts_with("c\""))
+}
+
+/// A literal handed to a marker, as its bytes stand in the source.
+struct Marked {
+    /// The 1-based line the literal opens on.
+    line: usize,
+    /// The literal's source text, between the opening `c"` and its closing `"`
+    /// — escapes as written, not as either language reads them.
+    raw: String,
+}
+
+/// Every marked literal in `code`, wherever the formatter put it.
+fn marked_literals(code: &str) -> Vec<Marked> {
+    let mut found = Vec::new();
+    for marker in MARKERS {
+        for (at, _) in code.match_indices(marker) {
+            let after = at + marker.len();
+            let opens = after + (code[after..].len() - code[after..].trim_start().len());
+            let Some(body) = code[opens..].strip_prefix("c\"") else {
+                // A marker on something that is not a literal: a message looked
+                // up through a constant, which contributes nothing to extract.
+                continue;
+            };
+            let end = closing_quote(body).unwrap_or_else(|| {
+                panic!("a c-string literal that never closes, at byte {opens} — the source does not compile")
+            });
+            found.push(Marked {
+                line: code[..opens].matches('\n').count() + 1,
+                raw: body[..end].to_owned(),
+            });
+        }
+    }
+    found
+}
+
+/// Where the literal starting just past a `c"` ends.
+///
+/// A backslash consumes what follows it, which is what keeps an escaped quote
+/// from being read as the end. Walking bytes is safe for the same reason it is
+/// enough: `\` and `"` are ASCII, and no byte of a multi-byte character can be
+/// mistaken for either.
+fn closing_quote(body: &str) -> Option<usize> {
+    let bytes = body.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\\' => at += 2,
+            b'"' => return Some(at),
+            _ => at += 1,
+        }
+    }
+    None
 }
 
 #[test]
@@ -188,5 +285,34 @@ fn every_path_listed_in_potfiles_still_marks_a_string() {
         "po/POTFILES.in lists these, and none of them marks a string any more — \
          either the strings moved and their new home is unlisted, or the entry \
          should go: {stale:?}"
+    );
+}
+
+#[test]
+fn every_marked_literal_is_written_on_one_line() {
+    let root = repo_root();
+    let mut literals = 0;
+    let mut spanning = Vec::new();
+
+    for path in listed(&root) {
+        for literal in marked_literals(&code_of(&source_text(&root, &path))) {
+            literals += 1;
+            if literal.raw.contains('\n') {
+                spanning.push(format!("{path}:{}", literal.line));
+            }
+        }
+    }
+
+    assert!(
+        literals > 0,
+        "no marked literal was found in any listed source, which cannot be true \
+         while po/POTFILES.in lists any — the scanner in this file has stopped \
+         recognising the markers, and every check here is passing vacuously"
+    );
+    assert!(
+        spanning.is_empty(),
+        "these marked literals are written across lines, so the msgid xgettext \
+         extracts is not the msgid the program looks up and no translation of \
+         them can ever be found — put each on a single line: {spanning:?}"
     );
 }

@@ -24963,3 +24963,111 @@ their contact-editor behaviour unmeasured; whether the editor lets a handle be
 moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-sixth session)
+
+**The two strings the last session marked for translation could never have been
+translated.** Marking them was the right move and the check that they are
+*listed* was real; what neither established is that `xgettext` reads a literal
+the way `rustc` does. It does not, on exactly one construct, and both of those
+messages used it.
+
+**The construct is a backslash at the end of a line.** Rust drops the newline
+*and* the indentation that follows it, so
+
+```
+c"…the time zone it is in, \
+  %2$s, is not defined…"
+```
+
+is looked up with one space before `%2$s`. `xgettext` has no Rust parser and is
+pointed at these files with `-L C`; C's line splicing drops the newline and
+keeps the indentation, so the extracted msgid carried fifteen spaces there.
+Confirmed against the tool rather than reasoned about — the `.pot` produced by
+the command `po/POTFILES.in` documents held:
+
+```
+"This event repeats until %1$s, and the time zone it is in,               "
+"%2$s, is not defined in this calendar entry in a way that               "
+```
+
+Two keys, one written by the extractor and one asked for at run time, that can
+never meet. And the failure is silent from end to end: extraction succeeds, the
+catalogue looks well-formed, a translator translates it, `gettext` finds no
+entry for the string the program actually passes, and the user reads English.
+Nothing in the build, in CI, or in the existing tests would have said a word —
+the last session's own `catalogue.rs` proof used a short single-line msgid, so
+the machinery it exercised was fine; it was the key that was wrong.
+
+**The rule is that a marked literal is written on one line**, checked in
+`jmap-backend-core/tests/potfiles.rs`, which already owns the question of how a
+translatable string is spelled. The narrower rule — allow the continuation, ban
+the *indentation* after it — was rejected deliberately: a column-zero
+continuation reads alike today and stops doing so the moment someone re-indents
+the block, which is the same silent failure one edit away. So: no newline inside
+the literal at all. The price is two long lines in `jmap-backend-cal/src/ops.rs`,
+and `rustfmt` does not touch the inside of a string literal, so they stay.
+
+**The scanner had to grow to see it.** The existing check only asked whether a
+file calls a marker on a literal; this one needs the literal's *extent*, so
+`marked_literals` walks from the `c"` to the closing quote with backslash
+escapes consuming what follows them, and reports the line. To have a line to
+report, comment lines are now blanked rather than dropped — an index into the
+scanned text still names the line it came from.
+
+**A vacuity guard, because this check is the kind that goes quietly green.**
+The test asserts it found at least one marked literal before asserting none of
+them spans lines. Without that, a scanner that stopped recognising the markers —
+which is precisely what the last session's line-bound matcher did — would report
+success over an empty set. Mutation-checked both ways: with the wrapped literals
+restored the test names both, at the right lines; with every entry of `MARKERS`
+spelled so it matches nothing, the vacuity assertion fires (and takes the
+stale-entry check with it, which is the older guard doing its job).
+
+The runtime behaviour is unchanged by the fix — Rust reads the same string
+before and after — which is exactly why this needed a check rather than a test
+of the message. `jmap-backend-cal/tests/ops.rs` stayed green throughout, as it
+should have.
+
+Tests: +1 in `jmap-backend-core/tests/potfiles.rs`. The default set is unchanged
+at 1157; this lives in the `rust-test-eds` leg with the rest of the i18n rules.
+
+Verified locally: `cargo test --locked` 1157, no failures; the EDS leg
+(`eds-sys`, `evo-sys`, `jmap-backend-*`, `jmap-mail`, `jmap-config`) green;
+`cargo fmt --all --check` clean; `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` clean; `RUSTDOCFLAGS="-D
+warnings" cargo doc --no-deps` clean for both crates touched; `ninja -C build`
+then `ctest --test-dir build` 14/14, functional and EDS-linked legs included.
+`ci/checks.sh` still stops at its first step on this VM (no `reuse`, no `pipx`,
+no `uvx`, no `cargo-deny`), so those were reasoned by hand: no file is added, so
+no SPDX header is missing, and `Cargo.lock` is untouched — no dependency
+changed, so `cargo deny`'s answer is the one it gave on the last green run.
+
+Housekeeping: the disk was full (57G of 58G) and the linker died of `SIGBUS`
+mid-run, which is the failure mode `docs/` has seen before wearing a different
+mask. `rust/target/debug/incremental`, 3.8G of it, was removed; `deps` is still
+20G and will want a real `cargo clean` before long.
+
+No milestone tag. Closed: **the calendar backend's translatable strings are now
+extractable with the msgids the program actually looks up**, which was half of
+the blocker the last session left — the other half stands. New blocker: none of
+its own. Unchanged blockers: there is still no `.pot` in the tree and nothing in
+the build generates one, so "a translator can reach this" still rests on a
+documented command line rather than on a file, and nothing checks the extracted
+`.pot` against the sources; `-L C` on Rust sources remains crude, and the
+`unterminated character constant` warning `jmap-mail/src/provider.rs` draws is
+still unwatched — a marked string between two lifetimes could be swallowed; a
+transition rule outside the counted shape still costs the whole zone, and
+whether any zone Evolution ships is in that state is unmeasured beyond Berlin;
+M10 still has no CI matrix; the calcard directive's two emitters are still ours;
+M9 has no CI job and no GUI tier; M7 still **needs human verification in real
+Evolution**; an `UNTIL` the parser itself refuses is invisible to `jmap-ical`;
+whether Evolution renders an `IMAGE` is unmeasured; the multi-`ORG`/`TITLE`
+"Evolution shows only the first" bet is still unverified; the two `LABEL` `TYPE`
+risks stand; a deathday and a birthday stated as a year alone are still
+invisible; the conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo
+are unverified and therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and
+their contact-editor behaviour unmeasured; whether the editor lets a handle be
+moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
+rendering is unmeasured; and what Evolution's contact editor writes for a
+replaced photo, and into a cleared field, is inferred rather than measured.
