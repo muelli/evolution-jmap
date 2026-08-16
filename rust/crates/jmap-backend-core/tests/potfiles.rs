@@ -69,6 +69,40 @@
 //! away. A long line is the price; `rustfmt` does not touch the inside of a
 //! string literal, so it stays a long line.
 //!
+//! ## And the catalogue in the tree must agree with the sources
+//!
+//! The two rules above are reasoning about what `xgettext -L C` will do. This
+//! last one stops reasoning and reads what it *did*: `po/evolution-jmap.pot` is
+//! the extraction's output, committed, and the messages in it are compared
+//! against the marked literals in both directions.
+//!
+//! That matters because `-L C` is crude in ways nobody has enumerated. One that
+//! was measured: gettext's C lexer treats `'` as opening a character constant
+//! and gives up at the end of the line, so a marked string sharing a line with
+//! an *odd* number of apostrophes — one lifetime, say — is swallowed whole. It
+//! is dropped from the catalogue with nothing but a
+//! `warning: unterminated character constant` naming the line, and
+//!
+//! ```text
+//! const NAME: &'static CStr = N_(c"JMAP");
+//! ```
+//!
+//! is not a strange thing to write. The rule that catches it cannot be "no
+//! lifetime near a string", because that is one specific instance of a class
+//! whose other members are unknown; comparing against what the tool actually
+//! emitted catches the whole class, this instance included.
+//!
+//! Both directions, because both are silent. A message the sources mark and the
+//! catalogue lacks was swallowed or is stale, and ships in English. A message
+//! the catalogue holds and no source marks is text translators spend effort on
+//! that no user will ever see — and is how a *changed* string hides, since the
+//! edit shows up as one loss and one orphan rather than as nothing at all.
+//!
+//! Not checked: the `#:` source references. They move whenever anything above
+//! them moves, and they are hints for a translator rather than anything a
+//! lookup depends on, so holding them exact would make every unrelated edit in
+//! a listed file red for no gain.
+//!
 //! ## Why this crate
 //!
 //! `i18n` is here, so the rule about how translatable strings are spelled is
@@ -253,6 +287,103 @@ fn closing_quote(body: &str) -> Option<usize> {
     None
 }
 
+/// The catalogue `po/extract.sh` writes, as a path under the checkout root.
+const CATALOGUE: &str = "po/evolution-jmap.pot";
+
+/// Every message in the extracted catalogue, in file order.
+///
+/// The header entry — the one with an empty msgid, whose msgstr carries
+/// `Content-Type` and the rest — is metadata rather than a message and is
+/// dropped. So are obsolete entries, which gettext writes commented out as
+/// `#~ msgid`: they are a record of what a message *used* to be and no lookup
+/// can reach them.
+fn catalogue_messages(root: &Path) -> Vec<String> {
+    let path = root.join(CATALOGUE);
+    let text = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "{CATALOGUE} is the catalogue this project's translators work from, \
+             and it could not be read ({error}) — run po/extract.sh to write it"
+        )
+    });
+
+    let lines: Vec<&str> = text.lines().collect();
+    let mut messages = Vec::new();
+    let mut at = 0;
+    while at < lines.len() {
+        let Some(first) = lines[at].strip_prefix("msgid ") else {
+            at += 1;
+            continue;
+        };
+        // A message gettext had to wrap is written as an empty first part
+        // followed by continuation lines, so the parts are joined rather than
+        // taken one at a time.
+        let mut message = quoted(first.trim());
+        at += 1;
+        while at < lines.len() && lines[at].starts_with('"') {
+            message.push_str(&quoted(lines[at].trim()));
+            at += 1;
+        }
+        if !message.is_empty() {
+            messages.push(message);
+        }
+    }
+    messages
+}
+
+/// The text of one `"…"` part of a catalogue entry, escapes resolved.
+fn quoted(line: &str) -> String {
+    let body = line
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("a catalogue line that is not a quoted string: {line}"));
+    unescape(body, "the catalogue")
+}
+
+/// A literal's bytes as the language that owns them reads it.
+///
+/// Both sides of this comparison spell the same small set of escapes the same
+/// way, so one decoder serves for the source and for the catalogue. An escape
+/// outside that set is a `panic!` and not a guess: the two languages agree on
+/// what is written here today, and the first construct where they might not —
+/// Rust's `\u{2014}` against C's `—`, say — must stop this check rather
+/// than be quietly read as one of them.
+fn unescape(raw: &str, whose: &str) -> String {
+    let mut out = String::new();
+    let mut chars = raw.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            out.push(character);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some(other) => panic!(
+                "\\{other} in {whose} is an escape this check does not model, and \
+                 Rust and C need not read it alike — teach `unescape` what it \
+                 means in both before writing it: {raw}"
+            ),
+            None => panic!("a trailing backslash in {whose}: {raw}"),
+        }
+    }
+    out
+}
+
+/// Every marked literal in every listed source, as the program reads it.
+fn marked_messages(root: &Path) -> Vec<String> {
+    listed(root)
+        .iter()
+        .flat_map(|path| {
+            marked_literals(&code_of(&source_text(root, path)))
+                .into_iter()
+                .map(|literal| unescape(&literal.raw, "a source"))
+        })
+        .collect()
+}
+
 #[test]
 fn every_source_that_marks_a_string_is_listed_in_potfiles() {
     let root = repo_root();
@@ -314,5 +445,50 @@ fn every_marked_literal_is_written_on_one_line() {
         "these marked literals are written across lines, so the msgid xgettext \
          extracts is not the msgid the program looks up and no translation of \
          them can ever be found — put each on a single line: {spanning:?}"
+    );
+}
+
+#[test]
+fn every_marked_literal_reached_the_catalogue() {
+    let root = repo_root();
+    let extracted = catalogue_messages(&root);
+    let marked = marked_messages(&root);
+
+    assert!(
+        !marked.is_empty(),
+        "no marked literal was found in any listed source, so this check is \
+         passing over an empty set — the scanner has stopped recognising the \
+         markers"
+    );
+
+    let lost: Vec<&String> = marked
+        .iter()
+        .filter(|message| !extracted.contains(message))
+        .collect();
+
+    assert!(
+        lost.is_empty(),
+        "these strings are marked for translation and are not in {CATALOGUE}, \
+         so no translator is offered them and they ship in English — either the \
+         catalogue is stale (run po/extract.sh) or xgettext did not see them \
+         where they stand: {lost:?}"
+    );
+}
+
+#[test]
+fn every_message_in_the_catalogue_is_still_marked_in_a_source() {
+    let root = repo_root();
+    let marked = marked_messages(&root);
+
+    let orphaned: Vec<String> = catalogue_messages(&root)
+        .into_iter()
+        .filter(|message| !marked.contains(message))
+        .collect();
+
+    assert!(
+        orphaned.is_empty(),
+        "{CATALOGUE} holds these messages and no source marks them any more, so \
+         translators are working on text nobody will ever read — run \
+         po/extract.sh: {orphaned:?}"
     );
 }

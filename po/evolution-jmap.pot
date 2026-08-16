@@ -1,0 +1,54 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR Tobias Mueller <muelli@cryptobitch.de>
+# This file is distributed under the same license as the evolution-jmap package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: evolution-jmap\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-16 02:45+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. TRANSLATORS: shown when a new recurring appointment could not be
+#. saved. %1$s is the date and time the series ends, as it was
+#. written in the appointment; %2$s is a time zone identifier such
+#. as "Europe/Berlin".
+#: rust/crates/jmap-backend-cal/src/ops.rs:369
+#, c-format
+msgid ""
+"This event repeats until %1$s, and the time zone it is in, %2$s, is not "
+"defined in this calendar entry in a way that instant can be converted out of "
+"— so the event was not created. Stating the recurrence as a repeat count "
+"works instead."
+msgstr ""
+
+#. TRANSLATORS: shown when a new recurring appointment could not be
+#. saved, and the reason is not something the user can be pointed
+#. at more precisely than this.
+#: rust/crates/jmap-backend-cal/src/ops.rs:378
+msgid ""
+"This event repeats in a way that cannot be stored on the server, so it was "
+"not created. Stating the recurrence as a repeat count is the spelling that "
+"always works."
+msgstr ""
+
+#. TRANSLATORS: the name of an account type, in the list of account types
+#. Evolution offers when adding an account. A protocol name — leave it as it is
+#. unless your language writes it in another script.
+#: rust/crates/jmap-mail/src/provider.rs:58
+msgid "JMAP"
+msgstr ""
+
+#. TRANSLATORS: the one-line description of the "JMAP" account type, shown
+#. beneath its name in the list of account types.
+#: rust/crates/jmap-mail/src/provider.rs:65
+msgid "For reading and storing mail on JMAP servers."
+msgstr ""
