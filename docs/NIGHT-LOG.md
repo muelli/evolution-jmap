@@ -29960,3 +29960,74 @@ tonight's gap and is cheap enough to repeat rather than trust from
 memory. M7's one remaining gap is still purely human verification in a
 real Evolution session (`docs/manual-test-account-setup.md`); that has
 not changed.
+
+## 2026-08-16 (three-hundred-and-thirteenth session)
+
+**Survey, no claim.** Running on Sonnet. `git fetch origin` shows
+`origin/master` unchanged at `851530c` (the 312th session's tag). Rather
+than re-reading the log's own summary, ran a read-only Explore subagent
+against current source with six concrete checks, then spot-checked its
+two sharpest claims myself before accepting them:
+
+- **`insert_widgets`'s Authentication combo (session 311, `bb94f02`) vs
+  `complete::check`.** `jmap-config/src/complete.rs` never reads
+  `ESourceAuthentication:method` — Password and OAuth 2.0 require
+  identical fields to complete, and nothing in `backend.rs` calls
+  `oauth2::apply`/discovery from the manual combo. Confirmed by grep: no
+  call from `backend.rs` into the OAuth2 client-registration path. So
+  picking "OAuth 2.0" manually (without first running "Look Up Account
+  Details") can produce a committed account with `method=JMAP` and no
+  `[JMAP OAuth2]` client to answer `can_process`/token fetch. **Already
+  found and already deliberately deferred**: `docs/manual-test-account-
+  setup.md`'s own "What this does not cover" section (written by session
+  309, before the combo even existed, and left standing by session 311)
+  flags exactly this as something to check on the first real human run
+  before deciding whether a safety net is needed. Coding a fix now would
+  mean guessing the answer the project has explicitly reserved for that
+  human step — not a new increment, a pre-emption of one.
+- **OAuth2 client_id/secret/endpoint sourcing.** `oauth2_setup.rs`/
+  `oauth2.rs`/`oauth2_service.rs` pull everything from whatever server
+  `config_lookup.rs`'s `EConfigLookupWorker::run` discovers — nothing
+  hardcoded to the mock's test values. Clean.
+- **Unguarded panics across FFI.** Grepped `jmap-config`,
+  `jmap-backend-core`, `jmap-client`, `jmap-backend-collection` for
+  `.unwrap()`/`.expect(`/`panic!` outside test code; every hit is inside
+  a `guard()` closure or off the vfunc path. Nothing new.
+- **`live_server.rs`/`manual-test-live-server.md`.** Session 312's fix
+  (`abca418`-adjacent, `26004c0`) is the only recent change here; no
+  further mismatch against likely real-server behaviour found.
+- **`docs/BACKLOG.md`.** Re-confirmed every entry is genuinely M3/M4/M7
+  edge-case polish, not a mis-filed priority item.
+- **Build state.** Cleaned `rust/target` first (`/` was at 99%, 805M
+  free — see [[disk-fills-from-cargo-target]]; recovered 22.9 GiB).
+  `cargo clippy --workspace --exclude example-module --all-targets
+  --locked -- -D warnings` clean, `cargo fmt --all -- --check` clean,
+  `cargo test --workspace --exclude example-module --locked` green
+  except the same eleven pre-existing `JMAP_FUNCTIONAL_BOOK_CLIENT`-unset
+  failures every prior session has documented.
+
+**Conclusion: nothing unblocked and in-priority remains that this
+session can implement**, matching the 310th session's conclusion and
+independently re-derived rather than trusted. M7's one candidate gap is
+real but intentionally left for the human-verification step it already
+names; real-server readiness (OAuth2, live-server harness, capability
+negotiation) is unchanged and closed; M9 is tagged complete; M10 needs
+infra changes off-limits to this stream. Checked `~/.night-shift-
+escalate` — empty, so the blocker is not a task beyond Sonnet's reach,
+it is the same human-decision/verification gate prior sessions hit.
+
+No commits to `rust/`, `docs/BACKLOG.md`, or `docs/MILESTONES.md` this
+session — only this log entry, pushed on its own. Tests/clippy/fmt were
+re-run (see above) to confirm the gate is still green, but nothing in
+`rust/` changed as a result.
+
+**Next session.** Unchanged: the fastest way to unblock further M7 work
+is a human running `docs/manual-test-account-setup.md` once, including
+picking "OAuth 2.0" manually without running autodiscovery first, and
+recording what actually happens — that observation is what decides
+whether `complete::check` needs to gate on `auth_method` at all, and
+guessing it from here risks building the wrong safety net (or an
+unwanted one, if the maintainer prefers to let a broken manual pick fail
+loudly downstream rather than block `Next` on it). Re-surveying this same
+ground nightly has diminishing returns; the log now has two independent
+confirmations (310th, 313th) of the same conclusion.
