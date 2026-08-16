@@ -29278,3 +29278,10 @@ session) is the server side that test can now point at instead of inventing
 one. M10's container matrix and M7's remaining `insert_widgets` OAuth2-
 triggering question are unchanged and out of scope for the reasons the
 296th–304th sessions already recorded.
+
+## 2026-08-16 (three-hundred-and-seventh session)
+
+**Claiming: fix `JmapConfigLookup::run()`'s inability to discover a
+non-default-port, plaintext JMAP deployment**, found by spiking the
+306th session's own "next session" note before trusting its shape. Running
+on Sonnet.
