@@ -27427,3 +27427,63 @@ not `jmap-config`'s own module — the account-setup module is never the
 process that refreshes a token in the background, and `evolution-source-registry`
 is where OAuth2 credential handling actually lives, matching evolution-ews's
 own placement exactly.
+
+**Delivered:** `jmap-backend-collection`'s module load (`module.rs`) now
+also registers `jmap_config::oauth2_service::Service` against its
+`GTypeModule`, one line beside the existing backend/factory registrations —
+`jmap-backend-collection`'s `Cargo.toml` gained a normal dependency on
+`jmap-config` for it. That is a dependency back-edge against `jmap-config`'s
+existing *dev*-dependency on `jmap-backend-collection` (its own
+account/collection round-trip tests), not a cycle — nothing `jmap-config`'s
+library needs depends on `jmap-backend-collection`, only its test targets do
+— and `cargo build`/`test`/`clippy` all confirm it: no cycle error, and the
+`Cargo.lock` diff is exactly the one new edge.
+
+New test, `jmap-backend-collection/tests/oauth2_service.rs`: register the
+module through the same `GTypeModule` stand-in `tests/factory.rs` and
+`tests/textdomain.rs` already use, then construct a real `EOAuth2Services`
+singleton (`e_oauth2_services_new()`) and ask `e_oauth2_services_find` for a
+source whose `[Authentication] method` is `JMAP` — the exact path a real
+`evolution-source-registry` takes, with no manual `g_object_new` of the
+service anywhere in the test. Confirmed red first: reverting just the
+`module.rs` line failed the test with the assertion's own message ("the
+module load did not register a service that answers to this service's own
+authentication method"), not a compile error, then green again with the line
+restored.
+
+Gates: `cargo test -p jmap-backend-collection`, `cargo test --workspace
+--exclude example-module` (the pre-existing `jmap-functional` CTest-only
+failures outside `ctest` are unchanged and documented, not new), `cargo
+clippy --workspace --exclude example-module --all-targets --locked -- -D
+warnings` clean, `cargo fmt --all --check` clean. `ninja -C build` then
+`ctest --test-dir build` 15/15, `rust-test-eds` and the four `functional-*`
+legs included, so the freshly built `module-jmap-backend.so` itself ran, not
+just the rlib's own test binary. Hit the disk-space-near-miss pattern the
+previous session documented (`ninja`'s release build plus `ctest`'s
+`rust-test-eds` rebuild filled `/` to 97% after the earlier `cargo test`/
+`clippy` runs had already built their own debug `target/`); caught it before
+it went to zero this time and `cargo clean --profile dev` immediately after
+the CMake gate recovered 22.7 GiB. One SPDX-headed new file, hand-checked
+(reuse itself still cannot run on this VM); no new external crates.
+
+**What this does not do.** Nothing constructs an OAuth2 account yet — M7's
+setup UI still has to write `[Authentication] method = JMAP` and the `[JMAP
+OAuth2]` extension's fields (RFC 8414 discovery + RFC 7591 registration,
+both already implemented in `jmap_config::oauth2`) for any of this to run in
+anger. This closes the "is the interface reachable from a real EDS process"
+gap the previous two sessions left open; it does not close "can a user
+actually pick OAuth2 in the account dialog", which is still M7's
+`insert_widgets` and needs a real Evolution session and a display this VM
+lacks. Not marking OAuth2 real-server-readiness COMPLETE for that reason —
+the registration is now real and tested, but nothing in this repository
+drives it end to end yet.
+
+**Next session**: M7's `insert_widgets` (needs human verification in real
+Evolution, still the only remaining vfunc) or picking up the RFC 8414/7591
+wiring into the setup UI's `commit_changes` path, whichever a future session
+judges more tractable. Unchanged blockers: no `.po` translation file exists
+yet (only the `.pot` template); M10 has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier;
+M7 still needs human verification in real Evolution; the OAuth2 consent
+page needs a display this VM lacks; `docs/BACKLOG.md`'s contact/vCard and
+calendar/iCal fidelity items are all still parked there.
