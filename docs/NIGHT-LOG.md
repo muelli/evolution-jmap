@@ -29729,3 +29729,135 @@ half and, per the 297th session's assessment, likely an escalation to
 `claude-opus-5` for the threading/FFI half. Until then, re-surveying this
 same ground nightly has diminishing value — worth the maintainer's
 attention specifically on making that one call.
+
+## 2026-08-16 (three-hundred-and-eleventh session)
+
+**Claiming and delivering: an authentication-method combo in
+`insert_widgets`.** Running on Sonnet. `git fetch origin` shows
+`origin/master` unchanged at `d9d83f9` (the 310th session's tag), so no other
+agent has this.
+
+**The "method-chooser-vs-auto-discovery" framing the 292nd–310th sessions
+inherited was answering the wrong question, on both halves, not just the
+autodiscovery half the 304th session already corrected.** That session found
+`EConfigLookupWorker` (`config_lookup.rs`, now built) is the transparent
+autodiscovery answer and concluded the stock idiom has "no manual
+chooser" — checked against `e-ews-config-lookup.c` alone. Tonight checked the
+*other* half of EWS, the one no prior session had opened:
+`e-mail-config-ews-backend.c`'s own `insert_widgets` (gitlab.gnome.org/GNOME/
+evolution-ews, `master`, fetched live — this VM has internet, confirmed
+working, the same finding the 304th session made and every session since
+reused without re-checking). It builds an `e_mail_config_auth_check_new`
+combo offering NTLM/PLAIN/GSSAPI/**Office365** (its OAuth2 provider), bound
+to `[Authentication] Method` by `"active-mechanism"`. The generic IMAP/POP/
+SMTP backend (`e-mail-config-remote-accounts.c`) does the identical thing.
+**Every stock backend that supports OAuth 2.0 has both**: an autodiscovery
+worker *and* a manual method combo in `insert_widgets`. There never was a
+chooser-vs-auto-discovery fork to resolve — EWS answers "both", and four
+sessions' worth of "blocked on a maintainer decision" was blocked on a
+question the maintainer was never going to need to answer, because upstream
+already had.
+
+**Why this project cannot reuse `e_mail_config_auth_check_new` itself, and
+what it uses instead.** That widget binds to
+`e_mail_config_service_backend_get_settings(backend)` — a `CamelSettings` of
+the scratch *mail* source. `insert_widgets`'s own doc (`## Why this binds to
+the collection, not to get_settings()`, written for the existing three
+entries) already states why that is wrong for this backend: `check_complete`
+and `commit_changes` read and write the *collection* source, not the mail
+source's settings, so a widget bound to `get_settings()` would show and edit
+a value neither vfunc looks at. That reasoning is not new tonight — it is
+what stopped this from being a five-minute port of the stock widget and
+pointed at a hand-built one instead, bound the same way the existing three
+entries are: directly to `[Authentication]` on the *collection*, via
+`e_binding_bind_property`, no `CamelSettings` involved anywhere.
+
+**Confirmed the exact id string against `e-oauth2-service.c`
+(`libedataserver/e-oauth2-service.c`, gitlab.gnome.org/GNOME/
+evolution-data-server, `master`) rather than assumed.**
+`EOAuth2Service::can_process`'s default implementation — the one
+`jmap_config::oauth2_service::Vtable` deliberately leaves unfilled, per that
+module's own doc — compares `[Authentication] Method` against
+`e_oauth2_service_get_name (service)` by exact string equality, and
+`e_source_get_oauth2_access_token_sync` resolves which registered service to
+ask through `e_oauth2_services_find`, which is that same comparison. So the
+combo's OAuth2 entry has to write literally `"JMAP"`
+(`oauth2_service::NAME`), not the generic `"OAuth2"` alias
+`jmap_backend_core::oauth2::method_is_oauth2` also accepts — that alias is
+`e_soup_session_setup_message_credentials`'s routing question ("try bearer
+auth at all?"), a different question from "which service", and writing only
+the generic string would pick no service and fail token fetch. Also confirmed
+`crate::account`'s own doc already pins `"none"` as `ESourceAuthentication:
+method`'s true default (`e-source-authentication.c`, `extension->priv->method
+= g_strdup ("none")`), so the Password entry's id needed no new sentinel.
+
+**Confirmed the mail-source's own forced-NULL `Method` (`mail.rs`'s
+`apply_server`, deliberate and documented) does not conflict.** That NULL is
+written to the *mail* source, where `ESourceCamel` reinterprets the same key
+as a Camel SASL mechanism name — an unrelated meaning on a different object.
+The combo here binds the *collection* source's `[Authentication]`, which is
+what `EOAuth2Service::can_process` and every other read in this crate
+(`account::read`, `complete::check`) already treat as the account's real
+authentication state. Traced this rather than assumed it, because getting it
+backwards would have been exactly the "plausible but wrong" failure mode the
+roadmap's escalation rule warns about, and it is precisely the kind of
+cross-object field-name collision a wrong guess would not have caught until a
+real connect attempt.
+
+**Delivered.** `jmap-config/src/backend.rs`: `AUTH_LABEL` and `AUTH_CHOICES`
+(two entries: `"none"` → "Password", `oauth2_service::NAME` → "OAuth 2.0"),
+and `insert_entries` grew a fourth row — a mnemonic label plus a
+`GtkComboBoxText` between the three entries and the TLS check button, bound
+`authentication`'s `"method"` to the combo's `"active-id"` bidirectionally
+with `SYNC_CREATE`, exactly the pattern the existing rows use. The check
+button and status label shifted down one row each. The existing `notify`
+handler on `[Authentication]` (connected once, for the extension as a whole)
+already covers the new property with no changes of its own —
+`check_complete` gets re-asked and the status label refreshes the moment the
+combo changes, for free. `evo-sys`: `GtkComboBoxText` joins the GTK handles,
+`gtk_combo_box_text_new`/`_append`/`_get_type` join the allowed GTK
+functions, `tests/gtk.rs` grew the matching entries (opaque-size check,
+dispatch-resolves check, class-identity check via the existing table-driven
+tests, no new test functions needed). Three new translatable strings
+("A_uthentication:", "Password", "OAuth 2.0") went through `N_`/`translate`
+like the existing rows'; `po/extract.sh` regenerated the catalogue (also
+picking up stale line numbers in three older `config_lookup.rs` entries that
+nobody had regenerated since — unrelated to tonight's change, just revealed
+by running the script).
+
+**Untestable here, same limit as the rest of `insert_widgets`.** GTK 3 will
+not construct a widget without a display, so nothing here has run this and
+looked at the result — `docs/manual-test-account-setup.md` (updated
+alongside this change: the field list, a new "what it worked means" bullet
+covering both `Method=JMAP` and `Method=none` round-tripping through a real
+`.source` file, and the "What this does not cover" section rewritten to
+match what now exists rather than what was missing) is what a human runs
+next. **Not tagging M7 complete** — this closes the UI gap the round-1/
+round-2 operator entries both flagged, but per the hard rules a GUI change
+stays unconfirmed until a human runs it in real Evolution.
+
+**Gates.** `cargo test -p evo-sys -p jmap-config --locked` green (evo-sys's
+new `GtkComboBoxText` checks included). `cargo test --workspace --exclude
+example-module --locked` green except the same eleven pre-existing
+`JMAP_FUNCTIONAL_BOOK_CLIENT`-unset `jmap-functional` failures every prior
+session's gate has documented (confirmed unchanged by running
+`--exclude jmap-functional` fully green first). `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean.
+`cargo fmt --all -- --check` clean, no reformat needed. `ninja -C build`
+(release) then `ctest --test-dir build` 16/16, `functional-config-lookup`
+included, confirming the OAuth2-discovery-via-autodiscovery half still works
+alongside tonight's manual-combo half. `rust/Cargo.lock` untouched — no new
+dependency. Hit [[disk-fills-from-cargo-target]]'s warning sign early this
+time (`/` at 85% mid-session) and ran `cargo clean --profile dev` pre-emptively
+before the `ninja`/`ctest` run rather than after a failure; recovered ~15 GiB.
+No new source files, so no new SPDX headers to check; `reuse`-relevant
+surface (`po/POTFILES.in`) already listed `backend.rs`.
+
+**Next session.** The remaining M7 gap is purely the human-verification
+loop: run `docs/manual-test-account-setup.md` end to end (now covering the
+combo) in real Evolution, and separately confirm the consent browser round
+trip against a real OAuth2 provider once one is available — neither is
+performable from this VM. If both come back clean, M7's UI surface is
+complete-in-substance and the milestone tag is the human confirmation away,
+not more code. `docs/BACKLOG.md` is unchanged; nothing tonight was
+edge-case polish of a closed backend.
