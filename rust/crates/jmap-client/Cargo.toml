@@ -16,6 +16,9 @@ name = "jmap_client"
 [features]
 default = ["transport-ureq"]
 transport-ureq = ["dep:ureq"]
+# Gates tests/live_server.rs: opt-in integration tests against a real JMAP
+# deployment, never run by default or in CI. See docs/manual-test-live-server.md.
+live-server = []
 
 [dependencies]
 evolution-jmap-proto = { workspace = true }
