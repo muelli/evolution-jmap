@@ -121,7 +121,11 @@
 //! editor, with one line behind them, so retyping either rewrites the other.
 //! See `context_slot` for the measurement and [`states_context`] for what the
 //! save then does about the context left off. An `EMAIL` is not narrowed: EDS
-//! files it by position rather than by `TYPE`.
+//! files it by position rather than by `TYPE`. A phone's `features` are
+//! narrowed the same way and for the same reason — `TYPE=WORK,VOICE,FAX` fills
+//! the Business Phone and the Business Fax field alike, and without a context
+//! `TYPE=VOICE,FAX` fills neither, leaving the number in no field at all. See
+//! `feature_slot` and [`states_phone_feature`].
 //!
 //! `onlineServices` is the one property vCard 3.0 has no line for at all. RFC
 //! 9553 §2.3.2 names the contact as one service or protocol knows them; RFC
@@ -244,12 +248,16 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
 /// matches more than one when the line carries more than one.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
-/// JSContact phone `features` and their vCard `TYPE` spelling.
+/// JSContact phone `features` and their vCard `TYPE` spelling, **most
+/// specific first**.
+///
+/// A line states at most *one* of them, for the reason [`CONTEXTS`] gives, and
+/// the order here is which one — see [`feature_slot`].
 const PHONE_FEATURES: [(&str, &str); 5] = [
-    ("voice", "VOICE"),
-    ("fax", "FAX"),
     ("mobile", "CELL"),
     ("pager", "PAGER"),
+    ("fax", "FAX"),
+    ("voice", "VOICE"),
     ("video", "VIDEO"),
 ];
 
@@ -492,10 +500,9 @@ pub fn maps_context(key: &str) -> bool {
 /// `TYPE` at all, which is a slot of its own: EDS reads such a line as
 /// `E_CONTACT_ADDRESS_OTHER`.
 ///
-/// What is *not* narrowed is a phone's `features`, which pick which kind of
-/// phone field the number lands in rather than which context's, and an
-/// `EMAIL`, which EDS files by position (`E_CONTACT_EMAIL_1` to `_4`) and not
-/// by `TYPE` at all.
+/// A phone's `features` are narrowed the same way and for the same reason, by
+/// [`feature_slot`]. What is *not* narrowed is an `EMAIL`, which EDS files by
+/// position (`E_CONTACT_EMAIL_1` to `_4`) and not by `TYPE` at all.
 ///
 /// The context left off the line is the save's problem, and
 /// [`states_context`] is the answer.
@@ -528,6 +535,58 @@ pub fn states_context(contexts: Option<&Value>, key: &str) -> bool {
 /// Whether the vCard mapping covers a JSContact phone `features` key.
 pub fn maps_phone_feature(key: &str) -> bool {
     PHONE_FEATURES.iter().any(|(mapped, _)| *mapped == key)
+}
+
+/// The one feature `TYPE` a `TEL` carries, or `None` for a phone whose
+/// features vCard 3.0 can spell none of.
+///
+/// [`context_slot`]'s problem one axis over: EDS picks the phone field by
+/// matching `TYPE` there too, and a number that says it is both a voice line
+/// and a fax says it to two fields the user edits separately —
+/// `E_CONTACT_PHONE_BUSINESS` wants `WORK`+`VOICE`, `E_CONTACT_PHONE_BUSINESS_FAX`
+/// wants `WORK`+`FAX`, and one `TEL;TYPE=WORK,VOICE,FAX` satisfies both, so
+/// retyping the office number silently moves the office fax with it. Without a
+/// context it is worse than duplication: the two unqualified fields
+/// `E_CONTACT_PHONE_OTHER` (`VOICE`) and `E_CONTACT_PHONE_OTHER_FAX` (`FAX`)
+/// are exclusive, and a bare `TEL;TYPE=VOICE,FAX` lands in *neither* — the
+/// number is in no field of the contact editor at all. Measured against
+/// libebook-contacts 3.52 by `eds-sys`'
+/// `a_line_wearing_several_feature_types_reaches_two_fields_or_none` and
+/// `editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other`.
+///
+/// **Which** feature survives is [`PHONE_FEATURES`]' order, and most of that
+/// order is EDS's own, read off the pairs where EDS resolves the collision
+/// itself: `VOICE,CELL` and `FAX,CELL` reach the mobile field alone, and
+/// `VOICE,PAGER` and `FAX,PAGER` the pager alone, so a feature naming a device
+/// outranks the two unqualified ones. `VIDEO` is last because this EDS knows
+/// no such `TYPE`: alone it reaches nothing, so it can never be the slot while
+/// another feature is available to be stated. `voice` sits just above it as
+/// the unmarked default — a `TEL;TYPE=WORK` with no feature at all already
+/// fills the *voice* field, so `voice` is the feature still said when it is
+/// left off, and `fax` the one that would be lost.
+///
+/// Two orderings EDS does not decide and this mapping does: `mobile` over
+/// `pager` (`CELL,PAGER` fills both fields, so there is nothing to read off),
+/// and `fax` over `voice` (`VOICE,FAX` fills neither). Neither pick loses
+/// anything from the *card* — the feature left off the line is kept by
+/// [`states_phone_feature`] — only which of the contact editor's phone fields
+/// the number appears in.
+fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
+    type_names(&PHONE_FEATURES, features).into_iter().next()
+}
+
+/// Whether the line written for a phone with these `features` states this
+/// feature.
+///
+/// [`states_context`] for features: a feature `feature_slot` left off the line
+/// is not one the user can have cleared by not typing it back.
+pub fn states_phone_feature(features: Option<&Value>, key: &str) -> bool {
+    let Some(slot) = feature_slot(features) else {
+        return false;
+    };
+    PHONE_FEATURES
+        .iter()
+        .any(|(mapped, name)| *mapped == key && *name == slot)
 }
 
 /// Whether the vCard mapping covers a JSContact address component kind.
@@ -1347,7 +1406,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             continue;
         }
         let mut types: Vec<&str> = context_slot(phone.contexts.as_ref()).into_iter().collect();
-        types.extend(type_names(&PHONE_FEATURES, phone.features.as_ref()));
+        types.extend(feature_slot(phone.features.as_ref()));
         if phone.pref.is_some() {
             types.push("PREF");
         }
