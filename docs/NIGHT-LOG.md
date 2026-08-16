@@ -27487,3 +27487,118 @@ directive's two emitters are still ours; M9 has no CI job and no GUI tier;
 M7 still needs human verification in real Evolution; the OAuth2 consent
 page needs a display this VM lacks; `docs/BACKLOG.md`'s contact/vCard and
 calendar/iCal fidelity items are all still parked there.
+
+## 2026-08-16 (two-hundred-and-eighty-ninth session)
+
+**Claiming: `jmap-config`'s `insert_widgets`** — M7's one remaining vfunc, and
+the current priority's top item now that the OAuth2 interface is registered
+and reachable. Note on process before the rest of this entry: this session
+read the roadmap and prior state, then went straight to research and
+implementation before appending this claim — the lock-then-push step the
+roadmap asks for first did not happen first. Checked before writing this up
+that it did not matter in practice: `git fetch origin` shows `origin/master`
+unchanged from this session's start (`86141e4`), so nothing collided. Noting
+it anyway so the deviation is on the record, not silently corrected.
+
+Read `insert_widgets` cold rather than guessing at Evolution's own idiom: cloned
+`gitlab.gnome.org/GNOME/evolution` at tag `3.52.3` and read
+`e-mail-config-remote-accounts.c` (the IMAPX/POP3/NNTP config backend, the
+closest existing example of entries bound to a server) and
+`e-mail-config-service-page.c`/`e-mail-config-assistant.c` (how the page and
+assistant learn an entry changed). Two findings shaped the implementation:
+
+- Evolution's own backends bind their entries to
+  `e_mail_config_service_backend_get_settings(backend)` — a `CamelSettings` of
+  the *scratch mail source* being built. JMAP's `check_complete` and
+  `commit_changes` (previous sessions) both read and write the *collection*
+  instead, for reasons already documented on those vfuncs, so binding entries
+  to `get_settings()` here would edit a value neither vfunc looks at. The new
+  entries bind straight to the collection's `[Authentication]` extension
+  instead, consistent with the rest of the class.
+- That choice has a real consequence upstream did not have to solve:
+  `e-mail-config-service-page.c`'s `mail_config_service_page_new_candidate`
+  connects a `notify` handler on `get_settings()` that calls
+  `e_mail_config_page_changed`, which is how the assistant's *Next* button
+  (`e-mail-config-assistant.c`, `mail_config_assistant_page_changed`) learns to
+  ask `check_complete` again after a keystroke. Binding to the collection
+  instead means that watcher never fires, so this connects its own `notify`
+  handler on the `[Authentication]` extension and calls
+  `e_mail_config_page_changed` itself — the same effect, aimed at the object
+  this dialog actually edits. `g_signal_connect_object` rather than a plain
+  `g_signal_connect`: it disconnects itself when either object involved is
+  finalized, which avoids tracking a handler id or adding a `dispose`
+  override.
+
+**New FFI surface, kept to one line**: `e_mail_config_page_changed` needed a
+new `evo-sys` binding, and its parameter type (`EMailConfigPage`, the
+interface every config page implements — confirmed against
+`e-mail-config-service-page.c`'s own `G_IMPLEMENT_INTERFACE` line, not
+assumed) joined `EMailConfigServicePage` as an opaque handle rather than being
+bindgen-generated, the same treatment and for the same reason. `wrapper.h`
+needed a new `#include <mail/e-mail-config-page.h>` — not pulled in
+transitively by the two includes already there. `evo-sys/tests/page.rs` gained
+a test in the same shape as its existing one: the symbol resolves, and the new
+handle carries no layout. No struct is subclassed and no layout is claimed, so
+this did not need the escalation the eds-sys `EOAuth2Service` vtable slice did
+two sessions ago — it is a link check and an opaque pointer, not new ABI
+surface this project owns the shape of.
+
+**Delivered**: `insert_widgets` builds a two-row `GtkGrid` — a mnemonic label
+and a `GtkEntry` for the server and for the login name — packed into the
+`GtkBox` Evolution hands the vfunc, each entry bound bidirectionally
+(`G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE`) to the collection's
+`[Authentication] host`/`user`. Both label strings are marked for translation
+(`N_`, looked up with `translate` since a `GtkLabel` copies the string and
+there is no per-call pointer to keep alive the way `translate_static` exists
+for) — `rust/crates/jmap-config/src/backend.rs` joined `po/POTFILES.in`, and
+`po/extract.sh` regenerated the `.pot` with the two new msgids.
+
+**What is deliberately not here, recorded rather than worked around**: a port
+entry and a security (TLS) toggle — `port`/`secure` stay at
+`from_identity`'s defaults (443, TLS) for every account this dialog can
+create — and a status label for `Incomplete`'s refusal reason, which
+`check_complete` still computes and throws away for want of anywhere on the
+page to put it. All three are real gaps, listed in `backend.rs`'s and
+`lib.rs`'s module docs rather than left to be discovered.
+
+**Untestable, as the roadmap's rule for this milestone expects.** GTK 3 will
+not construct a widget without a display connection this VM does not have, so
+nothing here ran `insert_widgets` and looked at the result. What could be
+checked was checked: `evo-sys`'s `tests/gtk.rs`/`tests/page.rs` hold every GTK
+and Evolution entry point this function calls against the linked library and
+the types it takes, and `jmap-config`'s own suite (67 tests) plus
+`cargo doc`'s intra-doc-link check are green. **Marking this needs human
+verification in real Evolution — not tagging M7 complete.** What a human
+still has to confirm: the page actually shows two rows, they arrive filled
+with what `setup_defaults` already offers, editing either updates the
+collection, and *Next*/*Apply* correctly re-enables and re-disables as the
+host is cleared and retyped (the `g_signal_connect_object` wiring this session
+added specifically for that last point).
+
+Gates: `cargo build -p evo-sys`, `cargo test -p evo-sys` (new
+`the_page_changed_entry_point_resolves_and_its_handle_carries_no_layout`
+included), `cargo clippy -p evo-sys --all-targets --locked -- -D warnings`,
+`cargo build`/`test`/`clippy`/`fmt --check -p jmap-config` (67 tests, all
+green), `cargo doc -p jmap-config --no-deps` clean of broken intra-doc links
+after fixing two this session's own doc edits introduced. `ninja -C build`
+then `ctest --test-dir build` 15/15, `rust-test-eds` and `translations`
+included, so the rebuilt `module-jmap-configuration.so` itself linked and its
+tests ran. `cargo test --workspace --exclude example-module --locked` and
+`cargo clippy --workspace --exclude example-module --all-targets --locked --
+-D warnings` both clean; the eleven `jmap-functional` failures outside `ctest`
+are the pre-existing, documented ones (`JMAP_FUNCTIONAL_BOOK_CLIENT` unset),
+unchanged and not new. `cargo fmt --all --check` clean. `cargo clean --profile
+dev` run before and after the CMake gate, per the disk-space lesson two
+sessions ago; `/` stayed under 80% throughout. No new external crates;
+`Cargo.lock` untouched. No new files, so no new SPDX headers to check.
+
+**Next session**: a port entry and a security toggle (same binding pattern,
+now established — `port` needs a string transform the host/user rows did not,
+the way `mail_child.rs`'s `secure_to_camel_method` already shows for the
+collection-backend side of this exact field), or the status label for
+`Incomplete`'s reason. Either still ends with "needs human verification in
+real Evolution" until M9's Xvfb tier exists or a maintainer opens the dialog by
+hand. Unchanged blockers: M10 has no CI matrix; the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier; the OAuth2 consent
+page needs a display this VM lacks; `docs/BACKLOG.md`'s contact/vCard and
+calendar/iCal fidelity items are all still parked there.
