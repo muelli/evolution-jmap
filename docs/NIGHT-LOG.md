@@ -25517,3 +25517,113 @@ unmeasured; whether the editor lets a handle be moved between the Home and Work
 slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; and what
 Evolution's contact editor writes for a replaced photo, and into a cleared
 field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-seventy-first session)
+
+**Last session measured the zones on the *save* path and closed that blocker
+with the sentence "a `VTIMEZONE` written by something else — an Exchange
+invitation, a `.ics` from another client — can still be in a shape this refuses,
+and nothing measures that population." That population is measured now, and
+`jmap-ical/src/zone.rs` refused seven of its 83 definitions.**
+
+The corpus is calcard 0.3.9's own `resources/ical`, which is already unpacked in
+the registry because calcard is a dependency: 301 iCalendar files carrying 83
+distinct `VTIMEZONE` components, written by Microsoft Exchange, Zimbra, Lotus
+Notes, Apple, Google, khal, ical.js and others. Each was put into a document
+with a recurring event in its own zone and a UTC `UNTIL`, and driven through
+`ical_to_event`; a definition this module cannot read leaves the `UNTIL`
+verbatim and `maps_recurrence_rule` refuses the rule, which is what was counted.
+Baseline: **76 counted, 7 refused.** After this session: **81 counted, 2
+refused.**
+
+**The two parts real producers write that this did not read.**
+
+1. *`WKST`.* Exchange (`PRODID:Microsoft CDO for Microsoft Exchange`) and Zimbra
+   both write `FREQ=YEARLY;WKST=MO;INTERVAL=1;BYMONTH=10;BYDAY=-1SU`, and the
+   part fell to the catch-all that refuses a rule saying more than was
+   understood. §3.3.10 gives `WKST` a meaning in exactly two rules — a `WEEKLY`
+   one repeating at an interval, and a `YEARLY` one carrying a `BYWEEKNO` —
+   and this module counts neither, since an `INTERVAL` other than 1 is refused
+   and a `BYWEEKNO` falls to that same catch-all. So no value of it can move a
+   transition read here, and it is passed over without its value being read,
+   which is the reason it can be passed over at all. Three of the seven.
+
+2. *`BYHOUR`/`BYMINUTE`.* Lotus Notes 6.0 states the time of day in the rule as
+   well as in the `DTSTART`: `FREQ=YEARLY;BYMINUTE=0;BYHOUR=2;BYDAY=-1SU;
+   BYMONTH=10`. In a `YEARLY` rule §3.3.10 makes these expand, and a field
+   expanded from one value to one value is a replacement for that field of the
+   `DTSTART`'s time of day — so the new `restated` helper overwrites hour,
+   minute and second individually and leaves the rest of the `DTSTART` alone.
+   Two of the seven, and one of them reached the corpus through khal, so this
+   is not one producer's habit.
+
+Notes always restates what the `DTSTART` already says, so the corpus cannot tell
+"apply the rule's hour" from "ignore it". A zone whose `DTSTART` says midnight
+and whose rule says two o'clock does, and an `UNTIL` in the two hours between
+them is the only place the difference shows — that is
+`a_time_of_day_the_rule_states_is_the_one_the_transition_happens_at`, and it is
+the test that fails if `restated` is dropped.
+
+**What is still refused, and rightly.** `Europe/Prague` in one file carries
+`TZOFFSETFROM:+5744` — Prague's local mean time, +00:57:44, written as if the
+seconds were the minutes; `utc_offset` holds an offset under 24 hours, so 57
+hours is refused and the definition with it. And ical.js's
+`Makebelieve/RRULE_UNTIL` states `FREQ=YEARLY;INTERVAL=5`, which is synthetic
+test data rather than a producer's shape, so aligning intervals was left
+undone rather than implemented for one fixture.
+
+**A range check the tests did not reach.** `restated` refuses a field outside
+§3.3.10's range, and mutating that check away reddened nothing, so
+`a_time_of_day_outside_the_range_it_is_stated_in_is_refused` was added rather
+than the check removed: an hour of 25 carried into the arithmetic moves the
+transition into the following day, which is the one thing about it the rule did
+state. Only the top of each range is reachable from a document — calcard's
+parser drops a negative `BYHOUR` before this layer sees the rule, and it then
+arrives as a rule stating no hour at all, which is why that case is described in
+the test and not asserted.
+
+**Mutation-checked, four ways, each run and reverted.** The `WKST` arm removed;
+`restated`'s answer discarded; a list read as its first value instead of
+refused; and the range check dropped. Each reddens exactly one of the new tests
+and no others.
+
+Tests: +5 in `jmap-ical/tests/event.rs`. The default set is 1181 → 1186.
+
+Verified locally: `cargo test --locked` 1186, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `ninja -C build` then `ctest --test-dir build`
+15/15, functional, EDS-linked and packaging legs included. `ci/checks.sh` still
+stops at its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no
+`cargo-deny`), so those were reasoned by hand: no file is added — the corpus
+harness was a throwaway and is deleted — and `Cargo.lock` is untouched, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Closed: **the receive-path population is measured, and the
+parts Exchange, Zimbra and Lotus Notes write are read rather than refused.**
+
+**What the measurement does not carry forward, said plainly.** The corpus is not
+committed: calcard's `resources/ical` is a dependency's test data of mixed
+provenance, and vendoring 83 third-party `.ics` files into this repository for a
+one-off count is not a licensing question worth taking in the dark. So the
+*number* — 76 → 81 of 83 — is a fact about today's calcard and today's code, and
+nothing re-runs it. What is committed is the shapes: a test per producer idiom,
+each written out with the producer named, so a regression on any of them is
+red. A producer whose habits are in none of those 301 files is still
+unmeasured.
+
+Unchanged blockers: no `.po` exists, and whether this repository's first
+translation should be written by an autonomous session is a maintainer's call;
+`gettext` is not in `Containerfile.ci`, so the `.pot` in the tree is trusted to
+have come from `po/extract.sh`; M10 still has no CI matrix; the calcard
+directive's two emitters are still ours; M9 has no CI job and no GUI tier; M7
+still **needs human verification in real Evolution**; an `UNTIL` the parser
+itself refuses is invisible to `jmap-ical`; whether Evolution renders an `IMAGE`
+is unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is
+still unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday
+stated as a year alone are still invisible; the conventional URI schemes for
+AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled;
+`X-TWITTER` and `X-SIP` are unmapped and their contact-editor behaviour
+unmeasured; whether the editor lets a handle be moved between the Home and Work
+slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured; and what
+Evolution's contact editor writes for a replaced photo, and into a cleared
+field, is inferred rather than measured.
