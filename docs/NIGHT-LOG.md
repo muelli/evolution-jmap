@@ -27809,3 +27809,28 @@ harness. Unchanged blockers: M10 has no CI matrix; the calcard directive's two
 emitters are still ours; M9 has no CI job and no GUI tier; the OAuth2 consent
 page needs a display this VM lacks; `docs/BACKLOG.md`'s contact/vCard and
 calendar/iCal fidelity items are all still parked there.
+
+## 2026-08-16 (two-hundred-and-ninety-second session)
+
+**Claiming: `jmap-config`'s OAuth2 discovery-and-registration glue.** The
+previous session's "next session" note names this as the current priority's
+next unblocked item — real-server readiness, the account-setup side of
+`EOAuth2Service` discovery. `git fetch origin` at claim time shows
+`origin/master` unchanged at `4fd2b17`, so no other agent has this.
+
+Scope, deliberately narrow: `jmap_client::oauth` already does RFC 8414
+discovery and RFC 7591 registration, tested end to end against `jmap-mock`
+(`jmap-client/tests/oauth_discovery.rs`); `jmap-config::oauth2` already stores
+the result on an `ESource` extension; `jmap-config::oauth2_service` already
+reads it back into `EOAuth2Service`'s vfuncs. What is missing between those
+two is the one call that turns a host name into a `Config` — discover, check
+the deployment offers the authorization-code grant, register this client if
+it offers RFC 7591. That is `oauth2_setup::discover_and_register`, a plain
+function taking a `Transport` and a host/port/secure triple (the same shape
+`jmap_backend_core::source::origin` already validates every JMAP connection
+against) plus a caller-supplied `redirect_uri`. It deliberately does not pick
+the redirect URI or drive a browser to the authorization endpoint — that is
+the consent exchange, which needs a display this VM lacks, and is
+`insert_widgets`'s job in a later, GUI-verified increment. Tested against
+`jmap-mock` the same way `jmap-client`'s own discovery tests are, with no
+`ESource` and no display needed.
