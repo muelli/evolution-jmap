@@ -14,3 +14,10 @@
  * page itself stays an opaque handle (see build.rs); this is here so that the
  * accessor's declaration is. */
 #include <mail/e-mail-config-service-page.h>
+
+/* The interface that page implements, for `e_mail_config_page_changed` —
+ * `insert_widgets`'s way of telling the assistant an entry changed so
+ * `check_complete` is asked again. Not pulled in by the two includes above:
+ * `e-mail-config-service-page.h` reaches `e-mail-config-activity-page.h`,
+ * which does not include this one either. */
+#include <mail/e-mail-config-page.h>

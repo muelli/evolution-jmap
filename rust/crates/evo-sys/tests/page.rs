@@ -63,3 +63,34 @@ fn the_page_handle_carries_no_layout() {
         "EMailConfigServicePage is no longer opaque"
     );
 }
+
+/// `insert_widgets` reaches `e_mail_config_page_changed` through the page
+/// `e_mail_config_service_backend_get_page` hands back, cast straight to the
+/// interface handle rather than through any accessor — the same
+/// pointer-is-the-same-object cast `E_MAIL_CONFIG_PAGE()` is in C, and sound
+/// for the same reason `build.rs` writes down: `e-mail-config-service-page.c`
+/// (tag 3.52.3) implements `EMailConfigPage` on exactly this type. Nothing
+/// here can check that implements-relationship at runtime without a display —
+/// `e_mail_config_service_page_get_type` is not part of this crate's allowed
+/// surface — so what this test can hold down is the half that fails silently
+/// otherwise: the symbol resolves, and the handle it takes carries no layout.
+#[test]
+fn the_page_changed_entry_point_resolves_and_its_handle_carries_no_layout() {
+    let changed: unsafe extern "C" fn(*mut EMailConfigPage) = e_mail_config_page_changed;
+    // A variable of the erased pointer type, as in the entry-point check
+    // above: clippy's `useless_ptr_null_checks` (rightly) refuses a direct
+    // `fn as *const ()` cast, since a function pointer is never null, but the
+    // check this is standing in for is a *link* check — does the symbol
+    // resolve in the library this crate links — for which going through a
+    // variable is what the rest of this file already does.
+    let address: *const () = changed as *const ();
+    assert!(
+        !address.is_null(),
+        "e_mail_config_page_changed resolved to NULL"
+    );
+    assert_eq!(
+        size_of::<EMailConfigPage>(),
+        0,
+        "EMailConfigPage is no longer opaque"
+    );
+}
