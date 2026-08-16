@@ -27970,3 +27970,90 @@ saved `.source` file naming `[JMAP OAuth2]`, parsed in a process that has not
 yet called `apply`/`read` on that particular source, would silently drop the
 group. Small, TDD-able without a display (GType registration, no widget),
 and does not touch the open design question at all.
+
+**Delivered, as scoped.** Both `e_module_load` entry points —
+`jmap-backend-collection::module::load` (`module-jmap-backend.so`, loaded
+into `evolution-source-registry`, where a saved account's `.source` is first
+parsed from disk) and `jmap-config::module::load` (`module-jmap-configuration.so`,
+loaded into Evolution's shell, which parses every `ESource` it receives from
+the registry over D-Bus into its own local objects the same way) — now call
+`jmap_config::oauth2::ensure_registered()` once, alongside their existing
+type registrations. Both calls are unconditional on every `load()`, matching
+`ensure_registered`'s own doc: it wraps a `register_static`, which is
+idempotent, so calling it every time the module is (re)loaded costs nothing
+and needs no guard.
+
+**Not a `register_dynamic` call, and the module docs now say why.** The
+three existing registrations in each `load()` (`JmapCollectionBackend`,
+`JmapCollectionFactory`, `oauth2_service::Service` / `JmapConfigServiceBackend`)
+are all tied to the `GTypeModule` GLib hands `load()`, so they unregister
+when the module is unused and re-register on the next use — the whole reason
+those functions take `type_module` at all. `[JMAP OAuth2]`'s extension type
+is different: it was already registered statically (`register_static`, no
+`type_module`) by the session that built the storage, because
+`e_source_get_extension`'s lookup does not care which module (if any) owns
+an `ESourceExtension` subclass, only that one answers to the name — the same
+reason EDS's own extension types are not module-scoped either. So this
+increment did not change that shape, only added the missing call.
+
+**Tested against the actual failure mode, not the mechanism.** Both new
+tests (`jmap-backend-collection/tests/oauth2_extension.rs`,
+`jmap-config/tests/oauth2_module.rs`) are their own test binary — Cargo gives
+each `tests/*.rs` file its own process, the same isolation
+`tests/textdomain.rs` already relies on for exactly this reason — and neither
+calls `jmap_config::oauth2::apply`/`read` anywhere. Each registers the
+`GTypeModule` stand-in `tests/factory.rs`/`tests/oauth2_service.rs` already
+use, calls `load()` through it, builds a fresh `ESource`, and calls
+`e_source_get_extension` for `[JMAP OAuth2]` directly — the same call EDS's
+own keyfile parser makes. Confirmed red first: reverting just the
+`ensure_registered()` line in each `module.rs` (checked one crate at a time)
+fails that crate's new test with `e_module_load did not register the [JMAP
+OAuth2] extension type`, not a compile error; green again with the line
+restored.
+
+**What this does not do.** Nothing writes a `[JMAP OAuth2]` group in the
+first place yet — that is still the still-open GTK wiring
+(`oauth2_setup::discover_and_register` into `insert_widgets`) the 292nd
+session's note describes, itself waiting on the maintainer's open design
+question about surfacing an auth method in the assistant. This increment
+only makes sure that once something does write one, every process that
+parses the resulting `.source` file recognises the group rather than
+silently dropping it — a prerequisite either answer to that design question
+needs, so it did not seem worth waiting on.
+
+Gates: `cargo test -p jmap-backend-collection --test oauth2_extension` and
+`cargo test -p jmap-config --test oauth2_module` (both red-then-green, as
+above). `cargo test --workspace --exclude example-module --locked` green
+except the eleven pre-existing, documented `jmap-functional` failures outside
+`ctest` (`JMAP_FUNCTIONAL_BOOK_CLIENT` unset — unchanged, not new). `cargo
+clippy --workspace --exclude example-module --all-targets --locked -- -D
+warnings` clean. `cargo fmt --all --check` clean, no reformat needed. `cargo
+doc -p jmap-config -p jmap-backend-collection --no-deps` has the same five
+pre-existing warnings in `oauth2.rs` as every prior session and no new ones.
+`ninja -C build` (release) then `ctest --test-dir build` 15/15 — `rust-test-eds`
+and all four `functional-*` legs included, so both rebuilt `.so`s themselves
+linked and ran. `cargo clean --profile dev` after the CMake gate recovered
+24 GiB; `/` stayed at 82% before and 58% after, never near the disk-space
+near-miss two sessions ago. `ci/checks.sh` still stops at its first step on
+this VM (no `reuse`/`pipx`/`uvx`/`cargo-deny`); both new files carry an SPDX
+`GPL-3.0-or-later` header, checked by hand; no new dependencies, so nothing
+for `cargo-deny` to weigh and `Cargo.lock` is untouched (confirmed with
+`git diff --stat`). No new translatable strings (doc comments and one
+function call each), so `po/POTFILES.in`/`po/extract.sh` needed no changes.
+
+No milestone tag — this is a correctness fix underneath the OAuth2 storage
+and interface work, not a milestone of its own.
+
+**Next session**: the two items the 292nd session's note and the operator
+verification both still leave open — (1) the maintainer's open design
+question on whether the assistant surfaces an authentication-method choice
+or auto-discovers and uses OAuth2 transparently, which this session
+deliberately did not decide; and (2) once that is answered, wiring
+`oauth2_setup::discover_and_register` into `insert_widgets`, which will need
+a background-thread/main-loop marshalling design over GTK objects — a
+genuine escalation candidate if a future session judges the concurrency
+reasoning involved to be beyond confident Sonnet reach, per the roadmap's own
+rule. Unchanged blockers: M10 has no CI matrix; the calcard directive's two
+emitters are still ours; M9 has no CI job and no GUI tier; the OAuth2 consent
+page needs a display this VM lacks; `docs/BACKLOG.md`'s contact/vCard and
+calendar/iCal fidelity items are all still parked there.
