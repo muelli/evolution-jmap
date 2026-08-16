@@ -24636,3 +24636,129 @@ the editor lets a handle be moved between the Home and Work slots at all is
 unknown; a `VALUE=uri` photo's rendering is unmeasured; and what Evolution's
 contact editor writes for a replaced photo, and into a cleared field, is
 inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-third session)
+
+**The blocker the last three sessions each named as the real defect is closed:
+a UTC `UNTIL` beside a `TZID` now converts, and the commonest recurring save in
+Evolution goes from an error dialog to a save.**
+
+**The insight is that the zone database was never needed.** RFC 5545 §3.6.5 says
+a `TZID` is defined by the `VTIMEZONE` *in the same object* — so a document that
+names a zone carries the rules for it. The reason this looked like a dependency
+problem is that the reading side had only ever asked the definition one question
+("which IANA zone is this?", `zone_names`) and thrown the component away. Keeping
+it answers the other one: what the offset was at a given instant. New module
+`jmap-ical/src/zone.rs`, ~200 lines, no new dependency.
+
+**What it evaluates, and what it refuses.** For each `STANDARD`/`DAYLIGHT`
+observance it collects the instants the zone changed offset — the `DTSTART`
+itself, every `RDATE`, and the occurrences of an `RRULE` — each resolved against
+the observance's own `TZOFFSETFROM`, which is how §3.6.5 dates one. The latest
+at or before the target instant wins and its `TZOFFSETTO` is the answer; an
+instant before every transition gets the earliest one's `TZOFFSETFROM`, the only
+thing the definition says about the zone before it starts describing it.
+
+Only the shape a transition rule is actually written in is counted: `FREQ=YEARLY`
+at interval 1, naming one day of one month. `INTERVAL` other than 1, a weekday
+with no ordinal (`BYDAY=SU` is every Sunday of the month, a set and not a
+transition), and — deliberately — **any part outside that handful** are refused,
+and a refusal costs the whole zone rather than the one observance. Half a
+definition is a different zone. A refusal lands exactly where the code was
+before this session: the instant is kept verbatim, `writable` refuses it,
+`maps_recurrence_rule` reports it, and a create is refused with the message the
+last session wrote. So the change can only turn refusals into saves, never the
+other way.
+
+**Only two occurrences of each rule are generated**, for the last year the rule
+can still have one at or before the target and the year before it. The second is
+not an optimisation — it is the whole southern hemisphere: in Auckland a January
+instant is governed by the *previous* September's transition, and both of that
+year's transitions are still to come.
+
+**The mutations, and two that survived and were worth the tests they cost.**
+Eight run and reverted. `onset <= target` made strict, the pre-history fallback
+dropped, the weekday numbering moved by one, an unknown rule part ignored, the
+`DTSTART` not counted as an occurrence — each reddened the expected test and
+nothing else. Two survived a first pass and are the interesting ones:
+
+- *Only the target year as a candidate.* Survived, because a Berlin winter date
+  falls back to the observances' own `DTSTART`s and those repeat the same annual
+  phase — so the naive answer is right by accident. It is right by accident for
+  every northern zone whose observances were written down in the usual order.
+  `a_summer_that_began_last_year_is_still_the_offset_in_force` drives Auckland,
+  where the two observances start in *different* years (the DST-end rule changed
+  and the DST-start rule did not, which is the ordinary state of a zone file) and
+  the accident gives an answer an hour out.
+- *An observance rule's own `UNTIL` ignored.* Survived, because the year-level
+  bound already excludes most of it. `a_transition_rule_that_has_stopped_stops_
+  being_counted` drives Istanbul, which abolished DST in September 2016: the
+  `UNTIL` names the moment the rule stopped rather than its last transition, so
+  that year still has an occurrence which never happened — and it is the *later*
+  candidate, so counting it wins and puts the zone back an hour for every instant
+  since.
+
+A third, RDATE-listed transitions ignored, was killed by
+`a_transition_the_zone_lists_by_date_counts_like_any_other` — Casablanca, whose
+Ramadan clock change is no date an `RRULE` states, so tzdata's renderers write
+the transitions out one at a time.
+
+**The claim is measured against libical, not against fixtures written here.**
+This mapping is only ever reached with the transition rules *some producer*
+wrote, and on the save path that producer is libical:
+`marshal::icalendar_from_instances` copies libical's own builtin `VTIMEZONE`
+into the save envelope for every `TZID` the components refer to. A definition
+libical states in a shape the evaluator will not guess at would leave every unit
+test green and every real appointment refused. So the assertion lives in
+`jmap-backend-cal/tests/marshal.rs`, in the `rust-test-eds` leg, against the
+definition libical actually holds — and it passes: `UNTIL=20260901T070000Z`
+beside libical's Berlin comes back as `2026-09-01T09:00:00`, sendable. Checked
+by disabling the conversion and watching that one leg redden.
+
+**What did not change, on purpose.** The drawing direction still writes the
+local form beside a zoned `DTSTART` rather than the UTC instant §3.3.10 asks
+for. It round-trips, libical reads it in the event's zone, and it is the same
+instant — and the definition needed to convert *back* is only available for a
+custom zone (out of `timeZones`), never for an IANA name, so converting would
+make the output depend on which kind of zone it was. Uniformly local beats
+inconsistently conformant.
+
+Tests: +6 in `jmap-ical/tests/event.rs`, +1 in `jmap-cal-sync/tests/save.rs`
+(a create whose `UNTIL` is a UTC instant now reaches the server as the series it
+is — the refusal test beside it keeps its meaning, its document naming a zone it
+does not define), +1 in `jmap-backend-cal/tests/marshal.rs`. The default set is
+1147 → 1154.
+
+Verified locally: `cargo test --locked` 1154, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+-p evolution-jmap-ical` clean; `ninja -C build` then `ctest --test-dir build`
+14/14, all four functional legs and the EDS-linked leg included. `ci/checks.sh`
+still stops at its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no
+`cargo-deny`), so those two were reasoned by hand: one file is added,
+`rust/crates/jmap-ical/src/zone.rs`, and it carries the SPDX header and the
+`GPL-3.0-or-later` identifier like every other; `Cargo.lock` is untouched — no
+dependency was added, which was the point — so `cargo deny`'s answer is the one
+it gave on the last green run.
+
+No milestone tag. Closed: **a zoned recurrence's UTC `UNTIL` now converts out of
+the document's own `VTIMEZONE`**, so the save that was refused last session
+succeeds. New blockers of its own: a transition rule outside the counted shape
+still costs the whole zone, and nothing reports *which* zone was refused — a
+user whose calendar is in such a zone gets the old error with no way to tell it
+apart from the old cause; whether any zone Evolution ships is in that state is
+unmeasured beyond Berlin. Unchanged blockers: M10 still has no CI matrix — the
+one piece left of it, and it wants a machine that can pull more than one EDS
+image; the calcard directive's two emitters are still ours; M9 has no CI job and
+no GUI tier; M7 still **needs human verification in real Evolution**; the create
+refusal's message is not marked for translation; an `UNTIL` the parser itself
+refuses is invisible to this crate; whether Evolution renders an `IMAGE` is
+unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; and what Evolution's
+contact editor writes for a replaced photo, and into a cleared field, is
+inferred rather than measured.
