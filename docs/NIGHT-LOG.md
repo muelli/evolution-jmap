@@ -27937,3 +27937,36 @@ the remaining setup-UI question is authentication (surfacing method/OAuth2 and,
 if applicable, a password entry). Not yet re-verified in real Evolution: the
 incompleteness **status label** (`993e24c`) and any user-visible effect of the
 OAuth2 discovery/registration work (`a121a3b`); worth a re-test after a rebuild.
+
+## 2026-08-16 (two-hundred-and-ninety-third session)
+
+**Claiming: wire `jmap_config::oauth2::ensure_registered()` into both
+modules' `e_module_load`.** `git fetch origin` at claim time shows
+`origin/master` unchanged at `c3cac2d`, so no other agent has this.
+
+The 292nd session's "next session" note pointed at wiring an OAuth2 choice
+into `insert_widgets` (a toggle plus a "discover and register" action calling
+last session's `discover_and_register` off the GTK main thread). The operator
+human-verification entry above complicates that: it raises an open design
+question — a method selector in the assistant vs. auto-discovery used
+transparently — that the maintainer has not yet decided, and the toggle work
+also needs a real background-thread/main-loop marshalling design over GTK
+objects, which is exactly the "subtle concurrency reasoning over GObject"
+shape the roadmap's escalation rule warns against attempting speculatively.
+Rather than guess at either the UI design or the threading shape tonight,
+picking a smaller, unambiguous, unblocked piece of the same real-server-
+readiness track instead: `jmap_config::oauth2::ensure_registered`'s own doc
+comment (`oauth2.rs`) already names a gap neither of the two sessions that
+registered `Service`/wrote the storage closed — "the one caller that *does*
+have to think about it is whatever eventually loads this project's EDS
+module... this has to have run once, at module load... before EDS is asked
+to parse a keyfile that carries `[JMAP OAuth2]`, or that group is silently
+unrecognised rather than restored." Grepped both `load()` entry points
+(`jmap-backend-collection::module` and `jmap-config::module`) and confirmed
+neither calls it — `apply`/`read` do, but nothing calls those from a module
+load path, only from code that already has a source in hand. This is a
+correctness gap regardless of how the open UI question above is resolved: a
+saved `.source` file naming `[JMAP OAuth2]`, parsed in a process that has not
+yet called `apply`/`read` on that particular source, would silently drop the
+group. Small, TDD-able without a display (GType registration, no widget),
+and does not touch the open design question at all.
