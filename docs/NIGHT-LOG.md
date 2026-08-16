@@ -25977,3 +25977,115 @@ their contact-editor behaviour unmeasured; whether the editor lets a handle be
 moved between the Home and Work slots at all is unknown; a `VALUE=uri` photo's
 rendering is unmeasured; and what Evolution's contact editor writes for a
 replaced photo, and into a cleared field, is inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-seventy-fifth session)
+
+**Last session's parting worry, followed up and found real. `merge_named` asked
+`diff_flags`' old single question — "does the mapping have a field for this?" —
+where it needed the two, and the list merger's other half short-circuited on an
+edited address with no components at all. Between them, an address the user only
+ever saw written out on its `LABEL` lost every component behind it on the first
+save.**
+
+Last session's "what this does not settle" named the next thing: the
+two-questions-one-predicate shape `diff_flags` had may exist in the other
+mergers. It does, in the one that merges lists.
+
+**The reachable loss.** `merge_components` began `let edited =
+restore_address_components(current, edited?)` — the `?` reading "the edited
+address states no components" as "there is nothing to merge", after which
+`diff_addresses` compared `Some(components)` against `None` and patched
+`addresses/a1/components: null`. Two ordinary states arrive that way:
+
+- An address whose components are all of kinds `ADR`'s seven fields have no room
+  for — `building`, `floor`, `block`, `district`, `landmark` — plus a written-out
+  `full`. `address_fields` gives no line, `address_label` does, so the entry is
+  visible on its `LABEL` alone. The user retypes the town and the components are
+  gone.
+- An `ADR` whose every field the user cleared. `read_address` returns `None` for
+  an all-empty line, exactly as it does for `EMAIL:`, so the address again
+  reaches the save on its `LABEL` alone — and the `floor` it never stated goes
+  with the street it did.
+
+The `name` side never had this: `diff_name` already passed
+`edited.components.as_deref().unwrap_or_default()`. The two sibling paths
+disagreeing is what says this is a slip rather than a decision.
+
+**And the narrower question underneath.** `merge_named`'s removal gate was
+`mapped(kind)`, but a kind having a field is not the same as the line having
+carried the component: `name_fields` and `address_fields` both skip a component
+whose *value* is empty, exactly as the emitter skips an entry that says nothing.
+So a `{"kind": "postcode", "value": ""}` the user was never shown was deleted by
+any edit beside it. `restore_shared_fields` already filtered on
+`!value.is_empty()` — the rule was known in one place and not the other. The
+gate is now `states_address_component`/`states_name_component`, living next to
+the emitter with the other `states_*` predicates, and `merge_named`'s parameter
+is renamed `was_stated` after `diff_flags`'. `maps_address_component` and
+`maps_name_component` are gone: those were their only callers, and keeping a
+predicate that answers the *almost*-right question is how this bug happens twice.
+
+**`merge_units` was re-read and is not the same bug, which took measuring.** A
+unit is not carried on the line only if its name is empty — the degenerate case,
+noted below and left. What was worth checking is whether the `ORG` line drops
+units the way `ADR` drops components, and it does not: `eds-sys`'
+`an_org_component_past_the_third_has_no_field_but_survives_an_edit_of_the_others`
+records what libebook-contacts 3.52 does with `ORG:Acme Ltd;Research;Optics;Lenses`
+— the first three components have a field each (`E_CONTACT_ORG`,
+`E_CONTACT_ORG_UNIT`, and `E_CONTACT_OFFICE`, which this repository had not
+written down before), the fourth has none, and a `set` on the department rewrites
+that one component and leaves the rest, `Lenses` included, where they are.
+Clearing a field empties its component in place rather than closing the gap, so
+the positions after it hold. Every unit with a name is written onto the line and
+every unit on the line comes back, so taking the edited list at its word is
+right there.
+
+**Mutation-checked twice, each run and reverted.** Restoring the `edited?`
+short-circuit reddens exactly the two address tests and not the empty-value one;
+dropping `!value.is_empty()` from both predicates reddens exactly the two
+empty-value tests, name and address alike, and neither of the others.
+
+Tests: +4 in `jmap-book-sync/tests/save.rs`, +1 in `eds-sys/tests/contacts.rs`
+(outside the default set). The default set is 1200 → 1204.
+
+Verified locally: `cargo test --locked` 1204, no failures; `cargo test -p eds-sys
+--test contacts` 26; `cargo fmt --all --check` clean; `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` clean;
+`RUSTDOCFLAGS=-D warnings cargo doc --no-deps -p evolution-jmap-vcard -p
+evolution-jmap-book-sync` clean; `ninja -C build` then `ctest --test-dir build`
+15/15, functional, EDS-linked and packaging legs included. `ci/checks.sh` still
+stops at its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no
+`cargo-deny`), so those were reasoned by hand: no file is added, so no SPDX
+header is missing, and `Cargo.lock` is untouched, so `cargo deny`'s answer is the
+one it gave on the last green run.
+
+No milestone tag. Closed: **an address shown only on its `LABEL` no longer loses
+the components behind it**, and **a component the line left out for saying
+nothing is no longer deleted by an edit beside it**.
+
+**What this does not settle.** The degenerate half of the same shape is still
+open in `merge_units`: a unit whose `name` is the empty string is left off the
+`ORG` line by `organization_components` and then deleted by the save, because
+`merge_units` matches by name and has no was-stated gate at all — it would need
+one, and the fix is not the one-line kind the components got. Nothing here asks
+Evolution what it *draws*: that `E_CONTACT_OFFICE` is component 2 of `ORG` is
+measured, that the contact editor shows it as a field is not. And the reachability
+argument for the second address case assumes clearing the `ADR` fields in the
+editor leaves the `LABEL` standing — if Evolution clears both, that path is the
+already-correct "the user deleted the address" one and only the first case bites.
+
+Unchanged blockers: no `.po` exists, and whether this repository's first
+translation should be written by an autonomous session is a maintainer's call;
+`gettext` is not in `Containerfile.ci`, so the `.pot` in the tree is trusted to
+have come from `po/extract.sh`; **a unit with an empty name is still dropped by a
+save** (above); M10 still has no CI matrix; the calcard directive's two emitters
+are still ours; M9 has no CI job and no GUI tier; M7 still **needs human
+verification in real Evolution**; an `UNTIL` the parser itself refuses is
+invisible to `jmap-ical`; whether Evolution renders an `IMAGE` is unmeasured; the
+multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still unverified; a
+deathday and a birthday stated as a year alone are still invisible; the
+conventional URI schemes for AIM, Gadu-Gadu, ICQ, MSN and Yahoo are unverified and
+therefore untabled; `X-TWITTER` and `X-SIP` are unmapped and their contact-editor
+behaviour unmeasured; whether the editor lets a handle be moved between the Home
+and Work slots at all is unknown; a `VALUE=uri` photo's rendering is unmeasured;
+and what Evolution's contact editor writes for a replaced photo, and into a
+cleared field, is inferred rather than measured.
