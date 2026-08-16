@@ -580,6 +580,48 @@ fn saving_a_name_back_untouched_does_not_rewrite_its_components() {
 }
 
 #[test]
+fn a_name_component_the_n_value_left_out_for_saying_nothing_survives_an_edit() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A component of a kind `N` does have a field for, saying nothing to put
+    // in it: the emitter leaves it off the value, so the user never saw it and
+    // cannot have cleared it by retyping the fields beside it.
+    fixture.patch(
+        &id,
+        json!({"name/components": [
+            {"kind": "surname", "value": "Oldenburg"},
+            {"kind": "given2", "value": ""},
+            {"kind": "given", "value": "Vera"},
+        ]}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("\r\nN:Oldenburg;Vera;;;\r\n"),
+        "the empty middle name reached the value: {vcard}"
+    );
+
+    let edited = vcard.replace("Vera", "Verena");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let components = fixture.card(&id).name.unwrap().components.unwrap();
+    let by_kind: Vec<(&str, &str)> = components
+        .iter()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        by_kind,
+        vec![
+            ("surname", "Oldenburg"),
+            ("given2", ""),
+            ("given", "Verena")
+        ],
+        "a component the `N` value never stated was deleted by an edit beside it"
+    );
+}
+
+#[test]
 fn renaming_an_employer_keeps_what_the_org_line_cannot_carry() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
@@ -985,6 +1027,153 @@ fn an_address_stated_only_as_a_label_is_patched_in_place() {
         addresses["a1"].extra.get("coordinates"),
         Some(&json!("geo:52.5,13.4")),
         "a member no line can carry was overwritten"
+    );
+}
+
+#[test]
+fn an_address_shown_only_on_its_label_keeps_the_components_no_adr_field_states() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // Every component here is of a kind the seven ADR fields have no room
+    // for, so the address gets a LABEL and no ADR at all — and the user, who
+    // was shown the written-out form and nothing else, cannot have cleared
+    // the components behind it by editing that one line.
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {
+            "@type": "Address",
+            "components": [
+                {"@type": "AddressComponent", "kind": "building", "value": "Turm A"},
+                {"@type": "AddressComponent", "kind": "floor", "value": "3"},
+            ],
+            "full": "Turm A, 3. Stock\n10115 Berlin",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("\r\nADR"), "{vcard}");
+    assert!(vcard.contains("\r\nLABEL"), "{vcard}");
+
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a save that changed nothing rewrote the address"
+    );
+
+    let edited = vcard.replace("Berlin", "Potsdam");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let addresses = fixture.card(&id).addresses.expect("addresses");
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("Turm A, 3. Stock\n10115 Potsdam")
+    );
+    let by_kind: Vec<(&str, &str)> = addresses["a1"]
+        .components
+        .iter()
+        .flatten()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        by_kind,
+        vec![("building", "Turm A"), ("floor", "3")],
+        "editing the written-out address deleted the components behind it"
+    );
+}
+
+#[test]
+fn clearing_every_adr_field_leaves_the_components_the_line_could_not_state() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // An ADR emptied field by field states nothing, so the address reaches
+    // this save on its LABEL alone — the same shape as the test above, only
+    // arrived at by an edit. What the line did state is the user's to have
+    // cleared; the floor, which it never stated, is not.
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {
+            "@type": "Address",
+            "components": [
+                {"@type": "AddressComponent", "kind": "name", "value": "Hauptstraße"},
+                {"@type": "AddressComponent", "kind": "locality", "value": "Berlin"},
+                {"@type": "AddressComponent", "kind": "floor", "value": "3"},
+            ],
+            "full": "Hauptstraße, 3. Stock\n10115 Berlin",
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let adr = vcard
+        .lines()
+        .find(|line| line.starts_with("ADR"))
+        .unwrap_or_else(|| panic!("no ADR line: {vcard}"));
+    let cleared = format!("{}:;;;;;;", adr.split_once(':').expect("an ADR value").0);
+    let edited = vcard.replace(adr, &cleared);
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let addresses = fixture.card(&id).addresses.expect("addresses");
+    let by_kind: Vec<(&str, &str)> = addresses["a1"]
+        .components
+        .iter()
+        .flatten()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        by_kind,
+        vec![("floor", "3")],
+        "clearing the ADR fields took a component that was never on the line"
+    );
+}
+
+#[test]
+fn a_component_the_line_left_out_for_saying_nothing_survives_an_edit() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // A component of a kind the ADR *does* have a field for, saying nothing
+    // to put in it. The emitter leaves it off the line for the same reason it
+    // leaves an empty entry off a card, so the save must read its absence the
+    // same way — not as the user having cleared a field they never saw filled.
+    fixture.patch(
+        &id,
+        json!({"addresses": {"a1": {
+            "@type": "Address",
+            "components": [
+                {"@type": "AddressComponent", "kind": "name", "value": "Hauptstraße"},
+                {"@type": "AddressComponent", "kind": "postcode", "value": ""},
+                {"@type": "AddressComponent", "kind": "locality", "value": "Berlin"},
+            ],
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("ADR;X-JMAP-KEY=a1:;;Hauptstraße;Berlin;;;"),
+        "the empty postcode reached the line: {vcard}"
+    );
+
+    let edited = vcard.replace("Berlin", "Potsdam");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let addresses = fixture.card(&id).addresses.expect("addresses");
+    let by_kind: Vec<(&str, &str)> = addresses["a1"]
+        .components
+        .iter()
+        .flatten()
+        .map(|component| (component.kind.as_str(), component.value.as_str()))
+        .collect();
+    assert_eq!(
+        by_kind,
+        vec![
+            ("name", "Hauptstraße"),
+            ("postcode", ""),
+            ("locality", "Potsdam")
+        ],
+        "a component the line never stated was deleted by an edit beside it"
     );
 }
 
