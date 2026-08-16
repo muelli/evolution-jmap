@@ -40,6 +40,17 @@
 /// body.
 pub const MAX_API_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// The most octets an RFC 8414 authorization-server metadata document may be.
+///
+/// Its own number, well below [`MAX_API_RESPONSE_BYTES`], because it is the
+/// one thing this client reads from a server it has not authenticated to and
+/// knows almost nothing about — discovery happens before there are
+/// credentials, by design (see [`crate::oauth`]). The document itself is a
+/// flat JSON object of a few dozen fields; real ones run to a couple of
+/// kilobytes, so a mebibyte is three orders of magnitude of room and still
+/// small enough that an endpoint answering with an endless body costs nothing.
+pub const MAX_OAUTH_METADATA_BYTES: u64 = 1024 * 1024;
+
 /// The most octets one blob download may be when the caller has no better
 /// number.
 ///

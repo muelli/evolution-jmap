@@ -41,9 +41,18 @@ pub const DEFAULT_CALLS_IN_REQUEST: u64 = 16;
 /// far above the longest id list any test builds.
 pub const DEFAULT_SIZE_REQUEST: u64 = 10_000_000;
 
+/// Builds the RFC 8414 authorization-server metadata document a mock
+/// deployment publishes, given the origin it ended up bound to.
+///
+/// A closure rather than a `Value` because the port is ephemeral: the
+/// endpoints a real document names are on the deployment's own origin, which
+/// nothing knows until the listener exists.
+type MetadataFn = dyn Fn(&str) -> Value + Send + Sync;
+
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
+    oauth_metadata: Option<Arc<MetadataFn>>,
     omitted_capabilities: BTreeSet<String>,
     omit_primary_accounts: bool,
     calls_in_request: Option<u64>,
@@ -205,6 +214,23 @@ impl MockServerBuilder {
         self
     }
 
+    /// Publish an RFC 8414 authorization-server metadata document at
+    /// `/.well-known/oauth-authorization-server`, built from the origin this
+    /// server binds to.
+    ///
+    /// Off by default, because a JMAP server need not do OAuth 2.0 at all and
+    /// a client has to be able to tell that it does not. Configuring it makes
+    /// the mock a deployment that *advertises* the flow; it does not make it
+    /// an identity provider — nothing here issues or accepts a token, and the
+    /// endpoints the document names are strings, not routes.
+    pub fn oauth_authorization_server(
+        mut self,
+        metadata: impl Fn(&str) -> Value + Send + Sync + 'static,
+    ) -> Self {
+        self.oauth_metadata = Some(Arc::new(metadata));
+        self
+    }
+
     /// Bind to a fixed localhost port instead of an ephemeral one.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
@@ -240,7 +266,8 @@ impl MockServerBuilder {
             let state = Arc::clone(&state);
             let stop = Arc::clone(&stop);
             let origin = origin.clone();
-            move || serve(server, state, self.auth, origin, stop)
+            let oauth_metadata = self.oauth_metadata.clone();
+            move || serve(server, state, self.auth, oauth_metadata, origin, stop)
         });
 
         MockServer {
@@ -265,6 +292,7 @@ impl MockServer {
         MockServerBuilder {
             auth: AuthConfig::default(),
             port: 0,
+            oauth_metadata: None,
             omitted_capabilities: BTreeSet::new(),
             omit_primary_accounts: false,
             calls_in_request: Some(DEFAULT_CALLS_IN_REQUEST),
@@ -329,12 +357,15 @@ fn serve(
     server: tiny_http::Server,
     state: Arc<Mutex<ServerState>>,
     auth: AuthConfig,
+    oauth_metadata: Option<Arc<MetadataFn>>,
     origin: String,
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::SeqCst) {
         match server.recv_timeout(Duration::from_millis(20)) {
-            Ok(Some(request)) => handle_request(request, &state, &auth, &origin),
+            Ok(Some(request)) => {
+                handle_request(request, &state, &auth, oauth_metadata.as_deref(), &origin)
+            }
             Ok(None) => {}
             Err(_) => break,
         }
@@ -345,8 +376,30 @@ fn handle_request(
     mut request: tiny_http::Request,
     state: &Mutex<ServerState>,
     auth: &AuthConfig,
+    oauth_metadata: Option<&MetadataFn>,
     origin: &str,
 ) {
+    // Answered before the credential check, and only ever with 200 or 404.
+    // RFC 8414 §3 has the metadata document publicly readable, which is not a
+    // detail: it is what a client reads in order to find out where to *get*
+    // credentials, so a deployment that demanded them here would have closed
+    // the loop on itself. A server with no OAuth 2.0 must equally answer "not
+    // here" rather than "who are you".
+    if request.method() == &tiny_http::Method::Get
+        && request.url().split('?').next().unwrap_or_default()
+            == "/.well-known/oauth-authorization-server"
+    {
+        match oauth_metadata {
+            Some(metadata) => respond_json(request, 200, &metadata(origin)),
+            None => respond_json(
+                request,
+                404,
+                &json!({"status": 404, "detail": "this deployment publishes no OAuth 2.0 metadata"}),
+            ),
+        }
+        return;
+    }
+
     let authorization = request
         .headers()
         .iter()
