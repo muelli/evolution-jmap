@@ -24521,3 +24521,118 @@ the editor lets a handle be moved between the Home and Work slots at all is
 unknown; a `VALUE=uri` photo's rendering is unmeasured; and what Evolution's
 contact editor writes for a replaced photo, and into a cleared field, is
 inferred rather than measured.
+
+## 2026-08-16 (two-hundred-and-sixty-second session)
+
+**The hole the last session named as the next thing to close, closed — and the
+answer is a refusal, which is the first one this repository has written.**
+`jmap_cal_sync::save_component`'s create branch sent `event.recurrence_rules`
+with no `maps_recurrence_rule` guard at all, where the patch branch has had one
+since `diff_recurrence` existed. So a brand-new recurring event whose rule this
+mapping cannot state went to the server as it came.
+
+**What that actually looked like, because the red test printed it.** Saving
+`DTSTART;TZID=Europe/Berlin` beside `RRULE:FREQ=WEEKLY;UNTIL=20260331T120000Z`
+— which is what RFC 5545 §3.3.10 *requires* a conformant editor to write, so it
+is every "repeat until <date>" in every zoned calendar — put
+`"until": "2026-03-31T12:00:00Z"` in the `CalendarEvent/set`, and the mock took
+it. The component handed back to EDS from that same create then had **no `RRULE`
+on it at all**: the value is no RFC 8984 §4.3.3 LocalDateTime, so `writable`
+refuses it and the drawing drops the rule. Evolution would have shown a single
+appointment while the server held a series — and a server holding a series
+invites its guests and fires its alarms. A strict server is the other outcome:
+it refuses the whole set, and the user gets a protocol error naming nothing they
+can act on.
+
+**Why refusing, and not the other two answers.** Three were available and all
+three are bad, because the right fix is a conversion this crate cannot do yet.
+Sending it is worst, for the reason above. Dropping the recurrence and filing the
+event anyway is what the *zone* does one line below — and the comment there says
+why that works: a wall-clock time with no zone is still the appointment the
+person who typed it sees. Nothing of the kind is true here. An event created
+without its recurrence is a **different event** — one occurrence where the user
+asked for a series — and there is no signal at all that it happened; the user
+finds out when the meetings do not. So `SyncError::Unsendable`, which reaches
+Evolution as `E_CLIENT_ERROR_INVALID_ARG` with a message naming what to change
+("an end date stated as a UTC instant is the usual cause, and a repeat count
+works"). A repeat count really does map, so the workaround is real. Asking for
+it is a worse thing than a recurrence that just works, and a better one than a
+meeting series that quietly happened once.
+
+**The distinction is worth keeping straight, because the two branches now differ
+on purpose.** An edit leaves the property alone and the server's own rule stands
+— there is something correct to fall back on. A create has nothing to leave
+standing, so "leave it alone" has no meaning there and the honest answers narrow
+to two. That asymmetry is written into the comment on the guard and into
+`SyncError::Unsendable`'s own docs, so the next reader does not "fix" one branch
+into the other.
+
+**What is still not fixed, and it is the real defect.** Converting a UTC `UNTIL`
+into the event's zone needs the offset in effect at that instant, which needs a
+zone database `jmap-ical` deliberately does not carry. The document usually
+*contains* the answer — Evolution writes the `VTIMEZONE` — so a mini evaluator
+over the definition's own observances would close it without a new dependency,
+but that means expanding yearly `BYDAY` rules and getting DST gaps, overlaps,
+southern-hemisphere ordering and `RDATE`-based zones right. That is its own
+piece of work, and until it lands this refusal is what a create can honestly do.
+**It is now the most valuable calendar item on the list**: it turns the
+commonest recurring save in Evolution from an error into a save.
+
+**Tests, and the mutations.** `a_new_events_recurrence_reaches_the_server` first,
+so the refusal is known to be about the rule rather than about recurrence on a
+create at all; then the two refusals, and
+`each_sync_error_carries_the_code_evolution_routes_on` gains the new variant so
+the FFI error path is exercised against the real EDS headers rather than
+inferred. Three mutations, each run and reverted: the guard's predicate replaced
+by `|_| true`, which reddens exactly the two refusal tests and nothing else; the
+new arm of `to_gerror` routed through `NotFound` instead, which reddens the
+`rust-test-eds` leg — worth doing, since a save error arriving as
+`OBJECT_NOT_FOUND` would make the meta backend drop the component rather than
+report the failure.
+
+**One test premise was wrong and had to be replaced, which is the same narrowing
+the last session logged.** The second refusal was first written with
+`BYDAY=XX` — and it stayed green, because the parser drops the token before this
+mapping sees it and the rule arrives as its frequency alone. `BYMONTH=5L`,
+RFC 7529's leap month, does get through, so that is what the test drives. The
+lesson repeats: a value chosen to be unmappable has to be checked to actually
+*reach* the code being tested.
+
+**A string the user reads, unmarked.** The refusal's message goes to an
+Evolution error dialog, and the standing directive says such a string is wrapped
+for gettext when it is introduced. It is not, because no Rust crate here has a
+gettext binding yet and the neighbouring messages (`no calendar event with
+identifier …`) are unmarked too. Filed rather than ignored, per the directive:
+whoever wires `gettextrs` into these crates takes this one with the rest.
+
+Tests: +3 in `jmap-cal-sync/tests/save.rs`, +1 case in
+`jmap-backend-cal/tests/ops.rs`. The default set is 1144 → 1147.
+
+Verified locally: `cargo test --locked` 1147, no failures; `cargo fmt --all
+--check` clean; `cargo clippy --workspace --exclude example-module --all-targets
+--locked -- -D warnings` clean; `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+-p evolution-jmap-cal-sync` clean; `ninja -C build` then `ctest --test-dir build`
+14/14, all four functional legs and the EDS-linked leg included. `ci/checks.sh`
+still stops at its first step on this VM (no `reuse`, no `pipx`, no `uvx`, no
+`cargo-deny`), so those two were reasoned by hand: no file is added or removed,
+so the SPDX header set is unchanged, and `Cargo.lock` is untouched, so
+`cargo deny`'s answer is the one it gave on the last green run.
+
+No milestone tag. Closed: a create sent a recurrence rule whose `until` does not
+map, with no guard. Unchanged blockers: **a UTC `UNTIL` beside a `TZID` still
+cannot be converted, so the commonest recurring create is now a refusal rather
+than a save** (above — the next item); M10 still has no CI matrix — the one piece
+left of it, and it wants a machine that can pull more than one EDS image; the
+calcard directive's two emitters are still ours; M9 has no CI job and no GUI
+tier; M7 still **needs human verification in real Evolution**; the refusal's
+message is not marked for translation (above); an `UNTIL` the parser itself
+refuses is invisible to this crate; whether Evolution renders an `IMAGE` is
+unmeasured; the multi-`ORG`/`TITLE` "Evolution shows only the first" bet is still
+unverified; the two `LABEL` `TYPE` risks stand; a deathday and a birthday stated
+as a year alone are still invisible; the conventional URI schemes for AIM,
+Gadu-Gadu, ICQ, MSN and Yahoo are unverified and therefore untabled; `X-TWITTER`
+and `X-SIP` are unmapped and their contact-editor behaviour unmeasured; whether
+the editor lets a handle be moved between the Home and Work slots at all is
+unknown; a `VALUE=uri` photo's rendering is unmeasured; and what Evolution's
+contact editor writes for a replaced photo, and into a cleared field, is
+inferred rather than measured.

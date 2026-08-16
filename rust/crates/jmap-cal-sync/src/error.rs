@@ -19,6 +19,17 @@ pub enum SyncError {
     ICal(ICalError),
     /// No event on the server has this identifier.
     NotFound(String),
+    /// A component Evolution handed us was read, and holds a value this
+    /// mapping cannot state as JSCalendar — so the save was refused rather
+    /// than carried out on an event that is not the one described.
+    ///
+    /// Only a *create* can end this way. An edit goes out as a PatchObject
+    /// naming only what the round trip preserved, so a property that cannot be
+    /// sent is simply left out and the server's own value stands; a create has
+    /// no value to leave standing, and the choices are an event the user did
+    /// not describe or no event at all. Refusing is the one of those the user
+    /// finds out about.
+    Unsendable(String),
 }
 
 impl SyncError {
@@ -45,6 +56,7 @@ impl std::fmt::Display for SyncError {
             Self::Client(error) => write!(f, "{error}"),
             Self::ICal(error) => write!(f, "{error}"),
             Self::NotFound(uid) => write!(f, "no calendar event with identifier {uid}"),
+            Self::Unsendable(what) => write!(f, "{what}"),
         }
     }
 }
@@ -54,7 +66,7 @@ impl std::error::Error for SyncError {
         match self {
             Self::Client(error) => Some(error),
             Self::ICal(error) => Some(error),
-            Self::NotFound(_) => None,
+            Self::NotFound(_) | Self::Unsendable(_) => None,
         }
     }
 }

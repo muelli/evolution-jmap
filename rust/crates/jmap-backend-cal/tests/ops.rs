@@ -783,6 +783,16 @@ fn each_sync_error_carries_the_code_evolution_routes_on() {
             unsafe { e_client_error_quark() },
             E_CLIENT_ERROR_INVALID_ARG as i32,
         ),
+        // A component we could read but cannot state as JSCalendar — a create
+        // whose recurrence rule would go out as one the server may refuse. Also
+        // the argument, not the server: the meta backend must report the save
+        // as failed rather than shelve it for a retry that would fail the same
+        // way, and the message names what the user has to change.
+        (
+            SyncError::Unsendable("it repeats in a way we cannot send".to_owned()),
+            unsafe { e_client_error_quark() },
+            E_CLIENT_ERROR_INVALID_ARG as i32,
+        ),
     ];
 
     for (error, domain, code) in cases {
