@@ -30397,3 +30397,77 @@ complete just because two of three backends were checked previously — this
 session found the OAuth2 gap precisely because that check had not been done
 before. M7's own gap (human verification) and M10's (infra) are unchanged.
 `~/.night-shift-escalate` empty.
+
+## 2026-08-16 (three-hundred-and-eighteenth session)
+
+**Did exactly the check the 317th session asked for**: re-verify the other
+two "real-server readiness" sub-items (capability-negotiation robustness,
+the `--features live-server` harness) against all three backends the same
+way 317th checked OAuth2 and found mail missing it, rather than assume they
+are fine because they'd been checked before. `git fetch origin` showed
+`origin/master` unchanged at `18c6663` (the 317th session's tag).
+
+**Capability-negotiation robustness — confirmed closed, all three backends.**
+`Session::resolve_primary_account` (`jmap-proto/src/session.rs:66-93`) is the
+single shared implementation every connect site calls through
+`Client::primary_account`: `jmap-backend-book/src/connect.rs:43`
+(`CAPABILITY_CONTACTS`), `jmap-backend-cal/src/connect.rs:47`
+(`CAPABILITY_CALENDARS`), `jmap-mail/src/connect.rs:369`
+(`CAPABILITY_MAIL`) — same helper, same fallback (RFC 8620 §2's spec-legal
+"server omits `primaryAccounts`" case), same error shape. Each has its own
+`without_capability(...)` test (`jmap-backend-book/tests/connect.rs:147`,
+`jmap-backend-cal/tests/connect.rs:144`,
+`jmap-mail/tests/connect.rs:71` `an_account_that_offers_no_mail_is_refused`)
+plus a `without_primary_accounts()` regression test for the fallback. This
+was a genuine gap once (270th-ish session, per `docs/NIGHT-LOG.md`) but the
+fix unified all three call sites on one helper, so there is no book/cal-vs-
+mail asymmetry left to find here the way there was for OAuth2.
+
+**`--features live-server` harness — confirmed it already exists and is
+wired for both auth schemes.** `jmap-client/tests/live_server.rs` is gated on
+the `live-server` feature (`jmap-client/Cargo.toml`) and `#[ignore]`, reads
+`JMAP_LIVE_SERVER_URL`/`_USER`/`_PASSWORD`/`_TOKEN` (Bearer via `_TOKEN` takes
+priority), and exercises session discovery, `Core/echo`, and read-only
+mail/contacts/calendars listing, skipping gracefully per-capability rather
+than failing on an account that lacks one.
+`docs/manual-test-live-server.md` documents the recipe end to end, including
+provisioning the disposable Stalwart VM. Nothing missing here either.
+
+**M7's known manual-OAuth2-page gap — re-confirmed as already logged, not a
+new find.** Checked whether `jmap-config`'s manual server-settings page
+(`insert_widgets`/`insert_entries` in `backend.rs`) itself drives OAuth2
+discovery-and-registration the way the "Look Up Account Details"
+`EConfigLookupWorker` path does (`config_lookup.rs`'s `run()` →
+`oauth2_setup::discover_and_register()` → `add_result()` writing
+`client-id`/`client-secret`/`authorization-endpoint`/`token-endpoint`/
+`redirect-uri` into `[JMAP OAuth2]`). It does not: picking "OAuth 2.0" by
+hand on the manual page has no widget or code path that triggers discovery,
+so `account.oauth2_registered` stays false and the 314th session's
+`Incomplete::OAuth2NotRegistered` gate correctly refuses to complete such an
+account — but there is no "look up now" affordance offered instead. This is
+not a new gap: `docs/manual-test-account-setup.md`'s "What this does not
+cover" section and the 313th/314th session entries already name it and
+defer the fix to a human decision (whether to add a retry-discovery
+affordance to the manual page, or leave manual OAuth2 selection blocked by
+design and rely on autodiscovery only) — exactly the kind of judgment call
+this session should not guess at blind, per the same reasoning the 314th
+session wrote down for it. Re-confirming it here only to be honest that it
+was checked again, not left unexamined because three "nothing to do"
+sessions preceded it.
+
+**Conclusion**: the roadmap's "real-server readiness" priority bullet is now
+fully closed (OAuth2 for all three backends, capability negotiation for all
+three, the live-server harness) except for the one item that is a genuine
+UI/design decision requiring a human, already logged as such. Nothing
+codable found this session; no `rust/` changes, so no cargo/clippy/reuse
+gate applies — `git status` confirms only this log entry changed.
+`~/.night-shift-escalate` empty (checked, not present).
+
+**Next session**: do not re-run this exact three-item check again absent a
+new commit upstream of `18c6663`/this entry that could plausibly reopen one
+of them. The two remaining open threads are unchanged: M7's GUI needs a
+human to run `docs/manual-test-account-setup.md` (and, while there, decide
+the manual-OAuth2-page question above), and M10 is blocked on
+`Containerfile.ci`/`ci-image.yml` growth, off-limits to this stream.
+`docs/BACKLOG.md`'s entries remain genuine M3/M4/M7 polish, correctly
+deferred.
