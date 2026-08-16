@@ -39,6 +39,7 @@ pub mod error;
 pub mod i18n;
 pub mod instance;
 pub mod marshal;
+pub mod oauth2;
 pub mod source;
 pub mod subclass;
 pub mod trampoline;

@@ -18,10 +18,10 @@
 use eds_sys::{ENamedParameters, ESource, ESourceAuthenticationResult};
 use gio_sys::GCancellable;
 use glib_sys::GError;
-use jmap_backend_core::connect::{Collection, ConnectError, connect_with, credentials, resolve};
+use jmap_backend_core::connect::{Collection, ConnectError, connect_with, resolve};
 use jmap_backend_core::source::SourceConfig;
 use jmap_cal_sync::CalSync;
-use jmap_client::Client;
+use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
 pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
@@ -29,9 +29,10 @@ pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
 /// Connects to the server `config` names and resolves which JMAP calendar the
 /// source stands for.
 ///
-/// `password` is what EDS got out of libsecret, which is `None` on the first
-/// attempt; see [`jmap_backend_core::connect::credentials`] for what that
-/// means for the prompt.
+/// `credentials` are already resolved: whether this account authenticates with
+/// a password out of libsecret or with an OAuth 2.0 bearer token is
+/// [`jmap_backend_core::connect::connect_with`]'s decision, taken once so that
+/// a calendar and an address book on one account cannot disagree about it.
 ///
 /// The client is built with no cancellation of its own: what stops the connect
 /// is the scope `connect_sync` installed, and what stops every operation after
@@ -40,10 +41,8 @@ pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
 /// would be the wrong lifetime.
 pub fn open_calendar(
     config: &SourceConfig,
-    password: Option<&str>,
+    credentials: Credentials,
 ) -> Result<CalSync, ConnectError> {
-    let credentials = credentials(config.user.as_deref(), password)?;
-
     let client = Client::connect(&config.origin, credentials)?;
     let account_id = client.primary_account(CAPABILITY_CALENDARS)?;
     let calendars = client.calendars(&account_id)?;

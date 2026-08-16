@@ -14,10 +14,10 @@
 use eds_sys::{ENamedParameters, ESource, ESourceAuthenticationResult};
 use gio_sys::GCancellable;
 use glib_sys::GError;
-use jmap_backend_core::connect::{Collection, ConnectError, connect_with, credentials, resolve};
+use jmap_backend_core::connect::{Collection, ConnectError, connect_with, resolve};
 use jmap_backend_core::source::SourceConfig;
 use jmap_book_sync::BookSync;
-use jmap_client::Client;
+use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
 pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
@@ -25,18 +25,20 @@ pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
 /// Connects to the server `config` names and resolves which JMAP address book
 /// the source stands for.
 ///
-/// `password` is what EDS got out of libsecret, which is `None` on the first
-/// attempt; see [`jmap_backend_core::connect::credentials`] for what that
-/// means for the prompt.
+/// `credentials` are already resolved: whether this account authenticates with
+/// a password out of libsecret or with an OAuth 2.0 bearer token is
+/// [`jmap_backend_core::connect::connect_with`]'s decision, taken once so that
+/// an address book and a calendar on one account cannot disagree about it.
 ///
 /// The client is built with no cancellation of its own: what stops the connect
 /// is the scope `connect_sync` installed, and what stops every operation after
 /// it is the scope that operation's vfunc installs. See
 /// [`jmap_backend_core::connect::connect_with`] for why a flag on the client
 /// would be the wrong lifetime.
-pub fn open_book(config: &SourceConfig, password: Option<&str>) -> Result<BookSync, ConnectError> {
-    let credentials = credentials(config.user.as_deref(), password)?;
-
+pub fn open_book(
+    config: &SourceConfig,
+    credentials: Credentials,
+) -> Result<BookSync, ConnectError> {
     let client = Client::connect(&config.origin, credentials)?;
     let account_id = client.primary_account(CAPABILITY_CONTACTS)?;
     let books = client.address_books(&account_id)?;
