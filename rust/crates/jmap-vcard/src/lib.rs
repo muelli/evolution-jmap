@@ -29,7 +29,7 @@ pub use contact::{
     same_photo, same_service, states_a_point_in_time, states_address, states_address_component,
     states_anniversary, states_calendar, states_context, states_email, states_keyword, states_link,
     states_media, states_name_component, states_nickname, states_note,
-    states_nothing_but_the_marriage, states_online_service, states_organization, states_phone,
-    states_phone_feature, states_spouse, states_title, title_kind, vcard_to_card,
+    states_nothing_but_the_marriage, states_online_service, states_org_unit, states_organization,
+    states_phone, states_phone_feature, states_spouse, states_title, title_kind, vcard_to_card,
 };
 pub use error::VCardError;

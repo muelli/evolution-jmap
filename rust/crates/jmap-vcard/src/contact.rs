@@ -1215,6 +1215,19 @@ pub fn states_organization(organization: &Organization) -> bool {
     organization_components(organization).is_some()
 }
 
+/// Whether the `ORG` line written for an organisation states this unit.
+///
+/// [`states_name_component`]' question one property over, and the reason a
+/// save has to ask it is the same: `organization_components` leaves out a
+/// unit that names nothing, so reading its absence from the edited line as a
+/// removal deletes a unit the user was never shown. Unlike a component there
+/// is no second half to the question — every unit that *has* a name is
+/// written, however many of them there are, because `ORG` takes as many
+/// components as the entry has units.
+pub fn states_org_unit(unit: &OrgUnit) -> bool {
+    !unit.name.is_empty()
+}
+
 /// Whether an anniversary reaches the user at all: the mapping must have a
 /// property for its `kind` *and* its date must name one calendar day.
 pub fn states_anniversary(anniversary: &Anniversary) -> bool {
