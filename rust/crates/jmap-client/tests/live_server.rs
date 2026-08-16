@@ -121,12 +121,18 @@ fn echo_round_trips_through_the_real_api_endpoint() {
 /// a failure of this client's, so that case is reported and skipped rather
 /// than asserted on: the point of this test is capability-negotiation
 /// robustness, which cuts both ways — tolerating what a real deployment
-/// does not offer is as much a part of it as reading what it does.
+/// does not offer is as much a part of it as reading what it does. That is
+/// also why the account id comes from [`Client::primary_account`] rather
+/// than reading `Session::primary_accounts` directly: a real server is
+/// allowed to omit `primaryAccounts` altogether (RFC 8620 §2), and the
+/// robust resolver still finds the account by capability in that case —
+/// this test should skip only when there truly is no mail-capable account,
+/// not merely because the server left the shortcut out.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn mail_capable_accounts_list_a_non_empty_mailbox_set() {
     let client = connect();
-    let Some(account_id) = client.session().primary_account(CAPABILITY_MAIL).cloned() else {
+    let Ok(account_id) = client.primary_account(CAPABILITY_MAIL) else {
         eprintln!("server names no primary account for {CAPABILITY_MAIL}; skipping");
         return;
     };
@@ -150,11 +156,7 @@ fn mail_capable_accounts_list_a_non_empty_mailbox_set() {
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn contacts_capable_accounts_can_list_their_address_books() {
     let client = connect();
-    let Some(account_id) = client
-        .session()
-        .primary_account(CAPABILITY_CONTACTS)
-        .cloned()
-    else {
+    let Ok(account_id) = client.primary_account(CAPABILITY_CONTACTS) else {
         eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
         return;
     };
@@ -170,11 +172,7 @@ fn contacts_capable_accounts_can_list_their_address_books() {
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn calendars_capable_accounts_can_list_their_calendars() {
     let client = connect();
-    let Some(account_id) = client
-        .session()
-        .primary_account(CAPABILITY_CALENDARS)
-        .cloned()
-    else {
+    let Ok(account_id) = client.primary_account(CAPABILITY_CALENDARS) else {
         eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
         return;
     };
