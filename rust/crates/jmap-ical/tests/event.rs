@@ -5439,6 +5439,121 @@ fn an_observances_until_is_drawn_as_the_utc_instant_it_names() {
     }
 }
 
+/// The end of a transition rule is the one part of an observance that cannot be
+/// narrowed, only lost — and losing it is a zone that never stops moving.
+///
+/// The mirror of what the drawing already does: `observance` gives up the whole
+/// `VTIMEZONE` rather than write a rule whose `UNTIL` it cannot state, because a
+/// zone that keeps springing forward puts every event in it an hour out from the
+/// day the transitions should have stopped. Reading was the asymmetric half — an
+/// `UNTIL` it could not convert simply went missing, and the unbounded rule left
+/// behind was then sent to the server as the zone's description.
+///
+/// Keeping the value it could not state is all that was needed: `read_time_zones`
+/// already draws every definition it reads and keeps only what came back, which
+/// is what `a_definition_with_a_part_that_cannot_be_read_is_not_read_in_part`
+/// covers for an observance's *parts*. An end that went missing was invisible to
+/// that check — the rule it left behind drew perfectly well, just not as the
+/// zone the document described.
+///
+/// Not describing the zone at all is the conservative answer, and one the rest
+/// of the stack already knows: the event still *names* the identifier, and
+/// `jmap_cal_sync::patch` drops a property naming a zone the save cannot define,
+/// so the server's own zone stands rather than being replaced by a wrong one.
+#[test]
+fn an_observance_whose_until_cannot_be_read_costs_the_whole_zone() {
+    for (until, offset_from) in [
+        // Digits in the right places that name no instant.
+        ("20261315T000000Z", "-0500"),
+        ("20260230T000000Z", "-0500"),
+        // Convertible in principle, but the shift steps off either end of the
+        // four-digit years RFC 5545 §3.3.4 admits, so there is no local time to
+        // state it as.
+        ("00000101T000000Z", "-0500"),
+        ("99991231T230000Z", "+0545"),
+    ] {
+        let ics = zoned(ENDING_TZID, &ending(until, offset_from));
+
+        let event = ical_to_event(&ics).expect("parse");
+
+        assert_eq!(
+            event.time_zones, None,
+            "{until} at {offset_from} describes no zone: {ics}"
+        );
+        // And the identifier stays where it was: the save path has to be able to
+        // tell a zone this mapping cannot describe from no zone at all.
+        assert_eq!(event.time_zone.as_deref(), Some(ENDING_TZID), "{until}");
+    }
+}
+
+/// The same defect one level up, where the sentinel rather than the refusal is
+/// the answer.
+///
+/// An event's `UNTIL` that cannot be read used to leave the rule looking like a
+/// recurrence that never ends — which the save path would then have patched over
+/// the server's, replacing an appointment that stops with one that repeats for
+/// ever. The unreadable value is kept instead, exactly as a zoned UTC instant
+/// is: it is no LocalDateTime, so the rule does not map and `recurrenceRules` is
+/// left alone.
+#[test]
+fn a_rules_unreadable_until_is_kept_rather_than_read_as_no_end_at_all() {
+    for until in ["20261315T000000Z", "20260230T000000Z"] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\n\
+             BEGIN:VEVENT\r\n\
+             UID:E1\r\n\
+             DTSTART:20260810T090000\r\n\
+             RRULE:FREQ=DAILY;UNTIL={until}\r\n\
+             END:VEVENT\r\n\
+             END:VCALENDAR\r\n"
+        );
+        let rules = ical_to_event(&ics)
+            .expect("parse")
+            .recurrence_rules
+            .expect("a rule came back");
+
+        assert!(rules[0].until.is_some(), "{until}");
+        assert!(!maps_recurrence_rule(&rules[0]), "{until}");
+    }
+}
+
+/// The limit of the two tests above, measured rather than assumed: an `UNTIL`
+/// the *parser* refuses never reaches this mapping at all, so there is nothing
+/// here to notice it by.
+///
+/// A value with digits in the wrong places is read and handed on — that is the
+/// hostile `.ics` the tests above drive, and the one libical itself would pass —
+/// but a value that is no date-time in any shape takes the rest of the rule with
+/// it: what arrives is the frequency alone, and this crate cannot tell that from
+/// a rule written that way. On an event that is a recurrence shown as unbounded;
+/// on a `VTIMEZONE` observance it is a zone that keeps moving, which
+/// `an_observance_whose_until_cannot_be_read_costs_the_whole_zone` closes only
+/// for the values that get through. Closing it too means a reader that reports
+/// what it discarded — a narrowing below this crate, not a decision of its own.
+///
+/// Here as a canary: a parser that starts passing the value through turns this
+/// red, and whoever sees that should widen the refusal to cover it.
+#[test]
+fn an_until_no_parser_can_read_never_reaches_this_mapping() {
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E1\r\n",
+        "DTSTART:20260810T090000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=whenever;BYMONTH=4\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let rules = ical_to_event(ics)
+        .expect("parse")
+        .recurrence_rules
+        .expect("a rule came back");
+
+    assert_eq!(rules[0].until, None, "no end survived the parser");
+    assert_eq!(rules[0].by_month, None, "nor the part written beside it");
+    assert_eq!(rules[0].frequency, "daily");
+}
+
 /// A zone the document *names* is left to the reader on the way back in, as it
 /// was on the way out. `Europe/Berlin` is a zone every database has; the
 /// `VTIMEZONE` beside it is libical's own copy, and carrying it into `timeZones`
