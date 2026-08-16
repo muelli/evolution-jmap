@@ -17,6 +17,13 @@ links = "evolution-shell"
 # generated a second time; see build.rs for what that costs and buys.
 eds-sys = { workspace = true }
 
+[dev-dependencies]
+# tests/config_lookup.rs dispatches through the raw GObject type-system calls
+# (g_type_fundamental, g_type_interface_prerequisites, ...) the same way
+# eds-sys/tests/oauth2.rs does, and needs both spellings for the same reason.
+glib-sys = { workspace = true }
+gobject-sys = { workspace = true }
+
 [build-dependencies]
 bindgen = { workspace = true }
 pkg-config = { workspace = true }

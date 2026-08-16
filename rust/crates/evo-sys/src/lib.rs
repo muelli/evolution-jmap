@@ -12,12 +12,22 @@
 //! surfaces into one crate would put GTK, WebKit and Evolution's own libraries
 //! behind every address book backend that only ever wanted `ESource`.
 //!
-//! What is in here is deliberately one class wide: `EMailConfigServiceBackend`,
-//! the `EExtension` Evolution's *Receiving Email* page instantiates one of per
+//! What is in here is deliberately narrow: `EMailConfigServiceBackend`, the
+//! `EExtension` Evolution's *Receiving Email* page instantiates one of per
 //! known mail provider, and whose vfuncs are where an account setup gets to
 //! say anything. The decisions those vfuncs make are already written and
 //! tested, in plain Rust over an `ESource`, in [`jmap-config`]; this crate is
 //! how they will be reached.
+//!
+//! `EConfigLookupWorker` joins it for a related but distinct reason: not a
+//! class Evolution instantiates per provider, but an interface an
+//! `EExtension` registered against `EConfigLookup` implements to run
+//! account-setup-time server discovery off the GTK main thread — the
+//! mechanism this crate exists to reach for M7's OAuth 2.0 discovery, the
+//! same one evolution-ews's own `e-ews-config-lookup.c` uses for Exchange
+//! autodiscovery. Its vtable is generated like the backend class's own,
+//! since this crate will fill it the same way `jmap-config/src/
+//! oauth2_service.rs` already fills `EOAuth2Service`'s.
 //!
 //! One accessor of the page that class extends comes with it —
 //! `e_mail_config_service_page_get_email_address`, the address typed on the

@@ -19,7 +19,17 @@ const MIN_EVO: &str = "3.52";
 /// else in Evolution's headers — the pages, the assistant, the notebook — is
 /// reached through the vfuncs of this class or not at all, so the surface this
 /// crate claims to have audited stays one file wide.
-const ALLOWED_TYPES: &[&str] = &["EMailConfigServiceBackend.*"];
+///
+/// `EConfigLookupWorker` joins it for a different reason: not subclassed, but
+/// an *interface* this crate will implement (`jmap-config`'s OAuth 2.0
+/// setup-time discovery, following the same pattern
+/// `jmap-config/src/oauth2_service.rs` already uses for `EOAuth2Service`), so
+/// its vtable's layout matters the same way a subclassed struct's does.
+/// `EConfigLookup` itself — the object a worker is registered against and
+/// handed back in `run()` — is not: nothing here subclasses it or reads a
+/// field of it, so it joins [`EVO_HANDLES`] instead, the same call
+/// [`BLOCKED_EVO_TYPES`] already made for `EMailConfigServicePage`.
+const ALLOWED_TYPES: &[&str] = &["EMailConfigServiceBackend.*", "EConfigLookupWorker.*"];
 
 /// The class's own accessors, and the one thing asked of the page it extends.
 ///
@@ -39,6 +49,14 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // asked again. See `EMailConfigPage` below on why the type it takes joins
     // the handles rather than being generated.
     "e_mail_config_page_changed",
+    // `EConfigLookupWorker`'s own wrappers — get_type, the display-name
+    // dispatch, and the one this crate exists to implement. Not the
+    // `EConfigLookup` object's own calls (`_register_worker`,
+    // `_get_source`, `_add_result`, …): those are the next increment's
+    // (the worker this interface backs), named individually when that
+    // increment writes the call, the same "named a function at a time"
+    // discipline the page accessor above follows.
+    "e_config_lookup_worker_.*",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -129,6 +147,11 @@ const BLOCKED_TYPES: &[&str] = &[
     "_E(Extension|Source)[A-Za-z]*",
     "Camel.*",
     "_Camel.*",
+    // `EConfigLookupWorker::run`'s own parameters: eds-sys already generates
+    // this one (its `e_named_parameters_.*` functions are allowlisted there),
+    // so a second copy here would be a type bindgen minted twice rather than
+    // the one every EDS-facing crate in this workspace shares.
+    "_?ENamedParameters",
 ];
 
 /// GTK's *types*, which this crate does not generate even though it now calls
@@ -152,8 +175,10 @@ const BLOCKED_TYPES: &[&str] = &[
 /// about a layout for no reason to make one.
 const BLOCKED_GTK_TYPES: &[&str] = &["Gtk.*", "_Gtk.*"];
 
-/// Evolution's own page classes, blocked for exactly the reason the GTK ones
-/// are: they are widgets.
+/// Evolution's own classes that this crate reaches only as a pointer, blocked
+/// for the same underlying reason the GTK ones are: nothing here subclasses
+/// them, so a generated layout would be a claim about a struct nobody reads a
+/// field of.
 ///
 /// `EMailConfigServicePage` is a `GtkScrolledWindow` two classes down
 /// (`EMailConfigPage` → `EMailConfigActivityPage` → this), so generating it
@@ -167,7 +192,15 @@ const BLOCKED_GTK_TYPES: &[&str] = &["Gtk.*", "_Gtk.*"];
 /// opposite case and stays generated: it *is* subclassed here, its layout is
 /// what `class_init` writes vfunc pointers into, and `tests/layout.rs` holds
 /// that layout against `g_type_query`.
-const BLOCKED_EVO_TYPES: &[&str] = &["_?EMailConfig(Page|ActivityPage|ServicePage)[A-Za-z]*"];
+const BLOCKED_EVO_TYPES: &[&str] = &[
+    "_?EMailConfig(Page|ActivityPage|ServicePage)[A-Za-z]*",
+    // `EConfigLookup`: the object an `EConfigLookupWorker` is registered
+    // against and handed back as `run()`'s argument. Not `EConfigLookupWorker`
+    // or `EConfigLookupResult(Simple)?` — this pattern has no trailing
+    // `[A-Za-z]*` so it matches only the exact name, the same way the page
+    // above is distinguished from `EMailConfigServiceBackend`.
+    "_?EConfigLookup",
+];
 
 /// Evolution's classes reached only through a pointer, as opaque handles — the
 /// same zero-sized `#[repr(C)]` treatment, and the same claim, as [`GTK_HANDLES`].
@@ -192,7 +225,13 @@ const BLOCKED_EVO_TYPES: &[&str] = &["_?EMailConfig(Page|ActivityPage|ServicePag
 /// `BLOCKED_EVO_TYPES`'s pattern already covers this name, so it joins the
 /// handle list rather than being bindgen's own guess at its layout — nothing
 /// here subclasses it or reads a field of it either.
-const EVO_HANDLES: &[&str] = &["EMailConfigServicePage", "EMailConfigPage"];
+///
+/// `EConfigLookup` is the third: the object `EConfigLookupWorker::run`
+/// receives, used only to call back onto (`e_config_lookup_get_source`,
+/// `_add_result`, …) once a worker exists to make those calls — not a widget,
+/// but opaque for the identical reason, since nothing here subclasses it or
+/// reads a field of it.
+const EVO_HANDLES: &[&str] = &["EMailConfigServicePage", "EMailConfigPage", "EConfigLookup"];
 
 /// The GTK classes the calls above mention, as opaque handles.
 ///
