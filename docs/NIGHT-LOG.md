@@ -29180,3 +29180,40 @@ taken down. `rust/Cargo.lock` gained one line (`gio-sys` under
 the workspace). `ci/checks.sh` still cannot run on this VM
 ([[checks-sh-blocked-on-vm]]); the new file carries its SPDX header, checked
 by hand.
+
+## 2026-08-16 (three-hundred-and-sixth session)
+
+**Claiming: teach `jmap-mockd` to speak RFC 8414/7591 OAuth 2.0 discovery.**
+Running on Sonnet.
+
+Re-surveyed rather than trusting the 305th session's own "next session" note
+on faith: it planned to drive the M9 functional harness against a real
+`EConfigLookup`, but that needs new `evo-sys` bindings for a live
+`EConfigLookup`/result inspection plus a D-Bus/`ESourceRegistry` environment —
+exactly the kind of new FFI-and-GObject-lifecycle surface this project treats
+carefully. Before taking that on, checked a smaller, load-bearing gap the
+305th session's own note mentioned in passing and did not verify: "the mock
+does not speak RFC 8414/7591 yet". That is true of the standalone
+`jmap-mockd` binary (`rust/crates/jmap-mock/src/bin/jmap-mockd.rs`, CLI-parsed
+`--port`/`--basic`/`--bearer` only) but NOT of the `jmap-mock` library —
+`MockServerBuilder::oauth_authorization_server`/`oauth_client_registration`
+already exist and are already exercised end-to-end by
+`jmap-config/tests/oauth2_setup.rs` and `jmap-client/tests/oauth_discovery.rs`.
+The binary just never exposes that builder surface on its command line, so
+nothing — not a human doing manual M7 verification, not a future functional
+test — can drive `JmapConfigLookup`'s discovery path against a real running
+process. That is a real, current-priority (real-server readiness) gap,
+smaller than the EConfigLookup harness, and pure Rust/CLI/JSON with no new
+FFI — claiming it instead.
+
+Plan: add an `--oauth2` flag to `jmap-mockd` that turns on a fixed RFC 8414
+metadata document (issuer = the mock's own origin, `/oauth/authorize`,
+`/oauth/token`, `/oauth/register` endpoints, `authorization_code`+
+`refresh_token` grants) and a `/oauth/register` handler answering a fixed
+`client_id`, using the builder methods the library already has — off by
+default, matching every other opt-in behaviour this binary has. Red test
+first: a new integration test spawning the actual `jmap-mockd` binary
+(`env!("CARGO_BIN_EXE_jmap-mockd")`, following `jmap-mock/tests/upload.rs`'s
+raw-`TcpStream` HTTP client rather than adding a new dependency) proving the
+well-known endpoint answers 404 without the flag and 200 with it, and that
+registration actually returns a `client_id`.
