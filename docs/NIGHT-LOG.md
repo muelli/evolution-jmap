@@ -27252,3 +27252,29 @@ directive's two emitters are still ours; M9 has no CI job and no GUI tier
 (`insert_widgets`) needs a display this VM does not have; the OAuth2 consent
 page needs one too; the docs/BACKLOG.md contact/vCard and calendar/iCal
 fidelity items are all still parked there.
+
+
+## 2026-08-16 (two-hundred-and-eighty-seventh session)
+
+**Claiming: the `EOAuth2Service` interface implementation** — last session's
+own "next session" note. Running on Sonnet.
+
+Before writing anything, fetched `e-oauth2-service.c` and
+`e-oauth2-service-google.c` for the installed EDS (3.52.3) from
+gitlab.gnome.org rather than working from the header alone, since the header
+carries no `(transfer …)`/behavioural annotations and a wrong guess about
+which vfuncs the wrapper actually calls would be exactly the "plausible but
+wrong" risk the roadmap's escalation rule names. That reading changed the
+plan: `e_oauth2_service_can_process`, `_guess_can_process`,
+`_prepare_authentication_uri_query`, `_prepare_get_token_form` and
+`_prepare_refresh_token_form` all call their own generic default
+*unconditionally first* and only call an override afterwards if the override
+is a genuinely different function pointer — so a service that needs no
+JMAP-specific behaviour beyond what the generic RFC 6749 default already does
+(true here: no scope parameter, no non-standard token endpoint quirks) does
+not implement them at all. `e-oauth2-service-google.c` confirms this is the
+real convention, not a theoretical reading: Google's own service overrides
+none of those five either. Full detail in the increment's own commit and
+`jmap-config/src/oauth2_service.rs`'s module docs.
+
+Continuing next session/escalation as normal.
