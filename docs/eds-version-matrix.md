@@ -37,40 +37,136 @@ or apt-pinning inside a shared image) is deliberate: a digest is
 reproducible, and re-pinning to a newer digest is an explicit, reviewable
 change to `ci.yml`, not a silent drift the next `apt-get update` introduces.
 
-## Known incompatibilities on EDS 3.60.2 (found 2026-08-17)
+## Reproducing the newer-EDS leg locally
 
-The `eds-version-matrix` job is `continue-on-error: true` because it does
-not pass yet — real API surface changed between 3.52 and 3.60. Porting the
-backends to support both is out of scope for M10 (see `docs/ROADMAP.md`:
-"the matrix's job is to make breakage visible, not to auto-port"); it is
-recorded here and in `docs/BACKLOG.md` for a later hardening pass.
+The leg does not have to be debugged through CI dispatches. Any machine with
+`docker` can run the exact container `ci.yml` pins:
+
+```sh
+sudo docker run -d --name edsmatrix -v "$PWD:/src:ro" -w /work \
+    fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898 \
+    sleep infinity
+sudo docker exec edsmatrix dnf -y install git evolution-data-server-devel \
+    evolution-devel pkgconf-pkg-config gcc clang-devel
+sudo docker exec edsmatrix sh -c \
+    'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+     --default-toolchain stable --profile minimal'
+# /src is read-only so the build does not touch the host's target dir
+sudo docker exec edsmatrix sh -c 'cp -r /src /work/src'
+sudo docker exec edsmatrix sh -c \
+    'cd /work/src && PATH=/root/.cargo/bin:$PATH ci/eds-matrix.sh'
+```
+
+Add `--no-fail-fast` to the `cargo test` line when you want the whole picture
+rather than the first target that fails. `pkg-config --modversion camel-1.2`
+inside the container is what confirms which EDS the digest currently resolves
+to.
+
+## How a version difference is expressed (2026-08-17)
+
+`eds-sys/build.rs` reads the bindings bindgen just generated and emits one
+`cargo::rustc-cfg` per entry in its `EDS_FEATURES` table, for the entries this
+EDS actually has. The oracle is therefore **clang on the installed headers**,
+not a comparison against `EDS_HEADER_VERSION`: a version comparison encodes a
+guess about which release changed what, and a wrong guess is silent on exactly
+the leg it guessed wrong about.
+
+Where the *same* operation is merely spelled differently in two releases, the
+difference is resolved once in `eds-sys/src/compat.rs` and the rest of the tree
+calls the wrapper — a build-script cfg does not reach dependent crates, so the
+abstraction has to live in `eds-sys` itself. Where an API was genuinely
+**removed** with no drop-in replacement, nothing is invented: the (test) call
+site is `#[cfg]`-gated and the port is recorded below.
+
+## Status on EDS 3.60.2 (measured 2026-08-17, in the pinned container)
+
+Reproduced locally by running `ci/eds-matrix.sh` inside the very digest the job
+pins, so everything below is observed rather than inferred.
+
+**Green on both 3.52 and 3.60:** `eds-sys`, `evo-sys`, `jmap-backend-core`,
+`jmap-backend-book`, `jmap-backend-cal` build and their whole suites pass,
+apart from the three contact-model assertions listed under (B). The
+`eds-version-matrix` job stays `continue-on-error: true` until (A) and (B)
+close.
+
+### Fixed — resolved behind one name each in `eds-sys/src/compat.rs`
 
 - **`e_vcard_to_string` dropped its format argument.** 3.52:
-  `e_vcard_to_string(EVCard *, EVCardFormat)`, called with
-  `EVC_FORMAT_VCARD_30`. 3.60: `e_vcard_to_string(EVCard *self)` — one
-  argument, no format enum; `EVC_FORMAT_VCARD_30` no longer exists.
-  Version is now read via `e_vcard_get_version()`/set via `e_vcard_convert()`
-  instead of chosen per-call. This is a **real break in shipped code**:
-  `jmap-backend-book/src/marshal.rs:114` calls the two-argument form and
-  fails to *compile* against 3.60 headers — not a latent runtime issue, an
-  immediate build failure.
-- **`CamelFolderSearch` and its class are gone from the public headers.**
-  `eds-sys/tests/layout.rs` and `tests/camel.rs` reference
-  `CamelFolderSearch`/`CamelFolderSearchClass`, `camel_folder_search_new`,
-  `camel_folder_search_get_type`, and several
-  `camel_folder_search_util_*`/`camel_folder_search_{set,get}_only_cached_messages`
-  helpers that no longer exist in 3.60's `camel/camel-folder-search.h` (or
-  it is no longer installed/public). Only `camel_folder_search_sync`,
-  `camel_folder_search_header_sync`, and `camel_folder_search_body_sync`
-  remain.
-- **`camel_folder_thread_messages_get_type` renamed to
-  `camel_folder_thread_flags_get_type`.**
-- **`camel_uid_cache_get_new_uids`/`camel_uid_cache_free_uids` are gone.**
+  `e_vcard_to_string(EVCard *, EVCardFormat)` with `EVC_FORMAT_VCARD_30`.
+  3.60: `e_vcard_to_string(EVCard *self)`, and the version a caller wants is
+  stated to `e_vcard_convert_to_string(EVCard *, EVCardVersion)` instead;
+  `EVCardFormat`/`EVC_FORMAT_VCARD_30` are gone, replaced by `EVCardVersion`
+  and `E_VCARD_VERSION_30`. This was a real break in shipped code —
+  `jmap-backend-book/src/marshal.rs` failed to *compile*. Both legs now go
+  through `compat::e_vcard_to_string_vcard_30`, which asks for vCard **3.0
+  explicitly**: on 3.60 the one-argument call emits the card's own version, so
+  taking the default would have quietly changed the bytes `jmap-vcard`'s
+  parser is written against.
+- **`e_contact_date_to_string` gained a version argument** —
+  `(EContactDate *, EVCardVersion)` on 3.60. Same treatment, same reason:
+  `compat::e_contact_date_to_string_vcard_30`.
 
-None of these are in code the "CURRENT PRIORITY" real-server-readiness work
-touches, and the pinned-3.52 leg (what the plugin actually ships against)
-is unaffected — logged here rather than fixed now, per the roadmap's
-explicit scope line for this milestone.
+### (A) Not fixed — `jmap-mail`'s Camel surface, 18 compile errors on 3.60
+
+The one crate in the matrix set that still does not build. This is a port to a
+**redesigned** API, not a set of renames, so it is its own work item:
+
+- **The folder-search object is gone.** 3.60 deleted
+  `camel/camel-folder-search.h` — `CamelFolderSearch`, its class, and the
+  `camel_folder_search_util_*` / `_{set,get}_only_cached_messages` helpers —
+  in favour of a new `CamelStoreSearch` API (`camel/camel-store-search.h`).
+  Only `camel_folder_search_sync`, `_header_sync` and `_body_sync`, on
+  `CamelFolder` itself, survive. `jmap-mail/src/folder.rs` calls
+  `camel_folder_search_new`/`_set_folder`/`_search`, and overrides the
+  `CamelFolderClass.search_by_expression` and `.search_by_uids` vfuncs, both
+  of which no longer exist in the class struct.
+- **The summary database's row structs are private now.** `CamelMIRecord` and
+  `CamelFIRecord` are gone; `camel_folder_summary_save` takes a
+  `CamelStoreDBFolderRecord *` third argument in their place.
+  `jmap-mail/src/message_info.rs` and `src/summary.rs` read and write both
+  structs — this is where the provider keeps its `Email` state and its
+  keywords, in the `bdata` column Camel reserves for a subclass, so the port
+  has to decide where that state lives now.
+- **`camel_folder_summary_get_array`, `_free_array` and `_get_changed` are
+  gone**, which is how `src/summary.rs` enumerates its rows.
+- **`CamelProvider` dropped `auto_detect`, `url_hash` and `url_equal`**
+  (and `CamelProviderAutoDetectFunc` with them).
+  `jmap-mail/src/provider.rs` sets all three to `None`; on 3.60 there is
+  nowhere to put them.
+
+### (B) Not fixed — contact-model *semantics* drifted; needs a mapping decision
+
+Three assertions in `eds-sys/tests/contacts.rs` fail on 3.60. They are not FFI
+problems — every one of them compiles and links; EDS simply answers
+differently. They are left failing rather than gated, because what the plugin
+*should* do about each is a `jmap-vcard` mapping decision, and inventing a
+3.60 expectation here would write a guess into the acceptance suite. Measured
+on both legs:
+
+| vCard line | 3.52 resolves to | 3.60 resolves to |
+| --- | --- | --- |
+| `X-JABBER` | `im_jabber` (the attribute list) | `im_jabber_home_1` (the first slot) |
+| `X-AIM` | `im_aim` | `im_aim_home_1` |
+| `X-GADUGADU` | `im_gadugadu` | `im_gadugadu_home_1` |
+| `ANNIVERSARY` | *unmapped* | `anniversary` |
+| `X-EVOLUTION-ANNIVERSARY` | `anniversary` | *unmapped* |
+| `DEATHDATE` | *unmapped* | `death_date` |
+| `X-SIP`, `X-TWITTER`, `BDAY`, `X-DEATHDATE` | unchanged | unchanged |
+
+Plus: **`E_CONTACT_NAME_OR_ORG` is derived differently.** With no explicit
+`FILE_AS`, 3.52 derives `"Family, Given"` (`"Oldenburg, Vera"`); 3.60 hands
+back the full name as it stands (`"Dr. Vera Marie Oldenburg MSc"`).
+
+The open questions, all of which change what the plugin emits or reads on a
+newer EDS: should a JMAP contact's chat handle land in the multi-valued IM
+field or in the first home slot; should the plugin write `ANNIVERSARY` or
+`X-EVOLUTION-ANNIVERSARY`; and does anything rely on `NAME_OR_ORG`'s
+sort-order shape. Note that this is the matrix catching *semantic* drift only
+because a behavioural test happened to cover it — see the next section for why
+that is luck rather than coverage.
+
+The pinned-3.52 leg (what the plugin actually ships against) is unaffected by
+any of the above.
 
 ## What this does not catch
 

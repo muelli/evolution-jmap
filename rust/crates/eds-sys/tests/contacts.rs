@@ -16,6 +16,10 @@
 use std::ffi::{CStr, CString};
 
 use eds_sys::*;
+// Not glob-imported: the point of these two is that the call site does not
+// have to know which spelling this EDS uses (see `eds_sys::compat`), and
+// naming them is what keeps that visible here.
+use eds_sys::compat::{e_contact_date_to_string_vcard_30, e_vcard_to_string_vcard_30};
 
 #[test]
 fn twitter_and_sip_fields_are_unslotted_attribute_lists_not_strings() {
@@ -200,7 +204,7 @@ fn e_contact_date_parsing_and_formatting() {
         assert_eq!((*date).month, 3);
         assert_eq!((*date).day, 27);
 
-        let formatted = e_contact_date_to_string(date);
+        let formatted = e_contact_date_to_string_vcard_30(date);
         assert!(!formatted.is_null());
         assert_eq!(CStr::from_ptr(formatted).to_str().unwrap(), "1964-03-27");
         g_free(formatted.cast());
@@ -237,7 +241,7 @@ fn a_date_before_the_year_1000_is_written_back_as_the_year_1000() {
             let stated = CString::new(text).expect("no interior NUL");
             let parsed = e_contact_date_from_string(stated.as_ptr());
             assert!(!parsed.is_null(), "{text} did not parse");
-            let formatted = e_contact_date_to_string(parsed);
+            let formatted = e_contact_date_to_string_vcard_30(parsed);
             assert!(!formatted.is_null());
             assert_eq!(
                 CStr::from_ptr(formatted).to_str().unwrap(),
@@ -264,7 +268,7 @@ fn setting_a_birthday_before_the_year_1000_rewrites_the_bday_line() {
                 .as_ptr(),
         );
 
-        let untouched = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let untouched = e_vcard_to_string_vcard_30(contact.cast());
         assert!(
             CStr::from_ptr(untouched)
                 .to_str()
@@ -280,7 +284,7 @@ fn setting_a_birthday_before_the_year_1000_rewrites_the_bday_line() {
         assert_eq!((*date).year, 800, "reading is not clamped");
         e_contact_set(contact, E_CONTACT_BIRTH_DATE, date.cast());
 
-        let rewritten = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let rewritten = e_vcard_to_string_vcard_30(contact.cast());
         assert!(
             CStr::from_ptr(rewritten)
                 .to_str()
@@ -387,7 +391,7 @@ END:VCARD\r\n";
             E_CONTACT_TITLE,
             c"Principal Scientist".as_ptr().cast(),
         );
-        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -402,7 +406,7 @@ END:VCARD\r\n";
 
         // Modifying ORG in place preserves X-JMAP-KEY and leaves second ORG intact
         e_contact_set(contact, E_CONTACT_ORG, c"Cyberdyne".as_ptr().cast());
-        let updated_org_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_org_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_org_vcard = CStr::from_ptr(updated_org_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -421,7 +425,7 @@ END:VCARD\r\n";
             E_CONTACT_ROLE,
             c"Chief Investigator".as_ptr().cast(),
         );
-        let updated_role_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_role_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_role_vcard = CStr::from_ptr(updated_role_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -480,7 +484,7 @@ END:VCARD\r\n";
 
         // Editing the department rewrites that component and no other.
         e_contact_set(contact, E_CONTACT_ORG_UNIT, c"Acoustics".as_ptr().cast());
-        let edited_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let edited_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let edited = CStr::from_ptr(edited_ptr).to_str().unwrap();
         assert!(
             edited.contains("ORG;X-JMAP-KEY=o1:Acme Ltd;Acoustics;Optics;Lenses"),
@@ -491,7 +495,7 @@ END:VCARD\r\n";
         // Clearing a field empties its component in place rather than closing
         // the gap, so the components after it keep their positions.
         e_contact_set(contact, E_CONTACT_OFFICE, std::ptr::null());
-        let cleared_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared = CStr::from_ptr(cleared_ptr).to_str().unwrap();
         assert!(
             cleared.contains("ORG;X-JMAP-KEY=o1:Acme Ltd;Acoustics;;Lenses"),
@@ -601,7 +605,7 @@ END:VCARD\r\n";
             c"Updated Work Label\nBerlin".as_ptr().cast(),
         );
 
-        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
         // Synthetic LABEL fields preserve custom parameters and are serialized with TYPE parameter by EDS
@@ -694,7 +698,7 @@ END:VCARD\r\n";
             c"alice_new@home.example".as_ptr().cast(),
         );
 
-        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -730,7 +734,7 @@ END:VCARD\r\n";
             E_CONTACT_IM_SKYPE_WORK_1,
             c"alice_skype_new".as_ptr().cast(),
         );
-        let second_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let second_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let second_vcard = CStr::from_ptr(second_vcard_ptr).to_str().unwrap();
         assert!(
             second_vcard.contains("X-SKYPE;TYPE=WORK;X-JMAP-KEY=k1:alice_skype_new")
@@ -870,7 +874,7 @@ END:VCARD\r\n";
         e_contact_set(contact, E_CONTACT_PHOTO, new_photo.cast());
         e_contact_photo_free(new_photo);
 
-        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
         // The first PHOTO line is replaced with the new inlined photo (EDS shortens image/png to TYPE=png)
@@ -901,7 +905,7 @@ END:VCARD\r\n";
         // Clearing E_CONTACT_PHOTO by setting NULL
         e_contact_set(contact, E_CONTACT_PHOTO, std::ptr::null());
 
-        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
 
         // The first PHOTO line is removed, while second PHOTO and LOGO remain
@@ -1113,7 +1117,7 @@ END:VCARD\r\n";
         e_contact_set(contact, E_CONTACT_NICKNAME, c"Vera-Prime".as_ptr().cast());
         e_contact_set(contact, E_CONTACT_SPOUSE, c"Taylor Olden".as_ptr().cast());
 
-        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
         // First URL is updated in place, second URL preserved
@@ -1167,7 +1171,7 @@ END:VCARD\r\n";
 
         // Clearing NOTE by passing NULL
         e_contact_set(contact, E_CONTACT_NOTE, std::ptr::null());
-        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -1428,7 +1432,7 @@ fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
         );
         e_contact_set(contact, E_CONTACT_MANAGER, c"Taylor Brooks".as_ptr().cast());
 
-        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -1458,7 +1462,7 @@ fn telephone_and_email_synthetic_slots_and_modification_behavior_in_eds() {
         e_contact_set(contact, E_CONTACT_PHONE_MOBILE, std::ptr::null());
         e_contact_set(contact, E_CONTACT_MANAGER, std::ptr::null());
 
-        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -1733,7 +1737,7 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
         e_contact_set(contact, E_CONTACT_GEO, new_geo.cast());
         e_contact_geo_free(new_geo);
 
-        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -1758,7 +1762,7 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
         // Field clearing by setting NULL
         e_contact_set(contact, E_CONTACT_GEO, std::ptr::null());
 
-        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -1972,7 +1976,7 @@ fn structured_address_and_office_vcard_lines_and_modification_in_eds() {
             c"Tower 1, Floor 15".as_ptr().cast(),
         );
 
-        let updated_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let updated_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let updated_vcard = CStr::from_ptr(updated_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -1999,7 +2003,7 @@ fn structured_address_and_office_vcard_lines_and_modification_in_eds() {
         e_contact_set(contact, E_CONTACT_ADDRESS_WORK, std::ptr::null());
         e_contact_set(contact, E_CONTACT_OFFICE, std::ptr::null());
 
-        let cleared_vcard_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let cleared_vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let cleared_vcard = CStr::from_ptr(cleared_vcard_ptr).to_str().unwrap();
 
         assert!(
@@ -2083,7 +2087,7 @@ fn a_line_wearing_both_context_types_fills_two_slots_that_overwrite_each_other()
         e_contact_set(contact, E_CONTACT_ADDRESS_WORK, work.cast());
         e_contact_address_free(work);
 
-        let edited_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let edited_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let edited = CStr::from_ptr(edited_ptr).to_str().unwrap();
         assert_eq!(
             edited.matches("\r\nADR").count(),
@@ -2202,7 +2206,7 @@ fn editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other()
             E_CONTACT_PHONE_BUSINESS,
             c"+49 30 222".as_ptr().cast::<std::ffi::c_void>().cast_mut(),
         );
-        let edited_ptr = e_vcard_to_string(contact.cast(), EVC_FORMAT_VCARD_30);
+        let edited_ptr = e_vcard_to_string_vcard_30(contact.cast());
         let edited = CStr::from_ptr(edited_ptr).to_str().unwrap();
         assert_eq!(
             edited.matches("\r\nTEL").count(),
