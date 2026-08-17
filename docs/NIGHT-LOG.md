@@ -30588,3 +30588,71 @@ book/cal/mail once had. Worth one focused look before assuming the whole
 bullet is closed across all four backends. M7 (human verification) and M10
 (infra) are unchanged.
 `~/.night-shift-escalate` empty (checked, not present).
+
+## 2026-08-17 (three-hundred-and-twenty-first session)
+
+**Did exactly the check the 320th session flagged: does
+`jmap-backend-collection`'s capability negotiation have the primary-account
+asymmetry book/cal/mail once had, before the 278th session moved the
+inference down to `Session::resolve_primary_account`?** `git fetch origin`
+showed `origin/master` unchanged at `aa77d26` (the 320th session's own
+commit) before starting.
+
+**Answer: no, and it never did.** Read `jmap-collection-sync::layout`,
+`resources.rs` and `parts.rs` end to end.
+`CollectionLayout::from_session`'s private `service()` helper is not a
+second implementation that could have drifted from book/cal/mail's — it is
+the *origin* of the inference (server capability, then `primaryAccounts`,
+then the sole-personal-account fallback): the 278th session's log entry
+says so explicitly ("the inference already correct and already tested at
+the `CollectionLayout` layer") and moved it down to
+`Session::resolve_primary_account` specifically so `Client::primary_account`
+(used by `jmap-backend-book`/`-cal`/`jmap-mail`'s `connect.rs`) could share
+it. `service()` today just calls that same shared method
+(`layout.rs:142`). So the four backends were never asymmetric on this
+question; the asymmetry the 278th session fixed was the other three
+backends lacking what collection already had, not collection lacking
+something they had. Also checked the two related surfaces the 320th
+session's OAuth2 fix touched: `jmap-backend-collection/src/mail_child.rs`
+and `prepare_mail.rs` hold no `Credentials`/OAuth2 logic of their own — the
+collection authenticates once in `authenticate.rs` and hands the resolved
+`Client` down, so there is no second credential path for the mail child to
+get out of step with. And `jmap-collection-sync/src/layout.rs`'s
+`can_send` (submission capability must resolve to the *same* account as
+mail before a transport child is offered) has no counterpart gap in
+`jmap-mail-sync/src/send.rs`, which only ever runs against a mail child
+collection already decided was sendable — it does not re-derive that
+decision.
+
+**Conclusion: the real-server-readiness bullet's capability-negotiation
+sub-item is closed across all four backends, confirmed rather than assumed.**
+No code change — there was nothing to fix, only something to verify — so no
+milestone tag and no gate re-run needed for a source change; ran the full
+suite anyway to keep the "was it green when I looked" answer current:
+`cargo test --workspace --exclude example-module --exclude jmap-functional
+--locked` (0 failed) and `cargo clippy --workspace --exclude example-module
+--all-targets --locked -- -D warnings` (clean) both pass. `grep -rn
+"TODO\|FIXME\|XXX" rust/` turns up the same single pre-existing, non-actionable
+`FIXME` the 319th session already read and dismissed (an upstream IMAPX doc
+comment quoted, not a marker of unfinished work here); nothing new.
+`reuse`/`cargo deny` still not installable here ([[checks-sh-blocked-on-vm]]).
+
+**No unblocked, non-guesswork tractable item found this session either.**
+Per ROADMAP priority order: M7's only gap is still the human verification
+pass. Real-server readiness (OAuth2 for all four backends now, including
+collection; capability negotiation for all four; the `live-server` harness)
+is fully closed, this session's own re-derivation rather than a rubber-stamp
+of the log's word. M9 is COMPLETE. M10 is blocked on `ci-image.yml`. The one
+open design question (manual-OAuth2-page retry-discovery affordance) is
+still a maintainer call per the 313th/314th sessions' reasoning, unchanged.
+Not claiming any task, not pushing a code change; only this log entry.
+`~/.night-shift-escalate` empty (checked, not present).
+
+**Next session**: do not re-open the capability-negotiation question for
+collection again absent a new commit touching
+`jmap-collection-sync/src/layout.rs` or the four backends' `connect.rs`/
+`authenticate.rs` files — it has now been checked from both the
+book/cal/mail side (317th/318th) and the collection side (this session) and
+found consistent both times. The two standing blockers (M7 human
+verification, M10 infra) are unchanged and need a human, not another agent
+session, to move.
