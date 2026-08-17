@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Thin convenience wrapper around the official `stalwart-cli`, so driving the
+# throwaway Stalwart test VM (see infra/gcp/create-stalwart.sh) needs no
+# --url/--user/--password boilerplate and copes with its ephemeral external IP.
+#
+# It resolves the connection automatically:
+#   - URL:  $STALWART_URL, else the VM's current external IP via gcloud → :8080.
+#   - Auth: $STALWART_TOKEN (bearer, --api-key) if set; else $STALWART_PASSWORD
+#           (basic, user 'admin') if set; else the admin secret fetched once over
+#           `gcloud compute ssh` and cached (mode 600) under $XDG_CACHE_HOME.
+#           No API token is needed to bootstrap — the built-in `admin` account's
+#           secret is enough; mint a token later if you prefer --api-key.
+#
+# The real `stalwart-cli` must be on PATH — the Stalwart Docker image does NOT
+# ship it:
+#   cargo install stalwart-cli
+#   # or a release binary: https://github.com/stalwartlabs/cli/releases
+#
+# Usage:
+#   stw <stalwart-cli args...>          # e.g.  stw describe ;  stw list account
+#   stw url                             # print the resolved server URL
+#   stw seed <domain> <local> <pass>    # idempotently create a domain + one user
+#   stw refresh                         # forget the cached URL + admin secret
+#
+# Env overrides: STALWART_VM (default stalwart-1), STALWART_ZONE
+# (default europe-west3-c), STALWART_URL, STALWART_PASSWORD, STALWART_TOKEN.
+set -euo pipefail
+
+NAME=${STALWART_VM:-stalwart-1}
+ZONE=${STALWART_ZONE:-europe-west3-c}
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/stw-$NAME.env"
+
+# `refresh` and `url` do not need the binary or the network round-trips below.
+if [[ "${1:-}" == "refresh" ]]; then rm -f "$CACHE"; echo "cleared $CACHE"; exit 0; fi
+
+[ -f "$CACHE" ] && { . "$CACHE"; }
+
+resolve_url() {
+    [ -n "${STALWART_URL:-}" ] && { printf '%s' "$STALWART_URL"; return; }
+    [ -n "${CACHED_URL:-}" ] && { printf '%s' "$CACHED_URL"; return; }
+    local ip
+    ip=$(gcloud compute instances describe "$NAME" --zone "$ZONE" \
+         --format='get(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || true)
+    [ -n "$ip" ] || { echo "stw: could not resolve $NAME's IP (is the VM running?)" >&2; exit 1; }
+    printf 'http://%s:8080' "$ip"
+}
+URL=$(resolve_url)
+
+if [[ "${1:-}" == "url" ]]; then echo "$URL"; exit 0; fi
+
+command -v stalwart-cli >/dev/null || {
+    echo "stw: stalwart-cli not found on PATH (the Docker image omits it). Install with:" >&2
+    echo "       cargo install stalwart-cli" >&2
+    echo "     or a release binary from https://github.com/stalwartlabs/cli/releases" >&2
+    exit 127
+}
+
+# Build the auth arguments, fetching+caching the admin secret only if needed.
+declare -a AUTH
+if [ -n "${STALWART_TOKEN:-}" ]; then
+    AUTH=(--api-key "$STALWART_TOKEN")
+elif [ -n "${STALWART_PASSWORD:-}" ]; then
+    AUTH=(--user admin --password "$STALWART_PASSWORD")
+else
+    secret=${CACHED_SECRET:-}
+    if [ -z "$secret" ]; then
+        secret=$(gcloud compute ssh "$NAME" --zone "$ZONE" \
+                 --command 'sudo cat /opt/stalwart/admin-password' 2>/dev/null | tr -dc 'A-Za-z0-9')
+        [ -n "$secret" ] || { echo "stw: could not fetch the admin secret over gcloud ssh" >&2; exit 1; }
+        ( umask 077; printf 'CACHED_URL=%q\nCACHED_SECRET=%q\n' "$URL" "$secret" > "$CACHE" )
+    fi
+    AUTH=(--user admin --password "$secret")
+fi
+
+# `seed`: one idempotent `apply` that creates a local domain and one individual
+# account with a password. Field names are per the current stalwart-cli docs
+# (schema-driven and version-dependent); if the server rejects one, run
+# `stw describe` to see the live schema and adjust. Re-running is safe (upsert).
+if [[ "${1:-}" == "seed" ]]; then
+    dom=${2:?usage: stw seed <domain> <local-part> <password>}
+    local_part=${3:?usage: stw seed <domain> <local-part> <password>}
+    pass=${4:?usage: stw seed <domain> <local-part> <password>}
+    plan=$(mktemp --suffix=.ndjson)
+    trap 'rm -f "$plan"' EXIT
+    cat > "$plan" <<PLAN
+{"@type":"upsert","object":"Domain","matchOn":["name"],"value":{"d":{"name":"$dom","isEnabled":true}}}
+{"@type":"upsert","object":"Account","matchOn":["name"],"value":{"a":{"@type":"Individual","name":"$local_part","domainId":"#d","credentials":{"0":{"@type":"Password","secret":"$pass"}}}}}
+PLAN
+    echo "stw: applying seed for ${local_part}@${dom} (password hidden) at $URL" >&2
+    exec stalwart-cli --url "$URL" "${AUTH[@]}" apply "$plan"
+fi
+
+exec stalwart-cli --url "$URL" "${AUTH[@]}" "$@"
