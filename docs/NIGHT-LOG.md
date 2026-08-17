@@ -30732,3 +30732,63 @@ the live-server-CI-job question again absent a new commit or an explicit
 maintainer decision on either open design question (manual-OAuth2-page
 affordance, Stalwart provisioning) — both have now been looked at and
 require a human choice, not more agent-side investigation.
+
+## 2026-08-17 (three-hundred-and-twenty-third session)
+
+**Dependency check before claiming anything.** `git fetch origin` showed
+`origin/master` unchanged at `5cf949f` (the 322nd session's own commit).
+Per its "next session" note, did not re-run the capability-negotiation/TODO
+sweep or the live-server-CI-job question again — no new commit and no
+maintainer decision on either open design question.
+
+**Found a stale doc comment while re-scanning for anything not yet
+covered by that note.** `grep -rn "not yet\b"` across `rust/crates/*/src`
+turned up `jmap-config/src/oauth2_service.rs`'s "## What this does not yet
+do": *"Set `[Authentication] method` to \[`NAME`\] anywhere. That is the
+setup UI's job (M7), which does not write OAuth2 accounts yet, so an
+account reaches this service only through a hand-edited `.source` keyfile
+today."* That was true when `805f197` wrote it, but `bb94f02`
+("jmap-config: offer an Authentication combo in insert_widgets"), later in
+history, gave `insert_widgets` an authentication-method combo whose
+`OAuth 2.0` entry writes `oauth2_service::NAME` straight into
+`[Authentication] method` via `account::apply` — confirmed by reading
+`backend.rs`'s `AUTH_ENTRIES` and `account.rs`'s `apply`, not assumed from
+the commit message alone. The comment was never updated, so a reader would
+conclude the setup UI still can't produce an OAuth2 account when it has
+been able to since `bb94f02`. `config_lookup`'s discovery result
+(`config_lookup.rs`) is a second, already-existing path to the same
+outcome.
+
+**Fixed: reworded the section to name both paths (`insert_entries`'s combo,
+`config_lookup`'s discovery result) instead of claiming neither exists.**
+No functional change — this crate still fills the vfunc it always filled;
+only the doc comment was wrong. `cargo build --workspace --exclude
+example-module --locked`, `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings`, and `cargo test -p
+jmap-config --locked` all green; `cargo doc -p jmap-config --no-deps
+--locked` shows the same 10 pre-existing warnings (unresolved/private
+intra-doc links and redundant link targets in `config_lookup.rs`,
+`oauth2.rs`, `module.rs`) it showed before this change, none introduced by
+it and none in the edited section. No new source file, so no SPDX header
+question; `reuse`/`cargo deny` still not installable here
+([[checks-sh-blocked-on-vm]]).
+
+**Not a milestone-affecting change** — M7 is already not tagged complete
+(GUI needs human verification), and this doesn't change what's implemented,
+only what the comment says is implemented.
+
+**Otherwise, no unblocked, non-guesswork tractable item found tonight.**
+Real-server readiness stays closed per the last several sessions' checks;
+M9 is COMPLETE; M10 is blocked on off-limits `ci-image.yml`; the two open
+design questions (manual-OAuth2-page retry-discovery affordance, Stalwart
+CI provisioning) are still maintainer calls, unchanged.
+`~/.night-shift-escalate` empty (checked, not present).
+
+**Next session**: unchanged standing blockers (M7 human verification, M10
+infra, the two open design questions). Worth a periodic `grep -rn "not
+yet\b\|does not.*yet\|TODO\|FIXME"` sweep like this one — it is cheap and
+this session's find (`805f197` and `bb94f02` landed the same day,
+2026-08-16, but the later commit never circled back to update the
+comment the earlier one wrote) shows the prior TODO/FIXME-only sweeps were
+missing a category of drift: a doc comment going stale within the same
+day's work, not just over weeks.
