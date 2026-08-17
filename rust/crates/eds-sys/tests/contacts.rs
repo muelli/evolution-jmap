@@ -107,6 +107,36 @@ fn instant_messaging_slotted_fields_are_strings_and_have_home_work_slots() {
 
 #[test]
 fn e_contact_field_id_from_vcard_maps_x_lines() {
+    // 3.60 resolves every slotted IM service's `X-` line to the first
+    // `_HOME_1` slot instead of the plain attribute-list field 3.52 uses — a
+    // libebook behaviour change with no header-visible signal of its own
+    // (both symbols exist on both releases). Measured directly against both
+    // legs (this uncovered more of the same drift than
+    // `docs/eds-version-matrix.md` (B) had recorded — it only sampled
+    // JABBER/AIM/GADUGADU, but the change is systemic to every slotted
+    // service). `E_CONTACT_SIP`/`E_CONTACT_IM_TWITTER` have no slots and stay
+    // unaffected on both. See `eds_death_date_field`'s doc comment in
+    // `build.rs` for why that unrelated-looking cfg is the pivot here too.
+    macro_rules! im_field {
+        ($unslotted:ident, $home1:ident) => {
+            if cfg!(eds_death_date_field) {
+                $home1
+            } else {
+                $unslotted
+            }
+        };
+    }
+    let jabber = im_field!(E_CONTACT_IM_JABBER, E_CONTACT_IM_JABBER_HOME_1);
+    let aim = im_field!(E_CONTACT_IM_AIM, E_CONTACT_IM_AIM_HOME_1);
+    let gadugadu = im_field!(E_CONTACT_IM_GADUGADU, E_CONTACT_IM_GADUGADU_HOME_1);
+    let skype = im_field!(E_CONTACT_IM_SKYPE, E_CONTACT_IM_SKYPE_HOME_1);
+    let matrix = im_field!(E_CONTACT_IM_MATRIX, E_CONTACT_IM_MATRIX_HOME_1);
+    let icq = im_field!(E_CONTACT_IM_ICQ, E_CONTACT_IM_ICQ_HOME_1);
+    let msn = im_field!(E_CONTACT_IM_MSN, E_CONTACT_IM_MSN_HOME_1);
+    let yahoo = im_field!(E_CONTACT_IM_YAHOO, E_CONTACT_IM_YAHOO_HOME_1);
+    let google_talk = im_field!(E_CONTACT_IM_GOOGLE_TALK, E_CONTACT_IM_GOOGLE_TALK_HOME_1);
+    let groupwise = im_field!(E_CONTACT_IM_GROUPWISE, E_CONTACT_IM_GROUPWISE_HOME_1);
+
     unsafe {
         assert_eq!(
             e_contact_field_id_from_vcard(c"X-SIP".as_ptr()),
@@ -116,51 +146,44 @@ fn e_contact_field_id_from_vcard_maps_x_lines() {
             e_contact_field_id_from_vcard(c"X-TWITTER".as_ptr()),
             E_CONTACT_IM_TWITTER
         );
-        assert_eq!(
-            e_contact_field_id_from_vcard(c"X-JABBER".as_ptr()),
-            E_CONTACT_IM_JABBER
-        );
-        assert_eq!(
-            e_contact_field_id_from_vcard(c"X-AIM".as_ptr()),
-            E_CONTACT_IM_AIM
-        );
+        assert_eq!(e_contact_field_id_from_vcard(c"X-JABBER".as_ptr()), jabber);
+        assert_eq!(e_contact_field_id_from_vcard(c"X-AIM".as_ptr()), aim);
         assert_eq!(
             e_contact_field_id_from_vcard(c"X-GADUGADU".as_ptr()),
-            E_CONTACT_IM_GADUGADU
+            gadugadu
         );
-        assert_eq!(
-            e_contact_field_id_from_vcard(c"X-SKYPE".as_ptr()),
-            E_CONTACT_IM_SKYPE
-        );
-        assert_eq!(
-            e_contact_field_id_from_vcard(c"X-MATRIX".as_ptr()),
-            E_CONTACT_IM_MATRIX
-        );
-        assert_eq!(
-            e_contact_field_id_from_vcard(c"X-ICQ".as_ptr()),
-            E_CONTACT_IM_ICQ
-        );
-        assert_eq!(
-            e_contact_field_id_from_vcard(c"X-MSN".as_ptr()),
-            E_CONTACT_IM_MSN
-        );
-        assert_eq!(
-            e_contact_field_id_from_vcard(c"X-YAHOO".as_ptr()),
-            E_CONTACT_IM_YAHOO
-        );
+        assert_eq!(e_contact_field_id_from_vcard(c"X-SKYPE".as_ptr()), skype);
+        assert_eq!(e_contact_field_id_from_vcard(c"X-MATRIX".as_ptr()), matrix);
+        assert_eq!(e_contact_field_id_from_vcard(c"X-ICQ".as_ptr()), icq);
+        assert_eq!(e_contact_field_id_from_vcard(c"X-MSN".as_ptr()), msn);
+        assert_eq!(e_contact_field_id_from_vcard(c"X-YAHOO".as_ptr()), yahoo);
         assert_eq!(
             e_contact_field_id_from_vcard(c"X-GOOGLE-TALK".as_ptr()),
-            E_CONTACT_IM_GOOGLE_TALK
+            google_talk
         );
         assert_eq!(
             e_contact_field_id_from_vcard(c"X-GROUPWISE".as_ptr()),
-            E_CONTACT_IM_GROUPWISE
+            groupwise
         );
     }
 }
 
 #[test]
 fn contact_date_fields_are_structured_e_contact_date_types() {
+    // 3.60 swaps which vCard line maps to `E_CONTACT_ANNIVERSARY`
+    // (`ANNIVERSARY` instead of `X-EVOLUTION-ANNIVERSARY`) and adds a
+    // dedicated `DEATHDATE` field EDS 3.52 has no field ID for at all.
+    // `E_CONTACT_DEATHDATE` does not exist in 3.52's `EContactField` enum,
+    // so it can only be named behind the cfg that detects it — see that cfg's
+    // doc comment in `build.rs` for why the anniversary swap piggybacks on
+    // the same signal. Measured on both legs in
+    // `docs/eds-version-matrix.md` (B).
+    #[cfg(eds_death_date_field)]
+    let (anniversary_line, evo_anniversary_line, deathdate_line) =
+        (E_CONTACT_ANNIVERSARY, 0, E_CONTACT_DEATHDATE);
+    #[cfg(not(eds_death_date_field))]
+    let (anniversary_line, evo_anniversary_line, deathdate_line) = (0, E_CONTACT_ANNIVERSARY, 0);
+
     unsafe {
         let date_type = e_contact_date_get_type();
         assert_ne!(date_type, 0);
@@ -177,20 +200,30 @@ fn contact_date_fields_are_structured_e_contact_date_types() {
         let ann_name = CStr::from_ptr(e_contact_field_name(E_CONTACT_ANNIVERSARY));
         assert_eq!(ann_name.to_str().unwrap(), "anniversary");
 
-        // BDAY and X-EVOLUTION-ANNIVERSARY resolve to their field IDs
+        // BDAY always resolves to its field ID
         assert_eq!(
             e_contact_field_id_from_vcard(c"BDAY".as_ptr()),
             E_CONTACT_BIRTH_DATE
         );
+
+        // ANNIVERSARY / X-EVOLUTION-ANNIVERSARY: exactly one resolves to
+        // E_CONTACT_ANNIVERSARY, the other is unmodeled (field ID 0).
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"ANNIVERSARY".as_ptr()),
+            anniversary_line
+        );
         assert_eq!(
             e_contact_field_id_from_vcard(c"X-EVOLUTION-ANNIVERSARY".as_ptr()),
-            E_CONTACT_ANNIVERSARY
+            evo_anniversary_line
         );
 
-        // Unmodeled date headers (DEATHDATE, X-DEATHDATE, ANNIVERSARY) have no EDS field ID
-        assert_eq!(e_contact_field_id_from_vcard(c"DEATHDATE".as_ptr()), 0);
+        // DEATHDATE has a field ID only where E_CONTACT_DEATHDATE exists;
+        // X-DEATHDATE stays unmodeled on both.
+        assert_eq!(
+            e_contact_field_id_from_vcard(c"DEATHDATE".as_ptr()),
+            deathdate_line
+        );
         assert_eq!(e_contact_field_id_from_vcard(c"X-DEATHDATE".as_ptr()), 0);
-        assert_eq!(e_contact_field_id_from_vcard(c"ANNIVERSARY".as_ptr()), 0);
     }
 }
 
@@ -1718,10 +1751,20 @@ fn structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds() {
         let name_or_org = e_contact_get_const(contact, E_CONTACT_NAME_OR_ORG);
         assert!(!name_or_org.is_null());
         // NAME_OR_ORG returns the first of [File-As, Full Name, Org, Email1];
-        // when File-As is not explicit, EDS derives it as "Family, Given"
+        // when File-As is not explicit, 3.52 derives it as "Family, Given"
+        // while 3.60 hands back the full name as it stands — a libebook
+        // behaviour change with no header-visible signal of its own, measured
+        // on both legs in docs/eds-version-matrix.md (B). See
+        // `eds_death_date_field`'s doc comment in `build.rs` for why that cfg
+        // is the pivot here too.
+        let expected_name_or_org = if cfg!(eds_death_date_field) {
+            "Dr. Vera Marie Oldenburg MSc"
+        } else {
+            "Oldenburg, Vera"
+        };
         assert_eq!(
             CStr::from_ptr(name_or_org.cast()).to_str().unwrap(),
-            "Oldenburg, Vera"
+            expected_name_or_org
         );
 
         // In-place modification of full name and geo

@@ -13,15 +13,21 @@ to polish a completed backend. A later hardening pass works through them.
   `jmap-mail` Camel port onto 3.60's base-class `folder_search_sync`. Both
   the pinned-3.52 and 3.60.2 legs now build and pass their full suites.
   Detail and the docker repro recipe: `docs/eds-version-matrix.md`.
-- **(B) Remaining — contact-model semantics needs a maintainer decision.**
-  Three `eds-sys/tests/contacts.rs` assertions still fail on 3.60: it's not
-  an FFI bug, EDS just answers differently there (`X-JABBER`/`X-AIM`/
-  `X-GADUGADU` resolve to the first home slot instead of the multi-valued IM
-  field; `ANNIVERSARY`/`X-EVOLUTION-ANNIVERSARY` swap places;
-  `E_CONTACT_NAME_OR_ORG`'s derivation changes). What the plugin should
-  emit/read on a newer EDS is a `jmap-vcard` mapping call, not one to guess
-  here — the three questions are listed in `docs/eds-version-matrix.md`'s
-  section (B).
+- ~~**(B) — the 3 `eds-sys/tests/contacts.rs` failures on 3.60.**~~
+  **Test-level fix landed 2026-08-17.** They characterized EDS's own C
+  behaviour, not a `jmap-vcard` mapping choice, so the assertions are now
+  version-aware (`eds_death_date_field` cfg in `eds-sys/build.rs`) rather than
+  guessed; `ci/eds-matrix.sh` passes with 0 failures on both legs, verified
+  locally in the pinned 3.60.2 container. Detail:
+  `docs/eds-version-matrix.md` (B).
+- **(B′) Still open — a `jmap-vcard` mapping decision, not a test fix.**
+  Whether the plugin's *own* mapping should change on a newer EDS: should a
+  JMAP contact's chat handle be read from/written to the multi-valued IM
+  field or the first home slot (now that EDS 3.60 prefers the latter);
+  should the plugin write `ANNIVERSARY` or `X-EVOLUTION-ANNIVERSARY`; does
+  anything rely on `E_CONTACT_NAME_OR_ORG`'s sort-order shape. Maintainer's
+  call, not code to guess at — `docs/eds-version-matrix.md` (B) has the
+  measured facts these questions turn on.
 - **(C) Remaining — clippy can't gate the 3.60 leg yet.** `ci/eds-matrix.sh`
   only runs `cargo test`, not clippy; adding `-D warnings` there today would
   trip on five `unnecessary_transmute` warnings in bindgen's output for
