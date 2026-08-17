@@ -31396,3 +31396,24 @@ pending a maintainer decision to spend cloud budget on it, not a credentials
 gap), and the manual-OAuth2-page UX call. If `origin/master` is still at
 this session's tag and nothing new has landed, another one-line confirmation
 is sufficient.
+
+## 2026-08-17 (three-hundred-and-thirty-seventh session)
+
+**One-line confirmation, per the 329th–336th sessions' own instruction not
+to re-derive an already-independently-verified conclusion.** `git fetch
+origin`: `origin/master` unchanged at `ee18784` (the 336th session's tag);
+no other agent landed anything. `gh`/token/escalate check re-run fresh:
+`which gh` not found, no `GITHUB_TOKEN`/`GH_TOKEN`, no `~/.config/gh`, no
+`~/.night-shift-escalate`. Fresh `TODO`/`FIXME`/`unimplemented!`/`todo!()`
+sweep of `jmap-config`, `jmap-config-module`, and
+`jmap-backend-core/src/oauth2.rs`: none found. Disk unchanged (84%, 9.2G
+free). `git status --short` empty. Nothing changed; no unblocked priority
+work exists tonight.
+
+**Next session**: same standing blockers as the 326th–336th sessions — M7
+human verification, M10 CI dispatch (needs `gh`/GitHub-UI access), Stalwart
+CI provisioning (technically runnable via this VM's `gcloud` auth but
+withheld pending a maintainer go/no-go on cloud spend), and the
+manual-OAuth2-page UX call. If `origin/master` is still at this session's
+tag and nothing new has landed, another one-line confirmation is
+sufficient.
