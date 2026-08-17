@@ -32114,3 +32114,40 @@ Conclusion unchanged from the 353rd session, now independently confirmed
 rather than inherited: no code change this session. Nothing unblocked
 exists under the current priority order (M7 → real-server readiness →
 M9/M10, all closed or maintainer-gated).
+
+## 2026-08-17 (355th session) — independent re-verification, still nothing unblocked
+
+Re-derived the unblocked-work set from scratch rather than trusting the
+353rd/354th entries' conclusions, checking different angles than they did:
+
+- `git fetch origin`: no commits ahead or behind `HEAD` (`36d6db8`) — no
+  maintainer push since the last session.
+- Public Actions API (unauthenticated `curl`, no `gh`): the last five CI
+  runs are all `completed`/`success`, including `32045850667` for `a8bb65e`
+  (the (A) Camel-port-to-3.60 fix) — the newer-EDS leg is genuinely green,
+  not just claimed green.
+- `~/.night-shift-escalate` absent — no pending escalation to honour.
+- `docs/ROADMAP.md` unchanged since `445dc22`; `docs/MILESTONES.md` still
+  M1–M10 all tagged, including M7 and M10.
+- Re-read `docs/eds-version-matrix.md` and `docs/BACKLOG.md` in full rather
+  than trusting prior summaries: (A) fixed and reproduced in-container per
+  the doc's own "Fixed 2026-08-17" section; (B) is an explicit
+  `jmap-vcard` mapping decision for the maintainer (three named questions,
+  none for the agent to guess); (C) is a bindgen/glibc clippy artifact on
+  the 3.60 container that `ci/eds-matrix.sh` doesn't gate on today — both
+  correctly parked, not live regressions.
+- Took a different angle than recent sessions: swept the whole `rust/`
+  tree for `TODO|FIXME|XXX` rather than just the oauth2/live-server files.
+  The only hits are `VTODO` calendar-component substring matches and one
+  doc-comment in `jmap-mail/src/folders.rs` quoting *upstream* IMAPX's own
+  `/* FIXME: obey other flags */` (explaining why this backend deliberately
+  does NOT share that gap) — not an open item here.
+- Confirmed `--features live-server` exists on `jmap-client` and the GUI
+  smoke-test machinery is wired into `.github/workflows/ci.yml` /
+  `runner-smoke.yml`, consistent with M9's tag — not just asserted from the
+  log, checked directly in the workflow files.
+
+Conclusion unchanged, independently re-confirmed via different checks than
+the 353rd/354th sessions ran: nothing unblocked exists under the current
+priority order (M7 → real-server readiness → M9/M10, all closed or
+maintainer-gated). No code change this session.
