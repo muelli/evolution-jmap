@@ -59,11 +59,14 @@
 //! freeing, which is the condition the previous session's storage work
 //! existed to reach.
 //!
-//! ## What this does not yet do
+//! ## What this crate does not do
 //!
-//! Set `[Authentication] method` to [`NAME`] anywhere. That is the setup UI's
-//! job (M7), which does not write OAuth2 accounts yet, so an account reaches
-//! this service only through a hand-edited `.source` keyfile today.
+//! Set `[Authentication] method` to [`NAME`] itself — that is
+//! [`backend::insert_entries`](crate::backend)'s job, the authentication
+//! combo an account's setup writes from, and
+//! [`config_lookup`](crate::config_lookup)'s successful-discovery result.
+//! Both already exist, so an account reaches this service through either
+//! path today, not only through a hand-edited `.source` keyfile.
 //!
 //! Registering the type is no longer on that list: both `e_module_load` entry
 //! points call `register_dynamic::<Service>()`, so an `EOAuth2Services` built
