@@ -31131,3 +31131,62 @@ UX call. Do not re-run the live-server/capability-negotiation/OAuth2 sweep
 again absent new code in that territory — it came back clean tonight via
 an independent audit on top of already being clean per many prior
 sessions' checks.
+
+## 2026-08-17 (three-hundred-and-twenty-eighth session)
+
+**Survey, no claim — again, but re-derived rather than trusted.** `git
+fetch origin` shows `origin/master` unchanged at `13d473a` (the 327th
+session's own tag); no other agent has landed anything since. Rather than
+accept the last several sessions' "no unblocked priority work" conclusion
+on their word, re-ran the checks that would overturn it if anything had
+changed:
+
+- **gh/CI-dispatch path**: `which gh` still `command not found`; no
+  `GITHUB_TOKEN`/`GH_TOKEN` in the environment, no `~/.config/gh`, no
+  `~/.netrc`. Unchanged from the 326th/327th sessions — this VM still has
+  no credential that would let it authenticate `gh` even if installed, so
+  M10's `eds-version-matrix` dispatch is still a human/GitHub-UI-only task.
+- **`~/.night-shift-escalate`**: checked, absent — nothing parked for a
+  bigger model.
+- **Full gate re-run for currency**: `cargo test --workspace --exclude
+  example-module --exclude jmap-functional --locked` (0 failed, all green)
+  and `cargo clippy --workspace --exclude example-module --all-targets
+  --locked -- -D warnings` (clean) both fresh, not assumed from the log.
+  `git status --short` empty before this entry; disk at 85% (9.0G free),
+  stable.
+- **Read `jmap-client/tests/live_server.rs` in full myself**, rather than
+  trusting the 327th session's subagent-audit summary of it: the
+  `--features live-server` harness is real and complete as described —
+  five `#[ignore]`d tests double-gated behind the feature and the flag,
+  covering session/core-capability discovery, `Core/echo`, and
+  capability-tolerant listing for mail/contacts/calendars via
+  `Client::primary_account`'s RFC 8620 §2 fallback (not
+  `Session::primary_accounts` directly, so a server omitting that field
+  still resolves). Read-only by design, documented as such, with
+  `docs/manual-test-live-server.md` as the runnable recipe and
+  `infra/gcp/create-stalwart.sh` for provisioning — the provisioning step
+  itself is infra/ and a real network target, out of reach and out of
+  scope for this VM regardless.
+- **Re-checked `docs/BACKLOG.md`**: unchanged since the 325th session's
+  read of it; the M7 section's one entry is already settled (2026-08-16,
+  no code change needed), and nothing under any other heading is
+  M7/real-server territory — all of it is M1–M6 fidelity polish this
+  session's priority explicitly forbids picking up.
+
+**Conclusion: unchanged.** M7's only gap is human verification in real
+Evolution (plus the parked manual-OAuth2-page UX call, a maintainer
+judgment call, not a technical unknown). Real-server readiness (OAuth2
+across all four backends, capability negotiation, the live-server harness)
+is implemented, tested against the mock, and documented — confirmed again
+by direct reading this session, not by re-trusting a prior summary. M10's
+job is landed but this VM has no path to dispatch it. Per "correctness over
+progress," not manufacturing a commit in M1–M6/M8 to avoid an empty-looking
+session; a survey that finds nothing new is the honest outcome the roadmap
+asks for.
+
+**Next session**: same standing blockers as the 326th/327th sessions — M7
+human verification, M10 CI dispatch (needs a human with `gh`/GitHub-UI
+access), Stalwart CI provisioning, and the manual-OAuth2-page UX call. Do
+not re-read `live_server.rs` or re-run the OAuth2/capability-negotiation
+sweep again absent new code in that territory; this session's direct read
+confirms it is clean on top of the 327th session's independent audit.
