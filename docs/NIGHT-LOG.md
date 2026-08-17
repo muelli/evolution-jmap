@@ -30524,3 +30524,67 @@ audit or this TODO/FIXME sweep again absent a new commit upstream of this
 entry — both came back clean twice in a row now (318th, 319th). The two
 standing blockers (M7 human verification, M10 infra) are unchanged and
 need a human, not another agent session, to move.
+
+## 2026-08-17 (three-hundred-and-twentieth session)
+
+**Claiming M6/OAuth2 increment: the collection backend's own credential path
+has never gone through OAuth 2.0.** `git fetch origin` showed `origin/master`
+unchanged at `5b988e9` (the 319th session's own commit) before starting, and
+again just before this push — no collision.
+
+**Found the gap by widening the 317th/318th sessions' check to a fourth
+backend.** Those two sessions confirmed OAuth2 and capability-negotiation
+were consistent across `jmap-backend-book`, `jmap-backend-cal` and
+`jmap-mail` — but never checked `jmap-backend-collection` (M6, the
+`ECollectionBackend` that fans one account out into mail+book+cal sources),
+which has its *own* `authenticate_sync` entry point
+(`src/authenticate.rs::authenticate_with`) rather than going through
+`jmap-backend-core::connect::connect_with`, the shared helper the other
+three route through. It built credentials by calling
+`jmap_backend_core::connect::credentials` directly — the Basic/anonymous-only
+helper — and never checked `[Authentication] Method` at all. This was
+already documented as a known gap in `src/populate.rs`'s module doc ("This
+backend has no OAuth2 support to gate on"), not a silent one, but it was
+still open.
+
+**Fixed with a red test first.** Added
+`an_oauth2_account_is_never_treated_as_anonymous` to
+`jmap-backend-collection/tests/authenticate.rs`: an account with
+`[Authentication] Method = OAuth2` and no `[Authentication] User` — which
+this project's own setup UI can legally write, since the identity lives in
+the OAuth2 consent rather than a typed field — was, before the fix,
+authenticated *anonymously* (`Credentials::None`) and fanned out, because an
+absent user reads as "anonymous on purpose" on the Basic-auth path. Confirmed
+red (`the fan-out ran for an account that should not have been contacted`),
+then made `authenticate_with` branch on
+`jmap_backend_core::oauth2::source_uses_oauth2` the same way `connect_with`
+already does for the other three backends: OAuth2 accounts call
+`oauth2::access_token` and map the result through `Credentials::bearer`;
+everyone else still goes through the existing Basic/anonymous helper. No
+change to `populate.rs`'s actual scheduling logic was needed — whichever of
+`request_credentials`/`authenticate_anonymously` a populate calls,
+`authenticate_sync` runs afterwards and the new branch in `authenticate_with`
+takes over regardless of what credentials EDS handed it — only its module
+doc, which flatly said OAuth2 was unsupported, needed correcting.
+
+**Full gate, clean.** `cargo build --workspace --exclude example-module`,
+`cargo clippy --workspace --exclude example-module --all-targets --locked --
+-D warnings`, and `cargo test --workspace --exclude example-module --exclude
+jmap-functional --locked` all green (0 failed across every crate). No new
+source files, so no SPDX header to add; `reuse`/`cargo deny` still not
+installable here ([[checks-sh-blocked-on-vm]]).
+
+**Not tagging a milestone.** Same reasoning as the 317th session's mail-side
+fix: this closes one more piece of the roadmap's "real-server readiness"
+priority bullet, not a milestone of its own. M6 itself is unaffected and
+already tagged complete.
+
+**Next session**: the real-server-readiness bullet should now be re-checked
+against jmap-backend-collection the same way the 318th session re-checked
+book/cal/mail for capability-negotiation robustness — this session only
+looked at OAuth2 for the fourth backend, not whether its capability
+negotiation (which collections/parts it fans out) has the same asymmetry
+book/cal/mail once had. Worth one focused look before assuming the whole
+bullet is closed across all four backends. M7 (human verification) and M10
+(infra) are unchanged.
+`~/.night-shift-escalate` empty (checked, not present).
