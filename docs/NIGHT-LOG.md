@@ -31480,3 +31480,13 @@ absent; disk 84%/9.2G free; `docs/BACKLOG.md` still 92 lines;
 `docs/MILESTONES.md` still shows M7/M10 untagged. Nothing to do this
 session but restate: the three open decisions are the maintainer's to
 make, not an agent's — see the 338th session's entry above.
+
+## 2026-08-17 (340th session)
+
+Pointer, per the 338th/339th sessions. `git fetch origin`: `origin/master`
+unchanged at `53257ac`; `gh`/token/escalate still absent; disk 84%/9.2G
+free; `git status --short` empty. This session's conversation is
+interactive (the maintainer is present), so rather than add a 341st
+identical confirmation, the assistant is asking the three open questions
+from the 338th session's entry directly in the chat turn instead of
+logging another wait. No `rust/` changes.
