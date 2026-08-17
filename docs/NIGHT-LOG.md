@@ -31807,3 +31807,82 @@ a guess: this VM has `docker` (via passwordless `sudo`), so the failing leg is
 (`fedora@sha256:6c75d5bf…`, EDS 3.60.2). Both ABIs therefore get a real
 compiler, and no part of this fix rests on me guessing what a 3.60 header
 says.
+
+### Result
+
+**Delivered: the version-conditional FFI layer, verified by compiling and
+running on both ABIs.** `eds-sys`, `evo-sys`, `jmap-backend-core`,
+`jmap-backend-book` and `jmap-backend-cal` now build on EDS 3.60.2 and their
+whole suites pass there (`eds-sys` 64/64 camel, 15/15 layout, 6/6 oauth2,
+22/22 ical, 2/2 errors), while the pinned-3.52 leg is unchanged and green
+(114 test binaries, `cargo clippy --all-targets -D warnings` clean on both the
+default members and the EDS crates, `cargo fmt --check` clean).
+
+Mechanism, and why it is this one: `build.rs` reads the bindings bindgen just
+produced and emits a `cargo::rustc-cfg` per entry of a new `EDS_FEATURES`
+table for the entries this EDS actually has. The oracle is clang on the
+installed headers, **not** a comparison against `EDS_HEADER_VERSION` — a
+version comparison would encode my guess about which release changed what, and
+a wrong guess is silent on precisely the leg it guessed wrong about. Each entry
+also gets a `rustc-check-cfg` so `-D warnings` does not trip on the ones a
+given EDS lacks. Verified both directions: on 3.52 five of the six markers are
+present and `EVCardVersion` is absent; on 3.60 exactly the reverse.
+
+The two calls that merely changed *shape* are resolved once, in a new
+`eds-sys/src/compat.rs`, because a build-script cfg does not reach dependent
+crates — so the abstraction has to live in `eds-sys` or every call site needs
+its own `#[cfg]`. Both wrappers ask for vCard **3.0 explicitly**
+(`e_vcard_convert_to_string(_, E_VCARD_VERSION_30)` on 3.60,
+`e_vcard_to_string(_, EVC_FORMAT_VCARD_30)` before it). That is the subtle
+part: on 3.60 the surviving one-argument `e_vcard_to_string` emits the card's
+*own* version, so the mechanical fix — drop the argument — would have compiled
+cleanly and quietly started emitting something other than the vCard 3.0
+`jmap-vcard`'s parser documents itself as reading. Exactly the
+plausible-but-wrong-but-compiles failure the escalation was for.
+
+Where 3.60 **removed** an API outright, nothing was invented: the affected
+`eds-sys` probe tests are `#[cfg]`-gated on the same feature detection, with a
+comment naming what is gone and whether shipped code depends on it. On 3.52
+every cfg is satisfied, so no assertion there changed — the counts are
+identical by construction.
+
+### Method note: the leg is reproducible locally, no CI dispatch needed
+
+This VM has `docker` plus passwordless `sudo`, so the failing leg ran in the
+very digest `ci.yml` pins. That is what made the work verifiable rather than
+speculative, and it turned up considerably more than the previous entry's
+recorded list (which came from reading the job log): `CamelProvider` also lost
+three fields, `CamelMIRecord`/`CamelFIRecord` are private now,
+`camel_folder_summary_get_array`/`_free_array`/`_get_changed` are gone, and
+`e_contact_date_to_string` gained a parameter nobody had noticed. The recipe is
+now in `docs/eds-version-matrix.md` so the next session starts from a running
+container instead of a dispatch round-trip.
+
+### What is left, and why I did not do it
+
+The leg is **not green yet** and `continue-on-error: true` must stay. Two items
+remain, both recorded in `docs/eds-version-matrix.md` with measured detail:
+
+- **(A) `jmap-mail`'s Camel port** — the only crate in the set that still fails
+  to compile (18 errors). 3.60 deleted `camel-folder-search.h` and replaced the
+  whole object with a new `CamelStoreSearch` API, dropped the
+  `CamelFolderClass.search_by_expression`/`.search_by_uids` vfuncs this
+  provider overrides, made the summary database's row structs private
+  (`camel_folder_summary_save` now takes a `CamelStoreDBFolderRecord *`), and
+  removed the summary array accessors. That is a port to a redesigned API, not
+  a set of renames — a whole increment of its own, and the natural next claim.
+- **(B) contact-model semantic drift** — the three `eds-sys/tests/contacts.rs`
+  assertions that still fail on 3.60. These are not FFI problems; they compile
+  and link, and EDS simply answers differently: `X-JABBER`/`X-AIM`/`X-GADUGADU`
+  now resolve to the first *home slot* instead of the multi-valued IM field,
+  `ANNIVERSARY` and `X-EVOLUTION-ANNIVERSARY` swapped places, `DEATHDATE`
+  became a real field, and `E_CONTACT_NAME_OR_ORG` no longer derives
+  `"Family, Given"`. I measured all of it on both legs (table in the doc) but
+  deliberately did **not** gate or re-assert it: what the plugin should emit
+  and read on a newer EDS is a `jmap-vcard` mapping decision, and writing a
+  3.60 expectation here would put a guess of mine into the acceptance suite.
+  Left failing so it stays visible. **Maintainer decision needed** on the three
+  questions in the doc.
+
+M10's tag in `docs/MILESTONES.md` (`445dc22`) predates this and is left as-is
+per the never-edit-prior-lines rule.

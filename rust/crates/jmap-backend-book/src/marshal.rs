@@ -18,9 +18,10 @@
 use std::ffi::CStr;
 use std::ptr;
 
+use eds_sys::compat::e_vcard_to_string_vcard_30;
 use eds_sys::{
-    E_CONTACT_UID, EContact, EVC_FORMAT_VCARD_30, EVCard, e_book_meta_backend_info_new,
-    e_contact_get_const, e_contact_new_from_vcard, e_vcard_to_string,
+    E_CONTACT_UID, EContact, EVCard, e_book_meta_backend_info_new, e_contact_get_const,
+    e_contact_new_from_vcard,
 };
 use glib_sys::{GSList, g_free, g_slist_prepend, gchar};
 use gobject_sys::g_object_unref;
@@ -111,7 +112,7 @@ pub unsafe fn vcard_from_contact(contact: *mut EContact) -> Option<String> {
     // SAFETY: EContact derives from EVCard, so the cast is the C upcast, and
     // the returned string is a GLib allocation this call takes ownership of.
     unsafe {
-        let raw = e_vcard_to_string(contact.cast::<EVCard>(), EVC_FORMAT_VCARD_30);
+        let raw = e_vcard_to_string_vcard_30(contact.cast::<EVCard>());
         if raw.is_null() {
             return None;
         }

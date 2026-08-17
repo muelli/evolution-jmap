@@ -7,6 +7,7 @@
 // cross-checks the result against the running GObject type system.
 
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 
 /// EDS 3.52 is the target platform (Debian trixie / Fedora 40 era). Older
@@ -631,6 +632,71 @@ const BLOCKED_TYPES: &[&str] = &[
     "__va_list_tag",
 ];
 
+/// The parts of the EDS API that are present in some releases and absent in
+/// others, each paired with a name whose presence in the generated bindings
+/// settles it: `(cfg name, marker identifier)`.
+///
+/// The point of detecting these from *bindgen's own output* rather than from
+/// `EDS_HEADER_VERSION` is that a version comparison encodes a guess about
+/// which release changed what, and a wrong guess is silent on the leg it
+/// guessed wrong about. Here the oracle is clang reading the headers that are
+/// actually installed: if the symbol is in `bindings.rs`, this EDS has it.
+/// A marker is a whole identifier that appears nowhere else in the surface, so
+/// a substring test cannot be fooled by a longer name.
+///
+/// `M10`'s matrix is what keeps this list honest — see
+/// `docs/eds-version-matrix.md` for what each of these turned out to be, and
+/// which of them the shipped code (as opposed to a probe test) depends on.
+const EDS_FEATURES: &[(&str, &str)] = &[
+    // 3.60 reworked vCard versioning: `EVCardFormat` and its
+    // `EVC_FORMAT_VCARD_30` are gone, `e_vcard_to_string` lost its format
+    // argument, and the version a caller wants is stated with an
+    // `EVCardVersion` to `e_vcard_convert_to_string` instead. The same enum
+    // is what `e_contact_date_to_string` gained a second parameter of, so one
+    // probe covers both — see `src/compat.rs`, which is the only place either
+    // spelling is written.
+    ("eds_vcard_version_enum", "EVCardVersion"),
+    // 3.60 dropped `CamelProvider`'s `auto_detect`, `url_hash` and
+    // `url_equal` fields; the function-pointer typedef of the first goes with
+    // them, and is the marker because a field name is not a distinct
+    // identifier in the bindings.
+    ("camel_provider_url_helpers", "CamelProviderAutoDetectFunc"),
+    // 3.60 removed `camel-folder-search.h` outright — the `CamelFolderSearch`
+    // object, its class, and the `camel_folder_search_util_*` helpers — in
+    // favour of a `CamelStoreSearch` API. Only `camel_folder_search_sync` and
+    // its two siblings survive, on `CamelFolder` itself.
+    ("camel_folder_search_object", "camel_folder_search_new"),
+    // 3.60 made the summary database's row structs private: `CamelMIRecord`
+    // (a message) and `CamelFIRecord` (the folder header beside them), which
+    // is where a provider keeps the one column Camel reserves for it.
+    ("camel_summary_records", "CamelMIRecord"),
+    // 3.60 replaced `camel_uid_cache_get_new_uids`/`_free_uids` with
+    // `camel_uid_cache_dup_new_uids`, whose result is an ordinary
+    // reference-counted `GPtrArray`.
+    (
+        "camel_uid_cache_get_new_uids",
+        "camel_uid_cache_get_new_uids",
+    ),
+    // 3.60 has no boxed `CamelFolderThread` type; the name now belongs to the
+    // `CamelFolderThreadFlags` enum's `GType`.
+    (
+        "camel_folder_thread_boxed",
+        "camel_folder_thread_messages_get_type",
+    ),
+];
+
+/// Emit one `cargo::rustc-cfg` per [`EDS_FEATURES`] entry the generated
+/// bindings actually contain, and a `rustc-check-cfg` for every entry either
+/// way so that `-D warnings` does not trip over the ones this EDS lacks.
+fn emit_feature_cfgs(bindings: &str) {
+    for (cfg, marker) in EDS_FEATURES {
+        println!("cargo::rustc-check-cfg=cfg({cfg})");
+        if bindings.contains(marker) {
+            println!("cargo::rustc-cfg={cfg}");
+        }
+    }
+}
+
 /// The one EDS version the four probed packages describe.
 ///
 /// They are four `.pc` files out of a single tarball, so in every sane
@@ -738,7 +804,12 @@ fn main() {
         .generate()
         .expect("bindgen failed on the EDS headers");
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR unset"));
+    let written = out.join("bindings.rs");
     bindings
-        .write_to_file(out.join("bindings.rs"))
+        .write_to_file(&written)
         .expect("could not write bindings.rs");
+
+    // Feature-detect against the file rustc is about to compile, rather than
+    // against the version string, so the answer is what this EDS really has.
+    emit_feature_cfgs(&fs::read_to_string(&written).expect("could not read back bindings.rs"));
 }
