@@ -32365,3 +32365,24 @@ Ninth independent conclusion: nothing unblocked exists under the current
 priority order (M7 → real-server readiness → M9/M10, all closed or
 maintainer-gated). No code change this session; ending here rather than
 manufacturing an item to justify a commit.
+
+## 2026-08-17 — M10 eds-version-matrix: compile drift fixed, 3 behavioral test failures remain
+
+Re-dispatched CI after the newer-EDS build fixes (c28adbb, a8bb65e). The leg now
+COMPILES against newer EDS (Fedora ~3.60) — the 46 compile errors are gone — and
+fails instead on 3 eds-sys `contacts` tests that encode 3.52 behavior newer EDS
+changed:
+- structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds
+  (crates/eds-sys/tests/contacts.rs:1722): left "Dr. Vera Marie Oldenburg MSc"
+  != right "Oldenburg, Vera" — newer libebook derives display/file-as name from
+  N/FN differently.
+- contact_date_fields_are_structured_e_contact_date_types
+- e_contact_field_id_from_vcard_maps_x_lines
+23 passed, 3 failed, exit 101.
+
+Top unblocked M10 item: make these 3 tests EDS-version-aware (assert the value
+each EDS version actually produces), or fix the mapping if the drift is a real
+functional regression rather than EDS's own formatting change. Prefer
+version-conditional assertions since these characterize EDS's own behavior. Then
+the leg goes green and M10 is tag-able. Re-dispatch CI to confirm (runner has no
+gh). vCard/EDS-semantics reasoning — escalate to opus only if it proves subtle.
