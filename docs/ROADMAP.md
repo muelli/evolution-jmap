@@ -37,6 +37,37 @@ them in `docs/BACKLOG.md` for a later hardening pass and move on. Correctness
 still governs *how* the priority work is done (TDD, honest verification); this
 directive governs *what* to work on.
 
+## MAINTAINER DECISIONS (2026-08-17) — resolves the three open items
+
+The 338th night-log entry surfaced three items only the maintainer could
+decide. All three are now answered:
+
+1. **Auth UX → option (b): autodiscovery-only, by design.** Manual selection
+   of OAuth 2.0 on the manual server-settings page stays blocked; there will
+   be NO manual "register a client" affordance (option (a) is declined). The
+   existing `complete.rs` status message (*"OAuth 2.0 needs \"Look Up Account
+   Details\" to run first."*) is the intended documentation of this. This
+   clears the last thing holding M7 back. **Action for the agent:** tag M7
+   COMPLETE in `docs/MILESTONES.md` — its setup UI is human-verified working
+   (two operator rounds, plus the round-2 entry confirming the status label,
+   persistence across `--force-shutdown`, and graceful port handling). You may
+   refine that message's wording for a first-time user, but add no new code
+   path.
+
+2. **M10 → the maintainer will dispatch it.** `eds-version-matrix` is a *job
+   inside the "CI" workflow* (`.github/workflows/ci.yml`), gated on
+   `workflow_dispatch` / the `run-eds-version-matrix` label. The maintainer
+   triggers it from the GitHub UI (the runner has no `gh`/token). Tag M10 once
+   it has run green in Actions; until then leave it untagged and do NOT try to
+   trigger it from the runner.
+
+3. **Stalwart → provisioned.** `stalwart-1` (europe-west3-c) is running the
+   real JMAP server. IMPORTANT: its firewall admits only the *operator's* host
+   IP, not the runner's egress — so the `--features live-server` harness is run
+   **operator-side**, not from the night runner. Do NOT attempt to reach
+   Stalwart from the runner; keep the harness mock-green as before and leave
+   real-server runs to the operator.
+
 ## Milestones (in order)
 
 ### M1 — `eds-sys`: bindgen FFI layer

@@ -31523,3 +31523,25 @@ Pointer. `git fetch origin`: `origin/master` unchanged at `a3f8dca` (the
 Interactive session again — asking the three open items directly in chat
 rather than adding a third near-identical pointer entry's worth of prose.
 No `rust/` changes.
+
+## 2026-08-17 — MAINTAINER DECISIONS (operator, interactive)
+
+The three open items from the 338th session are answered — see the new
+"MAINTAINER DECISIONS (2026-08-17)" section in docs/ROADMAP.md:
+
+1. **Auth UX = option (b), autodiscovery-only by design → tag M7 COMPLETE.**
+   The existing `complete.rs` `OAuth2NotRegistered` message documents it; no
+   option-(a) manual affordance is wanted. M7's setup UI is human-verified
+   (two operator rounds + the round-2 status-label / persistence / port
+   checks). Optional: polish that message's wording for a first-time user —
+   no new code path.
+2. **M10** = the maintainer dispatches the `eds-version-matrix` CI leg from
+   the GitHub UI; tag M10 once it has run green. The runner has no `gh`, so do
+   not try to trigger it from here.
+3. **Stalwart** provisioned (`stalwart-1`, europe-west3-c). Firewall admits
+   the operator host only, so `--features live-server` runs are operator-side,
+   not on the runner.
+
+Next unblocked agent work: implement decision 1 (tag M7 COMPLETE, optional
+message-wording polish). M10 tagging then waits on the maintainer's CI
+dispatch; Stalwart real-server runs are operator-side.
