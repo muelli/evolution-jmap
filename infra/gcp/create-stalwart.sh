@@ -21,8 +21,14 @@
 # wake it with `gcloud compute instances start <name>`. NB: the ephemeral
 # external IP changes across restarts.
 #
-# The admin password is generated on the VM at first boot:
-#   gcloud compute ssh stalwart-1 --zone europe-west3-c -- sudo cat /opt/stalwart/admin-password
+# Stalwart 0.16 starts in "bootstrap mode" until its one-time initial setup is
+# completed at http://<ip>:8080/ (which provisions a permanent admin and writes
+# the config into the persistent volume). Until then — and as a stable fallback
+# that survives reboots/naps — the recovery admin is pinned via
+# STALWART_RECOVERY_ADMIN to the password generated on the VM at first boot
+# (older ADMIN_SECRET is ignored by 0.16 and regenerates a random one each boot):
+#   user: admin
+#   pass: gcloud compute ssh stalwart-1 --zone europe-west3-c -- sudo cat /opt/stalwart/admin-password
 
 set -euo pipefail
 
@@ -89,7 +95,7 @@ docker rm -f stalwart || true
 docker run -d --name stalwart --restart unless-stopped \
     -p 8080:8080 \
     -v /opt/stalwart/data:/opt/stalwart \
-    -e ADMIN_SECRET="$(cat /opt/stalwart/admin-password)" \
+    -e STALWART_RECOVERY_ADMIN="admin:$(cat /opt/stalwart/admin-password)" \
     stalwartlabs/stalwart:latest
 EOF
 

@@ -4,15 +4,17 @@
 #
 # Thin convenience wrapper around the official `stalwart-cli`, so driving the
 # throwaway Stalwart test VM (see infra/gcp/create-stalwart.sh) needs no
-# --url/--user/--password boilerplate and copes with its ephemeral external IP.
+# --url/--user/--password boilerplate and copes with its ephemeral IP and its
+# 60-minute idle nap.
 #
 # It resolves the connection automatically:
 #   - URL:  $STALWART_URL, else the VM's current external IP via gcloud → :8080.
+#           If the VM is napped it is STARTED and waited on (IP + HTTP ready).
 #   - Auth: $STALWART_TOKEN (bearer, --api-key) if set; else $STALWART_PASSWORD
 #           (basic, user 'admin') if set; else the admin secret fetched once over
 #           `gcloud compute ssh` and cached (mode 600) under $XDG_CACHE_HOME.
-#           No API token is needed to bootstrap — the built-in `admin` account's
-#           secret is enough; mint a token later if you prefer --api-key.
+#           No API token is needed to bootstrap — the pinned recovery admin
+#           (STALWART_RECOVERY_ADMIN in create-stalwart.sh) is enough.
 #
 # The real `stalwart-cli` must be on PATH — the Stalwart Docker image does NOT
 # ship it:
@@ -23,7 +25,7 @@
 #   stw <stalwart-cli args...>          # e.g.  stw describe ;  stw list account
 #   stw url                             # print the resolved server URL
 #   stw seed <domain> <local> <pass>    # idempotently create a domain + one user
-#   stw refresh                         # forget the cached URL + admin secret
+#   stw refresh                         # forget the cached admin secret
 #
 # Env overrides: STALWART_VM (default stalwart-1), STALWART_ZONE
 # (default europe-west3-c), STALWART_URL, STALWART_PASSWORD, STALWART_TOKEN.
@@ -31,20 +33,35 @@ set -euo pipefail
 
 NAME=${STALWART_VM:-stalwart-1}
 ZONE=${STALWART_ZONE:-europe-west3-c}
-CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/stw-$NAME.env"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/stw-$NAME.secret"
 
-# `refresh` and `url` do not need the binary or the network round-trips below.
 if [[ "${1:-}" == "refresh" ]]; then rm -f "$CACHE"; echo "cleared $CACHE"; exit 0; fi
 
-[ -f "$CACHE" ] && { . "$CACHE"; }
+[ -f "$CACHE" ] && . "$CACHE"   # sets CACHED_SECRET
+
+vm_ip() {
+    gcloud compute instances describe "$NAME" --zone "$ZONE" \
+        --format='get(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || true
+}
 
 resolve_url() {
     [ -n "${STALWART_URL:-}" ] && { printf '%s' "$STALWART_URL"; return; }
-    [ -n "${CACHED_URL:-}" ] && { printf '%s' "$CACHED_URL"; return; }
-    local ip
-    ip=$(gcloud compute instances describe "$NAME" --zone "$ZONE" \
-         --format='get(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || true)
-    [ -n "$ip" ] || { echo "stw: could not resolve $NAME's IP (is the VM running?)" >&2; exit 1; }
+    local ip code; ip=$(vm_ip)
+    if [ -z "$ip" ]; then
+        # No external IP => the VM is stopped (the idle watchdog naps it). Start
+        # it and wait for both an IP and for Stalwart's HTTP port to answer.
+        echo "stw: $NAME is not running (idle-napped?) — starting it…" >&2
+        gcloud compute instances start "$NAME" --zone "$ZONE" >/dev/null 2>&1 \
+            || { echo "stw: failed to start $NAME" >&2; exit 1; }
+        for _ in $(seq 1 18); do ip=$(vm_ip); [ -n "$ip" ] && break; sleep 5; done
+        [ -n "$ip" ] || { echo "stw: $NAME started but has no IP yet — retry shortly" >&2; exit 1; }
+        echo "stw: $NAME up at http://$ip:8080 — waiting for Stalwart (container reboot ~1-2 min)…" >&2
+        for _ in $(seq 1 24); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$ip:8080/" 2>/dev/null || true)
+            [ "$code" != "000" ] && break
+            sleep 5
+        done
+    fi
     printf 'http://%s:8080' "$ip"
 }
 URL=$(resolve_url)
@@ -70,7 +87,7 @@ else
         secret=$(gcloud compute ssh "$NAME" --zone "$ZONE" \
                  --command 'sudo cat /opt/stalwart/admin-password' 2>/dev/null | tr -dc 'A-Za-z0-9')
         [ -n "$secret" ] || { echo "stw: could not fetch the admin secret over gcloud ssh" >&2; exit 1; }
-        ( umask 077; printf 'CACHED_URL=%q\nCACHED_SECRET=%q\n' "$URL" "$secret" > "$CACHE" )
+        ( umask 077; printf 'CACHED_SECRET=%q\n' "$secret" > "$CACHE" )
     fi
     AUTH=(--user admin --password "$secret")
 fi
