@@ -32758,3 +32758,58 @@ re-run, whichever comes first.
 Fifteenth independent conclusion: nothing unblocked under the current
 priority order. No code change this session; not manufacturing backlog
 polish to justify a commit.
+
+## 2026-08-17 (370th session) — sixteenth re-verification, nothing unblocked
+
+Independent dependency-graph pass, not a trust of the 369th session's
+conclusion. Checked directly:
+
+- `git fetch origin`: `HEAD` (`e19c69e`) matches `origin/master`, tree
+  clean, no new commits since the 369th session's own push.
+- `docs/ROADMAP.md`'s priority order and `docs/MILESTONES.md` (M1–M10 all
+  COMPLETE) re-read in full, unchanged. `~/.night-shift-escalate` absent.
+- Actions API: newest run still `32064810881` (`00271f9`, success); no
+  `workflow_dispatch` since `32063091331` (`dd76d558`) — same fact the
+  363rd–369th sessions established. Issues API: still only the two closed
+  FFI-audit issues, nothing new opened or in Pulls.
+
+New this session: `sudo docker ps` now succeeds (permission-denied in the
+369th session) — a change in the runner's sudo config, not anything this
+session did. But the 369th session's *other* blocker still holds: `df -h /`
+shows 58G total, still only **3.2G available** (95% full, `rust/target`
+alone is 21G), and no image is cached locally (`sudo docker images` empty).
+The reproduction recipe in `docs/eds-version-matrix.md` pulls a Fedora base,
+`dnf install`s `evolution-data-server-devel`/`evolution-devel`/a C toolchain,
+installs rustup, then builds 8 crates' full test suites from a fresh
+checkout — comfortably more than 3.2G even before accounting for Docker's
+own overlay storage sharing this same partition. Freeing the headroom would
+mean `cargo clean`-ing the working `rust/target` (rebuildable, but expensive
+to redo if the recheck itself then also fails to fit and something later in
+the session needs a build) for a check that has no undebugged failure behind
+it: the 3.60 leg is already confirmed green both by an actual CI dispatch
+(`32063091331`) and the 362nd session's documented local run in this exact
+container digest. Re-running it now would spend disk risk to reconfirm a
+already-green fact, not to diagnose a red one — not worth it. Logged so a
+future session doesn't re-treat "sudo docker now works" as license to retry
+without first checking the disk math is any different (it isn't).
+
+Also grepped specifically for "capability-negotiation robustness" — the
+exact phrase ROADMAP's real-server-readiness item uses — rather than the
+OAuth2/live-server files the 366th/368th sessions already confirmed.
+Capability handling is real and tested in its own right: `jmap-client`
+(`client.rs`'s `primary_account`, `oauth.rs`'s scope handling, `changes.rs`'s
+per-type capability lookup), `jmap-proto/src/session.rs`, and each backend's
+`connect.rs` (`jmap-backend-{core,book,cal}`, `jmap-mail`) all reference
+capability negotiation with dedicated test files
+(`jmap-backend-{book,cal}/tests/connect.rs`, `jmap-mail/tests/connect.rs`,
+`jmap-proto/tests/core.rs`, `jmap-collection-sync/tests/{layout,resources,
+children}.rs`) — not a thin wrapper, a real, exercised surface.
+
+`docs/BACKLOG.md` re-read in full: unchanged from the 369th session — (B′)
+a maintainer mapping decision, (C) a low-leverage clippy artifact on the
+3.60 leg, and the M3/M4 contact/vCard fidelity notes, all explicitly
+out of scope under the current-priority directive.
+
+Sixteenth independent conclusion: nothing unblocked under the current
+priority order. No code change this session; not manufacturing backlog
+polish to justify a commit.
