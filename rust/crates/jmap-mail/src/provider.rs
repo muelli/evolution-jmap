@@ -154,6 +154,14 @@ pub fn register() -> &'static CamelProvider {
             // and a NULL here is "no extra widgets" rather than a default.
             extra_conf: ptr::null_mut(),
             port_entries: ptr::null_mut(),
+            // Camel's offer to guess an account's settings from an address.
+            // Nothing to guess here: a JMAP account is discovered from its
+            // session object, which is [`crate::server`]'s job and needs a
+            // connection rather than a callback on a struct. Dropped from the
+            // struct in EDS 3.58 along with the two below, so on a newer EDS
+            // there is not even a slot to decline — see the note on
+            // `url_equal`.
+            #[cfg(camel_provider_url_helpers)]
             auto_detect: None,
             object_types,
             // The SASL mechanisms the provider advertises. Empty rather than
@@ -164,7 +172,17 @@ pub fn register() -> &'static CamelProvider {
             // Only consulted by the CamelURL-keyed service cache, which
             // nothing reaches on a registry-configured account; NULL makes
             // Camel use its own defaults.
+            //
+            // EDS 3.58 removed all three of these fields — that cache is gone,
+            // and with it `CamelProviderAutoDetectFunc`. The fields are
+            // `#[cfg]`-gated rather than the struct being built from zeroed
+            // memory on purpose: naming every field keeps this a struct
+            // literal, so a field some future EDS *adds* is a compile error
+            // here instead of a silent NULL, which is the whole point of the
+            // version matrix in `docs/eds-version-matrix.md`.
+            #[cfg(camel_provider_url_helpers)]
             url_hash: None,
+            #[cfg(camel_provider_url_helpers)]
             url_equal: None,
             // Not NULL, which in this struct means "a provider in the EDS
             // source tree, translated with EDS's catalogue". These strings are

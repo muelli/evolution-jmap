@@ -73,21 +73,35 @@ the leg it guessed wrong about.
 
 Where the *same* operation is merely spelled differently in two releases, the
 difference is resolved once in `eds-sys/src/compat.rs` and the rest of the tree
-calls the wrapper — a build-script cfg does not reach dependent crates, so the
-abstraction has to live in `eds-sys` itself. Where an API was genuinely
-**removed** with no drop-in replacement, nothing is invented: the (test) call
-site is `#[cfg]`-gated and the port is recorded below.
+calls the wrapper. Where an API was genuinely **removed** with no drop-in
+replacement, nothing is invented: the call site is `#[cfg]`-gated and the port
+is recorded below.
+
+A `rustc-cfg` reaches only the crate whose build script emitted it, so a
+`#[cfg]` in a crate that merely *depends* on `eds-sys` would be false on every
+EDS — silently, which is the one failure mode this whole document exists to
+prevent. Cargo's channel for this is a build script's `cargo::metadata`, handed
+to direct dependents' build scripts keyed by the `links` value: `eds-sys`
+publishes each detected feature, and `jmap-mail/build.rs` turns the ones that
+crate cares about back into cfgs for its library and its tests alike. The
+*detection* stays single-sourced in `eds-sys/build.rs`, where the oracle is
+clang; a dependent only re-emits, never re-derives — two oracles could disagree,
+and a version comparison would be a guess.
 
 ## Status on EDS 3.60.2 (measured 2026-08-17, in the pinned container)
 
 Reproduced locally by running `ci/eds-matrix.sh` inside the very digest the job
 pins, so everything below is observed rather than inferred.
 
-**Green on both 3.52 and 3.60:** `eds-sys`, `evo-sys`, `jmap-backend-core`,
-`jmap-backend-book`, `jmap-backend-cal` build and their whole suites pass,
-apart from the three contact-model assertions listed under (B). The
-`eds-version-matrix` job stays `continue-on-error: true` until (A) and (B)
-close.
+**Green on both 3.52 and 3.60:** every crate in the matrix set — `eds-sys`,
+`evo-sys`, `jmap-backend-core`, `jmap-backend-book`, `jmap-backend-cal`,
+`jmap-mail`, `jmap-backend-collection`, `jmap-config` — builds, and their whole
+suites pass apart from the three contact-model assertions listed under (B).
+`jmap-mail` was the last crate that would not compile; (A) closed on
+2026-08-17 (see below), with its 32 test binaries and 436 tests green on 3.60.
+The `eds-version-matrix` job stays
+`continue-on-error: true` until **(B)** closes, which needs a maintainer
+decision rather than code.
 
 ### Fixed — resolved behind one name each in `eds-sys/src/compat.rs`
 
@@ -106,33 +120,97 @@ close.
   `(EContactDate *, EVCardVersion)` on 3.60. Same treatment, same reason:
   `compat::e_contact_date_to_string_vcard_30`.
 
-### (A) Not fixed — `jmap-mail`'s Camel surface, 18 compile errors on 3.60
+### (A) Fixed 2026-08-17 — `jmap-mail`'s Camel surface builds and passes on both
 
-The one crate in the matrix set that still does not build. This is a port to a
-**redesigned** API, not a set of renames, so it is its own work item:
+`jmap-mail` was the last crate in the set that would not compile on 3.60 (18
+errors). It now builds there and its whole suite passes — 32 test binaries, 375
+tests, on both legs. The port turned out to be **smaller than the errors
+suggested**, and the reason is worth recording, because the previous entry's
+reading of it ("a port to a redesigned API") drove an escalation: the errors were
+almost all renames, and the one genuinely redesigned piece had been *absorbed
+into the base class*, so the correct response to it was to delete code rather
+than to write any.
 
-- **The folder-search object is gone.** 3.60 deleted
-  `camel/camel-folder-search.h` — `CamelFolderSearch`, its class, and the
-  `camel_folder_search_util_*` / `_{set,get}_only_cached_messages` helpers —
-  in favour of a new `CamelStoreSearch` API (`camel/camel-store-search.h`).
-  Only `camel_folder_search_sync`, `_header_sync` and `_body_sync`, on
-  `CamelFolder` itself, survive. `jmap-mail/src/folder.rs` calls
-  `camel_folder_search_new`/`_set_folder`/`_search`, and overrides the
-  `CamelFolderClass.search_by_expression` and `.search_by_uids` vfuncs, both
-  of which no longer exist in the class struct.
-- **The summary database's row structs are private now.** `CamelMIRecord` and
-  `CamelFIRecord` are gone; `camel_folder_summary_save` takes a
-  `CamelStoreDBFolderRecord *` third argument in their place.
-  `jmap-mail/src/message_info.rs` and `src/summary.rs` read and write both
-  structs — this is where the provider keeps its `Email` state and its
-  keywords, in the `bdata` column Camel reserves for a subclass, so the port
-  has to decide where that state lives now.
-- **`camel_folder_summary_get_array`, `_free_array` and `_get_changed` are
-  gone**, which is how `src/summary.rs` enumerates its rows.
-- **`CamelProvider` dropped `auto_detect`, `url_hash` and `url_equal`**
-  (and `CamelProviderAutoDetectFunc` with them).
-  `jmap-mail/src/provider.rs` sets all three to `None`; on 3.60 there is
-  nowhere to put them.
+Each of the four items, and what it actually needed:
+
+- **The folder-search object is gone — and so is the need for it.** 3.60 deleted
+  `camel/camel-folder-search.h` (the `CamelFolderSearch` object, its class, and
+  the `camel_folder_search_util_*` helpers) in favour of `CamelStoreSearch`, and
+  replaced `CamelFolderClass.search_by_expression`/`.search_by_uids` with a
+  single `search_sync`. The decisive fact is in `camel-folder.c`: 3.60's base
+  class *installs* `folder_search_sync`, a complete generic implementation over
+  `CamelStoreSearch` — `camel_store_search_new` on the parent store, the folder
+  added, `rebuild_sync`, `get_uids_sync` — which is precisely what
+  `jmap-mail/src/folder.rs` was doing by hand with the older object. Up to 3.52
+  the provider must implement it (the base class leaves the slots NULL and
+  asserts, which is why `9740f51` added them); from 3.58 the provider must
+  implement *nothing*. So the two vfunc installs and their two functions are
+  `#[cfg]`-gated on `camel_folder_search_object` and simply absent on the newer
+  leg.
+
+  This is the one item where a plausible port would have been wrong in a way
+  nothing catches at build time: overriding `search_sync` with a reimplementation
+  would compile, link, and quietly replace a working implementation — and
+  *omitting* the override on a release that needed one would compile just as
+  cleanly and yield a folder whose message list never draws. Neither is
+  arguable from a header, so `jmap-mail/tests/search.rs` asserts it
+  behaviourally: two rows, one seen, searched through whichever entry point the
+  installed EDS has (`camel_folder_search_by_expression` / `camel_folder_search_sync`),
+  with the same expected answers on both. It also searches for the *complement*
+  and for everything, so that a leg answering "all rows regardless of the
+  expression" fails rather than passes.
+- **The summary database's row structs were renamed, not made private.** The
+  earlier note was wrong on this point, which mattered because it was the other
+  half of the escalation's reasoning ("the port has to decide where that state
+  lives now"). It does not: 3.60's `CamelStoreDBMessageRecord` and
+  `CamelStoreDBFolderRecord` are public structs in `camel-store-db.h`, both
+  still carrying the `bdata` field a provider keeps its own column in. So the
+  provider's `Email` state and its keywords live exactly where they lived, and
+  the fix is two type aliases —
+  `compat::CamelSummaryMessageRecord`/`CamelSummaryFolderRecord`.
+- **One vfunc did change shape**, and it is the only one:
+  `CamelFolderSummaryClass.summary_header_save` went from
+  `CamelFIRecord *(*)(summary, error)` — allocate a record and return it — to
+  `gboolean (*)(summary, CamelStoreDBFolderRecord *inout_record, error)`, filling
+  in a record `camel_folder_summary_save` zeroes on its own stack, writes, and
+  then clears with `camel_store_db_folder_record_clear`. `src/summary.rs`
+  therefore has that vfunc twice, `#[cfg]`-selected, sharing the one function
+  that writes the field. Ownership of `bdata` is unchanged across the two — a
+  `g_malloc`ed string the record takes and `g_free`s — which is what makes the
+  shared half correct rather than coincidental. (`summary_header_load` kept its
+  shape; only the record's name moved.)
+- **`camel_folder_summary_get_array`/`_free_array`/`_get_changed`** became
+  `dup_uids`/`dup_changed`, freed with `g_ptr_array_unref`. Behind
+  `compat::summary_dup_uids`/`summary_dup_changed`/`summary_free_uids`. Verified
+  in the 3.60 source that the guarantee the callers rely on still holds: the
+  array holds a `camel_pstring_strdup` of each uid, so removing a row from the
+  summary while walking the snapshot neither frees the string being read nor
+  disturbs the walk — the same contract 3.52's accessor gave. Calling the wrong
+  release would *leak* rather than fail, which is why it is a wrapper and not a
+  comment.
+- **`CamelProvider` dropped `auto_detect`, `url_hash` and `url_equal`.** All
+  three were `None`, so the three fields are `#[cfg]`-gated. Deliberately not
+  built from zeroed memory instead: keeping it a struct literal that names every
+  field means a field a future EDS *adds* is a compile error here rather than a
+  silent NULL, which is what this matrix is for.
+
+Two more renames the previous entry had not found, both surfaced by compiling
+rather than by reading:
+
+- **`camel_folder_get_uids`/`camel_folder_free_uids` → `camel_folder_dup_uids`.**
+  A borrowed array handed back to the folder became a reference-counted one the
+  caller owns. `compat::folder_dup_uids`/`folder_free_uids` keep the folder in
+  the signature so one pair can stand for both. Four test files.
+- **`camel_folder_search_util_hash_message_id` → `camel_search_util_hash_message_id`**,
+  moved to `camel-search-utils.h` when the old header was deleted. Identical
+  signature; `compat::search_hash_message_id`.
+
+Detection for the two new ones follows the same rule as the rest — a marker
+identifier looked for in bindgen's output, never a version comparison. The
+folder uid list got its **own** probe rather than riding on the summary-record
+one: they are independent renames that happened to land in the same release, and
+folding them into one marker would make a future EDS that changed only one of
+them silently wrong about the other.
 
 ### (B) Not fixed — contact-model *semantics* drifted; needs a mapping decision
 
@@ -167,6 +245,20 @@ that is luck rather than coverage.
 
 The pinned-3.52 leg (what the plugin actually ships against) is unaffected by
 any of the above.
+
+### (C) Observed, not fixed — clippy cannot gate the newer leg yet
+
+`ci/eds-matrix.sh` runs `cargo test`, not clippy, and that is currently load
+bearing rather than an oversight: `cargo clippy --all-targets -- -D warnings`
+fails on the 3.60 container with five `unnecessary_transmute` warnings, all of
+them in bindgen's output for glibc's **`_IO_FILE`** — `_flags2` is a 24-bit
+bitfield there, and the container's newer rustc lints the accessor bindgen
+generates for it. Nothing in this repository is implicated: the struct arrives
+transitively through the EDS headers, and the pinned-3.52 leg (older glibc,
+older rustc) is clippy-clean with `-D warnings` across both the default members
+and the EDS crates. Recorded so that whoever tightens the matrix leg to include
+clippy knows what they will hit and that it is a bindgen/glibc artefact to
+suppress at the generated-code boundary, not a defect to chase.
 
 ## What this does not catch
 

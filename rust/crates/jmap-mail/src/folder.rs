@@ -224,9 +224,31 @@ unsafe impl ObjectSubclass for JmapFolder {
         // SAFETY: as above.
         unsafe { crate::expunge::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        let folder_class = unsafe { &mut *class.cast::<CamelFolderClass>() };
-        folder_class.search_by_expression = Some(search_by_expression);
-        folder_class.search_by_uids = Some(search_by_uids);
+        // And what the folder answers when it is asked which of its messages
+        // match an expression — which is not only the search bar: every
+        // message-list view is one ("Unread Messages", "Hide Deleted
+        // Messages"), so a folder that cannot answer is a folder whose list
+        // does not draw.
+        //
+        // Only up to EDS 3.52, and this is the one vfunc in the class that a
+        // newer EDS takes *away* from a provider rather than renaming. There,
+        // `CamelFolderClass` leaves `search_by_expression`/`search_by_uids`
+        // NULL and asserts on a class that has not filled them in, so the two
+        // functions below fill them with a `CamelFolderSearch` over the local
+        // summary. From 3.58 both slots are gone: `search_sync` replaces them
+        // and the base class installs an implementation of it built on
+        // `CamelStoreSearch`, over the same rows and with the same result. So
+        // the right thing to install on a newer EDS is nothing at all —
+        // overriding would replace a working implementation with a
+        // reimplementation of it. `tests/search.rs` is what holds that claim
+        // up: it drives whichever entry point the EDS in front of it has and
+        // asserts the same answers on both.
+        #[cfg(camel_folder_search_object)]
+        {
+            let folder_class = unsafe { &mut *class.cast::<CamelFolderClass>() };
+            folder_class.search_by_expression = Some(search_by_expression);
+            folder_class.search_by_uids = Some(search_by_uids);
+        }
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.
@@ -247,6 +269,18 @@ unsafe impl ObjectSubclass for JmapFolder {
     }
 }
 
+/// `CamelFolderClass.search_by_expression`, up to EDS 3.52: which of this
+/// folder's messages match `expression`.
+///
+/// A `CamelFolderSearch` over the folder's own summary, which is what a local
+/// search *is* — the rows are already here, and an expression over flags or
+/// headers needs nothing from the server. Built and dropped per call rather than
+/// kept on the folder: the object holds the folder it was pointed at, and a
+/// cached one would be a second owner of state Camel expects the search to read
+/// fresh.
+///
+/// Gone from 3.58, where the base class does this itself — see `class_init`.
+#[cfg(camel_folder_search_object)]
 unsafe extern "C" fn search_by_expression(
     folder: *mut CamelFolder,
     expression: *const gchar,
@@ -268,6 +302,12 @@ unsafe extern "C" fn search_by_expression(
     }
 }
 
+/// `CamelFolderClass.search_by_uids`: the same question narrowed to a list of
+/// uids, and answered the same way — the uid list is the one extra argument
+/// `camel_folder_search_search` takes.
+///
+/// Gone from 3.58 alongside its sibling.
+#[cfg(camel_folder_search_object)]
 unsafe extern "C" fn search_by_uids(
     folder: *mut CamelFolder,
     expression: *const gchar,

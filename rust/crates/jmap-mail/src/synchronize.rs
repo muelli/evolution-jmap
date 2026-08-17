@@ -87,10 +87,10 @@
 
 use std::ffi::{CStr, CString};
 
+use eds_sys::compat::{summary_dup_changed, summary_free_uids};
 use eds_sys::{
     CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_get_folder_summary,
-    camel_folder_get_full_name, camel_folder_summary_free_array, camel_folder_summary_get,
-    camel_folder_summary_get_changed, camel_message_info_set_folder_flagged,
+    camel_folder_get_full_name, camel_folder_summary_get, camel_message_info_set_folder_flagged,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
@@ -189,11 +189,11 @@ unsafe extern "C" fn synchronize_sync(
 ///
 /// `summary` must point at a live `CamelFolderSummary`.
 unsafe fn queued_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
-    // SAFETY: the contract above; `get_changed` hands back an array the caller
-    // owns and frees with `free_array`, holding a reference of its own to every
-    // uid in it.
+    // SAFETY: the contract above; `summary_dup_changed` hands back an array the
+    // caller owns and frees with `summary_free_uids`, holding a reference of its
+    // own to every uid in it.
     unsafe {
-        let queued = camel_folder_summary_get_changed(summary);
+        let queued = summary_dup_changed(summary);
         if queued.is_null() {
             return Vec::new();
         }
@@ -203,7 +203,7 @@ unsafe fn queued_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
                 (!uid.is_null()).then(|| CStr::from_ptr(uid).to_owned())
             })
             .collect();
-        camel_folder_summary_free_array(queued);
+        summary_free_uids(queued);
         uids
     }
 }

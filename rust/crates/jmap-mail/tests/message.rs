@@ -30,15 +30,15 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use common::Account;
+use eds_sys::compat::{folder_dup_uids, folder_free_uids, search_hash_message_id};
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE,
     CamelAddress, CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMedium, CamelMimeMessage,
     camel_address_format, camel_data_wrapper_decode_to_output_stream_sync,
-    camel_folder_error_quark, camel_folder_free_uids, camel_folder_get_message_sync,
-    camel_folder_get_uids, camel_folder_refresh_info_sync,
-    camel_folder_search_util_hash_message_id, camel_medium_get_content,
-    camel_mime_message_get_date, camel_mime_message_get_from, camel_mime_message_get_message_id,
-    camel_mime_message_get_subject, camel_service_error_quark, camel_store_get_folder_sync,
+    camel_folder_error_quark, camel_folder_get_message_sync, camel_folder_refresh_info_sync,
+    camel_medium_get_content, camel_mime_message_get_date, camel_mime_message_get_from,
+    camel_mime_message_get_message_id, camel_mime_message_get_subject, camel_service_error_quark,
+    camel_store_get_folder_sync,
 };
 use gio_sys::{
     GMemoryOutputStream, GOutputStream, g_memory_output_stream_get_data,
@@ -118,14 +118,14 @@ fn the_one_uid(folder: *mut CamelFolder) -> CString {
             glib_sys::GFALSE,
             "the folder would not refresh"
         );
-        let array: *mut GPtrArray = camel_folder_get_uids(folder);
+        let array: *mut GPtrArray = folder_dup_uids(folder);
         assert_eq!(
             (*array).len,
             1,
             "the inbox did not hold exactly one message"
         );
         let uid = CStr::from_ptr((*array).pdata.read().cast()).to_owned();
-        camel_folder_free_uids(folder, array);
+        folder_free_uids(folder, array);
         uid
     }
 }
@@ -489,8 +489,8 @@ fn an_opened_message_message_id_hashes_consistently() {
         let msg_id = camel_mime_message_get_message_id(message);
         assert!(!msg_id.is_null());
 
-        let hash1 = camel_folder_search_util_hash_message_id(msg_id, glib_sys::GFALSE);
-        let hash2 = camel_folder_search_util_hash_message_id(msg_id, glib_sys::GFALSE);
+        let hash1 = search_hash_message_id(msg_id, glib_sys::GFALSE);
+        let hash2 = search_hash_message_id(msg_id, glib_sys::GFALSE);
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, 0);
     }
