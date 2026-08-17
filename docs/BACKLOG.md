@@ -5,6 +5,24 @@ Real but low-leverage items, parked until the usability priorities in
 now** — add to the list when you notice one and would otherwise be tempted
 to polish a completed backend. A later hardening pass works through them.
 
+## EDS 3.60+ compatibility (M10 area, found by the version matrix)
+- `jmap-backend-book/src/marshal.rs` calls the 3.52-era
+  `e_vcard_to_string(EVCard *, EVCardFormat)` (`EVC_FORMAT_VCARD_30`); EDS
+  3.60 dropped the format argument entirely (`e_vcard_to_string(EVCard *)`,
+  version now via `e_vcard_get_version`/`e_vcard_convert`). Real compile
+  break against 3.60 headers, not just a runtime risk.
+- `eds-sys/tests/{layout,camel}.rs` reference `CamelFolderSearch`/
+  `CamelFolderSearchClass` and several `camel_folder_search_util_*`/
+  `camel_folder_search_{set,get}_only_cached_messages` helpers, none of
+  which exist in EDS 3.60's public Camel headers any more; also
+  `camel_folder_thread_messages_get_type` (renamed to
+  `camel_folder_thread_flags_get_type`) and
+  `camel_uid_cache_{get_new,free}_uids` (removed). Full detail in
+  `docs/eds-version-matrix.md`.
+- None of this affects the pinned-3.52 leg the plugin actually ships
+  against; parked here rather than fixed now per M10's explicit
+  make-it-visible-not-auto-port scope.
+
 ## Contact / vCard fidelity (M3 area, backend already works)
 - Multi-`ORG`/`TITLE` and multi-component field behaviour vs Evolution's
   contact editor (which components it shows, how it round-trips a 4th `ORG`
