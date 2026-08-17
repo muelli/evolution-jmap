@@ -32046,3 +32046,36 @@ rather than fixed: `cargo clippy -D warnings` cannot gate the 3.60 leg yet, over
 five `unnecessary_transmute` warnings in bindgen's output for glibc's
 `_IO_FILE` — a bitfield accessor on the container's newer glibc/rustc, nothing
 of ours, and clean on 3.52.
+
+## 2026-08-17 (353rd session) — re-verified no unblocked priority work; corrected a stale backlog entry
+
+Re-derived the unblocked-work set rather than trusting the 352nd entry's
+framing: `docs/ROADMAP.md`'s CURRENT PRIORITY (M7 → real-server readiness →
+M9/M10) is fully tagged in `docs/MILESTONES.md` (M1–M10, including M7 and
+M10). `git fetch` shows no new commits ahead of `HEAD`; no maintainer edit to
+`ROADMAP.md` since `445dc22`; `~/.night-shift-escalate` absent. The M10
+matrix's own carve-out items — (A), (B), (C) from `docs/eds-version-matrix.md`
+— were checked next, since the 350th/351st sessions established they sit
+underneath M10's tag: (A) (the `jmap-mail` Camel port) is now closed per the
+352nd session — confirmed directly by reading `marshal.rs` (uses
+`eds_sys::compat::e_vcard_to_string_vcard_30`) and `jmap-mail/src/folder.rs`
+(the `CamelFolderSearch` path is now `#[cfg(camel_folder_search_object)]`),
+not just by trusting the log entry. (B) is explicitly gated on a maintainer
+mapping decision (three questions in the doc) — not claimable. (C) is a
+bindgen/glibc clippy artifact on the 3.60 container, not a regression, and
+`ci/eds-matrix.sh` doesn't run clippy at all today (on either leg) — closing
+it would be net-new hardening scope on an already-complete milestone, not a
+fix, so it stays parked per the "don't reopen a completed milestone to
+polish" directive.
+
+Found one real thing to fix: `docs/BACKLOG.md`'s "EDS 3.60+ compatibility"
+section still described the `marshal.rs` vcard call and the
+`CamelFolderSearch`/summary-record surface as open compile breaks against
+3.60 — stale as of the 350th/352nd sessions' fixes. Left uncorrected, it
+would have sent a future session hunting for FFI work that no longer exists.
+Rewrote it to record what's actually fixed (with a pointer to
+`docs/eds-version-matrix.md` for detail) and restated only the two items
+still genuinely open, (B) and (C), with why each is parked rather than done.
+
+No code change. Nothing unblocked exists under the current priority order;
+ending here rather than manufacturing a second item.

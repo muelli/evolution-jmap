@@ -6,19 +6,28 @@ now** — add to the list when you notice one and would otherwise be tempted
 to polish a completed backend. A later hardening pass works through them.
 
 ## EDS 3.60+ compatibility (M10 area, found by the version matrix)
-- `jmap-backend-book/src/marshal.rs` calls the 3.52-era
-  `e_vcard_to_string(EVCard *, EVCardFormat)` (`EVC_FORMAT_VCARD_30`); EDS
-  3.60 dropped the format argument entirely (`e_vcard_to_string(EVCard *)`,
-  version now via `e_vcard_get_version`/`e_vcard_convert`). Real compile
-  break against 3.60 headers, not just a runtime risk.
-- `eds-sys/tests/{layout,camel}.rs` reference `CamelFolderSearch`/
-  `CamelFolderSearchClass` and several `camel_folder_search_util_*`/
-  `camel_folder_search_{set,get}_only_cached_messages` helpers, none of
-  which exist in EDS 3.60's public Camel headers any more; also
-  `camel_folder_thread_messages_get_type` (renamed to
-  `camel_folder_thread_flags_get_type`) and
-  `camel_uid_cache_{get_new,free}_uids` (removed). Full detail in
-  `docs/eds-version-matrix.md`.
+- ~~`jmap-backend-book/src/marshal.rs`'s `e_vcard_to_string` call, and
+  `eds-sys`/`jmap-mail`'s `CamelFolderSearch`/summary-record surface~~ —
+  **fixed 2026-08-17** via version-conditional FFI (`eds-sys::compat`,
+  `EDS_FEATURES` cfg markers detected from the installed headers) and the
+  `jmap-mail` Camel port onto 3.60's base-class `folder_search_sync`. Both
+  the pinned-3.52 and 3.60.2 legs now build and pass their full suites.
+  Detail and the docker repro recipe: `docs/eds-version-matrix.md`.
+- **(B) Remaining — contact-model semantics needs a maintainer decision.**
+  Three `eds-sys/tests/contacts.rs` assertions still fail on 3.60: it's not
+  an FFI bug, EDS just answers differently there (`X-JABBER`/`X-AIM`/
+  `X-GADUGADU` resolve to the first home slot instead of the multi-valued IM
+  field; `ANNIVERSARY`/`X-EVOLUTION-ANNIVERSARY` swap places;
+  `E_CONTACT_NAME_OR_ORG`'s derivation changes). What the plugin should
+  emit/read on a newer EDS is a `jmap-vcard` mapping call, not one to guess
+  here — the three questions are listed in `docs/eds-version-matrix.md`'s
+  section (B).
+- **(C) Remaining — clippy can't gate the 3.60 leg yet.** `ci/eds-matrix.sh`
+  only runs `cargo test`, not clippy; adding `-D warnings` there today would
+  trip on five `unnecessary_transmute` warnings in bindgen's output for
+  glibc's `_IO_FILE` bitfield accessor (a container/rustc artifact, nothing
+  of ours). Low-leverage hardening, not a regression — the pinned-3.52 leg
+  is already clippy-clean.
 - None of this affects the pinned-3.52 leg the plugin actually ships
   against; parked here rather than fixed now per M10's explicit
   make-it-visible-not-auto-port scope.
