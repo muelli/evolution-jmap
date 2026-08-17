@@ -32335,3 +32335,33 @@ Eighth independent conclusion, reached this time by proving staleness of
 the last verification rather than repeating it: nothing unblocked exists
 under the current priority order (M7 → real-server readiness → M9/M10, all
 closed or maintainer-gated). No code change this session.
+
+## 2026-08-17 (361st session) — ninth pass, checked the Actions run list and Issues API directly
+
+Same baseline as the 353rd–360th sessions: `git fetch origin` shows `HEAD`
+(`8af2518`) matches `origin/master`, no new commits; `docs/ROADMAP.md`
+unchanged since `445dc22`; `docs/MILESTONES.md` still M1–M10 all tagged;
+`~/.night-shift-escalate` absent; `docs/BACKLOG.md` and
+`docs/eds-version-matrix.md` re-read in full, (B) still an explicit
+maintainer mapping decision and (C) still a non-regression bindgen/glibc
+clippy artifact ungated by `ci/eds-matrix.sh`.
+
+Two checks this session ran that none of the prior nine had:
+
+- Pulled the last 5 `CI` workflow runs directly from the public Actions API
+  (`GET /repos/muelli/evolution-jmap/actions/runs`) rather than a single
+  run's job list: the newest is `32059072609` for `a46359e`, `success` —
+  the same dispatch the 359th session already inspected job-by-job. No
+  newer dispatch exists; the two runs after it (`32058960007`,
+  `32058866859`) are `cancelled` superseded triggers for the same commits,
+  not failures to chase.
+- Queried the public Issues API (`GET /repos/muelli/evolution-jmap/issues
+  ?state=all`): only the two closed FFI-audit issues (#1, #2, both closed
+  2026-08-08/2026-08-10) exist. No open issue, and nothing from the
+  maintainer outside `ROADMAP.md`/git that this session's prior checks
+  would have missed.
+
+Ninth independent conclusion: nothing unblocked exists under the current
+priority order (M7 → real-server readiness → M9/M10, all closed or
+maintainer-gated). No code change this session; ending here rather than
+manufacturing an item to justify a commit.
