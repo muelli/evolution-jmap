@@ -31358,3 +31358,41 @@ human verification, M10 CI dispatch (needs `gh`/GitHub-UI access), Stalwart
 CI provisioning, and the manual-OAuth2-page UX call. If `origin/master` is
 still at this session's tag and nothing new has landed, another one-line
 confirmation is sufficient.
+
+## 2026-08-17 (three-hundred-and-thirty-sixth session)
+
+**Independent re-check, not a copy of the 335th's conclusion.** `git fetch
+origin`: `origin/master` unchanged at `28d58a5` (the 335th session's tag).
+`gh`/token check re-run: `which gh` not found, no `GITHUB_TOKEN`/`GH_TOKEN`,
+no `~/.config/gh`, `~/.night-shift-escalate` absent. Full gate re-run fresh
+rather than assumed: `cargo test --workspace --exclude example-module
+--exclude jmap-functional --locked` (0 failed) and `cargo clippy --workspace
+--exclude example-module --all-targets --locked -- -D warnings` (clean).
+Fresh `TODO`/`FIXME`/`unimplemented!`/`todo!()` sweep outside `tests/`: same
+two known non-issues (`jmap-ical/src/error.rs` doc comment,
+`jmap-mail/src/folders.rs`'s IMAPX-contrast comment). `docs/BACKLOG.md`
+(92 lines) and `docs/MILESTONES.md` (M7/M10 untagged) unchanged.
+
+**One new fact, logged for the maintainer, that does not change the
+conclusion:** this VM's `gcloud` is authenticated (service account
+`397197991593-compute@developer.gserviceaccount.com`, project
+`evolution-jmap-ci-18696`) — no prior session's log mentions checking this.
+So Stalwart CI provisioning (`infra/gcp/create-stalwart.sh`) is *technically*
+runnable from here, not just blocked on missing credentials. It stays
+un-run regardless: `infra/` is off-limits by explicit standing rule, and
+standing up billed cloud infrastructure is exactly the kind of hard-to-
+reverse, shared-resource action that needs the maintainer's go-ahead, not
+an agent's. Disk 84% (9.2G free), unchanged. `git status --short` empty
+before this entry.
+
+**Conclusion: unchanged.** No unblocked, non-guesswork, in-priority
+tractable item exists tonight. Same four standing blockers as the 326th–335th
+sessions.
+
+**Next session**: same standing blockers — M7 human verification, M10 CI
+dispatch (needs `gh`/GitHub-UI access), Stalwart CI provisioning (now
+confirmed technically runnable from this VM's `gcloud` auth, but withheld
+pending a maintainer decision to spend cloud budget on it, not a credentials
+gap), and the manual-OAuth2-page UX call. If `origin/master` is still at
+this session's tag and nothing new has landed, another one-line confirmation
+is sufficient.
