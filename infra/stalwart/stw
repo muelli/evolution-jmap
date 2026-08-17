@@ -39,8 +39,14 @@ if [[ "${1:-}" == "refresh" ]]; then rm -f "$CACHE"; echo "cleared $CACHE"; exit
 
 [ -f "$CACHE" ] && . "$CACHE"   # sets CACHED_SECRET
 
+# Locate gcloud. It is commonly installed under /snap/bin, which non-login
+# shells leave off PATH — fall back to it so `stw` works from any shell.
+GCLOUD=$(command -v gcloud 2>/dev/null || true)
+[ -z "$GCLOUD" ] && [ -x /snap/bin/gcloud ] && GCLOUD=/snap/bin/gcloud
+
 vm_ip() {
-    gcloud compute instances describe "$NAME" --zone "$ZONE" \
+    [ -n "$GCLOUD" ] || { echo "stw: gcloud not found on PATH or /snap/bin" >&2; exit 1; }
+    "$GCLOUD" compute instances describe "$NAME" --zone "$ZONE" \
         --format='get(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || true
 }
 
@@ -51,7 +57,7 @@ resolve_url() {
         # No external IP => the VM is stopped (the idle watchdog naps it). Start
         # it and wait for both an IP and for Stalwart's HTTP port to answer.
         echo "stw: $NAME is not running (idle-napped?) — starting it…" >&2
-        gcloud compute instances start "$NAME" --zone "$ZONE" >/dev/null 2>&1 \
+        "$GCLOUD" compute instances start "$NAME" --zone "$ZONE" >/dev/null 2>&1 \
             || { echo "stw: failed to start $NAME" >&2; exit 1; }
         for _ in $(seq 1 18); do ip=$(vm_ip); [ -n "$ip" ] && break; sleep 5; done
         [ -n "$ip" ] || { echo "stw: $NAME started but has no IP yet — retry shortly" >&2; exit 1; }
@@ -84,7 +90,7 @@ elif [ -n "${STALWART_PASSWORD:-}" ]; then
 else
     secret=${CACHED_SECRET:-}
     if [ -z "$secret" ]; then
-        secret=$(gcloud compute ssh "$NAME" --zone "$ZONE" \
+        secret=$("$GCLOUD" compute ssh "$NAME" --zone "$ZONE" \
                  --command 'sudo cat /opt/stalwart/admin-password' 2>/dev/null | tr -dc 'A-Za-z0-9')
         [ -n "$secret" ] || { echo "stw: could not fetch the admin secret over gcloud ssh" >&2; exit 1; }
         ( umask 077; printf 'CACHED_SECRET=%q\n' "$secret" > "$CACHE" )
