@@ -32590,3 +32590,42 @@ priority order — M7, real-server readiness (OAuth2 + `--features
 live-server` harness), M9, and M10 are all closed or maintainer-gated (the
 `eds-version-matrix` dispatch confirmation). No code change this session;
 not manufacturing backlog polish to justify a commit.
+
+## 2026-08-17 (366th session) — twelfth re-verification, nothing unblocked
+
+Independent dependency-graph pass, not a trust of the 365th session's
+conclusion. Checked directly rather than assumed:
+
+- `git fetch origin`: `HEAD` (`02892b2`) matches `origin/master`, working
+  tree clean, no new commits since the 365th session's own push.
+- `docs/ROADMAP.md`'s priority order (M7 → real-server readiness → M9/M10)
+  re-read in full, unchanged; `docs/MILESTONES.md` confirms M1–M10 all
+  tagged COMPLETE. `~/.night-shift-escalate` absent (checked directly).
+- Grepped the actual codebase rather than trusting the milestone tags: the
+  "real-server readiness" item (OAuth2 auth + `--features live-server`
+  harness) named in the priority list is not a formal milestone tag, so it
+  gets checked independently each time. Confirmed present and substantial —
+  `jmap-client/src/oauth.rs`, `jmap-config/src/{oauth2,oauth2_setup,
+  oauth2_service}.rs`, `jmap-backend-core/src/oauth2.rs`,
+  `jmap-backend-collection` OAuth2 extension/service, `jmap-mail/src/
+  oauth2.rs`, and `evo-sys`'s `EOAuth2Service`/`ESourceCredentialsProviderImpl
+  OAuth2` bindings all exist with their own test files; `live-server` is a
+  real Cargo feature on `jmap-client`. Nothing here looks stubbed.
+- Pulled the last 8 `CI` workflow runs from the public Actions API: newest
+  is still `32064810881` for `00271f9`, `success`. No `workflow_dispatch`
+  since `32063091331` (`dd76d558`, before the M10 version-aware fix) — same
+  fact the 363rd–365th sessions already established, re-confirmed rather
+  than assumed. Checked the Issues API too: only the two closed FFI-audit
+  issues (#1, #2), nothing new opened.
+- `docs/BACKLOG.md` re-read in full: remaining items are (B′) an explicit
+  maintainer mapping decision, (C) an explicit low-leverage clippy artifact
+  on the 3.60 leg, and assorted M3/M4-area contact/vCard fidelity notes —
+  all already out of scope under the current-priority directive (don't
+  reopen completed backends to polish edge cases).
+
+Twelfth independent conclusion: nothing unblocked under the current
+priority order. The one new fact this session adds is the direct grep
+confirming "real-server readiness" itself (not just M7/M9/M10) has real,
+non-stub code behind it, rather than continuing to treat it as an item
+that might still need work. No code change this session; not manufacturing
+backlog polish to justify a commit.
