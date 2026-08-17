@@ -31646,3 +31646,48 @@ operator-side by design). Ending the session here — one milestone tag is
 the increment for tonight; the next unblocked agent work, if any surfaces,
 is genuinely fresh M1–M6/M8 polish (which the roadmap forbids picking up)
 or whatever the maintainer opens next in `docs/ROADMAP.md`.
+
+## 2026-08-17 (345th session)
+
+Fresh dependency-graph pass rather than trusting the log's own conclusion:
+read `docs/ROADMAP.md`, `docs/MILESTONES.md` (M1–M10 all tagged, including
+M7 `15ebe44` and M10 `445dc22` from the 343rd/344th sessions), and
+independently re-derived — not assumed — that the roadmap's current
+priority order has nothing left unblocked:
+
+- **Real-server readiness.** `grep` confirms OAuth2 wiring through
+  `jmap-backend-core::oauth2`, `jmap-mail::oauth2`, `jmap-config::oauth2*`,
+  and the book/cal/collection backends' connect paths, plus
+  `jmap-client/tests/live_server.rs` — a real, feature-gated (`--ignored`,
+  needs `--features live-server`), mock-independent harness that already
+  covers session discovery, `Core/echo`, and capability-tolerant
+  mail/contacts/calendars listing. `Client::primary_account` falls back to
+  a capability scan when a server omits `primaryAccounts` (RFC 8620 §2
+  allows this) — the capability-negotiation robustness the roadmap item
+  asks for, not just the happy path.
+- **Calcard standing directive.** Settled by design, not incomplete: both
+  `jmap-ical` and `jmap-vcard` read via calcard; writing stays hand-rolled
+  on purpose, with the reasoning (calcard's writer targets 4.0, Evolution's
+  `EVCard` only emits 3.0) documented in each crate's `syntax.rs` module
+  doc, backed by measurements already in this log.
+- **Translatable-strings directive.** Has a real enforcing test,
+  `jmap-backend-core/tests/potfiles.rs`, currently green — not an
+  aspiration.
+
+Ran the full local gate by hand (no `reuse`/`pipx`/`uvx` on this VM, per the
+standing note): `cargo fmt --check`, `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings`, and `cargo test
+--workspace --exclude example-module --exclude jmap-functional --locked`
+all clean/green. `git status --short` empty; disk 83%/11G free.
+
+**Conclusion:** no unblocked priority work remains under the current
+`docs/ROADMAP.md` order — M7, real-server readiness, and M9/M10 are all
+genuinely closed. `docs/BACKLOG.md` already holds the only real remaining
+items (M1–M6/M8 edge-case polish), which the current-priority directive
+forbids picking up. This session is autonomous (non-interactive), unlike
+the 340th–342nd sessions, so there is no one to ask directly; nothing to
+push beyond this log entry. Per "correctness over progress," logging an
+honest "nothing unblocked" is the right outcome here, not manufacturing an
+increment out of forbidden polish. The next actionable step is the
+maintainer's: open a new CURRENT PRIORITY in `docs/ROADMAP.md`, or
+authorize a BACKLOG.md hardening pass.
