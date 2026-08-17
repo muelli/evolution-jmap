@@ -32386,3 +32386,26 @@ functional regression rather than EDS's own formatting change. Prefer
 version-conditional assertions since these characterize EDS's own behavior. Then
 the leg goes green and M10 is tag-able. Re-dispatch CI to confirm (runner has no
 gh). vCard/EDS-semantics reasoning — escalate to opus only if it proves subtle.
+
+## 2026-08-17 (362nd session) — claiming M10: version-aware assertions for the 3 contact-model test failures
+
+Claiming the top unblocked item the 361st/previous session (e208aee) left off
+at: `eds-sys`/tests/contacts.rs's 3 failing tests on newer EDS (3.60) are
+genuine behavioural drift in libebook itself (X-JABBER/X-AIM/X-GADUGADU
+resolving to the `_HOME_1` slot instead of the plain attribute-list field,
+`ANNIVERSARY`/`X-EVOLUTION-ANNIVERSARY` swapping which vCard line maps to
+`E_CONTACT_ANNIVERSARY`, a new `E_CONTACT_DEATH_DATE` field, and
+`E_CONTACT_NAME_OR_ORG` deriving differently with no explicit FILE_AS) — not
+FFI/compile breaks, and not this project's own `jmap-vcard` mapping decisions
+(these tests characterize EDS's own C behaviour directly, per the file's own
+doc comment). `docs/eds-version-matrix.md` (B) already measured and tabulated
+all of these against the exact two legs CI runs (3.52, 3.60.2); the values are
+known, not guessed. Plan: make the 3 assertions version-aware using the same
+marker-detection mechanism `eds-sys/build.rs`'s `EDS_FEATURES` already uses
+(header-visible symbol presence, not a version-number comparison) — add one
+new entry for `E_CONTACT_DEATH_DATE` (absent on 3.52, present on 3.60) and use
+its presence as the single boolean these four coupled facts pivot on, since
+they are empirically all-or-nothing on the same EDS release. Reproducing
+locally in the pinned Fedora/3.60 container per
+`docs/eds-version-matrix.md`'s recipe (docker is available on this VM) to
+verify against the real newer EDS rather than trusting the table blind.
