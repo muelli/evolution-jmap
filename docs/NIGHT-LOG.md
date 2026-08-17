@@ -32151,3 +32151,36 @@ Conclusion unchanged, independently re-confirmed via different checks than
 the 353rd/354th sessions ran: nothing unblocked exists under the current
 priority order (M7 → real-server readiness → M9/M10, all closed or
 maintainer-gated). No code change this session.
+
+## 2026-08-17 (356th session) — verified real-server readiness by reading it, not grepping it
+
+`git fetch origin`: no commits ahead of `HEAD` (`22852bb`); `docs/ROADMAP.md`
+unchanged since `445dc22`; `~/.night-shift-escalate` absent. Same starting
+point as the 353rd–355th sessions, so rather than repeat their checklist this
+session took one different angle: the 354th session's "real-server readiness
+is done" claim rested on line counts and a `TODO|FIXME` grep over
+`oauth2.rs`/`oauth2_service.rs`/`oauth2_setup.rs`/`live_server.rs`. Absence of
+a TODO marker is not the same as the code being right, so this session
+actually read `jmap-client/tests/live_server.rs` (181 lines) and
+`jmap-backend-core/src/oauth2.rs` (232 lines) end to end.
+
+Both hold up under that closer look. `live_server.rs` is gated twice (the
+`live-server` feature plus `#[ignore]`) so it can never turn a plain `cargo
+test` into a network call, is read-only by design (mutation round-trips are
+left to the mock), and each capability test tolerates a real server that
+omits the capability rather than asserting on it — genuine
+capability-negotiation robustness, not just a test that happens to pass.
+`oauth2.rs` transcribes EDS's own auth-method dispatch rule
+(`e_soup_session_setup_message_credentials`) rather than inventing a
+parallel one, documents why it does *not* re-check TLS (that guard already
+lives one layer up in `source::origin`) or token lifetime (EDS refreshes
+inline on every call), and every `unsafe` block carries a safety comment
+naming the actual invariant relied on. This is not stub or placeholder code
+by any reading of it.
+
+Combined with the CI-green confirmation the 354th/355th sessions already ran
+via the public Actions API, and the (B)/(C) items in
+`docs/eds-version-matrix.md` remaining explicitly maintainer-gated / non-
+regression, the conclusion is unchanged for a fourth independent pass: no
+unblocked priority work exists. No code change this session; ending here
+rather than manufacturing an item to justify a commit.
