@@ -88,12 +88,12 @@ use std::ptr;
 
 use common::Account;
 use common::signals::{Context, Emission, emissions, watch};
+use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
     CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    camel_folder_error_quark, camel_folder_free_uids, camel_folder_get_folder_summary,
-    camel_folder_get_uids, camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_folder_transfer_messages_to_sync, camel_message_info_set_flags,
+    camel_folder_error_quark, camel_folder_get_folder_summary, camel_folder_refresh_info_sync,
+    camel_folder_summary_get, camel_folder_transfer_messages_to_sync, camel_message_info_set_flags,
     camel_service_error_quark, camel_store_get_folder_sync,
 };
 use glib_sys::{
@@ -403,9 +403,9 @@ fn listed(folder: *mut CamelFolder) -> Vec<String> {
     // SAFETY: a live folder; the array comes back owned and is freed with the
     // function Camel documents for it.
     unsafe {
-        let array = camel_folder_get_uids(folder);
+        let array = folder_dup_uids(folder);
         let uids = uid_list(array);
-        camel_folder_free_uids(folder, array);
+        folder_free_uids(folder, array);
         uids
     }
 }

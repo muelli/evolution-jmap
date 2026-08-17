@@ -455,7 +455,13 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // folder's lock around the dispatch, rather than through the class.
     "camel_folder_append_message_sync",
     "camel_folder_get_message_count",
-    "camel_folder_(get|free)_uids",
+    // Both spellings of the folder's uid list, because which one exists is the
+    // version difference `compat::folder_dup_uids` resolves: `get_uids` with
+    // `free_uids` beside it up to 3.52, `dup_uids` alone from 3.58. Allowlisting
+    // a name this EDS does not declare costs nothing — bindgen emits only what
+    // the headers have — and naming both is what lets the same allowlist serve
+    // both legs.
+    "camel_folder_(get|free|dup)_uids",
     "camel_folder_changed",
     "camel_folder_change_info_.*",
     "camel_folder_summary_.*",
@@ -548,6 +554,11 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "camel_hostname_utils_.*",
     "camel_sexp_.*",
     "camel_folder_search_.*",
+    // The same helpers under the name 3.58 moved them to (`camel-search-utils.h`)
+    // after deleting `camel-folder-search.h`. Both prefixes are listed for the
+    // reason the folder's uid list is — bindgen emits only what the installed
+    // headers declare, so one allowlist covers both legs.
+    "camel_search_util_.*",
     "camel_folder_thread_.*",
     "camel_folder_threaded_messages_dump",
     "camel_memchunk_.*",
@@ -670,6 +681,14 @@ const EDS_FEATURES: &[(&str, &str)] = &[
     // (a message) and `CamelFIRecord` (the folder header beside them), which
     // is where a provider keeps the one column Camel reserves for it.
     ("camel_summary_records", "CamelMIRecord"),
+    // 3.60 replaced `CamelFolder`'s `get_uids`/`free_uids` pair — an array
+    // borrowed from the folder and handed back to it — with `dup_uids`, an
+    // ordinary reference-counted `GPtrArray` the caller owns. Detected
+    // separately from the summary records above rather than assumed to move
+    // with them: they are two independent renames that happen to have landed
+    // in the same release, and folding them into one probe would make a future
+    // EDS that changed only one of them silently wrong about the other.
+    ("camel_folder_get_uids", "camel_folder_free_uids"),
     // 3.60 replaced `camel_uid_cache_get_new_uids`/`_free_uids` with
     // `camel_uid_cache_dup_new_uids`, whose result is an ordinary
     // reference-counted `GPtrArray`.
@@ -688,11 +707,22 @@ const EDS_FEATURES: &[(&str, &str)] = &[
 /// Emit one `cargo::rustc-cfg` per [`EDS_FEATURES`] entry the generated
 /// bindings actually contain, and a `rustc-check-cfg` for every entry either
 /// way so that `-D warnings` does not trip over the ones this EDS lacks.
+///
+/// The same answer goes out a second time as `cargo::metadata`, because a
+/// `rustc-cfg` reaches only *this* crate: `#[cfg]` in a crate that merely
+/// depends on `eds-sys` would silently be false on every EDS. Cargo hands a
+/// build script's metadata to the build scripts of its direct dependents as
+/// `DEP_EVOLUTION_DATA_SERVER_<KEY>` (the `links` key in `Cargo.toml`
+/// uppercased), so a dependent re-emits the cfgs it needs from there — see
+/// `jmap-mail/build.rs`. That keeps the *detection* single-sourced here, where
+/// the oracle is clang on the installed headers, rather than letting each crate
+/// invent its own version test.
 fn emit_feature_cfgs(bindings: &str) {
     for (cfg, marker) in EDS_FEATURES {
         println!("cargo::rustc-check-cfg=cfg({cfg})");
         if bindings.contains(marker) {
             println!("cargo::rustc-cfg={cfg}");
+            println!("cargo::metadata={cfg}=1");
         }
     }
 }
