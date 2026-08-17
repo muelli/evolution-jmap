@@ -31190,3 +31190,57 @@ access), Stalwart CI provisioning, and the manual-OAuth2-page UX call. Do
 not re-read `live_server.rs` or re-run the OAuth2/capability-negotiation
 sweep again absent new code in that territory; this session's direct read
 confirms it is clean on top of the 327th session's independent audit.
+
+## 2026-08-17 (three-hundred-and-twenty-ninth session)
+
+**Survey, no claim — deliberately short this time.** The 326th–328th
+sessions each re-derived, from fresh reads/subagents rather than trust,
+that no unblocked priority work remains; repeating that full derivation a
+fourth time in a row would be exactly the spinning the roadmap's "blocked
+>20 min on one approach, switch" rule warns against, so this session
+narrowed to: has anything actually changed since the 328th session's tag
+(`92b95a2`)?
+
+- `git fetch origin`: `origin/master` still at `92b95a2`, no other agent
+  landed anything.
+- `gh`/token/escalate check, re-run fresh rather than assumed: `which gh`
+  still not found, no `GITHUB_TOKEN`/`GH_TOKEN` in the environment, no
+  `~/.config/gh`, no `~/.netrc`; `git remote -v` confirms `origin` is
+  SSH-only (`git@github.com:...`), which authenticates git, not the
+  GitHub API `gh workflow run` needs. `~/.night-shift-escalate` absent.
+  Unchanged from every prior session that checked.
+- `docs/BACKLOG.md` re-read in full: unchanged (92 lines) from the 328th
+  session's read — the M7 entry is already settled, everything else is
+  M1–M6 fidelity/M10-3.60-compat polish this session's priority forbids
+  picking up.
+- Fresh repo-wide `TODO`/`FIXME`/`unimplemented!`/`todo!()` sweep outside
+  `tests/`: same two non-issues as the 327th session found (an
+  `error.rs` doc comment, and `folders.rs`'s comment quoting *IMAPX's*
+  FIXME as contrast) — nothing new.
+- Full gate re-run for currency rather than assumed: `cargo test
+  --workspace --exclude example-module --exclude jmap-functional --locked`
+  (0 failed, all green) and `cargo clippy --workspace --exclude
+  example-module --all-targets --locked -- -D warnings` (clean); disk at
+  85% (9.0G free), unchanged. `git status --short` empty before this
+  entry.
+
+**Conclusion: unchanged.** No unblocked, non-guesswork, in-priority
+tractable item exists tonight. M7's only gap is human verification in real
+Evolution plus the parked manual-OAuth2-page UX call (maintainer
+judgment). Real-server readiness stays closed, confirmed clean by the
+327th/328th sessions' independent reads, nothing new to re-check absent
+new code in that territory. M10's job is landed and was validated to
+actually run correctly in a local Fedora container by the 324th session;
+what remains is dispatching it on GitHub Actions, which needs `gh`/
+GitHub-UI access this VM provably does not have. Not manufacturing a
+commit in M1–M6/M8 to avoid an empty-looking session, per "correctness
+over progress."
+
+**Next session**: same standing blockers — M7 human verification, M10 CI
+dispatch (needs a human with `gh`/GitHub-UI access), Stalwart CI
+provisioning, and the manual-OAuth2-page UX call. None of these are
+resolvable by another agent iteration on this VM; if the next session
+finds `origin/master` still at this session's tag and no new code in the
+repo, a one-line confirmation that nothing changed is a sufficient session
+— further multi-paragraph re-derivation of an already-independently-
+verified conclusion is no longer adding information.
