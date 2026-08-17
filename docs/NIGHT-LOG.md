@@ -30995,3 +30995,80 @@ per the roadmap. Standing blockers unchanged: M7 needs human verification
 in real Evolution; the Stalwart-provisioning and manual-OAuth2-page design
 questions are maintainer calls. `~/.night-shift-escalate` empty (checked,
 not present).
+
+## 2026-08-17 (three-hundred-and-twenty-sixth session)
+
+**Dependency check before claiming anything.** `git fetch origin` showed
+`origin/master` unchanged at `0c25966` (the 325th session's own commit).
+Checked whether `gh` had since become available on this VM (it would let
+this session close out the 325th session's one remaining ask, dispatching
+`eds-version-matrix` by hand) — `which gh`/`gh --version` both still fail
+(`command not found`), and no `GITHUB_TOKEN`/`.netrc` credential exists
+either, only the SSH deploy key `origin` pushes with. So that path is still
+not open to an unattended session here, unchanged from the 325th session's
+own conclusion.
+
+**Did not just re-read the log and rubber-stamp "nothing to do" — picked
+three concrete, previously-unchecked angles and verified them against
+current source myself:**
+
+- **OAuth 2.0 token-lifetime handling, re-examined from first principles
+  rather than trusting the existing doc comment's word.** Read
+  `jmap-backend-core/src/oauth2.rs` end to end: `access_token` fetches a
+  fresh token every connect via `e_source_get_oauth2_access_token_sync`,
+  which is also where EDS itself refreshes an expired one against the
+  stored refresh token — the `expires_in` out-parameter is deliberately
+  unused because nothing here holds a connection open across an expiry to
+  need it. That is a real design decision, documented as one, not an
+  oversight; agrees with what the 317th/318th/320th/321st sessions already
+  established about the OAuth2 surface without re-deriving it from them.
+- **Whether the two most recent OAuth2 fixes (mail, session 317; collection,
+  session 320) honour the "mark UI strings translatable at introduction"
+  standing directive.** Neither `jmap-mail/src/oauth2.rs` nor
+  `jmap-backend-collection/src/authenticate.rs` calls `translate`/
+  `translate_with`/`N_(`, and neither is listed in `po/POTFILES.in` — but
+  correctly so: `jmap-mail::connect::StoreError::OAuth2` and
+  `jmap-backend-core::connect::ConnectError::OAuth2` both wrap EDS's own
+  message from `e_source_get_oauth2_access_token_sync`/
+  `camel_session_get_oauth2_access_token_sync` verbatim, and that string is
+  EDS's to translate, not this project's — the same call the `oauth2.rs`
+  module doc already states explicitly for the EDS-side error. No gap.
+- **Re-opened the "manual OAuth2 page has no discovery trigger" question
+  once more, this time reading `config_lookup.rs`'s own module doc rather
+  than the night-log summaries of it.** It states plainly that the
+  generic Evolution mechanism *is* the intended fix — "Look Up Account
+  Details" is an `EConfigLookupWorker` any provider (this one, or
+  `evolution-ews`'s `e-webdav-config-lookup.c`) registers with, so a
+  provider-specific button on the manual page would be a second, redundant
+  way to do the same thing rather than a missing piece. `complete.rs`'s
+  `Incomplete::OAuth2NotRegistered` message already names the remedy in
+  words. This reads less like an open design question than prior sessions'
+  framing suggested — the module doc already argues the current behaviour
+  is correct by design, matching how EDS's own other providers work — but
+  changing the disposition from "maintainer call" to "settled" on this
+  session's own say-so, with no human confirmation and no new code, would
+  be exactly the kind of claim the roadmap's "do not claim what you cannot
+  verify" rule warns against for a UX judgment. Left the disposition as-is;
+  noted here so a human weighing in has the module doc's own argument
+  pointed at directly instead of having to re-find it.
+
+**Conclusion: no unblocked, non-guesswork, in-priority tractable item found
+tonight.** M7's only gap is still the human-verification pass (plus the
+manual-OAuth2-page UX question above, now with a sharper pointer for
+whoever decides it). Real-server readiness is closed across all four
+backends. M9 is COMPLETE. M10's job is landed but unverified in CI pending
+`gh`/GitHub-UI access this VM does not have. Per the "correctness over
+progress" rule, not forcing a change into M1–M6/M8 to manufacture a commit.
+Full gate re-run for currency: `cargo test --workspace --exclude
+example-module --exclude jmap-functional --locked` (0 failed, all green).
+No `rust/` files changed, so clippy/fmt/reuse have nothing new to judge;
+`git status` shows only this log entry. `~/.night-shift-escalate` empty
+(checked, not present).
+
+**Next session**: unchanged standing blockers — M7 human verification, M10
+CI dispatch (needs `gh`/GitHub UI), Stalwart CI provisioning, and the
+manual-OAuth2-page UX call (see this session's sharper pointer at
+`config_lookup.rs`'s module doc if picking it up). Do not re-run the
+OAuth2-token-lifetime or translation-directive checks again absent new
+OAuth2-surface code — both came back clean this session on top of already
+being clean per prior sessions' checks.
