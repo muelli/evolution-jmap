@@ -31490,3 +31490,25 @@ interactive (the maintainer is present), so rather than add a 341st
 identical confirmation, the assistant is asking the three open questions
 from the 338th session's entry directly in the chat turn instead of
 logging another wait. No `rust/` changes.
+
+## 2026-08-17 (341st session)
+
+Pointer. `git fetch origin`: `origin/master` unchanged at `ee9d852` (the
+340th session's tag); no maintainer commit/comment answering any of the
+338th session's three items. `gh`/token/escalate still absent; disk
+84%/9.2G free; `docs/BACKLOG.md` (92 lines) and `docs/MILESTONES.md`
+(M7/M10 untagged) unchanged; `git status --short` empty before this entry.
+
+Rather than trust the accumulated log narrative on the manual-OAuth2-page
+item, this session had an independent agent re-derive it from source with
+no access to prior night-log reasoning. It reached the same conclusion:
+`jmap-config/src/complete.rs:206-211`'s refusal is correct by design (no
+production code path but `config_lookup.rs`'s `discover_and_register` ever
+writes `[JMAP OAuth2] client-id`), and closing it is a genuine two-way
+product choice, not a derivable fix — option (a) also needs new
+blocking-network-off-the-GTK-thread plumbing that still couldn't be
+verified headless. So this is confirmation, not new information; the
+conclusion stands unchanged.
+
+This session is interactive, so the three open items are asked directly in
+the chat turn again rather than left to another pointer entry.
