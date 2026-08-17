@@ -32079,3 +32079,38 @@ still genuinely open, (B) and (C), with why each is parked rather than done.
 
 No code change. Nothing unblocked exists under the current priority order;
 ending here rather than manufacturing a second item.
+
+## 2026-08-17 (354th session) — re-verified from scratch; still nothing unblocked
+
+Independently re-derived the unblocked-work set rather than trusting the
+353rd entry at face value. Checks made, each against current state rather
+than the log's summary of it:
+
+- `git fetch origin` — no commits ahead of `HEAD` (`cf6458c`); no maintainer
+  push since the last session.
+- `git log --oneline -5 -- docs/ROADMAP.md` — unchanged since `445dc22`
+  (the maintainer-decisions commit); no new directive to act on.
+- `docs/MILESTONES.md` — M1–M10 all tagged COMPLETE, M7 and M10 included.
+- `~/.night-shift-escalate` — absent, so no pending escalation to honour.
+- `docs/eds-version-matrix.md` read in full: (A) is closed (confirmed by
+  the file's own "Fixed 2026-08-17" section, not just the log). (B) is
+  explicitly a `jmap-vcard` mapping decision for the maintainer (three
+  named questions) — not claimable. (C) is a bindgen/glibc clippy artifact
+  on the 3.60 container that `ci/eds-matrix.sh` doesn't even gate on today
+  — parked correctly, not a live regression.
+- Spot-checked real-server readiness directly rather than re-trusting the
+  345th–348th sessions' sweep: `jmap-backend-core/src/oauth2.rs` (232
+  lines), `jmap-config/src/oauth2{,_service,_setup}.rs` (849 lines
+  combined), and `jmap-client/tests/live_server.rs` (181 lines) all exist
+  and are substantive, not stubs; `grep -rn "TODO\|FIXME\|XXX"` over the
+  oauth2 and live-server files returned nothing. Capability-negotiation
+  tests exist across `jmap-mail`, `jmap-backend-book`, `jmap-backend-cal`,
+  and `jmap-collection-sync`'s `connect.rs`/test suites.
+- Confirmed the last push is green in CI via the public Actions API
+  (unauthenticated `curl`, no `gh` needed): run 32045850667 for `a8bb65e`
+  (the (A) Camel-port commit) is `completed`/`success`.
+
+Conclusion unchanged from the 353rd session, now independently confirmed
+rather than inherited: no code change this session. Nothing unblocked
+exists under the current priority order (M7 → real-server readiness →
+M9/M10, all closed or maintainer-gated).
