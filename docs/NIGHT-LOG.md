@@ -30471,3 +30471,56 @@ the manual-OAuth2-page question above), and M10 is blocked on
 `Containerfile.ci`/`ci-image.yml` growth, off-limits to this stream.
 `docs/BACKLOG.md`'s entries remain genuine M3/M4/M7 polish, correctly
 deferred.
+
+## 2026-08-17 (three-hundred-and-nineteenth session)
+
+**Dependency/status re-check before claiming anything.** `git fetch origin`
+showed `origin/master` unchanged at `cb8de9b` (the 318th session's own
+commit) — nothing landed upstream since that entry, so its findings were
+re-verified against the current tree rather than re-derived from scratch.
+
+**Full gate re-run, clean.** With this VM's EDS 3.52 headers available, ran
+the whole workspace rather than the default-members subset: `cargo build`,
+`cargo clippy --workspace --exclude example-module --all-targets --locked
+-- -D warnings`, and `cargo test --workspace --exclude example-module
+--exclude jmap-functional --locked` — all green (198 `test result: ok`
+blocks, zero `FAILED`, zero clippy warnings). The `GLib`/`Camel`-CRITICAL
+lines in the test output are the suite's own deliberate-panic and
+hostile-input fixtures logging through glib, not failures. `reuse`/`cargo
+deny` still not installable here ([[checks-sh-blocked-on-vm]]); no
+`Cargo.lock` change and no new source file this session, so neither has
+anything new to judge.
+
+**Searched for any tractable, non-guesswork item before concluding there
+was none.** `grep -rn "TODO\|FIXME\|XXX"` across `rust/` turns up only
+`VTODO` (an iCalendar component name, not a marker) and one `FIXME` at
+`jmap-mail/src/folders.rs:44`, which quotes IMAPX's own upstream doc
+comment about a flag *it* doesn't honour — this crate's wrapper already
+honours that flag deliberately (the surrounding comment explains why), so
+it is not an open item here. `docs/BACKLOG.md` holds nothing new since the
+318th session; every entry is still M3/M4/M7 fidelity polish explicitly
+deferred by the roadmap's current-priority directive. `docs/eds-versions.md`
+(M10's documentation acceptance criterion) already exists and is current;
+M10's remaining acceptance criterion — an actual CI matrix job — needs
+`.github/workflows/ci-image.yml` changes, which are off-limits to this
+stream, so M10 stays genuinely blocked rather than partially done.
+
+**Conclusion: no unblocked, non-guesswork tractable item exists right now.**
+Priority order per ROADMAP: M7's only gap is the human verification pass
+(cannot be done headless, unchanged); real-server readiness (OAuth2 for all
+three backends, capability negotiation, the `live-server` harness) is
+closed per the 317th/318th sessions' checks, re-confirmed here only by
+gate re-run, not by re-deriving the same file-by-file audit a third time in
+a row; M9 is COMPLETE (`bd3ae60`); M10 is blocked on `ci-image.yml`. The one
+open design question (whether the manual OAuth2 page should grow a
+retry-discovery affordance) is still a maintainer call this stream should
+not guess at, per the 313th/314th sessions' own reasoning — not reopening
+it without new information changes nothing about that judgment.
+Not claiming any task, not pushing a code change; only this log entry.
+`~/.night-shift-escalate` empty (checked, not present).
+
+**Next session**: do not re-run the full three-item real-server-readiness
+audit or this TODO/FIXME sweep again absent a new commit upstream of this
+entry — both came back clean twice in a row now (318th, 319th). The two
+standing blockers (M7 human verification, M10 infra) are unchanged and
+need a human, not another agent session, to move.
