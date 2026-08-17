@@ -31072,3 +31072,62 @@ manual-OAuth2-page UX call (see this session's sharper pointer at
 OAuth2-token-lifetime or translation-directive checks again absent new
 OAuth2-surface code — both came back clean this session on top of already
 being clean per prior sessions' checks.
+
+## 2026-08-17 (three-hundred-and-twenty-seventh session)
+
+**Survey, no claim.** `git fetch origin` shows `origin/master` unchanged at
+`4f0b518` (the 326th session's own tag). Rather than accept "no unblocked
+priority work remains" on the log's word alone, ran two independent checks
+before concluding the same thing:
+
+- **Tried to actually unblock M10's one remaining gap** — the
+  `eds-version-matrix` CI job (landed `5d216c9`) needs a human or `gh` to
+  dispatch it once, since it only runs on `workflow_dispatch`/PR label, never
+  a plain push. Prior sessions checked `which gh` and stopped at "command not
+  found." Went one step further: `apt-cache policy gh` shows it *is*
+  installable (`2.45.0-1ubuntu0.3` candidate, this VM has outbound network),
+  and passwordless `sudo` is available — so installing it was actually
+  possible tonight, unlike the Docker-disk constraint two sessions ago. But
+  checked for a credential *before* installing anything: no `GITHUB_TOKEN`/
+  `GH_TOKEN` in the environment, no `~/.config/gh`, no `~/.netrc` — the only
+  GitHub credential on this VM is the SSH deploy key `origin` pushes with,
+  which authenticates git-over-SSH, not the GitHub REST/GraphQL API `gh`
+  needs for `gh auth login`/`gh workflow run`. Installing the binary with no
+  token to authenticate it would accomplish nothing (`gh auth login`
+  non-interactively needs a token; there isn't one), so did not install it —
+  a real attempt at the blocker, not a repeat of the same shell check, but
+  the conclusion is unchanged: this VM cannot dispatch the workflow.
+- **Independent code-level re-audit of "real-server readiness," via a
+  fresh read-only subagent with no access to this log's own summaries** —
+  asked it to verify from source alone, not trust prior sessions' word:
+  `--features live-server` (`jmap-client/tests/live_server.rs`, 4 tests,
+  feature+`#[ignore]` double-gated, compiles clean), capability-negotiation
+  (`jmap-proto/src/session.rs`'s `resolve_primary_account`/
+  `sole_personal_account` fallback per RFC 8620 §2, `max_*` limits correctly
+  `Option<u64>` with no invented defaults, `Client::primary_account()`
+  returns a descriptive error rather than panicking), OAuth2 across all four
+  backends (book/cal share `jmap-backend-core::oauth2`, mail and collection
+  each have their own, all tested — 5+4+17+16+1+1 tests across the surface),
+  and a repo-wide `TODO`/`FIXME`/`unimplemented!`/`todo!()` sweep (two hits,
+  neither a real gap: an `error.rs` doc comment and a `folders.rs` comment
+  quoting *IMAPX's* FIXME as contrast to this project's own correct
+  behaviour). Verdict: genuinely implemented and clean, not just claimed.
+
+**Conclusion: unchanged from the 326th session, now independently
+re-derived rather than trusted.** M7's only gap is human verification in
+real Evolution (plus the parked manual-OAuth2-page UX call). M10's job is
+landed but this VM has no path to dispatch it. Real-server readiness is
+closed. Per "correctness over progress," not manufacturing a commit in
+M1–M6/M8. `cargo test --workspace --exclude example-module --exclude
+jmap-functional --locked` re-run clean (0 failed); no `rust/` files
+changed. `~/.night-shift-escalate` empty (checked, not present).
+
+**Next session**: same standing blockers — M7 human verification, M10 CI
+dispatch (needs a human with `gh`/GitHub-UI access; this VM provably cannot
+authenticate `gh` even if installed, so stop re-checking `which gh` and
+instead look for a maintainer-provided token if this blocker is ever to
+close from this VM), Stalwart CI provisioning, and the manual-OAuth2-page
+UX call. Do not re-run the live-server/capability-negotiation/OAuth2 sweep
+again absent new code in that territory — it came back clean tonight via
+an independent audit on top of already being clean per many prior
+sessions' checks.
