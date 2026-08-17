@@ -32427,3 +32427,67 @@ BOTH EDS versions — version-aware expected values, or fix the mapping if 3.60 
 correct — do NOT loosen the assertions to hide a real behavioral difference.
 Reproduce via the newer-EDS container in `ci/eds-matrix.sh`. The agent cannot
 see CI (no `gh`), so this entry is the only channel for the leg's result.
+
+## 2026-08-17 (362nd session, continued) — M10: eds-matrix goes green on both legs
+
+Completed the increment claimed above. The 3 `eds-sys/tests/contacts.rs`
+failures on newer EDS were genuine libebook behaviour drift with no
+header-visible signal — same function names/signatures, different runtime
+answers — so no amount of FFI/bindgen work would touch them; the fix is in
+the test's expectations, not the bindings.
+
+- Added one `EDS_FEATURES` marker to `eds-sys/build.rs`:
+  `("eds_death_date_field", "E_CONTACT_DEATHDATE")`. That field is a genuine
+  new enum variant, absent from 3.52's `EContactField` entirely (confirmed by
+  grepping this VM's own generated `bindings.rs` — it wasn't there), so it is
+  a real compile-time signal, unlike the other three facts below.
+- Used that one cfg as the pivot for all four coupled facts `contacts.rs`
+  needed: the IM-service `X-` line → `_HOME_1` slot shift, the
+  `ANNIVERSARY`/`X-EVOLUTION-ANNIVERSARY` swap, the new `DEATHDATE` field ID,
+  and `E_CONTACT_NAME_OR_ORG`'s derivation — they are empirically
+  all-or-nothing on the same EDS release, so one boolean carries all four
+  rather than inventing four independent (undetectable) signals.
+- **Correction to the prior table**: it had only sampled 3 of 10 slotted IM
+  services (`X-JABBER`/`X-AIM`/`X-GADUGADU`) and assumed the rest unaffected.
+  They are not — every slotted service shifts to `_HOME_1` on 3.60. This only
+  surfaced because `assert_eq!` aborts a test function at its first failure;
+  fixing the first three assertions let execution reach `X-SKYPE` and reveal
+  the same drift there. Fixed all ten.
+- **First guess was wrong and caught by testing, not assumed correct**: named
+  the marker `E_CONTACT_DEATH_DATE` (guessing the header's naming
+  convention) before checking — the real symbol is `E_CONTACT_DEATHDATE`, no
+  separating underscore. Running against the actual 3.60 container caught
+  this immediately (cfg silently false, both assertions still failing);
+  fixed by grepping the container's own generated bindings rather than
+  guessing again.
+- Verified for real, not by trusting the table: reproduced the exact pinned
+  Fedora/3.60.2 container per `docs/eds-version-matrix.md`'s recipe (docker
+  works passwordlessly via sudo on this VM), ran `ci/eds-matrix.sh` in it —
+  **0 failures**, all crates, both binaries and doctests. Also re-ran
+  `cargo test`/`cargo clippy --all-targets -D warnings`/`cargo fmt --check`
+  on this VM's 3.52.3 for the default members and the explicit EDS-header
+  crate set — all clean.
+- Updated `docs/eds-version-matrix.md` (B) to record the fix, the corrected
+  IM-service list, and the `E_CONTACT_DEATHDATE` naming correction.
+  `docs/BACKLOG.md` gets a new (B′) entry for the part that's genuinely a
+  maintainer call and not a test fix: whether `jmap-vcard`'s own mapping
+  (not just the characterization test) should change on a newer EDS — chat
+  handle field choice, `ANNIVERSARY` vs `X-EVOLUTION-ANNIVERSARY` on write,
+  `NAME_OR_ORG` sort-order reliance.
+- **Disk filled twice during this session** (docker `cp -r` of the whole repo
+  including `rust/target`, then again mid-clippy-rebuild after `cargo clean`
+  had freed it) — worth a note since it briefly broke the harness's own tmp
+  filesystem, not just the build. Fixed by `git clone`-ing into the container
+  instead of `cp -r` (target/ is gitignored, ~14G smaller) and by
+  `cargo clean --profile dev` on the host between the two disk-full hits.
+- `docs/MILESTONES.md`'s `M10 COMPLETE` line (from `a26578b`, predating this
+  fix) is left as-is per the "never remove or edit prior lines" rule; this
+  session's fix is what makes that tag actually hold now that
+  `ci/eds-matrix.sh` is verified green rather than `continue-on-error`-masked.
+  Maintainer still needs to confirm via an actual CI dispatch (this runner
+  has no `gh`/write access).
+
+No blockers hit worth escalating — this turned out to be ordinary Rust test
+work plus careful measurement, not the FFI/ABI reasoning the maintainer
+flagged as an escalation candidate. Ending the session here per the
+one-increment rule.
