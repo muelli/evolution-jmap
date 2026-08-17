@@ -30792,3 +30792,91 @@ this session's find (`805f197` and `bb94f02` landed the same day,
 comment the earlier one wrote) shows the prior TODO/FIXME-only sweeps were
 missing a category of drift: a doc comment going stale within the same
 day's work, not just over weeks.
+
+## 2026-08-17 (three-hundred-and-twenty-fourth session)
+
+**Dependency check before claiming anything.** `git fetch origin` showed
+`origin/master` unchanged at `f107dfe` (the 323rd session's own commit).
+
+**Re-examined the M10 "blocked on `ci-image.yml`" conclusion the 319th
+session reached and every session since has repeated — and it does not
+hold up.** `ci-image.yml` builds `Containerfile.ci` and pushes it to
+`ghcr.io`, but reading `.github/workflows/ci.yml` end to end shows none of
+its jobs (`checks`, `build`, `reproducible`, `functional`, `gui-smoke`)
+actually run inside that image — every one runs directly on the bare
+`ubuntu-24.04` GitHub runner and installs the EDS/Evolution headers itself
+via `ci/install-deps.sh` (apt). `docs/functional-tests.md` and
+`docs/gui-smoke-test.md` say so explicitly: `Containerfile.ci`/`ci-image.yml`
+is what `release.yml` alone uses, for the artifact build. So a new
+EDS-version-matrix job for M10 does not need to touch `ci-image.yml` at
+all — it can be a job in `ci.yml` (not off-limits) that runs in a
+*different* container (e.g. `container: fedora:...`) for the "newer EDS"
+legs, the same way `functional`/`gui-smoke` are already separate jobs with
+their own dependency-install steps. The prior sessions' "M10 stays
+genuinely blocked" was a real misreading, not a re-confirmation — nothing
+in `ci.yml` was actually re-read before that conclusion was repeated five
+times in a row.
+
+**Checked what a Fedora-based leg would actually give.** Pulled
+`fedora:latest` in a local Docker container (this VM has Docker,
+passwordless sudo) and confirmed `pkg-config --modversion` for
+`camel-1.2`, `libedataserver-1.2`, `libebackend-1.2`, `libebook-1.2`,
+`libedata-book-1.2`, `libecal-2.0` and `libedata-cal-2.0` all agree at
+`3.60.2` once `evolution-data-server-devel` is installed via `dnf`. That
+single leg would satisfy *two* of M10's three minimum-version bullets at
+once — "the current stable" and "a 3.56+ that crosses the GtkUIManager
+change" — since 3.60 is both. `evolution-shell-3.0`/`evolution-mail-3.0`
+(needed by `evo-sys`/`jmap-config`, part of the existing `rust-test-eds`
+CTest target in `cmake/Rust.cmake:87-94`) resolve to the `evolution-devel`
+package, which `dnf provides 'pkgconfig(evolution-shell-3.0)'` confirms
+exists at the same `3.60.2`.
+
+**Could not verify the actual build, and did not push a CI job on the
+strength of package-name resolution alone.** Tried to `cargo build -p
+eds-sys` (then the full `rust-test-eds` crate set) inside that Fedora
+container, mounting a `target/`-free copy of `rust/`. Installing
+`evolution-devel` alone pulls in most of Fedora's desktop stack (pipewire,
+systemd-networkd, btrfs-progs, adwaita fonts, ~1GB+) because that is what
+the package depends on upstream — nothing this project controls. Combined
+with this VM's disk, which turned out to be at 95%+ (`rust/target` alone is
+21G, leaving under 3G free), first `rustup`+`cargo build -p eds-sys` alone
+ran the filesystem to `No space left on device` mid-way through compiling
+`regex-automata`/`syn`/`clang-sys` — ordinary `bindgen` dependencies,
+before a single line of this project's own FFI code had compiled. Two
+attempts, both cleaned up completely afterward (`docker rmi fedora:latest`,
+temp copies removed) — disk is back to the same ~3G free it started at, no
+lasting change to this VM or the repository.
+
+**So: M10's matrix is not blocked by an off-limits file, but this session
+could not produce the one thing that would actually matter — evidence that
+`eds-sys`'s layout assertions hold (or don't) against a newer EDS.**
+Pushing the CI YAML on the strength of "the package names resolve" would
+be exactly the "compiles but nothing has verified it" pattern the 322nd
+session correctly refused for the `live-server` job, except worse here:
+that job's failure mode was known in advance (no server to talk to); this
+one's is the open question M10 exists to answer, and this session has zero
+signal on it either way. No `gh` CLI is installed on this VM, so even
+pushing and watching a real GitHub Actions run was not an option this
+session. Not implementing the job; not tagging M10; no source or workflow
+file changed.
+
+**Full gate re-run anyway, clean, nothing touched:** `cargo test --workspace
+--exclude example-module --exclude jmap-functional --locked` (0 failed).
+
+**Next session**: M10 is tractable — a new gated job (`workflow_dispatch`/
+label, matching `functional`/`gui-smoke`'s own pattern) in `ci.yml`,
+containerized on a current Fedora image for the "current stable + 3.56+"
+leg, running `cargo test --locked -p eds-sys -p evo-sys -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config` (the exact set `rust-test-eds`
+already runs, per `cmake/Rust.cmake:87-94`) inside it. What is missing is a
+way to verify it before or immediately after pushing: either more free
+disk on this VM (to repeat tonight's Docker attempt to a successful finish
+before committing the YAML), or `gh` CLI/token access to watch the first
+real run land. Do not re-attempt the Docker verification here without
+first freeing real disk (`cargo clean --profile dev`, per
+[[disk-fills-from-cargo-target]], costs the next session's incremental
+build cache — a real tradeoff, not free) — repeating tonight's attempt on
+the same ~3G free will just hit the same wall. The M7 human-verification
+and Stalwart/manual-OAuth2-page maintainer-call blockers are unchanged.
+`~/.night-shift-escalate` empty (checked, not present).
