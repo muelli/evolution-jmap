@@ -31763,3 +31763,31 @@ but-wrong answer compiles-but-misbehaves → escalation candidate
 (`echo claude-opus-5 > ~/.night-shift-escalate`). Fix in `rust/`; do NOT edit
 the CI job to hide it. Repro locally against a newer EDS, or read the job log
 of run 32027119218. Maintainer re-runs the dispatch to confirm green.
+
+## 2026-08-17 (349th session) — escalating the M10 newer-EDS fix, not attempting it
+
+Confirmed the top unblocked item is exactly the one the prior entry
+recorded: make `eds-sys` build+test against both pinned EDS 3.52 and the
+newer EDS (3.60.2, per `docs/eds-version-matrix.md`) via version-conditional
+FFI. Re-verified nothing else is unblocked first — spot-checked
+`docs/BACKLOG.md` (unchanged, still out of scope by the current-priority
+directive) and re-read the 345th–348th sessions' exhaustive sweep of
+real-server readiness / M9 — before treating this as the only candidate.
+
+The fix isn't a single symbol rename: `e_vcard_to_string` dropped its
+`EVCardFormat` argument (3.52 two-arg → 3.60 one-arg, with version now set
+via `e_vcard_convert`), `CamelFolderSearch`/`CamelFolderSearchClass` and
+several `camel_folder_search_util_*` helpers are gone from 3.60's public
+headers entirely, `camel_folder_thread_messages_get_type` was renamed, and
+`camel_uid_cache_{get_new,free}_uids` were removed — a mix of signature
+changes, type removals, and symbol renames across two bindgen-generated
+surfaces (`eds-sys`'s `layout.rs`/`camel.rs` tests and
+`jmap-backend-book/src/marshal.rs`'s call site). Getting this right needs
+version-conditional bindgen output or cfg-gated wrapper functions that are
+correct on both ABIs, not just compiling on both — precisely the
+"plausible-but-wrong-but-compiles" FFI/ABI risk the roadmap's own note (and
+the model-escalation instructions) calls out for this task by name.
+
+Not attempting it on Sonnet. Wrote `claude-opus-5` to
+`~/.night-shift-escalate` and stopping here without claiming the work, per
+the escalation protocol. No code change this session.
