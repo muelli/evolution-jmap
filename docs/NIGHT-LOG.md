@@ -32300,3 +32300,38 @@ not run-level status; the operator doc's content, not just its existence):
 nothing unblocked exists under the current priority order (M7 → real-server
 readiness → M9/M10, all closed or maintainer-gated). No code change this
 session; ending here rather than manufacturing an item to justify a commit.
+
+## 2026-08-17 (360th session) — eighth pass, staleness check instead of re-running the gate
+
+The 359th session's evidence (per-job CI outcomes, the live-server operator
+doc) doesn't go stale on its own — it only needs re-checking if something
+changed. So this session's distinct angle: confirm nothing *has* changed
+since the last two sessions that did the expensive checks, rather than
+redo the expensive checks themselves.
+
+- `git fetch origin`: `HEAD` (`92b77ad` at session start) matches
+  `origin/master` — no commits landed since the 359th session's own push.
+- `git diff --stat cad4456..92b77ad -- rust/ docs/ROADMAP.md
+  docs/MILESTONES.md docs/BACKLOG.md`: empty. `cad4456` is the 358th
+  session's commit, the one that last ran `cargo test` +
+  `cargo clippy --all-targets -- -D warnings` locally (green, 128 tests,
+  both the default-members set and the EDS-header crates built explicitly
+  against this VM's 3.52.3). Nothing in `rust/` or the three governing docs
+  has moved since, so that green result still describes the current tree
+  exactly — re-running it would reproduce the same answer, not learn
+  anything new. The only commits in between (`a46359e`, `6cef8bf`) touch
+  only `infra/stalwart/`, already out of scope for this agent and already
+  identified as operator-side work by the 357th session.
+- `docs/MILESTONES.md`: unchanged, M1–M10 all tagged, including the
+  `M7 COMPLETE c3cac2d 2026-08-17` and `M10 COMPLETE 445dc22 2026-08-17`
+  lines the maintainer's decision commit asked for.
+- `~/.night-shift-escalate`: absent (checked directly, not inherited).
+- No `check-runs`/`status` entries exist yet against the new HEAD
+  (`92b77ad`) on the GitHub API — expected, since CI here is
+  `workflow_dispatch`-only and the maintainer dispatches it by hand (per
+  the 359th session's finding); not a gap to chase.
+
+Eighth independent conclusion, reached this time by proving staleness of
+the last verification rather than repeating it: nothing unblocked exists
+under the current priority order (M7 → real-server readiness → M9/M10, all
+closed or maintainer-gated). No code change this session.
