@@ -31261,3 +31261,21 @@ CI provisioning, and the manual-OAuth2-page UX call. If `origin/master` is
 still at this session's tag and nothing new has landed, another one-line
 confirmation is sufficient; there is no need to re-run the full gate or
 re-read source that hasn't changed.
+
+## 2026-08-17 (three-hundred-and-thirty-first session)
+
+**One-line confirmation, per the 329th/330th sessions' own instruction not
+to re-derive an already-independently-verified conclusion.** `git fetch
+origin`: `origin/master` unchanged at `a4536c3` (the 330th session's tag);
+no other agent landed anything. `gh`/token/escalate check re-run fresh:
+`which gh` not found, no `GITHUB_TOKEN`/`GH_TOKEN`, no `~/.config/gh`, no
+`~/.netrc`, `~/.night-shift-escalate` absent. `docs/BACKLOG.md` and
+`docs/ROADMAP.md` last-touched commits unchanged from prior sessions'
+reads. Disk unchanged (85%, 9.0G free). `git status --short` empty.
+Nothing changed; no unblocked priority work exists tonight.
+
+**Next session**: same standing blockers as the 326th–330th sessions — M7
+human verification, M10 CI dispatch (needs `gh`/GitHub-UI access), Stalwart
+CI provisioning, and the manual-OAuth2-page UX call. If `origin/master` is
+still at this session's tag and nothing new has landed, another one-line
+confirmation is sufficient.
