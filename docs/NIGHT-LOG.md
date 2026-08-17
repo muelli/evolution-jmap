@@ -32491,3 +32491,33 @@ No blockers hit worth escalating — this turned out to be ordinary Rust test
 work plus careful measurement, not the FFI/ABI reasoning the maintainer
 flagged as an escalation candidate. Ending the session here per the
 one-increment rule.
+
+## 2026-08-17 (363rd session) — re-verified, nothing unblocked; one new fact
+
+Fresh dependency-graph pass: `docs/ROADMAP.md`'s priority order (M7 →
+real-server readiness → M9/M10) and `docs/MILESTONES.md` (M1–M10 all
+tagged) are unchanged from the 362nd session; `git status` clean, `origin/
+master` at `b7946df` (this VM's own last push). `docs/BACKLOG.md`'s
+remaining items are (B′) an explicit maintainer call and (C) an explicit
+low-leverage non-regression, both already out of scope by the current-
+priority directive.
+
+Checked one thing none of the ~15 prior "nothing unblocked" sessions had
+occasion to, since it postdates the 362nd session's fix: whether that fix
+(`00271f9`, the version-aware contact-model assertions) actually landed
+green in CI, via the public Actions API (no `gh`/token needed for reads):
+- The push-triggered run for `00271f9` (`32064810881`) is green on
+  `checks`/`reproducible`/`build` — the fix didn't break the normal
+  pinned-3.52 gate.
+- `eds-version-matrix` itself only runs on `workflow_dispatch` or a PR
+  label (`ci.yml:139-141`), never on push — so it shows `skipped` on that
+  run, and no `workflow_dispatch` has fired since `dd76d558` (before the
+  fix). The fix is committed and locally verified against the real 3.60.2
+  container (per the 362nd session's log), but CI has not yet re-confirmed
+  it live. This runner has no write/dispatch access, so this is the
+  maintainer's step, same as the 362nd session already noted — restating
+  it here only because this session independently confirmed it via the
+  API rather than assuming it still held.
+
+No tractable item found beyond that; not manufacturing backlog polish to
+justify a commit. Ending here.
