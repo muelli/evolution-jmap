@@ -31545,3 +31545,11 @@ The three open items from the 338th session are answered — see the new
 Next unblocked agent work: implement decision 1 (tag M7 COMPLETE, optional
 message-wording polish). M10 tagging then waits on the maintainer's CI
 dispatch; Stalwart real-server runs are operator-side.
+
+## 2026-08-17 (343rd session)
+
+Claiming the maintainer decision's own "next unblocked agent work": tag M7
+COMPLETE in `docs/MILESTONES.md` (referencing `c3cac2d`, the master commit
+the round-2 operator verification above ran against), and polish the
+`OAuth2NotRegistered` status message's wording for a first-time user — no
+new code path, per the maintainer's decision 1.
