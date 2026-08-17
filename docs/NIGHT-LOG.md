@@ -31553,3 +31553,35 @@ COMPLETE in `docs/MILESTONES.md` (referencing `c3cac2d`, the master commit
 the round-2 operator verification above ran against), and polish the
 `OAuth2NotRegistered` status message's wording for a first-time user — no
 new code path, per the maintainer's decision 1.
+
+Done. `jmap-config/src/complete.rs`'s `status_message` for
+`Incomplete::OAuth2NotRegistered` used to read "OAuth 2.0 needs \"Look Up
+Account Details\" to run first." — accurate but not actionable for someone
+who does not already know the manual page is a dead end. It now reads
+"OAuth 2.0 can't be set up manually. Go back and use \"Look Up Account
+Details\" instead.", which states the refusal and the way out in the same
+sentence. Test-updated in the same commit (`status_message`'s test asserts
+the exact string), `po/evolution-jmap.pot` regenerated via `po/extract.sh`
+so `jmap-backend-core/tests/potfiles.rs` stays green — it did, along with
+the rest of `cargo test` (80 test binaries, 0 failures). No new code path,
+per the maintainer's instruction: the refusal logic in `check()` is
+untouched.
+
+Then tagged `M7 COMPLETE c3cac2d 2026-08-17` in `docs/MILESTONES.md`. The
+sha is the master commit the 296th session's round-2 operator verification
+ran against (not this session's own commits, which only reword a message —
+the actual human-verified UI predates them). `rust/crates/jmap-backend-core/
+tests/milestones.rs` (format, chronological order, sha-exists-in-history)
+passed against the new line before pushing.
+
+Checks run by hand in place of `ci/checks.sh` (this VM still has no
+`reuse`/`pipx`/`uvx`): `cargo fmt --check` clean, `cargo clippy
+--all-targets --locked -- -D warnings` clean, `cargo test --locked` green
+(80/80). No new source file, so `reuse lint`'s answer is unchanged from the
+last green run; `Cargo.lock` untouched, so likewise for `cargo deny`.
+
+M10 tagging still waits on the maintainer's GitHub Actions dispatch;
+Stalwart real-server runs stay operator-side. Ending the session here per
+the hard rule against starting a second large item — the next unblocked
+agent work is real-server readiness (OAuth2 hardening / `--features
+live-server` harness robustness) or M9/M10 follow-up once M10 is dispatched.
