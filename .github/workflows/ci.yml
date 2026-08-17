@@ -122,3 +122,34 @@ jobs:
           name: gui-smoke-artifacts
           path: ${{ runner.temp }}/gui-smoke-artifacts
           if-no-files-found: ignore
+
+  # M10 (docs/eds-version-matrix.md): the pinned-3.52 leg is the `build`
+  # job above (ctest there already runs rust-test-eds, layout checks
+  # included, against the Ubuntu 24.04 headers ci/install-deps.sh pins).
+  # This job is the *other* leg: a newer EDS, so an ABI/API drift becomes a
+  # red check here instead of a silent runtime segfault later. Fedora's
+  # current stable covers both "current stable" and "3.56+" in one
+  # container (see the doc for the version this digest resolved to when
+  # last checked). continue-on-error: known incompatibilities exist today
+  # (documented) and porting the backends to support them is explicitly
+  # out of M10's scope — this job's only job is to keep the breakage on
+  # the record, not to block CI on a milestone this repository does not
+  # commit to. Gated like functional/gui-smoke: it is not part of the
+  # every-push signal.
+  eds-version-matrix:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-eds-version-matrix')
+    runs-on: ubuntu-24.04
+    container: docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+    continue-on-error: true
+    steps:
+      - run: dnf -y install git evolution-data-server-devel evolution-devel pkgconf-pkg-config gcc clang-devel
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+      - run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: eds-version-matrix
+          workspaces: rust
+      - run: ci/eds-matrix.sh
