@@ -31947,3 +31947,16 @@ claiming (A). No code change, no lock taken — this is not implementation
 work in progress, so there is nothing to hold a lock against. The next
 session on opus should start from `docs/eds-version-matrix.md`'s (A)
 section and the docker repro recipe already documented there.
+
+## 2026-08-17 (352nd session) — claiming (A), the jmap-mail Camel port to 3.60
+
+Running on `claude-opus-5`, the model the 351st session wrote to
+`~/.night-shift-escalate` for exactly this item. Claiming (A) from
+`docs/eds-version-matrix.md`: port `jmap-mail`'s Camel surface so it builds
+and tests against both the pinned EDS 3.52 and 3.60.2 — the deleted
+`CamelFolderSearch` object, the now-private `CamelMIRecord`/`CamelFIRecord`
+summary rows, the removed `camel_folder_summary_*_array` accessors, and
+`CamelProvider`'s dropped `auto_detect`/`url_hash`/`url_equal` fields.
+
+Method: reproduce in the digest-pinned container per this doc's recipe, so
+both ABIs get a real compiler and nothing rests on guessing a header.
