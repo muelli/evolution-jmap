@@ -24,10 +24,11 @@ mod common;
 use std::ffi::{CStr, CString};
 use std::ptr;
 
+use eds_sys::compat::CamelSummaryMessageRecord;
 use eds_sys::{
     CAMEL_MESSAGE_ANSWERED, CAMEL_MESSAGE_ATTACHMENTS, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DRAFT,
     CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK,
-    CAMEL_MESSAGE_SEEN, CamelMIRecord, CamelMessageInfo, camel_message_info_get_cc,
+    CAMEL_MESSAGE_SEEN, CamelMessageInfo, camel_message_info_get_cc,
     camel_message_info_get_date_received, camel_message_info_get_date_sent,
     camel_message_info_get_flags, camel_message_info_get_folder_flagged,
     camel_message_info_get_from, camel_message_info_get_message_id, camel_message_info_get_preview,
@@ -801,7 +802,7 @@ fn the_keywords_a_row_remembers_survive_a_trip_through_the_summary_database() {
     // is the state Camel hands `save` one in, and every string `save` leaves in
     // it is read back before it goes out of scope.
     unsafe {
-        let mut record: CamelMIRecord = std::mem::zeroed();
+        let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
         let bdata = g_string_new(ptr::null());
         assert_ne!(
             camel_message_info_save(info, ptr::addr_of_mut!(record), bdata),
@@ -841,7 +842,7 @@ fn a_row_stored_without_the_column_loads_as_a_row_that_remembers_nothing() {
     // SAFETY: as above, with a record whose bdata is the empty string a summary
     // that wrote no provider data leaves behind.
     unsafe {
-        let mut record: CamelMIRecord = std::mem::zeroed();
+        let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
         let bdata = g_string_new(c"".as_ptr());
         record.uid = camel_message_info_get_uid(info);
         record.bdata = (*bdata).str;

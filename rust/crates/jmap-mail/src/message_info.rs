@@ -44,9 +44,13 @@
 //! set beside it, written by [`new_message_info`] and renewed by
 //! [`update_message_info`]. It is the shape IMAPX's own message info takes for
 //! the same reason — it keeps a `server_flags` word next to Camel's — and it
-//! survives a restart the only way Camel offers a provider: `CamelMIRecord`'s
-//! `bdata`, one string per row that the class chain appends to on the way out
-//! and reads back in the same order on the way in.
+//! survives a restart the only way Camel offers a provider: the summary
+//! database row's `bdata`, one string per row that the class chain appends to on
+//! the way out and reads back in the same order on the way in. (The row struct
+//! is `CamelMIRecord` up to EDS 3.52 and `CamelStoreDBMessageRecord` from 3.58;
+//! nothing but its name changed, so the two vfuncs below name it through
+//! [`eds_sys::compat::CamelSummaryMessageRecord`] and are otherwise the same
+//! functions on both.)
 //!
 //! Two things follow from what the column is *for*, and both are tested:
 //!
@@ -69,11 +73,12 @@ use std::ffi::CStr;
 use std::ptr;
 use std::sync::Mutex;
 
+use eds_sys::compat::CamelSummaryMessageRecord;
 use eds_sys::{
     CAMEL_MESSAGE_ANSWERED, CAMEL_MESSAGE_ATTACHMENTS, CAMEL_MESSAGE_DRAFT, CAMEL_MESSAGE_FLAGGED,
     CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK, CAMEL_MESSAGE_SEEN,
-    CamelAddress, CamelFolderSummary, CamelMIRecord, CamelMessageFlags, CamelMessageInfo,
-    CamelMessageInfoBase, CamelMessageInfoBaseClass, CamelMessageInfoClass, camel_address_format,
+    CamelAddress, CamelFolderSummary, CamelMessageFlags, CamelMessageInfo, CamelMessageInfoBase,
+    CamelMessageInfoBaseClass, CamelMessageInfoClass, camel_address_format,
     camel_internet_address_add, camel_internet_address_new, camel_message_info_base_get_type,
     camel_message_info_dup_user_flags, camel_message_info_freeze_notifications,
     camel_message_info_get_flags, camel_message_info_get_folder_flagged, camel_message_info_set_cc,
@@ -297,7 +302,7 @@ pub(crate) unsafe fn set_server_keywords(info: *mut CamelMessageInfo, keywords: 
 /// string the chain is building.
 unsafe extern "C" fn save(
     info: *const CamelMessageInfo,
-    record: *mut CamelMIRecord,
+    record: *mut CamelSummaryMessageRecord,
     bdata: *mut GString,
 ) -> gboolean {
     guard_row("save", info.cast_mut(), GFALSE, || {
@@ -338,7 +343,7 @@ unsafe extern "C" fn save(
 /// and the cursor the chain is reading through.
 unsafe extern "C" fn load(
     info: *mut CamelMessageInfo,
-    record: *const CamelMIRecord,
+    record: *const CamelSummaryMessageRecord,
     cursor: *mut *mut gchar,
 ) -> gboolean {
     guard_row("load", info, GFALSE, || {

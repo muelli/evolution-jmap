@@ -47,12 +47,20 @@
 //!
 //! Camel keeps one header record per folder beside the rows, and reserves a
 //! `bdata` field in it for whatever the provider has that Camel has none of —
-//! the same arrangement as `CamelMIRecord.bdata`, which [`crate::message_info`]
-//! keeps the keywords in, with one difference that decides the format below: a
-//! row's `bdata` is written and read through a cursor the whole class chain
-//! shares, and a header's is not — `summary_header_load` is handed the record
-//! and nothing else. So the field belongs to the last class in the chain, and
-//! this one writes it whole rather than appending to it.
+//! the same arrangement as the message row's `bdata`, which
+//! [`crate::message_info`] keeps the keywords in, with one difference that
+//! decides the format below: a row's `bdata` is written and read through a
+//! cursor the whole class chain shares, and a header's is not —
+//! `summary_header_load` is handed the record and nothing else. So the field
+//! belongs to the last class in the chain, and this one writes it whole rather
+//! than appending to it.
+//!
+//! The record is `CamelFIRecord` up to EDS 3.52 and `CamelStoreDBFolderRecord`
+//! from 3.58, named through [`eds_sys::compat::CamelSummaryFolderRecord`] here.
+//! Unlike the message row, that release also changed the *shape* of
+//! `summary_header_save` — from "allocate a record and return it" to "fill in
+//! the caller's and report success" — so that one vfunc exists twice below,
+//! sharing the single function that actually writes the field.
 //!
 //! It carries a format number before the state for the case that is not a
 //! restart but an upgrade: a header written by some later version of this
@@ -99,10 +107,10 @@ use std::ffi::CStr;
 use std::ptr;
 use std::sync::Mutex;
 
+use eds_sys::compat::{CamelSummaryFolderRecord, summary_dup_uids, summary_free_uids};
 use eds_sys::{
-    CamelFIRecord, CamelFolder, CamelFolderSummary, CamelFolderSummaryClass,
-    camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_count,
-    camel_folder_summary_free_array, camel_folder_summary_get, camel_folder_summary_get_array,
+    CamelFolder, CamelFolderSummary, CamelFolderSummaryClass, camel_folder_summary_add,
+    camel_folder_summary_check_uid, camel_folder_summary_count, camel_folder_summary_get,
     camel_folder_summary_get_type, camel_folder_summary_lock, camel_folder_summary_remove_uid,
     camel_folder_summary_touch, camel_folder_summary_unlock, camel_folder_take_folder_summary,
     camel_util_bdata_get_number, camel_util_bdata_get_string, camel_util_bdata_put_number,
@@ -308,22 +316,18 @@ pub unsafe fn set_summary_state(summary: *mut CamelFolderSummary, state: State) 
     unsafe { camel_folder_summary_touch(summary) };
 }
 
-/// `CamelFolderSummaryClass.summary_header_save`: puts the state into the
-/// record Camel is about to store.
+/// `CamelFolderSummaryClass.summary_header_save`, up to EDS 3.52: puts the state
+/// into the record Camel is about to store, and hands the record back.
 ///
 /// The record is the parent's — chained up for rather than allocated here, so
 /// that every count and flag Camel keeps in it is filled by the class that owns
-/// them. Only `bdata` is ours, and it is written whole for the reason this
-/// module's header gives: a header's `bdata` is not a chain the way a row's is.
-/// Whatever was in the field is freed first anyway, because a base class that
-/// started using it would otherwise leak it once per save.
-///
-/// A summary with no state stores nothing, so a mailbox that has never been
-/// listed reads back as one rather than as a state that is the empty string.
+/// them. Only `bdata` is ours; [`store_state`] is what writes it, and is shared
+/// with the newer EDS's version of this vfunc below.
+#[cfg(camel_summary_records)]
 unsafe extern "C" fn summary_header_save(
     summary: *mut CamelFolderSummary,
     error: *mut *mut GError,
-) -> *mut CamelFIRecord {
+) -> *mut CamelSummaryFolderRecord {
     guard_summary("summary_header_save", summary, ptr::null_mut(), || {
         // SAFETY: chaining up to the parent's own save, on an instance of a
         // type derived from it, with the arguments Camel passed through
@@ -336,21 +340,83 @@ unsafe extern "C" fn summary_header_save(
         }
 
         // SAFETY: `summary` is one of ours, by the guard; the record is the one
-        // the parent just allocated, so nothing else holds its `bdata`, and
-        // `g_string_free` hands over a `g_malloc`ed string Camel frees with the
-        // record.
-        unsafe {
-            let Some(state) = summary_state(summary) else {
-                return record;
-            };
-            let bdata = g_string_new(ptr::null());
-            camel_util_bdata_put_number(bdata, HEADER_VERSION);
-            camel_util_bdata_put_string(bdata, c_string(state.as_str()).as_ptr());
-            g_free((*record).bdata.cast());
-            (*record).bdata = g_string_free(bdata, GFALSE);
-        }
+        // the parent just allocated, so nothing else holds its `bdata`.
+        unsafe { store_state(summary, record) };
         record
     })
+}
+
+/// The same vfunc from EDS 3.58, where it fills in a record the *caller* owns
+/// and reports success instead.
+///
+/// This is the one place in the provider where a newer EDS changed a vfunc's
+/// shape rather than a name, so it is the one place that needs two functions
+/// rather than an alias. What moved: 3.52 has the implementation allocate a
+/// `CamelFIRecord` and return it, while 3.58 has `camel_folder_summary_save`
+/// zero a `CamelStoreDBFolderRecord` on its own stack, pass it down for filling,
+/// write it, and then clear it with `camel_store_db_folder_record_clear`.
+///
+/// What that changes for this provider is nothing but the plumbing, and that is
+/// worth saying explicitly because it is the part a plausible-looking port gets
+/// wrong: the record's `bdata` is still a `g_malloc`ed string the record takes
+/// ownership of, and `record_clear` `g_free`s it, so [`store_state`] hands over
+/// exactly what it handed the older one. The failure mode avoided here is
+/// allocating a record and returning a pointer to it — which is what the older
+/// signature invites and would, on this release, leak the record and drop the
+/// state.
+#[cfg(not(camel_summary_records))]
+unsafe extern "C" fn summary_header_save(
+    summary: *mut CamelFolderSummary,
+    record: *mut CamelSummaryFolderRecord,
+    error: *mut *mut GError,
+) -> gboolean {
+    guard_summary("summary_header_save", summary, GFALSE, || {
+        // SAFETY: chaining up first, so that every count and flag Camel keeps
+        // in the record is filled by the class that owns it, with the arguments
+        // Camel passed through untouched.
+        let chained = unsafe { parent_class() }
+            .and_then(|class| class.summary_header_save)
+            .map_or(GFALSE, |save| unsafe { save(summary, record, error) });
+        if chained == GFALSE || record.is_null() {
+            return chained;
+        }
+
+        // SAFETY: `summary` is one of ours, by the guard; the record is live for
+        // the call and the parent does not write `bdata`.
+        unsafe { store_state(summary, record) };
+        GTRUE
+    })
+}
+
+/// Writes the state into a record's `bdata`, whichever of the two vfuncs above
+/// is holding it.
+///
+/// Written whole rather than appended to, for the reason this module's header
+/// gives: a header's `bdata` is not a chain the way a row's is. Whatever was in
+/// the field is freed first anyway, because a base class that started using it
+/// would otherwise leak it once per save.
+///
+/// A summary with no state stores nothing, so a mailbox that has never been
+/// listed reads back as one rather than as a state that is the empty string.
+///
+/// # Safety
+///
+/// `summary` must be a live summary of this type, and `record` a live record
+/// whose `bdata` nothing else holds.
+unsafe fn store_state(summary: *mut CamelFolderSummary, record: *mut CamelSummaryFolderRecord) {
+    // SAFETY: the contract above, and `g_string_free` hands over a `g_malloc`ed
+    // string the record takes ownership of — freed with the record on 3.52, and
+    // by `camel_store_db_folder_record_clear` from 3.58.
+    unsafe {
+        let Some(state) = summary_state(summary) else {
+            return;
+        };
+        let bdata = g_string_new(ptr::null());
+        camel_util_bdata_put_number(bdata, HEADER_VERSION);
+        camel_util_bdata_put_string(bdata, c_string(state.as_str()).as_ptr());
+        g_free((*record).bdata.cast());
+        (*record).bdata = g_string_free(bdata, GFALSE);
+    }
 }
 
 /// `CamelFolderSummaryClass.summary_header_load`: reads it back out of the
@@ -363,7 +429,7 @@ unsafe extern "C" fn summary_header_save(
 /// nothing else needs.
 unsafe extern "C" fn summary_header_load(
     summary: *mut CamelFolderSummary,
-    record: *mut CamelFIRecord,
+    record: *mut CamelSummaryFolderRecord,
 ) -> gboolean {
     guard_summary("summary_header_load", summary, GFALSE, || {
         // SAFETY: chaining up first, on an instance of a type derived from the
@@ -604,11 +670,11 @@ unsafe fn remove_absent(
     listed: &BTreeSet<&str>,
     changes: &mut Changes,
 ) {
-    // SAFETY: `get_array` hands back a snapshot the caller owns, holding a
-    // reference of its own to every uid in it — so removing a row while
+    // SAFETY: `summary_dup_uids` hands back a snapshot the caller owns, holding
+    // a reference of its own to every uid in it — so removing a row while
     // walking it neither frees the string being read nor disturbs the walk.
     unsafe {
-        let existing = camel_folder_summary_get_array(summary);
+        let existing = summary_dup_uids(summary);
         if existing.is_null() {
             return;
         }
@@ -631,7 +697,7 @@ unsafe fn remove_absent(
                 changes.remove(text);
             }
         }
-        camel_folder_summary_free_array(existing);
+        summary_free_uids(existing);
     }
 }
 

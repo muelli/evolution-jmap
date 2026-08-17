@@ -16,7 +16,7 @@
 //! - **The fetch.** Camel calls the vfunc on the folder; the folder has a JMAP
 //!   mailbox id and nothing else, so the connection has to come from the store
 //!   it hangs off. What comes back is asserted through Camel's own accessors —
-//!   `camel_folder_get_message_count` and `camel_folder_get_uids` — rather than
+//!   `camel_folder_get_message_count` and the folder's own uid list — rather than
 //!   through the summary, because those are the two questions Evolution
 //!   actually asks and they are answered by `CamelFolder`'s base class out of
 //!   the summary this provider fills.
@@ -55,11 +55,11 @@ use std::ptr;
 
 use common::Account;
 use common::signals::{Context, emissions, uid_list, watch};
+use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
     CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass,
-    camel_folder_free_uids, camel_folder_get_folder_summary, camel_folder_get_message_count,
-    camel_folder_get_uids, camel_folder_refresh_info_sync, camel_service_error_quark,
-    camel_store_get_folder_sync,
+    camel_folder_get_folder_summary, camel_folder_get_message_count,
+    camel_folder_refresh_info_sync, camel_service_error_quark, camel_store_get_folder_sync,
 };
 use glib_sys::{GError, GFALSE, gboolean};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
@@ -254,9 +254,9 @@ fn listed(folder: *mut CamelFolder) -> Vec<String> {
     // SAFETY: a live folder; the array comes back owned and is freed with the
     // function Camel documents for it.
     unsafe {
-        let array = camel_folder_get_uids(folder);
+        let array = folder_dup_uids(folder);
         let uids = uid_list(array);
-        camel_folder_free_uids(folder, array);
+        folder_free_uids(folder, array);
         uids
     }
 }

@@ -31960,3 +31960,89 @@ summary rows, the removed `camel_folder_summary_*_array` accessors, and
 
 Method: reproduce in the digest-pinned container per this doc's recipe, so
 both ABIs get a real compiler and nothing rests on guessing a header.
+
+### Result — (A) is closed; the leg's only remaining failure is (B)
+
+`jmap-mail` builds on EDS 3.60.2 and its whole suite passes there (32 test
+binaries, 436 tests), while the pinned-3.52 leg is unchanged and green: 115
+EDS-crate test binaries plus 80 default-member ones, `cargo fmt --all --check`
+clean, `cargo clippy --all-targets -- -D warnings` clean on the default members
+*and* on the EDS crates. Running the full matrix crate set in the pinned
+container now fails on exactly three assertions — the item-(B) contact-model
+ones that need a maintainer decision — and nothing else.
+
+Reproduced in the digest-pinned container throughout, and I also pulled EDS
+3.60.2's **source** rpm into it. That second step is what changed the shape of
+this work, so it goes first:
+
+**The escalation's premise did not survive contact with the source.** Both
+halves of why (A) was judged beyond Sonnet turned out to be wrong about 3.60:
+
+- The 351st entry's "the subclass's vtable shape itself changed" is true, but the
+  conclusion drawn from it — that this provider must port its search onto
+  `CamelStoreSearch` — is not. 3.60's `camel-folder.c` line 1626 installs
+  `folder_search_sync` in the base class: a complete generic implementation over
+  `CamelStoreSearch` doing exactly what `folder.rs` was doing by hand with the
+  deleted object. So the correct port is to override *nothing* and delete the
+  two vfunc installs on that leg. Not "call a new function", and not a
+  redesign either — an implementation that moved upstream.
+- "`CamelMIRecord`/`CamelFIRecord` are private now … so the port has to decide
+  *where the plugin's existing state now lives*" is simply not the case.
+  `CamelStoreDBMessageRecord` and `CamelStoreDBFolderRecord` are **public**
+  structs in `camel-store-db.h`, both still carrying `bdata`. The state lives
+  where it lived; two type aliases cover it. There was no design decision here
+  to get wrong.
+
+Worth being blunt about, because it is a reusable lesson rather than a
+score-keeping exercise: both errors came from reading a *job log's error list*
+and inferring what the new API must be, rather than reading the new API. The
+26-line docker recipe already in `docs/eds-version-matrix.md` plus
+`dnf download --source evolution-data-server` answers these questions in
+minutes and does not require guessing at all. Escalating on an inference about a
+header is escalating on the least reliable input available.
+
+**What the port is.** One real shape change and a pile of renames.
+`CamelFolderSummaryClass.summary_header_save` went from "allocate a record and
+return it" to "fill in the caller's zeroed record and report success", so
+`summary.rs` carries that vfunc twice, `#[cfg]`-selected, sharing the single
+function that writes the field — correct to share because `bdata`'s ownership is
+identical across the two (a `g_malloc`ed string the record takes and frees; on
+3.60 via `camel_store_db_folder_record_clear`, which I read rather than assumed).
+Everything else went behind a name each in `eds-sys/src/compat.rs`: the two
+record types, the summary's `dup_uids`/`dup_changed`, the folder's `dup_uids`,
+and `camel_search_util_hash_message_id`. The last two are renames the previous
+entry had not found — compiling turns them up, reading a log does not.
+
+**The one thing a compiler could not settle, and how it is settled instead.**
+"Install nothing and let the base class answer" is the kind of claim that
+compiles cleanly and is wrong at runtime in both directions: an override on 3.60
+would replace a working implementation with a reimplementation, and a *missing*
+override on 3.52 is a folder whose message list never draws (which is what
+`9740f51` originally fixed). So it is asserted behaviourally, red first —
+`jmap-mail/tests/search.rs`, written and run green on 3.52 *before* any porting,
+then run green on 3.60 after. Two rows, one seen; searched for the flag, for its
+complement, and for everything, through whichever entry point the installed EDS
+has. The complement case is the one that matters: a leg that ignored its
+expression and returned every row passes a `match-all #t` test and fails this.
+
+**Plumbing worth noting.** A build script's `rustc-cfg` reaches only its own
+crate, so `#[cfg]` in `jmap-mail` would have been false on every EDS —
+silently, which is the exact failure mode this matrix exists to prevent.
+`eds-sys` already declares `links`, so the fix is cargo's own channel:
+`build.rs` publishes each detected feature as `cargo::metadata`, and a new
+`jmap-mail/build.rs` re-emits the three it needs from
+`DEP_EVOLUTION_DATA_SERVER_*`. Detection stays single-sourced in `eds-sys`,
+where the oracle is clang on the installed headers; a dependent re-emits and
+never re-derives, because two oracles can disagree and a version comparison
+would be a guess. Verified in both directions by the arms each leg actually
+compiled.
+
+**Not done, and why.** (B) — the three contact-model semantic assertions — is
+untouched: what the plugin should emit and read on a newer EDS is a `jmap-vcard`
+mapping decision, and the three questions in `docs/eds-version-matrix.md` are
+the maintainer's. So `continue-on-error: true` on the `eds-version-matrix` job
+**stays**, and M10's existing tag is left alone. Also recorded as new item (C)
+rather than fixed: `cargo clippy -D warnings` cannot gate the 3.60 leg yet, over
+five `unnecessary_transmute` warnings in bindgen's output for glibc's
+`_IO_FILE` — a bitfield accessor on the container's newer glibc/rustc, nothing
+of ours, and clean on 3.52.

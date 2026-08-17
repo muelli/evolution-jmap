@@ -63,11 +63,11 @@
 
 use std::ffi::{CStr, CString};
 
+use eds_sys::compat::{summary_dup_uids, summary_free_uids};
 use eds_sys::{
     CAMEL_MESSAGE_DELETED, CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
-    camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_summary_free_array,
-    camel_folder_summary_get, camel_folder_summary_get_array, camel_folder_summary_remove_uid,
-    camel_message_info_get_flags,
+    camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_summary_get,
+    camel_folder_summary_remove_uid, camel_message_info_get_flags,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
@@ -207,11 +207,11 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
 ///
 /// `summary` must point at a live `CamelFolderSummary`.
 unsafe fn deleted_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
-    // SAFETY: the contract above; `get_array` hands back an array the caller
-    // owns and frees with `free_array`, holding a reference of its own to every
-    // uid in it.
+    // SAFETY: the contract above; `summary_dup_uids` hands back an array the
+    // caller owns and frees with `summary_free_uids`, holding a reference of its
+    // own to every uid in it.
     unsafe {
-        let rows = camel_folder_summary_get_array(summary);
+        let rows = summary_dup_uids(summary);
         if rows.is_null() {
             return Vec::new();
         }
@@ -224,7 +224,7 @@ unsafe fn deleted_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
                 is_deleted(summary, uid).then(|| CStr::from_ptr(uid).to_owned())
             })
             .collect();
-        camel_folder_summary_free_array(rows);
+        summary_free_uids(rows);
         uids
     }
 }

@@ -26,13 +26,13 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use common::Account;
+use eds_sys::compat::{CamelSummaryFolderRecord, summary_dup_uids, summary_free_uids};
 use eds_sys::{
     CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_FLAGGED,
-    CAMEL_MESSAGE_FOLDER_FLAGGED, CAMEL_MESSAGE_SEEN, CamelFIRecord, CamelFolder,
-    CamelFolderSummary, CamelFolderSummaryClass, camel_folder_get_flags,
-    camel_folder_get_folder_summary, camel_folder_has_summary_capability,
-    camel_folder_summary_check_uid, camel_folder_summary_count, camel_folder_summary_free_array,
-    camel_folder_summary_get, camel_folder_summary_get_array, camel_folder_summary_get_folder,
+    CAMEL_MESSAGE_FOLDER_FLAGGED, CAMEL_MESSAGE_SEEN, CamelFolder, CamelFolderSummary,
+    CamelFolderSummaryClass, camel_folder_get_flags, camel_folder_get_folder_summary,
+    camel_folder_has_summary_capability, camel_folder_summary_check_uid,
+    camel_folder_summary_count, camel_folder_summary_get, camel_folder_summary_get_folder,
     camel_folder_summary_get_next_uid, camel_folder_summary_get_type,
     camel_folder_summary_get_unread_count, camel_folder_summary_header_load,
     camel_folder_summary_load, camel_folder_summary_save, camel_message_info_clone,
@@ -113,7 +113,7 @@ unsafe fn uids(summary: *mut CamelFolderSummary) -> BTreeSet<String> {
     // SAFETY: the array is a snapshot the caller owns and frees; every element
     // is a NUL-terminated string that lives until it is freed with the array.
     unsafe {
-        let array = camel_folder_summary_get_array(summary);
+        let array = summary_dup_uids(summary);
         assert!(!array.is_null(), "the summary listed no uids at all");
         let uids = (0..(*array).len)
             .map(|index| {
@@ -121,7 +121,7 @@ unsafe fn uids(summary: *mut CamelFolderSummary) -> BTreeSet<String> {
                 CStr::from_ptr(uid.cast()).to_string_lossy().into_owned()
             })
             .collect();
-        camel_folder_summary_free_array(array);
+        summary_free_uids(array);
         uids
     }
 }
@@ -849,7 +849,7 @@ fn the_state_outlives_the_folder_that_listed_it() {
 /// here is dropped by the caller.
 unsafe fn header_load(
     class: *mut CamelFolderSummaryClass,
-) -> unsafe extern "C" fn(*mut CamelFolderSummary, *mut CamelFIRecord) -> gboolean {
+) -> unsafe extern "C" fn(*mut CamelFolderSummary, *mut CamelSummaryFolderRecord) -> gboolean {
     // SAFETY: both classes are live — ours because the ref is held by the
     // caller, the parent's because ours keeps it alive.
     unsafe {
@@ -877,7 +877,7 @@ fn a_header_with_no_state_in_it_loads_without_one() {
     let account = Account::open();
 
     // SAFETY: the folder is live until it is unreffed once; the record is a
-    // zeroed `CamelFIRecord` that outlives the call, which is the struct the
+    // zeroed `CamelSummaryFolderRecord` that outlives the call, which is the struct the
     // vfunc is defined over, and the class is alive for as long as the ref is
     // held.
     unsafe {
@@ -885,7 +885,7 @@ fn a_header_with_no_state_in_it_loads_without_one() {
         let class = g_type_class_ref(summary_type()).cast::<CamelFolderSummaryClass>();
         let load = header_load(class);
 
-        let mut record: CamelFIRecord = std::mem::zeroed();
+        let mut record: CamelSummaryFolderRecord = std::mem::zeroed();
         assert_ne!(
             load(summary_of(folder), ptr::addr_of_mut!(record)),
             GFALSE,
@@ -914,7 +914,7 @@ fn a_header_from_an_unknown_format_loads_without_a_state() {
     let bdata = CString::new(" 99 11-EmailState7").expect("a header with no NUL in it");
 
     // SAFETY: the folder is live until it is unreffed once; the record is a
-    // zeroed `CamelFIRecord` whose `bdata` borrows a string that outlives the
+    // zeroed `CamelSummaryFolderRecord` whose `bdata` borrows a string that outlives the
     // call — nothing takes ownership of it — and the class is alive for as
     // long as the ref is held.
     unsafe {
@@ -922,7 +922,7 @@ fn a_header_from_an_unknown_format_loads_without_a_state() {
         let class = g_type_class_ref(summary_type()).cast::<CamelFolderSummaryClass>();
         let load = header_load(class);
 
-        let mut record: CamelFIRecord = std::mem::zeroed();
+        let mut record: CamelSummaryFolderRecord = std::mem::zeroed();
         record.bdata = bdata.as_ptr().cast_mut();
         assert_ne!(
             load(summary_of(folder), ptr::addr_of_mut!(record)),
