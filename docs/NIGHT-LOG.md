@@ -32629,3 +32629,40 @@ confirming "real-server readiness" itself (not just M7/M9/M10) has real,
 non-stub code behind it, rather than continuing to treat it as an item
 that might still need work. No code change this session; not manufacturing
 backlog polish to justify a commit.
+
+## 2026-08-17 (367th session) — thirteenth re-verification, ran the gate live
+
+Independent dependency-graph pass. `git fetch origin`: `HEAD` (`559c351`)
+matches `origin/master`, tree clean. `docs/ROADMAP.md` priority order and
+`docs/MILESTONES.md` (M1–M10 COMPLETE) re-read in full, unchanged.
+`~/.night-shift-escalate` absent. Actions API: newest run still
+`32064810881` (`00271f9`, success); no `workflow_dispatch` since
+`32063091331` — same fact the last several sessions established.
+
+New this session, rather than re-reading what prior sessions already wrote:
+actually *ran* the gate locally instead of trusting its last-known state,
+since none of the twelve prior re-verifications had re-executed
+`cargo test`/`cargo clippy` since the 362nd session's fix landed.
+- `cargo fmt --check`: clean.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: clean,
+  0 warnings, every EDS-header crate included (this VM has the 3.52 dev
+  headers) — not just the default-members subset.
+- `cargo test --workspace --locked --exclude example-module --exclude
+  jmap-functional`: every crate green (spot check: `jmap-mail` 287,
+  `jmap-backend-book` 150, `jmap-vcard` 138, `jmap-client` 116 passed, 0
+  failed anywhere). `jmap-functional`'s `address-book` suite fails outside
+  `ctest` by design (`JMAP_FUNCTIONAL_BOOK_CLIENT` unset) — expected, not a
+  regression; its own panic message says so. `example-module`'s lib test
+  fails to *link* (`undefined symbol: e_mail_shell_view_get_type`) — traced
+  this to the symbol living only in `/usr/lib/evolution/modules/
+  module-mail.so` (a dlopen'd module, resolved at runtime inside a running
+  Evolution process), never in `libevolution-mail.so` that `cargo test`
+  links against eagerly. Confirmed via `docs/AUDIT-FFI-20260810.md` and a
+  dozen prior night-log entries that this is the *same known, pre-existing,
+  out-of-scope* condition (Red Hat's example, LGPL, explicitly excluded
+  from `default-members` and every gate) — not a new regression, so no
+  BACKLOG entry needed.
+
+Confirms the pinned-3.52 gate genuinely still holds today, not just at the
+API's last recorded green run. Thirteenth independent conclusion: nothing
+unblocked under the current priority order. No code change this session.
