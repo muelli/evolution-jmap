@@ -32851,3 +32851,47 @@ conclusion. Checked directly:
 Seventeenth independent conclusion: nothing unblocked under the current
 priority order. No code change this session; not manufacturing backlog
 polish to justify a commit.
+
+## 2026-08-17 (372nd session) — eighteenth re-verification, disk-headroom angle checked
+
+Independent dependency-graph pass, not a trust of the 371st session's
+conclusion. Checked directly:
+
+- `git fetch origin`: `HEAD` (`4b6c996`) matches `origin/master`, tree
+  clean, no new commits since the 371st session's own push.
+- `docs/ROADMAP.md`'s priority order and `docs/MILESTONES.md` (M1–M10 all
+  COMPLETE, including M10 at `a26578b` — confirmed that commit is an
+  ancestor of current `HEAD`, i.e. the "eds-version-matrix ran green in
+  Actions" tag is genuinely on master, not a stray branch tip) re-read in
+  full, unchanged. `~/.night-shift-escalate` absent.
+- Actions API: newest run still `32064810881` (`00271f9`, success); newest
+  `workflow_dispatch` still `32063091331` (`dd76d558`, success) — same fact
+  the 363rd–371st sessions established. Issues API: still only the two
+  closed FFI-audit PRs (#1, #2), nothing new opened or in Pulls.
+- New this session: the 369th/370th sessions' disk-block finding (`df -h /`
+  at 3.2G available, 95% full) only looked at `rust/target`'s 21G as the
+  cause; this session checked whether *other*, safely-reclaimable space
+  existed that those sessions hadn't accounted for — `/var/cache/apt/
+  archives` (431M), the systemd journal (492M via `journalctl
+  --disk-usage`), `~/.cargo/registry` (200M, but needed for rebuilds so not
+  really reclaimable). Even freeing the apt cache and vacuuming the journal
+  fully would add under 1G, bringing availability to roughly 4G — still,
+  per the 369th session's own math, comfortably short of what pulling a
+  Fedora base image, `dnf install`-ing the EDS/GTK dev headers, installing
+  rustup, and building 8 crates' full suites from a fresh checkout needs.
+  So the disk-based block on re-running `ci/eds-matrix.sh`'s 3.60 leg
+  locally still holds — this closes off "was there overlooked headroom?"
+  as a question rather than leaving it unchecked, but doesn't change the
+  conclusion. Not attempting the cleanup-and-retry since the leg is already
+  confirmed green by an actual CI dispatch (`32063091331`), so the risk
+  (using free space mid-cleanup, then not fitting anyway) isn't buying a
+  new fact.
+- `docs/BACKLOG.md` re-read in full: unchanged — (B′) a maintainer mapping
+  decision, (C) a low-leverage clippy artifact on the 3.60 leg, and the
+  M3/M4 contact/vCard fidelity notes, all explicitly out of scope under the
+  current-priority directive.
+
+Eighteenth independent conclusion: nothing unblocked under the current
+priority order — M7, real-server readiness, M9, and M10 are all closed or
+already confirmed via CI. No code change this session; not manufacturing
+backlog polish to justify a commit.
