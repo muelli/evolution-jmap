@@ -32557,3 +32557,36 @@ dispatch confirmation). `docs/BACKLOG.md`'s remaining (B′)/(C) items stay
 explicit maintainer-call/low-leverage, out of scope per the current-
 priority directive. No code change this session; not manufacturing backlog
 polish to justify a commit.
+
+## 2026-08-17 (365th session) — eleventh re-verification, nothing unblocked
+
+Independent dependency-graph pass, not a trust of the 364th session's
+conclusion. Checked directly rather than assumed:
+
+- `git fetch origin`: `HEAD` (`0f68024`) matches `origin/master`, working
+  tree clean, no new commits since the 364th session's own push.
+- `docs/ROADMAP.md`'s priority order (M7 → real-server readiness → M9/M10)
+  and `docs/MILESTONES.md` (M1–M10 all tagged COMPLETE) re-read in full,
+  unchanged. `~/.night-shift-escalate` absent (checked directly).
+- Pulled the last 5 `CI` workflow runs from the public Actions API: newest
+  is `32064810881` for `00271f9` (the 362nd session's version-aware
+  contact-model fix), `success`. Its job list confirms exactly what the
+  363rd/364th sessions found: `checks`/`reproducible`/`build` green,
+  `eds-version-matrix`/`gui-smoke`/`functional` all `skipped` — these three
+  jobs gate on `workflow_dispatch` or a PR label
+  (`.github/workflows/ci.yml:79-141`), never on plain push, and no
+  `workflow_dispatch` has fired since `dd76d558` (before the fix landed).
+  This runner has no `gh`/dispatch access, so re-confirming the M10 fix
+  live in CI stays the maintainer's step — restating it here only because
+  this session independently re-derived it from the API and the workflow
+  file's `if:` conditions, not by trusting the prior write-up.
+- `docs/BACKLOG.md` re-read in full: remaining items are (B′) an explicit
+  maintainer mapping decision and (C) an explicit low-leverage
+  non-regression clippy artifact, both already out of scope under the
+  current-priority directive; no new item has appeared.
+
+Eleventh independent conclusion: nothing unblocked under the current
+priority order — M7, real-server readiness (OAuth2 + `--features
+live-server` harness), M9, and M10 are all closed or maintainer-gated (the
+`eds-version-matrix` dispatch confirmation). No code change this session;
+not manufacturing backlog polish to justify a commit.
