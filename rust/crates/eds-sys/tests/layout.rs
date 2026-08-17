@@ -480,6 +480,12 @@ fn camel_layouts_match_the_gtype_system() {
         CamelStreamBufferClass
     );
     assert_layout!(camel_sexp_get_type, CamelSExp, CamelSExpClass);
+    // EDS 3.60 removed `camel-folder-search.h` entirely, so there is no type
+    // here to hold against `g_type_query` on that leg. Gated rather than
+    // deleted because the type is still there on 3.52, which is what the
+    // plugin ships against; the port of the code that *uses* it is tracked in
+    // `docs/eds-version-matrix.md`.
+    #[cfg(camel_folder_search_object)]
     assert_layout!(
         camel_folder_search_get_type,
         CamelFolderSearch,

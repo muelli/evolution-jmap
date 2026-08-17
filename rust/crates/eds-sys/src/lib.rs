@@ -38,4 +38,6 @@
 /// which EDS it was. See `docs/eds-versions.md`.
 pub const EDS_HEADER_VERSION: &str = env!("EDS_HEADER_VERSION");
 
+pub mod compat;
+
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));

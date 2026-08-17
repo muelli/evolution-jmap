@@ -59,11 +59,17 @@ fn a_provider_built_in_rust_reads_back_out_of_camels_registry() {
         url_flags: CAMEL_URL_ALLOW_USER as CamelProviderURLFlags,
         extra_conf: ptr::null_mut(),
         port_entries: ptr::null_mut(),
+        // EDS 3.60 dropped these three fields; a provider there states no
+        // URL-hashing or auto-detection callbacks because there is nowhere to
+        // put them. See `docs/eds-version-matrix.md`.
+        #[cfg(camel_provider_url_helpers)]
         auto_detect: None,
         // The array is indexed by CamelProviderType; a store and no transport.
         object_types: [store_type, G_TYPE_INVALID],
         authtypes: ptr::null_mut(),
+        #[cfg(camel_provider_url_helpers)]
         url_hash: None,
+        #[cfg(camel_provider_url_helpers)]
         url_equal: None,
         translation_domain: ptr::null(),
         priv_: ptr::null_mut(),
@@ -449,10 +455,14 @@ fn registering_a_provider_does_not_write_back_into_the_struct() {
         url_flags: CAMEL_URL_ALLOW_USER as CamelProviderURLFlags,
         extra_conf: ptr::null_mut(),
         port_entries: ptr::null_mut(),
+        // Absent on 3.60, as above.
+        #[cfg(camel_provider_url_helpers)]
         auto_detect: None,
         object_types: [store_type, G_TYPE_INVALID],
         authtypes: ptr::null_mut(),
+        #[cfg(camel_provider_url_helpers)]
         url_hash: None,
+        #[cfg(camel_provider_url_helpers)]
         url_equal: None,
         translation_domain: ptr::null(),
         priv_: ptr::null_mut(),
@@ -936,6 +946,12 @@ fn camel_message_flags_and_folder_flags_in_eds() {
 }
 
 /// Probing `CamelMIRecord` and `CamelFIRecord` summary database record structures in EDS 3.52.
+///
+/// EDS 3.60 made both structs private, so there is nothing to probe there.
+/// `jmap-mail`'s summary and message-info classes do read and write them, so
+/// this is a real port rather than a test-only gap — `docs/eds-version-matrix.md`
+/// carries it.
+#[cfg(camel_summary_records)]
 #[test]
 fn camel_summary_records_mirecord_and_firecord_in_eds() {
     unsafe {
@@ -2015,26 +2031,36 @@ fn camel_uid_cache_operations_in_eds() {
         camel_uid_cache_save_uid(cache, c"UID-1001".as_ptr());
         camel_uid_cache_save_uid(cache, c"UID-1002".as_ptr());
 
-        // Prepare query array containing both old and new UIDs
-        let query_array = glib_sys::g_ptr_array_new();
-        glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1001".as_ptr()).cast());
-        glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1002".as_ptr()).cast());
-        glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1003".as_ptr()).cast());
-        glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1004".as_ptr()).cast());
+        // Which of a listing's uids the cache has not seen. EDS 3.60 replaced
+        // `camel_uid_cache_get_new_uids`/`_free_uids` with
+        // `camel_uid_cache_dup_new_uids`, whose result is an ordinary
+        // reference-counted `GPtrArray` — a different ownership contract, not
+        // a rename. Nothing in this tree uses the uid cache, so the pre-3.60
+        // spelling is probed where it exists rather than abstracted over; the
+        // creation, save and destroy either side of this block run on both.
+        #[cfg(camel_uid_cache_get_new_uids)]
+        {
+            // Prepare query array containing both old and new UIDs
+            let query_array = glib_sys::g_ptr_array_new();
+            glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1001".as_ptr()).cast());
+            glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1002".as_ptr()).cast());
+            glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1003".as_ptr()).cast());
+            glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1004".as_ptr()).cast());
 
-        let new_uids = camel_uid_cache_get_new_uids(cache, query_array.cast());
-        assert!(!new_uids.is_null());
-        assert_eq!((*new_uids).len, 2);
+            let new_uids = camel_uid_cache_get_new_uids(cache, query_array.cast());
+            assert!(!new_uids.is_null());
+            assert_eq!((*new_uids).len, 2);
 
-        let u1 = *(*new_uids).pdata as *const gchar;
-        let u2 = *(*new_uids).pdata.add(1) as *const gchar;
-        let s1 = std::ffi::CStr::from_ptr(u1).to_str().unwrap();
-        let s2 = std::ffi::CStr::from_ptr(u2).to_str().unwrap();
-        assert_eq!(s1, "UID-1003");
-        assert_eq!(s2, "UID-1004");
+            let u1 = *(*new_uids).pdata as *const gchar;
+            let u2 = *(*new_uids).pdata.add(1) as *const gchar;
+            let s1 = std::ffi::CStr::from_ptr(u1).to_str().unwrap();
+            let s2 = std::ffi::CStr::from_ptr(u2).to_str().unwrap();
+            assert_eq!(s1, "UID-1003");
+            assert_eq!(s2, "UID-1004");
 
-        camel_uid_cache_free_uids(new_uids);
-        glib_sys::g_ptr_array_free(query_array, glib_sys::GTRUE);
+            camel_uid_cache_free_uids(new_uids);
+            glib_sys::g_ptr_array_free(query_array, glib_sys::GTRUE);
+        }
 
         assert_eq!(camel_uid_cache_save(cache), glib_sys::GTRUE);
         camel_uid_cache_destroy(cache);
@@ -2886,6 +2912,12 @@ fn camel_sexp_parsing_and_evaluation_in_eds() {
 }
 
 /// Probing `CamelFolderSearch` in EDS 3.52.
+///
+/// Gone from 3.60, which replaced the whole object with `CamelStoreSearch` and
+/// kept only `camel_folder_search_sync` and its two siblings on `CamelFolder`
+/// itself. `jmap-mail`'s folder search calls the removed API, so this too marks
+/// a port, not just an absent probe.
+#[cfg(camel_folder_search_object)]
 #[test]
 fn camel_folder_search_utilities_in_eds() {
     unsafe {
@@ -2923,6 +2955,12 @@ fn camel_folder_search_utilities_in_eds() {
 }
 
 /// Probing `CamelFolderThread` boxed type in EDS 3.52.
+///
+/// 3.60 has no boxed `CamelFolderThread`: threading moved behind
+/// `CamelStoreSearch`, and `camel_folder_thread_flags_get_type` — the enum's
+/// `GType`, a different thing — is what carries the name now. Nothing in this
+/// tree threads messages, so this one is an absent probe and no more.
+#[cfg(camel_folder_thread_boxed)]
 #[test]
 fn camel_folder_thread_messages_in_eds() {
     unsafe {
