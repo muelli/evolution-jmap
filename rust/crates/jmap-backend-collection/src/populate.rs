@@ -83,10 +83,12 @@
 //!   user as anonymous *on purpose*, so asking for a password for one would put a
 //!   prompt in front of someone who needs none and then drop what they typed.
 //!
-//! This backend has no OAuth2 support to gate on, which is the third condition
-//! EDS's WebDAV backend has and this one does not: [`credentials`] builds a
-//! Basic-auth login or an anonymous one and nothing else, so an OAuth2 account is
-//! one this backend cannot serve whichever call a populate makes for it.
+//! An OAuth 2.0 account is not a third condition here the way it is for EDS's
+//! WebDAV backend: whichever of the two calls above a populate makes,
+//! `authenticate_sync` runs afterwards, and
+//! [`authenticate_with`](crate::authenticate::authenticate_with) is what reads
+//! `[Authentication] Method` and fetches the access token — this module never
+//! needs to know which scheme the account uses.
 //!
 //! ## What is not here
 //!
