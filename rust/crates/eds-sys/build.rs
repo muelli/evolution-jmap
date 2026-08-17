@@ -702,6 +702,22 @@ const EDS_FEATURES: &[(&str, &str)] = &[
         "camel_folder_thread_boxed",
         "camel_folder_thread_messages_get_type",
     ),
+    // 3.60 added a dedicated `E_CONTACT_DEATHDATE` field — absent from 3.52's
+    // `EContactField` enum entirely, so referencing it unconditionally would
+    // fail to compile there (a real header-visible signal, unlike the three
+    // facts below it piggybacks on). Its arrival lines up with several other
+    // `EContact` behaviour changes that carry no header signal of their own —
+    // `X-JABBER`/`X-AIM`/`X-GADUGADU` now resolving to the `_HOME_1` slot
+    // instead of the plain attribute-list field, `ANNIVERSARY` and
+    // `X-EVOLUTION-ANNIVERSARY` swapping which one maps to
+    // `E_CONTACT_ANNIVERSARY`, and `E_CONTACT_NAME_OR_ORG` deriving
+    // differently with no explicit `FILE_AS` — all measured together on the
+    // same two EDS releases (3.52, 3.60.2) in `docs/eds-version-matrix.md`
+    // (B). `eds-sys/tests/contacts.rs` uses this one cfg as the pivot for all
+    // four, since they are empirically all-or-nothing on the same release; if
+    // a future EDS ever decouples them, that is exactly the kind of surprise
+    // this matrix exists to surface.
+    ("eds_death_date_field", "E_CONTACT_DEATHDATE"),
 ];
 
 /// Emit one `cargo::rustc-cfg` per [`EDS_FEATURES`] entry the generated
