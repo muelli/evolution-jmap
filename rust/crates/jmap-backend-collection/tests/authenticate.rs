@@ -27,11 +27,12 @@ use eds_sys::{
     ENamedParameters, ESource, ESourceAuthentication, ESourceAuthenticationResult,
     ESourceCollection, ESourceSecurity, e_client_error_quark, e_named_parameters_free,
     e_named_parameters_new, e_named_parameters_set, e_source_authentication_get_type,
-    e_source_authentication_set_host, e_source_authentication_set_port,
-    e_source_authentication_set_user, e_source_collection_get_type,
-    e_source_collection_set_calendar_enabled, e_source_collection_set_contacts_enabled,
-    e_source_collection_set_mail_enabled, e_source_get_extension, e_source_new_with_uid,
-    e_source_security_get_type, e_source_security_set_secure, e_source_set_enabled,
+    e_source_authentication_set_host, e_source_authentication_set_method,
+    e_source_authentication_set_port, e_source_authentication_set_user,
+    e_source_collection_get_type, e_source_collection_set_calendar_enabled,
+    e_source_collection_set_contacts_enabled, e_source_collection_set_mail_enabled,
+    e_source_get_extension, e_source_new_with_uid, e_source_security_get_type,
+    e_source_security_set_secure, e_source_set_enabled,
 };
 use gio_sys::{
     G_IO_ERROR_CANCELLED, GCancellable, g_cancellable_cancel, g_cancellable_new, g_io_error_quark,
@@ -105,6 +106,19 @@ impl TestSource {
             let security: *mut ESourceSecurity =
                 e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
             e_source_security_set_secure(security, if secure { GTRUE } else { GFALSE });
+        }
+        self
+    }
+
+    /// Marks the account as authenticating with OAuth 2.0, the same field
+    /// `jmap_backend_core::oauth2::source_uses_oauth2` reads.
+    fn oauth2(self) -> Self {
+        let method = CString::new("OAuth2").expect("no NUL in a literal");
+        // SAFETY: as above.
+        unsafe {
+            let auth: *mut ESourceAuthentication =
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+            e_source_authentication_set_method(auth, method.as_ptr());
         }
         self
     }
@@ -300,6 +314,30 @@ fn an_empty_stored_password_is_tried_rather_than_prompted_for() {
         }
         other => panic!("an empty stored password was not sent: {other:?}"),
     }
+}
+
+#[test]
+fn an_oauth2_account_is_never_treated_as_anonymous() {
+    // This project's own setup UI can write an OAuth 2.0 account with no
+    // `[Authentication] User` at all — the identity lives in the consent, not
+    // in a typed field. Reading a missing user as "anonymous" the way a plain
+    // password account would be read would silently skip OAuth 2.0 entirely
+    // and fan the account out with no credentials whatsoever.
+    let source = TestSource::new()
+        .parts(Parts::ALL)
+        .authentication("jmap.example.com", 8443, None)
+        .secure(true)
+        .oauth2();
+
+    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+
+    assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
+    let error = error.expect("an OAuth 2.0 account with no token has to say so");
+    assert_eq!(error.code, E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32);
+    assert_ne!(
+        error.message, "the account has no password yet",
+        "an OAuth 2.0 account was routed through the Basic-auth path"
+    );
 }
 
 #[test]
