@@ -87,14 +87,18 @@ WATCHDOG
 chmod +x /usr/local/bin/idle-watchdog
 echo '*/5 * * * * root /usr/local/bin/idle-watchdog' > /etc/cron.d/idle-watchdog
 
-mkdir -p /opt/stalwart
+mkdir -p /opt/stalwart/etc /opt/stalwart/data
 if [ ! -f /opt/stalwart/admin-password ]; then
     tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 > /opt/stalwart/admin-password
 fi
 docker rm -f stalwart || true
+# Stalwart 0.16 keeps config in /etc/stalwart (config.json) and data in
+# /var/lib/stalwart. Bind BOTH to the host so a `docker rm` on reboot does not
+# drop them into throwaway anonymous volumes (which is what wiped every setup).
 docker run -d --name stalwart --restart unless-stopped \
     -p 8080:8080 \
-    -v /opt/stalwart/data:/opt/stalwart \
+    -v /opt/stalwart/etc:/etc/stalwart \
+    -v /opt/stalwart/data:/var/lib/stalwart \
     -e STALWART_RECOVERY_ADMIN="admin:$(cat /opt/stalwart/admin-password)" \
     stalwartlabs/stalwart:latest
 EOF
