@@ -84,6 +84,7 @@ use jmap_backend_core::cancel::observe;
 use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, ConnectError, credentials as login_as};
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::marshal::password as stored_password;
+use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
 use jmap_client::Credentials;
 use jmap_collection_sync::Parts;
 
@@ -184,11 +185,28 @@ where
     // asked libsecret for anything — or a valid `ENamedParameters` that
     // outlives the call.
     let password = unsafe { stored_password(credentials) };
-    let credentials = match login_as(server.connection.user.as_deref(), password.as_deref()) {
+    // Which authentication scheme this account uses is decided the same way
+    // `connect_with` decides it for the address book and calendar backends —
+    // see `jmap_backend_core::oauth2`'s module docs for whose rule this is.
+    // An OAuth 2.0 account can name no `[Authentication] User` at all, so
+    // reading a missing user as "anonymous" here, the way a plain password
+    // account's absent user means, would silently skip OAuth 2.0 and fan the
+    // account out with no credentials whatsoever.
+    // SAFETY: `source` is a valid ESource, checked non-NULL above; `cancellable`
+    // satisfies `access_token`'s contract by this function's own.
+    let resolved = unsafe {
+        if source_uses_oauth2(source) {
+            access_token(source, cancellable).map(Credentials::bearer)
+        } else {
+            login_as(server.connection.user.as_deref(), password.as_deref())
+        }
+    };
+    let credentials = match resolved {
         Ok(credentials) => credentials,
         Err(failure) => {
             // The prompt, and the only path that produces one: the account
-            // names a user and EDS has no password for it yet.
+            // names a user and EDS has no password for it yet, or the account
+            // is OAuth 2.0 and no access token could be had.
             // SAFETY: as above.
             unsafe { set_raw_gerror(error, failure.to_gerror()) };
             return failure.auth_result();
