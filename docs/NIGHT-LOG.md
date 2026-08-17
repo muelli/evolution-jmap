@@ -32521,3 +32521,39 @@ green in CI, via the public Actions API (no `gh`/token needed for reads):
 
 No tractable item found beyond that; not manufacturing backlog polish to
 justify a commit. Ending here.
+
+## 2026-08-17 (364th session) — tenth re-verification, nothing unblocked
+
+Independent dependency-graph pass, not a trust of the 363rd session's
+conclusion: `git fetch origin` shows `HEAD` (`c078032`) matches
+`origin/master`, working tree clean, no new commits since the 363rd
+session's own push. `docs/ROADMAP.md`'s priority order (M7 → real-server
+readiness → M9/M10) and `docs/MILESTONES.md` (M1–M10 all tagged COMPLETE,
+unchanged) confirmed by re-reading both in full rather than assuming.
+
+Two checks this session added beyond re-reading what the prior nine already
+covered:
+
+- Re-ran `docs/BACKLOG.md`'s translatability angle from first principles
+  instead of trusting the file: grepped `rust/crates/*/src/*.rs` for
+  gettext-marker-shaped strings and diffed against `po/POTFILES.in`. The
+  naive grep initially looked like it found ~15 unlisted files — but that
+  grep matches substrings like the word "translate" inside doc comments and
+  `_(` inside unrelated code, not real markers. The actual gate,
+  `cargo test -p jmap-backend-core --test potfiles`, is the source of truth
+  (it cross-checks POTFILES.in against the sources in both directions, per
+  its own doc comment) and is green: 5/5 passed, no drift. A false lead,
+  caught before it became a wrong log entry.
+- Confirmed the Actions API shows no new `workflow_dispatch` since
+  `dd76d558` (still the last `eds-version-matrix` run, `32063091331`,
+  green) and no new issues/PRs beyond the two closed FFI-audit issues —
+  same facts the 363rd session already established, re-checked rather than
+  assumed still true.
+
+Tenth independent conclusion: nothing unblocked under the current priority
+order — M7, real-server readiness (OAuth2 + `--features live-server`), M9,
+and M10 are all closed or maintainer-gated (the eds-version-matrix
+dispatch confirmation). `docs/BACKLOG.md`'s remaining (B′)/(C) items stay
+explicit maintainer-call/low-leverage, out of scope per the current-
+priority directive. No code change this session; not manufacturing backlog
+polish to justify a commit.
