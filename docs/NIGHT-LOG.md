@@ -31742,3 +31742,24 @@ near-identical derivation. Nothing unblocked exists under the current
 `docs/ROADMAP.md` priority order; the next move is the maintainer's (a
 new CURRENT PRIORITY entry, or authorization to start a BACKLOG.md
 hardening pass). Ending the session here with no code change.
+
+## 2026-08-17 — M10 dispatched: newer-EDS drift surfaced (real work, not a tag)
+
+The maintainer dispatched the "CI" workflow (run 32027119218). `eds-version-
+matrix` executed and **failed** (the job is `continue-on-error`, so the run
+shows green — check the job, not the run). Failure is a genuine newer-EDS API
+drift, not flaky CI: the pinned-3.52 `build` job passed, but in the newer-EDS
+container (Fedora libebook) `eds-sys` will not compile its `contacts` test —
+46 errors, notably `e_vcard_to_string(contact.cast())` → E0061 (wrong argument
+count) and E0425 (name not in scope). Newer libebook's `e_vcard_to_string`
+almost certainly gained/changed a parameter (an `EVCardFormat`), and other
+symbols moved.
+
+**This is the top unblocked agent item now** (see ROADMAP "MAINTAINER
+DECISIONS" #2): make `eds-sys` build+test against BOTH the pinned 3.52 and the
+newer EDS — version-conditional FFI / regenerated bindings — so the matrix leg
+goes green; then M10 can be tagged. Bindgen/FFI/ABI reasoning where a plausible-
+but-wrong answer compiles-but-misbehaves → escalation candidate
+(`echo claude-opus-5 > ~/.night-shift-escalate`). Fix in `rust/`; do NOT edit
+the CI job to hide it. Repro locally against a newer EDS, or read the job log
+of run 32027119218. Maintainer re-runs the dispatch to confirm green.

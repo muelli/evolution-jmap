@@ -54,12 +54,21 @@ decide. All three are now answered:
    refine that message's wording for a first-time user, but add no new code
    path.
 
-2. **M10 → the maintainer will dispatch it.** `eds-version-matrix` is a *job
-   inside the "CI" workflow* (`.github/workflows/ci.yml`), gated on
-   `workflow_dispatch` / the `run-eds-version-matrix` label. The maintainer
-   triggers it from the GitHub UI (the runner has no `gh`/token). Tag M10 once
-   it has run green in Actions; until then leave it untagged and do NOT try to
-   trigger it from the runner.
+2. **M10 → dispatched; the leg RAN and FAILED — real newer-EDS drift to fix.**
+   The maintainer dispatched the "CI" workflow on 2026-08-17
+   (run 32027119218). `eds-version-matrix` executed (so it is no longer a
+   "never ran" gap) but **failed**: against the newer-EDS container (Fedora's
+   libebook), `eds-sys` will not compile its `contacts` test — 46 errors, e.g.
+   `e_vcard_to_string(contact.cast())` raising **E0061 (wrong argument count)**
+   and **E0425 (name not in scope)**. The pinned-3.52 `build` job stays green,
+   so this is genuine API drift the matrix exists to catch, not flaky CI.
+   **This is now the top unblocked work item** (it is *not* a tag-and-done):
+   make `eds-sys` build+test against both the pinned 3.52 and the newer EDS
+   (version-conditional FFI / bindgen), then the leg goes green and M10 can be
+   tagged. This is bindgen/FFI/ABI reasoning — a legitimate **escalation
+   candidate** (`~/.night-shift-escalate` → `claude-opus-5`). Do the fix in
+   `rust/`; do not edit the CI job to paper over it. The maintainer re-runs the
+   dispatch to confirm green (runner has no `gh`).
 
 3. **Stalwart → provisioned.** `stalwart-1` (europe-west3-c) is running the
    real JMAP server. IMPORTANT: its firewall admits only the *operator's* host
