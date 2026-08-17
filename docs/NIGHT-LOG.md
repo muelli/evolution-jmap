@@ -32409,3 +32409,21 @@ they are empirically all-or-nothing on the same EDS release. Reproducing
 locally in the pinned Fedora/3.60 container per
 `docs/eds-version-matrix.md`'s recipe (docker is available on this VM) to
 verify against the real newer EDS rather than trusting the table blind.
+
+## 2026-08-17 — M10 re-dispatch: compile drift fixed, 3 contacts tests still red
+
+The maintainer re-dispatched the "CI" workflow (run 32063091331) after the
+Opus-escalated newer-EDS fix. Result: the compile drift is GONE — `eds-sys`
+now builds and runs against the newer-EDS container (EDS 3.60). But the
+`eds-version-matrix` leg still fails: `eds-sys`'s `contacts` test is 23 passed
+/ 3 failed, all `assertion left == right`, i.e. newer EDS maps some
+vCard/contact fields differently than the 3.52-pinned expectations. Failing:
+- `contact_date_fields_are_structured_e_contact_date_types`
+- `e_contact_field_id_from_vcard_maps_x_lines`
+- `structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`
+
+Next (see ROADMAP "MAINTAINER DECISIONS" #2, now updated): make those 3 pass on
+BOTH EDS versions — version-aware expected values, or fix the mapping if 3.60 is
+correct — do NOT loosen the assertions to hide a real behavioral difference.
+Reproduce via the newer-EDS container in `ci/eds-matrix.sh`. The agent cannot
+see CI (no `gh`), so this entry is the only channel for the leg's result.

@@ -54,21 +54,25 @@ decide. All three are now answered:
    refine that message's wording for a first-time user, but add no new code
    path.
 
-2. **M10 → dispatched; the leg RAN and FAILED — real newer-EDS drift to fix.**
-   The maintainer dispatched the "CI" workflow on 2026-08-17
-   (run 32027119218). `eds-version-matrix` executed (so it is no longer a
-   "never ran" gap) but **failed**: against the newer-EDS container (Fedora's
-   libebook), `eds-sys` will not compile its `contacts` test — 46 errors, e.g.
-   `e_vcard_to_string(contact.cast())` raising **E0061 (wrong argument count)**
-   and **E0425 (name not in scope)**. The pinned-3.52 `build` job stays green,
-   so this is genuine API drift the matrix exists to catch, not flaky CI.
-   **This is now the top unblocked work item** (it is *not* a tag-and-done):
-   make `eds-sys` build+test against both the pinned 3.52 and the newer EDS
-   (version-conditional FFI / bindgen), then the leg goes green and M10 can be
-   tagged. This is bindgen/FFI/ABI reasoning — a legitimate **escalation
-   candidate** (`~/.night-shift-escalate` → `claude-opus-5`). Do the fix in
-   `rust/`; do not edit the CI job to paper over it. The maintainer re-runs the
-   dispatch to confirm green (runner has no `gh`).
+2. **M10 → compile drift FIXED; 3 behavioral tests still fail on newer EDS.**
+   First dispatch (run 32027119218) failed because `eds-sys` would not
+   *compile* against the newer-EDS container (46 errors, `e_vcard_to_string`
+   drift). The Opus-escalated fix (`c28adbb` eds-sys, `a8bb65e` jmap-mail)
+   resolved that — the re-dispatch (run 32063091331) now **compiles and runs**
+   on EDS 3.60. What remains: `eds-sys`'s `contacts` test fails **3 of 26**
+   assertions (`assertion left == right`) because newer EDS maps some
+   vCard/contact fields differently than the 3.52-pinned expectations:
+   - `contact_date_fields_are_structured_e_contact_date_types`
+   - `e_contact_field_id_from_vcard_maps_x_lines`
+   - `structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`
+
+   **Top unblocked item:** make those 3 pass on BOTH EDS versions — version-aware
+   expectations, or fix the mapping if 3.60's behavior is the correct one — so
+   the leg goes green and M10 can be tagged. Reproduce with the newer-EDS
+   container in `ci/eds-matrix.sh` (as the earlier session did). Still an
+   FFI/EDS-semantics task, reasonable to escalate. Fix in `rust/`; do NOT edit
+   the CI job or loosen the assertions to hide a real behavioral difference.
+   The maintainer re-runs the dispatch to confirm green (runner has no `gh`).
 
 3. **Stalwart → provisioned.** `stalwart-1` (europe-west3-c) is running the
    real JMAP server. IMPORTANT: its firewall admits only the *operator's* host
