@@ -30889,3 +30889,109 @@ and Stalwart/manual-OAuth2-page maintainer-call blockers are unchanged.
 and this time verify it locally before pushing by freeing disk first
 (`cargo clean --profile dev`) so the earlier Docker attempt can finish.
 `git fetch origin` shows `origin/master` unchanged at `a4d891f`.
+
+**Freed disk, then finished what the 324th session couldn't.**
+`cargo clean --profile dev` recovered 21.4GiB (`rust/target` was 21G on a
+58G disk with ~3G free); disk went from 95% to 59% used. With that room,
+pulled `fedora:latest` (resolved to Fedora 44, a stable release, not
+rawhide) via this VM's Docker + passwordless sudo, then pinned the exact
+digest for reproducibility:
+`fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898`.
+Its `evolution-data-server-devel`/`evolution-devel` resolve every relevant
+`.pc` file (`camel-1.2`, `libedataserver-1.2`, `libebackend-1.2`,
+`libebook-1.2`, `libedata-book-1.2`, `libecal-2.0`, `libedata-cal-2.0`,
+`evolution-shell-3.0`, `evolution-mail-3.0`) to **3.60.2** — past 3.56, so
+one container satisfies both the "current stable" and "3.56+" minimums the
+roadmap's M10 acceptance asks for.
+
+**Built a real toolchain in that container (rustup, clang-devel for
+bindgen, gcc) and actually ran the exact `rust-test-eds` crate set inside
+it — not just resolved package names, unlike the 324th session's attempt,
+which hit the disk wall before a single line of this project's FFI code
+compiled.** `eds-sys` itself *builds* fine against 3.60.2 headers (only
+pre-existing bindgen-transmute clippy-style warnings, no errors) — the
+`layout.rs` struct-size machinery still works as a mechanism. But
+`cargo test -p eds-sys` and `cargo build -p jmap-backend-book` do not:
+real API surface moved between 3.52 and 3.60.
+**`e_vcard_to_string` dropped its whole format argument**
+(`e_vcard_to_string(EVCard*, EVCardFormat)` → `e_vcard_to_string(EVCard*)`,
+`EVC_FORMAT_VCARD_30` gone, version now via `e_vcard_get_version`/
+`e_vcard_convert`) — and `jmap-backend-book/src/marshal.rs:114` calls the
+two-argument form, so it fails to *compile* against 3.60, not just at
+runtime. `CamelFolderSearch`/`CamelFolderSearchClass` and several
+`camel_folder_search_util_*`/`_only_cached_messages` helpers
+`eds-sys/tests/{layout,camel}.rs` reference are gone from the public
+headers entirely; `camel_folder_thread_messages_get_type` was renamed to
+`camel_folder_thread_flags_get_type`; `camel_uid_cache_{get_new,free}_uids`
+are gone too. Full list in the new `docs/eds-version-matrix.md`.
+
+**Did not attempt to port the affected code to support both versions** —
+`docs/ROADMAP.md` states plainly that auto-porting is out of M10's scope;
+the matrix's job is to make breakage visible. Recorded the specific finds
+in `docs/BACKLOG.md` under a new "EDS 3.60+ compatibility" section instead.
+
+**Landed the CI job itself** (`5d216c9`): `eds-version-matrix` in `ci.yml`,
+gated the same way as `functional`/`gui-smoke` (`workflow_dispatch` or a PR
+label — `run-eds-version-matrix`), running in the pinned Fedora container,
+`continue-on-error: true` since it does not pass yet for the reasons above.
+`ci/eds-matrix.sh` runs the identical crate set `cmake/Rust.cmake`'s
+`rust-test-eds` target does. `docs/eds-version-matrix.md` documents both
+matrix legs (the existing `build` job's `ctest` run already *is* the pinned
+3.52 leg — confirmed, not assumed, by reading `ci/install-deps.sh` and
+`cmake/Rust.cmake:87-94` again), the specific incompatibilities above, and
+the "semantic ABI drift is not caught by this matrix" caveat the roadmap
+requires stating plainly. `docs/BACKLOG.md` cross-references it.
+
+**Verification, and its honest limit.** Reproduced, by hand in the exact
+same base container the CI job now uses, every failure the job's steps
+would hit — this is real, substantive verification of *what the job would
+find*, not "the package names resolve" (the 324th session's phrase for
+what it correctly refused to ship on). What is **not** verified: an actual
+GitHub Actions run of this job. No `gh` CLI is on this VM, and — importantly
+— the job's own gate condition means a plain push to `master` never
+triggers it; it only runs on `workflow_dispatch` or a PR carrying the
+`run-eds-version-matrix` label. So this push alone will not produce a real
+Actions run to observe, unlike ordinary pushes exercising `checks`/`build`.
+Container-job YAML has real plumbing this session could not exercise —
+`GITHUB_PATH` propagation into later steps, `actions/checkout` and
+`Swatinem/rust-cache` running inside a non-default container image rather
+than the bare runner — common patterns elsewhere, but unobserved here.
+
+**Not tagging M10 COMPLETE this session.** The acceptance text's letter is
+met (two legs covering 3.52/current-stable/3.56+, loud failure with the
+offending symbol named, the doc, the semantic-drift caveat, the informational
+marking for a leg that "legitimately can't pass yet") — but "Do not claim
+what you cannot verify" applies to the CI-plumbing question above just as
+much as it applied to the 324th session's package-name question. Whoever
+next has `gh` access (or is at a keyboard with the GitHub UI) should run
+`gh workflow run ci.yml -f ...` / use the "Run workflow" button to dispatch
+`eds-version-matrix` by hand once, confirm it appears, runs to completion,
+and reports failures matching the ones documented above (not an unrelated
+setup error) — then tag `M10 COMPLETE` in `docs/MILESTONES.md`. That is a
+five-minute check for a human with the GitHub UI open; this VM cannot do it
+blind.
+
+**Full gate:** `cargo fmt --check`, `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` (both against the
+host's pinned 3.52, unaffected by any of the above), and `cargo test
+--workspace --exclude example-module --exclude jmap-functional --locked`
+(0 failed) all green — matches [[checks-sh-blocked-on-vm]]'s substitute
+steps; `reuse`/`cargo-deny` still not installable here, and neither new
+file changes anything either check would flag (`docs/**` and
+`infra/night-shift/*.md` already carry a REUSE.toml aggregate exemption for
+the docs, `ci/eds-matrix.sh` carries its own SPDX header). `python3 -c
+"import yaml; yaml.safe_load(...)"` confirms the edited `ci.yml` still
+parses. Docker cleanup: removed the `eds-matrix-test` container and the
+`fedora` images afterward — disk is at 81% used (11G free), better than
+the ~3G this session started with even after accounting for the lost
+`cargo clean` build cache, since that cache was itself most of the 95% full
+disk.
+
+**Next session**: dispatch `eds-version-matrix` by hand (needs `gh` or the
+GitHub UI) and, if it runs and fails the way this session predicts, tag
+`M10 COMPLETE`. If it fails a *different* way (a setup/plumbing error), fix
+the job, not the documented EDS incompatibilities — those are out of scope
+per the roadmap. Standing blockers unchanged: M7 needs human verification
+in real Evolution; the Stalwart-provisioning and manual-OAuth2-page design
+questions are maintainer calls. `~/.night-shift-escalate` empty (checked,
+not present).
