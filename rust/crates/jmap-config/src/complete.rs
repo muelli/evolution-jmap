@@ -176,8 +176,8 @@ pub fn status_message(account: &Account) -> String {
         ),
         Err(Incomplete::Server(error)) => error.to_string(),
         Err(Incomplete::OAuth2NotRegistered) => translate(
-            // TRANSLATORS: shown when OAuth 2.0 is picked as the authentication method but "Look Up Account Details" has not registered a client for it yet.
-            c"OAuth 2.0 needs \"Look Up Account Details\" to run first.",
+            // TRANSLATORS: shown when OAuth 2.0 is picked as the authentication method on the manual server-settings page; this account cannot be set up this way. "Look Up Account Details" is the name of the button on the earlier identity page that sets OAuth 2.0 up automatically instead.
+            c"OAuth 2.0 can't be set up manually. Go back and use \"Look Up Account Details\" instead.",
         ),
     }
 }
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(check(&account), Err(Incomplete::OAuth2NotRegistered));
         assert_eq!(
             status_message(&account),
-            "OAuth 2.0 needs \"Look Up Account Details\" to run first."
+            "OAuth 2.0 can't be set up manually. Go back and use \"Look Up Account Details\" instead."
         );
     }
 
