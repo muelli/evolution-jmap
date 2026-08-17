@@ -30880,3 +30880,12 @@ build cache — a real tradeoff, not free) — repeating tonight's attempt on
 the same ~3G free will just hit the same wall. The M7 human-verification
 and Stalwart/manual-OAuth2-page maintainer-call blockers are unchanged.
 `~/.night-shift-escalate` empty (checked, not present).
+
+## 2026-08-17 (three-hundred-and-twenty-fifth session)
+
+**Claiming M10 increment**: build the gated EDS-version-matrix CI job the
+324th session scoped (a new job in `ci.yml`, containerized on Fedora for the
+"current stable + 3.56+" leg, running the exact `rust-test-eds` crate set),
+and this time verify it locally before pushing by freeing disk first
+(`cargo clean --profile dev`) so the earlier Docker attempt can finish.
+`git fetch origin` shows `origin/master` unchanged at `a4d891f`.
