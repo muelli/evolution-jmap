@@ -31297,3 +31297,25 @@ human verification, M10 CI dispatch (needs `gh`/GitHub-UI access), Stalwart
 CI provisioning, and the manual-OAuth2-page UX call. If `origin/master` is
 still at this session's tag and nothing new has landed, another one-line
 confirmation is sufficient.
+
+## 2026-08-17 (three-hundred-and-thirty-third session)
+
+**One-line confirmation, per the 329th–332nd sessions' own instruction not
+to re-derive an already-independently-verified conclusion.** `git fetch
+origin`: `origin/master` unchanged at `5fb8036` (the 332nd session's tag);
+no other agent landed anything. `gh`/token/escalate check re-run fresh:
+`which gh` not found, no `GITHUB_TOKEN`/`GH_TOKEN`, no `~/.config/gh`, no
+`~/.netrc`, `~/.night-shift-escalate` absent. `docs/BACKLOG.md` and the
+ROADMAP "CURRENT PRIORITY" section re-read in full: unchanged. Also
+confirmed directly (not assumed) that `.github/workflows/ci.yml`'s
+`eds-version-matrix` job is gated on `workflow_dispatch` or a PR label —
+both require GitHub API access this VM does not have, so M10 dispatch
+stays blocked for the reason already on record, not a new one. Disk
+unchanged (84%, 9.3G free). `git status --short` empty. Nothing changed;
+no unblocked priority work exists tonight.
+
+**Next session**: same standing blockers as the 326th–332nd sessions — M7
+human verification, M10 CI dispatch (needs `gh`/GitHub-UI access), Stalwart
+CI provisioning, and the manual-OAuth2-page UX call. If `origin/master` is
+still at this session's tag and nothing new has landed, another one-line
+confirmation is sufficient.
