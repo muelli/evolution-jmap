@@ -31791,3 +31791,19 @@ the model-escalation instructions) calls out for this task by name.
 Not attempting it on Sonnet. Wrote `claude-opus-5` to
 `~/.night-shift-escalate` and stopping here without claiming the work, per
 the escalation protocol. No code change this session.
+
+## 2026-08-17 (350th session) — claiming the M10 newer-EDS FFI fix (on opus, per the escalation)
+
+Running on `claude-opus-5`, the model the 349th session wrote to
+`~/.night-shift-escalate`. Claiming exactly the item that escalation named:
+make `eds-sys` (and the backend call sites) build and test against BOTH the
+pinned EDS 3.52 and the newer EDS the matrix leg uses, so
+`eds-version-matrix` goes green instead of `continue-on-error`-hiding a real
+break.
+
+Method decision up front, because it is what makes this tractable rather than
+a guess: this VM has `docker` (via passwordless `sudo`), so the failing leg is
+**reproducible locally** in the very container `ci.yml` pins
+(`fedora@sha256:6c75d5bf…`, EDS 3.60.2). Both ABIs therefore get a real
+compiler, and no part of this fix rests on me guessing what a 3.60 header
+says.
