@@ -99,9 +99,11 @@ pins, so everything below is observed rather than inferred.
 suites pass apart from the three contact-model assertions listed under (B).
 `jmap-mail` was the last crate that would not compile; (A) closed on
 2026-08-17 (see below), with its 32 test binaries and 436 tests green on 3.60.
-The `eds-version-matrix` job stays
-`continue-on-error: true` until **(B)** closes, which needs a maintainer
-decision rather than code.
+**(B)** also closed 2026-08-17 (see below) — `ci/eds-matrix.sh` now passes with
+0 failures on both legs (verified locally in the exact pinned Fedora
+container). The `eds-version-matrix` job's `continue-on-error: true` can be
+dropped once the maintainer confirms this on an actual CI dispatch (this
+runner has no `gh`/write access to trigger or watch one).
 
 ### Fixed — resolved behind one name each in `eds-sys/src/compat.rs`
 
@@ -212,36 +214,57 @@ one: they are independent renames that happened to land in the same release, and
 folding them into one marker would make a future EDS that changed only one of
 them silently wrong about the other.
 
-### (B) Not fixed — contact-model *semantics* drifted; needs a mapping decision
+### (B) Fixed 2026-08-17 — contact-model *semantics* drift, made version-aware
 
-Three assertions in `eds-sys/tests/contacts.rs` fail on 3.60. They are not FFI
-problems — every one of them compiles and links; EDS simply answers
-differently. They are left failing rather than gated, because what the plugin
-*should* do about each is a `jmap-vcard` mapping decision, and inventing a
-3.60 expectation here would write a guess into the acceptance suite. Measured
-on both legs:
+Three assertions in `eds-sys/tests/contacts.rs` failed on 3.60. They are not
+FFI problems — every one of them compiles and links; EDS simply answers
+differently, and the tests characterize EDS's own C behaviour directly (per
+the file's own doc comment), not a `jmap-vcard` mapping choice. So making the
+assertions version-aware is recording a measured fact, not guessing one — the
+values below come from running `eds-sys/tests/contacts.rs` against both
+pinned containers, not from reading a changelog. Measured on both legs:
 
 | vCard line | 3.52 resolves to | 3.60 resolves to |
 | --- | --- | --- |
-| `X-JABBER` | `im_jabber` (the attribute list) | `im_jabber_home_1` (the first slot) |
-| `X-AIM` | `im_aim` | `im_aim_home_1` |
-| `X-GADUGADU` | `im_gadugadu` | `im_gadugadu_home_1` |
+| `X-JABBER`, `X-AIM`, `X-GADUGADU`, `X-SKYPE`, `X-MATRIX`, `X-ICQ`, `X-MSN`, `X-YAHOO`, `X-GOOGLE-TALK`, `X-GROUPWISE` | the attribute-list field (e.g. `im_jabber`) | the first `_HOME_1` slot (e.g. `im_jabber_home_1`) |
 | `ANNIVERSARY` | *unmapped* | `anniversary` |
 | `X-EVOLUTION-ANNIVERSARY` | `anniversary` | *unmapped* |
-| `DEATHDATE` | *unmapped* | `death_date` |
+| `DEATHDATE` | *unmapped* | `deathdate` (new field, `E_CONTACT_DEATHDATE`) |
 | `X-SIP`, `X-TWITTER`, `BDAY`, `X-DEATHDATE` | unchanged | unchanged |
+
+The first row corrects an undercount in an earlier version of this table: it
+had only sampled `X-JABBER`/`X-AIM`/`X-GADUGADU` (the three the original test
+happened to assert on) and assumed the rest of the ten slotted IM services
+were unaffected. They are not — the `_HOME_1` shift is systemic to every
+slotted service, `assert_eq!` on the first assertion in the list just stopped
+each test run before the others could be checked. Running with
+`--no-fail-fast` and fixing one assertion at a time surfaced this.
 
 Plus: **`E_CONTACT_NAME_OR_ORG` is derived differently.** With no explicit
 `FILE_AS`, 3.52 derives `"Family, Given"` (`"Oldenburg, Vera"`); 3.60 hands
 back the full name as it stands (`"Dr. Vera Marie Oldenburg MSc"`).
 
-The open questions, all of which change what the plugin emits or reads on a
-newer EDS: should a JMAP contact's chat handle land in the multi-valued IM
-field or in the first home slot; should the plugin write `ANNIVERSARY` or
-`X-EVOLUTION-ANNIVERSARY`; and does anything rely on `NAME_OR_ORG`'s
-sort-order shape. Note that this is the matrix catching *semantic* drift only
-because a behavioural test happened to cover it — see the next section for why
-that is luck rather than coverage.
+`eds-sys/build.rs`'s `EDS_FEATURES` mechanism only detects *header*-visible
+differences (a symbol bindgen's output either has or lacks); none of the
+above has one — same function names and signatures, different runtime
+answers. The one exception is `E_CONTACT_DEATHDATE` itself, absent from
+3.52's `EContactField` enum entirely, which *is* a real compile-time signal
+(referencing it unconditionally fails to compile on 3.52). The fix uses its
+presence as `eds_death_date_field`, one cfg both `eds-sys/tests/contacts.rs`
+pivots all four facts above on, since they are empirically all-or-nothing on
+the same EDS release (3.52 vs. 3.60.2, the only two legs this repository
+tests) — see that cfg's doc comment in `build.rs`.
+
+What is **not** closed by this fix, and belongs in `docs/BACKLOG.md` rather
+than blocking M10: whether `jmap-vcard`'s own mapping should change on a
+newer EDS — should a JMAP contact's chat handle be read from/written to the
+multi-valued IM field or the first home slot; should the plugin write
+`ANNIVERSARY` or `X-EVOLUTION-ANNIVERSARY`; does anything rely on
+`NAME_OR_ORG`'s sort-order shape. Those are `jmap-vcard` mapping decisions
+the maintainer has to make; M10's own acceptance criteria only asks that
+breakage be visible, not that every version be made to work identically
+(explicitly out of scope, see the milestone's acceptance criteria in
+`docs/ROADMAP.md`).
 
 The pinned-3.52 leg (what the plugin actually ships against) is unaffected by
 any of the above.
