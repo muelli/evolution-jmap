@@ -31417,3 +31417,56 @@ withheld pending a maintainer go/no-go on cloud spend), and the
 manual-OAuth2-page UX call. If `origin/master` is still at this session's
 tag and nothing new has landed, another one-line confirmation is
 sufficient.
+
+## 2026-08-17 (three-hundred-and-thirty-eighth session)
+
+**Independently re-verified, then stopped confirming and surfaced the
+decisions instead.** `git fetch origin`: `origin/master` unchanged at
+`56152da` (the 337th session's tag). `gh`/token/escalate re-checked fresh:
+`which gh` not found, no `GITHUB_TOKEN`/`GH_TOKEN`/`.netrc`,
+`~/.night-shift-escalate` absent. `docs/BACKLOG.md` (92 lines) and
+`docs/MILESTONES.md` (14 lines, M7/M10 untagged) unchanged. Disk 84%, 9.2G
+free. `git status --short` empty.
+
+This makes 12 consecutive sessions (326th–337th) reaching the identical
+"nothing unblocked" conclusion, on top of the ~15 before them that mapped
+the blockers in detail. Re-deriving that a 13th time has no value; a 338th
+"same blockers" paragraph would just be more of what the 314th and 318th
+sessions already warned against (resurveying settled ground). The maintainer
+is reachable in this session, unlike a purely unattended run, so this entry
+states the three open items as direct decisions rather than log prose, and
+the assistant's chat turn asks for them explicitly:
+
+1. **Manual-OAuth2-page UX** (blocks tagging M7 `COMPLETE`): picking
+   "OAuth 2.0" by hand on `jmap-config`'s manual server-settings page (not
+   via "Look Up Account Details") cannot complete today —
+   `Incomplete::OAuth2NotRegistered` (314th session) correctly refuses it
+   since no client is registered. Two ways to close this, needing a call
+   only the maintainer can make: (a) add a "Look Up Account Details"-style
+   retry-discovery affordance to the manual page, or (b) leave manual OAuth2
+   selection blocked by design, autodiscovery-only, and document it as
+   intended in the assistant's UI copy.
+2. **M10 tag**: the CI job (`eds-version-matrix`, `5d216c9`) exists,
+   `continue-on-error`, gated on `workflow_dispatch`/a PR label — both need
+   GitHub UI or a `gh`/token credential this VM has never had. It has never
+   actually executed in GitHub Actions' own record. Someone with GitHub
+   access dispatching it once (or labelling a PR `run-eds-version-matrix`)
+   is what turns "the job exists" into "M10's acceptance criterion is met."
+3. **Stalwart CI provisioning**: `infra/gcp/create-stalwart.sh` is
+   technically runnable from this VM (confirmed 336th session: `gcloud` is
+   already authenticated), but stands up billed cloud infrastructure —
+   withheld pending the maintainer's go/no-go on spending that budget, not a
+   credentials gap.
+
+M7 itself is otherwise human-verified working (two operator rounds, 292nd
+and 295th sessions) apart from item 1 above. Real-server readiness (OAuth2
+across all three backends, capability negotiation, the `--features
+live-server` harness) and M9 (both tiers) are genuinely closed. No `rust/`
+changes this session — only this log entry.
+
+**Next session**: if none of the three items above have moved (no
+maintainer answer, `gh` still absent, `origin/master` still at this
+session's tag), a short pointer back to this entry is sufficient instead of
+a fresh multi-paragraph survey — but do re-check `git log` for a maintainer
+commit/comment answering any of them, since that is the one thing that
+would actually unblock a milestone tag or new code here.
