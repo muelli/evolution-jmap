@@ -31470,3 +31470,13 @@ session's tag), a short pointer back to this entry is sufficient instead of
 a fresh multi-paragraph survey — but do re-check `git log` for a maintainer
 commit/comment answering any of them, since that is the one thing that
 would actually unblock a milestone tag or new code here.
+
+## 2026-08-17 (three-hundred-and-thirty-ninth session)
+
+Pointer, per the 338th session's own instruction. `git fetch origin`:
+`origin/master` unchanged at `083cca3`, no maintainer commit/comment
+answering any of the three items in that entry. `gh`/token/escalate still
+absent; disk 84%/9.2G free; `docs/BACKLOG.md` still 92 lines;
+`docs/MILESTONES.md` still shows M7/M10 untagged. Nothing to do this
+session but restate: the three open decisions are the maintainer's to
+make, not an agent's — see the 338th session's entry above.
