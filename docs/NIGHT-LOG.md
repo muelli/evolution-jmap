@@ -31886,3 +31886,64 @@ remain, both recorded in `docs/eds-version-matrix.md` with measured detail:
 
 M10's tag in `docs/MILESTONES.md` (`445dc22`) predates this and is left as-is
 per the never-edit-prior-lines rule.
+
+## 2026-08-17 (351st session) — escalating item (A), the jmap-mail Camel port
+
+Re-derived the unblocked-work set from scratch rather than trusting the
+350th entry's framing at face value: read `docs/ROADMAP.md`'s CURRENT
+PRIORITY and MAINTAINER DECISIONS, `docs/MILESTONES.md` (M7/M9/M10 all
+tagged COMPLETE), and `docs/BACKLOG.md`. M7/M9/M10 being tagged does not by
+itself mean nothing is left — the 350th session's own remaining items (A)
+and (B) sit underneath M10's tag, carved out by the maintainer's explicit
+"top unblocked work item" note, so they were checked first before falling
+back to the general M7 → real-server-readiness → M9/M10 ordering. Real-server
+readiness (OAuth2, `--features live-server` harness) already has extensive
+existing code (`jmap-backend-core/src/oauth2.rs`,
+`jmap-config/src/oauth2*.rs`, `jmap-client/tests/live_server.rs`, etc.) and
+the 345th–348th sessions already swept it exhaustively and found nothing
+unblocked there — re-confirmed that conclusion still holds rather than
+repeating the sweep.
+
+That leaves exactly (A) and (B) from `docs/eds-version-matrix.md`. (B) is
+explicitly gated on a maintainer decision (three semantic-mapping questions
+the doc lists) — not mine to guess, so not claimable. (A) — porting
+`jmap-mail`'s Camel surface off the deleted `CamelFolderSearch` object onto
+the redesigned `CamelStoreSearch` API — is the only candidate.
+
+Read the affected files before deciding
+(`jmap-mail/src/{folder,summary,message_info,provider}.rs`, ~2250 lines
+combined) rather than escalating on the doc's description alone. The doc's
+scope holds up: `folder.rs` overrides `CamelFolderClass.search_by_expression`
+and `.search_by_uids`, both vfuncs that no longer exist on 3.60's class
+struct, so the port is not "call a new function" but "the subclass's vtable
+shape itself changed." `message_info.rs`/`summary.rs` read and write
+`CamelMIRecord`/`CamelFIRecord`, EDS's storage for this provider's per-message
+state (including its keyword/label bits) via the `bdata` column — 3.60 made
+both structs private and replaced the save path with an opaque
+`CamelStoreDBFolderRecord *`, so the port has to decide *where the plugin's
+existing state now lives*, not just how to spell the write. That is a design
+decision inside a GObject subclass's private ABI, exactly the
+"plausible-but-wrong-but-compiles" risk the escalation criteria names
+(ABI/vtable correctness, a wrong-but-compiling answer is the likely failure
+mode, not a build error). Also load-bearing: this crate is mail (M5), the
+provider's most-used surface, so a subtly wrong port is a real-server data
+hazard, not a matrix-leg nuisance.
+
+Considered doing it on Sonnet anyway since the previous FFI escalation
+(349th→350th) resolved cleanly on opus with a docker-reproducible container
+to check against — the same reproduction recipe is available here
+(`docs/eds-version-matrix.md`'s docker steps). But the *kind* of risk is
+different: the earlier fix was renames/signature changes checkable by
+"does it compile and do existing tests still pass," where a wrong compat
+shim is visibly wrong. This one asks "what CamelStoreSearch/CamelStoreDB
+call sequence preserves the same search and per-message-state semantics
+the deleted API had" — the failure mode is a version that compiles, links,
+and passes the existing 3.52-parity tests while being subtly wrong about
+ownership or a vfunc pre/postcondition on 3.60, which is precisely what the
+escalation instructions ask Sonnet not to gamble on.
+
+Wrote `claude-opus-5` to `~/.night-shift-escalate` and stopping without
+claiming (A). No code change, no lock taken — this is not implementation
+work in progress, so there is nothing to hold a lock against. The next
+session on opus should start from `docs/eds-version-matrix.md`'s (A)
+section and the docker repro recipe already documented there.
