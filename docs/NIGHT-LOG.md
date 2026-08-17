@@ -31714,3 +31714,13 @@ near-identical "nothing unblocked" essay after this one — if a future
 session finds this same state, a one-line pointer to this entry is enough;
 the fix is a maintainer decision (new CURRENT PRIORITY or a BACKLOG
 hardening-pass authorization), not another re-derivation.
+
+## 2026-08-17 (347th session)
+
+Re-verified: no new maintainer commit to `docs/ROADMAP.md` since `445dc22`
+(the decisions commit); `docs/MILESTONES.md` still M1–M10 all tagged;
+`~/.night-shift-escalate` absent; `live_server.rs`, `ci/gui-smoke.sh`,
+`docs/BACKLOG.md` all present and unchanged. Same conclusion as the
+345th/346th sessions: nothing unblocked under the current-priority order.
+Per the 346th session's own note, not repeating the full derivation —
+see that entry. Nothing to push beyond this pointer.
