@@ -32218,3 +32218,43 @@ against the maintainer's own recent commits rather than assumed to be more
 night-shift entries: nothing unblocked exists under the current priority
 order (M7 → real-server readiness → M9/M10, all closed or maintainer-gated).
 No code change this session.
+
+## 2026-08-17 (358th session) — sixth pass, this time verified by actually running the gate, not reading about it
+
+Every prior re-verification since the 353rd session established "nothing
+unblocked" by reading code, logs, `docs/`, and the public Actions API. None
+of them re-ran the gate itself on this VM against the crates that need EDS
+headers — the CI-green confirmations were all through the Actions API. So
+this session's distinct check: actually run the suite locally rather than
+trust a remote status badge.
+
+- `git fetch origin`: no commits ahead of `HEAD` (`e333701` at session
+  start) other than the maintainer's own two operator-side commits already
+  identified by the 357th session (`4ee80e8`, `acacc09`) plus two more of
+  the same kind made since (`6cef8bf`, `a46359e` — both
+  `tobias.mueller@sitasys.com`, both touching only `infra/stalwart/`:
+  `stw`/`create-stalwart.sh` idempotency and CLI-argument fixes). Confirmed
+  by `git show --stat` on each — out of bounds for this agent regardless
+  (`infra/` is off-limits), and not night-shift entries to react to.
+- `docs/ROADMAP.md` unchanged since `445dc22`; `~/.night-shift-escalate`
+  absent; `docs/MILESTONES.md` still M1–M10 all tagged.
+- `cargo test` (default members, mirrors what a plain `cargo test` in
+  `ci/checks.sh` runs): green, every crate.
+- `cargo clippy --all-targets -- -D warnings` (default members): clean.
+- The EDS-header crates that `default-members` excludes — `eds-sys`,
+  `jmap-backend-core`, `jmap-backend-book`, `jmap-backend-cal`, `jmap-mail`,
+  `jmap-backend-collection`, `jmap-config` — built and tested explicitly by
+  name against this VM's installed EDS 3.52.3 (`pkg-config --modversion`
+  confirmed the version first rather than assumed): all
+  green, 128 tests total across the crates that have any, 0 failed. Same
+  set under `cargo clippy --all-targets -- -D warnings`: clean.
+- This does not re-litigate the 3.60 leg — (B)/(C) in
+  `docs/eds-version-matrix.md` stay maintainer-gated/non-regression as the
+  352nd–357th sessions established; this VM only has 3.52 headers to test
+  against directly.
+
+So the gate is not just reported green elsewhere, it passes green here, on
+demand, today. Sixth independent conclusion, now on the strongest evidence
+basis of the run: nothing unblocked exists under the current priority order
+(M7 → real-server readiness → M9/M10, all closed or maintainer-gated). No
+code change this session.
