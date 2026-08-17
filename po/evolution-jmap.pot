@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-16 22:32+0000\n"
+"POT-Creation-Date: 2026-08-17 12:10+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -131,9 +131,11 @@ msgstr ""
 msgid "\"%1$s\" is not an email address."
 msgstr ""
 
-#. TRANSLATORS: shown when OAuth 2.0 is picked as the authentication method but "Look Up Account Details" has not registered a client for it yet.
+#. TRANSLATORS: shown when OAuth 2.0 is picked as the authentication method on the manual server-settings page; this account cannot be set up this way. "Look Up Account Details" is the name of the button on the earlier identity page that sets OAuth 2.0 up automatically instead.
 #: rust/crates/jmap-config/src/complete.rs:180
-msgid "OAuth 2.0 needs \"Look Up Account Details\" to run first."
+msgid ""
+"OAuth 2.0 can't be set up manually. Go back and use \"Look Up Account "
+"Details\" instead."
 msgstr ""
 
 #: rust/crates/jmap-config/src/config_lookup.rs:297
@@ -154,7 +156,7 @@ msgstr ""
 #. TRANSLATORS: the name of an account type, in the list of account types
 #. Evolution offers when adding an account. A protocol name — leave it as it is
 #. unless your language writes it in another script.
-#: rust/crates/jmap-config/src/oauth2_service.rs:170
+#: rust/crates/jmap-config/src/oauth2_service.rs:173
 #: rust/crates/jmap-mail/src/provider.rs:58
 msgid "JMAP"
 msgstr ""
