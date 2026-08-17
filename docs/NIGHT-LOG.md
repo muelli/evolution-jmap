@@ -32666,3 +32666,47 @@ since none of the twelve prior re-verifications had re-executed
 Confirms the pinned-3.52 gate genuinely still holds today, not just at the
 API's last recorded green run. Thirteenth independent conclusion: nothing
 unblocked under the current priority order. No code change this session.
+
+## 2026-08-17 (368th session) — fourteenth re-verification, live-server harness compile-checked
+
+Independent dependency-graph pass, not a trust of the 367th session's
+conclusion. Checked directly:
+
+- `git fetch origin`: `HEAD` (`62d2dad`) matches `origin/master`, tree
+  clean, no new commits since the 367th session's own push.
+- `docs/ROADMAP.md`'s priority order (M7 → real-server readiness → M9/M10)
+  and `docs/MILESTONES.md` (M1–M10 all COMPLETE) re-read in full,
+  unchanged. `~/.night-shift-escalate` absent.
+- Actions API: newest run still `32064810881` (`00271f9`, success); no
+  `workflow_dispatch` since `32063091331` (`dd76d558`) — same fact the
+  363rd–367th sessions established, re-confirmed rather than assumed.
+  Issues API: still only the two closed FFI-audit PRs (#1, #2), nothing
+  new opened.
+
+New this session, rather than re-reading what the 366th session's grep
+already established: the 366th session confirmed the OAuth2/`live-server`
+*code* exists and isn't stubbed, by grepping for the files. This session
+went one step further and actually exercised the build: `cargo test
+--manifest-path crates/jmap-client/Cargo.toml --features live-server
+--no-run` compiles cleanly, producing `tests/live_server.rs`'s binary
+alongside every other test binary in the crate. Read `live_server.rs` in
+full: every test is gated on both the `live-server` feature *and*
+`#[ignore]`, is read-only against the real server on purpose, and panics
+with a named-variable message if the required env vars
+(`JMAP_LIVE_SERVER_URL`/`_USER`/`_PASSWORD`/`_TOKEN`) are absent rather
+than silently skipping — matching `docs/manual-test-live-server.md`'s
+documented recipe and the ROADMAP's "buildable/testable against the mock
+now" bar for real-server readiness. Confirms the harness itself (not just
+its file's existence) is real, not partially wired.
+
+`docs/BACKLOG.md` re-read in full: remaining items are (B′) an explicit
+maintainer mapping decision, (C) an explicit low-leverage clippy artifact
+on the 3.60 leg, and the M3/M4-area contact/vCard fidelity notes — all
+already out of scope under the current-priority directive.
+
+Fourteenth independent conclusion: nothing unblocked under the current
+priority order — M7, real-server readiness, M9, and M10 are all closed or
+maintainer-gated (the `eds-version-matrix` dispatch confirmation, and any
+real-Stalwart run, which per the MAINTAINER DECISIONS section is
+operator-side only). No code change this session; not manufacturing
+backlog polish to justify a commit.
