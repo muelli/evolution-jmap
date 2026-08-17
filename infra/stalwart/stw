@@ -116,7 +116,8 @@ if [[ "${1:-}" == "seed" ]]; then
 {"@type":"upsert","object":"Account","matchOn":["name"],"value":{"a":{"@type":"Individual","name":"$local_part","domainId":"#d","credentials":{"0":{"@type":"Password","secret":"$pass"}}}}}
 PLAN
     echo "stw: applying seed for ${local_part}@${dom} (password hidden) at $URL" >&2
-    exec stalwart-cli --url "$URL" "${AUTH[@]}" apply "$plan"
+    stalwart-cli --url "$URL" "${AUTH[@]}" apply --file "$plan"
+    exit $?
 fi
 
 exec stalwart-cli --url "$URL" "${AUTH[@]}" "$@"
