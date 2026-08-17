@@ -31585,3 +31585,64 @@ Stalwart real-server runs stay operator-side. Ending the session here per
 the hard rule against starting a second large item — the next unblocked
 agent work is real-server readiness (OAuth2 hardening / `--features
 live-server` harness robustness) or M9/M10 follow-up once M10 is dispatched.
+
+## 2026-08-17 (344th session)
+
+Claiming: **tag M10 COMPLETE** — the maintainer's GitHub Actions dispatch
+this M10 tagging was waiting on has now happened.
+
+M7 is tagged (`15ebe44`); per the roadmap's priority order the next item is
+real-server readiness, which ~15 prior sessions' independent re-audits
+already found genuinely closed (OAuth2 across all four backends,
+capability negotiation, the `--features live-server` harness — see the
+326th/327th/337th sessions' entries). Rather than re-run that sweep again
+with nothing new in that territory, checked the one thing those sessions
+never tried: prior sessions all stopped at `which gh`/`$GITHUB_TOKEN`
+absence and concluded this VM cannot *dispatch* the `eds-version-matrix`
+job. True, but reading a public repo's Actions API needs no auth at
+all — `curl https://api.github.com/repos/muelli/evolution-jmap/actions/...`
+works unauthenticated. That shows a `workflow_dispatch` run of `ci.yml`
+(run 32027119218, head sha `445dc22`) at 2026-08-17T11:53:36Z — today,
+after the 343rd session's tag — with overall conclusion `success`. Its
+`eds-version-matrix` job itself completed with conclusion `failure`, but
+that job is `continue-on-error: true` by design, which is why it doesn't
+turn the run red. Checked the failure is the *documented, expected* one and
+not a new regression: `docs/eds-version-matrix.md`'s "Known
+incompatibilities on EDS 3.60.2" section (dated 2026-08-17, already in the
+tree) lists exactly this — `e_vcard_to_string`'s dropped format argument,
+`CamelFolderSearch`'s removal from public headers, two renamed/removed
+Camel helpers — none of which are in code the real-server-readiness work
+touches, and all explicitly out of M10's scope per the roadmap ("the
+matrix's job is to make breakage visible, not to auto-port").
+
+This is exactly the acceptance shape the roadmap's M10 section describes: "a
+build or layout mismatch on any version fails that matrix leg loudly... a
+leg that legitimately can't pass yet may be marked allow_failure/
+informational, but must still run so the breakage is on the record." It ran,
+it failed loudly and specifically (version and offending symbols named), and
+the overall pipeline stayed green. That matches the maintainer's own
+decision 2 in `docs/ROADMAP.md`: "tag M10 once it has run green in
+Actions."
+
+Tagging `M10 COMPLETE 445dc22 2026-08-17` in `docs/MILESTONES.md` — the sha
+is the run's own `head_sha` (already on master, four commits back), not a
+new commit this session makes. `rust/crates/jmap-proto/tests/milestones.rs`
+passed against the new line (chronological, sha resolves via `git
+rev-parse`) before pushing.
+
+Checks run by hand (no `reuse`/`pipx`/`uvx` on this VM, per the standing
+note): `cargo fmt --check` clean, `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings` clean, `cargo test
+--workspace --exclude example-module --exclude jmap-functional --locked`
+green. No new source file, so `reuse lint`'s prior green answer is
+unchanged; `Cargo.lock` untouched, so likewise for `cargo deny`. Disk was
+cleaned (`cargo clean --profile dev`, 21G freed) at the top of this session
+after `df` showed 96%/2.8G free — see the disk-fill note from prior
+sessions; re-ran clean afterward at 59%/24G free.
+
+All three of the 338th session's maintainer-decision items are now closed:
+M7 tagged, M10 tagged, Stalwart provisioned (real-server runs stay
+operator-side by design). Ending the session here — one milestone tag is
+the increment for tonight; the next unblocked agent work, if any surfaces,
+is genuinely fresh M1–M6/M8 polish (which the roadmap forbids picking up)
+or whatever the maintainer opens next in `docs/ROADMAP.md`.
