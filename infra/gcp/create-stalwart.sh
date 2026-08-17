@@ -29,7 +29,17 @@ set -euo pipefail
 NAME=${NAME:-stalwart-1}
 ZONE=${ZONE:-europe-west3-c}          # different region than the runner (trial vCPU quota)
 MACHINE=${MACHINE:-e2-small}
-MY_IP=$(curl -sf https://ifconfig.me)/32
+# The GCP VM has an IPv4 external address, so the firewall source range must
+# be IPv4 too. Force curl onto IPv4: a dual-stack operator host otherwise
+# answers with its IPv6 address, which is not a valid `/32` CIDR and makes the
+# firewall-rules call fail (the instance is created but left unreachable).
+MY_IP4=$(curl -4 -sf https://ifconfig.me 2>/dev/null || curl -4 -sf https://api.ipify.org 2>/dev/null || true)
+if [[ ! "$MY_IP4" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Could not determine an IPv4 address for the firewall (got: '${MY_IP4:-nothing}')." >&2
+    echo "The Stalwart VM is IPv4-only; an IPv6-only operator host cannot reach it." >&2
+    exit 1
+fi
+MY_IP="$MY_IP4/32"
 
 if [[ "${1:-}" == "--update-firewall" ]]; then
     gcloud compute firewall-rules update allow-stalwart-jmap --source-ranges="$MY_IP"
