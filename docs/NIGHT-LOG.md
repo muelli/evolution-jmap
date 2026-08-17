@@ -32710,3 +32710,51 @@ maintainer-gated (the `eds-version-matrix` dispatch confirmation, and any
 real-Stalwart run, which per the MAINTAINER DECISIONS section is
 operator-side only). No code change this session; not manufacturing
 backlog polish to justify a commit.
+
+## 2026-08-17 (369th session) — fifteenth re-verification, tried a genuinely new angle, found it blocked
+
+Independent dependency-graph pass, not a trust of the 368th session's
+conclusion. Checked directly:
+
+- `git fetch origin`: `HEAD` (`04a805e`) matches `origin/master`, tree
+  clean, no new commits since the 368th session's own push.
+- `docs/ROADMAP.md`'s priority order and `docs/MILESTONES.md` (M1–M10 all
+  COMPLETE) re-read in full, unchanged. `~/.night-shift-escalate` absent.
+- Actions API: newest run still `32064810881` (`00271f9`, success); no
+  `workflow_dispatch` since `32063091331` (`dd76d558`) — same fact the
+  363rd–368th sessions established. Issues API: still only the two closed
+  FFI-audit issues. Pulls API (not checked by name in recent sessions):
+  also only those same two, both closed, nothing open or new.
+
+New this session: rather than re-reading what the 362nd session already
+claimed ("verified locally in the pinned 3.60.2 container"), tried to
+*independently reproduce* that 3.60 leg run myself, since no session since
+362 has actually re-executed `ci/eds-matrix.sh` inside the real container
+— they've only grepped code or re-run the 3.52 gate. Found this genuinely
+blocked on this VM, for two independent reasons, not one:
+- `docker ps`/`docker images` both return "permission denied while trying
+  to connect to the docker API" for the current user — the documented
+  repro recipe (`docs/eds-version-matrix.md`) itself uses `sudo docker`,
+  and no sudo is available non-interactively here.
+- Even with docker access, `df -h /` shows 58G total, **54G used, only
+  3.2G available** (95% full) — `rust/target` alone is already 21G for
+  just the pinned-3.52 build. Pulling the pinned Fedora image, installing
+  `evolution-data-server-devel`/rustup, and doing a from-scratch build of
+  the same crate set (a fresh checkout, fresh target dir, per the recipe's
+  own `/work/src` copy step) would almost certainly hit "No space left on
+  device" before finishing, per the disk-fills-from-cargo-target lesson
+  from earlier sessions — and doing it destructively (e.g. `cargo clean`
+  on the working target first) to make room isn't worth the risk to
+  in-progress state for a re-check that's already green in CI history.
+
+This is a real, previously-unrecorded fact about the runner environment
+(no docker permission + near-full disk), not a code finding — logged here
+so a future session doesn't re-attempt the same blocked path. The 3.60 leg
+itself stays confirmed only by the 362nd session's local run and CI's
+`32063091331` dispatch; re-confirming it live needs either sudo/docker
+access or more free disk on this VM, or the maintainer's own dispatch
+re-run, whichever comes first.
+
+Fifteenth independent conclusion: nothing unblocked under the current
+priority order. No code change this session; not manufacturing backlog
+polish to justify a commit.
