@@ -32184,3 +32184,37 @@ via the public Actions API, and the (B)/(C) items in
 regression, the conclusion is unchanged for a fourth independent pass: no
 unblocked priority work exists. No code change this session; ending here
 rather than manufacturing an item to justify a commit.
+
+## 2026-08-17 (357th session) — fifth independent re-verification, still nothing unblocked
+
+Re-derived from scratch again, deliberately checking different evidence
+than the 353rd–356th sessions rather than re-running their exact steps:
+
+- `git fetch origin`: no commits ahead of `HEAD` (`0574864` at session
+  start); the two newest commits on the branch, `4ee80e8` and `acacc09`,
+  are the maintainer's own operator-side Stalwart/`stw` infra work
+  (author `tobias.mueller@sitasys.com`, touching only `infra/`) — not
+  night-shift entries, and out of bounds for this agent to touch per the
+  standing "never touch `infra/`" rule anyway.
+- Public Actions API (unauthenticated `curl`, no `gh`): the last five CI
+  runs, including the two maintainer infra commits and `a8bb65e`/`c28adbb`
+  (the M10 newer-EDS fix), are all `completed`/`success`.
+- `git log --oneline -5 -- docs/ROADMAP.md`: unchanged since `445dc22`
+  (the maintainer-decisions commit) — no new directive.
+- `~/.night-shift-escalate`: absent.
+- Confirmed directly (not inherited from memory) that `reuse`, `cargo-deny`,
+  `pipx`, and `uvx` are all still absent from `PATH` on this VM, so
+  `ci/checks.sh` genuinely cannot run here end-to-end; verification instead
+  relies on `cargo test`/`cargo clippy` plus the CI API check above, as in
+  prior sessions.
+- `docs/MILESTONES.md`: M1–M10 all tagged, including M7 and M10.
+- `docs/BACKLOG.md`: (B) (contact-model semantics on EDS 3.60) remains an
+  explicit maintainer mapping decision, three questions, none answerable
+  by inference; (C) (bindgen/glibc clippy noise on the 3.60 leg) remains
+  non-regression, ungated by `ci/eds-matrix.sh` today.
+
+Conclusion unchanged for a fifth independent pass, this time cross-checked
+against the maintainer's own recent commits rather than assumed to be more
+night-shift entries: nothing unblocked exists under the current priority
+order (M7 → real-server readiness → M9/M10, all closed or maintainer-gated).
+No code change this session.
