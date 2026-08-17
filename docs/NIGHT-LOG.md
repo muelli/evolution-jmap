@@ -30656,3 +30656,79 @@ book/cal/mail side (317th/318th) and the collection side (this session) and
 found consistent both times. The two standing blockers (M7 human
 verification, M10 infra) are unchanged and need a human, not another agent
 session, to move.
+
+## 2026-08-17 (three-hundred-and-twenty-second session)
+
+**Dependency check before claiming anything.** `git fetch origin` showed
+`origin/master` unchanged at `e80fe78` (the 321st session's own commit).
+Per that session's own "next session" note, did not re-run the
+capability-negotiation or TODO/FIXME sweeps again — no commit landed that
+could plausibly reopen either.
+
+**Looked for one angle the prior six sessions had not explicitly ruled
+in or out: the "Integration testing (parallel track)" section's own
+"gated CI job … against a real Stalwart server", separate from the
+numbered CURRENT PRIORITY list's "`--features live-server` integration
+harness" (which is done — `jmap-client/tests/live_server.rs`,
+confirmed present by the 318th session).** `grep` across
+`.github/workflows/*.yml` for `live-server`/`live_server`/`LIVE_SERVER`
+found nothing — no CI job invokes that harness at all, only the local
+recipe in `docs/manual-test-live-server.md` exists. Considered adding one,
+mirroring the existing gated pattern (`functional`/`gui-smoke` in
+`ci.yml`, both `if: workflow_dispatch || pull_request label`).
+
+**Did not implement it, on purpose.** Unlike `functional`/`gui-smoke`,
+which are gated but exercise infrastructure this repo already owns
+end-to-end (a real EDS runtime, a real Evolution, both against the
+in-repo mock), a `live-server` CI job's entire point is to run against an
+actual external Stalwart deployment
+(`infra/gcp/create-stalwart.sh` provisions one) with real account
+credentials as repo secrets — neither of which exists yet, and
+provisioning cloud infrastructure or minting credentials is outside what
+an autonomous session should do unilaterally. Adding the YAML now would be
+exactly the "compiles but nothing has verified it" pattern the roadmap's
+correctness-over-progress rule forbids: even a syntactically correct job
+would either be dead code (never triggered, secrets never set) or, if
+triggered, fail immediately for having nothing to talk to — not a
+regression risk, but not a real increment either. This is a maintainer
+provisioning decision (spin up/pay for a disposable Stalwart VM, mint an
+account, wire the secrets), not a coding gap this stream can close, so it
+is left alone rather than half-done.
+
+**Re-looked at the manual-OAuth2-page question (313th/314th/318th) for
+anything that would let this session resolve it rather than defer it
+again.** `jmap-config/src/complete.rs:178-180`'s
+`Incomplete::OAuth2NotRegistered` message already names the exact
+remedy — *"OAuth 2.0 needs \"Look Up Account Details\" to run first."* —
+so a user who picks OAuth 2.0 on the manual page is not stuck without
+guidance, only without a button that does it for them from that page.
+Whether that's sufficient or the assistant should grow a
+retry-discovery affordance on the manual page itself is still a UX
+judgment call between two legitimate designs, not a fact this stream can
+derive from source the way the 321st session resolved the
+capability-negotiation question — leaving it exactly where the 314th
+session put it.
+
+**Full gate, clean, no source touched.** `cargo build --workspace
+--exclude example-module --locked`, `cargo clippy --workspace --exclude
+example-module --all-targets --locked -- -D warnings`, and `cargo test
+--workspace --exclude example-module --exclude jmap-functional --locked`
+all green (0 failed). `git status` shows only this log entry changing.
+
+**Conclusion: no unblocked, non-guesswork, in-priority tractable item
+found tonight either — the seventh session in a row to reach that
+conclusion, two of which (317th, 320th) turned up and closed a real gap
+along the way.** M7's only gap is still the human verification pass.
+Real-server readiness (OAuth2, capability negotiation, the live-server
+harness) is closed for all four backends; the CI-wiring half of the
+*parallel-track* Stalwart integration item is a provisioning decision, not
+a coding gap. M9 is COMPLETE, M10 is blocked on off-limits `ci-image.yml`.
+Not claiming any task, not pushing a code change; only this log entry.
+`~/.night-shift-escalate` empty (checked, not present).
+
+**Next session**: unchanged standing blockers (M7 human verification, M10
+infra). Do not re-run the capability-negotiation/TODO sweep or re-derive
+the live-server-CI-job question again absent a new commit or an explicit
+maintainer decision on either open design question (manual-OAuth2-page
+affordance, Stalwart provisioning) — both have now been looked at and
+require a human choice, not more agent-side investigation.
