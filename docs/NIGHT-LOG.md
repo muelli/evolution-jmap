@@ -31691,3 +31691,26 @@ honest "nothing unblocked" is the right outcome here, not manufacturing an
 increment out of forbidden polish. The next actionable step is the
 maintainer's: open a new CURRENT PRIORITY in `docs/ROADMAP.md`, or
 authorize a BACKLOG.md hardening pass.
+
+## 2026-08-17 (346th session)
+
+Fetched origin: unchanged at `f7a4536` (the 345th session's tag). No new
+maintainer commit to `docs/ROADMAP.md` (last touch `445dc22`, the
+decisions commit); `docs/MILESTONES.md` still M1–M10 all tagged; `~/.night-
+shift-escalate` absent; `git status --short` empty.
+
+Rather than repeat the 345th session's full grep sweep, spot-checked the
+two artifacts it cited that are easiest to have bit-rotted silently:
+`rust/crates/jmap-client/tests/live_server.rs` and `ci/gui-smoke.sh` (M9
+Tier 2) both still exist on disk with the content those sessions described
+(dogtail/AT-SPI smoke test, feature-gated live-server harness). No
+regression found. Disk 83%/11G free.
+
+**Conclusion unchanged:** nothing unblocked under the current-priority
+order (M7, real-server readiness, M9, M10 are all genuinely tagged and
+spot-verified). `docs/BACKLOG.md`'s items remain the only real work and
+remain out of scope by the standing directive. Not adding a fourth
+near-identical "nothing unblocked" essay after this one — if a future
+session finds this same state, a one-line pointer to this entry is enough;
+the fix is a maintainer decision (new CURRENT PRIORITY or a BACKLOG
+hardening-pass authorization), not another re-derivation.
