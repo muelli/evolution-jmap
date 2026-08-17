@@ -32813,3 +32813,41 @@ out of scope under the current-priority directive.
 Sixteenth independent conclusion: nothing unblocked under the current
 priority order. No code change this session; not manufacturing backlog
 polish to justify a commit.
+
+## 2026-08-17 (371st session) — seventeenth re-verification, tooling and dispatch state re-checked
+
+Independent dependency-graph pass, not a trust of the 370th session's
+conclusion. Checked directly:
+
+- `git fetch origin`: `HEAD` (`aaf895a`) matches `origin/master`, tree
+  clean, no new commits since the 370th session's own push.
+- `docs/ROADMAP.md`'s priority order and `docs/MILESTONES.md` (M1–M10 all
+  COMPLETE) re-read in full, unchanged. `~/.night-shift-escalate` absent.
+- Actions API: newest run still `32064810881` (`00271f9`, success).
+  Explicitly listed the repo's four workflows this time
+  (`ci-image.yml`, `ci.yml`, `release.yml`, `runner-smoke.yml` — no
+  separate `eds-version-matrix` workflow exists; that leg runs inside
+  `ci.yml`) and the last five `workflow_dispatch`-triggered runs: newest is
+  still `32063091331` (`dd76d55`, success) — same fact the 363rd–370th
+  sessions established, now cross-checked against the dispatch list
+  directly rather than only the "no dispatch since X" summary. Issues/Pulls
+  unchanged (two closed FFI-audit items, nothing new).
+- Re-checked the two blockers the 369th/370th sessions logged, in case the
+  runner environment had shifted again the way sudo/docker did between
+  those two sessions: `df -h /` is unchanged, still 58G total / 54G used /
+  **3.2G available** (95% full); `sudo -n docker images` now runs
+  non-interactively (confirms the 370th session's sudo-config change is
+  durable) but the image cache is still empty, so the 3.60 matrix recheck
+  is exactly as disk-blocked as the 369th/370th sessions found — no new
+  fact, just confirmed the blocker hasn't quietly resolved itself.
+- New this session: actually tested whether `docs/checks-sh-blocked-on-vm.md`'s
+  standing note (`reuse`/`pipx`/`uvx`/`cargo-deny` all absent) still holds,
+  rather than assuming a stale memory note. `which reuse pipx uvx
+  cargo-deny` all empty, `python3 -m reuse --version` still "No module
+  named reuse", `cargo deny --version` still "no such command: `deny`".
+  Unchanged — `ci/checks.sh` remains unrunnable here; `cargo fmt`/`clippy`/
+  `test` (already re-run live by the 367th session) stay the substitute.
+
+Seventeenth independent conclusion: nothing unblocked under the current
+priority order. No code change this session; not manufacturing backlog
+polish to justify a commit.
