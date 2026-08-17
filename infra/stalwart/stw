@@ -28,7 +28,10 @@
 #   stw refresh                         # forget the cached admin secret
 #
 # Env overrides: STALWART_VM (default stalwart-1), STALWART_ZONE
-# (default europe-west3-c), STALWART_URL, STALWART_PASSWORD, STALWART_TOKEN.
+# (default europe-west3-c), STALWART_URL, STALWART_USER (default admin),
+# STALWART_PASSWORD, STALWART_TOKEN. After the web setup provisions a permanent
+# admin, set STALWART_USER/STALWART_PASSWORD to it (the cached recovery secret
+# no longer applies).
 set -euo pipefail
 
 NAME=${STALWART_VM:-stalwart-1}
@@ -86,7 +89,7 @@ declare -a AUTH
 if [ -n "${STALWART_TOKEN:-}" ]; then
     AUTH=(--api-key "$STALWART_TOKEN")
 elif [ -n "${STALWART_PASSWORD:-}" ]; then
-    AUTH=(--user admin --password "$STALWART_PASSWORD")
+    AUTH=(--user "${STALWART_USER:-admin}" --password "$STALWART_PASSWORD")
 else
     secret=${CACHED_SECRET:-}
     if [ -z "$secret" ]; then
@@ -95,7 +98,7 @@ else
         [ -n "$secret" ] || { echo "stw: could not fetch the admin secret over gcloud ssh" >&2; exit 1; }
         ( umask 077; printf 'CACHED_SECRET=%q\n' "$secret" > "$CACHE" )
     fi
-    AUTH=(--user admin --password "$secret")
+    AUTH=(--user "${STALWART_USER:-admin}" --password "$secret")
 fi
 
 # `seed`: one idempotent `apply` that creates a local domain and one individual

@@ -99,18 +99,32 @@ docker run -d --name stalwart --restart unless-stopped \
     stalwartlabs/stalwart:latest
 EOF
 
-gcloud compute instances create "$NAME" \
-    --zone "$ZONE" \
-    --machine-type "$MACHINE" \
-    --image-family=ubuntu-2404-lts-amd64 \
-    --image-project=ubuntu-os-cloud \
-    --boot-disk-size=20GB \
-    --tags=stalwart \
-    --metadata-from-file=startup-script="$STARTUP"
+# Idempotent: create the VM if absent, else refresh its startup-script metadata
+# (so re-running picks up fixes like the 0.16 recovery-admin change). Updated
+# metadata applies on the next boot — `gcloud compute instances reset "$NAME"
+# --zone "$ZONE"` to apply immediately.
+if gcloud compute instances describe "$NAME" --zone "$ZONE" >/dev/null 2>&1; then
+    echo "Instance $NAME already exists — updating its startup-script metadata (applies on next boot)."
+    gcloud compute instances add-metadata "$NAME" --zone "$ZONE" \
+        --metadata-from-file startup-script="$STARTUP"
+else
+    gcloud compute instances create "$NAME" \
+        --zone "$ZONE" \
+        --machine-type "$MACHINE" \
+        --image-family=ubuntu-2404-lts-amd64 \
+        --image-project=ubuntu-os-cloud \
+        --boot-disk-size=20GB \
+        --tags=stalwart \
+        --metadata-from-file=startup-script="$STARTUP"
+fi
 
-gcloud compute firewall-rules describe allow-stalwart-jmap >/dev/null 2>&1 \
-    || gcloud compute firewall-rules create allow-stalwart-jmap \
+# Ensure the firewall admits the operator's current IP (create or refresh).
+if gcloud compute firewall-rules describe allow-stalwart-jmap >/dev/null 2>&1; then
+    gcloud compute firewall-rules update allow-stalwart-jmap --source-ranges="$MY_IP"
+else
+    gcloud compute firewall-rules create allow-stalwart-jmap \
         --allow=tcp:8080 --target-tags=stalwart --source-ranges="$MY_IP"
+fi
 
 IP=$(gcloud compute instances describe "$NAME" --zone "$ZONE" \
     --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
