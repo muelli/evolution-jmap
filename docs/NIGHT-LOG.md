@@ -32258,3 +32258,45 @@ demand, today. Sixth independent conclusion, now on the strongest evidence
 basis of the run: nothing unblocked exists under the current priority order
 (M7 → real-server readiness → M9/M10, all closed or maintainer-gated). No
 code change this session.
+
+## 2026-08-17 (359th session) — seventh pass, checked CI job outcomes directly and the operator's live-server recipe
+
+Same starting point as the 353rd–358th sessions (`git fetch origin`: no
+commits ahead of `HEAD` at `cad4456` other than the maintainer's own
+operator-side `infra/stalwart/` work, already identified by prior sessions;
+`docs/ROADMAP.md` unchanged since `445dc22`; `~/.night-shift-escalate`
+absent; `docs/MILESTONES.md` still M1–M10 all tagged). Two checks this
+session ran that none of the six prior re-verifications had:
+
+- Pulled the job list for the latest `workflow_dispatch` CI run
+  (`32059072609`, for `a46359e`) via the public Actions API rather than just
+  the run-level `success`/`failure` the 354th–357th sessions checked: every
+  job — `reproducible`, `build`, `checks`, `functional`, and, notably,
+  `gui-smoke` (M9 Tier 2) — is individually `success`, down to each step
+  (`ci/gui-smoke.sh`, `ci/functional.sh` themselves green, not just the
+  jobs that wrap them). Only `eds-version-matrix` is `failure`, and that is
+  the expected, `continue-on-error: true` shape from (B) in
+  `docs/eds-version-matrix.md` — a real server behaving differently on
+  3.60, not a regression. So M9's GUI-smoke tier isn't just wired into the
+  workflow file, as the 355th session established; it actually ran and
+  passed on the most recent dispatch.
+- Read `docs/manual-test-live-server.md` end to end (it hadn't been read by
+  any of the 354th–358th sessions, only `live_server.rs` itself). It is a
+  complete, accurate operator recipe: how to get a Stalwart account or use
+  an existing server, the three env vars and their Bearer-token override,
+  the double gate (`--features live-server` plus `--ignored`) that keeps a
+  plain `cargo test` network-free, and per-test pass criteria that
+  correctly distinguish "capability absent, skip" from "capability present,
+  must work" — matching the maintainer's note in `docs/ROADMAP.md` that the
+  harness runs operator-side because Stalwart's firewall only admits the
+  operator's IP, not the runner's.
+- Re-confirmed `reuse`, `cargo-deny`, `pipx`, `uvx` are still absent from
+  `PATH` on this VM (unchanged from the 357th session's check) — noted so a
+  future session doesn't re-spend time on the same probe.
+
+Conclusion unchanged for a seventh independent pass, on evidence one level
+more concrete than any prior session gathered (actual per-job CI outcomes,
+not run-level status; the operator doc's content, not just its existence):
+nothing unblocked exists under the current priority order (M7 → real-server
+readiness → M9/M10, all closed or maintainer-gated). No code change this
+session; ending here rather than manufacturing an item to justify a commit.
