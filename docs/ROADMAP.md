@@ -28,6 +28,15 @@ they close, prioritise in this order:
    `--features live-server` integration harness and capability-negotiation
    robustness, all buildable/testable against the mock now so a real server
    (Stalwart, then Fastmail) is a config change, not a rewrite.
+   - **CLAIM THIS — first live-Stalwart test found a real bug (2026-08-18, see
+     NIGHT-LOG "session-discovery redirect strips auth"):** the session lives
+     behind a `307` (`/.well-known/jmap` → `/jmap/session`) and `UreqTransport`
+     lets ureq's default drop the `Authorization` header on the redirect, so the
+     client reads an anonymous, empty-accounts session and fails with "no primary
+     account". Fix: set `redirect_auth_headers = SameHost` in
+     `UreqTransport::new`. **This is mock-testable now** — add a `jmap-mock`
+     mode that serves the session via a `307` to an auth-required path and
+     assert the account still resolves; no live server needed to land it.
 3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
