@@ -33906,3 +33906,56 @@ test does), renames it via `mailbox_update`'s JSON Patch, confirms the new
 name via `Mailbox/get`, then destroys it. Gated behind the existing
 `connect_for_write()`. Will also fix the doc comment to state accurately
 what is and is not covered once this lands.
+
+## 2026-08-18 — Delivered: a Mailbox/set rename live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended the sole existing
+  mutating mailbox test — renamed
+  `mailbox_create_then_destroy_round_trips_through_the_real_api` to
+  `mailbox_create_rename_then_destroy_round_trips_through_the_real_api` and
+  inserted a rename step between create and destroy: after confirming the
+  created mailbox's name via `Mailbox/get`, calls `mailbox_update` with a
+  `{"name": ...}` `PatchObject` to a second unique name, then confirms via
+  another `Mailbox/get` that the new name — not the old one — is what comes
+  back, before destroying it. Extended the existing test rather than adding
+  a fifth, because the file's own doc comment already claimed "create,
+  rename, destroy" was covered by this one test; it wasn't, until now.
+  Updated that doc comment's link and the function's own doc comment to
+  match.
+- **`docs/manual-test-live-server.md`**: updated both the intro's write-test
+  list and the "what it worked means" section for the renamed test and the
+  new rename step.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent upsert;
+  previous session's password not recoverable by design, as with every
+  prior write-path session). Found and fixed two environment-setup snags
+  while doing so, neither a code bug: `infra/stalwart/stw` needs the real
+  `stalwart-cli` binary reachable under exactly that name on `PATH` — the
+  cached download from a prior session lives at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/stalwart-cli`,
+  a versioned directory, not directly usable until that directory itself is
+  put on `PATH`; and `infra/live-server/live-server-env.sh` exports
+  `STALWART_USER`/`STALWART_PASSWORD` (or `STALWART_TOKEN`), not
+  `STALWART_ADMIN_PASSWORD` as this session first guessed — sourcing the
+  file and reading what it actually exports resolved both.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the renamed/extended one — `Mailbox/set`
+  update round-trips a real rename against Stalwart's own state handling,
+  not just create/destroy. No client bug found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --locked`
+  (default-members) green, no failures. `cargo deny`/`reuse lint` still
+  unavailable on this VM; the only changed source file (`live_server.rs`)
+  already carries its SPDX header.
+
+Closes the gap between what the file's doc comment claimed and what it
+actually tested. Remaining unexercised corners of `jmap-client`'s write
+surface against a real server: `contact_update`/`event_update`/
+`email_update` (mark-as-read/flags) have no live-server coverage yet, and
+`send_email`/`submit_email` still need an SMTP-capable deployment (out of
+scope for this throwaway Stalwart account, as noted by the prior session).
+Left as follow-up work for a future session, not claimed here. Left
+`agent-livewrite.net`/`agent1` in place, same reasoning as every prior
+write-path session.
