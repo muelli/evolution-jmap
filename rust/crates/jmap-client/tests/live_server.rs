@@ -61,11 +61,23 @@
 use std::env;
 
 use jmap_client::{Client, Credentials};
+use jmap_proto::calendars::CalendarEvent;
+use jmap_proto::contacts::ContactCard;
 use jmap_proto::mail::Mailbox;
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
 };
 use serde_json::json;
+
+/// A value unique to this process invocation, for naming a record so a
+/// concurrent or prior run's leftover can never be mistaken for this run's
+/// own.
+fn unique_suffix() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+}
 
 /// The origin and credentials this run was pointed at, or a panic naming the
 /// variable that is missing.
@@ -246,13 +258,7 @@ fn mailbox_create_then_destroy_round_trips_through_the_real_api() {
 
     // Unique per run so a prior run's leftover (e.g. a destroy that failed)
     // cannot be mistaken for this run's own mailbox.
-    let name = format!(
-        "agent-livewrite-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
+    let name = format!("agent-livewrite-{}", unique_suffix());
     let mailbox = Mailbox {
         name: name.clone(),
         ..Mailbox::default()
@@ -281,4 +287,104 @@ fn mailbox_create_then_destroy_round_trips_through_the_real_api() {
     client
         .mailbox_destroy(&account_id, &id)
         .expect("Mailbox/set destroy failed against the real server");
+}
+
+/// The contacts capability's half of the write-path proof: `ContactCard/set`
+/// creates a card in the account's default address book, reads it back
+/// through `ContactCard/get`, then destroys it. Relies on Stalwart
+/// auto-provisioning one default address book per account (confirmed by
+/// hand before this test was written) rather than creating one first — the
+/// same assumption the mailbox test makes about a default Inbox.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn contact_card_create_then_destroy_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let book_id = client
+        .address_books(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default address book")
+        .id
+        .expect("the server named the address book");
+
+    let full_name = format!("agent-livewrite-{}", unique_suffix());
+    let card = ContactCard::simple(book_id, &full_name, "agent-livewrite@example.invalid");
+
+    let created = client
+        .contact_create(&account_id, &card)
+        .expect("ContactCard/set create failed against the real server");
+    let id = created.id.clone().expect("the server named the new card");
+
+    let round_tripped = client
+        .contact_get(&account_id, std::slice::from_ref(&id))
+        .unwrap()
+        .list
+        .into_iter()
+        .next();
+    assert_eq!(
+        round_tripped
+            .and_then(|card| card.name)
+            .and_then(|name| name.full),
+        Some(full_name),
+        "the created card does not show up in ContactCard/get afterwards"
+    );
+
+    client
+        .contact_destroy(&account_id, &id)
+        .expect("ContactCard/set destroy failed against the real server");
+}
+
+/// The calendars capability's half of the write-path proof: `CalendarEvent/
+/// set` creates an event in the account's default calendar, reads it back
+/// through `CalendarEvent/get`, then destroys it. Same default-calendar
+/// assumption as the contacts test makes about the default address book.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn calendar_event_create_then_destroy_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let title = format!("agent-livewrite-{}", unique_suffix());
+    let event = CalendarEvent::simple(calendar_id, &title, "2026-08-18T13:00:00", "PT1H");
+
+    let created = client
+        .event_create(&account_id, &event)
+        .expect("CalendarEvent/set create failed against the real server");
+    let id = created.id.clone().expect("the server named the new event");
+
+    let round_tripped = client
+        .event_get(&account_id, std::slice::from_ref(&id))
+        .unwrap()
+        .list
+        .into_iter()
+        .next();
+    assert_eq!(
+        round_tripped.and_then(|event| event.title),
+        Some(title),
+        "the created event does not show up in CalendarEvent/get afterwards"
+    );
+
+    client
+        .event_destroy(&account_id, &id)
+        .expect("CalendarEvent/set destroy failed against the real server");
 }
