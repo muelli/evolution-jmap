@@ -282,13 +282,8 @@ impl Component {
 }
 
 /// Parse a complete `VCALENDAR` object.
-///
-/// A content line calcard cannot read is *skipped*, not fatal: that is the
-/// policy the semantic mapping already states for a value it cannot map, and a
-/// calendar that refuses to open over one bad line loses every event in it.
-/// What is still fatal is a document that is not a calendar, one that is
-/// truncated, and one nested deeper than [`MAX_DEPTH`].
-pub fn parse(text: &str) -> Result<Component, ICalError> {
+/// Parse a complete `VCALENDAR` object into calcard's parsed representation.
+pub fn parse_ical(text: &str) -> Result<calcard::icalendar::ICalendar, ICalError> {
     check_structure(text)?;
 
     let mut parser = Parser::new(text);
@@ -315,7 +310,81 @@ pub fn parse(text: &str) -> Result<Component, ICalError> {
     }
     check_depth(components)?;
 
-    Ok(from_component(components, 0))
+    Ok(calendar)
+}
+
+/// Parse a complete `VCALENDAR` object.
+///
+/// A content line calcard cannot read is *skipped*, not fatal: that is the
+/// policy the semantic mapping already states for a value it cannot map, and a
+/// calendar that refuses to open over one bad line loses every event in it.
+/// What is still fatal is a document that is not a calendar, one that is
+/// truncated, and one nested deeper than [`MAX_DEPTH`].
+pub fn parse(text: &str) -> Result<Component, ICalError> {
+    let calendar = parse_ical(text)?;
+    Ok(from_component(&calendar.components, 0))
+}
+
+pub fn entry_text(entry: &ICalendarEntry) -> String {
+    entry
+        .values
+        .iter()
+        .filter_map(value_text_str)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub fn entry_texts(entry: &ICalendarEntry) -> Vec<String> {
+    entry.values.iter().filter_map(value_text_str).collect()
+}
+
+pub fn entry_raw_value(entry: &ICalendarEntry) -> String {
+    entry_text(entry)
+}
+
+pub fn entry_param(entry: &ICalendarEntry, name: &str) -> Option<String> {
+    entry
+        .params
+        .iter()
+        .find(|param| param.name.as_str().eq_ignore_ascii_case(name))
+        .map(|param| param_text(&param.value))
+}
+
+pub fn entry_param_values(entry: &ICalendarEntry, name: &str) -> Vec<String> {
+    entry
+        .params
+        .iter()
+        .filter(|param| param.name.as_str().eq_ignore_ascii_case(name))
+        .map(|param| param_text(&param.value))
+        .collect()
+}
+
+pub fn component_entry<'a>(
+    component: &'a ICalendarComponent,
+    name: &str,
+) -> Option<&'a ICalendarEntry> {
+    component
+        .entries
+        .iter()
+        .find(|entry| entry.name.as_str().eq_ignore_ascii_case(name))
+}
+
+pub fn component_entries<'a>(
+    component: &'a ICalendarComponent,
+    name: &'a str,
+) -> impl Iterator<Item = &'a ICalendarEntry> {
+    component
+        .entries
+        .iter()
+        .filter(move |entry| entry.name.as_str().eq_ignore_ascii_case(name))
+}
+
+pub fn component_text(component: &ICalendarComponent, name: &str) -> Option<String> {
+    component_entry(component, name).map(entry_text)
+}
+
+pub fn value_text_str(value: &ICalendarValue) -> Option<String> {
+    value_text(value).map(|(s, _)| s)
 }
 
 /// Whether the document opens and closes its components properly.

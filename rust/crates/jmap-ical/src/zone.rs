@@ -33,15 +33,17 @@
 //! by hand, and the parts they wrote that it did not read are the ones the
 //! tests named for Exchange, Zimbra and Lotus Notes now cover.
 
+use calcard::icalendar::ICalendarComponent;
+
 use crate::event::{WEEKDAYS, days_from_civil, days_in_month, offset_seconds, to_local_date_time};
-use crate::syntax::{Component, Property};
+use crate::syntax::{component_entries, component_text, entry_raw_value, entry_texts};
 
 /// When the zone last changed its offset, and what that offset is — the
 /// `TZOFFSETTO` of the observance the transition belongs to, or, for the
 /// earliest transition of all, the `TZOFFSETFROM` it moved away from.
 type Transition = (i64, i64);
 
-/// The offset from UTC in force at `utc` in the zone `vtimezone` describes, as
+/// The offset from UTC in force at `utc` in the zone `observances` describe, as
 /// a count of seconds east of UTC, or `None` for a definition whose
 /// transitions this cannot work out.
 ///
@@ -57,17 +59,17 @@ type Transition = (i64, i64);
 /// An instant before every transition the definition states gets the
 /// `TZOFFSETFROM` of the earliest of them, which is the only thing the
 /// definition says about the zone before it started describing it.
-pub(crate) fn offset_at(vtimezone: &Component, utc: &str) -> Option<i64> {
+pub(crate) fn offset_at(observances: &[&ICalendarComponent], utc: &str) -> Option<i64> {
     let (year, ..) = parts(utc)?;
     let target = seconds_at(utc)?;
     let mut in_force: Option<Transition> = None;
     let mut first: Option<Transition> = None;
-    for observance in &vtimezone.children {
-        if !matches!(observance.name.as_str(), "STANDARD" | "DAYLIGHT") {
+    for observance in observances {
+        if !matches!(observance.component_type.as_str(), "STANDARD" | "DAYLIGHT") {
             continue;
         }
-        let from = offset_seconds(&observance.text("TZOFFSETFROM")?)?;
-        let to = offset_seconds(&observance.text("TZOFFSETTO")?)?;
+        let from = offset_seconds(&component_text(observance, "TZOFFSETFROM")?)?;
+        let to = offset_seconds(&component_text(observance, "TZOFFSETTO")?)?;
         for onset in onsets(observance, from, year)? {
             if onset <= target && in_force.is_none_or(|(latest, _)| onset > latest) {
                 in_force = Some((onset, to));
@@ -88,14 +90,10 @@ pub(crate) fn offset_at(vtimezone: &Component, utc: &str) -> Option<i64> {
 /// offset it is moving *from*, so that is what each local time here is resolved
 /// with. The `DTSTART` is itself the first occurrence, as it is for any
 /// recurrence.
-fn onsets(observance: &Component, from: i64, year: i64) -> Option<Vec<i64>> {
-    let start = to_local_date_time(&observance.text("DTSTART")?)?;
+fn onsets(observance: &ICalendarComponent, from: i64, year: i64) -> Option<Vec<i64>> {
+    let start = to_local_date_time(&component_text(observance, "DTSTART")?)?;
     let mut onsets = vec![seconds_at(&start)? - from];
-    for date in observance
-        .all("RDATE")
-        .into_iter()
-        .flat_map(Property::texts)
-    {
+    for date in component_entries(observance, "RDATE").flat_map(entry_texts) {
         // A period says how long an occurrence lasts, which is not a thing a
         // transition has; §3.8.5.2 admits the spelling and no zone uses it, so
         // it is refused rather than read as its first half.
@@ -104,8 +102,8 @@ fn onsets(observance: &Component, from: i64, year: i64) -> Option<Vec<i64>> {
         }
         onsets.push(seconds_at(&to_local_date_time(&date)?)? - from);
     }
-    for rule in observance.all("RRULE") {
-        onsets.extend(rule_onsets(&rule.raw_value(), &start, from, year)?);
+    for rule in component_entries(observance, "RRULE") {
+        onsets.extend(rule_onsets(&entry_raw_value(rule), &start, from, year)?);
     }
     Some(onsets)
 }

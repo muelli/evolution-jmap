@@ -8700,3 +8700,93 @@ fn maps_priority_privacy_and_status_combinations_faithfully() {
     assert_eq!(back.status, event.status);
     assert_eq!(back.free_busy_status, event.free_busy_status);
 }
+
+#[test]
+fn reads_an_icalendar_with_mixed_case_properties_and_parameters_and_parses_faithfully() {
+    let ics = "bEgIn:vCaLeNdAr\r\n\
+               vErSiOn:2.0\r\n\
+               pRoDiD:-//mixed-case//test//EN\r\n\
+               bEgIn:vEvEnT\r\n\
+               uId:mixed-case-event-1\r\n\
+               sUmMaRy:Cross-Platform Strategy\r\n\
+               dEsCrIpTiOn:Reviewing architecture alignment\\nand milestones.\r\n\
+               dTsTaRt;tZiD=Europe/Berlin:20260815T143000\r\n\
+               dUrAtIoN:PT1H30M\r\n\
+               cLaSs:PrIvAtE\r\n\
+               sTaTuS:cOnFiRmEd\r\n\
+               tRaNsP:oPaQuE\r\n\
+               pRiOrItY:2\r\n\
+               lOcAtIoN;x-JmAp-KeY=loc1:Executive Boardroom\r\n\
+               cOnFeReNcE;x-JmAp-KeY=v1;fEaTuRe=aUdIo,vIdEo;lAbEl=\"Video Bridge\":https://meet.example.com/board\r\n\
+               cAtEgOrIeS:Strategy,Architecture\r\n\
+               cAtEgOrIeS:Q3-Milestones\r\n\
+               aTtAcH;x-JmAp-KeY=k1;fMtTyPe=text/plain:https://example.com/briefing.txt\r\n\
+               iMaGe;x-JmAp-KeY=k2;dIsPlAy=badge:https://example.com/badge.png\r\n\
+               bEgIn:vAlArM\r\n\
+               aCtIoN:dIsPlAy\r\n\
+               tRiGgEr;rElAtEd=eNd:-PT15M\r\n\
+               uId:alert-1\r\n\
+               eNd:vAlArM\r\n\
+               eNd:vEvEnT\r\n\
+               eNd:vCaLeNdAr\r\n";
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(
+        event.id.as_ref().map(|id| id.as_str()),
+        Some("mixed-case-event-1")
+    );
+    assert_eq!(event.title.as_deref(), Some("Cross-Platform Strategy"));
+    assert_eq!(
+        event.description.as_deref(),
+        Some("Reviewing architecture alignment\nand milestones.")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-08-15T14:30:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(event.privacy.as_deref(), Some("private"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(event.priority, Some(2));
+
+    let locs = event.locations.as_ref().expect("locations");
+    assert_eq!(locs["loc1"]["name"].as_str(), Some("Executive Boardroom"));
+
+    let vlocs = event.virtual_locations.as_ref().expect("virtualLocations");
+    assert_eq!(
+        vlocs["v1"]["uri"].as_str(),
+        Some("https://meet.example.com/board")
+    );
+    assert_eq!(vlocs["v1"]["name"].as_str(), Some("Video Bridge"));
+    assert_eq!(vlocs["v1"]["features"]["audio"].as_bool(), Some(true));
+    assert_eq!(vlocs["v1"]["features"]["video"].as_bool(), Some(true));
+
+    let tags = event.keywords.as_ref().expect("keywords");
+    assert_eq!(tags.len(), 3);
+    assert_eq!(tags["Strategy"].as_bool(), Some(true));
+    assert_eq!(tags["Architecture"].as_bool(), Some(true));
+    assert_eq!(tags["Q3-Milestones"].as_bool(), Some(true));
+
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(
+        links["k1"]["href"].as_str(),
+        Some("https://example.com/briefing.txt")
+    );
+    assert_eq!(links["k1"]["contentType"].as_str(), Some("text/plain"));
+    assert_eq!(
+        links["k2"]["href"].as_str(),
+        Some("https://example.com/badge.png")
+    );
+    assert_eq!(links["k2"]["rel"].as_str(), Some("icon"));
+    assert_eq!(links["k2"]["display"].as_str(), Some("badge"));
+
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts["alert-1"]["action"].as_str(), Some("display"));
+    assert_eq!(
+        alerts["alert-1"]["trigger"]["offset"].as_str(),
+        Some("-PT15M")
+    );
+    assert_eq!(
+        alerts["alert-1"]["trigger"]["relativeTo"].as_str(),
+        Some("end")
+    );
+}
