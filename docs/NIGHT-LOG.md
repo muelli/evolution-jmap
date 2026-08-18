@@ -34363,3 +34363,25 @@ create classifies correctly (both flags true on one id).
 (no SMTP path configured), unchanged from every prior session in this
 chain. Left `agent-livewrite.net`/`agent1` in place, same reasoning as
 every prior write-path session.
+
+## 2026-08-18 (claim) — Claiming an Email/changes live-server test
+
+Re-surveyed: `docs/MILESTONES.md` still has M1–M10 all `COMPLETE`,
+`docs/BACKLOG.md` unchanged. The prior session closed `all_changes`
+coverage for `Mailbox`, `ContactCard`, and `CalendarEvent`, leaving
+`Email/changes` as the one named follow-up (the other, same-page
+create+update classification, stays open). `Client::email_state` already
+exists in `jmap-client/src/mail.rs` (an `Email/get` with no ids, for
+exactly this: reading a state without paying for the objects) but nothing
+in `live_server.rs` calls it — `email_get` itself has its own request-
+splitting logic and does not expose `state` at all, which is why this
+gap wasn't just "copy the other three tests".
+
+Claiming: extend
+`email_import_update_then_destroy_round_trips_through_the_real_api` in
+`jmap-client/tests/live_server.rs` — capture `Client::email_state` before
+each of import/update/destroy and assert `Client::all_changes(&account_id,
+"Email", ...)` since that state reports the message's id in the matching
+bucket after each one, mirroring the mailbox/contact/event tests exactly.
+Same throwaway account and gating; will update
+`docs/manual-test-live-server.md` to match.
