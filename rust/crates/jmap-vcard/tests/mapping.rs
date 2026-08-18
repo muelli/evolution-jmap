@@ -4830,3 +4830,182 @@ fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
     let parsed = vcard_to_card(&vcard).expect("parse");
     assert_eq!(parsed.anniversaries, None);
 }
+
+#[test]
+fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
+    // 1. `states_org_unit` predicate characterization:
+    // A unit is stated on the wire only if its name is non-empty.
+    // An empty name with or without sortAs in extra is unstated.
+    let empty_unit = OrgUnit::new("");
+    assert!(!states_org_unit(&empty_unit));
+
+    let empty_with_sort_as = OrgUnit {
+        name: "".to_owned(),
+        extra: [("sortAs".to_owned(), json!("Alpha"))].into(),
+    };
+    assert!(!states_org_unit(&empty_with_sort_as));
+
+    let normal_unit = OrgUnit::new("Engineering");
+    assert!(states_org_unit(&normal_unit));
+
+    let normal_with_sort_as = OrgUnit {
+        name: "Engineering".to_owned(),
+        extra: [("sortAs".to_owned(), json!("Eng"))].into(),
+    };
+    assert!(states_org_unit(&normal_with_sort_as));
+
+    let whitespace_unit = OrgUnit::new("   ");
+    assert!(states_org_unit(&whitespace_unit));
+
+    // 2. `states_organization` predicate with combinations of empty units:
+    // Org with empty name and only empty units states nothing.
+    let empty_org = Organization {
+        name: None,
+        units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
+        ..Organization::default()
+    };
+    assert!(!states_organization(&empty_org));
+
+    let empty_named_org = Organization {
+        name: Some("".to_owned()),
+        units: Some(vec![OrgUnit::new("")]),
+        ..Organization::default()
+    };
+    assert!(!states_organization(&empty_named_org));
+
+    // Org with employer name states an ORG line even if all units are empty.
+    let named_org_empty_units = Organization {
+        name: Some("Acme Corp".to_owned()),
+        units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
+        ..Organization::default()
+    };
+    assert!(states_organization(&named_org_empty_units));
+
+    // Org with no employer name but at least one non-empty unit states an ORG line.
+    let nameless_org_valid_unit = Organization {
+        name: None,
+        units: Some(vec![OrgUnit::new(""), OrgUnit::new("Finance")]),
+        ..Organization::default()
+    };
+    assert!(states_organization(&nameless_org_valid_unit));
+}
+
+#[test]
+fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
+    // 1. Org with employer name and only empty-name units:
+    // Emits employer name alone on the ORG line; empty units are dropped from wire format.
+    let card1 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Corp".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new(""),
+                        OrgUnit {
+                            name: "".to_owned(),
+                            extra: [("sortAs".to_owned(), json!("Secret"))].into(),
+                        },
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let vcard1 = card_to_vcard(&card1);
+    assert_eq!(line(&vcard1, "ORG"), "ORG;X-JMAP-KEY=o1:Acme Corp");
+    let back1 = vcard_to_card(&vcard1).expect("parse");
+    let org1 = &back1.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org1.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(org1.units, None);
+
+    // 2. Org with employer name, leading/intermediate empty units, and valid units:
+    // Empty units are omitted from ORG components, leaving non-empty units in sequence.
+    let card2 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Corp".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new(""),
+                        OrgUnit::new("Research"),
+                        OrgUnit {
+                            name: "".to_owned(),
+                            extra: [("sortAs".to_owned(), json!("OpticsSort"))].into(),
+                        },
+                        OrgUnit::new("Optics"),
+                        OrgUnit::new(""),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let vcard2 = card_to_vcard(&card2);
+    assert_eq!(
+        line(&vcard2, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme Corp;Research;Optics"
+    );
+    let back2 = vcard_to_card(&vcard2).expect("parse");
+    let org2 = &back2.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org2.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(
+        org2.units.as_deref(),
+        Some([OrgUnit::new("Research"), OrgUnit::new("Optics")].as_slice())
+    );
+
+    // 3. Nameless org with leading empty unit and valid units:
+    // Leading semicolon keeps unit in department slot; empty unit is omitted.
+    let card3 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: None,
+                    units: Some(vec![OrgUnit::new(""), OrgUnit::new("Engineering")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let vcard3 = card_to_vcard(&card3);
+    assert_eq!(line(&vcard3, "ORG"), "ORG;X-JMAP-KEY=o1:;Engineering");
+    let back3 = vcard_to_card(&vcard3).expect("parse");
+    let org3 = &back3.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org3.name, None);
+    assert_eq!(
+        org3.units.as_deref(),
+        Some([OrgUnit::new("Engineering")].as_slice())
+    );
+
+    // 4. Inbound vCards with various empty component patterns:
+    // - ORG with empty employer and empty unit components:
+    let empty_components_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG;X-JMAP-KEY=o1:;;;\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_empty = vcard_to_card(empty_components_vcard).expect("parse");
+    assert_eq!(from_empty.organizations, None);
+
+    // - ORG with empty intermediate components and trailing empty semicolons:
+    let multi_empty_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG;X-JMAP-KEY=o1:Acme Corp;;Research;;Development;\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_multi_empty = vcard_to_card(multi_empty_vcard).expect("parse");
+    let org_multi = &from_multi_empty.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org_multi.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(
+        org_multi.units.as_deref(),
+        Some([OrgUnit::new("Research"), OrgUnit::new("Development")].as_slice())
+    );
+}
