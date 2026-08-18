@@ -33213,3 +33213,39 @@ Thirtieth independent conclusion: nothing unblocked. Same two items
 flagged since the 374th session — a maintainer call on BACKLOG (B′), and
 (low-leverage) (C) — are what would open further autonomous work; neither
 is this session's to take. No code change this session.
+
+## 2026-08-18 (385th session) — thirty-first re-verification, nothing unblocked
+
+Kept short, checked directly rather than trusted:
+
+- `git fetch origin`: `HEAD` (`c652538`) matches `origin/master`, tree
+  clean, no new commits since the 384th session's push.
+- `docs/MILESTONES.md`: M1–M10 all COMPLETE, unchanged. `~/.night-shift-
+  escalate` absent.
+- `git log -3 -- docs/ROADMAP.md docs/BACKLOG.md`: newest touching commits
+  still `dbd43c3` (ROADMAP) and `00271f9` (BACKLOG) — no maintainer edit
+  since the priority order, MAINTAINER DECISIONS, and (B′)/(C) were
+  written.
+- Actions API (`muelli/evolution-jmap`): newest run still `32064810881`
+  (`00271f9`, success); prior run `32063091331` (`dd76d55`, success).
+  Issues (state=all): still only the two closed FFI-audit items, nothing
+  new opened.
+- `df -h /`: 3.0G available (95% full), unchanged. `docker info`: still
+  permission-denied on the daemon socket (client responds, server
+  doesn't) — unchanged from prior sessions.
+- New angle this session: rather than trust the log's claim that
+  real-server readiness (ROADMAP priority item 2 — OAuth2, `--features
+  live-server` harness, capability-negotiation robustness) is done,
+  grepped for it directly. OAuth2 has dedicated modules and tests across
+  five crates (`jmap-config`, `jmap-backend-core`, `jmap-backend-
+  collection`, `jmap-mail`, `eds-sys`, `jmap-mock`); `jmap-client/tests/
+  live_server.rs` is a real `--features live-server`-gated integration
+  test, not a stub; capability negotiation has its own code path in
+  `jmap-mail/src/provider.rs` plus coverage in the live-server test. All
+  three sub-items are substantive, matching what six-plus prior sessions
+  concluded from re-reading rather than re-deriving.
+
+Thirty-first independent conclusion: nothing unblocked. Same two items
+flagged since the 374th session — a maintainer call on BACKLOG (B′), and
+(low-leverage) (C) — are what would open further autonomous work; neither
+is this session's to take. No code change this session.
