@@ -34148,3 +34148,82 @@ scope for this throwaway account, as every prior session in this chain has
 noted) and remain the only unexercised corner of `jmap-client`'s write
 surface. Left `agent-livewrite.net`/`agent1` in place, same reasoning as
 every prior write-path session.
+
+## 2026-08-18 (claim) — Claiming a Mailbox/changes (incremental sync) live-server test
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` still has M1–M10
+all `COMPLETE`, `docs/BACKLOG.md` unchanged (only the parked maintainer-call/
+low-leverage items). The write-path chain that occupied the last five
+sessions (`mailbox_update`, `contact_update`, `event_update`, `email_update`,
+plus the original create/destroy tests) is now closed; the only named
+remaining gap, `send_email`/`submit_email`, needs an SMTP-capable deployment
+this throwaway account cannot provide, so it stays out of scope.
+
+Surveyed `jmap-client/tests/live_server.rs` for what else in the client's
+surface has zero live-server coverage rather than assuming the write-path
+chain was the whole story: `Client::changes`/`all_changes`
+(`jmap-client/src/changes.rs`, RFC 8620 §5.2 incremental sync — the
+primitive every EDS meta-backend's `get_changes_sync` drives) is called
+nowhere in that file. `grep -i changes docs/NIGHT-LOG.md` against
+live-server/real-server context returns nothing, so this is not
+re-treading a prior session's ground. This is real-server-readiness work,
+not backend polish: it exercises state-token semantics (format,
+monotonicity, `hasMoreChanges` pagination, created/updated/destroyed
+classification) against Stalwart's own `/changes` implementation, which the
+mock cannot stand in for.
+
+Confirmed reachable before claiming: `source
+infra/live-server/live-server-env.sh` resolves `STALWART_URL` and the
+internal endpoint answers (307 on `/.well-known/jmap`, expected pre-auth).
+
+Claiming: extend `mailbox_create_rename_then_destroy_round_trips_through_
+the_real_api` in `jmap-client/tests/live_server.rs` — capture
+`mailbox_get`'s `state` before each mutation (create/rename/destroy) and
+assert `Client::all_changes("Mailbox", ...)` since that state reports the
+mailbox's id in the right bucket (`created`/`updated`/`destroyed`) after
+each one. Same throwaway account and gating as every write-path test in
+this file; will update `docs/manual-test-live-server.md` to match.
+
+## 2026-08-18 — Delivered: a Mailbox/changes live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `mailbox_create_rename_then_destroy_round_trips_through_the_real_api` —
+  before each of the three steps (create, rename, destroy), captures
+  `Mailbox/get`'s `state`; after each step, calls `Client::all_changes`
+  since that captured state and asserts the mailbox's id shows up in the
+  matching bucket (`created`, `updated`, `destroyed`). Same test, same
+  throwaway account, no new gating — just more assertions on a sequence the
+  test was already driving.
+- **`docs/manual-test-live-server.md`**: documented the new `all_changes`
+  assertions in the write-tests section.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent upsert;
+  previous session's password not recoverable by design). `stalwart-cli`
+  was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/`.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the extended mailbox test —
+  `Mailbox/changes` reports Stalwart's own state tokens and
+  created/updated/destroyed classification correctly across a
+  create/rename/destroy sequence, not just the mock's. No client bug found;
+  `Client::all_changes`'s pagination-following and classification logic
+  worked against a real server on the first attempt.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --locked`
+  (default-members) green, no failures. `cargo deny`/`reuse lint` still
+  unavailable on this VM; the only changed source file (`live_server.rs`)
+  already carries its SPDX header.
+
+Closes a real-server-readiness gap the write-path chain's five prior
+sessions did not touch: `Client::changes`/`all_changes` — the incremental-
+sync primitive `jmap-mail-sync`/`jmap-book-sync`/`jmap-cal-sync` all poll
+through — had zero live-server coverage even after every capability's
+create/update/destroy path was verified. Still open, unchanged from the
+prior session: `send_email`/`submit_email` need an SMTP-capable deployment
+this throwaway account cannot provide. A next session could extend the
+same `all_changes` check to the contact/event/email write tests, or verify
+`ContactCard`/`CalendarEvent`/`Mailbox` changes tolerate an update that
+lands inside the same page as the create (both flags true on one id) —
+parking rather than doing both in one increment.

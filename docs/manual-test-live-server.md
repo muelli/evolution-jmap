@@ -147,8 +147,15 @@ in the invocation, worth failing loudly on.
   before destroying it (what a real folder rename, contact edit, or event
   edit in Evolution sends). The contact/event tests create into the
   account's default address book/calendar rather than one of their own
-  making, relying on Stalwart auto-provisioning both per account. Skipped,
-  not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not
+  making, relying on Stalwart auto-provisioning both per account. The
+  mailbox test additionally checks `Client::all_changes` (RFC 8620 §5.2's
+  `/changes`, the primitive every EDS meta-backend's `get_changes_sync`
+  drives) after each of the three steps: the mailbox's id must show up in
+  the right bucket (`created`/`updated`/`destroyed`) since the state
+  captured just before that step — the first place this client's
+  incremental-sync state tokens and pagination are exercised against a real
+  server rather than `jmap-mockd`'s own invention of them. Skipped, not
+  failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not
   set.
 - `email_import_update_then_destroy_round_trips_through_the_real_api` — the
   mail write path's other shape: uploads a small message's bytes via
