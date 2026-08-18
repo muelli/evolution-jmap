@@ -466,6 +466,14 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
 /// path — what a user editing an event's title in the calendar view sends),
 /// reads it back again, then destroys it. Same default-calendar assumption
 /// as the contacts test makes about the default address book.
+///
+/// Also checks `Client::all_changes` after each mutation, same as
+/// [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`]
+/// and
+/// [`contact_card_create_update_then_destroy_round_trips_through_the_real_api`]:
+/// `jmap-cal-sync`'s own polling loop drives `CalendarEvent/changes`, and a
+/// real server's state tokens and created/updated/destroyed classification
+/// for this type had no live-server coverage until now.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() {
@@ -484,6 +492,11 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
         .expect("the write-test account needs a default calendar")
         .id
         .expect("the server named the calendar");
+
+    let state_before_create = client
+        .event_get(&account_id, &[])
+        .expect("CalendarEvent/get failed against the real server")
+        .state;
 
     let title = format!("agent-livewrite-{}", unique_suffix());
     let event = CalendarEvent::simple(calendar_id, &title, "2026-08-18T13:00:00", "PT1H");
@@ -505,6 +518,15 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
         "the created event does not show up in CalendarEvent/get afterwards"
     );
 
+    let changes_after_create = client
+        .all_changes(&account_id, "CalendarEvent", &state_before_create)
+        .expect("CalendarEvent/changes failed against the real server");
+    assert!(
+        changes_after_create.created.contains(&id),
+        "CalendarEvent/changes since before the create does not list the new event as created"
+    );
+
+    let state_before_update = client.event_get(&account_id, &[]).unwrap().state;
     let updated_title = format!("agent-livewrite-updated-{}", unique_suffix());
     client
         .event_update(&account_id, &id, json!({"title": updated_title}))
@@ -522,9 +544,26 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
         "the updated event does not show the new title in CalendarEvent/get afterwards"
     );
 
+    let changes_after_update = client
+        .all_changes(&account_id, "CalendarEvent", &state_before_update)
+        .expect("CalendarEvent/changes failed against the real server");
+    assert!(
+        changes_after_update.updated.contains(&id),
+        "CalendarEvent/changes since before the update does not list the event as updated"
+    );
+
+    let state_before_destroy = client.event_get(&account_id, &[]).unwrap().state;
     client
         .event_destroy(&account_id, &id)
         .expect("CalendarEvent/set destroy failed against the real server");
+
+    let changes_after_destroy = client
+        .all_changes(&account_id, "CalendarEvent", &state_before_destroy)
+        .expect("CalendarEvent/changes failed against the real server");
+    assert!(
+        changes_after_destroy.destroyed.contains(&id),
+        "CalendarEvent/changes since before the destroy does not list the event as destroyed"
+    );
 }
 
 /// The mail write path's other shape: `Email/import` puts bytes the caller
