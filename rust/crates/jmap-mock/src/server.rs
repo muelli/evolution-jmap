@@ -95,6 +95,7 @@ pub struct MockServerBuilder {
     size_request: Option<u64>,
     size_upload: Option<u64>,
     session_via_redirect: bool,
+    advertise_origin: Option<String>,
 }
 
 impl MockServerBuilder {
@@ -322,6 +323,17 @@ impl MockServerBuilder {
         self
     }
 
+    /// State the session document's `apiUrl`, `downloadUrl`, `uploadUrl` and
+    /// `eventSourceUrl` on `origin` rather than the address this server
+    /// actually listens on — reproducing a real deployment (Stalwart among
+    /// them) whose session document names a configured hostname/scheme a
+    /// client cannot necessarily reach, distinct from the address it
+    /// connected through to fetch that very document.
+    pub fn advertise_origin(mut self, origin: impl Into<String>) -> Self {
+        self.advertise_origin = Some(origin.into());
+        self
+    }
+
     /// Bind to localhost and start serving on a background thread. The
     /// server stops when the returned handle is dropped.
     pub fn start(self) -> MockServer {
@@ -336,6 +348,7 @@ impl MockServerBuilder {
         state.size_request = self.size_request;
         state.size_upload = self.size_upload;
         state.session_via_redirect = self.session_via_redirect;
+        state.advertise_origin = self.advertise_origin.clone();
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -394,6 +407,7 @@ impl MockServer {
             size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
+            advertise_origin: None,
         }
     }
 
@@ -912,6 +926,8 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
         core["maxCallsInRequest"] = json!(calls_in_request);
     }
 
+    let advertised = state.advertise_origin.as_deref().unwrap_or(origin);
+
     Session {
         capabilities: [(CAPABILITY_CORE.to_owned(), core)]
             .into_iter()
@@ -927,10 +943,10 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
         username: first_account
             .map(|(_, account)| account.name.clone())
             .unwrap_or_default(),
-        api_url: format!("{origin}/jmap"),
-        download_url: format!("{origin}/download/{{accountId}}/{{blobId}}/{{name}}"),
-        upload_url: format!("{origin}/upload/{{accountId}}"),
-        event_source_url: format!("{origin}/eventsource"),
+        api_url: format!("{advertised}/jmap"),
+        download_url: format!("{advertised}/download/{{accountId}}/{{blobId}}/{{name}}"),
+        upload_url: format!("{advertised}/upload/{{accountId}}"),
+        event_source_url: format!("{advertised}/eventsource"),
         state: state.session_state(),
         extra: Default::default(),
     }
