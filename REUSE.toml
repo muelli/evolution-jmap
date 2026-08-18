@@ -36,6 +36,7 @@ path = [
     # file and would have the header rewritten on every regeneration.
     "po/evolution-jmap.pot",
     "infra/night-shift/*.md",
+    "infra/agy-night-shift/*.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Tobias Mueller <muelli@cryptobitch.de>"
