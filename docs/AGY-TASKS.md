@@ -7,37 +7,38 @@ gated entirely by the existing test suite. Record completions in
 `docs/AGY-LOG.md`; do **not** prune this file (the maintainer removes finished
 items when merging `antigravity → master`).
 
-## PRIMARY — calcard migration (ROADMAP: "Outsource iCalendar/vCard parsing to calcard")
+The calcard migration (former PRIMARY) is **DONE and merged to master
+(2026-08-19)** — both hand-rolled `syntax.rs` layers are gone. The items below
+are the next fidelity polish: all **semantic-mapping** work in
+`jmap-vcard/src/contact.rs` or `jmap-ical/src/event.rs`, gated by the test suite.
+Same rules: TDD, whole-crate tests green at every push, log completions in
+`docs/AGY-LOG.md`. **Check the current code first** — some of these may be partly
+done; do the undone parts and add round-trip tests that pin the behaviour. A
+behaviour choice that is genuinely a product decision is a **finding to log**,
+not something to guess at.
 
-Replace the hand-rolled RFC 5545/6350 text layers with the `calcard` crate
-(already a workspace dependency: `calcard = "0.3.9"` in `rust/Cargo.toml`).
+## Contact / vCard fidelity (`jmap-vcard/src/contact.rs`) — HEADLESS only
+1. **Multi-`TYPE` phone numbers** (`TEL;TYPE=WORK,VOICE,FAX` and friends):
+   characterize how a number carrying several TYPE tokens maps to EDS's
+   business / business-fax fields — today picking one winner loses the
+   voice/fax distinction. Add round-trip tests pinning the behaviour; improve the
+   mapping where the right answer is unambiguous. Do NOT try to verify the
+   contact editor's display — that is the maintainer's GUI check.
+2. **IM / social online-service URI schemes**: map the remaining schemes onto
+   `onlineServices` — `X-TWITTER`, `X-SIP`, and the IM protocols not already
+   handled (MSN, Yahoo, AIM/ICQ if not done, …). Read `contact.rs` for what is
+   already mapped; add the undone ones with round-trip tests.
+3. **Multi-component `ORG` / `TITLE`** round-trip: ensure a vCard `ORG` with 3+
+   components (incl. a 4th mapping to `E_CONTACT_OFFICE`) round-trips
+   vCard↔JSContact without dropping components. Headless round-trip only.
+4. **Bare-year dates** (`BDAY`/anniversary stated as a year only): characterize
+   and test how a year-only date maps (EDS clamps); pin it with a round-trip test.
 
-**Targets to remove/replace:**
-- `rust/crates/jmap-vcard/src/syntax.rs` (~410 lines) — vCard lexer/emitter
-- `rust/crates/jmap-ical/src/syntax.rs` (~628 lines) — iCal lexer/emitter
-  (mind `jmap-ical/src/zone.rs` for time zones)
+## Calendar / iCal fidelity (`jmap-ical/src/event.rs`) — HEADLESS only
+5. **`merge_units` empty-name edge case**: a unit with an empty name is currently
+   dropped — characterize, add a test, and fix if the drop is wrong.
 
-**Keep, do not rewrite:** the semantic mapping in `jmap-vcard/src/contact.rs`
-and `jmap-ical/src/event.rs` (JSContact↔vCard, JSCalendar↔iCal). Adapt them to
-consume/produce calcard's parsed form instead of the hand-rolled syntax types.
-
-**Acceptance suite = ALL existing fixture/round-trip tests in both crates.** Keep
-them green at every push. A behaviour difference calcard introduces is a
-**finding to log in `docs/AGY-LOG.md`**, never a test to weaken or delete.
-
-**This is multi-session — progress it incrementally**, one coherent sub-layer per
-session, whole-crate tests green each time. Do NOT report BLOCKED just because it
-won't fit one session. Suggested order:
-1. jmap-vcard: route **parsing** through calcard; adapt `contact.rs`; tests green.
-2. jmap-vcard: route **emitting** through calcard; delete the dead syntax code; tests green.
-3. jmap-ical: **parsing** through calcard (handle `zone.rs` zones); tests green.
-4. jmap-ical: **emitting** through calcard; delete the dead syntax code; tests green.
-
-When both hand-rolled `syntax.rs` layers are gone and all tests pass, append
-`CALCARD COMPLETE <UTC date>` to `docs/MILESTONES.md` (the ROADMAP tag mechanism).
-
-## SECONDARY — small headless items (only if the calcard step is blocked)
-- Empty-`ORG`-name emission: an organisation whose `name` is `""` rather than
-  absent — decide the `ORG` line output and add a round-trip test (`jmap-vcard`).
-- Windows time-zone names: add a test confirming the refusal path is correct
-  (`jmap-ical`), unsendable-by-design.
+Work one increment per session, each self-contained so the periodic
+`antigravity → master` merge stays trivial. Only when you exhaust these AND find
+no further in-lane headless sub-step should you report `AGY-SHIFT: BLOCKED` — the
+maintainer refills this file then.
