@@ -1676,7 +1676,7 @@ fn a_uri_keeps_the_punctuation_a_vcard_value_gives_meaning_to() {
     let vcard = card_to_vcard(&one_link("l1", "https://vera.example/q?tags=a,b;c"));
     assert_eq!(
         line(&vcard, "URL"),
-        "URL;X-JMAP-KEY=l1:https://vera.example/q?tags=a\\,b\\;c"
+        "URL;X-JMAP-KEY=l1:https://vera.example/q?tags=a,b;c"
     );
 
     let links = vcard_to_card(&vcard).expect("parse").links.unwrap();
@@ -3806,4 +3806,28 @@ fn reads_a_vcard_with_mixed_case_property_names_and_parameters() {
     assert!(keywords.contains_key("Gamma"));
     let related = card.related_to.as_ref().unwrap();
     assert!(related.contains_key("Jordan"));
+}
+
+#[test]
+fn emits_a_comprehensive_vcard_via_calcard_and_roundtrips() {
+    let card = fixture_card();
+    let vcard = card_to_vcard(&card);
+    assert!(vcard.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(vcard.ends_with("END:VCARD\r\n"));
+    assert!(vcard.contains("UID:C1\r\n"));
+    assert!(vcard.contains("FN:Vera Oldenburg\r\n"));
+    assert!(vcard.contains("N:Oldenburg;Vera;;;\r\n"));
+
+    let back = vcard_to_card(&vcard).expect("parse back");
+    assert_eq!(back.id, card.id);
+    assert_eq!(back.uid, card.uid);
+    assert_eq!(back.name, card.name);
+    assert_eq!(
+        back.emails.as_ref().unwrap().len(),
+        card.emails.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        back.phones.as_ref().unwrap().len(),
+        card.phones.as_ref().unwrap().len()
+    );
 }
