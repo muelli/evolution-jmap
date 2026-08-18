@@ -55,6 +55,18 @@ they close, prioritise in this order:
      `JMAP_LIVE_SERVER_REBASE_URLS=1`, all 5 pass against the real
      deployment. See NIGHT-LOG's "Delivered: opt-in apiUrl/downloadUrl/
      uploadUrl rebase to the connected origin".
+   - **VERIFIED 2026-08-19 (operator, real Evolution → real Stalwart):** mail
+     send/deliver/read, contacts, and calendar all round-trip and persist across
+     a reboot (NIGHT-LOG "operator-verified real-server end-to-end"). The
+     real-server dimension of M7 and of this item is human-confirmed.
+   - **DEFERRED (maintainer, 2026-08-19): OAuth 2.0 real-server validation.**
+     The client's RFC 8414 issuer check correctly rejects the throwaway Stalwart
+     (plain HTTP, `defaultHostname = example.com`, reached via a forward) — see
+     NIGHT-LOG "OAuth 2.0 discovery's issuer check". OAuth2 is fully mock-tested
+     and behaving correctly; exercising it against a real server needs a
+     TLS-proper deployment (real hostname + cert), parked for later. Do NOT
+     relax the issuer match to make it pass — it is the mix-up-attack defence, a
+     deliberate maintainer call, not a bug. Do not re-surface it as a blocker.
 3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
