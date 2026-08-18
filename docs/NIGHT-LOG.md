@@ -33520,3 +33520,103 @@ Not a `jmap-client` bug — same conclusion the original finding reached, now
 with the actual mechanism confirmed instead of guessed at. No code change
 this session; logged per "correctness over progress" rather than attempting
 a TLS-trust change blind.
+
+## 2026-08-18 (claim) — Claiming ROADMAP item 2: opt-in apiUrl rebase (mock-testable)
+
+Claiming the real-server-readiness item the previous session's apiUrl
+root-cause left open. That session correctly declined the two options it
+found (bind a TLS cert to the reachable listener, or publish Stalwart's
+`:443` listener) as maintainer-only trust/infra decisions. There is a third
+option this session's own environment brief names explicitly — "make the
+harness use STALWART_URL as the base" — that is neither: it does not touch
+certificate trust at all, only which origin the *client* sends method calls
+to, opt-in and off by default. Implementing it as
+`ClientBuilder::rebase_urls_to_origin`: after session discovery, optionally
+rewrite the scheme+authority of `apiUrl`/`downloadUrl`/`uploadUrl`/
+`eventSourceUrl` to the origin the client actually connected through,
+keeping each URL's path/query as the server stated it. TDD against
+`jmap-mock` via a new `MockServerBuilder::advertise_origin` (advertise a
+different, unreachable origin than the one the mock actually listens on —
+reproducing Stalwart's apiUrl/hostname mismatch without a live server).
+
+## 2026-08-18 — Delivered: opt-in apiUrl/downloadUrl/uploadUrl rebase to the connected origin
+
+- **`jmap-mock`**: `MockServerBuilder::advertise_origin(origin)` — the
+  session document's `apiUrl`/`downloadUrl`/`uploadUrl`/`eventSourceUrl` are
+  built from `origin` instead of the address the mock is actually reachable
+  on, while `/.well-known/jmap` itself (and, in `session_via_redirect` mode,
+  its redirect target) stays on the real address — exactly the shape a real
+  deployment with a configured-but-unreachable public hostname has: you can
+  reach it to *discover* the session, but the session's own URLs point
+  somewhere else.
+- **Red tests**: `jmap-client/tests/rebase_urls.rs` —
+  `without_the_option_method_calls_target_the_advertised_origin_and_fail`
+  proves the baseline (session discovery succeeds, `Core/echo` fails because
+  it dials `http://127.0.0.1:1`, nothing listening); the fix's test,
+  `rebase_urls_to_origin_reaches_the_server_through_the_origin_actually_connected_to`,
+  connects with the new option and asserts `Core/echo` round-trips through
+  the real origin instead.
+- **Fix**: `ClientBuilder::rebase_urls_to_origin(bool)` (off by default —
+  RFC 8620 states these are the server's own URLs). When on, `Client`
+  records the origin it connected through and `refresh_session` rewrites
+  the four session URLs via a new `crate::url::rebase_origin(url, origin)`
+  helper — pure string surgery (swap everything before the first `/` after
+  `scheme://`, keep the rest), unit-tested in `jmap-client/src/url.rs`
+  against a plain URL, a `{accountId}`/`{blobId}` download template, and a
+  trailing-slash origin.
+- **`live_server.rs`/`manual-test-live-server.md`**: wired a
+  `JMAP_LIVE_SERVER_REBASE_URLS` env var onto the new option and documented
+  it as the answer to exactly the Stalwart apiUrl finding — set it and the
+  operator-side `--features live-server` run should now reach real method
+  calls (`Core/echo`, `Mailbox/get`, …) through `JMAP_LIVE_SERVER_URL` even
+  though Stalwart's session still (falsely) advertises `https://example.com`.
+
+Deliberately narrow: this changes nothing for a client that does not opt in,
+and does not touch certificate trust or Stalwart's config — it only lets an
+operator who has already verified out-of-band that the address they
+connected through *is* the deployment the session names, keep talking to
+that address instead of one the session claims but the network cannot route
+to.
+
+Full gate: `cargo test --locked` (all crates green, including the 2 new
+`rebase_urls.rs` tests and 3 new `url.rs` unit tests), `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings` and
+`cargo clippy -p evolution-jmap-client --all-targets --features live-server
+--locked -- -D warnings` all clean. `cargo test -p evolution-jmap-client
+--features live-server --no-run` compiles. Hit "No space left on device"
+mid-session (target/ had regrown to 24G on a 58G disk) — `cargo clean
+--profile dev` (per prior sessions' finding) freed 25GiB and the rebuild
+reproduced the same green result. `cargo deny`/`reuse lint` still
+unavailable on this VM; the new file (`jmap-client/tests/rebase_urls.rs`)
+carries the SPDX `GPL-3.0-or-later` header by hand-inspection.
+
+**Also confirmed against the real, live Stalwart** — this session's own
+environment brief says the runner now has internal-VPC reachability
+(`source infra/live-server/live-server-env.sh`), superseding ROADMAP's
+maintainer-decision #3 ("firewall admits only the operator's host"), which
+must predate that access being wired up. Ran the actual
+`--features live-server -- --ignored` suite against `$STALWART_URL` with
+`admin@example.com` (read-only; no throwaway `agent-*` domain needed for
+this):
+
+- **Without** `JMAP_LIVE_SERVER_REBASE_URLS`: 4 of 5 tests fail —
+  `the_session_names_the_core_capability` passes (session discovery only),
+  the other four (`echo`, mailbox/address-book/calendar listing) fail with
+  `Http { status: 405, ... }`. Confirms the finding is worse than "times
+  out": `apiUrl` is `https://example.com/jmap/`, and `example.com` is a real
+  Internet domain this VM has ordinary HTTPS egress to — every authenticated
+  method call was silently being sent to the actual `example.com` website
+  (which naturally answers `405` to a JSON POST), not merely failing to
+  connect. A deployment operator who fat-fingers `defaultHostname` to any
+  live domain gets exactly this: a client that thinks it is misconfigured
+  when it is actually leaking requests to a third party.
+- **With** `JMAP_LIVE_SERVER_REBASE_URLS=1`: all 5 tests pass — `Core/echo`
+  round-trips through the real API, `Mailbox/get` lists the account's
+  mailboxes, `AddressBook/get`/`Calendar/get` deserialise real data. First
+  genuine end-to-end pass of this crate's client against a real, live JMAP
+  server.
+
+This raises the `405`-vs-hang finding above to something worth a line in
+ROADMAP.md's real-server-readiness note, since it changes the risk framing
+(silent cross-origin leakage, not just unreachability) — added there
+alongside marking this rebase option as the answer to the apiUrl blocker.
