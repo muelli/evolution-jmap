@@ -217,7 +217,10 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as BASE64, STANDARD_NO_PAD as BASE64_UNPADDED};
 use calcard::common::IanaString;
-use calcard::vcard::{VCardEntry, VCardParameterValue, VCardValue, VCardValueType};
+use calcard::vcard::{
+    VCardEntry, VCardParameter, VCardParameterName, VCardParameterValue, VCardProperty, VCardValue,
+    VCardValueType,
+};
 use calcard::{Entry, Parser};
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
@@ -227,7 +230,6 @@ use jmap_proto::contacts::{
 use serde_json::{Map, Value, json};
 
 use crate::error::VCardError;
-use crate::syntax::{self, Property};
 
 /// Carries the JSContact `uid` when the vCard `UID` is taken by the JMAP id.
 const X_JMAP_UID: &str = "X-JMAP-UID";
@@ -732,7 +734,7 @@ fn calendar_kind(property: &str) -> Option<&'static str> {
 ///   relation the server holds and add one under the new key. The empty name,
 ///   ends made of ASCII whitespace — trimmed by EDS, measured against
 ///   libebook-contacts 3.52, as they are on an instant-messaging handle — and a
-///   carriage return, dropped by [`crate::syntax::write`], are each that case.
+///   carriage return, dropped by [`card_to_vcard`], are each that case.
 pub fn states_spouse(key: &str, relation: &Relation) -> bool {
     married(relation) && names_a_person(key)
 }
@@ -954,7 +956,7 @@ pub fn states_online_service(service: &OnlineService) -> bool {
 ///   [`online_service_handle`] — and left invisible otherwise, because the
 ///   alternative is guessing at a handle and then writing the guess back.
 /// - **its handle would come back from EDS spelled differently.** The empty
-///   handle says nothing; a carriage return is dropped by [`crate::syntax::write`]
+///   handle says nothing; a carriage return is dropped by [`card_to_vcard`]
 ///   as a security property; and ends made of ASCII whitespace are trimmed by
 ///   EDS — measured against libebook-contacts 3.52, where `X-JABBER: vera@a `
 ///   reaches the user as `vera@a`. Each would have the next save rename the
@@ -1373,7 +1375,7 @@ fn member(date: &Value, name: &str) -> Option<u32> {
 /// Render a contact card as a vCard 3.0 string, ready for
 /// `e_contact_new_from_vcard()`.
 pub fn card_to_vcard(card: &ContactCard) -> String {
-    let mut properties = vec![Property::new("VERSION", "3.0")];
+    let mut entries = Vec::new();
 
     // EDS keys its cache on the vCard UID and passes it back to
     // load_contact_sync()/remove_contact_sync(), so it has to be the
@@ -1385,18 +1387,23 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         .map(|id| id.as_str())
         .or(card.uid.as_deref())
     {
-        properties.push(Property::new("UID", uid));
+        entries.push(VCardEntry::new(VCardProperty::Uid).with_value(uid.to_owned()));
     }
     if let Some(uid) = &card.uid {
-        properties.push(Property::new(X_JMAP_UID, uid));
+        entries.push(
+            VCardEntry::new(VCardProperty::Other(X_JMAP_UID.to_owned())).with_value(uid.clone()),
+        );
     }
 
     if let Some(name) = &card.name {
         if let Some(full) = name.full.clone().or_else(|| derive_full(name)) {
-            properties.push(Property::new("FN", &full));
+            entries.push(VCardEntry::new(VCardProperty::Fn).with_value(full));
         }
         if let Some(fields) = name_fields(name) {
-            properties.push(Property::structured("N", fields));
+            entries.push(
+                VCardEntry::new(VCardProperty::N)
+                    .with_values(fields.into_iter().map(VCardValue::Text).collect()),
+            );
         }
     }
 
@@ -1407,22 +1414,39 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         if !states_nickname(nickname) {
             continue;
         }
-        properties.push(Property::new("NICKNAME", &nickname.name).with_param(X_JMAP_KEY, key));
+        entries.push(
+            VCardEntry::new(VCardProperty::Nickname)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_value(nickname.name.clone()),
+        );
     }
 
     for (key, email) in card.emails.iter().flatten() {
         if !states_email(email) {
             continue;
         }
-        let mut types = type_names(&CONTEXTS, email.contexts.as_ref());
+        let mut params = vec![VCardParameter::new(
+            VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+            VCardParameterValue::Text(key.clone()),
+        )];
+        for type_name in type_names(&CONTEXTS, email.contexts.as_ref()) {
+            params.push(VCardParameter::typ(VCardParameterValue::Text(
+                type_name.to_owned(),
+            )));
+        }
         if email.pref.is_some() {
             // vCard 3.0 has no ranking, only a preferred flag.
-            types.push("PREF");
+            params.push(VCardParameter::typ(VCardParameterValue::Text(
+                "PREF".to_owned(),
+            )));
         }
-        properties.push(
-            Property::new("EMAIL", &email.address)
-                .with_param(X_JMAP_KEY, key)
-                .with_params("TYPE", types),
+        entries.push(
+            VCardEntry::new(VCardProperty::Email)
+                .with_params(params)
+                .with_value(email.address.clone()),
         );
     }
 
@@ -1430,37 +1454,64 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         if !states_phone(phone) {
             continue;
         }
-        let mut types: Vec<&str> = context_slot(phone.contexts.as_ref()).into_iter().collect();
-        types.extend(feature_slot(phone.features.as_ref()));
-        if phone.pref.is_some() {
-            types.push("PREF");
+        let mut params = vec![VCardParameter::new(
+            VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+            VCardParameterValue::Text(key.clone()),
+        )];
+        if let Some(type_name) = context_slot(phone.contexts.as_ref()) {
+            params.push(VCardParameter::typ(VCardParameterValue::Text(
+                type_name.to_owned(),
+            )));
         }
-        properties.push(
-            Property::new("TEL", &phone.number)
-                .with_param(X_JMAP_KEY, key)
-                .with_params("TYPE", types),
+        if let Some(type_name) = feature_slot(phone.features.as_ref()) {
+            params.push(VCardParameter::typ(VCardParameterValue::Text(
+                type_name.to_owned(),
+            )));
+        }
+        if phone.pref.is_some() {
+            params.push(VCardParameter::typ(VCardParameterValue::Text(
+                "PREF".to_owned(),
+            )));
+        }
+        entries.push(
+            VCardEntry::new(VCardProperty::Tel)
+                .with_params(params)
+                .with_value(phone.number.clone()),
         );
     }
 
     for (key, address) in card.addresses.iter().flatten() {
-        let types: Vec<&str> = context_slot(address.contexts.as_ref())
-            .into_iter()
-            .collect();
+        let mut type_params = Vec::new();
+        if let Some(slot) = context_slot(address.contexts.as_ref()) {
+            type_params.push(VCardParameter::typ(VCardParameterValue::Text(
+                slot.to_owned(),
+            )));
+        }
         if let Some(fields) = address_fields(address) {
-            properties.push(
-                Property::structured("ADR", fields)
-                    .with_param(X_JMAP_KEY, key)
-                    .with_params("TYPE", types.clone()),
+            let mut params = vec![VCardParameter::new(
+                VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                VCardParameterValue::Text(key.clone()),
+            )];
+            params.extend(type_params.clone());
+            entries.push(
+                VCardEntry::new(VCardProperty::Adr)
+                    .with_params(params)
+                    .with_values(fields.into_iter().map(VCardValue::Text).collect()),
             );
         }
         // The same address written out for an envelope, on the line RFC 2426
         // §3.2.2 gives it — directly after its own `ADR`, and on its own when
         // the components are not known and there is no `ADR` to follow.
         if let Some(full) = address_label(address) {
-            properties.push(
-                Property::new("LABEL", full)
-                    .with_param(X_JMAP_KEY, key)
-                    .with_params("TYPE", types),
+            let mut params = vec![VCardParameter::new(
+                VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                VCardParameterValue::Text(key.clone()),
+            )];
+            params.extend(type_params);
+            entries.push(
+                VCardEntry::new(VCardProperty::Other("LABEL".to_owned()))
+                    .with_params(params)
+                    .with_value(full.to_owned()),
             );
         }
     }
@@ -1469,7 +1520,14 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         let Some(components) = organization_components(organization) else {
             continue;
         };
-        properties.push(Property::structured("ORG", components).with_param(X_JMAP_KEY, key));
+        entries.push(
+            VCardEntry::new(VCardProperty::Org)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_values(components.into_iter().map(VCardValue::Text).collect()),
+        );
     }
 
     for (key, title) in card.titles.iter().flatten() {
@@ -1482,21 +1540,47 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         else {
             continue;
         };
-        properties.push(Property::new(name, &title.name).with_param(X_JMAP_KEY, key));
+        let prop = if *name == "TITLE" {
+            VCardProperty::Title
+        } else {
+            VCardProperty::Role
+        };
+        entries.push(
+            VCardEntry::new(prop)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_value(title.name.clone()),
+        );
     }
 
     for (key, note) in card.notes.iter().flatten() {
         if !states_note(note) {
             continue;
         }
-        properties.push(Property::new("NOTE", &note.note).with_param(X_JMAP_KEY, key));
+        entries.push(
+            VCardEntry::new(VCardProperty::Note)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_value(note.note.clone()),
+        );
     }
 
     for (key, link) in card.links.iter().flatten() {
         if !states_link(link) {
             continue;
         }
-        properties.push(Property::new("URL", &link.uri).with_param(X_JMAP_KEY, key));
+        entries.push(
+            VCardEntry::new(VCardProperty::Url)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_value(link.uri.clone()),
+        );
     }
 
     // The contact's own calendar and the free/busy data drawn from it, each on
@@ -1509,7 +1593,19 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         if calendar.uri.is_empty() {
             continue;
         }
-        properties.push(Property::new(name, &calendar.uri).with_param(X_JMAP_KEY, key));
+        let prop = if name == "CALURI" {
+            VCardProperty::Caluri
+        } else {
+            VCardProperty::Fburl
+        };
+        entries.push(
+            VCardEntry::new(prop)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_value(calendar.uri.clone()),
+        );
     }
 
     // The picture the card carries, on the line Evolution shows as the
@@ -1519,19 +1615,45 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     // are measured against libebook-contacts 3.52; see [`photo`] for the
     // entries that get no line at all.
     for (key, media) in card.media.iter().flatten() {
-        let property = match photo(media) {
+        match photo(media) {
             None => continue,
-            Some(Photo::Inline { subtype, base64 }) => Property::new("PHOTO", &base64)
-                .with_param(X_JMAP_KEY, key)
-                .with_params("TYPE", subtype)
-                .with_param("ENCODING", "b"),
+            Some(Photo::Inline { subtype, base64 }) => {
+                let mut params = vec![VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                )];
+                if let Some(subtype) = subtype {
+                    params.push(VCardParameter::typ(VCardParameterValue::Text(
+                        subtype.to_owned(),
+                    )));
+                }
+                params.push(VCardParameter::new(
+                    VCardParameterName::Other("ENCODING".to_owned()),
+                    VCardParameterValue::Text("b".to_owned()),
+                ));
+                entries.push(
+                    VCardEntry::new(VCardProperty::Photo)
+                        .with_params(params)
+                        .with_value(base64),
+                );
+            }
             // Without `VALUE=uri` EDS reaches no field at all, so the user is
             // shown no picture rather than one fetched from the URI.
-            Some(Photo::Uri(uri)) => Property::new("PHOTO", uri)
-                .with_param(X_JMAP_KEY, key)
-                .with_param("VALUE", "uri"),
-        };
-        properties.push(property);
+            Some(Photo::Uri(uri)) => {
+                entries.push(
+                    VCardEntry::new(VCardProperty::Photo)
+                        .with_param(VCardParameter::new(
+                            VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                            VCardParameterValue::Text(key.clone()),
+                        ))
+                        .with_param(VCardParameter::new(
+                            VCardParameterName::Value,
+                            VCardParameterValue::Text("uri".to_owned()),
+                        ))
+                        .with_value(uri.to_owned()),
+                );
+            }
+        }
     }
 
     // One line per service, on the property EDS keeps that service's handles
@@ -1541,10 +1663,16 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         let Some((property, handle)) = drawn_service(service) else {
             continue;
         };
-        properties.push(
-            Property::new(property, handle)
-                .with_param(X_JMAP_KEY, key)
-                .with_param("TYPE", service_slot(service)),
+        entries.push(
+            VCardEntry::new(VCardProperty::Other(property.to_owned()))
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_param(VCardParameter::typ(VCardParameterValue::Text(
+                    service_slot(service).to_owned(),
+                )))
+                .with_value(handle.to_owned()),
         );
     }
 
@@ -1555,7 +1683,19 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         ) else {
             continue;
         };
-        properties.push(Property::new(name, &date).with_param(X_JMAP_KEY, key));
+        let prop = if name == "BDAY" {
+            VCardProperty::Bday
+        } else {
+            VCardProperty::Other(name.to_owned())
+        };
+        entries.push(
+            VCardEntry::new(prop)
+                .with_param(VCardParameter::new(
+                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                    VCardParameterValue::Text(key.clone()),
+                ))
+                .with_value(date),
+        );
     }
 
     // The spouse, on the line EDS keeps that field on — and with no key on it,
@@ -1568,7 +1708,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         if !states_spouse(key, relation) {
             continue;
         }
-        properties.push(Property::new(X_EVOLUTION_SPOUSE, key));
+        entries.push(
+            VCardEntry::new(VCardProperty::Other(X_EVOLUTION_SPOUSE.to_owned()))
+                .with_value(key.clone()),
+        );
     }
 
     // The whole set on one line, which is all EDS reads, and with no key on it:
@@ -1577,10 +1720,23 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     // exactly as for a card with no tags.
     let tags = drawn_tags(card);
     if !tags.is_empty() {
-        properties.push(Property::list(CATEGORIES, tags));
+        entries.push(
+            VCardEntry::new(VCardProperty::Categories).with_values(
+                tags.into_iter()
+                    .map(|tag| VCardValue::Text(tag.to_owned()))
+                    .collect(),
+            ),
+        );
     }
 
-    syntax::write(&properties)
+    let mut out = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\n");
+    for entry in &entries {
+        entry
+            .write_to(&mut out, true)
+            .expect("writing to String never fails");
+    }
+    out.push_str("END:VCARD\r\n");
+    out
 }
 
 /// Read a vCard 3.0 string into a contact card.

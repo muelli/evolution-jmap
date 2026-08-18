@@ -21,7 +21,6 @@
 
 pub mod contact;
 pub mod error;
-pub mod syntax;
 
 pub use contact::{
     address_label, anniversary_date, card_to_vcard, maps_context, maps_phone_feature,
