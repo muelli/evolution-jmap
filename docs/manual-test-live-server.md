@@ -12,10 +12,10 @@ Almost all of it is read-only — session discovery, `Core/echo`, or listing
 what already exists. Four tests write: `mailbox_create_rename_then_destroy_
 round_trips_through_the_real_api` (`Mailbox/set` create, then a rename via
 `mailbox_update`, then destroy),
-`contact_card_create_then_destroy_round_trips_through_the_real_api`
-(`ContactCard/set`),
+`contact_card_create_update_then_destroy_round_trips_through_the_real_api`
+(`ContactCard/set` create, then a rename via `contact_update`, then destroy),
 `calendar_event_create_then_destroy_round_trips_through_the_real_api`
-(`CalendarEvent/set`), each create-then-destroy, and
+(`CalendarEvent/set` create-then-destroy), and
 `email_import_round_trips_through_the_real_api` (`Email/import` via
 `upload_blob` then `download_blob`). All four run only against a separate,
 dedicated throwaway account (see step 3) so they can never touch whatever
@@ -134,18 +134,19 @@ in the invocation, worth failing loudly on.
   read what a real server actually sends, not just `jmap-mockd`'s fixtures —
   is the claim. An account with no such capability is reported and skipped.
 - `mailbox_create_rename_then_destroy_round_trips_through_the_real_api`,
-  `contact_card_create_then_destroy_round_trips_through_the_real_api`, and
-  `calendar_event_create_then_destroy_round_trips_through_the_real_api` —
+  `contact_card_create_update_then_destroy_round_trips_through_the_real_api`,
+  and `calendar_event_create_then_destroy_round_trips_through_the_real_api` —
   each creates a record (`Mailbox`/`ContactCard`/`CalendarEvent`), confirms
   it via the matching `/get`, then destroys it — the write path, not just
   reads, against a real server's own id assignment and state changes. The
-  mailbox test additionally renames the folder via `mailbox_update`'s
-  `PatchObject` (what a real folder rename in Evolution sends) and confirms
-  the new name via another `Mailbox/get` before destroying it. The
-  contact/event tests create into the account's default address book/
-  calendar rather than one of their own making, relying on Stalwart
-  auto-provisioning both per account. Skipped, not failed, when
-  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
+  mailbox and contact tests additionally update the record — a folder rename
+  via `mailbox_update`'s `PatchObject`, a name change via `contact_update`'s
+  — each confirmed via another `/get` before destroying it (what a real
+  folder rename or contact edit in Evolution sends). The contact/event tests
+  create into the account's default address book/calendar rather than one of
+  their own making, relying on Stalwart auto-provisioning both per account.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3)
+  are not set.
 - `email_import_round_trips_through_the_real_api` — the mail write path's
   other shape: uploads a small message's bytes via `Client::upload_blob`,
   imports it into the account's Inbox via `Email/import`, confirms it via
