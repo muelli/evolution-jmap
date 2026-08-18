@@ -33161,3 +33161,27 @@ Kept short, checked directly rather than trusted:
 Twenty-eighth independent conclusion: nothing unblocked. As before, a
 maintainer call on BACKLOG (B′) is the only thing that would open new
 autonomous work. No code change this session.
+
+## 2026-08-18 (383rd session) — twenty-ninth re-verification, nothing unblocked
+
+Kept short, checked directly rather than trusted:
+
+- `git fetch origin`: `HEAD` (`2fbfafa`) matches `origin/master`, tree
+  clean, no new commits since the 382nd session's push.
+- `docs/MILESTONES.md`: M1–M10 all COMPLETE, unchanged. `~/.night-shift-
+  escalate` absent.
+- Actions API (`muelli/evolution-jmap`): newest run still `32064810881`
+  (`00271f9`, success), five most recent runs all `success`/`cancelled`
+  (the cancelled ones are superseded-by-newer-push dupes, not failures).
+  Issues (state=all): still only the two closed FFI-audit items, nothing
+  new opened.
+- `docs/BACKLOG.md` re-read in full: unchanged — (B′) (jmap-vcard IM-field/
+  ANNIVERSARY/name-sort mapping choice) and (C) (clippy blocked on a
+  third-party bindgen warning on the 3.60 leg) remain the only open items,
+  both explicit maintainer-call/low-leverage under current priority.
+- `df -h /`: unchanged, 3.0G available (95% full).
+
+Twenty-ninth independent conclusion: nothing unblocked. Same two items
+flagged since the 374th session — a maintainer call on BACKLOG (B′), and
+(low-leverage) (C) — are what would open further autonomous work; neither
+is this session's to take. No code change this session.
