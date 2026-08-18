@@ -29,7 +29,7 @@ pub enum ICalError {
     /// The tree a parse returns is dropped recursively, so a document deeper
     /// than the stack can hold would abort the process rather than fail.
     ///
-    /// [`MAX_DEPTH`]: crate::syntax::MAX_DEPTH
+    /// [`MAX_DEPTH`]: crate::event::MAX_DEPTH
     TooDeep(String),
     /// A well-formed calendar that holds no `VEVENT` — a `VTODO` or a bare
     /// `VTIMEZONE`. There is no event to hand back and nothing to store.
@@ -48,7 +48,7 @@ impl std::fmt::Display for ICalError {
             Self::TooDeep(name) => write!(
                 f,
                 "iCalendar components nested more than {} deep at BEGIN:{name}",
-                crate::syntax::MAX_DEPTH
+                crate::event::MAX_DEPTH
             ),
             Self::NoEvent => f.write_str("iCalendar object contains no VEVENT"),
         }
