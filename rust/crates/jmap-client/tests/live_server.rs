@@ -256,7 +256,11 @@ fn connect_for_write() -> Option<Client> {
 /// invention; a real server's tokens, pagination (`hasMoreChanges`), and
 /// created/updated/destroyed classification are Stalwart's, not fixed by
 /// this workspace, so this is the first place they are exercised end to
-/// end.
+/// end. Additionally checks the create-then-rename window as a whole,
+/// since the state captured before either: RFC 8620 §5.2's fold rule says
+/// an object created and updated within one `/changes` window is reported
+/// as created only, and this is the first time that rule is checked
+/// against a real server rather than just the mock.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
@@ -333,6 +337,27 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
     assert!(
         changes_after_rename.updated.contains(&id),
         "Mailbox/changes since before the rename does not list the mailbox as updated"
+    );
+
+    // RFC 8620 §5.2's fold rule: an object created and then updated inside
+    // one `/changes` window is reported as created, not also updated,
+    // because the caller never saw the pre-update state. `ChangeSet::
+    // classify` implements this client-side and is already mock-tested
+    // (`jmap-client/tests/changes.rs`); this is the first time it is
+    // checked against a real server's own `/changes`, which is free to
+    // classify the single-response case however it likes as long as the
+    // fold comes out right. `state_before_create` spans both the create
+    // and the rename above.
+    let changes_since_before_create = client
+        .all_changes(&account_id, "Mailbox", &state_before_create)
+        .expect("Mailbox/changes failed against the real server");
+    assert!(
+        changes_since_before_create.created.contains(&id),
+        "Mailbox/changes spanning both the create and the rename does not list the mailbox as created"
+    );
+    assert!(
+        !changes_since_before_create.updated.contains(&id),
+        "a mailbox created and renamed inside one /changes window should classify as created, not updated"
     );
 
     let state_before_destroy = client.mailbox_get(&account_id).unwrap().state;

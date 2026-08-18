@@ -158,6 +158,12 @@ in the invocation, worth failing loudly on.
   of them, for `Mailbox/changes`, `ContactCard/changes`, and
   `CalendarEvent/changes`. Skipped, not failed, when
   `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
+  The mailbox test additionally checks `all_changes` since the state
+  captured *before the create*, spanning both the create and the rename:
+  RFC 8620 §5.2's fold rule says an object created and updated within one
+  `/changes` window is reported as created only, and this checks that
+  against Stalwart's own `/changes` rather than just the mock (the client
+  itself already folds pages this way via `ChangeSet::classify`).
 - `email_import_update_then_destroy_round_trips_through_the_real_api` — the
   mail write path's other shape: uploads a small message's bytes via
   `Client::upload_blob`, imports it into the account's Inbox via
