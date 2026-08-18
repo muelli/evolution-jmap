@@ -33872,3 +33872,37 @@ other two, need an SMTP-capable deployment to observe delivery and are out
 of scope for a throwaway Stalwart account with no outbound mail path
 configured; not claimed here). Left `agent-livewrite.net`/`agent1` in
 place, same reasoning as the prior two sessions.
+
+## 2026-08-18 (claim) — Claiming a Mailbox/set update (rename) test against the live server
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` still has M1–M10
+all `COMPLETE`, `docs/BACKLOG.md` unchanged (only the parked maintainer-call/
+low-leverage (B') and (C) items), and the last four sessions' write-path
+tests (`Mailbox/set` create+destroy, `ContactCard/set`, `CalendarEvent/set`,
+`Email/import`+`download_blob`) all landed clean against the live Stalwart.
+
+Found one concrete, previously-unnoticed gap while re-reading
+`jmap-client/tests/live_server.rs` rather than trusting its own summary:
+the file's top-level doc comment claims "`Mailbox/set` round-trips (create,
+rename, destroy) are covered against the mock, *and* against a dedicated
+throwaway account here" — but the actual test
+(`mailbox_create_then_destroy_round_trips_through_the_real_api`) only
+exercises create and destroy; there is no rename (`mailbox_update`) call
+anywhere in the file. So `Client::mailbox_update` — used by `jmap-mail`'s
+Camel port whenever a user renames a folder — has zero live-server
+coverage, and the doc comment overstates what is actually tested. Same is
+true of `contact_update`/`event_update`/`email_update` (mark-as-read/
+flags), none of which appear in this file either, but `mailbox_update` is
+the one the file's own comment already claims to cover, making it the
+clearest, most self-contained next increment rather than a new category of
+work. This is real-server-readiness work per ROADMAP priority 2 (verifying
+`jmap-client`'s existing write surface against a real deployment's
+semantics), not backend polish — `jmap-mail`'s use of `mailbox_update` is
+already fully covered against the mock.
+
+Claiming: add `mailbox_update_round_trips_through_the_real_api` to
+`jmap-client/tests/live_server.rs` — creates a mailbox (as the existing
+test does), renames it via `mailbox_update`'s JSON Patch, confirms the new
+name via `Mailbox/get`, then destroys it. Gated behind the existing
+`connect_for_write()`. Will also fix the doc comment to state accurately
+what is and is not covered once this lands.
