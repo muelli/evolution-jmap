@@ -33788,3 +33788,42 @@ set` as verified real-server-readiness surface alongside mail. Left the
 prior session did: `stw seed` is an idempotent upsert, so a future session
 that needs it again can just reseed rather than finding it permanently
 unusable. New password kept only in this session's `/tmp`, not committed.
+
+## 2026-08-18 (claim) — Claiming an Email/import write-path test against the live server
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` has all of
+M1–M10 `COMPLETE`, `docs/BACKLOG.md` unchanged (only the parked
+maintainer-call/low-leverage items), and the maintainer's 2026-08-17
+firewall note ("do NOT attempt to reach Stalwart from the runner") is
+superseded by this session's environment brief, which explicitly grants
+VPC access — consistent with the last two sessions' live writes against
+it landing clean.
+
+`live_server.rs` now has write-path coverage for `Mailbox/set`,
+`ContactCard/set`, and `CalendarEvent/set`, but `jmap-client::mail` has
+three more write/blob methods with zero live-server coverage:
+`email_import` (the two-step `upload_blob` + `Email/import` path —
+what Evolution's future `append_message_sync` will drive), and
+`download_blob`. Unlike the three existing write tests, this path is a
+different shape entirely — bytes in, bytes (or at least a consistent size)
+out — so it is new coverage, not a fourth copy of the same create/get/
+destroy pattern; a real server's own message-store handling of blob
+upload + import (repairing/re-serializing the message, assigning size)
+is exactly the kind of thing `jmap-mockd`'s fixtures cannot exercise.
+This is real-server-readiness work per ROADMAP priority 2, not backend
+polish: `jmap-mail`'s Camel port already has full mock-tested coverage of
+this path (`tests/mail_import.rs`), so nothing about `jmap-mail` itself is
+in question here.
+
+Claiming: add `email_import_round_trips_through_the_real_api` to
+`jmap-client/tests/live_server.rs`, gated behind the existing
+`connect_for_write()` (the same throwaway `agent-livewrite.net` account
+the other three write tests use) — uploads a small RFC 5322 message,
+imports it into the account's Inbox, confirms it via `Email/get`,
+downloads the blob back and checks it against the size `Email/get`
+reported, then destroys the message. Not asserting the downloaded bytes
+equal the uploaded bytes verbatim: RFC 8621 §4.8 lets a server repair or
+re-serialize an imported message, so a real deployment adding e.g. a
+`Received` header is a legitimate answer, not a bug — the test instead
+checks the downloaded length matches the size `Email/get` itself reported
+and that the unique subject text survived.
