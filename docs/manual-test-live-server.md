@@ -156,8 +156,7 @@ in the invocation, worth failing loudly on.
   that step — exercising this client's incremental-sync state tokens and
   pagination against a real server rather than `jmap-mockd`'s own invention
   of them, for `Mailbox/changes`, `ContactCard/changes`, and
-  `CalendarEvent/changes`. The email test does not yet have this check (a
-  follow-up, not a gap in what already passes). Skipped, not failed, when
+  `CalendarEvent/changes`. Skipped, not failed, when
   `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
 - `email_import_update_then_destroy_round_trips_through_the_real_api` — the
   mail write path's other shape: uploads a small message's bytes via
@@ -171,7 +170,12 @@ in the invocation, worth failing loudly on.
   uploaded bytes verbatim — RFC 8621 §4.8 allows a server to repair or
   re-serialize an imported message — only that the downloaded length
   matches the `size` `Email/get` itself reports and that the message's
-  subject survived. Skipped under the same condition as the other three.
+  subject survived. Also checks `Client::all_changes` for `Email` after each
+  of import/update/destroy, same as the other three tests — via
+  `Client::email_state` rather than a state field on `email_get`'s own
+  response, since `email_get` splits large id lists across several
+  `Email/get` calls and keeps only their `list`s, not a `state`. Skipped
+  under the same condition as the other three.
 
 Anything short of that is a finding, not a nuisance — write it down in
 `docs/NIGHT-LOG.md`.
