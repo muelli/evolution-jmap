@@ -94,12 +94,25 @@ jobs:
           name: deb
           path: deb
 
+      # Build-time only, never a runtime/`.deb` dependency. Pinned exactly, like
+      # the cargo-deny bootstrap in ci/checks.sh — confirm the current release on
+      # crates.io and bump this deliberately.
+      - name: Install the SBOM generator (pinned)
+        run: cargo install --locked --version 0.5.9 cargo-cyclonedx
+
       - name: Collect artifacts and checksums
         run: |
           mkdir -p dist
           cp rust/target/release/jmap-mockd dist/
           cp "evolution-jmap-${GITHUB_REF_NAME}.tar.xz" dist/
           cp deb/*.deb dist/
+          # CycloneDX SBOM: the Rust crate graph plus the .deb's dpkg-shlibdeps
+          # Depends, dated by SOURCE_DATE_EPOCH so re-running a tag is
+          # byte-identical. Written into dist/, so the sha256sum below, the
+          # attest step (dist/*) and the release step (dist/*) all cover it
+          # unchanged — attested set stays == published set.
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          ci/sbom.sh deb/*.deb "dist/evolution-jmap-${GITHUB_REF_NAME}.cdx.json"
           (cd dist && sha256sum * > SHA256SUMS)
           cat dist/SHA256SUMS
 
