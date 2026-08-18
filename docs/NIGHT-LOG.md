@@ -34227,3 +34227,24 @@ same `all_changes` check to the contact/event/email write tests, or verify
 `ContactCard`/`CalendarEvent`/`Mailbox` changes tolerate an update that
 lands inside the same page as the create (both flags true on one id) —
 parking rather than doing both in one increment.
+
+## 2026-08-18 (claim) — Claiming a ContactCard/changes live-server test
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` still has M1–M10
+all `COMPLETE`, `docs/BACKLOG.md` unchanged. The prior session closed
+`Mailbox/changes` coverage and named two follow-ups without doing both in
+one increment: extend the same `all_changes` check to the contact/event/
+email write tests, or verify same-page create+update classification. Of
+the two, extending `all_changes` coverage to another capability is the
+smaller, better-understood increment (same shape just proven against
+`Mailbox`), so it goes first.
+
+Claiming: extend
+`contact_card_create_update_then_destroy_round_trips_through_the_real_api`
+in `jmap-client/tests/live_server.rs` — capture `ContactCard/get`'s `state`
+before each mutation (create/update/destroy) and assert
+`Client::all_changes(&account_id, "ContactCard", ...)` since that state
+reports the card's id in the matching bucket after each one, mirroring the
+mailbox test exactly. Same throwaway account and gating. `CalendarEvent`/
+`Email` `all_changes` coverage and the same-page classification question
+stay open for a future session.
