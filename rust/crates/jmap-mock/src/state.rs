@@ -104,6 +104,16 @@ pub struct ServerState {
     /// unauthenticated, so the failure this exists to catch is "no primary
     /// account", not a transport error.
     pub session_via_redirect: bool,
+    /// State the session document's `apiUrl`/`downloadUrl`/`uploadUrl`/
+    /// `eventSourceUrl` on this origin instead of the one this server is
+    /// actually reachable on, as
+    /// [`crate::MockServerBuilder::advertise_origin`] asked — a real
+    /// deployment (Stalwart among them) can advertise a configured public
+    /// hostname/scheme that differs from the address a client actually
+    /// reached it through (a reverse proxy, NAT boundary, or a TLS listener
+    /// nothing routes to). `None` advertises the real origin, matching every
+    /// other test.
+    pub advertise_origin: Option<String>,
 }
 
 impl ServerState {
@@ -122,6 +132,7 @@ impl ServerState {
             size_request: Some(crate::DEFAULT_SIZE_REQUEST),
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
+            advertise_origin: None,
         }
     }
 
