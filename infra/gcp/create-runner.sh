@@ -12,7 +12,7 @@
 #
 # Shutdown policy: an idle watchdog powers the VM off once there has been
 # no CI job, login session, or actively-running agent session for
-# IDLE_MINUTES (default 15; boot counts as activity, so a freshly started
+# IDLE_MINUTES (default 5; boot counts as activity, so a freshly started
 # VM gets a grace period to begin work). Crucially the session signal is
 # the running claude process, not the driver loop — a driver spinning over
 # an empty backlog must NOT keep the VM alive. A 24h maximum-uptime guard
@@ -29,7 +29,7 @@ NAME=${NAME:-gha-runner-1}
 ZONE=${ZONE:-europe-west1-b}
 MACHINE=${MACHINE:-c2d-standard-8}
 REPO=${REPO:-muelli/evolution-jmap}
-IDLE_MINUTES=${IDLE_MINUTES:-15}
+IDLE_MINUTES=${IDLE_MINUTES:-5}
 # 24.04 matches the hosted runners, the CI container, and the Evolution
 # 3.52 target. Override (e.g. IMAGE_FAMILY=ubuntu-2604-lts-amd64) to get a
 # newer-EDS build target once the backends exist.
@@ -67,9 +67,10 @@ if [ "\$(awk '{printf "%d", \$1}' /proc/uptime)" -gt 86400 ]; then
     logger "idle-watchdog: 24h uptime cap reached, shutting down (self-heal will restart)"
     /sbin/shutdown -h now
 fi
-# Keep IDLE_MINUTES comfortably above the driver's between-iteration sleep
-# (10 min) so a working shift is never cut off, but short enough that a
-# drained backlog naps promptly — each idle hour then costs ~IDLE_MINUTES
+# IDLE_MINUTES must stay ABOVE the driver's longest between-iteration sleep
+# (now 4 min) so a working shift is never cut off mid-loop, but short enough
+# that once the driver exits or pauses (drained backlog, usage limit, or
+# "blocked") the VM naps promptly — each idle hour then costs ~IDLE_MINUTES
 # of uptime, not a full 60.
 if [ \$(( \$(date +%s) - \$(stat -c %Y "\$STAMP") )) -gt \$(( ${IDLE_MINUTES} * 60 )) ]; then
     logger "idle-watchdog: idle ${IDLE_MINUTES} minutes (no session, login, or CI job), shutting down"

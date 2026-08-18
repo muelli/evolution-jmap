@@ -6,6 +6,8 @@ Task: read docs/ROADMAP.md, docs/NIGHT-LOG.md (if present), git log --oneline -1
 2. Claiming: Select ONE unblocked task. Before writing code, append a lock entry to `docs/NIGHT-LOG.md` (e.g., "Claiming M3 increment: [description]") and `git push` it. If the push fails, another agent claimed it; pull, rebase, and pick a different unblocked task. **Deadlock handling**: If a task was claimed more than 24 hours ago (check git log for the lock commit timestamp) and shows no subsequent progress, consider the lock expired and claim it.
 3. Execution: Implement ONE focused increment (~30-90 min of work): TDD, red test first, then green.
 
+If NO unblocked task exists — every incomplete milestone is blocked on a human decision, a real server, CI you cannot trigger, etc. — do NOT write another pointer/no-op NIGHT-LOG entry and do NOT re-survey ground earlier sessions already mapped. Print the single line `NIGHT-SHIFT: BLOCKED — <one-line reason>` and end the session immediately, committing nothing. The driver pauses the shift after 3 consecutive such reports (until a human unblocks work); re-confirming the same block over and over just burns the shared quota.
+
 Hard rules (ROADMAP "Rules for autonomous work sessions" applies in full):
 - Before every push: cargo test green, cargo clippy --all-targets -- -D warnings clean, reuse lint green (SPDX GPL-3.0-or-later headers on new files).
 - Small commits, imperative subject, NO Co-Authored-By trailer. Plain git push, never force, never rewrite history.

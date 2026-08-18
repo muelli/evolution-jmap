@@ -40,7 +40,8 @@ STOP_FILE="$HOME/.night-shift-stop"        # one-shot: stop cleanly once, then c
 PAUSE_FILE="$HOME/.night-shift-paused"     # durable: stay stopped across reboots until removed
 ESCALATE_FILE="$HOME/.night-shift-escalate"  # one-shot: model to use for the NEXT iteration only
 DEFAULT_MODEL="claude-sonnet-5"            # the shared subscription's workhorse; escalate by exception
-DRAIN_LIMIT=3          # consecutive no-op iterations that mean "backlog drained"
+DRAIN_LIMIT=3          # consecutive short/no-op iterations (crash/transient) → exit
+BLOCKED_LIMIT=3        # consecutive "agent reported BLOCKED" iterations → durable pause
 UNKNOWN_RESET_BACKOFF=21600   # 6h, if a limit is seen but its reset can't be parsed
 
 # Only these models may be escalated to — a typo or junk in the escalate
@@ -84,6 +85,7 @@ fi
 
 log "=== night shift starting ==="
 consecutive_noop=0
+consecutive_blocked=0
 while true; do
     # Both flags are checked only between iterations, never mid-session, so a
     # running increment always finishes and pushes before the driver exits —
@@ -134,6 +136,11 @@ while true; do
     [ "$escalated" = 1 ] && rm -f "$ESCALATE_FILE"
 
     reset_epoch=$(limit_reset_epoch "$out")
+    # The prompt tells the agent to print exactly this line (and make no pointer
+    # commit) when there is no unblocked work to progress. It is the reliable
+    # "blocked" signal — unlike duration, since a blocked session that re-surveys
+    # and writes prose runs well over 120s and would never trip the drain path.
+    blocked=0; grep -q "NIGHT-SHIFT: BLOCKED" "$out" && blocked=1
     rm -f "$out"
     if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$(date +%s)" ]; then
         echo "$reset_epoch" > "$LIMIT_FILE"
@@ -141,17 +148,39 @@ while true; do
         exit 0
     fi
 
+    # Every sleep below is kept UNDER the VM's idle-watchdog timeout (5 min), so a
+    # working loop keeps the VM awake but the moment the driver stops invoking
+    # Claude — by exiting (drain/limit/stop) or pausing (blocked) — the VM naps.
+
+    # Blocked: no unblocked work. Do not keep waking hourly to re-confirm it (that
+    # burns the shared quota and never naps). After BLOCKED_LIMIT in a row, set
+    # the DURABLE pause so it stays down across reboots until a human unblocks
+    # something and removes the sentinel.
+    if [ "$blocked" = 1 ]; then
+        consecutive_blocked=$(( consecutive_blocked + 1 ))
+        log "agent reported BLOCKED ${consecutive_blocked}/${BLOCKED_LIMIT}"
+        if [ "$consecutive_blocked" -ge "$BLOCKED_LIMIT" ]; then
+            touch "$PAUSE_FILE"
+            log "blocked ${BLOCKED_LIMIT}x — pausing (touched $PAUSE_FILE). Unblock work, then rm it and relaunch (or wait for a reboot)."
+            exit 0
+        fi
+        sleep 120
+        continue
+    fi
+    consecutive_blocked=0
+
     if [ "$duration" -lt 120 ]; then
-        # A fast exit with no limit message is a no-op or transient error.
+        # Fast exit, no BLOCKED marker, no limit → a crash or transient error.
+        # A few in a row → exit; the hourly reboot retries from a clean slate.
         consecutive_noop=$(( consecutive_noop + 1 ))
         log "short iteration ${consecutive_noop}/${DRAIN_LIMIT}"
         if [ "$consecutive_noop" -ge "$DRAIN_LIMIT" ]; then
-            log "backlog appears drained - exiting; hourly reboot re-checks for new work"
+            log "drained or agent crashing - exiting; hourly reboot re-checks for new work"
             exit 0
         fi
-        sleep 300
+        sleep 120
     else
         consecutive_noop=0
-        sleep 600
+        sleep 240
     fi
 done
