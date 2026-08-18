@@ -7044,9 +7044,9 @@ fn the_people_invited_to_an_event_are_written_as_attendees() {
     assert_eq!(
         attendees,
         [
-            "ATTENDEE;CN=Bob Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:\
+            "ATTENDEE;CN=\"Bob Example\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:\
              mailto:bob@example.com",
-            "ATTENDEE;CN=Carol Example;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION;\
+            "ATTENDEE;CN=\"Carol Example\";ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION;\
              RSVP=TRUE:mailto:carol@example.com",
         ],
         "{ics}"
@@ -7070,7 +7070,7 @@ fn the_participant_that_owns_the_event_is_its_organizer() {
 
     assert_eq!(
         content_line(&ics, "ORGANIZER"),
-        "ORGANIZER;CN=Alice Example:mailto:alice@example.com",
+        "ORGANIZER;CN=\"Alice Example\":mailto:alice@example.com",
         "{ics}"
     );
     assert!(
@@ -7081,7 +7081,7 @@ fn the_participant_that_owns_the_event_is_its_organizer() {
     );
     assert_eq!(
         content_line(&ics, "ATTENDEE"),
-        "ATTENDEE;CN=Bob Example;ROLE=REQ-PARTICIPANT:mailto:bob@example.com",
+        "ATTENDEE;CN=\"Bob Example\";ROLE=REQ-PARTICIPANT:mailto:bob@example.com",
         "{ics}"
     );
 }
@@ -7100,12 +7100,12 @@ fn an_owner_who_is_also_attending_gets_both_lines() {
 
     assert_eq!(
         content_line(&ics, "ORGANIZER"),
-        "ORGANIZER;CN=Alice Example:mailto:alice@example.com",
+        "ORGANIZER;CN=\"Alice Example\":mailto:alice@example.com",
         "{ics}"
     );
     assert_eq!(
         content_line(&ics, "ATTENDEE"),
-        "ATTENDEE;CN=Alice Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:\
+        "ATTENDEE;CN=\"Alice Example\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:\
          mailto:alice@example.com",
         "{ics}"
     );
@@ -7128,7 +7128,7 @@ fn a_room_the_event_is_booked_in_is_written_as_one() {
 
         assert_eq!(
             content_line(&ics, "ATTENDEE"),
-            format!("ATTENDEE;CN=Room 1;CUTYPE={cutype}:mailto:room-1@example.com"),
+            format!("ATTENDEE;CN=\"Room 1\";CUTYPE={cutype}:mailto:room-1@example.com"),
             "{ics}"
         );
     }
@@ -7183,7 +7183,7 @@ fn a_status_role_or_kind_outside_the_shared_vocabulary_is_left_off() {
 
     assert_eq!(
         content_line(&ics, "ATTENDEE"),
-        "ATTENDEE;CN=Bob Example:mailto:bob@example.com",
+        "ATTENDEE;CN=\"Bob Example\":mailto:bob@example.com",
         "{ics}"
     );
 }
@@ -7223,7 +7223,7 @@ fn an_edited_instance_carries_the_guest_list_of_the_series() {
     assert_eq!(vevents(&ics), 2, "{ics}");
     assert_eq!(
         content_line(vevent(&ics, 1), "ATTENDEE"),
-        "ATTENDEE;CN=Bob Example;ROLE=REQ-PARTICIPANT:mailto:bob@example.com",
+        "ATTENDEE;CN=\"Bob Example\";ROLE=REQ-PARTICIPANT:mailto:bob@example.com",
         "{ics}"
     );
 }
@@ -7285,7 +7285,7 @@ fn where_an_event_is_joined_online_is_written_as_a_conference() {
     assert_eq!(
         conferences(&ics),
         [
-            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Team room;X-JMAP-KEY=v1:\
+            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=\"Team room\";X-JMAP-KEY=v1:\
              https://meet.example.com/sprint",
             "CONFERENCE;VALUE=URI;FEATURE=PHONE;LABEL=Dial-in;X-JMAP-KEY=v2:tel:+1-555-0100",
         ],
@@ -7333,7 +7333,7 @@ fn a_way_of_joining_outside_the_shared_vocabulary_is_left_off() {
     assert_eq!(
         conferences(&ics),
         [
-            "CONFERENCE;VALUE=URI;FEATURE=SCREEN;LABEL=Team room;X-JMAP-KEY=v1:https://meet.example.com/sprint"
+            "CONFERENCE;VALUE=URI;FEATURE=SCREEN;LABEL=\"Team room\";X-JMAP-KEY=v1:https://meet.example.com/sprint"
         ],
         "{ics}"
     );
@@ -7567,7 +7567,7 @@ fn an_edited_instance_carries_the_conferences_of_the_series() {
     assert_eq!(vevents(&ics), 2, "{ics}");
     assert_eq!(
         conferences(vevent(&ics, 1)),
-        ["CONFERENCE;VALUE=URI;LABEL=Team room;X-JMAP-KEY=v1:https://meet.example.com/sprint"],
+        ["CONFERENCE;VALUE=URI;LABEL=\"Team room\";X-JMAP-KEY=v1:https://meet.example.com/sprint"],
         "{ics}"
     );
 }
@@ -8224,7 +8224,7 @@ fn event_with_chair_and_multiple_participants_emits_accurate_attendees_and_organ
 
     assert_eq!(
         content_line(&ics, "ORGANIZER"),
-        "ORGANIZER;CN=Alice Owner:mailto:alice@example.com",
+        "ORGANIZER;CN=\"Alice Owner\":mailto:alice@example.com",
         "{ics}"
     );
 
@@ -8238,9 +8238,9 @@ fn event_with_chair_and_multiple_participants_emits_accurate_attendees_and_organ
     assert_eq!(
         attendees,
         [
-            "ATTENDEE;CN=Alice Owner;ROLE=CHAIR;PARTSTAT=ACCEPTED:mailto:alice@example.com",
-            "ATTENDEE;CN=Bob Engineer;ROLE=REQ-PARTICIPANT;PARTSTAT=DECLINED:mailto:bob@example.com",
-            "ATTENDEE;CN=Carol Observer;ROLE=NON-PARTICIPANT;PARTSTAT=TENTATIVE:mailto:carol@example.com",
+            "ATTENDEE;CN=\"Alice Owner\";ROLE=CHAIR;PARTSTAT=ACCEPTED:mailto:alice@example.com",
+            "ATTENDEE;CN=\"Bob Engineer\";ROLE=REQ-PARTICIPANT;PARTSTAT=DECLINED:mailto:bob@example.com",
+            "ATTENDEE;CN=\"Carol Observer\";ROLE=NON-PARTICIPANT;PARTSTAT=TENTATIVE:mailto:carol@example.com",
         ],
         "{ics}"
     );
@@ -8788,5 +8788,275 @@ fn reads_an_icalendar_with_mixed_case_properties_and_parameters_and_parses_faith
     assert_eq!(
         alerts["alert-1"]["trigger"]["relativeTo"].as_str(),
         Some("end")
+    );
+}
+
+#[test]
+fn emits_a_comprehensive_icalendar_via_calcard_and_roundtrips() {
+    let mut locations = std::collections::BTreeMap::new();
+    locations.insert(
+        "loc-1".to_owned(),
+        json!({
+            "name": "Berlin Office Room 404"
+        }),
+    );
+
+    let mut virtual_locations = std::collections::BTreeMap::new();
+    virtual_locations.insert(
+        "v1".to_owned(),
+        json!({
+            "uri": "https://conf.example.com/calcard",
+            "name": "Jitsi Room",
+            "features": {
+                "audio": true,
+                "video": true
+            }
+        }),
+    );
+
+    let mut links = std::collections::BTreeMap::new();
+    links.insert(
+        "k1".to_owned(),
+        json!({
+            "href": "https://example.com/plan.pdf",
+            "contentType": "application/pdf",
+            "size": 4096
+        }),
+    );
+    links.insert(
+        "k2".to_owned(),
+        json!({
+            "href": "https://example.com/logo.png",
+            "rel": "icon",
+            "display": "badge",
+            "contentType": "image/png"
+        }),
+    );
+
+    let mut keywords = std::collections::BTreeMap::new();
+    keywords.insert("Migration".to_owned(), Value::Bool(true));
+    keywords.insert("Polish".to_owned(), Value::Bool(true));
+
+    let mut participants = std::collections::BTreeMap::new();
+    participants.insert(
+        "p1".to_owned(),
+        json!({
+            "name": "Organizer",
+            "sendTo": {
+                "imip": "mailto:organizer@example.com"
+            },
+            "roles": {
+                "owner": true,
+                "attendee": true
+            }
+        }),
+    );
+    participants.insert(
+        "p2".to_owned(),
+        json!({
+            "name": "Attendee",
+            "sendTo": {
+                "imip": "mailto:attendee@example.com"
+            },
+            "roles": {
+                "attendee": true
+            },
+            "kind": "individual",
+            "participationStatus": "accepted",
+            "expectReply": true
+        }),
+    );
+
+    let mut alerts = std::collections::BTreeMap::new();
+    alerts.insert(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT10M",
+                "relativeTo": "start"
+            }
+        }),
+    );
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "2026-08-20T14:00:00".to_owned(),
+        json!({
+            "title": "Calcard Retrospective (Adjusted)",
+            "description": "Special agenda."
+        }),
+    );
+
+    let event = CalendarEvent {
+        id: Some("event-calcard-1".into()),
+        uid: Some("urn:uuid:calcard-event-uuid-1".to_owned()),
+        created: Some("2026-08-18T10:00:00Z".to_owned()),
+        updated: Some("2026-08-18T11:00:00Z".to_owned()),
+        title: Some("Calcard Migration All-Hands".to_owned()),
+        description: Some(
+            "Discussing multi-session migration progress,\nsyntax deletion, and gate verification."
+                .to_owned(),
+        ),
+        start: Some("2026-08-18T14:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        status: Some("confirmed".to_owned()),
+        free_busy_status: Some("busy".to_owned()),
+        priority: Some(1),
+        privacy: Some("private".to_owned()),
+        locations: Some(locations),
+        virtual_locations: Some(virtual_locations),
+        links: Some(links),
+        keywords: Some(keywords),
+        participants: Some(participants),
+        alerts: Some(alerts),
+        recurrence_rules: Some(vec![RecurrenceRule {
+            frequency: "weekly".to_owned(),
+            interval: Some(2),
+            by_day: Some(vec![NDay::new("tu"), NDay::new("th")]),
+            count: Some(10),
+            ..RecurrenceRule::default()
+        }]),
+        recurrence_overrides: Some(overrides),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&event);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+
+    assert!(
+        unfolded.starts_with("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:"),
+        "{ics}"
+    );
+    assert!(unfolded.contains("UID:event-calcard-1\r\n"), "{ics}");
+    assert!(
+        unfolded.contains("X-JMAP-UID:urn:uuid:calcard-event-uuid-1\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("SUMMARY:Calcard Migration All-Hands\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("DTSTART;TZID=Europe/Berlin:20260818T140000\r\n"),
+        "{ics}"
+    );
+    assert!(unfolded.contains("DURATION:PT1H\r\n"), "{ics}");
+    assert!(unfolded.contains("STATUS:CONFIRMED\r\n"), "{ics}");
+    assert!(unfolded.contains("TRANSP:OPAQUE\r\n"), "{ics}");
+    assert!(unfolded.contains("PRIORITY:1\r\n"), "{ics}");
+    assert!(unfolded.contains("CLASS:PRIVATE\r\n"), "{ics}");
+    assert!(
+        unfolded.contains("LOCATION;X-JMAP-KEY=loc-1:Berlin Office Room 404\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=\"Jitsi Room\";X-JMAP-KEY=v1:https://conf.example.com/calcard\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("ATTACH;FMTTYPE=application/pdf;SIZE=4096;X-JMAP-KEY=k1:https://example.com/plan.pdf\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=k2:https://example.com/logo.png\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("CATEGORIES:Migration,Polish\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("ORGANIZER;CN=Organizer:mailto:organizer@example.com\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("ATTENDEE;CN=Attendee;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:attendee@example.com\r\n"),
+        "{ics}"
+    );
+    assert!(unfolded.contains("BEGIN:VALARM\r\n"), "{ics}");
+    assert!(unfolded.contains("TRIGGER:-PT10M\r\n"), "{ics}");
+    assert!(
+        unfolded.contains("RRULE:FREQ=WEEKLY;COUNT=10;INTERVAL=2;BYDAY=TU,TH\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("RECURRENCE-ID;TZID=Europe/Berlin:20260820T140000\r\n"),
+        "{ics}"
+    );
+    assert!(
+        unfolded.contains("SUMMARY:Calcard Retrospective (Adjusted)\r\n"),
+        "{ics}"
+    );
+    assert!(unfolded.ends_with("END:VCALENDAR\r\n"), "{ics}");
+
+    let roundtrip = ical_to_event(&ics).expect("roundtrip parse");
+    assert_eq!(
+        roundtrip.id.as_ref().map(|id| id.as_str()),
+        Some("event-calcard-1")
+    );
+    assert_eq!(
+        roundtrip.uid.as_deref(),
+        Some("urn:uuid:calcard-event-uuid-1")
+    );
+    assert_eq!(
+        roundtrip.title.as_deref(),
+        Some("Calcard Migration All-Hands")
+    );
+    assert_eq!(roundtrip.start.as_deref(), Some("2026-08-18T14:00:00"));
+    assert_eq!(roundtrip.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(roundtrip.duration.as_deref(), Some("PT1H"));
+    assert_eq!(roundtrip.status.as_deref(), Some("confirmed"));
+    assert_eq!(roundtrip.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(roundtrip.priority, Some(1));
+    assert_eq!(roundtrip.privacy.as_deref(), Some("private"));
+
+    let rt_locs = roundtrip.locations.as_ref().expect("locations");
+    assert_eq!(
+        rt_locs["loc-1"]["name"].as_str(),
+        Some("Berlin Office Room 404")
+    );
+
+    let rt_vlocs = roundtrip
+        .virtual_locations
+        .as_ref()
+        .expect("virtualLocations");
+    assert_eq!(
+        rt_vlocs["v1"]["uri"].as_str(),
+        Some("https://conf.example.com/calcard")
+    );
+    assert_eq!(rt_vlocs["v1"]["name"].as_str(), Some("Jitsi Room"));
+
+    let rt_tags = roundtrip.keywords.as_ref().expect("keywords");
+    assert_eq!(rt_tags.len(), 2);
+    assert_eq!(rt_tags["Migration"].as_bool(), Some(true));
+    assert_eq!(rt_tags["Polish"].as_bool(), Some(true));
+
+    let rt_alerts = roundtrip.alerts.as_ref().expect("alerts");
+    assert_eq!(rt_alerts["a1"]["action"].as_str(), Some("display"));
+    assert_eq!(
+        rt_alerts["a1"]["trigger"]["offset"].as_str(),
+        Some("-PT10M")
+    );
+
+    let rt_rules = roundtrip
+        .recurrence_rules
+        .as_ref()
+        .expect("recurrenceRules");
+    assert_eq!(rt_rules.len(), 1);
+    assert_eq!(rt_rules[0].frequency, "weekly");
+    assert_eq!(rt_rules[0].interval, Some(2));
+    assert_eq!(rt_rules[0].count, Some(10));
+
+    let rt_overrides = roundtrip
+        .recurrence_overrides
+        .as_ref()
+        .expect("recurrenceOverrides");
+    assert_eq!(
+        rt_overrides["2026-08-20T14:00:00"]["title"].as_str(),
+        Some("Calcard Retrospective (Adjusted)")
     );
 }

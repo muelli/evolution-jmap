@@ -35,8 +35,10 @@
 
 use calcard::icalendar::ICalendarComponent;
 
-use crate::event::{WEEKDAYS, days_from_civil, days_in_month, offset_seconds, to_local_date_time};
-use crate::syntax::{component_entries, component_text, entry_raw_value, entry_texts};
+use crate::event::{
+    WEEKDAYS, component_entries, component_text, days_from_civil, days_in_month, entry_raw_value,
+    entry_texts, offset_seconds, to_local_date_time,
+};
 
 /// When the zone last changed its offset, and what that offset is — the
 /// `TZOFFSETTO` of the observance the transition belongs to, or, for the
