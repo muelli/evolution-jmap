@@ -33427,3 +33427,43 @@ mode that serves the session document via a 307 to a separate auth-checked
 path so this is red/green-testable without a live server. TDD: red test
 first (session resolution fails through the redirect today), then the
 one-line transport fix turns it green.
+
+## 2026-08-18 — Fixed: session-discovery redirect strips auth
+
+Landed the fix ROADMAP.md's "CLAIM THIS" item asked for, mock-tested end to
+end without a live server:
+
+- **`jmap-mock`**: added `MockServerBuilder::session_via_redirect()`. When
+  set, `GET /.well-known/jmap` answers a `307` to `/jmap/session` (no auth
+  gate on the well-known lookup itself, matching a real deployment), and
+  `/jmap/session` always answers `200` — with a full session if the request
+  carries valid credentials, or one with empty `accounts`/`primaryAccounts`
+  if it does not — rather than a `401`. That "still 200, just empty" shape
+  is exactly what made the real bug confusing: it surfaces downstream as "no
+  primary account", not as a request failure.
+- **Red test**: `jmap-client/tests/redirect_auth.rs`,
+  `primary_account_resolves_through_a_same_host_session_redirect`, drives
+  the real (default) `UreqTransport` — not a fake transport — through
+  `Client::connect` against a `session_via_redirect` + `basic_auth` mock.
+  Before the fix it failed for the right reason: `connect()` itself
+  succeeded (the redirect target answers 200), but the session it got back
+  was the anonymous one, so `primary_account(CAPABILITY_MAIL)` was `None`.
+- **Fix**: one line in `UreqTransport::new` —
+  `.redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)` —
+  so `Authorization` survives a same-host redirect (cross-host still strips
+  it, ureq's safe default). Test goes green with no other change.
+
+Full gate run by hand: `cargo test --locked` (all crates, no failures),
+`cargo fmt --check` (one formatting nit `cargo fmt` fixed, re-checked
+clean), `cargo clippy --all-targets --locked -- -D warnings` clean.
+`cargo deny`/`reuse lint` still unavailable on this VM (prior sessions'
+finding, unchanged) — the new file
+(`jmap-client/tests/redirect_auth.rs`) carries the SPDX
+`GPL-3.0-or-later` header by hand-inspection.
+
+Not yet done, and intentionally left for whoever runs the operator-side
+`--features live-server` harness next: the secondary blocker this same
+finding flagged — Stalwart's session advertising `apiUrl` as its configured
+hostname (`example.com` in this instance) rather than the address reached —
+is a test-environment/Stalwart-config matter, not a client bug, so no code
+change here addresses it.
