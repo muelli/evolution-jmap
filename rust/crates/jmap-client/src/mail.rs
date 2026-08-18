@@ -69,6 +69,42 @@ fn in_query_order(ids: &[Id], emails: Vec<Email>) -> Vec<Email> {
     ids.iter().filter_map(|id| by_id.remove(id)).collect()
 }
 
+/// Fill in `identityId`/`emailId` on a just-created `EmailSubmission` if the
+/// server left them out.
+///
+/// RFC 8620 §5.3 says the `created` map need only carry properties "that
+/// were not sent by the client" — and a client always states both when it
+/// asks to create a submission, so neither is server-set. This client
+/// assumed both would be echoed back in full until the live Stalwart
+/// deployment took the RFC at its word and omitted them, which
+/// `EmailSubmission`'s deserialization (both fields non-optional, since
+/// every other caller of this type needs them) then panicked on. Rather than
+/// make the fields optional everywhere — every consumer of a fetched or
+/// mock-seeded `EmailSubmission` reasonably expects them — this patches the
+/// raw JSON with values the caller already knows before deserializing, since
+/// the whole reason the server may omit them is that the caller supplied
+/// them itself moments earlier.
+fn backfill_submission_created(
+    mut arguments: Value,
+    creation_id: &str,
+    identity_id: &Id,
+    email_id: &Id,
+) -> Value {
+    if let Some(object) = arguments
+        .get_mut("created")
+        .and_then(|created| created.get_mut(creation_id))
+        .and_then(Value::as_object_mut)
+    {
+        object
+            .entry("identityId")
+            .or_insert_with(|| Value::from(identity_id.as_str()));
+        object
+            .entry("emailId")
+            .or_insert_with(|| Value::from(email_id.as_str()));
+    }
+    arguments
+}
+
 /// The `EmailSubmission/set` half of sending: submit `email_id` through
 /// `identity_id`, and patch the message once the server accepts it.
 ///
@@ -617,9 +653,16 @@ impl Client {
             .responses_for(&submission_call_id)
             .next()
             .ok_or_else(|| Error::Protocol("no EmailSubmission/set response".to_owned()))?;
-        let submission_response: SetResponse<EmailSubmission> = serde_json::from_value(
+        let submission_arguments = backfill_submission_created(
             Self::unwrap_invocation(submission_invocation, "EmailSubmission/set")?,
-        )?;
+            SUBMISSION,
+            identity_id,
+            created_email.id.as_ref().ok_or_else(|| {
+                Error::Protocol("Email/set created a draft without an id".to_owned())
+            })?,
+        );
+        let submission_response: SetResponse<EmailSubmission> =
+            serde_json::from_value(submission_arguments)?;
         let submission = expect_created(&submission_response, SUBMISSION)?;
 
         Ok((created_email, submission))
@@ -649,14 +692,21 @@ impl Client {
             .clone()
             .ok_or_else(|| Error::Protocol("Email/set created a draft without an id".to_owned()))?;
 
-        let submission_set =
-            submission_request(account_id, identity_id, email_id, None, on_success_update);
+        let submission_set = submission_request(
+            account_id,
+            identity_id,
+            email_id.clone(),
+            None,
+            on_success_update,
+        );
         let arguments = self.single_call(
             &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
             "EmailSubmission/set",
             &submission_set,
         )?;
-        let submission_response: SetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
+        let submission_response: SetResponse<EmailSubmission> = serde_json::from_value(
+            backfill_submission_created(arguments, SUBMISSION, identity_id, &email_id),
+        )?;
         let submission = expect_created(&submission_response, SUBMISSION)?;
 
         Ok((created_email, submission))
@@ -703,7 +753,9 @@ impl Client {
             "EmailSubmission/set",
             &submission_set,
         )?;
-        let response: SetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
+        let response: SetResponse<EmailSubmission> = serde_json::from_value(
+            backfill_submission_created(arguments, SUBMISSION, identity_id, email_id),
+        )?;
         expect_created(&response, SUBMISSION)
     }
 
