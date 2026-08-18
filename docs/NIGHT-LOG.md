@@ -33384,3 +33384,36 @@ appears not yet synced with the repo version, per that commit's own
 session's to fix (deployment, not repo state), but flagging it since it
 means recent sessions (including this one) ran the pre-482be0a prompt
 without the new blocked/pause sentinel.
+
+## 2026-08-18 — REAL-SERVER FINDING: session-discovery redirect strips auth
+
+First live end-to-end test against Stalwart 0.16.17 surfaced a genuine client
+bug. Adding a JMAP account failed with "protocol error: no primary account for
+urn:ietf:params:jmap:mail".
+
+Root cause (confirmed): Stalwart serves the session via a redirect —
+`GET /.well-known/jmap` → `307` → `/jmap/session` — whereas `jmap-mock` serves
+the session document DIRECTLY at `/.well-known/jmap`, so redirect-following was
+never exercised. `UreqTransport::new` (transport.rs:176) sets no redirect-auth
+policy, and ureq 3.x defaults to `redirect_auth_headers = Never`: it strips the
+`Authorization` header when following a redirect, even same-host. So
+`/jmap/session` is fetched UNAUTHENTICATED; Stalwart answers 200 with an
+anonymous session — server capabilities present (incl. jmap:mail) but
+`"accounts":{}` and `"primaryAccounts":{}` — so `Session::resolve_primary_account`
+sees the capability but zero personal accounts and returns None. (`curl -u`
+works because curl keeps auth across same-host redirects.) Verified by fetching
+`/jmap/session` with no auth: HTTP 200, empty accounts/primaryAccounts.
+
+Fix (real-server readiness, priority lane): in `UreqTransport::new` set
+`.redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)` so auth is
+re-sent on same-host redirects (keep cross-host stripping). TDD it: add a
+`jmap-mock` mode that serves the session via a 307 to a second, auth-REQUIRING
+path, and assert the client still resolves the primary account — today the mock
+serves the session inline, so the green suite hides this.
+
+Secondary blocker (NOT this bug, expect it next): the authenticated session
+advertises `apiUrl`/`downloadUrl`/… as `https://example.com/…` (Stalwart's
+configured hostname), not the address the client reached it on. After the auth
+fix, method calls would target example.com over HTTPS — a Stalwart hostname /
+test-env matter (map example.com to the server, or reconfigure Stalwart's
+hostname), not a client bug.
