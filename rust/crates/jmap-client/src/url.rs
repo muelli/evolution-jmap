@@ -53,9 +53,32 @@ fn hex_digit(nibble: u8) -> char {
     })
 }
 
+/// Replace `url`'s scheme and authority with `origin`'s, keeping its path and
+/// query untouched.
+///
+/// Backs [`crate::ClientBuilder::rebase_urls_to_origin`]: a real deployment's
+/// session document is authoritative about the *path* its endpoints live at,
+/// but a client that reached the session through a different scheme/host
+/// than the document names — a reverse proxy, NAT boundary, or a configured
+/// public hostname the client cannot route to — needs the option to keep
+/// talking to the origin that worked rather than the one the server states.
+pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
+    let path_and_beyond = match url.find("://") {
+        Some(scheme_end) => {
+            let after_scheme = scheme_end + 3;
+            match url[after_scheme..].find('/') {
+                Some(slash) => &url[after_scheme + slash..],
+                None => "",
+            }
+        }
+        None => url,
+    };
+    format!("{}{path_and_beyond}", origin.trim_end_matches('/'))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::encode_template_value;
+    use super::{encode_template_value, rebase_origin};
 
     #[test]
     fn unreserved_characters_pass_through() {
@@ -90,5 +113,32 @@ mod tests {
     fn a_multibyte_character_becomes_one_escape_per_octet() {
         assert_eq!(encode_template_value("ä"), "%C3%A4");
         assert_eq!(encode_template_value("日"), "%E6%97%A5");
+    }
+
+    #[test]
+    fn rebase_origin_keeps_the_path_and_swaps_the_scheme_and_authority() {
+        assert_eq!(
+            rebase_origin("https://example.com/jmap", "http://10.0.0.5:8080"),
+            "http://10.0.0.5:8080/jmap"
+        );
+    }
+
+    #[test]
+    fn rebase_origin_keeps_a_template_with_query_and_braces_intact() {
+        assert_eq!(
+            rebase_origin(
+                "https://example.com/download/{accountId}/{blobId}/{name}",
+                "http://127.0.0.1:9"
+            ),
+            "http://127.0.0.1:9/download/{accountId}/{blobId}/{name}"
+        );
+    }
+
+    #[test]
+    fn rebase_origin_strips_a_trailing_slash_from_the_new_origin() {
+        assert_eq!(
+            rebase_origin("https://example.com/jmap", "http://10.0.0.5:8080/"),
+            "http://10.0.0.5:8080/jmap"
+        );
     }
 }
