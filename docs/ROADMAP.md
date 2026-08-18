@@ -34,18 +34,27 @@ they close, prioritise in this order:
      `redirect_auth_headers = SameHost`, and `jmap-mock` grew a
      `session_via_redirect()` mode so the whole thing is covered by
      `jmap-client/tests/redirect_auth.rs` without a live server.
-   - **Still outstanding, not a client bug** — the *secondary* blocker the
-     same finding flagged, now root-caused (see NIGHT-LOG "apiUrl's scheme is
-     hardcoded https, not just the hostname", 2026-08-18): Stalwart's session
-     always advertises `apiUrl` as `https://<defaultHostname>/…` regardless
-     of listener TLS config, while this VPC-reachable Stalwart only publishes
-     plain HTTP on :8080 — so no combination of Stalwart *settings* makes the
-     session's own `apiUrl` reachable from the runner. Fixing it for real
-     needs a maintainer call on one of: binding a (self-signed, for this
-     disposable deployment) TLS cert to the reachable listener and deciding
-     whether the harness may trust it, or publishing Stalwart's existing
-     `:443` listener through the VM's network config. Not attempted
-     unilaterally — it's a trust/infra decision, not an in-repo increment.
+   - **FIXED 2026-08-18** — the *secondary* blocker the same finding flagged
+     (root-caused in NIGHT-LOG "apiUrl's scheme is hardcoded https, not just
+     the hostname"): Stalwart's session always advertises `apiUrl` as
+     `https://<defaultHostname>/…` regardless of listener TLS config, and this
+     VPC-reachable Stalwart only publishes plain HTTP on :8080, so no
+     Stalwart *setting* makes the session's own `apiUrl` reachable from the
+     runner. Rather than a TLS-trust or infra change, `jmap-client` grew an
+     opt-in `ClientBuilder::rebase_urls_to_origin` (env
+     `JMAP_LIVE_SERVER_REBASE_URLS` for the harness): after session discovery,
+     rewrite `apiUrl`/`downloadUrl`/`uploadUrl`/`eventSourceUrl`'s
+     scheme+authority to the origin actually connected through, keeping each
+     URL's path/query as stated. Off by default; TDD'd against `jmap-mock`
+     (`MockServerBuilder::advertise_origin`,
+     `jmap-client/tests/rebase_urls.rs`) and confirmed against the live
+     Stalwart: without it, 4 of 5 `live_server.rs` tests failed with `HTTP
+     405` — `apiUrl`'s `https://example.com` is a real Internet domain this
+     runner has ordinary egress to, so every method call was silently being
+     sent there, not merely failing to connect; with
+     `JMAP_LIVE_SERVER_REBASE_URLS=1`, all 5 pass against the real
+     deployment. See NIGHT-LOG's "Delivered: opt-in apiUrl/downloadUrl/
+     uploadUrl rebase to the connected origin".
 3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
