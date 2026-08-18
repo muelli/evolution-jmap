@@ -23,6 +23,14 @@ destroy), and
 account (see step 3) so they can never touch whatever account the read-only
 tests are pointed at.
 
+A fifth test, `send_email_delivers_to_a_second_account_on_the_real_server`,
+writes to *two* throwaway accounts: it sends a message via `Client::send_email`
+from the write-test account to a second one (step 3's "send-email test"
+below) and polls the recipient's Inbox until the message actually arrives —
+proof of intra-server delivery, not just that `EmailSubmission/set` was
+accepted. It needs no outbound SMTP relay: both accounts live on the same
+Stalwart deployment, so delivery never leaves it.
+
 ## 1. Get a server
 
 Two ways, either is fine:
@@ -100,6 +108,21 @@ session that lost the password — just resets that one account's password
 rather than erroring or duplicating anything. Use a domain name that is
 obviously a test fixture (`agent-*`), never the operator's own
 (`example.com`, `alice@example.com`).
+
+## 3a. (optional) Enable the send-email test
+
+`send_email_delivers_to_a_second_account_on_the_real_server` needs a
+*second* account distinct from the write-test one above — it sends *to*
+it — on the same domain, so delivery stays intra-server and needs no
+outbound relay:
+
+```console
+$ ./infra/stalwart/stw seed agent-livewrite.net agent2 '<a different fresh password>'
+$ export JMAP_LIVE_SERVER_RECIPIENT_USER=agent2@agent-livewrite.net
+$ export JMAP_LIVE_SERVER_RECIPIENT_PASSWORD='<that password>'
+```
+
+Skipped, not failed, when unset — same shape as step 3.
 
 ## 4. Run it
 
@@ -182,6 +205,21 @@ in the invocation, worth failing loudly on.
   response, since `email_get` splits large id lists across several
   `Email/get` calls and keeps only their `list`s, not a `state`. Skipped
   under the same condition as the other three.
+- `send_email_delivers_to_a_second_account_on_the_real_server` — sends a
+  message via `Client::send_email` (`Email/set` + `EmailSubmission/set`,
+  chained) from the write-test account to the second account step 3a seeds,
+  then polls the recipient's `Email/query` (filtered by the message's unique
+  subject, in its Inbox) until the message shows up, confirming actual
+  delivery rather than only an accepted submission. Along the way this is
+  also the test that first caught a real client bug: Stalwart's created
+  `EmailSubmission` omits `identityId`/`emailId` (RFC 8620 §5.3 permits this
+  — the client supplied both itself, so neither is server-set), which
+  `Client::send_email`/`submit_email` now backfill from what they sent
+  before deserializing (`jmap-client/src/mail.rs`'s
+  `backfill_submission_created`, regression-tested against `jmap-mockd`'s
+  new `MockServerBuilder::terse_submission_create` in
+  `jmap-client/tests/mail_send.rs`). Skipped, not failed, when
+  `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` (step 3a) are not set.
 
 Anything short of that is a finding, not a nuisance — write it down in
 `docs/NIGHT-LOG.md`.
