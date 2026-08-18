@@ -14,8 +14,9 @@ use jmap_proto::contacts::{
     Relation, Title,
 };
 use jmap_vcard::{
-    card_to_vcard, maps_phone_feature, states_context, states_keyword, states_media,
-    states_org_unit, states_organization, states_phone_feature, states_title, vcard_to_card,
+    anniversary_date, card_to_vcard, maps_phone_feature, states_a_point_in_time,
+    states_anniversary, states_context, states_keyword, states_media, states_org_unit,
+    states_organization, states_phone_feature, states_title, vcard_to_card,
 };
 use serde_json::{Value, json};
 
@@ -4589,4 +4590,243 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
     let contexts = json!({"work": true, "private": true});
     assert!(states_context(Some(&contexts), "private"));
     assert!(!states_context(Some(&contexts), "work"));
+}
+
+#[test]
+fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
+    // Characterization of bare-year dates (RFC 9553 §2.8.1 PartialDate with year only):
+    // 1. vCard 3.0 (RFC 2426 §3.1.5) requires BDAY to be a full date (YYYY-MM-DD or YYYYMMDD).
+    // 2. EDS (libebook-contacts) e_contact_date_from_string returns NULL for partial dates.
+    // 3. When EDS writes an EContactDate via e_contact_date_to_string, it CLAMPs year into 1000..=9999,
+    //    month into 1..=12, and day into 1..=31. Emitting an unanchored bare year or partial date
+    //    would cause EDS to clamp missing fields to 01-01 (e.g. 1984-01-01), corrupting the user's date.
+    // 4. Therefore, jmap-vcard drops bare-year dates on emission, leaving diff_entries to preserve
+    //    the server-side PartialDate untouched without creating phantom vCard lines.
+
+    // 1. Predicates on bare-year dates
+    let birth_bare_year = Anniversary {
+        kind: "birth".to_owned(),
+        date: Some(json!({"@type": "PartialDate", "year": 1984})),
+        ..Anniversary::default()
+    };
+    assert!(!states_anniversary(&birth_bare_year));
+    assert_eq!(anniversary_date(&birth_bare_year), None);
+    assert!(!states_a_point_in_time(&birth_bare_year));
+
+    let wedding_bare_year = Anniversary {
+        kind: "wedding".to_owned(),
+        date: Some(json!({"@type": "PartialDate", "year": 1996})),
+        ..Anniversary::default()
+    };
+    assert!(!states_anniversary(&wedding_bare_year));
+    assert_eq!(anniversary_date(&wedding_bare_year), None);
+    assert!(!states_a_point_in_time(&wedding_bare_year));
+
+    let death_bare_year = Anniversary {
+        kind: "death".to_owned(),
+        date: Some(json!({"@type": "PartialDate", "year": 2019})),
+        ..Anniversary::default()
+    };
+    assert!(!states_anniversary(&death_bare_year));
+    assert_eq!(anniversary_date(&death_bare_year), None);
+
+    // 2. Outbound emission across various bare-year representations
+    for bare_date in [
+        json!({"year": 1984}),
+        json!({"@type": "PartialDate", "year": 1984}),
+        json!({"year": 800}),  // historical year below clamp threshold
+        json!({"year": 999}),  // boundary below clamp threshold
+        json!({"year": 1000}), // earliest clamp threshold
+        json!({"year": 2026}), // current era
+        json!({"@type": "PartialDate", "year": 1984, "calendarScale": "gregorian"}),
+    ] {
+        let vcard_birth = card_to_vcard(&one_anniversary("birth", bare_date.clone()));
+        assert!(!vcard_birth.contains("BDAY"), "{bare_date}: {vcard_birth}");
+
+        let vcard_wedding = card_to_vcard(&one_anniversary("wedding", bare_date.clone()));
+        assert!(
+            !vcard_wedding.contains("X-EVOLUTION-ANNIVERSARY"),
+            "{bare_date}: {vcard_wedding}"
+        );
+        assert!(
+            !vcard_wedding.contains("ANNIVERSARY"),
+            "{bare_date}: {vcard_wedding}"
+        );
+    }
+
+    // 3. Inbound parsing of bare-year and partial date lines from vCards
+    for vcard_input in [
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:1984\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:1984-06\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:--06-21\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY;VALUE=date:1984\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY;VALUE=text:1984\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nX-EVOLUTION-ANNIVERSARY:1996\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nX-EVOLUTION-ANNIVERSARY:1996-08\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nX-EVOLUTION-ANNIVERSARY:--08-03\r\nEND:VCARD\r\n",
+    ] {
+        let card = vcard_to_card(vcard_input).expect("parse");
+        assert_eq!(
+            card.anniversaries, None,
+            "inbound bare date should not parse into card: {vcard_input}"
+        );
+    }
+
+    // 4. Roundtrip of a card with coexisting bare-year and full-date anniversaries
+    let mixed_card = ContactCard {
+        anniversaries: Some(
+            [
+                (
+                    "y1".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(json!({"@type": "PartialDate", "year": 1984})),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y2".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(
+                            json!({"@type": "PartialDate", "year": 1984, "month": 6, "day": 21}),
+                        ),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y3".to_owned(),
+                    Anniversary {
+                        kind: "wedding".to_owned(),
+                        date: Some(json!({"@type": "PartialDate", "year": 1996})),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y4".to_owned(),
+                    Anniversary {
+                        kind: "wedding".to_owned(),
+                        date: Some(
+                            json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}),
+                        ),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y5".to_owned(),
+                    Anniversary {
+                        kind: "death".to_owned(),
+                        date: Some(json!({"@type": "PartialDate", "year": 2019})),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y6".to_owned(),
+                    Anniversary {
+                        kind: "death".to_owned(),
+                        date: Some(
+                            json!({"@type": "PartialDate", "year": 2019, "month": 10, "day": 15}),
+                        ),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y7".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(
+                            json!({"@type": "PartialDate", "year": 800, "month": 6, "day": 21}),
+                        ),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y8".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(json!({"@type": "PartialDate", "year": 800})),
+                        ..Anniversary::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&mixed_card);
+    assert_eq!(line(&emitted, "BDAY"), "BDAY;X-JMAP-KEY=y2:1984-06-21");
+    assert_eq!(
+        line(&emitted, "X-EVOLUTION-ANNIVERSARY"),
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y4:1996-08-03"
+    );
+    // Unstated entries are absent
+    assert!(!emitted.contains("X-JMAP-KEY=y1"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y3"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y5"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y6"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y7"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y8"), "{emitted}");
+
+    // Inbound roundtrip parses the emitted lines back losslessly
+    let roundtripped = vcard_to_card(&emitted).expect("parse back");
+    let recovered = roundtripped.anniversaries.expect("anniversaries");
+    assert_eq!(recovered.len(), 2);
+    assert_eq!(recovered["y2"].kind, "birth");
+    assert_eq!(
+        recovered["y2"].date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 6, "day": 21}))
+    );
+    assert_eq!(recovered["y4"].kind, "wedding");
+    assert_eq!(
+        recovered["y4"].date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+}
+
+#[test]
+fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
+    // Tests that PartialDate objects carrying custom or alternative calendar attributes
+    // with bare years are safely handled and do not panic or emit malformed vCard lines.
+    let card = ContactCard {
+        anniversaries: Some(
+            [
+                (
+                    "y1".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(json!({
+                            "@type": "PartialDate",
+                            "year": 2567,
+                            "calendarScale": "buddhist"
+                        })),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y2".to_owned(),
+                    Anniversary {
+                        kind: "wedding".to_owned(),
+                        date: Some(json!({
+                            "@type": "PartialDate",
+                            "year": 5784,
+                            "calendarScale": "hebrew"
+                        })),
+                        ..Anniversary::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(!vcard.contains("BDAY"), "{vcard}");
+    assert!(!vcard.contains("ANNIVERSARY"), "{vcard}");
+    assert!(!vcard.contains("2567"), "{vcard}");
+    assert!(!vcard.contains("5784"), "{vcard}");
+
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(parsed.anniversaries, None);
 }

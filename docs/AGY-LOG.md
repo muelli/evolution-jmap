@@ -104,3 +104,15 @@ Running record of headless polish increments on the `antigravity` branch.
   1. `calcard` automatically folds long lines (such as deep multi-component `ORG` values and escaped punctuation) at 75 octets with CRLF-space folding, while unfolding them losslessly on parse.
   2. `calcard` parses structured values containing escaped delimiters (`\;`, `\,`) into discrete component tokens with unescaped text content and re-escapes them on emission according to RFC 2426 §2.4.2.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+## 2026-08-18 — Bare-year dates fidelity & EDS clamping protection (`jmap-vcard`)
+
+- **AGY-TASKS sub-step:** 4. Bare-year dates (`BDAY`/anniversary stated as a year only): characterize and test how a year-only date maps (EDS clamps); pin it with a round-trip test.
+- **Changes:**
+  - Added comprehensive characterization and round-trip tests in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `bare_year_dates_characterization_and_eds_clamping_roundtrip`: verifies that `PartialDate` anniversaries stating only a year (`birth`, `wedding`, `death`, and unmapped kinds) emit no `BDAY` or `X-EVOLUTION-ANNIVERSARY` vCard lines, ensuring `diff_entries` leaves the server-side date untouched rather than exposing it to EDS's `e_contact_date_to_string` clamping (`1000..=9999` for year, `1..=12` for month, `1..=31` for day) which would corrupt a bare year into a January 1 date; confirms `states_anniversary`, `anniversary_date`, and `states_a_point_in_time` predicates evaluate to false/None; validates that truncated inbound vCard date lines (`BDAY:1984`, `BDAY:1984-06`, `BDAY:--06-21`, `X-EVOLUTION-ANNIVERSARY:1996`, explicit `VALUE=date`/`VALUE=text`) are safely dropped by `read_anniversary` rather than parsed into invalid dates; and tests roundtrip preservation of cards with coexisting bare-year and full-date anniversaries.
+    - `bare_year_and_partial_dates_with_custom_attributes_roundtrip`: validates that `PartialDate` instances specifying custom calendar scales (`buddhist`, `hebrew`) with bare years are safely handled and round-trip without emitting malformed properties or corrupting other fields.
+- **Calcard behaviour-difference findings:**
+  1. `calcard` correctly parses `VCardProperty::Bday` entries into discrete components and passes raw value strings intact to mapping helpers without implicit date conversion or field guessing.
+  2. Inbound vCards with incomplete or non-standard date values (such as bare years or truncated ISO-8601 strings) are safely handed to `read_anniversary`, which safely rejects them without panicking or producing partial records.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
