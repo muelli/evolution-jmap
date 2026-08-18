@@ -34801,3 +34801,50 @@ and assert the new event's id is present; right after the destroy step,
 call it again and assert the id is absent. Same throwaway account
 (`agent-livewrite.net`/`agent1`) and gating as every write-path test in
 this file. Will update `docs/manual-test-live-server.md` to match.
+
+## 2026-08-18 — Delivered: a CalendarEvent/query live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
+  — right after the create step, calls `Client::event_query` with
+  `CalendarEventQueryFilter::in_calendar` and asserts the new event's id is
+  present; right after the destroy step, calls it again and asserts the id
+  is absent. This is the exact call `jmap-cal-sync::list_existing_sync`
+  makes (`lib.rs:98`) to enumerate a calendar — the backend's actual
+  listing path — which had zero live-server coverage before this, unlike
+  `get`/`set`/`changes` on the same type. Mirrors the `ContactCard/query`
+  check the prior session added to the contact test.
+- **`docs/manual-test-live-server.md`**: documented the new query checks
+  alongside the existing per-step ones.
+- No production code changed: `Client::event_query` and
+  `CalendarEventQueryFilter::in_calendar` already existed and are already
+  mock-tested; this session's question was only whether a *real* server's
+  `CalendarEvent/query` answers as this client already assumes for the
+  filter shape the backend actually sends.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent
+  upsert; previous session's password not recoverable by design).
+  `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/`.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 10 tests in
+  `live_server.rs` pass, including the extended calendar test —
+  `CalendarEvent/query` filtered by calendar lists the newly created event
+  and excludes it after destruction, against Stalwart's own query engine.
+  No client bug found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p
+  evolution-jmap-client --all-targets --locked --features live-server --
+  -D warnings` and `cargo clippy --all-targets --locked -- -D warnings`
+  (default-members) both clean, `cargo test --locked` (default-members)
+  green, no failures. `cargo deny`/`reuse lint` unavailable on this VM as
+  usual; the only changed source file (`live_server.rs`) already carries
+  its SPDX header.
+
+With this, `ContactCard/query` and `CalendarEvent/query` both have
+live-server coverage — the last named gap the query-coverage thread left
+open is closed. Real-server readiness's remaining named items are down to
+just the maintainer-gated OAuth2 issuer-mismatch call (`docs/BACKLOG.md`)
+and the mapping-decision items under "EDS 3.60+ compatibility" (also
+maintainer-gated). A future session should re-survey
+`docs/ROADMAP.md`/`docs/BACKLOG.md` fresh rather than assume another
+increment in the live-server CRUD/query/changes/send vein — it has no
+further open named follow-up.
