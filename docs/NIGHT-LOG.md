@@ -34040,3 +34040,42 @@ mailbox-rename and contact-update tests — patching the event's `title` via
 `event_update` and confirming the new title via `CalendarEvent/get` before
 destroying it. `email_update` (mark-as-read/flags) stays open for a future
 session; one increment at a time.
+
+## 2026-08-18 — Delivered: a CalendarEvent/set update live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: renamed
+  `calendar_event_create_then_destroy_round_trips_through_the_real_api` to
+  `calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
+  and inserted an update step between create and destroy: after confirming
+  the created event's title via `CalendarEvent/get`, calls `event_update`
+  with a `{"title": ...}` `PatchObject` to a second unique title, confirms
+  via another `CalendarEvent/get` that the new title comes back, then
+  destroys it — the same shape as the mailbox-rename and contact-update
+  tests.
+- **`docs/manual-test-live-server.md`**: updated the intro's write-test list
+  and the "what it worked means" section for the renamed test and its new
+  update step; folded the "mailbox and contact tests additionally update"
+  sentence into "all three additionally update" now that the event test
+  does too.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent upsert;
+  previous session's password not recoverable by design, as with every
+  prior write-path session).
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the renamed/extended one —
+  `CalendarEvent/set` update round-trips a real title change against
+  Stalwart's own state handling. No client bug found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --workspace --exclude
+  example-module --exclude jmap-functional --locked` green, no failures.
+  `cargo deny`/`reuse lint` still unavailable on this VM; the only changed
+  source file (`live_server.rs`) already carries its SPDX header.
+
+Closes the calendar half of the "remaining unexercised corners" the prior
+session flagged. Still open for a future session: `email_update`
+(mark-as-read/flags) has no live-server coverage yet, and
+`send_email`/`submit_email` still need an SMTP-capable deployment (out of
+scope for this throwaway account). Left `agent-livewrite.net`/`agent1` in
+place, same reasoning as every prior write-path session.
