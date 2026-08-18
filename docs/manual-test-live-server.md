@@ -51,6 +51,24 @@ $ export JMAP_LIVE_SERVER_TOKEN=...
 
 `JMAP_LIVE_SERVER_TOKEN` takes priority if both are set.
 
+If the deployment's session document names an `apiUrl` (and
+`downloadUrl`/`uploadUrl`/`eventSourceUrl`) this runner cannot route to, even
+though `JMAP_LIVE_SERVER_URL` itself is reachable — a reverse proxy, a NAT
+boundary, or a configured public hostname advertised over `https` when only a
+plain-`http` listener on a different address actually answers, as a
+disposable Stalwart 0.16 test deployment does (see `docs/NIGHT-LOG.md`,
+"apiUrl's scheme is hardcoded https, not just the hostname") — set:
+
+```console
+$ export JMAP_LIVE_SERVER_REBASE_URLS=1
+```
+
+This makes the client keep every URL the session names *pathwise*, but
+rewrite its scheme and authority to the one `JMAP_LIVE_SERVER_URL` actually
+reached, rather than trusting the address the server states. Leave it unset
+by default: it exists for exactly this apiUrl/hostname mismatch, not as a
+routine option.
+
 ## 3. Run it
 
 ```console
