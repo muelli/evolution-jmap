@@ -33332,3 +33332,55 @@ Thirty-fourth independent conclusion: nothing unblocked. Same two items
 flagged since the 374th session — a maintainer call on BACKLOG (B′), and
 (low-leverage) (C) — are what would open further autonomous work; neither
 is this session's to take. No code change this session.
+
+## 2026-08-18 (389th session) — CI red on master, REUSE annotation gap fixed
+
+Unlike the last 34 sessions, checking the Actions API surfaced something new:
+run `32112139179` on master's tip (`2990756`) has overall conclusion
+`failure` — the first red run since `32064810881`. The `checks` job failed
+at its first step, `Run ci/checks.sh` (`build`, `reproducible` both green;
+`gui-smoke`/`functional`/`eds-version-matrix` skipped as a consequence). Job
+logs aren't fetchable unauthenticated (403, "must have admin rights"), so
+root-caused it by hand: `git log --name-status 00271f9..HEAD` shows exactly
+one newly-*added* file since the last known-green run,
+`infra/agy-night-shift/agy-prompt.md` (from `a06a20d`, the maintainer's
+own commit setting up the Antigravity/agy polish-shift driver). It's a
+plain-prose prompt file with no SPDX header — by the same convention as
+`infra/night-shift/night-prompt.md` et al. (a header would be prompt noise
+fed straight to an LLM) — but `REUSE.toml`'s existing exemption only lists
+`infra/night-shift/*.md`, a glob that doesn't cross into the sibling
+`infra/agy-night-shift/` directory. `ci/checks.sh`'s first step is the REUSE
+lint, so an uncovered file there fails the whole gate before rustfmt/clippy/
+tests even run.
+
+Fix: added `"infra/agy-night-shift/*.md"` alongside the existing
+`infra/night-shift/*.md` entry in `REUSE.toml`'s plain-prose annotation
+block — one line, no infra/ file touched, consistent with the existing
+convention. Couldn't run `reuse lint` itself to confirm (no `reuse`/`pipx`/
+`uvx`/working `python3 -m venv` on this VM, per prior sessions' findings),
+so verified by direct inspection of the tool's glob semantics and the diff
+range instead. Ran the rest of the local gate by hand since the tree was
+touched anyway: `cargo fmt --check`, `cargo clippy --all-targets --locked
+-- -D warnings`, and `cargo test --locked` (default-members) are all clean.
+`cargo-deny` unavailable on this VM as before; `rust/Cargo.lock` is
+untouched by this change so its answer is still the last green run's.
+
+This isn't roadmap milestone work (M1–M10 all stay COMPLETE, nothing
+reopened) — it's the shared push gate itself being red on master, which
+blocks everyone's next commit, agy's included. Judged in scope despite the
+"never touch infra/" rule: the fix lives in `REUSE.toml` at the repo root,
+not under `infra/`, and the rule's evident purpose (don't mess with the
+night-shift driver machinery) doesn't cover a one-line licensing-manifest
+fix for a file another stream added. The maintainer should re-run/confirm
+the next CI dispatch goes green now (this session has no `gh` access to
+verify the Actions result of its own push).
+
+Also noticed, not acted on: `infra/night-shift/night-prompt.md` (in-repo,
+updated by `482be0a` to add the new `NIGHT-SHIFT: BLOCKED` sentinel and
+durable-pause behaviour) differs from the prompt text this very session was
+invoked with — the deployed copy at `~/night-prompt.md` on the runner
+appears not yet synced with the repo version, per that commit's own
+"BY THE OPERATOR (deliberately not automated)" deployment note. Not this
+session's to fix (deployment, not repo state), but flagging it since it
+means recent sessions (including this one) ran the pre-482be0a prompt
+without the new blocked/pause sentinel.
