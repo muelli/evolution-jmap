@@ -7,7 +7,9 @@
 use jmap_client::{Client, Credentials, Error, limits};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_proto::mail::{Email, EmailAddress, EmailBodyPart, EmailBodyValue, keyword, role};
+use jmap_proto::mail::{
+    Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, keyword, role,
+};
 use serde_json::json;
 
 /// A minimal draft addressed from `alice` to `bob`.
@@ -88,6 +90,118 @@ fn send_email_full_flow() {
     let keywords = email.keywords.as_ref().unwrap();
     assert_eq!(keywords.get(keyword::SEEN), Some(&true));
     assert_eq!(keywords.get(keyword::DRAFT), Some(&true)); // patch left it alone
+}
+
+/// RFC 8620 §5.3 lets a `created` entry omit properties the client already
+/// sent — and a client always sends `identityId`/`emailId` when creating a
+/// submission, so a spec-following server (Stalwart, in the finding this
+/// regression-tests) may leave both out. `send_email`'s chained
+/// `Email/set`+`EmailSubmission/set` form must still come back with a
+/// complete `EmailSubmission`, backfilling both from what it sent rather
+/// than failing to deserialize a response with neither.
+#[test]
+fn send_email_tolerates_a_server_that_omits_identity_and_email_id() {
+    let server = MockServer::builder().terse_submission_create().start();
+    let account_id = server.account_id();
+
+    let (drafts, _sent) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_identity("Alice", "alice@example.com");
+        (
+            account.seed_mailbox("Drafts", Some(role::DRAFTS)),
+            account.seed_mailbox("Sent", Some(role::SENT)),
+        )
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let identity_id = client.identities(&account_id).unwrap()[0]
+        .id
+        .clone()
+        .unwrap();
+
+    let (created_email, submission) = client
+        .send_email(&account_id, &draft(&drafts), &identity_id, None)
+        .unwrap();
+
+    let email_id = created_email.id.expect("server assigned an email id");
+    assert_eq!(submission.identity_id, identity_id);
+    assert_eq!(submission.email_id, email_id);
+}
+
+/// The same tolerance for the split form of sending
+/// (`sending_splits_when_the_server_takes_one_call` in `call_limits.rs`
+/// covers the split itself; this covers a terse response on top of it).
+#[test]
+fn send_email_tolerates_a_terse_response_when_split_across_two_calls() {
+    let server = MockServer::builder()
+        .calls_in_request(1)
+        .terse_submission_create()
+        .start();
+    let account_id = server.account_id();
+
+    let drafts = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_identity("Alice", "alice@example.com");
+        account.seed_mailbox("Drafts", Some(role::DRAFTS))
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let identity_id = client.identities(&account_id).unwrap()[0]
+        .id
+        .clone()
+        .unwrap();
+
+    let (created_email, submission) = client
+        .send_email(&account_id, &draft(&drafts), &identity_id, None)
+        .unwrap();
+
+    let email_id = created_email.id.expect("server assigned an email id");
+    assert_eq!(submission.identity_id, identity_id);
+    assert_eq!(submission.email_id, email_id);
+}
+
+/// `submit_email` (the non-composing half, for a message that arrived via
+/// `Email/import`) needs the same tolerance: it deserializes a created
+/// `EmailSubmission` from its own single request, independently of
+/// `send_email`'s two call sites.
+#[test]
+fn submit_email_tolerates_a_server_that_omits_identity_and_email_id() {
+    let server = MockServer::builder().terse_submission_create().start();
+    let account_id = server.account_id();
+
+    let inbox = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_identity("Alice", "alice@example.com");
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let identity_id = client.identities(&account_id).unwrap()[0]
+        .id
+        .clone()
+        .unwrap();
+
+    let message = b"From: alice@example.com\r\nTo: bob@example.com\r\nSubject: Ping\r\n\r\nHi\r\n";
+    let upload = client
+        .upload_blob(&account_id, "message/rfc822", message.to_vec())
+        .unwrap();
+    let imported = client
+        .email_import(&account_id, &EmailImport::new(upload.blob_id, inbox))
+        .unwrap();
+    let email_id = imported.id.expect("server assigned an email id");
+
+    let submission = client
+        .submit_email(&account_id, &email_id, &identity_id, None, None)
+        .unwrap();
+
+    assert_eq!(submission.identity_id, identity_id);
+    assert_eq!(submission.email_id, email_id);
 }
 
 #[test]

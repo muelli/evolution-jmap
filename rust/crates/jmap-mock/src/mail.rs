@@ -867,6 +867,7 @@ pub fn email_submission_set(
     request_created_ids: &BTreeMap<String, Id>,
 ) -> Result<Value, MethodError> {
     let request: EmailSubmissionSetRequest = parse_arguments(arguments)?;
+    let terse_submission_create = state.terse_submission_create;
     let account = account_mut(state, &request.set.account_id)?;
 
     let old_state = account.submissions.state();
@@ -1002,7 +1003,7 @@ pub fn email_submission_set(
         }
     });
 
-    to_result(&SetResponse {
+    let mut result = to_result(&SetResponse {
         account_id: request.set.account_id,
         old_state: Some(old_state),
         new_state: account.submissions.state(),
@@ -1012,7 +1013,24 @@ pub fn email_submission_set(
         not_created: (!not_created.is_empty()).then_some(not_created),
         not_updated: None,
         not_destroyed: None,
-    })
+    })?;
+
+    // RFC 8620 §5.3: the `created` map need only carry properties the client
+    // did not already send. `identityId`/`emailId` never qualify — the
+    // client names both when it asks for the create — so a server reading
+    // that literally (Stalwart among them) leaves both out.
+    if terse_submission_create
+        && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
+    {
+        for object in created.values_mut() {
+            if let Some(object) = object.as_object_mut() {
+                object.remove("identityId");
+                object.remove("emailId");
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 // ── Seeding helpers ──────────────────────────────────────────────────────────
