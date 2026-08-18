@@ -88,6 +88,10 @@ chmod +x /usr/local/bin/idle-watchdog
 echo '*/5 * * * * root /usr/local/bin/idle-watchdog' > /etc/cron.d/idle-watchdog
 
 mkdir -p /opt/stalwart/etc /opt/stalwart/data
+# The Stalwart container runs as a non-root user (uid 2000), so the bind-mounted
+# config+data dirs must be writable by it or the DB creation at first setup fails
+# with "Permission denied" on /var/lib/stalwart. 777 is fine for a throwaway box.
+chmod 777 /opt/stalwart/etc /opt/stalwart/data
 if [ ! -f /opt/stalwart/admin-password ]; then
     tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 > /opt/stalwart/admin-password
 fi
