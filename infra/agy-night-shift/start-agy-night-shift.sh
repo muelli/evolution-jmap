@@ -31,6 +31,7 @@ PAUSE_FILE="$HOME/.agy-shift-paused"
 STOP_FILE="$HOME/.agy-shift-stop"
 BLOCKED_LIMIT=3        # consecutive "AGY-SHIFT: BLOCKED" reports → durable pause
 DRAIN_LIMIT=3          # consecutive short/no-op iterations (crash/transient) → exit
+MERGE_CONFLICT_LIMIT=5 # consecutive failures to merge master in → durable pause
 QUOTA_RESET_SECONDS=3600
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
@@ -51,6 +52,7 @@ mapfile -t AVAILABLE_MODELS < <(agy models </dev/null 2>/dev/null | grep -v "Fet
 CURRENT_MODEL_INDEX=-1   # -1 = the CLI default model
 consecutive_blocked=0
 consecutive_noop=0
+consecutive_merge_fail=0
 
 while true; do
     if [ -f "$PAUSE_FILE" ]; then log "paused ($PAUSE_FILE); exiting between iterations. rm it to resume."; exit 0; fi
@@ -64,9 +66,17 @@ while true; do
         || git checkout -b antigravity origin/antigravity >> "$LOG" 2>&1 \
         || git checkout -b antigravity origin/master >> "$LOG" 2>&1 || true
     git pull --rebase --quiet origin antigravity >> "$LOG" 2>&1 || true
-    if ! git merge --no-edit origin/master >> "$LOG" 2>&1; then
+    if git merge --no-edit origin/master >> "$LOG" 2>&1; then
+        consecutive_merge_fail=0
+    else
         git merge --abort >> "$LOG" 2>&1 || true
-        log "merge of origin/master conflicted — skipping merge this round; resolve at integration time"
+        consecutive_merge_fail=$(( consecutive_merge_fail + 1 ))
+        log "merge of origin/master conflicted (${consecutive_merge_fail}/${MERGE_CONFLICT_LIMIT}); skipping this round"
+        if [ "$consecutive_merge_fail" -ge "$MERGE_CONFLICT_LIMIT" ]; then
+            touch "$PAUSE_FILE"
+            log "cannot merge master into antigravity ${MERGE_CONFLICT_LIMIT}x — the polish lane has collided with master's. Pausing (touched $PAUSE_FILE); resolve the branch conflict, then rm it and relaunch."
+            exit 0
+        fi
     fi
 
     model_arg=""; current_model_name="default"
