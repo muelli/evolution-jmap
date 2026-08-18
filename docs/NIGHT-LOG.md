@@ -33110,3 +33110,31 @@ trusted, including one angle not in the last few passes' checklist:
 Twenty-sixth independent conclusion: nothing unblocked. As before, a
 maintainer call on BACKLOG (B′) is the only thing that would open new
 autonomous work. No code change this session.
+
+## 2026-08-18 (381st session) — twenty-seventh re-verification, nothing unblocked
+
+Kept short, checked directly rather than trusted:
+
+- `git fetch origin`: `HEAD` (`9b3c13a`) matches `origin/master`, tree
+  clean, no new commits since the 380th session's push.
+- `docs/MILESTONES.md`: M1–M10 all COMPLETE, unchanged. `~/.night-shift-
+  escalate` absent.
+- Actions API (`muelli/evolution-jmap`): newest run still `32064810881`
+  (`00271f9`, success). Issues/PRs: still only the two closed FFI-audit
+  items, nothing new.
+- `df -h /`: unchanged, 3.2G available (95% full). `docker info`: still
+  permission-denied.
+- `docs/BACKLOG.md` re-read in full: unchanged — (B′) and (C) remain the
+  only open items, both explicit maintainer-call/low-leverage under
+  current priority, not autonomous work.
+- New angle this session: confirmed the real-server-readiness pieces
+  aren't stubs by reading them, not just grepping for their existence —
+  `jmap-client/tests/live_server.rs` is a real gated integration test
+  (`--features live-server`, never run by default per MAINTAINER DECISIONS
+  item 3), and the last 30 commits touching `rust/` are all substantive
+  M7/OAuth2/M10 work, not scaffolding. `cargo build --workspace` is clean
+  with no incremental staleness.
+
+Twenty-seventh independent conclusion: nothing unblocked. As before, a
+maintainer call on BACKLOG (B′) is the only thing that would open new
+autonomous work. No code change this session.
