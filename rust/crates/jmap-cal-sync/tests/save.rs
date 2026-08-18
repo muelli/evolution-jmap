@@ -287,12 +287,12 @@ fn editing_an_event_leaves_unmapped_properties_alone() {
     assert!(
         icalendar
             .replace("\r\n ", "")
-            .contains("ATTENDEE;CN=Vera Example;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:vera@example.com"),
+            .contains("ATTENDEE;CN=\"Vera Example\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:vera@example.com"),
         "{icalendar}"
     );
     assert!(
         icalendar.replace("\r\n ", "").contains(
-            "CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Team room;X-JMAP-KEY=v1:\
+            "CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=\"Team room\";X-JMAP-KEY=v1:\
              https://meet.example.com/standup"
         ),
         "{icalendar}"
@@ -409,7 +409,7 @@ fn renaming_a_conference_and_changing_how_it_is_joined_both_arrive() {
     let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
     let edited = icalendar
         .replace("FEATURE=VIDEO", "FEATURE=AUDIO,PHONE")
-        .replace("LABEL=Team room", "LABEL=Phone bridge");
+        .replace("LABEL=\"Team room\"", "LABEL=\"Phone bridge\"");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
@@ -429,7 +429,7 @@ fn clearing_a_conferences_name_removes_it_rather_than_naming_it_nothing() {
     let (id, sync) = joined_online(&fixture, json!({"v1": team_room()}));
 
     let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
-    let edited = icalendar.replace(";LABEL=Team room", "");
+    let edited = icalendar.replace(";LABEL=\"Team room\"", "");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);

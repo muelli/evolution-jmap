@@ -13,7 +13,7 @@ use jmap_proto::contacts::{
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
     Relation, Title,
 };
-use jmap_vcard::{card_to_vcard, states_keyword, states_media, vcard_to_card};
+use jmap_vcard::{card_to_vcard, states_keyword, states_media, states_organization, vcard_to_card};
 use serde_json::{Value, json};
 
 fn fixture_card() -> ContactCard {
@@ -328,6 +328,63 @@ fn an_organization_with_nothing_in_it_is_skipped_in_both_directions() {
     let back =
         vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nORG:;;\r\nEND:VCARD\r\n").expect("parse");
     assert_eq!(back.organizations, None);
+}
+
+#[test]
+fn an_organization_with_an_empty_name_string_behaves_consistently() {
+    // An organisation whose name is `""` rather than absent:
+    // 1. When it has no units, it states nothing and is skipped rather than emitting an empty `ORG:` line.
+    let card_empty_name = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some(String::new()),
+                    units: None,
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let org = &card_empty_name.organizations.as_ref().unwrap()["o1"];
+    assert!(!states_organization(org));
+    let vcard = card_to_vcard(&card_empty_name);
+    assert!(!vcard.contains("\r\nORG"));
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, None);
+
+    // 2. When it has units, the empty name is preserved as an empty first component:
+    // the leading semicolon keeps units in their structured component position.
+    let card_empty_name_with_units = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some(String::new()),
+                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Security")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let org_with_units = &card_empty_name_with_units.organizations.as_ref().unwrap()["o1"];
+    assert!(states_organization(org_with_units));
+    let vcard_with_units = card_to_vcard(&card_empty_name_with_units);
+    assert_eq!(
+        line(&vcard_with_units, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security"
+    );
+    let back_with_units = vcard_to_card(&vcard_with_units).expect("parse");
+    let back_orgs = back_with_units.organizations.expect("organizations");
+    assert_eq!(back_orgs["o1"].name, None);
+    assert_eq!(
+        back_orgs["o1"].units.as_deref(),
+        Some([OrgUnit::new("Engineering"), OrgUnit::new("Security")].as_slice())
+    );
 }
 
 #[test]
@@ -1676,7 +1733,7 @@ fn a_uri_keeps_the_punctuation_a_vcard_value_gives_meaning_to() {
     let vcard = card_to_vcard(&one_link("l1", "https://vera.example/q?tags=a,b;c"));
     assert_eq!(
         line(&vcard, "URL"),
-        "URL;X-JMAP-KEY=l1:https://vera.example/q?tags=a\\,b\\;c"
+        "URL;X-JMAP-KEY=l1:https://vera.example/q?tags=a,b;c"
     );
 
     let links = vcard_to_card(&vcard).expect("parse").links.unwrap();
@@ -3768,4 +3825,66 @@ fn maps_contact_with_unmodeled_office_and_organization_extra_safely() {
     assert_eq!(units.len(), 2);
     assert_eq!(units[0].name, "Research");
     assert_eq!(units[1].name, "Advanced Optics");
+}
+
+#[test]
+fn reads_a_vcard_with_mixed_case_property_names_and_parameters() {
+    let vcard = concat!(
+        "BEGIN:vcard\r\n",
+        "version:3.0\r\n",
+        "uid:card-mixed-1\r\n",
+        "fn:Alex Mixed\r\n",
+        "email;type=work,pref:alex@work.example\r\n",
+        "tel;TYPE=cell,home:+1234567890\r\n",
+        "adr;type=work:;;100 Work St;Berlin;;10115;Germany\r\n",
+        "categories:Alpha,Beta\r\n",
+        "categories:Gamma\r\n",
+        "x-evolution-spouse:Jordan\r\n",
+        "END:vcard\r\n"
+    );
+    let card = vcard_to_card(vcard).expect("parse mixed case vcard");
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "card-mixed-1");
+    assert_eq!(
+        card.name.as_ref().unwrap().full.as_deref(),
+        Some("Alex Mixed")
+    );
+    let emails = card.emails.as_ref().unwrap();
+    assert_eq!(emails.len(), 1);
+    let email = emails.values().next().unwrap();
+    assert_eq!(email.address, "alex@work.example");
+    assert_eq!(email.pref, Some(1));
+    let phones = card.phones.as_ref().unwrap();
+    let phone = phones.values().next().unwrap();
+    assert_eq!(phone.number, "+1234567890");
+    let keywords = card.keywords.as_ref().unwrap();
+    assert_eq!(keywords.len(), 3);
+    assert!(keywords.contains_key("Alpha"));
+    assert!(keywords.contains_key("Beta"));
+    assert!(keywords.contains_key("Gamma"));
+    let related = card.related_to.as_ref().unwrap();
+    assert!(related.contains_key("Jordan"));
+}
+
+#[test]
+fn emits_a_comprehensive_vcard_via_calcard_and_roundtrips() {
+    let card = fixture_card();
+    let vcard = card_to_vcard(&card);
+    assert!(vcard.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(vcard.ends_with("END:VCARD\r\n"));
+    assert!(vcard.contains("UID:C1\r\n"));
+    assert!(vcard.contains("FN:Vera Oldenburg\r\n"));
+    assert!(vcard.contains("N:Oldenburg;Vera;;;\r\n"));
+
+    let back = vcard_to_card(&vcard).expect("parse back");
+    assert_eq!(back.id, card.id);
+    assert_eq!(back.uid, card.uid);
+    assert_eq!(back.name, card.name);
+    assert_eq!(
+        back.emails.as_ref().unwrap().len(),
+        card.emails.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        back.phones.as_ref().unwrap().len(),
+        card.phones.as_ref().unwrap().len()
+    );
 }
