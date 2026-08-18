@@ -34695,3 +34695,38 @@ per "correctness over progress" rather than guessed at; added to
 hostname misconfiguration as expected client behaviour, and would sit in the
 operator's `--features live-server -- --ignored` suite as a permanently red
 test rather than the green-when-run suite that file documents itself as).
+
+## 2026-08-18 (claim) — Claiming a ContactCard/query live-server test
+
+Re-surveyed fresh: `docs/MILESTONES.md` still has M1–M10 all COMPLETE,
+`docs/BACKLOG.md` unchanged (open items are (B′)/(C), explicit
+maintainer-call/low-leverage, plus the OAuth2 issuer-mismatch item this
+session's predecessor just filed). Ran an independent Explore pass on
+"capability-negotiation robustness" (the other named sub-item of ROADMAP's
+real-server-readiness priority) rather than trusting old night-log claims at
+face value: confirmed it is genuinely done (tolerant `Session` deserialization,
+`resolve_primary_account`'s full RFC 8620 §2 inference chain, `jmap-mock`
+perturbation support, and tests already covering missing-capability/
+missing-`primaryAccounts` cases in `jmap-{backend-book,backend-cal,mail}/
+tests/connect.rs`). Also checked blob upload/download against the real
+server — already exercised end-to-end inside
+`email_import_update_then_destroy_round_trips_through_the_real_api`.
+
+Found a genuine, still-open gap instead: `Client::contact_query` and
+`Client::event_query` — the exact calls `jmap-book-sync`/`jmap-cal-sync` make
+in `list_existing_sync` to enumerate an address book's/calendar's records —
+are never invoked anywhere in `jmap-client/tests/live_server.rs`. Every
+existing contact/calendar test proves create/update/destroy/changes via
+`ContactCard/CalendarEvent` `get`/`set`/`changes`, but the `/query` call the
+backends' listing path actually depends on has zero live-server coverage.
+
+Claiming: extend
+`contact_card_create_update_then_destroy_round_trips_through_the_real_api`
+in `jmap-client/tests/live_server.rs` — after the create step, call
+`Client::contact_query(&account_id, ContactCardQueryFilter::in_address_book(book_id))`
+and assert the new card's id is present; after the destroy step, call it
+again and assert the id is absent. Same throwaway account
+(`agent-livewrite.net`/`agent1`) and gating as every write-path test in this
+file. `CalendarEvent/query`'s equivalent stays open for a follow-up session
+— matching this chain's established one-type-per-session cadence rather than
+bundling two into one increment.
