@@ -116,3 +116,16 @@ Running record of headless polish increments on the `antigravity` branch.
   1. `calcard` correctly parses `VCardProperty::Bday` entries into discrete components and passes raw value strings intact to mapping helpers without implicit date conversion or field guessing.
   2. Inbound vCards with incomplete or non-standard date values (such as bare years or truncated ISO-8601 strings) are safely handed to `read_anniversary`, which safely rejects them without panicking or producing partial records.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+## 2026-08-18 — Org unit empty-name edge case & unstated predicate fidelity (`jmap-vcard`)
+
+- **AGY-TASKS sub-step:** 5. `merge_units` empty-name edge case: characterize `states_org_unit` unstated predicate fidelity, empty-name unit omission, and structured ORG roundtrip.
+- **Changes:**
+  - Added comprehensive characterization and round-trip tests in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `org_unit_empty_name_characterization_and_unstated_predicate_fidelity`: characterizes `states_org_unit` predicate across empty names (`OrgUnit::new("")`), empty names with `sortAs` (`extra["sortAs"]`), standard named units, and whitespace-only units; characterizes `states_organization` predicate with combinations of empty units and employer names.
+    - `org_with_empty_name_units_and_sort_as_emission_and_roundtrip`: tests emission and roundtrip of organizations with only empty-named units (which emit only the employer name and omit unit components from wire format, preventing bogus empty components), organizations with intermediate or trailing empty units, nameless organizations with empty units (retaining leading semicolon for department position while omitting empty units), and inbound vCards with multiple empty components (`ORG:;;;`, `ORG:Acme;;Research;;Development;`).
+- **Calcard behaviour-difference findings:**
+  1. `calcard` correctly writes structured `ORG` entries with semicolon delimiters for non-empty components and avoids writing trailing empty delimiters when all units are empty.
+  2. `calcard` parses multiple consecutive semicolons in structured values into empty string slices without collapsing delimiters, allowing `read_organization` to cleanly filter out intermediate empty components without shifting trailing units.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
