@@ -9,14 +9,16 @@ this project does not control. `rust/crates/jmap-client/tests/live_server.rs`
 is the other half, and this is its recipe.
 
 Almost all of it is read-only — session discovery, `Core/echo`, or listing
-what already exists. Three tests write: `mailbox_create_then_destroy_
+what already exists. Four tests write: `mailbox_create_then_destroy_
 round_trips_through_the_real_api` (`Mailbox/set`),
 `contact_card_create_then_destroy_round_trips_through_the_real_api`
-(`ContactCard/set`), and
+(`ContactCard/set`),
 `calendar_event_create_then_destroy_round_trips_through_the_real_api`
-(`CalendarEvent/set`), each create-then-destroy. All three run only
-against a separate, dedicated throwaway account (see step 3) so they can
-never touch whatever account the read-only tests are pointed at.
+(`CalendarEvent/set`), each create-then-destroy, and
+`email_import_round_trips_through_the_real_api` (`Email/import` via
+`upload_blob` then `download_blob`). All four run only against a separate,
+dedicated throwaway account (see step 3) so they can never touch whatever
+account the read-only tests are pointed at.
 
 ## 1. Get a server
 
@@ -77,7 +79,7 @@ routine option.
 
 ## 3. (optional) Enable the write-path tests
 
-The three mutating tests are skipped, not failed, unless a *separate*
+The four mutating tests are skipped, not failed, unless a *separate*
 login is given for them — deliberately not the same variables step 2
 sets, so pointing the read-only tests at a real mailbox can never also
 point the mutating tests at it. Seed a throwaway account for this alone
@@ -140,6 +142,15 @@ in the invocation, worth failing loudly on.
   calendar rather than one of their own making, relying on Stalwart
   auto-provisioning both per account. Skipped, not failed, when
   `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
+- `email_import_round_trips_through_the_real_api` — the mail write path's
+  other shape: uploads a small message's bytes via `Client::upload_blob`,
+  imports it into the account's Inbox via `Email/import`, confirms it via
+  `Email/get`, downloads the blob back via `Client::download_blob`, then
+  destroys it. Does not require the downloaded bytes to equal the uploaded
+  bytes verbatim — RFC 8621 §4.8 allows a server to repair or re-serialize
+  an imported message — only that the downloaded length matches the `size`
+  `Email/get` itself reports and that the message's subject survived.
+  Skipped under the same condition as the other three.
 
 Anything short of that is a finding, not a nuisance — write it down in
 `docs/NIGHT-LOG.md`.

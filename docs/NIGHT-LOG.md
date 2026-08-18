@@ -33827,3 +33827,48 @@ re-serialize an imported message, so a real deployment adding e.g. a
 `Received` header is a legitimate answer, not a bug — the test instead
 checks the downloaded length matches the size `Email/get` itself reported
 and that the unique subject text survived.
+
+## 2026-08-18 — Delivered: an Email/import live-server write-path test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: added
+  `email_import_round_trips_through_the_real_api` — uploads a short RFC 5322
+  message via `upload_blob`, imports it into the write-test account's Inbox
+  via `email_import`, confirms it via `email_get` (asserting the unique
+  subject matches), downloads the blob back via `download_blob` (asserting
+  the downloaded length matches the `size` `Email/get` reported — not a
+  byte-for-byte comparison against the upload, since RFC 8621 §4.8 lets a
+  server repair or re-serialize an imported message), then destroys it via
+  `email_destroy`. Gated behind the existing `connect_for_write()`, same as
+  the other three write tests.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent upsert;
+  as with the prior two sessions, the previous password was not
+  recoverable by design) before running anything against it.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the new one — `upload_blob`,
+  `Email/import`, and `download_blob` all round-trip correctly against
+  Stalwart's real message-store handling. No client bug found this time
+  either.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --workspace --exclude
+  example-module --exclude jmap-functional --exclude eds-sys --all-targets
+  --locked -- -D warnings` clean, `cargo test --workspace --exclude
+  example-module --exclude jmap-functional --locked` green (201 `test
+  result: ok`, zero failures — unchanged from the prior session, since this
+  file's new test lives behind the `live-server` feature that default `cargo
+  test` never compiles). `cargo deny`/`reuse lint` still unavailable on this
+  VM; the only changed source file (`live_server.rs`) already carries its
+  SPDX header.
+- `docs/manual-test-live-server.md` updated: the intro and step 3 now say
+  four write-path tests instead of three, and the "what it worked means"
+  list documents the new test's size-not-bytes assertion and why.
+
+This is the fourth write-path proof against a real, live JMAP server, and
+the first to exercise `jmap-client`'s blob-upload/download methods rather
+than only its typed `Xxx/set` calls — closing the last unexercised corner
+of `jmap-client::mail`'s write surface (`send_email`/`submit_email`, the
+other two, need an SMTP-capable deployment to observe delivery and are out
+of scope for a throwaway Stalwart account with no outbound mail path
+configured; not claimed here). Left `agent-livewrite.net`/`agent1` in
+place, same reasoning as the prior two sessions.
