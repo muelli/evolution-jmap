@@ -33,12 +33,19 @@ they close, prioritise in this order:
      auth" and its "Fixed" follow-up): `UreqTransport::new` now sets
      `redirect_auth_headers = SameHost`, and `jmap-mock` grew a
      `session_via_redirect()` mode so the whole thing is covered by
-     `jmap-client/tests/redirect_auth.rs` without a live server. Still
-     outstanding, not this fix's to close: the *secondary* blocker the same
-     finding flagged — Stalwart advertising `apiUrl` as its configured
-     hostname rather than the address reached — is a test-environment/
-     Stalwart-config matter for whoever next runs the operator-side
-     `--features live-server` harness, not a client bug.
+     `jmap-client/tests/redirect_auth.rs` without a live server.
+   - **Still outstanding, not a client bug** — the *secondary* blocker the
+     same finding flagged, now root-caused (see NIGHT-LOG "apiUrl's scheme is
+     hardcoded https, not just the hostname", 2026-08-18): Stalwart's session
+     always advertises `apiUrl` as `https://<defaultHostname>/…` regardless
+     of listener TLS config, while this VPC-reachable Stalwart only publishes
+     plain HTTP on :8080 — so no combination of Stalwart *settings* makes the
+     session's own `apiUrl` reachable from the runner. Fixing it for real
+     needs a maintainer call on one of: binding a (self-signed, for this
+     disposable deployment) TLS cert to the reachable listener and deciding
+     whether the harness may trust it, or publishing Stalwart's existing
+     `:443` listener through the VM's network config. Not attempted
+     unilaterally — it's a trust/infra decision, not an in-repo increment.
 3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They

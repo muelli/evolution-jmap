@@ -33467,3 +33467,56 @@ finding flagged — Stalwart's session advertising `apiUrl` as its configured
 hostname (`example.com` in this instance) rather than the address reached —
 is a test-environment/Stalwart-config matter, not a client bug, so no code
 change here addresses it.
+
+## 2026-08-18 — REAL-SERVER FINDING: apiUrl's scheme is hardcoded https, not just the hostname
+
+Picked up the secondary blocker the redirect-auth finding left open (the
+"whoever next runs the harness" item) rather than re-surveying already-mapped
+ground. `source infra/live-server/live-server-env.sh` reaches Stalwart fine
+over the internal VPC at `$STALWART_URL` (plain HTTP, port 8080); the
+provisioned `admin@example.com` account already carries mail + contacts +
+calendars capabilities, so no throwaway `agent-*` domain was needed for this
+read-only investigation.
+
+Downloaded the `stalwart-cli` v1.0.12 Linux release binary to `/tmp` (not
+`cargo install`'d — disk is ~97% full per prior sessions' finding, and a
+prebuilt binary needs no build) to inspect and edit live settings via
+`infra/stalwart/stw`/`stalwart-cli`. Findings:
+
+- `SystemSettings.defaultHostname` (currently `example.com`) is genuinely
+  what the session document's `apiUrl`/`downloadUrl`/`uploadUrl`/
+  `eventSourceUrl` are built from — changing it and issuing an
+  `Action/ReloadSettings` immediately changed the advertised hostname to
+  match. So the roadmap's "reconfigure Stalwart's hostname" half works.
+- But the **scheme is unconditionally `https://`**, not derived from
+  listener config: toggling `useTls` to `false` on the `NetworkListener`
+  bound to `:443` (name `"https"`) and reloading left the advertised scheme
+  untouched. It is not "https because a TLS listener exists" — it looks
+  hardcoded in Stalwart's session-building code.
+- This VM's Docker/firewall setup (`infra/gcp/create-stalwart.sh`) only
+  publishes port 8080, plain HTTP (`-p 8080:8080`). Stalwart's own `:443`
+  "https" listener is configured but never reachable from the VPC at all —
+  there is no route to it, published or not.
+- Net effect: **no settings change makes the session's `apiUrl` reachable**.
+  Fixing the hostname alone (what the existing roadmap note suggested) is
+  necessary but not sufficient — the scheme mismatch (server always
+  advertises `https`, only plain `http` is reachable) is the actual
+  remaining blocker. Closing it needs one of two bigger, infra-adjacent
+  changes, neither attempted here: (a) bind a real or self-signed TLS
+  certificate to the one listener the VPC can actually reach and decide
+  whether the harness should trust it (self-signed, for this one disposable
+  deployment only), or (b) publish the existing `:443` listener through the
+  VM's Docker/firewall config. Both are maintainer calls, not a 30-90 minute
+  increment, and (a) touches how much a JMAP client should ever trust an
+  unverified certificate — not a decision to make unilaterally.
+- Reverted every settings/listener change back to its original value
+  (`defaultHostname=example.com`; `services.jmap` back to `{hostname: null,
+  cleartext: false}`; the `https` listener's `useTls` back to `true`) and
+  confirmed by re-reading `SystemSettings` and the session document — no
+  lasting change to the shared Stalwart, operator's `alice@example.com`
+  setup untouched.
+
+Not a `jmap-client` bug — same conclusion the original finding reached, now
+with the actual mechanism confirmed instead of guessed at. No code change
+this session; logged per "correctness over progress" rather than attempting
+a TLS-trust change blind.
