@@ -21,8 +21,18 @@
 //! $ export JMAP_LIVE_SERVER_URL=https://jmap.example.com
 //! $ export JMAP_LIVE_SERVER_USER=me@example.com
 //! $ export JMAP_LIVE_SERVER_PASSWORD=...        # or JMAP_LIVE_SERVER_TOKEN for Bearer
+//! $ export JMAP_LIVE_SERVER_REBASE_URLS=1       # only if apiUrl names an unreachable origin
 //! $ cargo test -p evolution-jmap-client --features live-server -- --ignored
 //! ```
+//!
+//! `JMAP_LIVE_SERVER_REBASE_URLS` is [`Client::builder`]'s
+//! `rebase_urls_to_origin`: set it when the deployment's session document
+//! names an `apiUrl`/`downloadUrl`/`uploadUrl`/`eventSourceUrl` this runner
+//! cannot route to even though `JMAP_LIVE_SERVER_URL` itself is reachable —
+//! a reverse proxy, NAT boundary, or (the case this exists for) a configured
+//! public hostname advertised over `https` when only a plain-`http` listener
+//! on a different address answers. Leave it unset against a deployment whose
+//! session already names a reachable origin.
 //!
 //! `docs/manual-test-live-server.md` has the full recipe, including how to
 //! provision the disposable Stalwart VM this is meant to run against first
@@ -77,7 +87,11 @@ fn connect() -> Client {
         }
     };
 
-    Client::connect(&origin, credentials)
+    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+
+    Client::builder()
+        .rebase_urls_to_origin(rebase)
+        .connect(&origin, credentials)
         .expect("could not fetch the session document from JMAP_LIVE_SERVER_URL")
 }
 
