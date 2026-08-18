@@ -106,3 +106,28 @@ creates on the way to them, and the `ar` member headers — is
 packaged it. A different EDS version, or a different image, will produce
 different bytes: that is the ABI contract these modules live under, not a
 reproducibility failure.
+
+## 6. The SBOM
+
+Every release also carries `evolution-jmap-<version>.cdx.json`, a
+[CycloneDX](https://cyclonedx.org/) 1.5 Software Bill of Materials: the Rust
+crate graph (from the committed `Cargo.lock`) plus the `.deb`'s system-library
+`Depends`, the ones `dpkg-shlibdeps` derives. It is checksummed and attested
+like every other artifact — it is one of the files in `dist/*`.
+
+```bash
+# Integrity and provenance, same as any other artifact:
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify evolution-jmap-*.cdx.json --repo muelli/evolution-jmap
+
+# Scan it against advisory feeds (either tool; neither is required to install):
+grype sbom:evolution-jmap-*.cdx.json
+osv-scanner --sbom=evolution-jmap-*.cdx.json
+```
+
+The SBOM is reproducible in the same sense as the binaries: its timestamp is
+`SOURCE_DATE_EPOCH` and it carries no random serial number, so it is a
+deterministic function of `Cargo.lock` and the package's `Depends`. The crate
+versions are exact `pkg:cargo` Package-URLs; the system libraries are
+`pkg:deb/ubuntu` names carrying the `Depends` version *constraints* rather than
+resolved versions, because those are fixed only inside the build image.
