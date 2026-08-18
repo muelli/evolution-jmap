@@ -47,15 +47,21 @@
 //!
 //! ## What this deliberately does not do
 //!
-//! Write anything. A real account may be someone's actual mailbox — even the
+//! Write to any account it did not create for the purpose. Most of the
+//! deployment's real mail is not this suite's to touch — even the
 //! disposable Stalwart VM is meant to be reused across runs rather than
-//! reseeded — so every test here is read-only: session discovery, `Core/echo`,
-//! and listing what already exists. `Mailbox/set` round-trips (create, rename,
-//! destroy) are covered against the mock, where they cost nothing.
+//! reseeded — so most tests here are read-only: session discovery,
+//! `Core/echo`, and listing what already exists. `Mailbox/set` round-trips
+//! (create, rename, destroy) are covered against the mock, where they cost
+//! nothing, *and* against a dedicated throwaway account here (see
+//! [`mailbox_create_then_destroy_round_trips_through_the_real_api`]) — the
+//! one exception, and scoped to an account this suite seeded for exactly
+//! this test.
 
 use std::env;
 
 use jmap_client::{Client, Credentials};
+use jmap_proto::mail::Mailbox;
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
 };
@@ -192,4 +198,87 @@ fn calendars_capable_accounts_can_list_their_calendars() {
     };
 
     client.calendars(&account_id).unwrap();
+}
+
+/// Credentials for the one test in this file that writes, kept deliberately
+/// separate from [`connect`]'s: those are handed to every read-only test, so
+/// whatever account someone points them at (their own mailbox, an
+/// operator's shared test login) must never be the one a `Mailbox/set`
+/// lands on. This account exists only if `JMAP_LIVE_SERVER_WRITE_USER`/
+/// `_PASSWORD` are set to a login seeded for exactly this purpose — see
+/// `docs/manual-test-live-server.md`'s "write-path test" section for the
+/// `infra/stalwart/stw seed` recipe. Absent, not just empty, so the base
+/// read-only suite runs without ever needing them: this returns `None`
+/// rather than panicking, and the caller skips.
+fn connect_for_write() -> Option<Client> {
+    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
+    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
+        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
+    let origin = env::var("JMAP_LIVE_SERVER_URL")
+        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
+    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+
+    Some(
+        Client::builder()
+            .rebase_urls_to_origin(rebase)
+            .connect(&origin, Credentials::basic(user, password))
+            .expect("could not fetch the session document for the write-test account"),
+    )
+}
+
+/// The one mutating test in this file: `Mailbox/set` creates a folder, reads
+/// it back through `Mailbox/get`, then destroys it — proof this client's
+/// write path round-trips against a real server's own semantics (id
+/// assignment, state changes), not just `jmap-mockd`'s fixtures, which
+/// already cover the same shape at no risk. Scoped to the throwaway account
+/// [`connect_for_write`] describes; skipped, not failed, when that account
+/// is not configured.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn mailbox_create_then_destroy_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    // Unique per run so a prior run's leftover (e.g. a destroy that failed)
+    // cannot be mistaken for this run's own mailbox.
+    let name = format!(
+        "agent-livewrite-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let mailbox = Mailbox {
+        name: name.clone(),
+        ..Mailbox::default()
+    };
+
+    let created = client
+        .mailbox_create(&account_id, &mailbox)
+        .expect("Mailbox/set create failed against the real server");
+    let id = created
+        .id
+        .clone()
+        .expect("the server named the new mailbox");
+
+    let round_tripped = client
+        .mailbox_get(&account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.id.as_ref() == Some(&id));
+    assert_eq!(
+        round_tripped.map(|mailbox| mailbox.name),
+        Some(name),
+        "the created mailbox does not show up in Mailbox/get afterwards"
+    );
+
+    client
+        .mailbox_destroy(&account_id, &id)
+        .expect("Mailbox/set destroy failed against the real server");
 }
