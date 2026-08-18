@@ -33249,3 +33249,39 @@ Thirty-first independent conclusion: nothing unblocked. Same two items
 flagged since the 374th session — a maintainer call on BACKLOG (B′), and
 (low-leverage) (C) — are what would open further autonomous work; neither
 is this session's to take. No code change this session.
+
+## 2026-08-18 (386th session) — thirty-second re-verification, nothing unblocked
+
+Kept short, checked directly rather than trusted:
+
+- `git fetch origin`: `HEAD` (`c609ae9`) matches `origin/master`, tree
+  clean, no new commits since the 385th session's push.
+- `docs/MILESTONES.md`: M1–M10 all COMPLETE, unchanged. `~/.night-shift-
+  escalate` absent.
+- `git log -3 -- docs/ROADMAP.md docs/BACKLOG.md`: newest touching commits
+  still `dbd43c3` (ROADMAP) and `00271f9` (BACKLOG) — no maintainer edit
+  since the priority order, MAINTAINER DECISIONS, and (B′)/(C) were
+  written.
+- Actions API (`muelli/evolution-jmap`): newest run still `32064810881`
+  (`00271f9`, success); prior dispatch `32063091331` (`dd76d55`, success).
+  Issues (state=all): still only the two closed FFI-audit items, nothing
+  new opened.
+- `df -h /`: 3.0G available (95% full), unchanged.
+- New this session: rather than only read prior sessions' claims, ran the
+  actual gate by hand — `cargo build`/`cargo test` (default-members) and
+  `cargo clippy --all-targets -- -D warnings` in `rust/` are all clean.
+  (`cargo test --workspace` — which pulls in `example-module`, deliberately
+  excluded from `default-members` per the hard rules since it needs the
+  full Evolution shell libs — fails to link with undefined symbols
+  `e_mail_shell_view_get_type`/`e_cal_shell_view_get_type`; that is the
+  expected reason it's kept out of default-members, not a regression, and
+  running with the correct `cargo test` invocation confirms green.)
+- `docs/BACKLOG.md` re-read in full: unchanged — (B′) (jmap-vcard IM-field/
+  ANNIVERSARY/name-sort mapping choice) and (C) (clippy blocked on a
+  third-party bindgen warning on the 3.60 leg) remain the only open items,
+  both explicit maintainer-call/low-leverage under current priority.
+
+Thirty-second independent conclusion: nothing unblocked. Same two items
+flagged since the 374th session — a maintainer call on BACKLOG (B′), and
+(low-leverage) (C) — are what would open further autonomous work; neither
+is this session's to take. No code change this session.
