@@ -34313,3 +34313,53 @@ in `jmap-client/tests/live_server.rs` — capture `CalendarEvent/get`'s `state`
 matching bucket after each one. Same throwaway account and gating.
 `Email/changes` coverage and the same-page classification question stay
 open for a future session.
+
+## 2026-08-18 — Delivered: a CalendarEvent/changes live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
+  — before each of the three steps (create, update, destroy), captures
+  `CalendarEvent/get`'s `state` (fetched with an empty `ids` array, same
+  idiom as the mailbox/contact tests); after each step, calls
+  `Client::all_changes(&account_id, "CalendarEvent", ...)` since that state
+  and asserts the event's id shows up in the matching bucket (`created`,
+  `updated`, `destroyed`).
+- **`docs/manual-test-live-server.md`**: updated to say the mailbox,
+  contact, *and* calendar-event tests now carry the `all_changes` check,
+  leaving only the email test without it (a named follow-up).
+- Note on tooling: `source infra/live-server/live-server-env.sh | tail -N`
+  silently discards the exported variables — bash runs the left side of a
+  pipeline in a subshell, so nothing it exports reaches the parent shell.
+  Cost a few minutes of `curl: (3) URL rejected: No host part in the URL`
+  confusion before switching to a plain `source ...; echo "$STALWART_URL"`.
+  Not a repository bug, just a trap worth naming for the next session that
+  reaches for a pipe to trim the script's own wake-up chatter.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent
+  upsert; previous session's password not recoverable by design; the VM
+  was napped, `stw`'s own auto-wake failed with `PERMISSION_DENIED`/
+  `ACCESS_TOKEN_SCOPE_INSUFFICIENT` on `compute.instances.start` — the
+  runner's service account lacks that scope — but the VM turned out to
+  already be reachable, so this did not block anything).
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the extended calendar-event test —
+  `CalendarEvent/changes` reports Stalwart's own state tokens and
+  created/updated/destroyed classification correctly across a
+  create/update/destroy sequence. No client bug found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --locked`
+  (default-members) green, no failures. `cargo deny`/`reuse lint` still
+  unavailable on this VM; the only changed source file (`live_server.rs`)
+  already carries its SPDX header.
+
+Closes the last of the three `all_changes` follow-ups named after the
+`Mailbox/changes` session (`Mailbox`, `ContactCard`, now `CalendarEvent`
+all covered). Still open for a future session: the same check on
+`Email/changes`, and whether an update landing inside the same page as its
+create classifies correctly (both flags true on one id).
+`send_email`/`submit_email` remain out of scope for this throwaway account
+(no SMTP path configured), unchanged from every prior session in this
+chain. Left `agent-livewrite.net`/`agent1` in place, same reasoning as
+every prior write-path session.
