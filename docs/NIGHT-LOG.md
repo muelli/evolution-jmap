@@ -33082,3 +33082,31 @@ trusted:
 Twenty-fifth independent conclusion: nothing unblocked. As before, a
 maintainer call on BACKLOG (B′) is the only thing that would open new
 autonomous work. No code change this session.
+
+## 2026-08-18 (380th session) — twenty-sixth re-verification, nothing unblocked
+
+Kept short per the 374th session's note. Checked directly rather than
+trusted, including one angle not in the last few passes' checklist:
+
+- `git fetch origin`: `HEAD` (`19d3f67`) matches `origin/master`, tree
+  clean, no new commits since the 379th session's push.
+- `docs/MILESTONES.md`: M1–M10 all COMPLETE, unchanged. `~/.night-shift-
+  escalate` absent.
+- Actions API (correct remote is `muelli/evolution-jmap`, not a guessed
+  slug): newest run still `32064810881` (`00271f9`, success); only four
+  workflows registered (CI image, CI, Release, Runner smoke test) — no
+  standalone `eds-version-matrix` dispatch workflow exists separately, so
+  "unchanged since the 363rd session" for that dispatch is as expected, not
+  stale. Issues/PRs: still only the two closed FFI-audit items, nothing new.
+- `df -h /`: unchanged, 3.2G available (95% full).
+- `docs/BACKLOG.md` re-read in full: unchanged — (B′) and (C) remain the
+  only open items, both explicit maintainer-call/low-leverage under
+  current priority, not autonomous work.
+- New this session: grepped `rust/crates` for `TODO|FIXME|unimplemented!|
+  todo!` looking for a stray marker the milestone-complete tags might have
+  missed. No hits — every match was the substring `VTODO` in iCal
+  test/doc text, not an actual marker.
+
+Twenty-sixth independent conclusion: nothing unblocked. As before, a
+maintainer call on BACKLOG (B′) is the only thing that would open new
+autonomous work. No code change this session.
