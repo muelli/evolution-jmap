@@ -28,15 +28,17 @@ they close, prioritise in this order:
    `--features live-server` integration harness and capability-negotiation
    robustness, all buildable/testable against the mock now so a real server
    (Stalwart, then Fastmail) is a config change, not a rewrite.
-   - **CLAIM THIS — first live-Stalwart test found a real bug (2026-08-18, see
-     NIGHT-LOG "session-discovery redirect strips auth"):** the session lives
-     behind a `307` (`/.well-known/jmap` → `/jmap/session`) and `UreqTransport`
-     lets ureq's default drop the `Authorization` header on the redirect, so the
-     client reads an anonymous, empty-accounts session and fails with "no primary
-     account". Fix: set `redirect_auth_headers = SameHost` in
-     `UreqTransport::new`. **This is mock-testable now** — add a `jmap-mock`
-     mode that serves the session via a `307` to an auth-required path and
-     assert the account still resolves; no live server needed to land it.
+   - **FIXED 2026-08-18 (86fea00)** — the redirect-auth bug found by the first
+     live-Stalwart test (see NIGHT-LOG "session-discovery redirect strips
+     auth" and its "Fixed" follow-up): `UreqTransport::new` now sets
+     `redirect_auth_headers = SameHost`, and `jmap-mock` grew a
+     `session_via_redirect()` mode so the whole thing is covered by
+     `jmap-client/tests/redirect_auth.rs` without a live server. Still
+     outstanding, not this fix's to close: the *secondary* blocker the same
+     finding flagged — Stalwart advertising `apiUrl` as its configured
+     hostname rather than the address reached — is a test-environment/
+     Stalwart-config matter for whoever next runs the operator-side
+     `--features live-server` harness, not a client bug.
 3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
