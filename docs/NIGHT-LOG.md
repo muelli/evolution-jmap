@@ -34559,3 +34559,68 @@ submission. New env vars `JMAP_LIVE_SERVER_RECIPIENT_USER`/
 `_PASSWORD`, mirroring `connect_for_write`'s shape; skipped like every other
 write-path test when unset. Will update `docs/manual-test-live-server.md`
 to match.
+
+## 2026-08-18 — REAL-SERVER FINDING + fix: EmailSubmission omits identityId/emailId
+
+Seeded a second throwaway account (`agent2@agent-livewrite.net`, same
+domain as the existing `agent1`, via `stw seed` — idempotent, no risk to
+the operator's account) and added
+`send_email_delivers_to_a_second_account_on_the_real_server` to
+`jmap-client/tests/live_server.rs`: send via `Client::send_email` from
+`agent1` to `agent2`, then poll `agent2`'s `Email/query` (filtered by the
+message's unique subject, in its Inbox) until it lands — proof of actual
+intra-server delivery, closing the one corner of "real-server readiness"
+every prior live-server session left out (the earlier note "no SMTP path
+configured" was true only of *outbound* relay; delivery between two
+accounts on the same Stalwart deployment needs none).
+
+First run found a real client bug: `Client::send_email` panicked
+deserializing `EmailSubmission/set`'s response with `missing field
+"identityId"`. Root cause, not a Stalwart defect: RFC 8620 §5.3 says a
+`/set` `created` entry need only carry properties "that were not sent by
+the client" — and a client always states `identityId`/`emailId` itself
+when creating an `EmailSubmission`, so neither is server-set. Stalwart
+takes this literally and omits both; this project's own `jmap-mockd` had
+always echoed the full object back (its own convention, never a spec
+requirement), so nothing before tonight ever exercised the terse case.
+
+**Fixed**: `jmap-client/src/mail.rs` gained
+`backfill_submission_created`, called at all three places
+`EmailSubmission/set`'s response is deserialized (`send_email`'s chained
+and split forms, `submit_email`) — it patches the raw JSON with the
+`identityId`/`emailId` the client already sent, before deserializing into
+`EmailSubmission`, rather than requiring the server to repeat them.
+Chose this over making the fields `Option` on `EmailSubmission` generally:
+every other consumer of a fetched or mock-seeded submission reasonably
+expects both present, and the type is otherwise unaffected elsewhere in
+the codebase. Regression-tested against the mock via a new
+`MockServerBuilder::terse_submission_create` toggle (`jmap-mock/src/
+{state,server,mail}.rs`) that strips both fields from a created
+submission's JSON, matching Stalwart's own shape; three new tests in
+`jmap-client/tests/mail_send.rs` cover the chained, split, and
+`submit_email` call sites, each confirmed red (the exact
+`missing field "identityId"` panic) before the fix and green after —
+verified by literally reverting the client-side commit and re-running.
+
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p
+  evolution-jmap-client -p evolution-jmap-mock --all-targets --locked --
+  --features live-server -D warnings` and `cargo clippy --all-targets
+  --locked -- -D warnings` (default-members) both clean, `cargo test
+  --workspace --exclude example-module --exclude jmap-functional --locked`
+  green, no failures. `cargo deny`/`reuse lint` unavailable on this VM as
+  usual; no new source file (nothing new for reuse to judge) and
+  `Cargo.lock` untouched (no new dependency).
+- **Result against the real, live Stalwart**: all 10 tests in
+  `live_server.rs` now pass (the prior 9 plus this one), with
+  `send_email_delivers_to_a_second_account_on_the_real_server` confirming
+  delivery lands within a couple of polls. `docs/manual-test-live-server.md`
+  documents the new test, its second-account env vars
+  (`JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD`), and the finding.
+
+`send_email`/`submit_email` are no longer an open follow-up: the one
+remaining gap named across the entire live-server chain (Mailbox/
+ContactCard/CalendarEvent/Email create+update+destroy+changes, the
+same-page create+update fold, and now sending) is closed. A future
+session should re-survey `docs/ROADMAP.md`/`docs/BACKLOG.md` fresh rather
+than assume another increment in this vein — same advice the prior
+session gave, now doubly true.
