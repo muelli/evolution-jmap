@@ -34248,3 +34248,49 @@ reports the card's id in the matching bucket after each one, mirroring the
 mailbox test exactly. Same throwaway account and gating. `CalendarEvent`/
 `Email` `all_changes` coverage and the same-page classification question
 stay open for a future session.
+
+## 2026-08-18 — Delivered: a ContactCard/changes live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `contact_card_create_update_then_destroy_round_trips_through_the_real_api`
+  — before each of the three steps (create, update, destroy), captures
+  `ContactCard/get`'s `state` (fetched with an empty `ids` array, per RFC
+  8620 §5.1, to read the state without pulling every card in the address
+  book); after each step, calls `Client::all_changes(&account_id,
+  "ContactCard", ...)` since that captured state and asserts the card's id
+  shows up in the matching bucket (`created`, `updated`, `destroyed`) —
+  same shape as the prior session's `Mailbox/changes` extension.
+- **`docs/manual-test-live-server.md`**: documented that the mailbox *and*
+  contact tests now carry the `all_changes` check, and that the
+  calendar-event/email tests do not yet (a named follow-up, not an
+  oversight).
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent
+  upsert; previous session's password not recoverable by design).
+  `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/`.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the extended contact test —
+  `ContactCard/changes` reports Stalwart's own state tokens and
+  created/updated/destroyed classification correctly across a
+  create/update/destroy sequence. No client bug found; fetching state via
+  `contact_get(&account_id, &[])` (an empty, not absent, `ids` array —
+  RFC 8620 §5.1's "no records" case) returned a valid `state` on the first
+  try, confirming that idiom works against a real deployment and not just
+  in theory.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --workspace --exclude
+  example-module --exclude jmap-functional --locked` green, no failures.
+  `cargo deny`/`reuse lint` still unavailable on this VM; the only changed
+  source file (`live_server.rs`) already carries its SPDX header.
+
+Closes one of the two follow-ups the prior session named. Still open for a
+future session: the same `all_changes` check on `CalendarEvent`/`Email`,
+and whether an update landing inside the same page as its create classifies
+correctly (both flags true on one id) — parking both rather than doing more
+than one increment tonight. `send_email`/`submit_email` remain out of scope
+for this throwaway account (no SMTP path configured), unchanged from every
+prior session in this chain. Left `agent-livewrite.net`/`agent1` in place,
+same reasoning as every prior write-path session.
