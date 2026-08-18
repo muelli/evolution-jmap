@@ -352,7 +352,7 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("Yahoo", "X-YAHOO"),
 ];
 
-/// The URI scheme each service states its handles under, for the services whose
+/// The URI schemes each service states its handles under, for the services whose
 /// scheme names the handle *literally* — `xmpp:vera@jabber.example` is the JID
 /// `vera@jabber.example` with a prefix and nothing else.
 ///
@@ -361,31 +361,40 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 /// without it the handle would have to be guessed out of the URI, and the guess
 /// would be written back on the next save.
 ///
-/// Deliberately shorter than [`ONLINE_SERVICES`], because a scheme is only
-/// listed here where its scheme-specific part *is* the handle:
-///
+/// - `aim` for AIM (`aim:<screenname>`).
 /// - `gg` is the provisional IANA scheme (RFC 7595 template `gg:<userid>`) for
 ///   Gadu-Gadu, whose path is the numerical user identifier (UIN).
 /// - `xmpp` is RFC 5122 §2.1's, whose path is a JID. Google Talk ran on XMPP,
 ///   so its handles are JIDs too, and one scheme serves both.
+/// - `groupwise` for GroupWise.
+/// - `icq` for ICQ (`icq:<uin>`).
+/// - `msn` and `msnim` for MSN Messenger (`msn:<user>` or `msnim:<user>`).
+/// - `matrix` for Matrix bare handle URIs (`matrix:<handle>`).
 /// - `skype` is the scheme Skype's own links use, where the bare form
 ///   `skype:<name>` is the Skype Name and the rest is a query telling the client
 ///   what to do with it — which [`plain_handle`] refuses.
-/// - `matrix` is left out: RFC-registered, but it states an identifier as
-///   `u/vera:matrix.example` rather than as the `@vera:matrix.example` the field
-///   holds, so reading one means rewriting it and writing one means the reverse.
-/// - AIM, ICQ, MSN and Yahoo: AIM and MSN/Yahoo conventionally use query/action
-///   URIs (e.g. `aim:goim?screenname=...`, `msnim:chat?contact=...`,
-///   `ymsgr:sendim?...`) which [`plain_handle`] rejects, while ICQ has no
-///   registered standalone IANA scheme.
+/// - `yahoo` and `ymsgr` for Yahoo Messenger (`yahoo:<user>` or `ymsgr:<user>`).
+///
+/// Action/query URIs (such as `aim:goim?screenname=...`, `msnim:chat?contact=...`,
+/// `ymsgr:sendim?...`, `icq:message?uin=...`, `matrix:u/vera:...`) are refused by
+/// [`plain_handle`] because they carry query parameters or path structures that
+/// do not represent bare handles.
 ///
 /// Getting a scheme *wrong* is bounded the same way: a URI whose scheme does not
 /// match is not drawn, which is the behaviour of every service missing here.
-const SERVICE_SCHEMES: [(&str, &str); 4] = [
+const SERVICE_SCHEMES: [(&str, &str); 12] = [
+    ("AIM", "aim"),
     ("Gadu-Gadu", "gg"),
     ("Google Talk", "xmpp"),
+    ("GroupWise", "groupwise"),
+    ("ICQ", "icq"),
     ("Jabber", "xmpp"),
+    ("MSN", "msn"),
+    ("MSN", "msnim"),
+    ("Matrix", "matrix"),
     ("Skype", "skype"),
+    ("Yahoo", "yahoo"),
+    ("Yahoo", "ymsgr"),
 ];
 
 /// The slot EDS files a handle in when nothing says otherwise, and the only one
@@ -990,10 +999,13 @@ pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
 /// The handle inside a service's URI, for a URI that states one and nothing
 /// else.
 fn handle_in_uri<'a>(service: &str, uri: &'a str) -> Option<&'a str> {
-    let scheme = service_scheme(service)?;
+    let wanted = normalised_service(service);
     let (stated, handle) = uri.split_once(':')?;
     // Case-insensitively, as RFC 3986 §3.1 requires of a scheme.
-    (stated.eq_ignore_ascii_case(scheme) && plain_handle(handle)).then_some(handle)
+    let matches = SERVICE_SCHEMES.iter().any(|(name, scheme)| {
+        normalised_service(name) == wanted && stated.eq_ignore_ascii_case(scheme)
+    });
+    (matches && plain_handle(handle)).then_some(handle)
 }
 
 /// The URI a service would state a handle under, or `None` when there is no
