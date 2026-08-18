@@ -192,7 +192,10 @@ in the invocation, worth failing loudly on.
   book (`ContactCardQueryFilter::in_address_book`) — the exact call
   `jmap-book-sync::list_existing_sync` makes to enumerate an address book,
   which had no live-server coverage from the `get`/`set`/`changes` checks
-  alone.
+  alone. The calendar test makes the same check with `Client::event_query`
+  and `CalendarEventQueryFilter::in_calendar`, mirroring
+  `jmap-cal-sync::list_existing_sync`'s equivalent call to enumerate a
+  calendar.
 - `email_import_update_then_destroy_round_trips_through_the_real_api` — the
   mail write path's other shape: uploads a small message's bytes via
   `Client::upload_blob`, imports it into the account's Inbox via
