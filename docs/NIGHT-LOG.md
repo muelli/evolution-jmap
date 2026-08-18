@@ -33653,3 +33653,57 @@ account (`alice@example.com`, `admin@example.com`) untouched. If it passes,
 this is the first genuine round-trip proof of `jmap-client`'s mutating
 JMAP calls against a real, non-mock server. If it fails, that is exactly
 the kind of finding this track exists to surface.
+
+## 2026-08-18 — Delivered: a live-server write-path test, and it passed
+
+Seeded a dedicated throwaway account rather than touching either
+pre-existing one: `./infra/stalwart/stw seed agent-livewrite.net agent1
+<generated password>` (the `.invalid`/`.test` TLDs Stalwart's own domain
+validation refuses — tried `.invalid` first, got `invalidPatch: Invalid
+domain name`; a conventional-looking TLD it does not itself resolve, like
+`.net` here, is accepted). Verified the seeded account authenticates and
+carries mail/contacts/calendars capabilities before writing any test
+against it.
+
+- **`jmap-client/tests/live_server.rs`**: added
+  `connect_for_write()`, which only returns a `Client` if
+  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are set — deliberately separate
+  from `connect()`'s variables, so the base read-only suite's credentials
+  (which might be a real person's mailbox) can never be the ones a
+  `Mailbox/set` lands on. New test
+  `mailbox_create_then_destroy_round_trips_through_the_real_api`: creates a
+  uniquely-named mailbox, confirms it shows up via `Mailbox/get` with the
+  right name, then destroys it. Skips (does not fail) when the write
+  credentials are absent, so this is opt-in on top of the existing
+  `--ignored` gate, not a new hard requirement for the file.
+- **`docs/manual-test-live-server.md`**: documented the new step 3 (seed a
+  throwaway account, export the two new env vars) and added the write test
+  to the "what it worked means" list. Corrected the file's former "It is
+  read-only" claim, which this test makes no longer true of the file as a
+  whole (still true of every other test in it).
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1` since the apiUrl-scheme
+  issue is unchanged): all 6 tests in the file pass, including the new one.
+  Ran the write test twice in a row (same process, fresh unique mailbox name
+  each time) to check for any leftover-state issue — both passed cleanly,
+  `Mailbox/destroy` leaves nothing behind.
+- Full gate: `cargo fmt --check` (one nit `cargo fmt` fixed, re-checked
+  clean), `cargo clippy -p evolution-jmap-client --all-targets --locked --
+  -D warnings` and the same with `--features live-server` both clean,
+  `cargo test --workspace --exclude example-module --exclude
+  jmap-functional --locked` green (201 `test result: ok`, zero failures).
+  `cargo deny`/`reuse lint` still unavailable on this VM; both changed
+  files already carried their SPDX headers (existing files, not new ones).
+
+Left in place rather than torn down: the `agent-livewrite.net`/`agent1`
+account on Stalwart, since the account is exactly what a future session
+needs to run this same test again, and `stw seed` is an idempotent upsert
+— a later session that lost the password can just reseed it rather than
+this test staying permanently unusable. Password was not committed
+anywhere (generated locally, kept only in this session's `/tmp`).
+
+This closes the last concrete gap `live_server.rs`'s own doc comment named
+("What this deliberately does not do: Write anything") now that this
+session's environment made a safe way to do so available. No client bug
+found this time — unlike the redirect-auth and apiUrl findings, the write
+path worked correctly on the first real attempt.
