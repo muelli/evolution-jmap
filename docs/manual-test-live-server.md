@@ -16,10 +16,12 @@ round_trips_through_the_real_api` (`Mailbox/set` create, then a rename via
 (`ContactCard/set` create, then a rename via `contact_update`, then destroy),
 `calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
 (`CalendarEvent/set` create, then a title change via `event_update`, then
-destroy), and `email_import_round_trips_through_the_real_api` (`Email/import`
-via `upload_blob` then `download_blob`). All four run only against a
-separate, dedicated throwaway account (see step 3) so they can never touch
-whatever account the read-only tests are pointed at.
+destroy), and
+`email_import_update_then_destroy_round_trips_through_the_real_api`
+(`Email/import` via `upload_blob`, a mark-as-read via `email_update`, then
+`download_blob`). All four run only against a separate, dedicated throwaway
+account (see step 3) so they can never touch whatever account the read-only
+tests are pointed at.
 
 ## 1. Get a server
 
@@ -148,15 +150,19 @@ in the invocation, worth failing loudly on.
   making, relying on Stalwart auto-provisioning both per account. Skipped,
   not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not
   set.
-- `email_import_round_trips_through_the_real_api` — the mail write path's
-  other shape: uploads a small message's bytes via `Client::upload_blob`,
-  imports it into the account's Inbox via `Email/import`, confirms it via
-  `Email/get`, downloads the blob back via `Client::download_blob`, then
-  destroys it. Does not require the downloaded bytes to equal the uploaded
-  bytes verbatim — RFC 8621 §4.8 allows a server to repair or re-serialize
-  an imported message — only that the downloaded length matches the `size`
-  `Email/get` itself reports and that the message's subject survived.
-  Skipped under the same condition as the other three.
+- `email_import_update_then_destroy_round_trips_through_the_real_api` — the
+  mail write path's other shape: uploads a small message's bytes via
+  `Client::upload_blob`, imports it into the account's Inbox via
+  `Email/import`, confirms it via `Email/get`, marks it read via
+  `email_update`'s `{"keywords/$seen": true}` `PatchObject` (what
+  `jmap-mail-sync::MailSync::set_keywords` sends whenever a user marks a
+  message read/unread or flags it), confirms the `$seen` keyword via
+  another `Email/get`, downloads the blob back via `Client::download_blob`,
+  then destroys it. Does not require the downloaded bytes to equal the
+  uploaded bytes verbatim — RFC 8621 §4.8 allows a server to repair or
+  re-serialize an imported message — only that the downloaded length
+  matches the `size` `Email/get` itself reports and that the message's
+  subject survived. Skipped under the same condition as the other three.
 
 Anything short of that is a finding, not a nuisance — write it down in
 `docs/NIGHT-LOG.md`.
