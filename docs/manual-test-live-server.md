@@ -8,9 +8,11 @@ never seen, limits that are actually enforced, a session shaped by a server
 this project does not control. `rust/crates/jmap-client/tests/live_server.rs`
 is the other half, and this is its recipe.
 
-It is read-only. Every test in that file is session discovery, `Core/echo`,
-or listing what already exists — nothing here creates, renames or deletes
-anything on the server it is pointed at.
+Almost all of it is read-only — session discovery, `Core/echo`, or listing
+what already exists. One test, `mailbox_create_then_destroy_round_trips_
+through_the_real_api`, does write (`Mailbox/set` create then destroy), and
+it only runs against a separate, dedicated throwaway account (see step 3)
+so it can never touch whatever account the read-only tests are pointed at.
 
 ## 1. Get a server
 
@@ -69,7 +71,29 @@ reached, rather than trusting the address the server states. Leave it unset
 by default: it exists for exactly this apiUrl/hostname mismatch, not as a
 routine option.
 
-## 3. Run it
+## 3. (optional) Enable the write-path test
+
+`mailbox_create_then_destroy_round_trips_through_the_real_api` is skipped,
+not failed, unless a *separate* login is given for it — deliberately not
+the same variables step 2 sets, so pointing the read-only tests at a real
+mailbox can never also point the one mutating test at it. Seed a throwaway
+account for this alone (the Stalwart VM's `infra/stalwart/stw seed`
+wrapper needs `stalwart-cli` on `PATH`; see that script's header for where
+to get it):
+
+```console
+$ ./infra/stalwart/stw seed agent-livewrite.net agent1 '<a fresh password>'
+$ export JMAP_LIVE_SERVER_WRITE_USER=agent1@agent-livewrite.net
+$ export JMAP_LIVE_SERVER_WRITE_PASSWORD='<that password>'
+```
+
+`stw seed` is idempotent (an upsert), so re-running it — e.g. from a later
+session that lost the password — just resets that one account's password
+rather than erroring or duplicating anything. Use a domain name that is
+obviously a test fixture (`agent-*`), never the operator's own
+(`example.com`, `alice@example.com`).
+
+## 4. Run it
 
 ```console
 $ cargo test -p evolution-jmap-client --features live-server -- --ignored
@@ -103,6 +127,11 @@ in the invocation, worth failing loudly on.
   calendar yet, so the round trip succeeding — proving this client's types
   read what a real server actually sends, not just `jmap-mockd`'s fixtures —
   is the claim. An account with no such capability is reported and skipped.
+- `mailbox_create_then_destroy_round_trips_through_the_real_api` — `Mailbox/
+  set` creates a folder, `Mailbox/get` shows it back with the right name, and
+  `Mailbox/set` destroys it again — the write path, not just reads, against a
+  real server's own id assignment and state changes. Skipped, not failed,
+  when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
 
 Anything short of that is a finding, not a nuisance — write it down in
 `docs/NIGHT-LOG.md`.
