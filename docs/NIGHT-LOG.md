@@ -34935,3 +34935,30 @@ OAuth2 issuer-mismatch call and the EDS 3.60+ mapping decisions
 than assume another increment in this vein — but this time verify against
 the actual production call sites (`grep` the `*-sync` crates for what they
 call), not just against what earlier night-log entries claim is covered.
+
+## 2026-08-19 — OPERATOR HUMAN VERIFICATION: real-server end-to-end through Evolution
+
+First full end-to-end of the plugin against a REAL JMAP server (Stalwart
+0.16, the disposable GCP test VM) driven through real Evolution's UI — not the
+harness. All three domains work and round-trip:
+- **Mail**: composed and sent a message to `alice@example.com`; it submitted,
+  delivered locally, and was READ back in the Inbox — exercising the whole
+  EmailSubmission path incl. the identityId/emailId backfill (`daf9b3b`).
+- **Contacts**: created a contact; it saved and came back from the server.
+- **Calendar**: created an event; saved and came back from the server.
+- **Persistence**: all of it survived `--force-shutdown` + a full VM reboot,
+  re-read from Stalwart — proof it synced up, not just cached locally.
+
+This is the real-server dimension of M7 (account UI) and of "real-server
+readiness" (ROADMAP item 2), confirmed by a human. As expected, the account
+shows an Address Book + a Calendar (events) but no Tasks/Memos — correct: JMAP
+`:calendars` is CalendarEvent-only; VTODO/VJOURNAL are a CalDAV surface the
+plugin deliberately does not offer (`jmap-backend-cal/src/factory.rs`).
+
+Test-env caveats (not product gaps): reached Stalwart via a socat localhost
+forward with `JMAP_LIVE_SERVER_REBASE_URLS=1` (the client honours it in
+`Client::connect`, `fd1322e`), because this Stalwart advertises `apiUrl` as
+`https://example.com` and is only reachable over plain HTTP behind the forward.
+A real deployment (client connects to the server's own TLS hostname, apiUrl ==
+origin) needs no rebase. Remaining real-server item: the OAuth 2.0 discovery
+issuer-mismatch finding (`2672cb4`) is still open.
