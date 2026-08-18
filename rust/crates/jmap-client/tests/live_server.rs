@@ -383,11 +383,13 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
 
 /// The calendars capability's half of the write-path proof: `CalendarEvent/
 /// set` creates an event in the account's default calendar, reads it back
-/// through `CalendarEvent/get`, then destroys it. Same default-calendar
-/// assumption as the contacts test makes about the default address book.
+/// through `CalendarEvent/get`, updates it (`event_update`'s `PatchObject`
+/// path — what a user editing an event's title in the calendar view sends),
+/// reads it back again, then destroys it. Same default-calendar assumption
+/// as the contacts test makes about the default address book.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
-fn calendar_event_create_then_destroy_round_trips_through_the_real_api() {
+fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
@@ -422,6 +424,23 @@ fn calendar_event_create_then_destroy_round_trips_through_the_real_api() {
         round_tripped.and_then(|event| event.title),
         Some(title),
         "the created event does not show up in CalendarEvent/get afterwards"
+    );
+
+    let updated_title = format!("agent-livewrite-updated-{}", unique_suffix());
+    client
+        .event_update(&account_id, &id, json!({"title": updated_title}))
+        .expect("CalendarEvent/set update failed against the real server");
+
+    let round_tripped_after_update = client
+        .event_get(&account_id, std::slice::from_ref(&id))
+        .unwrap()
+        .list
+        .into_iter()
+        .next();
+    assert_eq!(
+        round_tripped_after_update.and_then(|event| event.title),
+        Some(updated_title),
+        "the updated event does not show the new title in CalendarEvent/get afterwards"
     );
 
     client
