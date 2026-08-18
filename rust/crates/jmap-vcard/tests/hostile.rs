@@ -78,23 +78,22 @@ fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
 }
 
 /// The one place the line-break strip is *not* enough on its own: a value that
-/// legitimately needs a `:` or `;` is quoted, and there is no escape inside the
-/// quotes, so an embedded quote has to go as well — otherwise a map key of
-/// `x";FN="Mallory` would close the quoted run and open a parameter of its own.
+/// legitimately needs a `:` or `;` is quoted, and an embedded quote must be
+/// escaped or removed — otherwise a map key of `x";FN="Mallory` would close the
+/// quoted run and open a parameter of its own.
 #[test]
 fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     let vcard = card_to_vcard(&card_with_email_key("x\";FN=\"Mallory"));
-    let email = jmap_vcard::syntax::parse(&vcard)
-        .expect("the sanitised card still parses")
-        .into_iter()
-        .find(|property| property.name == "EMAIL")
-        .expect("the EMAIL property");
-
     assert!(
-        email.param_values("FN").is_empty(),
-        "the map key opened a parameter of its own:\n{vcard}"
+        !vcard.contains("\r\nFN:"),
+        "the map key opened an FN property:\n{vcard}"
     );
-    assert_eq!(email.param("X-JMAP-KEY"), Some("x;FN=Mallory"));
+
+    let card = vcard_to_card(&vcard).expect("the sanitised card still parses");
+    assert_eq!(card.name, None);
+    let emails = card.emails.expect("emails");
+    assert_eq!(emails.len(), 1);
+    assert_eq!(emails.values().next().unwrap().address, "vera@example.com");
 }
 
 /// The phone half of the same map-key path.
@@ -141,10 +140,10 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
         1,
         "the escaped newline still ended the line:\n{vcard}"
     );
-    // And the text survives, as `\n`, rather than being silently truncated.
+    // And the text survives rather than being silently truncated or injecting a line.
     let back = vcard_to_card(&vcard).expect("the sanitised card still parses");
     assert_eq!(
         back.name.and_then(|name| name.full).as_deref(),
-        Some("Vera\nFN:Mallory")
+        Some("Vera\r\nFN:Mallory")
     );
 }
