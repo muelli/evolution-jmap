@@ -247,6 +247,16 @@ fn connect_for_write() -> Option<Client> {
 /// already cover the same shape at no risk. Scoped to the throwaway account
 /// [`connect_for_write`] describes; skipped, not failed, when that account
 /// is not configured.
+///
+/// Also checks `Client::all_changes` (RFC 8620 §5.2's `/changes`, the
+/// primitive every EDS meta-backend's `get_changes_sync` drives) after each
+/// mutation: the mailbox's id must show up in the right bucket
+/// (`created`/`updated`/`destroyed`) since the state captured just before
+/// that mutation. `jmap-mockd`'s state tokens are this crate's own
+/// invention; a real server's tokens, pagination (`hasMoreChanges`), and
+/// created/updated/destroyed classification are Stalwart's, not fixed by
+/// this workspace, so this is the first place they are exercised end to
+/// end.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
@@ -257,6 +267,11 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
     let account_id = client
         .primary_account(CAPABILITY_MAIL)
         .expect("the write-test account needs the mail capability");
+
+    let state_before_create = client
+        .mailbox_get(&account_id)
+        .expect("Mailbox/get failed against the real server")
+        .state;
 
     // Unique per run so a prior run's leftover (e.g. a destroy that failed)
     // cannot be mistaken for this run's own mailbox.
@@ -286,6 +301,15 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
         "the created mailbox does not show up in Mailbox/get afterwards"
     );
 
+    let changes_after_create = client
+        .all_changes(&account_id, "Mailbox", &state_before_create)
+        .expect("Mailbox/changes failed against the real server");
+    assert!(
+        changes_after_create.created.contains(&id),
+        "Mailbox/changes since before the create does not list the new mailbox as created"
+    );
+
+    let state_before_rename = client.mailbox_get(&account_id).unwrap().state;
     let renamed_name = format!("agent-livewrite-renamed-{}", unique_suffix());
     client
         .mailbox_update(&account_id, &id, json!({"name": renamed_name}))
@@ -303,9 +327,26 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
         "the renamed mailbox does not show the new name in Mailbox/get afterwards"
     );
 
+    let changes_after_rename = client
+        .all_changes(&account_id, "Mailbox", &state_before_rename)
+        .expect("Mailbox/changes failed against the real server");
+    assert!(
+        changes_after_rename.updated.contains(&id),
+        "Mailbox/changes since before the rename does not list the mailbox as updated"
+    );
+
+    let state_before_destroy = client.mailbox_get(&account_id).unwrap().state;
     client
         .mailbox_destroy(&account_id, &id)
         .expect("Mailbox/set destroy failed against the real server");
+
+    let changes_after_destroy = client
+        .all_changes(&account_id, "Mailbox", &state_before_destroy)
+        .expect("Mailbox/changes failed against the real server");
+    assert!(
+        changes_after_destroy.destroyed.contains(&id),
+        "Mailbox/changes since before the destroy does not list the mailbox as destroyed"
+    );
 }
 
 /// The contacts capability's half of the write-path proof: `ContactCard/set`
