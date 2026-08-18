@@ -357,6 +357,13 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
 /// auto-provisioning one default address book per account (confirmed by
 /// hand before this test was written) rather than creating one first — the
 /// same assumption the mailbox test makes about a default Inbox.
+///
+/// Also checks `Client::all_changes` after each mutation, same as
+/// [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`]:
+/// `jmap-book-sync`'s own polling loop drives `ContactCard/changes`
+/// (`lib.rs:153`), and a real server's state tokens and
+/// created/updated/destroyed classification for this type had no
+/// live-server coverage until now.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
@@ -375,6 +382,11 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
         .expect("the write-test account needs a default address book")
         .id
         .expect("the server named the address book");
+
+    let state_before_create = client
+        .contact_get(&account_id, &[])
+        .expect("ContactCard/get failed against the real server")
+        .state;
 
     let full_name = format!("agent-livewrite-{}", unique_suffix());
     let card = ContactCard::simple(book_id, &full_name, "agent-livewrite@example.invalid");
@@ -398,6 +410,15 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
         "the created card does not show up in ContactCard/get afterwards"
     );
 
+    let changes_after_create = client
+        .all_changes(&account_id, "ContactCard", &state_before_create)
+        .expect("ContactCard/changes failed against the real server");
+    assert!(
+        changes_after_create.created.contains(&id),
+        "ContactCard/changes since before the create does not list the new card as created"
+    );
+
+    let state_before_update = client.contact_get(&account_id, &[]).unwrap().state;
     let renamed_full_name = format!("agent-livewrite-renamed-{}", unique_suffix());
     client
         .contact_update(&account_id, &id, json!({"name/full": renamed_full_name}))
@@ -417,9 +438,26 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
         "the updated card does not show the new name in ContactCard/get afterwards"
     );
 
+    let changes_after_update = client
+        .all_changes(&account_id, "ContactCard", &state_before_update)
+        .expect("ContactCard/changes failed against the real server");
+    assert!(
+        changes_after_update.updated.contains(&id),
+        "ContactCard/changes since before the update does not list the card as updated"
+    );
+
+    let state_before_destroy = client.contact_get(&account_id, &[]).unwrap().state;
     client
         .contact_destroy(&account_id, &id)
         .expect("ContactCard/set destroy failed against the real server");
+
+    let changes_after_destroy = client
+        .all_changes(&account_id, "ContactCard", &state_before_destroy)
+        .expect("ContactCard/changes failed against the real server");
+    assert!(
+        changes_after_destroy.destroyed.contains(&id),
+        "ContactCard/changes since before the destroy does not list the card as destroyed"
+    );
 }
 
 /// The calendars capability's half of the write-path proof: `CalendarEvent/
