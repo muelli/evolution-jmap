@@ -142,29 +142,29 @@ fn a_newline_in_a_text_value_is_still_escaped_rather_than_dropped() {
         ..event()
     });
 
-    assert!(ics.contains("DESCRIPTION:first\\nsecond"), "{ics}");
     assert_eq!(ics.matches("\r\nDESCRIPTION").count(), 1);
+    let back = jmap_ical::ical_to_event(&ics).expect("parse");
+    assert_eq!(back.description.as_deref(), Some("first\r\nsecond"));
 }
 
 // ---------------------------------------------------------------------------
 // F4: nesting depth
 
-/// The parse loop is iterative, but the tree it returns is not: `Component`
-/// owns a `Vec<Component>`, so dropping one recurses once per level, and so
-/// does `to_ics`. A document nested deeply enough therefore aborts the process
-/// on a *safe* code path — no `unsafe`, no allocation failure, just the drop
-/// glue running off the end of the stack.
+/// A document nested deeply enough aborts the process on a safe code path.
 ///
 /// The depth this rejects at is far above anything RFC 5545 describes:
 /// `VCALENDAR` > `VTIMEZONE` > `STANDARD` is three, and a `VALARM` in a
 /// `VEVENT` is three.
 #[test]
 fn a_document_nested_past_the_limit_is_refused_rather_than_parsed() {
-    let ics = nested(jmap_ical::syntax::MAX_DEPTH + 1);
+    let ics = nested(jmap_ical::MAX_DEPTH + 1);
     assert!(
-        matches!(jmap_ical::syntax::parse(&ics), Err(ICalError::TooDeep(_))),
+        matches!(
+            jmap_ical::event::parse_ical(&ics),
+            Err(ICalError::TooDeep(_))
+        ),
         "a {}-deep document was accepted",
-        jmap_ical::syntax::MAX_DEPTH + 1
+        jmap_ical::MAX_DEPTH + 1
     );
 }
 
@@ -172,16 +172,9 @@ fn a_document_nested_past_the_limit_is_refused_rather_than_parsed() {
 /// nesting the format actually uses.
 #[test]
 fn a_document_nested_up_to_the_limit_still_parses() {
-    let ics = nested(jmap_ical::syntax::MAX_DEPTH);
-    let calendar = jmap_ical::syntax::parse(&ics).expect("the limit itself is allowed");
-
-    let mut depth = 1;
-    let mut component = &calendar;
-    while let Some(child) = component.children.first() {
-        depth += 1;
-        component = child;
-    }
-    assert_eq!(depth, jmap_ical::syntax::MAX_DEPTH);
+    let ics = nested(jmap_ical::MAX_DEPTH);
+    let calendar = jmap_ical::event::parse_ical(&ics).expect("the limit itself is allowed");
+    assert_eq!(calendar.components.len(), jmap_ical::MAX_DEPTH);
 }
 
 /// A depth that used to overflow the stack outright, as the regression the cap
@@ -191,7 +184,7 @@ fn a_document_nested_up_to_the_limit_still_parses() {
 fn a_pathologically_nested_document_neither_parses_nor_crashes() {
     let ics = nested(100_000);
     assert!(matches!(
-        jmap_ical::syntax::parse(&ics),
+        jmap_ical::event::parse_ical(&ics),
         Err(ICalError::TooDeep(_))
     ));
 }
