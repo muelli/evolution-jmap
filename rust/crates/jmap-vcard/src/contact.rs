@@ -216,6 +216,9 @@ use std::collections::BTreeMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as BASE64, STANDARD_NO_PAD as BASE64_UNPADDED};
+use calcard::common::IanaString;
+use calcard::vcard::{VCardEntry, VCardParameterValue, VCardValue, VCardValueType};
+use calcard::{Entry, Parser};
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
@@ -1176,11 +1179,11 @@ fn drawn_tags(card: &ContactCard) -> Vec<&str> {
 /// keyed maps have one: the save reads an edit off a difference from what was
 /// shown, and an empty set would claim the contact is untagged where the vCard
 /// made no claim at all.
-fn read_keywords(properties: &[Property]) -> Option<BTreeMap<String, Value>> {
-    let tags: BTreeMap<String, Value> = properties
+fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
+    let tags: BTreeMap<String, Value> = entries
         .iter()
-        .filter(|property| property.name == CATEGORIES)
-        .flat_map(Property::items)
+        .filter(|entry| entry.name.as_str().eq_ignore_ascii_case(CATEGORIES))
+        .flat_map(entry_items)
         .filter(|tag| !tag.is_empty())
         .map(|tag| (tag, Value::Bool(true)))
         .collect();
@@ -1587,16 +1590,21 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
 /// JMAP id — the caller knows which case it is in and must drop it before
 /// sending a create.
 pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
-    let properties = syntax::parse(vcard)?;
+    let card = match Parser::new(vcard).strict().entry() {
+        Entry::VCard(card) => card,
+        Entry::UnterminatedComponent(_) => return Err(VCardError::Unterminated),
+        Entry::InvalidLine(line) => return Err(VCardError::Malformed(line)),
+        _ => return Err(VCardError::NotAVCard),
+    };
     let text = |name: &str| {
-        properties
+        card.entries
             .iter()
-            .find(|property| property.name == name)
-            .map(Property::text)
+            .find(|entry| entry.name.as_str().eq_ignore_ascii_case(name))
+            .map(entry_text)
             .filter(|value| !value.is_empty())
     };
 
-    let name = read_name(&properties);
+    let name = read_name(&card.entries);
     let mut nicknames = BTreeMap::new();
     let mut emails = BTreeMap::new();
     let mut phones = BTreeMap::new();
@@ -1611,8 +1619,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut online_services = BTreeMap::new();
     let mut related_to = BTreeMap::new();
 
-    for property in &properties {
-        match property.name.as_str() {
+    for entry in &card.entries {
+        let name_upper = entry.name.as_str().to_ascii_uppercase();
+        match name_upper.as_str() {
             "NICKNAME" => {
                 // Read as a `text-list` value, because that is what RFC 2426
                 // §3.1.3 makes it and what calcard parses it as: a comma the
@@ -1620,68 +1629,68 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 // it is to EDS, rather than a separator that would file the
                 // rest of the line as a second nickname.
                 let nickname = Nickname {
-                    name: property.text_list(),
+                    name: entry_text_list(entry),
                     extra: BTreeMap::new(),
                 };
                 if !states_nickname(&nickname) {
                     continue;
                 }
-                nicknames.insert(entry_key(property, "k", &nicknames), nickname);
+                nicknames.insert(entry_key(entry, "k", &nicknames), nickname);
             }
             "EMAIL" => {
-                let address = property.text();
+                let address = entry_text(entry);
                 if address.is_empty() {
                     continue;
                 }
                 let email = ContactEmail {
                     address,
-                    contexts: read_flags(&CONTEXTS, property),
-                    pref: property.has_type("PREF").then_some(1),
+                    contexts: read_flags(&CONTEXTS, entry),
+                    pref: entry_has_type(entry, "PREF").then_some(1),
                     ..ContactEmail::default()
                 };
-                emails.insert(entry_key(property, "e", &emails), email);
+                emails.insert(entry_key(entry, "e", &emails), email);
             }
             "TEL" => {
-                let number = property.text();
+                let number = entry_text(entry);
                 if number.is_empty() {
                     continue;
                 }
                 let phone = ContactPhone {
                     number,
-                    contexts: read_flags(&CONTEXTS, property),
-                    features: read_flags(&PHONE_FEATURES, property),
-                    pref: property.has_type("PREF").then_some(1),
+                    contexts: read_flags(&CONTEXTS, entry),
+                    features: read_flags(&PHONE_FEATURES, entry),
+                    pref: entry_has_type(entry, "PREF").then_some(1),
                     ..ContactPhone::default()
                 };
-                phones.insert(entry_key(property, "p", &phones), phone);
+                phones.insert(entry_key(entry, "p", &phones), phone);
             }
             "ADR" => {
-                let Some(address) = read_address(property) else {
+                let Some(address) = read_address(entry) else {
                     continue;
                 };
-                addresses.insert(entry_key(property, "a", &addresses), address);
+                addresses.insert(entry_key(entry, "a", &addresses), address);
             }
             "ORG" => {
-                let Some(organization) = read_organization(property) else {
+                let Some(organization) = read_organization(entry) else {
                     continue;
                 };
-                organizations.insert(entry_key(property, "o", &organizations), organization);
+                organizations.insert(entry_key(entry, "o", &organizations), organization);
             }
             "TITLE" | "ROLE" => {
-                let Some(title) = read_title(property) else {
+                let Some(title) = read_title(entry) else {
                     continue;
                 };
-                titles.insert(entry_key(property, "t", &titles), title);
+                titles.insert(entry_key(entry, "t", &titles), title);
             }
             "NOTE" => {
                 let note = Note {
-                    note: property.text(),
+                    note: entry_text(entry),
                     extra: BTreeMap::new(),
                 };
                 if !states_note(&note) {
                     continue;
                 }
-                notes.insert(entry_key(property, "n", &notes), note);
+                notes.insert(entry_key(entry, "n", &notes), note);
             }
             "URL" => {
                 // Read as one value, which is what calcard makes of a URI:
@@ -1689,52 +1698,52 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 // anything, so a query string listing tags arrives as the URI
                 // the line stated rather than as a fragment of it.
                 let link = Link {
-                    uri: property.text(),
+                    uri: entry_text(entry),
                     kind: None,
                     extra: BTreeMap::new(),
                 };
                 if !states_link(&link) {
                     continue;
                 }
-                links.insert(entry_key(property, "l", &links), link);
+                links.insert(entry_key(entry, "l", &links), link);
             }
             // Both calendaring lines feed one keyed map, so the line's own name
             // is the only thing that says what kind the entry is — and the keys
             // the reader invents for the two have to be free of each other's.
             "CALURI" | "FBURL" => {
-                let uri = property.text();
+                let uri = entry_text(entry);
                 if uri.is_empty() {
                     continue;
                 }
                 let calendar = Calendar {
-                    kind: calendar_kind(&property.name).map(str::to_owned),
+                    kind: calendar_kind(&name_upper).map(str::to_owned),
                     uri,
                     extra: BTreeMap::new(),
                 };
-                calendars.insert(entry_key(property, "c", &calendars), calendar);
+                calendars.insert(entry_key(entry, "c", &calendars), calendar);
             }
             "PHOTO" => {
-                let Some(photo) = read_photo(property) else {
+                let Some(photo) = read_photo(entry) else {
                     continue;
                 };
-                media.insert(entry_key(property, "m", &media), photo);
+                media.insert(entry_key(entry, "m", &media), photo);
             }
             // Every line of the name, not only the first EDS shows the user: a
             // relation nobody can edit is still one a save must not delete. The
             // key is the line's own text, so nothing is invented and an
             // X-JMAP-KEY, if some other client wrote one, is not read.
             X_EVOLUTION_SPOUSE => {
-                let (key, relation) = spouse_named(property);
+                let (key, relation) = spouse_named(entry);
                 if !states_spouse(&key, &relation) {
                     continue;
                 }
                 related_to.insert(key, relation);
             }
             "BDAY" | X_EVOLUTION_ANNIVERSARY => {
-                let Some(anniversary) = read_anniversary(property) else {
+                let Some(anniversary) = read_anniversary(entry) else {
                     continue;
                 };
-                anniversaries.insert(entry_key(property, "y", &anniversaries), anniversary);
+                anniversaries.insert(entry_key(entry, "y", &anniversaries), anniversary);
             }
             // One of the `X-` lines EDS keeps instant-messaging handles on, and
             // nothing else: a line for a service this mapping does not state is
@@ -1744,33 +1753,34 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 let Some(service) = service_of(name) else {
                     continue;
                 };
-                let handle = property.text();
+                let handle = entry_text(entry);
                 if handle.is_empty() {
                     continue;
                 }
-                let entry = OnlineService {
+                let entry_obj = OnlineService {
                     service: Some(service.to_owned()),
                     user: Some(handle),
                     uri: None,
                     extra: BTreeMap::new(),
                 };
-                online_services.insert(entry_key(property, "s", &online_services), entry);
+                online_services.insert(entry_key(entry, "s", &online_services), entry_obj);
             }
         }
     }
 
     // The `LABEL` lines after the `ADR` ones, because a label states an
     // address the card may already have named and has to find it first.
-    for property in properties
+    for entry in card
+        .entries
         .iter()
-        .filter(|property| property.name == "LABEL")
+        .filter(|entry| entry.name.as_str().eq_ignore_ascii_case("LABEL"))
     {
-        let full = property.text();
+        let full = entry_text(entry);
         if full.is_empty() {
             continue;
         }
-        let contexts = read_flags(&CONTEXTS, property);
-        let key = label_entry(property, contexts.as_ref(), &addresses);
+        let contexts = read_flags(&CONTEXTS, entry);
+        let key = label_entry(entry, contexts.as_ref(), &addresses);
         addresses
             .entry(key)
             .or_insert_with(|| Address {
@@ -1804,7 +1814,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         // nothing and left to the save to patch around.
         media: (!media.is_empty()).then_some(media),
         online_services: (!online_services.is_empty()).then_some(online_services),
-        keywords: read_keywords(&properties),
+        keywords: read_keywords(&card.entries),
         // Only the marriages: `spouse` is the one relation type with a line, so
         // every other entity the card relates to is read back by nothing and
         // left to the save to patch around.
@@ -1823,7 +1833,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 /// libebook-contacts 3.52 — with the `X-JMAP-KEY` gone from a line the user
 /// edited, which is the save's problem rather than this one's.
 ///
-/// The bytes come from [`Property::binary`] where the line carried bytes and
+/// The bytes come from [`entry_binary`] where the line carried bytes and
 /// from the value's own where it carried text, since calcard decodes the base64
 /// either way and surfaces bytes only when the result is not a string: an SVG is
 /// a picture whose bytes *are* text. The cost of taking both paths is that a
@@ -1837,26 +1847,24 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 /// the parameter states the subtype and the type is `image/` in front of it (see
 /// [`image_subtype`]). [`UNKNOWN_TYPE`] is what EDS writes when it has none, and
 /// names no format, so it reads back as none.
-fn read_photo(property: &Property) -> Option<Media> {
-    let states_a_reference = property
-        .param("VALUE")
-        .is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE));
+fn read_photo(entry: &VCardEntry) -> Option<Media> {
+    let states_a_reference =
+        entry_param(entry, "VALUE").is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE));
     if states_a_reference {
-        let uri = property.text();
+        let uri = entry_text(entry);
         // A URI line says what the resource is nowhere: EDS writes no `TYPE` on
         // one and reads none off one, so there is nothing to state.
         return (!uri.is_empty()).then(|| photo_entry(uri, None));
     }
 
-    let bytes = match property.binary() {
+    let bytes = match entry_binary(entry) {
         Some(bytes) => bytes.to_vec(),
-        None => property.text().into_bytes(),
+        None => entry_text(entry).into_bytes(),
     };
     if bytes.is_empty() {
         return None;
     }
-    let media_type = property
-        .param("TYPE")
+    let media_type = entry_param(entry, "TYPE")
         .filter(|subtype| !subtype.eq_ignore_ascii_case(UNKNOWN_TYPE))
         .map(|subtype| format!("{IMAGE_PREFIX}{subtype}"));
     let uri = format!(
@@ -1884,14 +1892,14 @@ fn photo_entry(uri: String, media_type: Option<String>) -> Media {
 /// The kind is left unsaid when it is the default, so that reading back a
 /// card that never named one produces the card that was there — a save then
 /// has nothing to patch.
-fn read_title(property: &Property) -> Option<Title> {
-    let name = property.text();
+fn read_title(entry: &VCardEntry) -> Option<Title> {
+    let name = entry_text(entry);
     if name.is_empty() {
         return None;
     }
     let kind = TITLE_KINDS
         .iter()
-        .find(|(_, mapped)| *mapped == property.name)
+        .find(|(_, mapped)| mapped.eq_ignore_ascii_case(entry.name.as_str()))
         .map(|(kind, _)| *kind)
         .filter(|kind| *kind != DEFAULT_TITLE_KIND);
     Some(Title {
@@ -1908,12 +1916,12 @@ fn read_title(property: &Property) -> Option<Title> {
 /// the single point this and [`card_to_vcard`] agree through — a name that could
 /// not be written on the line is not read back off one either, or the save would
 /// create an entry the emitter can never draw again.
-fn spouse_named(property: &Property) -> (String, Relation) {
+fn spouse_named(entry: &VCardEntry) -> (String, Relation) {
     let relation = Relation {
         relation: Some([(SPOUSE_RELATION.to_owned(), Value::Bool(true))].into()),
         extra: BTreeMap::new(),
     };
-    (property.text(), relation)
+    (entry_text(entry), relation)
 }
 
 /// The anniversary a date line states, or `None` for a line no calendar day
@@ -1921,13 +1929,13 @@ fn spouse_named(property: &Property) -> (String, Relation) {
 ///
 /// The kind is the line's own: a `BDAY` states a birthday and nothing else,
 /// so unlike a title's it is never guessed at and never left unsaid.
-fn read_anniversary(property: &Property) -> Option<Anniversary> {
+fn read_anniversary(entry: &VCardEntry) -> Option<Anniversary> {
     let (kind, _) = ANNIVERSARY_KINDS
         .iter()
-        .find(|(_, name)| *name == property.name)?;
+        .find(|(_, name)| name.eq_ignore_ascii_case(entry.name.as_str()))?;
     Some(Anniversary {
         kind: (*kind).to_owned(),
-        date: Some(read_day(&property.text())?.json()),
+        date: Some(read_day(&entry_text(entry))?.json()),
         extra: BTreeMap::new(),
     })
 }
@@ -2056,8 +2064,8 @@ fn restore_shared_fields<T: Clone>(
 
 /// The address an `ADR` line states, or `None` when every field of it is
 /// empty — the same "nothing was said" an `EMAIL:` with no address is.
-fn read_address(property: &Property) -> Option<Address> {
-    let fields = property.components();
+fn read_address(entry: &VCardEntry) -> Option<Address> {
+    let fields = entry_components(entry);
     let mut components = Vec::new();
     for (kind, index) in ADDRESS_COMPONENTS {
         let Some(value) = fields.get(index).filter(|value| !value.is_empty()) else {
@@ -2070,7 +2078,7 @@ fn read_address(property: &Property) -> Option<Address> {
     }
     Some(Address {
         components: Some(components),
-        contexts: read_flags(&CONTEXTS, property),
+        contexts: read_flags(&CONTEXTS, entry),
         // Filled in by the `LABEL` line, if the card has one for this address.
         full: None,
         extra: BTreeMap::new(),
@@ -2102,8 +2110,8 @@ fn organization_components(organization: &Organization) -> Option<Vec<String>> {
 
 /// The organisation an `ORG` line states, or `None` when every component of
 /// it is empty — the same "nothing was said" an `EMAIL:` with no address is.
-fn read_organization(property: &Property) -> Option<Organization> {
-    let components = property.components();
+fn read_organization(entry: &VCardEntry) -> Option<Organization> {
+    let components = entry_components(entry);
     let name = components.first().filter(|name| !name.is_empty()).cloned();
     let units: Vec<OrgUnit> = components
         .iter()
@@ -2135,15 +2143,15 @@ fn read_organization(property: &Property) -> Option<Organization> {
 /// this side wrote does not survive the trip through Evolution. Without the
 /// fallback every save would then file the label as a second address.
 fn label_entry(
-    property: &Property,
+    entry: &VCardEntry,
     contexts: Option<&Value>,
     addresses: &BTreeMap<String, Address>,
 ) -> String {
     let unlabelled = |address: &Address| address.full.is_none();
-    if let Some(key) = property.param(X_JMAP_KEY).filter(|key| !key.is_empty())
-        && addresses.get(key).is_none_or(unlabelled)
+    if let Some(key) = entry_param(entry, X_JMAP_KEY).filter(|key| !key.is_empty())
+        && addresses.get(&key).is_none_or(unlabelled)
     {
-        return key.to_owned();
+        return key;
     }
     if let Some((key, _)) = addresses
         .iter()
@@ -2151,16 +2159,16 @@ fn label_entry(
     {
         return key.clone();
     }
-    entry_key(property, "a", addresses)
+    entry_key(entry, "a", addresses)
 }
 
 /// The JSContact map key for an entry: the one we round-tripped, or the
 /// first free `e1`, `e2`, … for a vCard that never had one.
-fn entry_key<T>(property: &Property, prefix: &str, taken: &BTreeMap<String, T>) -> String {
-    if let Some(key) = property.param(X_JMAP_KEY).filter(|key| !key.is_empty())
-        && !taken.contains_key(key)
+fn entry_key<T>(entry: &VCardEntry, prefix: &str, taken: &BTreeMap<String, T>) -> String {
+    if let Some(key) = entry_param(entry, X_JMAP_KEY).filter(|key| !key.is_empty())
+        && !taken.contains_key(&key)
     {
-        return key.to_owned();
+        return key;
     }
     (1..)
         .map(|index| format!("{prefix}{index}"))
@@ -2206,11 +2214,15 @@ fn derive_full(name: &Name) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-fn read_name(properties: &[Property]) -> Option<Name> {
-    let find = |name: &str| properties.iter().find(|property| property.name == name);
+fn read_name(entries: &[VCardEntry]) -> Option<Name> {
+    let find = |name: &str| {
+        entries
+            .iter()
+            .find(|entry| entry.name.as_str().eq_ignore_ascii_case(name))
+    };
 
-    let full = find("FN").map(Property::text).filter(|f| !f.is_empty());
-    let fields = find("N").map(Property::components).unwrap_or_default();
+    let full = find("FN").map(entry_text).filter(|f| !f.is_empty());
+    let fields = find("N").map(entry_components).unwrap_or_default();
 
     // Each component is read as the bare kind and value the `N` field states.
     // What a name component carries besides that — RFC 9553 §2.2.1's `phonetic`
@@ -2249,12 +2261,91 @@ fn type_names(table: &[(&str, &'static str)], value: Option<&Value>) -> Vec<&'st
         .collect()
 }
 
-/// The JSContact boolean map for the `TYPE` values present on `property`.
-fn read_flags(table: &[(&str, &str)], property: &Property) -> Option<Value> {
+/// The JSContact boolean map for the `TYPE` values present on `entry`.
+fn read_flags(table: &[(&str, &str)], entry: &VCardEntry) -> Option<Value> {
     let flags: Map<String, Value> = table
         .iter()
-        .filter(|(_, type_name)| property.has_type(type_name))
+        .filter(|(_, type_name)| entry_has_type(entry, type_name))
         .map(|(key, _)| ((*key).to_owned(), Value::Bool(true)))
         .collect();
     (!flags.is_empty()).then_some(Value::Object(flags))
+}
+
+fn param_text(value: &VCardParameterValue) -> String {
+    match value {
+        VCardParameterValue::Text(text) => text.clone(),
+        VCardParameterValue::Integer(number) => number.to_string(),
+        VCardParameterValue::Timestamp(stamp) => stamp.to_string(),
+        VCardParameterValue::Bool(true) => "TRUE".to_owned(),
+        VCardParameterValue::Bool(false) => "FALSE".to_owned(),
+        VCardParameterValue::ValueType(kind) => kind.as_str().to_owned(),
+        VCardParameterValue::Type(kind) => kind.as_str().to_owned(),
+        VCardParameterValue::Calscale(scale) => scale.as_str().to_owned(),
+        VCardParameterValue::Level(level) => level.as_str().to_owned(),
+        VCardParameterValue::Phonetic(system) => system.as_str().to_owned(),
+        _ => String::new(),
+    }
+}
+
+fn value_text(value: &VCardValue) -> Option<String> {
+    match value {
+        VCardValue::Text(text) => Some(text.clone()),
+        VCardValue::Component(items) => Some(items.join(",")),
+        VCardValue::PartialDateTime(date) => {
+            let mut text = String::new();
+            date.format_as_vcard(&mut text, &VCardValueType::DateAndOrTime)
+                .ok()?;
+            Some(text)
+        }
+        _ => None,
+    }
+}
+
+fn entry_text(entry: &VCardEntry) -> String {
+    entry
+        .values
+        .iter()
+        .filter_map(value_text)
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn entry_text_list(entry: &VCardEntry) -> String {
+    entry
+        .values
+        .iter()
+        .filter_map(value_text)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn entry_components(entry: &VCardEntry) -> Vec<String> {
+    entry.values.iter().filter_map(value_text).collect()
+}
+
+fn entry_items(entry: &VCardEntry) -> Vec<String> {
+    entry.values.iter().filter_map(value_text).collect()
+}
+
+fn entry_binary(entry: &VCardEntry) -> Option<&[u8]> {
+    entry.values.iter().find_map(|value| match value {
+        VCardValue::Binary(data) => Some(data.data.as_slice()),
+        _ => None,
+    })
+}
+
+fn entry_param(entry: &VCardEntry, name: &str) -> Option<String> {
+    entry
+        .params
+        .iter()
+        .find(|param| param.name.as_str().eq_ignore_ascii_case(name))
+        .map(|param| param_text(&param.value))
+}
+
+fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
+    entry
+        .params
+        .iter()
+        .filter(|param| param.name.as_str().eq_ignore_ascii_case("TYPE"))
+        .any(|param| param_text(&param.value).eq_ignore_ascii_case(value))
 }
