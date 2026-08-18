@@ -148,17 +148,17 @@ in the invocation, worth failing loudly on.
   edit in Evolution sends). The contact/event tests create into the
   account's default address book/calendar rather than one of their own
   making, relying on Stalwart auto-provisioning both per account. The
-  mailbox and contact tests additionally check `Client::all_changes` (RFC
-  8620 §5.2's `/changes`, the primitive every EDS meta-backend's
-  `get_changes_sync` drives) after each of the three steps: the record's id
-  must show up in the right bucket (`created`/`updated`/`destroyed`) since
-  the state captured just before that step — exercising this client's
-  incremental-sync state tokens and pagination against a real server rather
-  than `jmap-mockd`'s own invention of them, for both `Mailbox/changes` and
-  `ContactCard/changes`. The calendar-event and email tests do not yet have
-  this check (a follow-up, not a gap in what already passes). Skipped, not
-  failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not
-  set.
+  mailbox, contact, and calendar-event tests additionally check
+  `Client::all_changes` (RFC 8620 §5.2's `/changes`, the primitive every EDS
+  meta-backend's `get_changes_sync` drives) after each of the three steps:
+  the record's id must show up in the right bucket
+  (`created`/`updated`/`destroyed`) since the state captured just before
+  that step — exercising this client's incremental-sync state tokens and
+  pagination against a real server rather than `jmap-mockd`'s own invention
+  of them, for `Mailbox/changes`, `ContactCard/changes`, and
+  `CalendarEvent/changes`. The email test does not yet have this check (a
+  follow-up, not a gap in what already passes). Skipped, not failed, when
+  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
 - `email_import_update_then_destroy_round_trips_through_the_real_api` — the
   mail write path's other shape: uploads a small message's bytes via
   `Client::upload_blob`, imports it into the account's Inbox via
