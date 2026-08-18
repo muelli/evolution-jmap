@@ -34104,3 +34104,47 @@ message's subject via `Email/get`, call `email_update` with a
 via another `Email/get`, then continue into the existing download/destroy
 steps. Mirrors the mailbox-rename/contact-update/event-update tests'
 shape. Will update `docs/manual-test-live-server.md` to match.
+
+## 2026-08-18 — Delivered: an Email/set update (mark-as-read) live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: renamed
+  `email_import_round_trips_through_the_real_api` to
+  `email_import_update_then_destroy_round_trips_through_the_real_api` and
+  inserted an update step between the post-import `Email/get` and the
+  download/destroy steps: calls `email_update` with a
+  `{"keywords/$seen": true}` `PatchObject` (the same shape
+  `jmap-mail-sync::MailSync::set_keywords` sends), then confirms via another
+  `Email/get` that the `$seen` keyword comes back set before continuing into
+  the existing blob-download and destroy steps — the same shape as the
+  mailbox-rename/contact-update/event-update tests. Added `keyword` to the
+  `jmap_proto::mail` import to name the well-known `$seen` constant instead
+  of a bare string literal.
+- **`docs/manual-test-live-server.md`**: updated the intro's write-test list
+  and the "what it worked means" section for the renamed test and its new
+  update step.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent upsert;
+  previous session's password not recoverable by design, as with every
+  prior write-path session). `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/` from a
+  prior session; just putting that directory on `PATH` was enough.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the renamed/extended one — `Email/set`
+  update round-trips a real mark-as-read against Stalwart's own keyword
+  handling, not just import/download/destroy. No client bug found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --locked`
+  (default-members) green, no failures. `cargo deny`/`reuse lint` still
+  unavailable on this VM; the only changed source file (`live_server.rs`)
+  already carries its SPDX header.
+
+Closes the last of the four "still open" write-path gaps the prior four
+sessions flagged one by one: `mailbox_update`, `contact_update`,
+`event_update`, and now `email_update` all have live-server coverage.
+`send_email`/`submit_email` still need an SMTP-capable deployment (out of
+scope for this throwaway account, as every prior session in this chain has
+noted) and remain the only unexercised corner of `jmap-client`'s write
+surface. Left `agent-livewrite.net`/`agent1` in place, same reasoning as
+every prior write-path session.

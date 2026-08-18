@@ -63,7 +63,7 @@ use std::env;
 use jmap_client::{Client, Credentials};
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::contacts::ContactCard;
-use jmap_proto::mail::{EmailImport, Mailbox, role};
+use jmap_proto::mail::{EmailImport, Mailbox, keyword, role};
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
 };
@@ -451,9 +451,12 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
 /// The mail write path's other shape: `Email/import` puts bytes the caller
 /// already has into the store, rather than `Mailbox/set`'s create-from-
 /// properties. Uploads a small RFC 5322 message via [`Client::upload_blob`],
-/// imports it into the account's Inbox, confirms it via `Email/get`,
-/// downloads the blob back through [`Client::download_blob`], then destroys
-/// the message.
+/// imports it into the account's Inbox, confirms it via `Email/get`, marks it
+/// read (`email_update`'s `PatchObject` path — what
+/// `jmap-mail-sync::MailSync::set_keywords` sends whenever a user marks a
+/// message read/unread or flags it), confirms the keyword via another
+/// `Email/get`, downloads the blob back through [`Client::download_blob`],
+/// then destroys the message.
 ///
 /// Does not assert the downloaded bytes equal the uploaded bytes verbatim:
 /// RFC 8621 §4.8 lets a server repair or re-serialize an imported message
@@ -464,7 +467,7 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
 /// survived the round trip.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
-fn email_import_round_trips_through_the_real_api() {
+fn email_import_update_then_destroy_round_trips_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
@@ -513,10 +516,34 @@ fn email_import_round_trips_through_the_real_api() {
         Some(subject),
         "the imported email's subject does not match what was uploaded"
     );
-    let size = fetched
+
+    client
+        .email_update(
+            &account_id,
+            &id,
+            json!({format!("keywords/{}", keyword::SEEN): true}),
+        )
+        .expect("Email/set update failed against the real server");
+
+    let fetched_after_update = client
+        .email_get(&account_id, std::slice::from_ref(&id), None)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the updated email does not show up in Email/get afterwards");
+    assert_eq!(
+        fetched_after_update
+            .keywords
+            .as_ref()
+            .and_then(|keywords| keywords.get(keyword::SEEN))
+            .copied(),
+        Some(true),
+        "the updated email does not show the $seen keyword in Email/get afterwards"
+    );
+    let size = fetched_after_update
         .size
         .expect("Email/get named a size for the imported email");
-    let blob_id = fetched
+    let blob_id = fetched_after_update
         .blob_id
         .clone()
         .expect("Email/get named a blobId for the imported email");
