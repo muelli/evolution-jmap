@@ -33417,3 +33417,13 @@ configured hostname), not the address the client reached it on. After the auth
 fix, method calls would target example.com over HTTPS — a Stalwart hostname /
 test-env matter (map example.com to the server, or reconfigure Stalwart's
 hostname), not a client bug.
+
+## 2026-08-18 (claim) — Claiming ROADMAP item 2: redirect-auth fix (mock-testable)
+
+Claiming the top real-server-readiness item flagged in ROADMAP.md: set
+`redirect_auth_headers = SameHost` in `UreqTransport::new` so the
+`Authorization` header survives a same-host redirect, and add a `jmap-mock`
+mode that serves the session document via a 307 to a separate auth-checked
+path so this is red/green-testable without a live server. TDD: red test
+first (session resolution fails through the redirect today), then the
+one-line transport fix turns it green.
