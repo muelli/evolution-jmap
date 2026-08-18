@@ -34442,3 +34442,32 @@ never answered. `send_email`/`submit_email` remain out of scope for this
 throwaway account (no SMTP path configured), unchanged from every prior
 session in this chain. Left `agent-livewrite.net`/`agent1` in place, same
 reasoning as every prior write-path session.
+
+## 2026-08-18 (claim) — Claiming the same-page create+update classification question
+
+Re-surveyed: `docs/MILESTONES.md` still has M1–M10 all `COMPLETE`,
+`docs/BACKLOG.md` unchanged (only (B′)/(C), both explicit maintainer-call/
+low-leverage). The prior session closed live-server `all_changes` coverage
+for `Mailbox`/`ContactCard`/`CalendarEvent`/`Email` and named the one
+question left unanswered: whether an object created and then updated
+inside a single `/changes` window classifies as `created` only (RFC 8620
+§5.2's fold rule, implemented client-side by
+`ChangeSet::classify`/`jmap-client/src/changes.rs:159` and already
+mock-tested at `jmap-client/tests/changes.rs:207`) against a *real*
+server's own `/changes`, not just `jmap-mockd`'s own invention of that
+behaviour.
+
+Confirmed reachable before claiming: `source
+infra/live-server/live-server-env.sh` resolves `STALWART_URL`
+(`http://stalwart-1...:8080`), and `/.well-known/jmap` answers `307` as
+expected pre-auth.
+
+Claiming: extend
+`mailbox_create_rename_then_destroy_round_trips_through_the_real_api` in
+`jmap-client/tests/live_server.rs` — after the existing create+rename
+steps, call `Client::all_changes` since the *pre-create* state (already
+captured as `state_before_create`) and assert the mailbox's id lands in
+`created` and NOT in `updated`, since the window spans both mutations.
+Same throwaway account (`agent-livewrite.net`/`agent1`, reseeded via `stw
+seed`) and gating as every write-path test in this file; will update
+`docs/manual-test-live-server.md` to match.
