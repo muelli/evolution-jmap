@@ -34385,3 +34385,60 @@ each of import/update/destroy and assert `Client::all_changes(&account_id,
 bucket after each one, mirroring the mailbox/contact/event tests exactly.
 Same throwaway account and gating; will update
 `docs/manual-test-live-server.md` to match.
+
+## 2026-08-18 — Delivered: an Email/changes live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `email_import_update_then_destroy_round_trips_through_the_real_api` —
+  before each of import/update/destroy, captures `Client::email_state`
+  (already existed in `mail.rs`, an `Email/get` naming no ids, for exactly
+  this — it was simply unused by any live-server test until now); after
+  each step, calls `Client::all_changes(&account_id, "Email", ...)` since
+  that captured state and asserts the message's id shows up in the matching
+  bucket (`created`, `updated`, `destroyed`) — same shape as the
+  mailbox/contact/event tests' `all_changes` checks. No production code
+  changed: `email_get` itself still does not expose a `state` (it splits
+  large id lists across several `Email/get` calls and only keeps their
+  `list`s), which is exactly why this test reaches for `email_state`
+  instead, same as the others reach for `contact_get(&account_id,
+  &[]).state`/`event_get(&account_id, &[]).state`.
+- **`docs/manual-test-live-server.md`**: updated the write-tests section —
+  the four tests all now carry the `all_changes` check, and noted why the
+  email test's route to a state token differs from the other three's.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent
+  upsert; previous session's password not recoverable by design).
+  `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/`.
+- Note on tooling: `infra/live-server/live-server-env.sh` exports
+  `STALWART_URL`/`STALWART_USER`/`STALWART_PASSWORD` (the *admin* creds),
+  not `JMAP_LIVE_SERVER_URL`/`_USER`/`_PASSWORD` the harness itself reads —
+  they need to be assigned across by hand (`export
+  JMAP_LIVE_SERVER_URL="$STALWART_URL"`, etc.) after sourcing it. Not a bug,
+  just a naming gap between the two scripts worth a next session
+  remembering rather than rediscovering via `NotPresent` panics.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the extended email test —
+  `Email/changes` reports Stalwart's own state tokens and
+  created/updated/destroyed classification correctly across an
+  import/update/destroy sequence, using `email_state` rather than a get
+  response's own state for the first time. No client bug found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --workspace --exclude
+  example-module --exclude jmap-functional --locked` green, no failures.
+  `cargo deny`/`reuse lint` still unavailable on this VM; the only changed
+  source files (`live_server.rs`, this doc) already carry SPDX headers
+  where required.
+
+Closes the last of the three `all_changes` follow-ups named across the
+`Mailbox`/`ContactCard`/`CalendarEvent`/`Email` chain — all four of
+`jmap-client`'s mutating record types now have live-server-verified
+incremental-sync coverage. Still open for a future session: whether an
+update landing inside the same page as its create classifies correctly
+(both flags true on one id) — the one `all_changes` question this chain
+never answered. `send_email`/`submit_email` remain out of scope for this
+throwaway account (no SMTP path configured), unchanged from every prior
+session in this chain. Left `agent-livewrite.net`/`agent1` in place, same
+reasoning as every prior write-path session.
