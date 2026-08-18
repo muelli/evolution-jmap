@@ -94,6 +94,7 @@ pub struct MockServerBuilder {
     query_page_size: Option<u64>,
     size_request: Option<u64>,
     size_upload: Option<u64>,
+    session_via_redirect: bool,
 }
 
 impl MockServerBuilder {
@@ -305,6 +306,22 @@ impl MockServerBuilder {
         self
     }
 
+    /// Serve the session document via a 307 redirect from
+    /// `/.well-known/jmap` to a second path (`/jmap/session`), instead of
+    /// inline — as Stalwart does, and as this crate's default shape (session
+    /// served directly at the well-known path) does not, which is exactly
+    /// why a redirect-related client bug went uncaught until a real server
+    /// exercised it (see `docs/NIGHT-LOG.md`, "session-discovery redirect
+    /// strips auth"). The redirect target answers 200 whether or not the
+    /// request carries valid credentials — matching the real server — with
+    /// zero accounts when it does not, rather than a 401; a client that
+    /// drops `Authorization` across the hop still gets a response, just an
+    /// anonymous one with no primary account to resolve.
+    pub fn session_via_redirect(mut self) -> Self {
+        self.session_via_redirect = true;
+        self
+    }
+
     /// Bind to localhost and start serving on a background thread. The
     /// server stops when the returned handle is dropped.
     pub fn start(self) -> MockServer {
@@ -318,6 +335,7 @@ impl MockServerBuilder {
         state.query_page_size = self.query_page_size;
         state.size_request = self.size_request;
         state.size_upload = self.size_upload;
+        state.session_via_redirect = self.session_via_redirect;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -375,6 +393,7 @@ impl MockServer {
             query_page_size: None,
             size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
+            session_via_redirect: false,
         }
     }
 
@@ -530,6 +549,44 @@ fn handle_request(
         return;
     }
 
+    // In `session_via_redirect` mode, `/.well-known/jmap` and its redirect
+    // target are both handled here, ahead of the usual 401 gate below — a
+    // real server answers the initial well-known lookup with the redirect
+    // unconditionally, and answers the target with 200 either way (empty
+    // accounts when unauthenticated), never a 401. That shape is the point:
+    // it is what lets an auth header quietly dropped on the hop surface as
+    // "no primary account" rather than as a request failure a client would
+    // notice immediately.
+    let session_via_redirect = state.lock().expect("mock state lock").session_via_redirect;
+    if session_via_redirect {
+        let path_only = request.url().split('?').next().unwrap_or_default();
+        if request.method() == &tiny_http::Method::Get && path_only == "/.well-known/jmap" {
+            let location = format!("{origin}/jmap/session");
+            let response = tiny_http::Response::empty(307).with_header(
+                tiny_http::Header::from_bytes(&b"Location"[..], location.as_bytes())
+                    .expect("location header"),
+            );
+            let _ = request.respond(response);
+            return;
+        }
+        if request.method() == &tiny_http::Method::Get && path_only == "/jmap/session" {
+            let authorization = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("Authorization"))
+                .map(|header| header.value.as_str().to_owned());
+            let authorized = auth.authorized(authorization.as_deref());
+            let state = state.lock().expect("mock state lock");
+            let session = session_document(&state, origin, authorized);
+            respond_json(
+                request,
+                200,
+                &serde_json::to_value(&session).expect("session serializes"),
+            );
+            return;
+        }
+    }
+
     let authorization = request
         .headers()
         .iter()
@@ -555,7 +612,7 @@ fn handle_request(
     match (method, path.as_str()) {
         (tiny_http::Method::Get, "/.well-known/jmap") => {
             let state = state.lock().expect("mock state lock");
-            let session = session_document(&state, origin);
+            let session = session_document(&state, origin, true);
             respond_json(
                 request,
                 200,
@@ -788,26 +845,38 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
 ];
 
 /// Build the RFC 8620 §2 session document from current state.
-fn session_document(state: &ServerState, origin: &str) -> Session {
+///
+/// `authorized` is false only for the anonymous fetch
+/// [`MockServerBuilder::session_via_redirect`]'s target answers when the
+/// request carried no valid credentials — real servers shaped that way still
+/// answer 200, just with no accounts to show for it, which is the exact
+/// condition `Session::resolve_primary_account` has to fail loudly on.
+fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
-    for (id, account) in &state.accounts {
-        accounts.insert(
-            id.clone(),
-            Account {
-                name: account.name.clone(),
-                is_personal: true,
-                is_read_only: false,
-                account_capabilities: ACCOUNT_CAPABILITIES
-                    .iter()
-                    .filter(|capability| !state.omitted_capabilities.contains(**capability))
-                    .map(|capability| ((*capability).to_owned(), json!({})))
-                    .collect(),
-                extra: Default::default(),
-            },
-        );
+    if authorized {
+        for (id, account) in &state.accounts {
+            accounts.insert(
+                id.clone(),
+                Account {
+                    name: account.name.clone(),
+                    is_personal: true,
+                    is_read_only: false,
+                    account_capabilities: ACCOUNT_CAPABILITIES
+                        .iter()
+                        .filter(|capability| !state.omitted_capabilities.contains(**capability))
+                        .map(|capability| ((*capability).to_owned(), json!({})))
+                        .collect(),
+                    extra: Default::default(),
+                },
+            );
+        }
     }
 
-    let first_account = state.accounts.iter().next();
+    let first_account = if authorized {
+        state.accounts.iter().next()
+    } else {
+        None
+    };
     let primary_accounts = if state.omit_primary_accounts {
         std::collections::BTreeMap::new()
     } else {

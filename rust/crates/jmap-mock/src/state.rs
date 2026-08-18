@@ -94,6 +94,16 @@ pub struct ServerState {
     /// any size. The default is [`crate::DEFAULT_SIZE_UPLOAD`], far above what
     /// any test uploads, so only a test about the limit meets it.
     pub size_upload: Option<u64>,
+    /// Serve the session document via a 307 redirect from `/.well-known/jmap`
+    /// to `/jmap/session`, as [`crate::MockServerBuilder::session_via_redirect`]
+    /// asked — a real deployment (Stalwart among them) shaped exactly this
+    /// way is what first exposed `UreqTransport` dropping the `Authorization`
+    /// header across the hop. `/jmap/session` itself is never gated by the
+    /// usual 401: like the server this reproduces, it answers 200 either way
+    /// and simply reports zero accounts when the request arrived
+    /// unauthenticated, so the failure this exists to catch is "no primary
+    /// account", not a transport error.
+    pub session_via_redirect: bool,
 }
 
 impl ServerState {
@@ -111,6 +121,7 @@ impl ServerState {
             query_page_size: None,
             size_request: Some(crate::DEFAULT_SIZE_REQUEST),
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
+            session_via_redirect: false,
         }
     }
 

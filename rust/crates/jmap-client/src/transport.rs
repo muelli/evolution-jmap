@@ -178,6 +178,16 @@ mod ureq_transport {
                 // carries RFC 7807 problem details), not as transport errors.
                 .http_status_as_error(false)
                 .timeout_global(Some(timeout))
+                // ureq's default (`Never`) strips `Authorization` on every
+                // redirect, even a same-host one. A server that serves its
+                // session document via a same-host redirect (Stalwart's
+                // `/.well-known/jmap` -> `/jmap/session`, for one) then sees
+                // an unauthenticated request and answers with an anonymous,
+                // empty-accounts session — not a 401, so the failure surfaces
+                // confusingly downstream as "no primary account" rather than
+                // here. Cross-host redirects still get no auth header, which
+                // is the safe default RFC 7235 leaves it out for.
+                .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
                 .build();
             Self {
                 agent: config.into(),
