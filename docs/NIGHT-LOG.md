@@ -33285,3 +33285,27 @@ Thirty-second independent conclusion: nothing unblocked. Same two items
 flagged since the 374th session — a maintainer call on BACKLOG (B′), and
 (low-leverage) (C) — are what would open further autonomous work; neither
 is this session's to take. No code change this session.
+
+## 2026-08-18 (387th session) — thirty-third re-verification, nothing unblocked
+
+Independent pass, checked directly rather than trusted:
+
+- `git fetch origin`: `HEAD` (`e4dc544`) matches `origin/master`, tree
+  clean, no new commits since the 386th session's push.
+- `docs/MILESTONES.md`: M1–M10 all COMPLETE, unchanged. `~/.night-shift-
+  escalate` absent.
+- `git log -3 -- docs/ROADMAP.md docs/BACKLOG.md`: newest touching commits
+  still `dbd43c3` (ROADMAP) and `00271f9` (BACKLOG) — no maintainer edit
+  since the priority order, MAINTAINER DECISIONS, and (B′)/(C) were
+  written.
+- Ran the gate by hand in `rust/`: `cargo test --locked` and `cargo
+  clippy --all-targets --locked -- -D warnings` both clean/green.
+- `docs/BACKLOG.md` re-read in full: unchanged — (B′) (jmap-vcard IM-field/
+  ANNIVERSARY/name-sort mapping choice) and (C) (clippy blocked on a
+  third-party bindgen warning on the 3.60 leg) remain the only open items,
+  both explicit maintainer-call/low-leverage under current priority, which
+  the roadmap's own "do not reopen completed backends" directive rules out
+  as this session's to take.
+
+Thirty-third independent conclusion: nothing unblocked. No code change
+this session.
