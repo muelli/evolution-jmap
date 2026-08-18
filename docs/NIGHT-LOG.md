@@ -33959,3 +33959,27 @@ scope for this throwaway Stalwart account, as noted by the prior session).
 Left as follow-up work for a future session, not claimed here. Left
 `agent-livewrite.net`/`agent1` in place, same reasoning as every prior
 write-path session.
+
+## 2026-08-18 (claim) — Claiming a ContactCard/set update test against the live server
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` still has M1–M10
+all `COMPLETE`, `docs/BACKLOG.md` unchanged (only the parked maintainer-call/
+low-leverage items), and the previous session's own "remaining follow-up"
+note names the gap directly: `jmap-client/tests/live_server.rs` covers
+`Mailbox/set` create+rename+destroy and `ContactCard/set`/`CalendarEvent/set`
+create+destroy, but `contact_update`/`event_update`/`email_update` (the
+`PatchObject`-based update path `jmap-book-sync`/`jmap-cal-sync`/`jmap-mail`
+send whenever a user edits a contact, moves/reschedules an event, or flags a
+message) have zero live-server coverage. Same category as the mailbox-rename
+increment: verifying `jmap-client`'s existing write surface against a real
+deployment's own semantics, not backend polish (the mock already covers this
+path fully).
+
+Claiming: extend
+`contact_card_create_then_destroy_round_trips_through_the_real_api` into
+`contact_card_create_update_then_destroy_round_trips_through_the_real_api`
+in `jmap-client/tests/live_server.rs` — after confirming the created card's
+name via `ContactCard/get`, call `contact_update` with a `PatchObject`
+changing the name, confirm the new name via another `ContactCard/get`, then
+destroy. Mirrors the mailbox-rename test's shape exactly. Will update
+`docs/manual-test-live-server.md` to match.
