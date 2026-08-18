@@ -15,7 +15,7 @@ use jmap_proto::contacts::{
 };
 use jmap_vcard::{
     card_to_vcard, maps_phone_feature, states_context, states_keyword, states_media,
-    states_organization, states_phone_feature, vcard_to_card,
+    states_org_unit, states_organization, states_phone_feature, states_title, vcard_to_card,
 };
 use serde_json::{Value, json};
 
@@ -26,6 +26,10 @@ fn fixture_card() -> ContactCard {
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+fn unfolded(vcard: &str) -> String {
+    vcard.replace("\r\n ", "").replace("\r\n\t", "")
 }
 
 fn line<'a>(vcard: &'a str, prefix: &str) -> &'a str {
@@ -596,6 +600,342 @@ fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
 
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.titles, card.titles);
+}
+
+#[test]
+fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully() {
+    // RFC 2426 §3.5.5 and EDS field slotting:
+    // Component 1: Organization name (`Acme Ltd` -> `E_CONTACT_ORG`)
+    // Component 2: Department (`Research` -> `E_CONTACT_ORG_UNIT`)
+    // Component 3: Office (`Optics` -> `E_CONTACT_OFFICE`)
+    // Component 4: Fourth unit (`Lenses` -> unmapped in EDS, survives edits)
+    let card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Ltd".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("Research"),
+                        OrgUnit::new("Optics"),
+                        OrgUnit::new("Lenses"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let org = &card.organizations.as_ref().unwrap()["o1"];
+    assert!(states_organization(org));
+    for unit in org.units.as_ref().unwrap() {
+        assert!(states_org_unit(unit));
+    }
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;Optics;Lenses"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
+
+    // Verify inbound vCard without X-JMAP-KEY preserves all 4 components into o1.
+    let unkeyed_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG:Acme Ltd;Research;Optics;Lenses\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_unkeyed = vcard_to_card(unkeyed_vcard).expect("parse");
+    let unkeyed_orgs = from_unkeyed.organizations.expect("organizations");
+    assert_eq!(unkeyed_orgs.keys().collect::<Vec<_>>(), vec!["o1"]);
+    assert_eq!(unkeyed_orgs["o1"].name.as_deref(), Some("Acme Ltd"));
+    assert_eq!(
+        unkeyed_orgs["o1"].units.as_deref(),
+        Some(
+            [
+                OrgUnit::new("Research"),
+                OrgUnit::new("Optics"),
+                OrgUnit::new("Lenses")
+            ]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_roundtrip() {
+    // 1. Deep 6-component hierarchy: OrgName + 5 units.
+    let deep_card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Global Tech".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("Engineering"),
+                        OrgUnit::new("Infrastructure"),
+                        OrgUnit::new("Storage Systems"),
+                        OrgUnit::new("Flash Division"),
+                        OrgUnit::new("Team Beta"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let deep_vcard = card_to_vcard(&deep_card);
+    assert_eq!(
+        line(&unfolded(&deep_vcard), "ORG"),
+        "ORG;X-JMAP-KEY=o1:Global Tech;Engineering;Infrastructure;Storage Systems;Flash Division;Team Beta"
+    );
+    let deep_back = vcard_to_card(&deep_vcard).expect("parse");
+    assert_eq!(deep_back.organizations, deep_card.organizations);
+
+    // 2. Nameless organisation with 4 units: leading semicolon preserves unit positions.
+    let nameless_card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: None,
+                    units: Some(vec![
+                        OrgUnit::new("Engineering"),
+                        OrgUnit::new("Security"),
+                        OrgUnit::new("Cryptography"),
+                        OrgUnit::new("Quantum"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let nameless_vcard = card_to_vcard(&nameless_card);
+    assert_eq!(
+        line(&nameless_vcard, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security;Cryptography;Quantum"
+    );
+    let nameless_back = vcard_to_card(&nameless_vcard).expect("parse");
+    assert_eq!(nameless_back.organizations, nameless_card.organizations);
+
+    // 3. Intermediate empty component (such as EDS clearing E_CONTACT_OFFICE in place):
+    // empty unit is filtered on read, emitting only non-empty units without sliding into name.
+    let cleared_office_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;;Lenses\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_cleared = vcard_to_card(cleared_office_vcard).expect("parse");
+    let cleared_orgs = from_cleared.organizations.as_ref().expect("organizations");
+    assert_eq!(cleared_orgs["o1"].name.as_deref(), Some("Acme Ltd"));
+    assert_eq!(
+        cleared_orgs["o1"].units.as_deref(),
+        Some([OrgUnit::new("Research"), OrgUnit::new("Lenses")].as_slice())
+    );
+    let rewritten_vcard = card_to_vcard(&from_cleared);
+    assert_eq!(
+        line(&rewritten_vcard, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;Lenses"
+    );
+    let rewritten_back = vcard_to_card(&rewritten_vcard).expect("parse");
+    assert_eq!(rewritten_back.organizations, from_cleared.organizations);
+}
+
+#[test]
+fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
+    let card = ContactCard {
+        organizations: Some(
+            [
+                (
+                    "o1".to_owned(),
+                    Organization {
+                        name: Some("Acme Corp".to_owned()),
+                        units: Some(vec![
+                            OrgUnit::new("Research"),
+                            OrgUnit::new("Optics"),
+                            OrgUnit::new("Lenses"),
+                        ]),
+                        ..Organization::default()
+                    },
+                ),
+                (
+                    "o2".to_owned(),
+                    Organization {
+                        name: Some("MegaCorp Industries".to_owned()),
+                        units: Some(vec![
+                            OrgUnit::new("Cloud"),
+                            OrgUnit::new("Datacenter"),
+                            OrgUnit::new("Hardware"),
+                            OrgUnit::new("Power"),
+                        ]),
+                        ..Organization::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        titles: Some(
+            [
+                (
+                    "t1".to_owned(),
+                    Title {
+                        name: "Chief Scientist".to_owned(),
+                        kind: None,
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "t2".to_owned(),
+                    Title {
+                        name: "Distinguished Engineer".to_owned(),
+                        kind: Some("title".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "r1".to_owned(),
+                    Title {
+                        name: "Technical Lead".to_owned(),
+                        kind: Some("role".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "r2".to_owned(),
+                    Title {
+                        name: "Steering Committee Member".to_owned(),
+                        kind: Some("role".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "x1".to_owned(),
+                    Title {
+                        name: "Honorary Fellow".to_owned(),
+                        kind: Some("x-honour".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    for title in card.titles.as_ref().unwrap().values() {
+        if title.kind.as_deref() == Some("x-honour") {
+            assert!(!states_title(title));
+        } else {
+            assert!(states_title(title));
+        }
+    }
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o1:Acme Corp;Research;Optics;Lenses\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o2:MegaCorp Industries;Cloud;Datacenter;Hardware;Power\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t1:Chief Scientist\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t2:Distinguished Engineer\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ROLE;X-JMAP-KEY=r1:Technical Lead\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ROLE;X-JMAP-KEY=r2:Steering Committee Member\r\n"),
+        "{vcard}"
+    );
+    // Unmapped vendor title kind gets no vCard line.
+    assert!(!vcard.contains("Honorary Fellow"), "{vcard}");
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
+
+    // Expected titles in roundtrip: t1, t2, r1, r2 with canonical kind (None for default title).
+    let expected_titles = [
+        (
+            "t1".to_owned(),
+            Title {
+                name: "Chief Scientist".to_owned(),
+                kind: None,
+                ..Title::default()
+            },
+        ),
+        (
+            "t2".to_owned(),
+            Title {
+                name: "Distinguished Engineer".to_owned(),
+                kind: None,
+                ..Title::default()
+            },
+        ),
+        (
+            "r1".to_owned(),
+            Title {
+                name: "Technical Lead".to_owned(),
+                kind: Some("role".to_owned()),
+                ..Title::default()
+            },
+        ),
+        (
+            "r2".to_owned(),
+            Title {
+                name: "Steering Committee Member".to_owned(),
+                kind: Some("role".to_owned()),
+                ..Title::default()
+            },
+        ),
+    ]
+    .into();
+    assert_eq!(back.titles, Some(expected_titles));
+}
+
+#[test]
+fn multi_component_org_with_escaped_punctuation_roundtrips() {
+    let card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme, Inc.".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("R&D; Applied Science"),
+                        OrgUnit::new("Optics, Lasers & Sensors"),
+                        OrgUnit::new("Lab #4 (Room 101; Wing B)"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&unfolded(&vcard), "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme\\, Inc.;R&D\\; Applied Science;Optics\\, Lasers & Sensors;Lab #4 (Room 101\\; Wing B)"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
 }
 
 /// The kinds and values of an address's components, in the order it lists
