@@ -33138,3 +33138,26 @@ Kept short, checked directly rather than trusted:
 Twenty-seventh independent conclusion: nothing unblocked. As before, a
 maintainer call on BACKLOG (B′) is the only thing that would open new
 autonomous work. No code change this session.
+
+## 2026-08-18 (382nd session) — twenty-eighth re-verification, nothing unblocked
+
+Kept short, checked directly rather than trusted:
+
+- `git fetch origin`: `HEAD` (`84c1943`) matches `origin/master`, tree
+  clean, no new commits since the 381st session's push.
+- `docs/MILESTONES.md`: M1–M10 all COMPLETE, unchanged. `~/.night-shift-
+  escalate` absent.
+- `git log -- docs/ROADMAP.md` / `docs/BACKLOG.md`: newest touching commits
+  are still `dbd43c3` and `00271f9` respectively — no maintainer edit since
+  the priority order and MAINTAINER DECISIONS were written; (B′) and (C)
+  remain the only open BACKLOG items, both explicit maintainer-call/
+  low-leverage under current priority.
+- Actions API (`muelli/evolution-jmap`): newest run still `32064810881`
+  (`00271f9`, success). Issues/PRs: still only the two closed FFI-audit
+  items, nothing new.
+- `df -h /`: unchanged, 3.0G available (95% full). `docker info`: still
+  permission-denied on the daemon socket (client works, server doesn't).
+
+Twenty-eighth independent conclusion: nothing unblocked. As before, a
+maintainer call on BACKLOG (B′) is the only thing that would open new
+autonomous work. No code change this session.
