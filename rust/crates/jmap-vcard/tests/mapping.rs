@@ -13,7 +13,7 @@ use jmap_proto::contacts::{
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
     Relation, Title,
 };
-use jmap_vcard::{card_to_vcard, states_keyword, states_media, vcard_to_card};
+use jmap_vcard::{card_to_vcard, states_keyword, states_media, states_organization, vcard_to_card};
 use serde_json::{Value, json};
 
 fn fixture_card() -> ContactCard {
@@ -328,6 +328,63 @@ fn an_organization_with_nothing_in_it_is_skipped_in_both_directions() {
     let back =
         vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nORG:;;\r\nEND:VCARD\r\n").expect("parse");
     assert_eq!(back.organizations, None);
+}
+
+#[test]
+fn an_organization_with_an_empty_name_string_behaves_consistently() {
+    // An organisation whose name is `""` rather than absent:
+    // 1. When it has no units, it states nothing and is skipped rather than emitting an empty `ORG:` line.
+    let card_empty_name = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some(String::new()),
+                    units: None,
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let org = &card_empty_name.organizations.as_ref().unwrap()["o1"];
+    assert!(!states_organization(org));
+    let vcard = card_to_vcard(&card_empty_name);
+    assert!(!vcard.contains("\r\nORG"));
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, None);
+
+    // 2. When it has units, the empty name is preserved as an empty first component:
+    // the leading semicolon keeps units in their structured component position.
+    let card_empty_name_with_units = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some(String::new()),
+                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Security")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let org_with_units = &card_empty_name_with_units.organizations.as_ref().unwrap()["o1"];
+    assert!(states_organization(org_with_units));
+    let vcard_with_units = card_to_vcard(&card_empty_name_with_units);
+    assert_eq!(
+        line(&vcard_with_units, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security"
+    );
+    let back_with_units = vcard_to_card(&vcard_with_units).expect("parse");
+    let back_orgs = back_with_units.organizations.expect("organizations");
+    assert_eq!(back_orgs["o1"].name, None);
+    assert_eq!(
+        back_orgs["o1"].units.as_deref(),
+        Some([OrgUnit::new("Engineering"), OrgUnit::new("Security")].as_slice())
+    );
 }
 
 #[test]
