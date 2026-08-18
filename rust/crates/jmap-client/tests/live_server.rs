@@ -61,7 +61,7 @@
 use std::env;
 
 use jmap_client::{Client, Credentials};
-use jmap_proto::calendars::CalendarEvent;
+use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
@@ -558,6 +558,15 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
 /// `jmap-cal-sync`'s own polling loop drives `CalendarEvent/changes`, and a
 /// real server's state tokens and created/updated/destroyed classification
 /// for this type had no live-server coverage until now.
+///
+/// Also checks `Client::event_query` right after the create and right after
+/// the destroy: `jmap-cal-sync::list_existing_sync` enumerates a calendar via
+/// exactly `CalendarEventQueryFilter::in_calendar` (`lib.rs:98`), the
+/// backend's actual listing path, which — unlike `get`/`set`/`changes`
+/// above — had no live-server coverage at all before this test. Mirrors the
+/// `ContactCard/query` check
+/// [`contact_card_create_update_then_destroy_round_trips_through_the_real_api`]
+/// already makes for the address-book listing path.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() {
@@ -583,7 +592,7 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
         .state;
 
     let title = format!("agent-livewrite-{}", unique_suffix());
-    let event = CalendarEvent::simple(calendar_id, &title, "2026-08-18T13:00:00", "PT1H");
+    let event = CalendarEvent::simple(calendar_id.clone(), &title, "2026-08-18T13:00:00", "PT1H");
 
     let created = client
         .event_create(&account_id, &event)
@@ -608,6 +617,17 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
     assert!(
         changes_after_create.created.contains(&id),
         "CalendarEvent/changes since before the create does not list the new event as created"
+    );
+
+    let query_after_create = client
+        .event_query(
+            &account_id,
+            CalendarEventQueryFilter::in_calendar(calendar_id.clone()),
+        )
+        .expect("CalendarEvent/query failed against the real server");
+    assert!(
+        query_after_create.ids.contains(&id),
+        "CalendarEvent/query for the calendar does not list the new event"
     );
 
     let state_before_update = client.event_get(&account_id, &[]).unwrap().state;
@@ -647,6 +667,17 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
     assert!(
         changes_after_destroy.destroyed.contains(&id),
         "CalendarEvent/changes since before the destroy does not list the event as destroyed"
+    );
+
+    let query_after_destroy = client
+        .event_query(
+            &account_id,
+            CalendarEventQueryFilter::in_calendar(calendar_id),
+        )
+        .expect("CalendarEvent/query failed against the real server");
+    assert!(
+        !query_after_destroy.ids.contains(&id),
+        "CalendarEvent/query for the calendar still lists the destroyed event"
     );
 }
 
