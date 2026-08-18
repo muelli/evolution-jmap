@@ -34442,3 +34442,120 @@ never answered. `send_email`/`submit_email` remain out of scope for this
 throwaway account (no SMTP path configured), unchanged from every prior
 session in this chain. Left `agent-livewrite.net`/`agent1` in place, same
 reasoning as every prior write-path session.
+
+## 2026-08-18 (claim) — Claiming the same-page create+update classification question
+
+Re-surveyed: `docs/MILESTONES.md` still has M1–M10 all `COMPLETE`,
+`docs/BACKLOG.md` unchanged (only (B′)/(C), both explicit maintainer-call/
+low-leverage). The prior session closed live-server `all_changes` coverage
+for `Mailbox`/`ContactCard`/`CalendarEvent`/`Email` and named the one
+question left unanswered: whether an object created and then updated
+inside a single `/changes` window classifies as `created` only (RFC 8620
+§5.2's fold rule, implemented client-side by
+`ChangeSet::classify`/`jmap-client/src/changes.rs:159` and already
+mock-tested at `jmap-client/tests/changes.rs:207`) against a *real*
+server's own `/changes`, not just `jmap-mockd`'s own invention of that
+behaviour.
+
+Confirmed reachable before claiming: `source
+infra/live-server/live-server-env.sh` resolves `STALWART_URL`
+(`http://stalwart-1...:8080`), and `/.well-known/jmap` answers `307` as
+expected pre-auth.
+
+Claiming: extend
+`mailbox_create_rename_then_destroy_round_trips_through_the_real_api` in
+`jmap-client/tests/live_server.rs` — after the existing create+rename
+steps, call `Client::all_changes` since the *pre-create* state (already
+captured as `state_before_create`) and assert the mailbox's id lands in
+`created` and NOT in `updated`, since the window spans both mutations.
+Same throwaway account (`agent-livewrite.net`/`agent1`, reseeded via `stw
+seed`) and gating as every write-path test in this file; will update
+`docs/manual-test-live-server.md` to match.
+
+## 2026-08-18 — Delivered: the same-page create+update classification test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `mailbox_create_rename_then_destroy_round_trips_through_the_real_api` —
+  after the existing create+rename steps (each already checked
+  individually via `all_changes` since its own preceding state), added one
+  more `Client::all_changes(&account_id, "Mailbox", &state_before_create)`
+  call spanning *both* mutations, asserting the mailbox's id lands in
+  `created` and is absent from `updated`. `state_before_create` was already
+  captured by the existing test, before either mutation, so this needed no
+  new plumbing — just one more assertion on a sequence already being
+  driven.
+- **`docs/manual-test-live-server.md`**: documented the new
+  cross-mutation `all_changes` check alongside the existing per-step ones.
+- No production code changed: `ChangeSet::classify`
+  (`jmap-client/src/changes.rs:159`) already implements RFC 8620 §5.2's
+  fold rule (create+update in one window → created only) and is mock-tested
+  at `jmap-client/tests/changes.rs:207`. This session's question was
+  whether a *real* server's own `/changes` — whatever it does in the
+  single-response case — still comes out right after the client's own
+  fold; it does.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent
+  upsert; previous session's password not recoverable by design).
+  `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/`.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the extended mailbox test — a mailbox
+  created and then renamed within one `/changes` window since before the
+  create classifies as `created`, not `updated`, against Stalwart's own
+  `/changes`, matching what the client already assumed. No client bug
+  found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --locked`
+  (default-members) green, no failures. `cargo deny`/`reuse lint` still
+  unavailable on this VM; the two changed files already carry SPDX headers
+  where required.
+
+Closes the one `all_changes` question the `Mailbox`/`ContactCard`/
+`CalendarEvent`/`Email` chain left open: the create/update/destroy
+classification rule now has live-server confirmation for both the
+per-mutation case (all four types, prior sessions) and the single-window
+create+update fold (this session, `Mailbox` only — the rule is generic
+over type, so one confirmation stands for all four; there is no reason to
+expect Stalwart's fold behaviour to differ by data type). Still open,
+unchanged: `send_email`/`submit_email` need an SMTP-capable deployment
+this throwaway account cannot provide. With this closed, the live-server
+write-path/incremental-sync chain that has occupied the last ~10 sessions
+has no further named follow-up — a future session should re-survey rather
+than assume there is a next increment in this specific vein.
+
+## 2026-08-18 (claim) — Claiming a send_email/EmailSubmission live-server test
+
+Re-surveyed per the prior session's own suggestion: `docs/MILESTONES.md`
+still has M1–M10 all `COMPLETE`, `docs/BACKLOG.md` unchanged (only (B′)/(C),
+both explicit maintainer-call/low-leverage). The live-server
+write-path/incremental-sync chain (`Mailbox`/`ContactCard`/`CalendarEvent`/
+`Email` create+update+destroy, each with `all_changes` coverage, plus the
+same-page create+update fold) is exhausted — every named follow-up in that
+vein is closed.
+
+One corner of "real-server readiness" was left unaddressed across that
+entire chain, each time with the same note: `send_email`/`submit_email`
+"remain out of scope for this throwaway account (no SMTP path configured)".
+That note conflated two different things — *outbound* SMTP relay to the
+public Internet (genuinely out of scope for a throwaway domain with no MX/
+DKIM) and *intra-server* delivery between two accounts on the same Stalwart
+deployment, which needs no outbound relay at all and this VM can provision
+freely (`infra/stalwart/stw seed` is an idempotent upsert; the domain
+`agent-livewrite.net` already exists from prior sessions). Confirmed
+reachable before claiming: `source infra/live-server/live-server-env.sh`
+resolves `STALWART_URL`, `/.well-known/jmap` answers `307` as expected
+pre-auth.
+
+Claiming: seed a second throwaway account (`agent2@agent-livewrite.net`) on
+the existing domain, and add a new test to
+`jmap-client/tests/live_server.rs` — `Client::send_email` from the existing
+write-test account (`agent1@agent-livewrite.net`) addressed to the new
+account, then poll the new account's `Email/query` (filtered by the
+message's unique subject) until the message shows up in its Inbox,
+confirming Stalwart actually delivers rather than merely accepting the
+submission. New env vars `JMAP_LIVE_SERVER_RECIPIENT_USER`/
+`_PASSWORD`, mirroring `connect_for_write`'s shape; skipped like every other
+write-path test when unset. Will update `docs/manual-test-live-server.md`
+to match.
