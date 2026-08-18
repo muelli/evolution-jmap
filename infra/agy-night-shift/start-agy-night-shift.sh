@@ -2,110 +2,136 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Antigravity Night-shift driver. Started BY THE OPERATOR inside tmux.
-# Ensure that the agy CLI is installed and accessible in PATH.
+# Antigravity POLISH-shift driver. Runs on the agy VM as the `runner` user (agy
+# is installed and OAuth-authed under /home/runner). Started inside tmux BY THE
+# OPERATOR (agy runs with --dangerously-skip-permissions).
+#
+# Lane: LOW-PRIORITY POLISH only, on the `antigravity` branch, which the
+# maintainer merges into `master` every so often. Claude works the priority
+# items on master. Each iteration this driver stays on antigravity, merges the
+# latest master in (so polish builds on current code), runs ONE agy increment
+# against infra/agy-night-shift/agy-prompt.md, and the agent commits+pushes to
+# antigravity. Lane rules live in that prompt.
+#
+# Sentinels (checked only between iterations, so a running increment always
+# finishes first):
+#   ~/.agy-shift-paused  durable  — stays down across reboots until removed
+#   ~/.agy-shift-stop    one-shot — one clean exit (the lossless driver-swap seam)
+# Blocked: the prompt makes agy print "AGY-SHIFT: BLOCKED" when the polish lane
+# has nothing unblocked; after BLOCKED_LIMIT in a row the driver sets the durable
+# pause rather than spinning (mirrors the Claude driver).
 
-set -euo pipefail
+set -uo pipefail   # deliberately not -e: git/agy failures are handled inline
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 cd "$HOME/evolution-jmap" || exit 1
 LOG="$HOME/agy-night-shift.log"
-PROMPT_FILE="$HOME/evolution-jmap/infra/night-shift/night-prompt.md"
+PROMPT_FILE="$HOME/evolution-jmap/infra/agy-night-shift/agy-prompt.md"
+PAUSE_FILE="$HOME/.agy-shift-paused"
+STOP_FILE="$HOME/.agy-shift-stop"
+BLOCKED_LIMIT=3        # consecutive "AGY-SHIFT: BLOCKED" reports → durable pause
+DRAIN_LIMIT=3          # consecutive short/no-op iterations (crash/transient) → exit
+QUOTA_RESET_SECONDS=3600
 
 log() { echo "$(date -Is) $*" >> "$LOG"; }
+trap 'log "=== agy shift exiting (line=$LINENO) ==="' EXIT
 
-# Log every exit so it's obvious where the driver terminated.
-trap 'log "=== agy night shift exiting (exit=$?, line=$LINENO) ==="' EXIT
-
-# Parse "Resets in 1h39m50s" (or "39m50s", "50s") into seconds.
+# Parse "1h39m50s" / "39m50s" / "50s" into seconds.
 parse_reset_seconds() {
-    local str="$1"
-    local hours=0 mins=0 secs=0
+    local str="$1" hours=0 mins=0 secs=0
     [[ "$str" =~ ([0-9]+)h ]] && hours="${BASH_REMATCH[1]}"
     [[ "$str" =~ ([0-9]+)m ]] && mins="${BASH_REMATCH[1]}"
     [[ "$str" =~ ([0-9]+)s ]] && secs="${BASH_REMATCH[1]}"
     echo $(( hours * 3600 + mins * 60 + secs ))
 }
 
-log "=== agy night shift starting ==="
-
-# Pick exactly one model from each major provider/family (e.g. one gemini, one claude, one gpt) 
-# to avoid spinning through models that share the same quota bucket.
-mapfile -t AVAILABLE_MODELS < <(agy models </dev/null | grep -v "Fetching" | awk '{print $1}' | awk -F'-' '!seen[$1]++ { print $0 }' || true)
-CURRENT_MODEL_INDEX=-1 # -1 means use the CLI default model
-QUOTA_RESET_SECONDS=3600 # fallback sleep if we can't parse the reset time
+log "=== agy polish shift starting ==="
+# One model per provider family so quota-cycling does not spin same-bucket models.
+mapfile -t AVAILABLE_MODELS < <(agy models </dev/null 2>/dev/null | grep -v "Fetching" | awk '{print $1}' | awk -F'-' '!seen[$1]++ { print $0 }' || true)
+CURRENT_MODEL_INDEX=-1   # -1 = the CLI default model
+consecutive_blocked=0
 consecutive_noop=0
+
 while true; do
-    git pull --rebase --quiet >> "$LOG" 2>&1 || true
-    start=$(date +%s)
-    
-    model_arg=""
-    current_model_name="default"
-    if [ "$CURRENT_MODEL_INDEX" -ge 0 ] && [ "$CURRENT_MODEL_INDEX" -lt "${#AVAILABLE_MODELS[@]}" ]; then
-        current_model_name="${AVAILABLE_MODELS[$CURRENT_MODEL_INDEX]}"
-        model_arg="--model $current_model_name"
+    if [ -f "$PAUSE_FILE" ]; then log "paused ($PAUSE_FILE); exiting between iterations. rm it to resume."; exit 0; fi
+    if [ -f "$STOP_FILE" ]; then rm -f "$STOP_FILE"; log "stop requested; exiting cleanly between iterations."; exit 0; fi
+
+    # Stay on the antigravity polish branch and keep it current with master. We
+    # are the sole writer of antigravity, so pull --rebase on it is safe; the
+    # merge of origin/master brings in Claude's latest priority work.
+    git fetch origin --quiet >> "$LOG" 2>&1 || true
+    git checkout antigravity >> "$LOG" 2>&1 \
+        || git checkout -b antigravity origin/antigravity >> "$LOG" 2>&1 \
+        || git checkout -b antigravity origin/master >> "$LOG" 2>&1 || true
+    git pull --rebase --quiet origin antigravity >> "$LOG" 2>&1 || true
+    if ! git merge --no-edit origin/master >> "$LOG" 2>&1; then
+        git merge --abort >> "$LOG" 2>&1 || true
+        log "merge of origin/master conflicted — skipping merge this round; resolve at integration time"
     fi
-    
-    log "launching agy in autonomous mode with /goal (model: $current_model_name)"
-    
-    out=$(mktemp)
-    set +e
+
+    model_arg=""; current_model_name="default"
+    if [ "$CURRENT_MODEL_INDEX" -ge 0 ] && [ "$CURRENT_MODEL_INDEX" -lt "${#AVAILABLE_MODELS[@]}" ]; then
+        current_model_name="${AVAILABLE_MODELS[$CURRENT_MODEL_INDEX]}"; model_arg="--model $current_model_name"
+    fi
+    log "launching agy (/goal, model: $current_model_name)"
+
+    start=$(date +%s); out=$(mktemp)
     agy $model_arg --dangerously-skip-permissions --print-timeout 8h --print "/goal $(cat "$PROMPT_FILE")" > "$out" 2>&1
     status=$?
-    set -e
     cat "$out" >> "$LOG"
-    
     duration=$(( $(date +%s) - start ))
     log "agy finished: exit=$status duration=${duration}s"
 
-    # Detect quota/usage limit.
-    # Exact message observed from agy: "Error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in Xh Ym Zs."
-    # Note: agy exits 0 even on quota errors, so we cannot rely on exit code.
+    # Quota: agy exits 0 even on quota errors, so detect from the output.
     quota_hit=0
     if grep -qiE "Individual quota reached|usage limit|quota exceeded|resource exhausted|rate limit" "$out" 2>/dev/null; then
-        log "Quota error detected in output."
         quota_hit=1
-        # Try to parse the reset time from the message, e.g. "Resets in 1h39m50s."
-        reset_str=$(grep -oiE "Resets in [0-9hms]+" "$out" 2>/dev/null | head -1 | awk '{print $3}') || true
-        if [ -n "$reset_str" ]; then
-            QUOTA_RESET_SECONDS=$(parse_reset_seconds "$reset_str")
-            log "Quota resets in ${QUOTA_RESET_SECONDS}s (parsed from: $reset_str)."
-        fi
+        reset_str=$(grep -oiE "Resets in [0-9hms ]+" "$out" 2>/dev/null | head -1 | sed -E 's/Resets in //I; s/ //g') || true
+        [ -n "$reset_str" ] && QUOTA_RESET_SECONDS=$(parse_reset_seconds "$reset_str")
+        log "quota reached; reset ~${QUOTA_RESET_SECONDS}s"
     fi
+    blocked=0; grep -q "AGY-SHIFT: BLOCKED" "$out" 2>/dev/null && blocked=1
     rm -f "$out"
 
+    # Sleeps below stay UNDER the VM idle-watchdog timeout so a working loop keeps
+    # the VM awake; the VM naps once the driver exits (quota/drain/stop) or pauses.
+
     if [ "$quota_hit" -eq 1 ]; then
+        consecutive_blocked=0; consecutive_noop=0
         CURRENT_MODEL_INDEX=$(( CURRENT_MODEL_INDEX + 1 ))
         if [ "$CURRENT_MODEL_INDEX" -lt "${#AVAILABLE_MODELS[@]}" ]; then
-            log "Switching to fallback model: ${AVAILABLE_MODELS[$CURRENT_MODEL_INDEX]}."
-            consecutive_noop=0  # reset so drain detection doesn't fire prematurely
-            continue
-        else
-            # All models exhausted — sleep until the earliest quota resets, then try again.
-            sleep_secs=$(( QUOTA_RESET_SECONDS + 60 ))
-            log "All models hit quota. Sleeping ${sleep_secs}s until quota resets, then retrying default model."
-            sleep "$sleep_secs"
-            CURRENT_MODEL_INDEX=-1
-            consecutive_noop=0
-            continue
+            log "switching to fallback model ${AVAILABLE_MODELS[$CURRENT_MODEL_INDEX]}"; continue
         fi
+        log "all models hit quota — exiting to nap; hourly reboot resumes after reset"
+        exit 0
     fi
 
-    # Reset model to default after a successful long shift (quota may have recovered)
-    if [ "$duration" -ge 120 ] && [ "$status" -eq 0 ]; then
-        CURRENT_MODEL_INDEX=-1
+    # Recover to the default model after a healthy long run.
+    [ "$duration" -ge 120 ] && [ "$status" -eq 0 ] && CURRENT_MODEL_INDEX=-1
+
+    # Blocked polish lane → durable pause after BLOCKED_LIMIT in a row.
+    if [ "$blocked" = 1 ]; then
+        consecutive_blocked=$(( consecutive_blocked + 1 ))
+        log "agy reported BLOCKED ${consecutive_blocked}/${BLOCKED_LIMIT}"
+        if [ "$consecutive_blocked" -ge "$BLOCKED_LIMIT" ]; then
+            touch "$PAUSE_FILE"
+            log "polish lane blocked ${BLOCKED_LIMIT}x — pausing (touched $PAUSE_FILE). rm it and relaunch to resume."
+            exit 0
+        fi
+        sleep 120; continue
     fi
+    consecutive_blocked=0
 
     if [ "$duration" -lt 120 ]; then
         consecutive_noop=$(( consecutive_noop + 1 ))
-        log "short iteration ${consecutive_noop}/3"
-        if [ "$consecutive_noop" -ge 3 ]; then
-            log "backlog appears drained or agent crashed repeatedly - exiting. VM will be napped by idle-watchdog once idle."
+        log "short iteration ${consecutive_noop}/${DRAIN_LIMIT}"
+        if [ "$consecutive_noop" -ge "$DRAIN_LIMIT" ]; then
+            log "drained or agy crashing — exiting; hourly reboot re-checks"
             exit 0
         fi
-        sleep 300
+        sleep 120
     else
         consecutive_noop=0
-        sleep 600
+        sleep 240
     fi
 done

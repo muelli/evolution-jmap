@@ -14,7 +14,7 @@ NAME=${NAME:-gha-agy-runner-1}
 ZONE=${ZONE:-europe-west1-b}
 MACHINE=${MACHINE:-c2d-standard-8}
 REPO=${REPO:-muelli/evolution-jmap}
-IDLE_MINUTES=${IDLE_MINUTES:-15}
+IDLE_MINUTES=${IDLE_MINUTES:-5}
 IMAGE_FAMILY=${IMAGE_FAMILY:-ubuntu-2404-lts-amd64}
 
 STARTUP=$(mktemp)
