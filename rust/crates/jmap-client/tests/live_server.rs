@@ -67,6 +67,7 @@ use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
     keyword, role,
 };
+use jmap_proto::methods::Comparator;
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
 };
@@ -744,7 +745,10 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
         .expect("Email/get failed against the real server");
 
     let imported = client
-        .email_import(&account_id, &EmailImport::new(upload.blob_id, inbox_id))
+        .email_import(
+            &account_id,
+            &EmailImport::new(upload.blob_id, inbox_id.clone()),
+        )
         .expect("Email/import failed against the real server");
     let id = imported.id.clone().expect("the server named the new email");
 
@@ -754,6 +758,24 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
     assert!(
         changes_after_import.created.contains(&id),
         "Email/changes since before the import does not list the new message as created"
+    );
+
+    // Same call `jmap-mail-sync::message_ids` makes to list a mailbox's
+    // messages (`in_mailbox` filter, ascending `receivedAt`, unbounded
+    // position) — the folder-listing path itself, not just get/set/changes
+    // on an id already known.
+    let queried_after_import = client
+        .email_query(
+            &account_id,
+            EmailQueryFilter::in_mailbox(inbox_id.clone()),
+            Some(vec![Comparator::ascending("receivedAt")]),
+            None,
+            0,
+        )
+        .expect("Email/query failed against the real server");
+    assert!(
+        queried_after_import.ids.contains(&id),
+        "Email/query on the Inbox does not list the newly imported message"
     );
 
     let fetched = client
@@ -832,6 +854,20 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
     assert!(
         changes_after_destroy.destroyed.contains(&id),
         "Email/changes since before the destroy does not list the message as destroyed"
+    );
+
+    let queried_after_destroy = client
+        .email_query(
+            &account_id,
+            EmailQueryFilter::in_mailbox(inbox_id.clone()),
+            Some(vec![Comparator::ascending("receivedAt")]),
+            None,
+            0,
+        )
+        .expect("Email/query failed against the real server");
+    assert!(
+        !queried_after_destroy.ids.contains(&id),
+        "Email/query on the Inbox still lists the destroyed message"
     );
 }
 

@@ -34881,3 +34881,57 @@ message's id is present; right after the destroy step, call it again and
 assert the id is absent. Same throwaway write-path account and gating as
 every other write-path test in this file. Will update
 `docs/manual-test-live-server.md` to match.
+
+## 2026-08-18 — Delivered: an Email/query live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `email_import_update_then_destroy_round_trips_through_the_real_api` —
+  right after the import step, calls `Client::email_query` with
+  `EmailQueryFilter::in_mailbox(inbox_id)` sorted
+  `Comparator::ascending("receivedAt")` and asserts the newly imported
+  message's id is present; right after the destroy step, calls it again and
+  asserts the id is absent. This is the exact filter/sort shape
+  `jmap-mail-sync::message_ids` (`lib.rs:985-1008`) uses to enumerate a
+  mailbox's messages — the mail backend's real listing path, which had zero
+  live-server coverage before this. It is distinct from the `Email/query`
+  call already in this file (inside `send_email_delivers_to_a_second_
+  account_on_the_real_server`, which filters by mailbox *and* subject with
+  no sort — a delivery-polling probe, not the listing path), which is why
+  the prior session's "no further open named follow-up" note was wrong: the
+  query-coverage thread had closed the two non-mail types
+  (`ContactCard/CalendarEvent`) but not mail's own `Email/query` shape.
+- **`docs/manual-test-live-server.md`**: documented the new query checks
+  alongside the existing per-step ones.
+- No production code changed: `Client::email_query` and
+  `EmailQueryFilter::in_mailbox` already existed and are already
+  mock-tested; this session's question was only whether a *real* server's
+  `Email/query` answers, for the exact filter+sort shape the backend
+  actually sends, the way this client already assumes.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent
+  upsert; previous session's password not recoverable by design).
+  `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/`.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 10 tests in
+  `live_server.rs` pass, including the extended email test — `Email/query`
+  filtered by mailbox and sorted by `receivedAt` lists the newly imported
+  message and excludes it after destruction, against Stalwart's own query
+  engine. No client bug found.
+- Full gate: `cargo fmt --check` clean (after `cargo fmt` reflowed one
+  over-width call this session's own edit left), `cargo clippy -p
+  evolution-jmap-client --all-targets --locked --features live-server --
+  -D warnings` and `cargo clippy --all-targets --locked -- -D warnings`
+  (default-members) both clean, `cargo test --locked` (default-members)
+  green, no failures. `cargo deny`/`reuse lint` unavailable on this VM as
+  usual; the only changed source file (`live_server.rs`) already carries
+  its SPDX header.
+
+With this, all three record types the backends actually query
+(`ContactCard`, `CalendarEvent`, and now `Email`) have live-server coverage
+of their real listing shape, not just `get`/`set`/`changes`. Real-server
+readiness's remaining named items are back down to the maintainer-gated
+OAuth2 issuer-mismatch call and the EDS 3.60+ mapping decisions
+(`docs/BACKLOG.md`). A future session should still re-survey fresh rather
+than assume another increment in this vein — but this time verify against
+the actual production call sites (`grep` the `*-sync` crates for what they
+call), not just against what earlier night-log entries claim is covered.
