@@ -33060,3 +33060,25 @@ maintainer call on BACKLOG (B′) is the only thing that would open new
 autonomous work; the `eds-version-matrix` dispatch is not actually pending
 anything further — it already shows `success`, and M10 is tagged complete.
 No code change this session.
+
+## 2026-08-18 (379th session) — twenty-fifth re-verification, nothing unblocked
+
+Kept short per the 374th session's note. Checked directly rather than
+trusted:
+
+- `git fetch origin`: `HEAD` (`45dfe3e`) matches `origin/master`, tree
+  clean, no new commits since the 378th session's push.
+- `docs/MILESTONES.md`: M1–M10 all COMPLETE, unchanged. `~/.night-shift-
+  escalate` absent.
+- Actions API: newest run still `32064810881` (`00271f9`, success); newest
+  `workflow_dispatch` still `32063091331` (`dd76d55`, success) — unchanged
+  since the 363rd session, 16 sessions ago. Issues/Pulls: still only the
+  two closed FFI-audit items, nothing new.
+- `df -h /`: unchanged, 3.2G available (95% full).
+- `docs/BACKLOG.md` re-read in full: unchanged — (B′) and (C) remain the
+  only open items, both explicit maintainer-call/low-leverage under
+  current priority, not autonomous work.
+
+Twenty-fifth independent conclusion: nothing unblocked. As before, a
+maintainer call on BACKLOG (B′) is the only thing that would open new
+autonomous work. No code change this session.
