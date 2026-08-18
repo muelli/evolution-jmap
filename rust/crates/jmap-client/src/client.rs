@@ -172,8 +172,22 @@ impl Client {
     }
 
     /// Connect with default transport and timeout.
+    ///
+    /// Honours `JMAP_LIVE_SERVER_REBASE_URLS` as an opt-in escape hatch for
+    /// reaching a deployment through an address it does not advertise — a
+    /// `socat`/localhost forward or a reverse proxy — by rebasing the session's
+    /// URLs onto the origin actually connected through (see
+    /// [`ClientBuilder::rebase_urls_to_origin`]). Off by default (RFC-strict:
+    /// follow `apiUrl` as given); set the variable to `1`/`true` to enable it.
+    /// Every EDS backend reaches a server through this method, so one env var
+    /// switches them all.
     pub fn connect(origin: &str, credentials: Credentials) -> Result<Self, Error> {
-        Self::builder().connect(origin, credentials)
+        let rebase = std::env::var("JMAP_LIVE_SERVER_REBASE_URLS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        Self::builder()
+            .rebase_urls_to_origin(rebase)
+            .connect(origin, credentials)
     }
 
     /// The session object fetched at connect time.
