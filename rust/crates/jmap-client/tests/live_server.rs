@@ -54,9 +54,9 @@
 //! `Core/echo`, and listing what already exists. `Mailbox/set` round-trips
 //! (create, rename, destroy) are covered against the mock, where they cost
 //! nothing, *and* against a dedicated throwaway account here (see
-//! [`mailbox_create_then_destroy_round_trips_through_the_real_api`]) — the
-//! one exception, and scoped to an account this suite seeded for exactly
-//! this test.
+//! [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`])
+//! — the one exception, and scoped to an account this suite seeded for
+//! exactly this test.
 
 use std::env;
 
@@ -238,16 +238,18 @@ fn connect_for_write() -> Option<Client> {
     )
 }
 
-/// The one mutating test in this file: `Mailbox/set` creates a folder, reads
-/// it back through `Mailbox/get`, then destroys it — proof this client's
-/// write path round-trips against a real server's own semantics (id
-/// assignment, state changes), not just `jmap-mockd`'s fixtures, which
+/// The one mutating test in this file: `Mailbox/set` creates a folder,
+/// renames it (`mailbox_update`'s `PatchObject` path — what `jmap-mail`'s
+/// Camel port sends whenever a user renames a folder), reads it back
+/// through `Mailbox/get` after each step, then destroys it — proof this
+/// client's write path round-trips against a real server's own semantics
+/// (id assignment, state changes), not just `jmap-mockd`'s fixtures, which
 /// already cover the same shape at no risk. Scoped to the throwaway account
 /// [`connect_for_write`] describes; skipped, not failed, when that account
 /// is not configured.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
-fn mailbox_create_then_destroy_round_trips_through_the_real_api() {
+fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
@@ -282,6 +284,23 @@ fn mailbox_create_then_destroy_round_trips_through_the_real_api() {
         round_tripped.map(|mailbox| mailbox.name),
         Some(name),
         "the created mailbox does not show up in Mailbox/get afterwards"
+    );
+
+    let renamed_name = format!("agent-livewrite-renamed-{}", unique_suffix());
+    client
+        .mailbox_update(&account_id, &id, json!({"name": renamed_name}))
+        .expect("Mailbox/set update failed against the real server");
+
+    let round_tripped_after_rename = client
+        .mailbox_get(&account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.id.as_ref() == Some(&id));
+    assert_eq!(
+        round_tripped_after_rename.map(|mailbox| mailbox.name),
+        Some(renamed_name),
+        "the renamed mailbox does not show the new name in Mailbox/get afterwards"
     );
 
     client
