@@ -5,6 +5,38 @@ Real but low-leverage items, parked until the usability priorities in
 now** — add to the list when you notice one and would otherwise be tempted
 to polish a completed backend. A later hardening pass works through them.
 
+## Real-server readiness — OAuth 2.0 discovery vs. a misconfigured issuer
+- **Maintainer's call, not code to guess at.** Found 2026-08-18 (see
+  `docs/NIGHT-LOG.md` "REAL-SERVER FINDING: OAuth 2.0 discovery's issuer
+  check rejects this Stalwart"): `jmap_client::oauth::discover` enforces RFC
+  8414 §3.3 (the metadata document's stated `issuer` must equal the one
+  asked for) and the disposable Stalwart test deployment fails it —
+  `SystemSettings.defaultHostname=example.com` plus a hardcoded `https://`
+  scheme (the same root cause already on record for the `apiUrl` finding)
+  means its `/.well-known/oauth-authorization-server` document names issuer
+  `https://example.com` no matter which reachable address it was fetched
+  from. `discover_and_register` (`jmap-config/src/oauth2_setup.rs`) builds
+  its issuer from exactly the host/port a user types into account setup, so
+  any self-hosted deployment with this same mismatch cannot use OAuth 2.0
+  through this client today.
+- Unlike the `apiUrl` fix (`ClientBuilder::rebase_urls_to_origin`, shipped
+  unilaterally because it only changes which reachable address
+  already-authenticated requests target), relaxing the §3.3 issuer check —
+  even behind an opt-in flag — changes what a client trusts a self-hosted
+  deployment's own metadata to assert about *itself* before any
+  authentication has happened. That is the mix-up defence RFC 8414 §3.3
+  exists for, not a routing convenience, so it needs the maintainer's
+  explicit sign-off rather than an agent's guess. Candidate shapes, for
+  whichever the maintainer prefers: (a) leave it strict and document that a
+  self-hosted deployment's `defaultHostname`/public URL must actually match
+  how clients reach it — the normal ABI-style contract EDS modules already
+  hold servers to elsewhere; (b) an opt-in analogous to
+  `rebase_urls_to_origin` that trusts the connected origin over the
+  document's stated issuer, on the reasoning that this call site is
+  first-party discovery from user-typed input, not delegated/redirected
+  discovery from an untrusted source — but explicitly flagged as a trust
+  decision, not a reachability one.
+
 ## EDS 3.60+ compatibility (M10 area, found by the version matrix)
 - ~~`jmap-backend-book/src/marshal.rs`'s `e_vcard_to_string` call, and
   `eds-sys`/`jmap-mail`'s `CamelFolderSearch`/summary-record surface~~ —

@@ -34624,3 +34624,74 @@ same-page create+update fold, and now sending) is closed. A future
 session should re-survey `docs/ROADMAP.md`/`docs/BACKLOG.md` fresh rather
 than assume another increment in this vein — same advice the prior
 session gave, now doubly true.
+
+## 2026-08-18 — REAL-SERVER FINDING: OAuth 2.0 discovery's issuer check rejects this Stalwart
+
+Re-surveyed fresh per the prior session's own advice rather than assuming a
+next increment in the live-server CRUD/changes/send vein: `docs/MILESTONES.md`
+still has M1–M10 all COMPLETE (M7, M9, M10 included), `docs/BACKLOG.md`'s
+open items are (B′)/(C), both explicit maintainer-call/low-leverage, and the
+send_email chain just closed is exhausted per its own closing note. Looked at
+ROADMAP's real-server-readiness lane (item 2) from a different angle than any
+prior session: everything landed there so far (redirect-auth, apiUrl rebase,
+identityId/emailId backfill, the whole CRUD/changes/send chain) exercised the
+JMAP API surface (`Session/get`, `*/get`, `*/set`, `*/changes`,
+`EmailSubmission/set`, blob upload/download). `jmap-client::oauth` — RFC 8414
+discovery, RFC 7591 registration, RFC 6749 token exchange
+(`jmap-client/src/oauth.rs`, wired to production via
+`jmap-config/src/oauth2_setup.rs::discover_and_register`) — is entirely
+mock-tested (`jmap-client/tests/{oauth_discovery,oauth_token}.rs`) and had
+never been run against the real Stalwart at all.
+
+Confirmed reachable and checked whether Stalwart even publishes OAuth 2.0
+metadata (not assumed): `source infra/live-server/live-server-env.sh`, then
+`curl "$STALWART_URL/.well-known/oauth-authorization-server"` — `200`, a full
+RFC 8414 document (`authorization_endpoint`, `token_endpoint`,
+`registration_endpoint`, `device_authorization_endpoint`, the
+`urn:ietf:params:oauth:scope:{mail,contacts,calendars}` scopes, PKCE S256).
+So this deployment is a genuine, non-trivial OAuth 2.0 target worth testing
+against — not a dead end.
+
+Ran it for real rather than reasoning from the curl output alone: a throwaway
+`cargo run --example` (not committed — deleted before writing this entry)
+called `jmap_client::oauth::discover(&UreqTransport::default(), STALWART_URL,
+None)`, the exact call `discover_and_register` makes with the issuer built
+from whatever host/port a user types into account setup
+(`jmap-config/src/oauth2_setup.rs:94-96`, via `source::origin`). Result:
+
+```
+ERR: protocol error: the metadata document at http://stalwart-1.<...>.internal:8080
+names issuer https://example.com; RFC 8414 §3.3 requires them to be identical
+```
+
+Root cause: the same one already on record for `apiUrl` (see this file's
+"apiUrl's scheme is hardcoded https, not just the hostname") — Stalwart's
+`SystemSettings.defaultHostname` is `example.com` and its session/metadata
+builder unconditionally states `https://` regardless of which listener a
+client actually reached it through, so every self-describing absolute URL
+Stalwart hands back (session URLs *and*, newly found tonight, the OAuth 2.0
+issuer) names an address this VPC cannot dial over TLS. It is not a fresh
+Stalwart bug, just a second call site the known quirk breaks — did not
+re-verify by editing settings again (the apiUrl session already proved and
+reverted that `defaultHostname` propagates immediately but the `https`
+literal does not follow listener config; no reason to expect the OAuth
+metadata builder differs).
+
+**Not fixed — this is a maintainer call, unlike the apiUrl case.** The apiUrl
+fix (`ClientBuilder::rebase_urls_to_origin`) was safe to ship unilaterally
+because it only changes which *reachable* address already-authenticated
+requests are sent to — RFC 8620 states apiUrl is the server's own URL, and
+rebasing it weakens no check. RFC 8414 §3.3's issuer match is not that: it
+*is* the mix-up defence — the one thing standing between "this is my
+deployment's authorization server" and "a server answering at this address
+can claim to be any issuer it likes." Relaxing it, even behind an opt-in
+flag, is a security-policy decision about what a client may trust from a
+self-hosted deployment whose configured public identity disagrees with how
+it is actually reached — squarely the kind of trust call the apiUrl session
+declined to make unilaterally for the analogous TLS-cert question. Logged
+per "correctness over progress" rather than guessed at; added to
+`docs/BACKLOG.md` for the maintainer's call. No code change, no test added
+(a live test asserting today's failure would encode this deployment's own
+hostname misconfiguration as expected client behaviour, and would sit in the
+operator's `--features live-server -- --ignored` suite as a permanently red
+test rather than the green-when-run suite that file documents itself as).
