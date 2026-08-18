@@ -101,12 +101,19 @@
 //! without any `VEVENT` in it is an error.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write;
 
+use calcard::common::{IanaParse, IanaString, PartialDateTime};
+use calcard::icalendar::{
+    ICalendar, ICalendarComponent, ICalendarComponentType, ICalendarEntry, ICalendarParameter,
+    ICalendarParameterName, ICalendarParameterValue, ICalendarProperty, ICalendarValue,
+    ICalendarValueType, Uri,
+};
+use calcard::{Entry, Parser};
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Map, Value, json};
 
 use crate::error::ICalError;
-use crate::syntax::{self, Component, Property};
 
 /// Carries the JSCalendar `uid` when the iCalendar `UID` is taken by the JMAP
 /// id, mirroring `X-JMAP-UID` on the address book side.
@@ -156,6 +163,102 @@ const DISPLAY_ALERT: (&str, &str) = ("display", "DISPLAY");
 
 /// The `PRODID` of every calendar this crate emits.
 const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Component {
+    component_type: ICalendarComponentType,
+    entries: Vec<ICalendarEntry>,
+    children: Vec<Component>,
+}
+
+impl Component {
+    fn new(name: &str) -> Self {
+        let component_type = ICalendarComponentType::parse(name.as_bytes())
+            .unwrap_or_else(|| ICalendarComponentType::Other(name.to_ascii_uppercase()));
+        Self {
+            component_type,
+            entries: Vec::new(),
+            children: Vec::new(),
+        }
+    }
+
+    fn with(mut self, entry: ICalendarEntry) -> Self {
+        self.entries.push(entry);
+        self
+    }
+
+    fn with_child(mut self, child: Component) -> Self {
+        self.children.push(child);
+        self
+    }
+
+    fn write_into(&self, out: &mut String) {
+        write!(out, "BEGIN:{}\r\n", self.component_type.as_str()).unwrap();
+        for entry in &self.entries {
+            entry.write_to(out).unwrap();
+        }
+        for child in &self.children {
+            child.write_into(out);
+        }
+        write!(out, "END:{}\r\n", self.component_type.as_str()).unwrap();
+    }
+
+    fn to_ics(&self) -> String {
+        let mut out = String::new();
+        self.write_into(&mut out);
+        out
+    }
+}
+
+fn make_entry(name: &str, value: &str) -> ICalendarEntry {
+    let prop = ICalendarProperty::parse(name.as_bytes())
+        .unwrap_or_else(|| ICalendarProperty::Other(name.to_ascii_uppercase()));
+    ICalendarEntry::new(prop).with_value(ICalendarValue::Text(value.to_owned()))
+}
+
+trait EntryExt {
+    fn with_named_param(self, name: &str, value: &str) -> Self;
+    fn with_named_params<I, S>(self, name: &str, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>;
+}
+
+impl EntryExt for ICalendarEntry {
+    fn with_named_param(self, name: &str, value: &str) -> Self {
+        self.with_named_params(name, [value])
+    }
+
+    fn with_named_params<I, S>(mut self, name: &str, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let param_name = ICalendarParameterName::try_parse(name.as_bytes())
+            .unwrap_or_else(|| ICalendarParameterName::Other(name.to_ascii_uppercase()));
+        for val in values {
+            self.params.push(ICalendarParameter::new(
+                param_name.clone(),
+                ICalendarParameterValue::Text(val.as_ref().to_owned()),
+            ));
+        }
+        self
+    }
+}
+
+fn rrule_entry(rrule_str: &str) -> Option<ICalendarEntry> {
+    let raw = format!("BEGIN:VEVENT\r\nRRULE:{rrule_str}\r\nEND:VEVENT\r\n");
+    let mut parser = Parser::new(&raw);
+    let Entry::ICalendar(mut calendar) = parser.entry() else {
+        return None;
+    };
+    let mut component = calendar.components.pop()?;
+    let idx = component
+        .entries
+        .iter()
+        .position(|entry| entry.name == ICalendarProperty::Rrule)?;
+    Some(component.entries.swap_remove(idx))
+}
 
 /// The JSCalendar spelling of `Etc/UTC`, the one the client and the mock use.
 const UTC: &str = "Etc/UTC";
@@ -638,11 +741,11 @@ fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Compon
         // RFC 9074 §6 gives a VALARM a UID, which is where the key of the entry
         // rides so that a save states the reminder the server holds under the
         // name the server gave it.
-        .with(Property::new("UID", key))
-        .with(Property::raw("ACTION", ical))
-        .with(Property::raw("TRIGGER", &offset).with_params("RELATED", related));
+        .with(make_entry("UID", key))
+        .with(make_entry("ACTION", ical))
+        .with(make_entry("TRIGGER", &offset).with_named_params("RELATED", related));
     if let Some(summary) = summary.filter(|summary| !summary.is_empty()) {
-        valarm = valarm.with(Property::new("DESCRIPTION", summary));
+        valarm = valarm.with(make_entry("DESCRIPTION", summary));
     }
     Some(valarm)
 }
@@ -717,7 +820,7 @@ fn drawn_alarms(event: &CalendarEvent) -> Vec<Component> {
 /// besides — the usual shape of a meeting somebody called and comes to — gets
 /// both, because iCalendar states the organizer beside the guest list rather
 /// than instead of it.
-fn drawn_participants(event: &CalendarEvent) -> Vec<Property> {
+fn drawn_participants(event: &CalendarEvent) -> Vec<ICalendarEntry> {
     let mut lines = Vec::new();
     let mut organizer_drawn = false;
     for participant in event.participants.iter().flatten().map(|(_, value)| value) {
@@ -729,28 +832,28 @@ fn drawn_participants(event: &CalendarEvent) -> Vec<Property> {
         if owns && !organizer_drawn {
             organizer_drawn = true;
             lines.push(
-                Property::raw("ORGANIZER", address).with_params("CN", stated_name(participant)),
+                make_entry("ORGANIZER", address).with_named_params("CN", stated_name(participant)),
             );
         }
         if owns && role.is_none() {
             continue;
         }
         lines.push(
-            Property::raw("ATTENDEE", address)
-                .with_params("CN", stated_name(participant))
-                .with_params(
+            make_entry("ATTENDEE", address)
+                .with_named_params("CN", stated_name(participant))
+                .with_named_params(
                     "CUTYPE",
                     spelled(&PARTICIPANT_KINDS, participant.get("kind")),
                 )
-                .with_params("ROLE", role)
-                .with_params(
+                .with_named_params("ROLE", role)
+                .with_named_params(
                     "PARTSTAT",
                     spelled(
                         &PARTICIPATION_STATUSES,
                         participant.get("participationStatus"),
                     ),
                 )
-                .with_params("RSVP", expects_reply(participant).then_some("TRUE")),
+                .with_named_params("RSVP", expects_reply(participant).then_some("TRUE")),
         );
     }
     lines
@@ -764,7 +867,7 @@ fn drawn_participants(event: &CalendarEvent) -> Vec<Property> {
 /// therefore shows one of (see [`drawn_place`]), RFC 7986 §5.11 states that the
 /// property "can be specified multiple times", so a map of several places needs
 /// nothing left out and nothing patched in place.
-fn drawn_conferences(event: &CalendarEvent) -> Vec<Property> {
+fn drawn_conferences(event: &CalendarEvent) -> Vec<ICalendarEntry> {
     event
         .virtual_locations
         .iter()
@@ -790,17 +893,17 @@ fn drawn_conferences(event: &CalendarEvent) -> Vec<Property> {
 /// VirtualLocation, and a place with none is dropped rather than guessed at.
 /// Such an entry is one the drawing left out, which is what
 /// [`maps_virtual_locations`] refuses a save over.
-fn drawn_conference(key: &str, location: &Value) -> Option<Property> {
+fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
     let uri = location
         .get("uri")?
         .as_str()
         .filter(|uri| names_a_uri(uri))?;
     Some(
-        Property::raw("CONFERENCE", uri)
-            .with_param("VALUE", "URI")
-            .with_params("FEATURE", joining_features(location))
-            .with_params("LABEL", stated_name(location))
-            .with_param(X_JMAP_KEY, key),
+        make_entry("CONFERENCE", uri)
+            .with_named_param("VALUE", "URI")
+            .with_named_params("FEATURE", joining_features(location))
+            .with_named_params("LABEL", stated_name(location))
+            .with_named_param(X_JMAP_KEY, key),
     )
 }
 
@@ -828,7 +931,7 @@ fn joining_features(location: &Value) -> Vec<&'static str> {
 /// [`ICON_REL`] is what tells them apart, since it is the relation RFC 8984
 /// §1.4.11 attaches `display` to. Both admit being stated more than once, so —
 /// as with `CONFERENCE`, and unlike `LOCATION` — nothing is left out.
-fn drawn_links(event: &CalendarEvent) -> Vec<Property> {
+fn drawn_links(event: &CalendarEvent) -> Vec<ICalendarEntry> {
     event
         .links
         .iter()
@@ -851,7 +954,7 @@ fn drawn_links(event: &CalendarEvent) -> Vec<Property> {
 /// entry of the server's map it is a drawing of. Position could not do that job —
 /// an editor that drops a line it has no URI for would slide every later
 /// resource onto the wrong entry.
-fn drawn_link(key: &str, link: &Value) -> Option<Property> {
+fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
     let href = link
         .get("href")?
         .as_str()
@@ -863,11 +966,11 @@ fn drawn_link(key: &str, link: &Value) -> Option<Property> {
         // `CONFERENCE`, and the reason both write a parameter that says only
         // what the default already says.
         return Some(
-            Property::raw("IMAGE", href)
-                .with_param("VALUE", "URI")
-                .with_params("DISPLAY", spelled(&LINK_DISPLAYS, link.get("display")))
-                .with_params("FMTTYPE", media_type)
-                .with_param(X_JMAP_KEY, key),
+            make_entry("IMAGE", href)
+                .with_named_param("VALUE", "URI")
+                .with_named_params("DISPLAY", spelled(&LINK_DISPLAYS, link.get("display")))
+                .with_named_params("FMTTYPE", media_type)
+                .with_named_param(X_JMAP_KEY, key),
         );
     }
     // No `VALUE`: RFC 5545 §3.8.1.1 already makes `URI` the default value type
@@ -876,10 +979,10 @@ fn drawn_link(key: &str, link: &Value) -> Option<Property> {
     // link that asked to be displayed without saying it is an icon is taken at
     // its `rel`.
     Some(
-        Property::raw("ATTACH", href)
-            .with_params("FMTTYPE", media_type)
-            .with_params("SIZE", stated_size(link))
-            .with_param(X_JMAP_KEY, key),
+        make_entry("ATTACH", href)
+            .with_named_params("FMTTYPE", media_type)
+            .with_named_params("SIZE", stated_size(link))
+            .with_named_param(X_JMAP_KEY, key),
     )
 }
 
@@ -1037,18 +1140,22 @@ fn stated_offset(value: &str) -> Option<String> {
 /// reason [`read_locations`] gives: the save path reads an edit off a difference
 /// from what was shown, and an empty map would claim the event reminds nobody
 /// where the component made no claim at all.
-fn read_alerts(vevent: &Component) -> Option<BTreeMap<String, Value>> {
+fn read_alerts(
+    vevent: &ICalendarComponent,
+    components: &[ICalendarComponent],
+) -> Option<BTreeMap<String, Value>> {
     let mut alerts: BTreeMap<String, Value> = BTreeMap::new();
     let mut nameless: Vec<Value> = Vec::new();
     for valarm in vevent
-        .children
+        .component_ids
         .iter()
-        .filter(|child| child.name == "VALARM")
+        .filter_map(|id| components.get(*id as usize))
+        .filter(|child| child.component_type.as_str().eq_ignore_ascii_case("VALARM"))
     {
         let Some(alert) = read_alert(valarm) else {
             continue;
         };
-        match valarm.text("UID").filter(|uid| names_map_entry(uid)) {
+        match component_text(valarm, "UID").filter(|uid| names_map_entry(uid)) {
             Some(uid) => {
                 alerts.insert(uid, alert);
             }
@@ -1080,13 +1187,13 @@ fn read_alerts(vevent: &Component) -> Option<BTreeMap<String, Value>> {
 /// off: both directions have to agree about which, or a save would read its own
 /// rendering as an edit. What decides is [`drawn_alert`], which reads back exactly
 /// this shape.
-fn read_alert(valarm: &Component) -> Option<Value> {
+fn read_alert(valarm: &ICalendarComponent) -> Option<Value> {
     let (jscalendar, ical) = DISPLAY_ALERT;
-    if !valarm.text("ACTION")?.eq_ignore_ascii_case(ical) {
+    if !component_text(valarm, "ACTION")?.eq_ignore_ascii_case(ical) {
         return None;
     }
-    let property = valarm.property("TRIGGER")?;
-    let offset = stated_offset(&property.raw_value())?;
+    let property = component_entry(valarm, "TRIGGER")?;
+    let offset = stated_offset(&entry_raw_value(property))?;
     let mut trigger = Map::from_iter([
         ("@type".to_owned(), json!("OffsetTrigger")),
         ("offset".to_owned(), json!(offset)),
@@ -1094,7 +1201,7 @@ fn read_alert(valarm: &Component) -> Option<Value> {
     // RFC 5545 §3.2.14 defaults `RELATED` to the start, and so does RFC 8984
     // §4.5.3's `relativeTo`, so only the end is stated. A value that is neither
     // is an alarm firing at a moment this mapping cannot name.
-    match property.param("RELATED") {
+    match entry_param(property, "RELATED") {
         None => {}
         Some(related) if related.eq_ignore_ascii_case("START") => {}
         Some(related) if related.eq_ignore_ascii_case("END") => {
@@ -1447,8 +1554,10 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     let mut vevent = vevent_of(event, as_a_date, zone, None);
 
     for rule in event.recurrence_rules.iter().flatten() {
-        if let Some(value) = rule_to_rrule(rule, Ends::In(Zoned::named(zone)), as_a_date) {
-            vevent = vevent.with(Property::raw("RRULE", &value));
+        if let Some(entry) = rule_to_rrule(rule, Ends::In(Zoned::named(zone)), as_a_date)
+            .and_then(|v| rrule_entry(&v))
+        {
+            vevent = vevent.with(entry);
         }
     }
 
@@ -1467,8 +1576,8 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     let instances = modified_instances(event);
 
     let mut calendar = Component::new("VCALENDAR")
-        .with(Property::raw("VERSION", "2.0"))
-        .with(Property::raw("PRODID", PRODID));
+        .with(make_entry("VERSION", "2.0"))
+        .with(make_entry("PRODID", PRODID));
     // Ahead of the events that refer to them, which is where a reader resolving a
     // `TZID` as it walks wants them.
     for vtimezone in drawn_time_zones(event, &instances, as_a_date) {
@@ -1650,7 +1759,7 @@ pub fn defines_time_zone(event: &CalendarEvent, tzid: &str) -> bool {
 /// transition and describes a zone whose past was corrected rather than one whose
 /// future differs.
 fn vtimezone_of(tzid: &str, definition: &Value) -> Option<Component> {
-    let mut vtimezone = Component::new("VTIMEZONE").with(Property::new("TZID", tzid));
+    let mut vtimezone = Component::new("VTIMEZONE").with(make_entry("TZID", tzid));
     let mut observances = 0;
     for (name, member) in [("STANDARD", "standard"), ("DAYLIGHT", "daylight")] {
         // A zone that never moves states one of the two and not the other, which
@@ -1683,12 +1792,12 @@ fn observance(name: &str, rule: &Value) -> Option<Component> {
     // `UNTIL` needs as well as its `DTSTART` — see [`Ends::At`].
     let offset_from = member("offsetFrom").and_then(utc_offset)?;
     let mut observance = Component::new(name)
-        .with(Property::raw(
+        .with(make_entry(
             "DTSTART",
             &member("start").and_then(to_ical_date_time)?,
         ))
-        .with(Property::raw("TZOFFSETFROM", &offset_from))
-        .with(Property::raw(
+        .with(make_entry("TZOFFSETFROM", &offset_from))
+        .with(make_entry(
             "TZOFFSETTO",
             &member("offsetTo").and_then(utc_offset)?,
         ));
@@ -1712,10 +1821,9 @@ fn observance(name: &str, rule: &Value) -> Option<Component> {
         if !maps_recurrence_rule(&recurrence) {
             return None;
         }
-        observance = observance.with(Property::raw(
-            "RRULE",
-            &rule_to_rrule(&recurrence, Ends::At(&offset_from), false)?,
-        ));
+        let rrule_str = rule_to_rrule(&recurrence, Ends::At(&offset_from), false)?;
+        let entry = rrule_entry(&rrule_str)?;
+        observance = observance.with(entry);
     }
 
     // What a reader shows for the offset — `CET`, `CEST`. RFC 8984 §4.7.2 keys
@@ -1730,7 +1838,7 @@ fn observance(name: &str, rule: &Value) -> Option<Component> {
         .filter(|(_, wanted)| *wanted == &Value::Bool(true))
         .map(|(name, _)| name)
     {
-        observance = observance.with(Property::new("TZNAME", named));
+        observance = observance.with(make_entry("TZNAME", named));
     }
     Some(observance)
 }
@@ -1810,10 +1918,10 @@ fn vevent_of(
         .map(|id| id.as_str())
         .or(event.uid.as_deref())
     {
-        vevent = vevent.with(Property::new("UID", uid));
+        vevent = vevent.with(make_entry("UID", uid));
     }
     if let Some(uid) = &event.uid {
-        vevent = vevent.with(Property::new(X_JMAP_UID, uid));
+        vevent = vevent.with(make_entry(X_JMAP_UID, uid));
     }
     if let Some(recurrence_id) = recurrence_id {
         vevent = vevent.with(dated(
@@ -1839,7 +1947,7 @@ fn vevent_of(
         ("LAST-MODIFIED", &event.updated),
     ] {
         if let Some(stamp) = value.as_deref().and_then(to_utc_date_time) {
-            vevent = vevent.with(Property::raw(name, &stamp));
+            vevent = vevent.with(make_entry(name, &stamp));
         }
     }
 
@@ -1848,7 +1956,7 @@ fn vevent_of(
         ("DESCRIPTION", &event.description),
     ] {
         if let Some(value) = value.as_deref().filter(|value| !value.is_empty()) {
-            vevent = vevent.with(Property::new(name, value));
+            vevent = vevent.with(make_entry(name, value));
         }
     }
 
@@ -1867,11 +1975,11 @@ fn vevent_of(
     // just its length. See [`stated_duration`], which is also what reads the
     // property back.
     if let Some(duration) = event.duration.as_deref().and_then(stated_duration) {
-        vevent = vevent.with(Property::raw("DURATION", &duration));
+        vevent = vevent.with(make_entry("DURATION", &duration));
     }
 
     if let Some(status) = event.status.as_deref().and_then(ical_status) {
-        vevent = vevent.with(Property::raw("STATUS", status));
+        vevent = vevent.with(make_entry("STATUS", status));
     }
 
     // Whether the event blocks the time it occupies. An event that says nothing
@@ -1882,27 +1990,30 @@ fn vevent_of(
         .as_deref()
         .and_then(ical_transparency)
     {
-        vevent = vevent.with(Property::raw("TRANSP", transparency));
+        vevent = vevent.with(make_entry("TRANSP", transparency));
     }
 
     // How important the event is. Only a number inside the range both formats
     // admit — see [`PRIORITIES`], which is also what reads the property back.
     if let Some(priority) = event.priority.filter(|priority| known_priority(*priority)) {
-        vevent = vevent.with(Property::raw("PRIORITY", &priority.to_string()));
+        vevent = vevent.with(
+            ICalendarEntry::new(ICalendarProperty::Priority)
+                .with_value(ICalendarValue::Integer(priority)),
+        );
     }
 
     // How much of the event may be shared. Written out even for public, which is
     // the default both formats share — see [`PRIVACIES`] for why that is not the
     // `TRANSP` case.
     if let Some(privacy) = event.privacy.as_deref().and_then(ical_privacy) {
-        vevent = vevent.with(Property::raw("CLASS", privacy));
+        vevent = vevent.with(make_entry("CLASS", privacy));
     }
 
     // One place of possibly several, by name, with the key it came from riding
     // alongside so a save can patch that entry rather than replace the property.
     // See [`maps_locations`] for what the drawing leaves out.
     if let Some((key, name)) = drawn_place(event) {
-        vevent = vevent.with(Property::new("LOCATION", name).with_param(X_JMAP_KEY, key));
+        vevent = vevent.with(make_entry("LOCATION", name).with_named_param(X_JMAP_KEY, key));
     }
 
     // Where the event may be joined online: a line per place, since RFC 7986
@@ -1924,7 +2035,13 @@ fn vevent_of(
     // a tag that is the empty string. See [`maps_keyword`].
     let tags = drawn_tags(event);
     if !tags.is_empty() {
-        vevent = vevent.with(Property::list("CATEGORIES", tags));
+        vevent = vevent.with(
+            ICalendarEntry::new(ICalendarProperty::Categories).with_values(
+                tags.into_iter()
+                    .map(|t| ICalendarValue::Text(t.to_owned()))
+                    .collect(),
+            ),
+        );
     }
 
     // Who called the meeting and who is invited to it. Written for the user to
@@ -2109,21 +2226,30 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
 /// Each value is a rendered `YYYYMMDDTHHMMSS`; the caller has already decided
 /// whether the event is written as a date, which is the only case where the time
 /// may be dropped.
-fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> Property {
-    let join = |render: &dyn Fn(&String) -> String| -> String {
-        values.iter().map(render).collect::<Vec<_>>().join(",")
-    };
+fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> ICalendarEntry {
+    let prop = ICalendarProperty::parse(name.as_bytes())
+        .unwrap_or_else(|| ICalendarProperty::Other(name.to_ascii_uppercase()));
     match (as_a_date, zone) {
         // A DATE value, RFC 5545 §3.6.1's other form of an event. The parameter
         // is required: these properties are DATE-TIME by default, and libical
         // refuses the whole component over a value that is not one.
         (true, _) => {
-            Property::raw(name, &join(&|value| value[..8].to_owned())).with_param("VALUE", "DATE")
+            let vals = values
+                .iter()
+                .map(|value| ICalendarValue::Text(value[..8].to_owned()))
+                .collect();
+            ICalendarEntry::new(prop)
+                .with_values(vals)
+                .with_named_param("VALUE", "DATE")
         }
         // Form 2, a UTC instant. Form 3 with TZID=Etc/UTC would be legal but
         // obliges us to ship a VTIMEZONE for it.
         (false, Some(zone)) if is_utc(zone) => {
-            Property::raw(name, &join(&|value| format!("{value}Z")))
+            let vals = values
+                .iter()
+                .map(|value| ICalendarValue::Text(format!("{value}Z")))
+                .collect();
+            ICalendarEntry::new(prop).with_values(vals)
         }
         // Form 3. RFC 5545 §3.2.19 has the document define what a `TZID` refers
         // to; for an IANA name this is the one place the mapping leans on the
@@ -2137,9 +2263,23 @@ fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> 
         // on the consumer's side, which is the same guess we would have to make —
         // measured too, in the same leg, as an appointment two hours from where
         // the server put it.
-        (false, Some(zone)) => Property::raw(name, &join(&String::clone)).with_param("TZID", zone),
+        (false, Some(zone)) => {
+            let vals = values
+                .iter()
+                .map(|value| ICalendarValue::Text(value.clone()))
+                .collect();
+            ICalendarEntry::new(prop)
+                .with_values(vals)
+                .with_named_param("TZID", zone)
+        }
         // Form 1, floating. Inventing UTC here would move the event.
-        (false, None) => Property::raw(name, &join(&String::clone)),
+        (false, None) => {
+            let vals = values
+                .iter()
+                .map(|value| ICalendarValue::Text(value.clone()))
+                .collect();
+            ICalendarEntry::new(prop).with_values(vals)
+        }
     }
 }
 
@@ -2215,8 +2355,8 @@ fn known_privacy(privacy: &str) -> bool {
 /// JSCalendar's own spelling of a different value — the two vocabularies overlap
 /// nowhere, so `CLASS:secret` is an x-name-shaped value this mapping has no
 /// business reading as RFC 8984's `secret`.
-fn read_privacy(vevent: &Component) -> Option<String> {
-    let privacy = vevent.text("CLASS")?;
+fn read_privacy(vevent: &ICalendarComponent) -> Option<String> {
+    let privacy = component_text(vevent, "CLASS")?;
     PRIVACIES
         .iter()
         .find(|(_, ical)| ical.eq_ignore_ascii_case(&privacy))
@@ -2236,9 +2376,8 @@ fn known_priority(priority: i64) -> bool {
 /// `parse` is deliberately strict about what an integer is: it refuses leading
 /// space, a fraction and a second value after a comma, none of which is the RFC
 /// 5545 §3.3.8 INTEGER the property is defined to carry.
-fn read_priority(vevent: &Component) -> Option<i64> {
-    vevent
-        .text("PRIORITY")?
+fn read_priority(vevent: &ICalendarComponent) -> Option<i64> {
+    component_text(vevent, "PRIORITY")?
         .parse()
         .ok()
         .filter(|priority| known_priority(*priority))
@@ -2248,12 +2387,238 @@ fn read_priority(vevent: &Component) -> Option<i64> {
 /// component states none this mapping can name — which is read as nothing said,
 /// like every other unreadable value, rather than passed on for the server to
 /// reject.
-fn read_transparency(vevent: &Component) -> Option<String> {
-    let transparency = vevent.text("TRANSP")?;
+fn read_transparency(vevent: &ICalendarComponent) -> Option<String> {
+    let transparency = component_text(vevent, "TRANSP")?;
     FREE_BUSY_STATUSES
         .iter()
         .find(|(_, ical)| ical.eq_ignore_ascii_case(&transparency))
         .map(|(jscalendar, _)| (*jscalendar).to_owned())
+}
+
+/// How deep component nesting may go before a document is refused whole.
+pub const MAX_DEPTH: usize = 32;
+
+/// Parse an iCalendar string into calcard's `ICalendar` structure, validating
+/// envelope boundaries and component nesting depth limits.
+pub fn parse_ical(text: &str) -> Result<ICalendar, ICalError> {
+    check_structure(text)?;
+
+    let mut parser = Parser::new(text);
+    let calendar = match parser.entry() {
+        Entry::ICalendar(calendar) => calendar,
+        _ => return Err(ICalError::NotACalendar),
+    };
+    match parser.entry() {
+        Entry::Eof => {}
+        Entry::InvalidLine(line) => return Err(ICalError::Trailing(line)),
+        _ => return Err(ICalError::Trailing("BEGIN:VCALENDAR".to_owned())),
+    }
+
+    let components = &calendar.components;
+    let root = components.first().ok_or(ICalError::NotACalendar)?;
+    if !root
+        .component_type
+        .as_str()
+        .eq_ignore_ascii_case("VCALENDAR")
+    {
+        return Err(ICalError::NotACalendar);
+    }
+    check_depth(components)?;
+
+    Ok(calendar)
+}
+
+fn check_structure(text: &str) -> Result<(), ICalError> {
+    let mut open: Vec<String> = Vec::new();
+    for line in unfold(text.strip_prefix('\u{feff}').unwrap_or(text)) {
+        let Some((keyword, name)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_uppercase();
+        if name.is_empty() {
+            continue;
+        }
+        if keyword.eq_ignore_ascii_case("BEGIN") {
+            open.push(name);
+        } else if keyword.eq_ignore_ascii_case("END") {
+            match open.pop() {
+                Some(expected) if expected == name => {}
+                Some(expected) => {
+                    return Err(ICalError::Mismatched {
+                        expected,
+                        found: name,
+                    });
+                }
+                None => {}
+            }
+        }
+    }
+    match open.pop() {
+        Some(name) => Err(ICalError::Unterminated(name)),
+        None => Ok(()),
+    }
+}
+
+fn check_depth(components: &[ICalendarComponent]) -> Result<(), ICalError> {
+    let mut pending = vec![(0usize, 1usize)];
+    while let Some((index, depth)) = pending.pop() {
+        let Some(component) = components.get(index) else {
+            continue;
+        };
+        if depth > MAX_DEPTH {
+            return Err(ICalError::TooDeep(
+                component.component_type.as_str().to_ascii_uppercase(),
+            ));
+        }
+        for child in &component.component_ids {
+            pending.push((*child as usize, depth + 1));
+        }
+    }
+    Ok(())
+}
+
+fn unfold(text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for raw in text.replace("\r\n", "\n").split('\n') {
+        match raw.strip_prefix([' ', '\t']) {
+            Some(rest) if !lines.is_empty() => lines.last_mut().expect("non-empty").push_str(rest),
+            _ => {
+                let line = raw.trim_end_matches('\r');
+                if !line.is_empty() {
+                    lines.push(line.to_owned());
+                }
+            }
+        }
+    }
+    lines
+}
+
+pub(crate) fn entry_text(entry: &ICalendarEntry) -> String {
+    entry
+        .values
+        .iter()
+        .filter_map(value_text_str)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub(crate) fn entry_texts(entry: &ICalendarEntry) -> Vec<String> {
+    entry.values.iter().filter_map(value_text_str).collect()
+}
+
+pub(crate) fn entry_raw_value(entry: &ICalendarEntry) -> String {
+    entry_text(entry)
+}
+
+pub(crate) fn entry_param(entry: &ICalendarEntry, name: &str) -> Option<String> {
+    entry
+        .params
+        .iter()
+        .find(|param| param.name.as_str().eq_ignore_ascii_case(name))
+        .map(|param| param_text(&param.value))
+}
+
+pub(crate) fn entry_param_values(entry: &ICalendarEntry, name: &str) -> Vec<String> {
+    entry
+        .params
+        .iter()
+        .filter(|param| param.name.as_str().eq_ignore_ascii_case(name))
+        .map(|param| param_text(&param.value))
+        .collect()
+}
+
+pub(crate) fn component_entry<'a>(
+    component: &'a ICalendarComponent,
+    name: &str,
+) -> Option<&'a ICalendarEntry> {
+    component
+        .entries
+        .iter()
+        .find(|entry| entry.name.as_str().eq_ignore_ascii_case(name))
+}
+
+pub(crate) fn component_entries<'a>(
+    component: &'a ICalendarComponent,
+    name: &'a str,
+) -> impl Iterator<Item = &'a ICalendarEntry> {
+    component
+        .entries
+        .iter()
+        .filter(move |entry| entry.name.as_str().eq_ignore_ascii_case(name))
+}
+
+pub(crate) fn component_text(component: &ICalendarComponent, name: &str) -> Option<String> {
+    component_entry(component, name).map(entry_text)
+}
+
+pub(crate) fn value_text_str(value: &ICalendarValue) -> Option<String> {
+    value_text(value).map(|(s, _)| s)
+}
+
+fn value_text(value: &ICalendarValue) -> Option<(String, bool)> {
+    let typed = |value: String| Some((value, false));
+    match value {
+        ICalendarValue::Text(text) => Some((text.clone(), true)),
+        ICalendarValue::PartialDateTime(stamp) => typed(date_time_text(stamp)),
+        ICalendarValue::Duration(duration) => typed(duration.to_string()),
+        ICalendarValue::RecurrenceRule(rule) => typed(rule.to_string()),
+        ICalendarValue::Period(period) => typed(period.to_string()),
+        ICalendarValue::Uri(Uri::Location(uri)) => typed(uri.clone()),
+        ICalendarValue::Integer(number) => typed(number.to_string()),
+        ICalendarValue::Float(number) => typed(number.to_string()),
+        ICalendarValue::Boolean(true) => typed("TRUE".to_owned()),
+        ICalendarValue::Boolean(false) => typed("FALSE".to_owned()),
+        ICalendarValue::CalendarScale(scale) => typed(scale.as_str().to_owned()),
+        ICalendarValue::Method(method) => typed(method.as_str().to_owned()),
+        ICalendarValue::Classification(class) => typed(class.as_str().to_owned()),
+        ICalendarValue::Status(status) => typed(status.as_str().to_owned()),
+        ICalendarValue::Transparency(transparency) => typed(transparency.as_str().to_owned()),
+        ICalendarValue::Action(action) => typed(action.as_str().to_owned()),
+        ICalendarValue::BusyType(kind) => typed(kind.as_str().to_owned()),
+        ICalendarValue::ParticipantType(kind) => typed(kind.as_str().to_owned()),
+        ICalendarValue::ResourceType(kind) => typed(kind.as_str().to_owned()),
+        ICalendarValue::Proximity(proximity) => typed(proximity.as_str().to_owned()),
+        ICalendarValue::Binary(_) | ICalendarValue::Uri(Uri::Data(_)) => None,
+    }
+}
+
+fn date_time_text(stamp: &PartialDateTime) -> String {
+    let kind = match (stamp.year.is_some(), stamp.hour.is_some()) {
+        (true, true) => ICalendarValueType::DateTime,
+        (true, false) => ICalendarValueType::Date,
+        (false, true) => ICalendarValueType::Time,
+        (false, false) => ICalendarValueType::UtcOffset,
+    };
+    let mut out = String::new();
+    let _ = stamp.format_as_ical(&mut out, &kind);
+    match out == "-0000" {
+        true => "+0000".to_owned(),
+        false => out,
+    }
+}
+
+fn param_text(value: &ICalendarParameterValue) -> String {
+    match value {
+        ICalendarParameterValue::Text(text) => text.clone(),
+        ICalendarParameterValue::Integer(number) => number.to_string(),
+        ICalendarParameterValue::Bool(true) => "TRUE".to_owned(),
+        ICalendarParameterValue::Bool(false) => "FALSE".to_owned(),
+        ICalendarParameterValue::Uri(Uri::Location(uri)) => uri.clone(),
+        ICalendarParameterValue::Cutype(kind) => kind.as_str().to_owned(),
+        ICalendarParameterValue::Fbtype(kind) => kind.as_str().to_owned(),
+        ICalendarParameterValue::Partstat(status) => status.as_str().to_owned(),
+        ICalendarParameterValue::Related(related) => related.as_str().to_owned(),
+        ICalendarParameterValue::Reltype(kind) => kind.as_str().to_owned(),
+        ICalendarParameterValue::Role(role) => role.as_str().to_owned(),
+        ICalendarParameterValue::ScheduleAgent(agent) => agent.as_str().to_owned(),
+        ICalendarParameterValue::ScheduleForceSend(send) => send.as_str().to_owned(),
+        ICalendarParameterValue::Value(kind) => kind.as_str().to_owned(),
+        ICalendarParameterValue::Display(display) => display.as_str().to_owned(),
+        ICalendarParameterValue::Feature(feature) => feature.as_str().to_owned(),
+        ICalendarParameterValue::Duration(duration) => duration.to_string(),
+        ICalendarParameterValue::Linkrel(relation) => relation.as_str().to_owned(),
+        ICalendarParameterValue::Uri(Uri::Data(_)) | ICalendarParameterValue::Null => String::new(),
+    }
 }
 
 /// Read an iCalendar object into a calendar event.
@@ -2274,26 +2639,26 @@ fn read_transparency(vevent: &Component) -> Option<String> {
 /// id — the caller knows which case it is in and must drop it before sending
 /// a create.
 pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
-    let calendar = syntax::parse(text)?;
-    let vevents: Vec<&Component> = calendar
-        .children
+    let calendar = parse_ical(text)?;
+    let components = &calendar.components;
+    let vevents: Vec<&ICalendarComponent> = components
         .iter()
-        .filter(|child| child.name == "VEVENT")
+        .filter(|child| child.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
         .collect();
     let series = *vevents
         .iter()
-        .find(|vevent| vevent.property(RECURRENCE_ID).is_none())
+        .find(|vevent| component_entry(vevent, RECURRENCE_ID).is_none())
         .or_else(|| vevents.first())
         .ok_or(ICalError::NoEvent)?;
 
-    let zones = stated_zones(&calendar);
-    let mut event = read_vevent(series, &zones);
-    event.recurrence_overrides = read_overrides(series, &vevents, &event, &zones);
+    let zones = stated_zones(components);
+    let mut event = read_vevent(series, &zones, components);
+    event.recurrence_overrides = read_overrides(series, &vevents, &event, &zones, components);
     // After the overrides, because which definitions the document is carrying for
     // us is decided by which zones the event turned out to refer to — the series'
     // and one per occurrence that moved into a zone of its own. See
     // [`read_time_zones`].
-    event.time_zones = read_time_zones(&calendar, &event);
+    event.time_zones = read_time_zones(components, &event);
     Ok(event)
 }
 
@@ -2346,27 +2711,29 @@ struct Zone<'a> {
     /// [`names_time_zone`] needs no translating, and an `X-LIC-LOCATION` that
     /// names no zone either is no better than what it would replace.
     name: Option<String>,
-    definition: &'a Component,
+    observances: Vec<&'a ICalendarComponent>,
 }
 
 /// Every `VTIMEZONE` the document carries, by the `TZID` that refers to it.
-fn stated_zones(calendar: &Component) -> Zones<'_> {
-    calendar
-        .children
+fn stated_zones<'a>(components: &'a [ICalendarComponent]) -> Zones<'a> {
+    components
         .iter()
-        .filter(|child| child.name == "VTIMEZONE")
+        .filter(|child| {
+            child
+                .component_type
+                .as_str()
+                .eq_ignore_ascii_case("VTIMEZONE")
+        })
         .filter_map(|vtimezone| {
-            let tzid = vtimezone.text("TZID")?;
-            let name = vtimezone
-                .text(X_LIC_LOCATION)
+            let tzid = component_text(vtimezone, "TZID")?;
+            let name = component_text(vtimezone, X_LIC_LOCATION)
                 .filter(|location| !names_time_zone(&tzid) && names_time_zone(location));
-            Some((
-                tzid,
-                Zone {
-                    name,
-                    definition: vtimezone,
-                },
-            ))
+            let observances: Vec<&'a ICalendarComponent> = vtimezone
+                .component_ids
+                .iter()
+                .filter_map(|id| components.get(*id as usize))
+                .collect();
+            Some((tzid, Zone { name, observances }))
         })
         .collect()
 }
@@ -2402,18 +2769,25 @@ fn stated_zones(calendar: &Component) -> Zones<'_> {
 /// zone is a different zone, so a `VTIMEZONE` this mapping cannot state whole is
 /// read as no definition at all. It also makes the round trip exact — what comes
 /// back out is byte for byte what came in.
-fn read_time_zones(calendar: &Component, event: &CalendarEvent) -> Option<BTreeMap<String, Value>> {
+fn read_time_zones(
+    components: &[ICalendarComponent],
+    event: &CalendarEvent,
+) -> Option<BTreeMap<String, Value>> {
     let mut zones: BTreeMap<String, Value> = BTreeMap::new();
     for tzid in referred_zones(event) {
         if names_time_zone(tzid) || !tzid.starts_with('/') || zones.contains_key(tzid) {
             continue;
         }
-        let Some(definition) = calendar
-            .children
+        let Some(definition) = components
             .iter()
-            .filter(|child| child.name == "VTIMEZONE")
-            .find(|vtimezone| vtimezone.text("TZID").as_deref() == Some(tzid))
-            .and_then(read_definition)
+            .filter(|child| {
+                child
+                    .component_type
+                    .as_str()
+                    .eq_ignore_ascii_case("VTIMEZONE")
+            })
+            .find(|vtimezone| component_text(vtimezone, "TZID").as_deref() == Some(tzid))
+            .and_then(|vtimezone| read_definition(vtimezone, components))
         else {
             continue;
         };
@@ -2488,16 +2862,20 @@ pub fn prune_time_zones(event: &mut CalendarEvent) {
 /// `recurrenceOverrides` have no iCalendar spelling this crate writes, so a
 /// value invented for them here would be this side making a claim about the zone
 /// rather than reporting one.
-fn read_definition(vtimezone: &Component) -> Option<Value> {
+fn read_definition(
+    vtimezone: &ICalendarComponent,
+    components: &[ICalendarComponent],
+) -> Option<Value> {
     let mut zone = Map::new();
     zone.insert("@type".to_owned(), json!("TimeZone"));
-    zone.insert("tzId".to_owned(), json!(vtimezone.text("TZID")?));
+    zone.insert("tzId".to_owned(), json!(component_text(vtimezone, "TZID")?));
     let mut observances = 0;
     for (name, member) in [("STANDARD", "standard"), ("DAYLIGHT", "daylight")] {
         let rules = vtimezone
-            .children
+            .component_ids
             .iter()
-            .filter(|child| child.name == name)
+            .filter_map(|id| components.get(*id as usize))
+            .filter(|child| child.component_type.as_str().eq_ignore_ascii_case(name))
             .map(read_observance)
             .collect::<Option<Vec<Value>>>()?;
         if rules.is_empty() {
@@ -2520,34 +2898,32 @@ fn read_definition(vtimezone: &Component) -> Option<Value> {
 /// `TZOFFSETFROM`, which is how an observance dates itself in the zone it is
 /// defining, and it is why the value is read as a local date-time rather than
 /// through the zone lookup every other `DTSTART` in the document goes through.
-fn read_observance(component: &Component) -> Option<Value> {
+fn read_observance(component: &ICalendarComponent) -> Option<Value> {
     let mut rule = Map::new();
     rule.insert("@type".to_owned(), json!("TimeZoneRule"));
     rule.insert(
         "start".to_owned(),
-        json!(to_local_date_time(
-            &component.property("DTSTART")?.raw_value()
-        )?),
+        json!(to_local_date_time(&entry_raw_value(component_entry(
+            component, "DTSTART"
+        )?))?),
     );
     // Through `utc_offset` rather than verbatim: it is the same grammar on both
     // sides, so a value it refuses is one no reader resolves, and a zone
     // described by an offset nobody can read is not a zone.
-    let offset_from = utc_offset(&component.text("TZOFFSETFROM")?)?;
+    let offset_from = utc_offset(&component_text(component, "TZOFFSETFROM")?)?;
     rule.insert("offsetFrom".to_owned(), json!(offset_from));
     rule.insert(
         "offsetTo".to_owned(),
-        json!(utc_offset(&component.text("TZOFFSETTO")?)?),
+        json!(utc_offset(&component_text(component, "TZOFFSETTO")?)?),
     );
 
-    let rules = component
-        .all("RRULE")
-        .into_iter()
+    let rules = component_entries(component, "RRULE")
         .map(|property| {
             // Not a zone but the offset beside it: an observance dates itself in
             // the zone it is defining rather than in one it refers to, so a UTC
             // `UNTIL` here converts with nothing but arithmetic — see
             // [`Ends::At`].
-            let recurrence = rrule_to_rule(&property.raw_value(), Ends::At(&offset_from))?;
+            let recurrence = rrule_to_rule(&entry_raw_value(property), Ends::At(&offset_from))?;
             // A rule that survives this but not the trip back — an end this
             // could not restate, a month `month_token` will not write — costs
             // the whole definition, and does so at [`read_time_zones`], which
@@ -2565,11 +2941,10 @@ fn read_observance(component: &Component) -> Option<Value> {
     // §3.8.3.2 distinguishes several `TZNAME`s by `LANGUAGE`, which has nowhere
     // to go, so each name is read plainly and a second spelling of one name is
     // one key.
-    let names: Map<String, Value> = component
-        .all("TZNAME")
-        .into_iter()
-        .map(|property| (property.text(), json!(true)))
-        .filter(|(name, _)| !name.is_empty())
+    let names: Map<String, Value> = component_entries(component, "TZNAME")
+        .map(entry_text)
+        .filter(|name| !name.is_empty())
+        .map(|name| (name, json!(true)))
         .collect();
     if !names.is_empty() {
         rule.insert("names".to_owned(), Value::Object(names));
@@ -2604,8 +2979,12 @@ fn zone_of(tzid: &str, zones: &Zones) -> String {
 
 /// One `VEVENT` as an event, recurrence rules included and named instances not:
 /// those are the document's, not the component's.
-fn read_vevent(vevent: &Component, zones: &Zones) -> CalendarEvent {
-    let text = |name: &str| vevent.text(name).filter(|value| !value.is_empty());
+fn read_vevent(
+    vevent: &ICalendarComponent,
+    zones: &Zones,
+    components: &[ICalendarComponent],
+) -> CalendarEvent {
+    let text = |name: &str| component_text(vevent, name).filter(|value| !value.is_empty());
     let (start, time_zone, show_without_time) = read_start(vevent, zones);
 
     // Only for a component that is actually *in* the zone: a `TZID` beside a
@@ -2614,21 +2993,17 @@ fn read_vevent(vevent: &Component, zones: &Zones) -> CalendarEvent {
     let definition = time_zone
         .is_some()
         .then(|| {
-            vevent
-                .property("DTSTART")
-                .and_then(|property| property.param("TZID"))
-                .and_then(|tzid| zones.get(tzid))
-                .map(|zone| zone.definition)
+            component_entry(vevent, "DTSTART")
+                .and_then(|property| entry_param(property, "TZID"))
+                .and_then(|tzid| zones.get(&tzid))
         })
         .flatten();
     let ends = Ends::In(Zoned {
         name: time_zone.as_deref(),
-        definition,
+        observances: definition.map(|zone| zone.observances.as_slice()),
     });
-    let rules: Vec<RecurrenceRule> = vevent
-        .all("RRULE")
-        .into_iter()
-        .filter_map(|property| rrule_to_rule(&property.raw_value(), ends))
+    let rules: Vec<RecurrenceRule> = component_entries(vevent, "RRULE")
+        .filter_map(|property| rrule_to_rule(&entry_raw_value(property), ends))
         .collect();
 
     CalendarEvent {
@@ -2651,7 +3026,7 @@ fn read_vevent(vevent: &Component, zones: &Zones) -> CalendarEvent {
         time_zone,
         duration: read_duration(vevent),
         show_without_time,
-        status: vevent.text("STATUS").and_then(|status| {
+        status: component_text(vevent, "STATUS").and_then(|status| {
             STATUSES
                 .iter()
                 .find(|(_, ical)| ical.eq_ignore_ascii_case(&status))
@@ -2667,7 +3042,7 @@ fn read_vevent(vevent: &Component, zones: &Zones) -> CalendarEvent {
         // where the server put it. See [`read_virtual_locations`].
         virtual_locations: read_virtual_locations(vevent),
         keywords: read_keywords(vevent),
-        alerts: read_alerts(vevent),
+        alerts: read_alerts(vevent, components),
         // Drawn onto the document and never read back off it, like the two
         // timestamps above and for a heavier reason: who is invited, and what
         // each of them replied, is scheduling state. Changing it means an iTIP
@@ -2714,17 +3089,16 @@ fn read_vevent(vevent: &Component, zones: &Zones) -> CalendarEvent {
 /// `None` rather than an empty map for a component that names no place: the save
 /// path reads an edit off a difference from what was shown, and an empty map
 /// would claim the event happens nowhere where the component made no claim.
-fn read_locations(vevent: &Component) -> Option<BTreeMap<String, Value>> {
-    let property = vevent.property("LOCATION")?;
-    let name = property.text();
+fn read_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+    let property = component_entry(vevent, "LOCATION")?;
+    let name = entry_text(property);
     if name.is_empty() {
         return None;
     }
-    let key = property
-        .param(X_JMAP_KEY)
+    let key = entry_param(property, X_JMAP_KEY)
         .filter(|key| names_map_entry(key))
-        .unwrap_or(INVENTED_KEY);
-    Some([(key.to_owned(), json!({"@type": "Location", "name": name}))].into())
+        .unwrap_or_else(|| INVENTED_KEY.to_owned());
+    Some([(key, json!({"@type": "Location", "name": name}))].into())
 }
 
 /// The places the component says the event may be joined online, as a
@@ -2754,41 +3128,40 @@ fn read_locations(vevent: &Component) -> Option<BTreeMap<String, Value>> {
 /// reason [`read_locations`] gives: the save path reads an edit off a
 /// difference from what was shown, and an empty map would claim the event is
 /// joined nowhere where the component made no claim at all.
-fn read_virtual_locations(vevent: &Component) -> Option<BTreeMap<String, Value>> {
-    let lines = vevent.all("CONFERENCE");
-    let keys: Vec<Option<&str>> = lines
+fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+    let lines: Vec<&ICalendarEntry> = component_entries(vevent, "CONFERENCE").collect();
+    let keys: Vec<Option<String>> = lines
         .iter()
-        .map(|line| line.param(X_JMAP_KEY).filter(|key| names_map_entry(key)))
+        .map(|line| entry_param(line, X_JMAP_KEY).filter(|key| names_map_entry(key)))
         .collect();
 
     let mut places = BTreeMap::new();
     let mut invented = 0;
     for (line, key) in lines.iter().zip(&keys) {
-        let value = line.raw_value();
+        let value = entry_raw_value(line);
         if !names_a_uri(&value) {
             continue;
         }
         let key = match key {
-            Some(key) => (*key).to_owned(),
+            Some(key) => key.clone(),
             None => loop {
                 invented += 1;
                 let key = format!("{INVENTED_CONFERENCE_KEY}{invented}");
-                if !keys.contains(&Some(key.as_str())) {
+                if !keys.iter().any(|k| k.as_deref() == Some(key.as_str())) {
                     break key;
                 }
             },
         };
         let mut place = json!({"@type": "VirtualLocation", "uri": value});
-        if let Some(name) = line.param("LABEL").filter(|name| !name.is_empty()) {
-            place["name"] = Value::String(name.to_owned());
+        if let Some(name) = entry_param(line, "LABEL").filter(|name| !name.is_empty()) {
+            place["name"] = Value::String(name);
         }
-        let features: Map<String, Value> = line
-            .param_values("FEATURE")
+        let features: Map<String, Value> = entry_param_values(line, "FEATURE")
             .into_iter()
             .filter_map(|feature| {
                 CONFERENCE_FEATURES
                     .iter()
-                    .find(|(_, ical)| ical.eq_ignore_ascii_case(feature))
+                    .find(|(_, ical)| ical.eq_ignore_ascii_case(&feature))
                     .map(|(jscalendar, _)| ((*jscalendar).to_owned(), Value::Bool(true)))
             })
             .collect();
@@ -2838,55 +3211,60 @@ fn read_virtual_locations(vevent: &Component) -> Option<BTreeMap<String, Value>>
 /// reason [`read_locations`] gives.
 ///
 /// [`syntax`]: crate::syntax
-fn read_links(vevent: &Component) -> Option<BTreeMap<String, Value>> {
-    let lines: Vec<&Property> = vevent
-        .properties
+fn read_links(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+    let lines: Vec<&ICalendarEntry> = vevent
+        .entries
         .iter()
-        .filter(|property| property.name == "ATTACH" || property.name == "IMAGE")
+        .filter(|entry| {
+            let name = entry.name.as_str();
+            name.eq_ignore_ascii_case("ATTACH") || name.eq_ignore_ascii_case("IMAGE")
+        })
         .collect();
-    let keys: Vec<Option<&str>> = lines
+    let keys: Vec<Option<String>> = lines
         .iter()
-        .map(|line| line.param(X_JMAP_KEY).filter(|key| names_map_entry(key)))
+        .map(|line| entry_param(line, X_JMAP_KEY).filter(|key| names_map_entry(key)))
         .collect();
 
     let mut links = BTreeMap::new();
     let mut invented = 0;
     for (line, key) in lines.iter().zip(&keys) {
-        let href = line.raw_value();
+        let href = entry_raw_value(line);
         if !names_a_uri(&href) || fetched_locally(&href) {
             continue;
         }
         let key = match key {
-            Some(key) => (*key).to_owned(),
+            Some(key) => key.clone(),
             None => loop {
                 invented += 1;
                 let key = format!("{INVENTED_LINK_KEY}{invented}");
-                if !keys.contains(&Some(key.as_str())) {
+                if !keys.iter().any(|k| k.as_deref() == Some(key.as_str())) {
                     break key;
                 }
             },
         };
         let mut link = json!({"@type": "Link", "href": href});
-        if line.name == "IMAGE" {
+        if line.name.as_str().eq_ignore_ascii_case("IMAGE") {
             // The property is what says the resource is a picture of the event,
             // so the `rel` it stands for is read off the name — without it a
             // re-drawing would put the picture back on an `ATTACH`.
             link["rel"] = Value::String(ICON_REL.to_owned());
-            if let Some(display) = line.param("DISPLAY").and_then(|display| {
+            if let Some(display) = entry_param(line, "DISPLAY").and_then(|display| {
                 LINK_DISPLAYS
                     .iter()
-                    .find(|(_, ical)| ical.eq_ignore_ascii_case(display))
+                    .find(|(_, ical)| ical.eq_ignore_ascii_case(&display))
             }) {
                 link["display"] = Value::String(display.0.to_owned());
             }
-        } else if let Some(size) = line.param("SIZE").and_then(|size| size.parse::<u64>().ok()) {
+        } else if let Some(size) =
+            entry_param(line, "SIZE").and_then(|size| size.parse::<u64>().ok())
+        {
             // Only on an `ATTACH`: RFC 8607 §4.1 adds the parameter to that
             // property, and RFC 7986 §5.10 admits no `SIZE` on an `IMAGE`, so a
             // drawing never wrote one there.
             link["size"] = Value::from(size);
         }
-        if let Some(media_type) = line.param("FMTTYPE").filter(|name| !name.is_empty()) {
-            link["contentType"] = Value::String(media_type.to_owned());
+        if let Some(media_type) = entry_param(line, "FMTTYPE").filter(|name| !name.is_empty()) {
+            link["contentType"] = Value::String(media_type);
         }
         links.insert(key, link);
     }
@@ -2917,11 +3295,9 @@ fn fetched_locally(href: &str) -> bool {
 /// [`read_locations`] gives: the save path reads an edit off a difference from
 /// what was shown, and an empty set would claim the event is untagged where the
 /// component made no claim at all.
-fn read_keywords(vevent: &Component) -> Option<BTreeMap<String, Value>> {
-    let tags: BTreeMap<String, Value> = vevent
-        .all("CATEGORIES")
-        .into_iter()
-        .flat_map(Property::texts)
+fn read_keywords(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+    let tags: BTreeMap<String, Value> = component_entries(vevent, "CATEGORIES")
+        .flat_map(entry_texts)
         .filter(|tag| !tag.is_empty())
         .map(|tag| (tag, Value::Bool(true)))
         .collect();
@@ -2951,11 +3327,14 @@ fn names_map_entry(value: &str) -> bool {
 /// A timed start yields `None` rather than `Some(false)`: the RFC 8984 default
 /// is false anyway, and the save path reads an edit off a difference from this,
 /// so answering `false` where the server said nothing would invent one.
-fn read_start(vevent: &Component, zones: &Zones) -> (Option<String>, Option<String>, Option<bool>) {
-    let Some(property) = vevent.property("DTSTART") else {
+fn read_start(
+    vevent: &ICalendarComponent,
+    zones: &Zones,
+) -> (Option<String>, Option<String>, Option<bool>) {
+    let Some(property) = component_entry(vevent, "DTSTART") else {
         return (None, None, None);
     };
-    let value = property.raw_value();
+    let value = entry_raw_value(property);
     let Some(start) = to_local_date_time(&value) else {
         return (None, None, None);
     };
@@ -2967,10 +3346,9 @@ fn read_start(vevent: &Component, zones: &Zones) -> (Option<String>, Option<Stri
     }
     let zone = match value.ends_with('Z') {
         true => Some(UTC.to_owned()),
-        false => property
-            .param("TZID")
+        false => entry_param(property, "TZID")
             .filter(|zone| !zone.is_empty())
-            .map(|zone| zone_of(zone, zones)),
+            .map(|zone| zone_of(&zone, zones)),
     };
     (Some(start), zone, None)
 }
@@ -3008,13 +3386,18 @@ fn read_start(vevent: &Component, zones: &Zones) -> (Option<String>, Option<Stri
 /// `recurrenceOverrides` has no single entry for; reading it as one would move
 /// one day and silently drop the change to all the others.
 fn read_overrides(
-    series: &Component,
-    vevents: &[&Component],
+    series: &ICalendarComponent,
+    vevents: &[&ICalendarComponent],
     event: &CalendarEvent,
     zones: &Zones,
+    components: &[ICalendarComponent],
 ) -> Option<BTreeMap<String, Value>> {
     let mut overrides: BTreeMap<String, Value> = BTreeMap::new();
-    let values = |name: &str| series.all(name).into_iter().flat_map(Property::texts);
+    let values = |name: &str| -> Vec<String> {
+        component_entries(series, name)
+            .flat_map(entry_texts)
+            .collect()
+    };
     for value in values("RDATE") {
         // A period is the only RDATE value with a `/` in it, and calcard renders
         // both its spellings that way, so the separator is what decides.
@@ -3046,16 +3429,16 @@ fn read_overrides(
         if std::ptr::eq(*vevent, series) {
             continue;
         }
-        let Some(property) = vevent.property(RECURRENCE_ID) else {
+        let Some(property) = component_entry(vevent, RECURRENCE_ID) else {
             continue;
         };
-        if property.param("RANGE").is_some() {
+        if entry_param(property, "RANGE").is_some() {
             continue;
         }
-        let Some(id) = to_local_date_time(&property.raw_value()) else {
+        let Some(id) = to_local_date_time(&entry_raw_value(property)) else {
             continue;
         };
-        let patch = instance_patch(event, &read_vevent(vevent, zones), &id);
+        let patch = instance_patch(event, &read_vevent(vevent, zones, components), &id);
         overrides.insert(id, patch);
     }
 
@@ -3168,16 +3551,15 @@ fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) ->
 /// alternative is dropping the length of an event that plainly states it, and
 /// a zone database is a dependency this crate does not carry (see
 /// [`rule_to_rrule`] for the same trade made about `UNTIL`).
-fn read_duration(vevent: &Component) -> Option<String> {
-    if let Some(duration) = vevent
-        .property("DURATION")
-        .map(Property::raw_value)
+fn read_duration(vevent: &ICalendarComponent) -> Option<String> {
+    if let Some(duration) = component_entry(vevent, "DURATION")
+        .map(entry_raw_value)
         .and_then(|value| stated_duration(&value))
     {
         return Some(duration);
     }
-    let start = instant(&vevent.property("DTSTART")?.raw_value())?;
-    let end = instant(&vevent.property("DTEND")?.raw_value())?;
+    let start = instant(&entry_raw_value(component_entry(vevent, "DTSTART")?))?;
+    let end = instant(&entry_raw_value(component_entry(vevent, "DTEND")?))?;
     to_duration(end - start)
 }
 
@@ -4150,7 +4532,7 @@ fn read_until(value: &str, ends: Ends) -> String {
 #[derive(Clone, Copy)]
 struct Zoned<'a> {
     name: Option<&'a str>,
-    definition: Option<&'a Component>,
+    observances: Option<&'a [&'a ICalendarComponent]>,
 }
 
 impl<'a> Zoned<'a> {
@@ -4159,14 +4541,14 @@ impl<'a> Zoned<'a> {
     fn named(name: Option<&'a str>) -> Self {
         Self {
             name,
-            definition: None,
+            observances: None,
         }
     }
 
     /// The offset from UTC in force in this zone at `utc`, where the document
     /// said enough for it to be worked out.
     fn offset_at(&self, utc: &str) -> Option<i64> {
-        crate::zone::offset_at(self.definition?, utc)
+        crate::zone::offset_at(self.observances?, utc)
     }
 }
 
