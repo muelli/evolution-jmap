@@ -13,7 +13,10 @@ use jmap_proto::contacts::{
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
     Relation, Title,
 };
-use jmap_vcard::{card_to_vcard, states_keyword, states_media, states_organization, vcard_to_card};
+use jmap_vcard::{
+    card_to_vcard, maps_phone_feature, states_context, states_keyword, states_media,
+    states_organization, states_phone_feature, vcard_to_card,
+};
 use serde_json::{Value, json};
 
 fn fixture_card() -> ContactCard {
@@ -3945,4 +3948,305 @@ fn emits_a_comprehensive_vcard_via_calcard_and_roundtrips() {
         back.phones.as_ref().unwrap().len(),
         card.phones.as_ref().unwrap().len()
     );
+}
+
+#[test]
+fn multi_type_phone_numbers_characterization_and_roundtrip() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:test-multi-type-phones\r\n",
+        "FN:Multi Phone Test\r\n",
+        "TEL;X-JMAP-KEY=p_work_voice_fax;TYPE=WORK,VOICE,FAX:+49 30 111111\r\n",
+        "TEL;X-JMAP-KEY=p_home_voice_fax;TYPE=HOME,VOICE,FAX:+49 30 222222\r\n",
+        "TEL;X-JMAP-KEY=p_bare_voice_fax;TYPE=VOICE,FAX:+49 30 333333\r\n",
+        "TEL;X-JMAP-KEY=p_work_cell_voice;TYPE=WORK,CELL,VOICE:+49 170 444444\r\n",
+        "TEL;X-JMAP-KEY=p_work_cell_fax;TYPE=WORK,CELL,FAX:+49 170 555555\r\n",
+        "TEL;X-JMAP-KEY=p_home_pager_voice;TYPE=HOME,PAGER,VOICE:+49 30 666666\r\n",
+        "TEL;X-JMAP-KEY=p_work_voice_video;TYPE=WORK,VOICE,VIDEO:+49 30 777777\r\n",
+        "TEL;X-JMAP-KEY=p_bare_fax_video;TYPE=FAX,VIDEO:+49 30 888888\r\n",
+        "TEL;X-JMAP-KEY=p_all_features;TYPE=HOME,CELL,PAGER,FAX,VOICE,VIDEO:+49 170 999999\r\n",
+        "TEL;X-JMAP-KEY=p_pref_work_fax;TYPE=PREF,WORK,VOICE,FAX:+49 30 000000\r\n",
+        "TEL;X-JMAP-KEY=p_separate_params;TYPE=WORK;TYPE=VOICE;TYPE=FAX:+49 30 123456\r\n",
+        "TEL;X-JMAP-KEY=p_mixed_case;type=work,voice,fax;type=pref:+49 30 234567\r\n",
+        "TEL;X-JMAP-KEY=p_unmapped_types;TYPE=ISDN,CAR,VOICE;TYPE=WORK:+49 30 345678\r\n",
+        "TEL;X-JMAP-KEY=p_bare_plain:+49 30 456789\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse multi-type vcard");
+    let phones = card.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 14);
+
+    // 1. TEL;TYPE=WORK,VOICE,FAX: parses work context and both voice & fax features
+    let p_wvf = &phones["p_work_voice_fax"];
+    assert_eq!(p_wvf.number, "+49 30 111111");
+    assert_eq!(p_wvf.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wvf.features, Some(json!({"voice": true, "fax": true})));
+    assert_eq!(p_wvf.pref, None);
+    assert!(states_phone_feature(p_wvf.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_wvf.features.as_ref(), "voice"));
+    assert!(states_context(p_wvf.contexts.as_ref(), "work"));
+    assert!(!states_context(p_wvf.contexts.as_ref(), "private"));
+
+    // 2. TEL;TYPE=HOME,VOICE,FAX: parses private context and both voice & fax features
+    let p_hvf = &phones["p_home_voice_fax"];
+    assert_eq!(p_hvf.number, "+49 30 222222");
+    assert_eq!(p_hvf.contexts, Some(json!({"private": true})));
+    assert_eq!(p_hvf.features, Some(json!({"voice": true, "fax": true})));
+    assert!(states_phone_feature(p_hvf.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_hvf.features.as_ref(), "voice"));
+    assert!(states_context(p_hvf.contexts.as_ref(), "private"));
+
+    // 3. TEL;TYPE=VOICE,FAX: bare features with no context
+    let p_bvf = &phones["p_bare_voice_fax"];
+    assert_eq!(p_bvf.number, "+49 30 333333");
+    assert_eq!(p_bvf.contexts, None);
+    assert_eq!(p_bvf.features, Some(json!({"voice": true, "fax": true})));
+    assert!(states_phone_feature(p_bvf.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_bvf.features.as_ref(), "voice"));
+
+    // 4. TEL;TYPE=WORK,CELL,VOICE: mobile outranks voice
+    let p_wcv = &phones["p_work_cell_voice"];
+    assert_eq!(p_wcv.number, "+49 170 444444");
+    assert_eq!(p_wcv.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wcv.features, Some(json!({"mobile": true, "voice": true})));
+    assert!(states_phone_feature(p_wcv.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(p_wcv.features.as_ref(), "voice"));
+
+    // 5. TEL;TYPE=WORK,CELL,FAX: mobile outranks fax
+    let p_wcf = &phones["p_work_cell_fax"];
+    assert_eq!(p_wcf.number, "+49 170 555555");
+    assert_eq!(p_wcf.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wcf.features, Some(json!({"mobile": true, "fax": true})));
+    assert!(states_phone_feature(p_wcf.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(p_wcf.features.as_ref(), "fax"));
+
+    // 6. TEL;TYPE=HOME,PAGER,VOICE: pager outranks voice
+    let p_hpv = &phones["p_home_pager_voice"];
+    assert_eq!(p_hpv.number, "+49 30 666666");
+    assert_eq!(p_hpv.contexts, Some(json!({"private": true})));
+    assert_eq!(p_hpv.features, Some(json!({"pager": true, "voice": true})));
+    assert!(states_phone_feature(p_hpv.features.as_ref(), "pager"));
+    assert!(!states_phone_feature(p_hpv.features.as_ref(), "voice"));
+
+    // 7. TEL;TYPE=WORK,VOICE,VIDEO: voice outranks unmapped video
+    let p_wvv = &phones["p_work_voice_video"];
+    assert_eq!(p_wvv.number, "+49 30 777777");
+    assert_eq!(p_wvv.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wvv.features, Some(json!({"voice": true, "video": true})));
+    assert!(states_phone_feature(p_wvv.features.as_ref(), "voice"));
+    assert!(!states_phone_feature(p_wvv.features.as_ref(), "video"));
+
+    // 8. TEL;TYPE=FAX,VIDEO: fax outranks video
+    let p_bfv = &phones["p_bare_fax_video"];
+    assert_eq!(p_bfv.number, "+49 30 888888");
+    assert_eq!(p_bfv.contexts, None);
+    assert_eq!(p_bfv.features, Some(json!({"fax": true, "video": true})));
+    assert!(states_phone_feature(p_bfv.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_bfv.features.as_ref(), "video"));
+
+    // 9. TEL;TYPE=HOME,CELL,PAGER,FAX,VOICE,VIDEO: full hierarchy resolves to CELL
+    let p_all = &phones["p_all_features"];
+    assert_eq!(p_all.number, "+49 170 999999");
+    assert_eq!(p_all.contexts, Some(json!({"private": true})));
+    assert_eq!(
+        p_all.features,
+        Some(json!({
+            "mobile": true,
+            "pager": true,
+            "fax": true,
+            "voice": true,
+            "video": true
+        }))
+    );
+    assert!(states_phone_feature(p_all.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(p_all.features.as_ref(), "pager"));
+    assert!(!states_phone_feature(p_all.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_all.features.as_ref(), "voice"));
+    assert!(!states_phone_feature(p_all.features.as_ref(), "video"));
+
+    // 10. TEL;TYPE=PREF,WORK,VOICE,FAX: pref extracted alongside types
+    let p_pref = &phones["p_pref_work_fax"];
+    assert_eq!(p_pref.number, "+49 30 000000");
+    assert_eq!(p_pref.pref, Some(1));
+    assert_eq!(p_pref.contexts, Some(json!({"work": true})));
+    assert_eq!(p_pref.features, Some(json!({"voice": true, "fax": true})));
+
+    // 11. Separate TYPE parameters parse identically to comma-separated
+    let p_sep = &phones["p_separate_params"];
+    assert_eq!(p_sep.number, "+49 30 123456");
+    assert_eq!(p_sep.contexts, Some(json!({"work": true})));
+    assert_eq!(p_sep.features, Some(json!({"voice": true, "fax": true})));
+
+    // 12. Mixed case TYPE parameters and values parse correctly
+    let p_case = &phones["p_mixed_case"];
+    assert_eq!(p_case.number, "+49 30 234567");
+    assert_eq!(p_case.pref, Some(1));
+    assert_eq!(p_case.contexts, Some(json!({"work": true})));
+    assert_eq!(p_case.features, Some(json!({"voice": true, "fax": true})));
+
+    // 13. Unmapped types (ISDN, CAR) are ignored while mapped types (VOICE, WORK) survive
+    let p_unm = &phones["p_unmapped_types"];
+    assert_eq!(p_unm.number, "+49 30 345678");
+    assert_eq!(p_unm.contexts, Some(json!({"work": true})));
+    assert_eq!(p_unm.features, Some(json!({"voice": true})));
+
+    // 14. Bare plain telephone with no types
+    let p_bare = &phones["p_bare_plain"];
+    assert_eq!(p_bare.number, "+49 30 456789");
+    assert_eq!(p_bare.contexts, None);
+    assert_eq!(p_bare.features, None);
+    assert_eq!(p_bare.pref, None);
+    assert!(!states_phone_feature(p_bare.features.as_ref(), "voice"));
+    assert!(!states_context(p_bare.contexts.as_ref(), "work"));
+
+    // Now verify outbound vCard emission for each phone entry
+    let emitted = card_to_vcard(&card);
+
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_voice_fax"),
+        "TEL;X-JMAP-KEY=p_work_voice_fax;TYPE=WORK,FAX:+49 30 111111"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_home_voice_fax"),
+        "TEL;X-JMAP-KEY=p_home_voice_fax;TYPE=HOME,FAX:+49 30 222222"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_bare_voice_fax"),
+        "TEL;X-JMAP-KEY=p_bare_voice_fax;TYPE=FAX:+49 30 333333"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_cell_voice"),
+        "TEL;X-JMAP-KEY=p_work_cell_voice;TYPE=WORK,CELL:+49 170 444444"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_cell_fax"),
+        "TEL;X-JMAP-KEY=p_work_cell_fax;TYPE=WORK,CELL:+49 170 555555"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_home_pager_voice"),
+        "TEL;X-JMAP-KEY=p_home_pager_voice;TYPE=HOME,PAGER:+49 30 666666"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_voice_video"),
+        "TEL;X-JMAP-KEY=p_work_voice_video;TYPE=WORK,VOICE:+49 30 777777"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_bare_fax_video"),
+        "TEL;X-JMAP-KEY=p_bare_fax_video;TYPE=FAX:+49 30 888888"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_all_features"),
+        "TEL;X-JMAP-KEY=p_all_features;TYPE=HOME,CELL:+49 170 999999"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_pref_work_fax"),
+        "TEL;X-JMAP-KEY=p_pref_work_fax;TYPE=WORK,FAX,PREF:+49 30 000000"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_separate_params"),
+        "TEL;X-JMAP-KEY=p_separate_params;TYPE=WORK,FAX:+49 30 123456"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_mixed_case"),
+        "TEL;X-JMAP-KEY=p_mixed_case;TYPE=WORK,FAX,PREF:+49 30 234567"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_unmapped_types"),
+        "TEL;X-JMAP-KEY=p_unmapped_types;TYPE=WORK,VOICE:+49 30 345678"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_bare_plain"),
+        "TEL;X-JMAP-KEY=p_bare_plain:+49 30 456789"
+    );
+}
+
+#[test]
+fn maps_phone_feature_predicate_characterization() {
+    // All supported JSContact phone features mapped to vCard 3.0 TYPE values
+    assert!(maps_phone_feature("mobile"));
+    assert!(maps_phone_feature("pager"));
+    assert!(maps_phone_feature("fax"));
+    assert!(maps_phone_feature("voice"));
+    assert!(maps_phone_feature("video"));
+
+    // Unsupported, unmapped, or type-confusion keys
+    assert!(!maps_phone_feature("cell")); // vCard spelling, not JSContact key
+    assert!(!maps_phone_feature("car"));
+    assert!(!maps_phone_feature("isdn"));
+    assert!(!maps_phone_feature("modem"));
+    assert!(!maps_phone_feature("bbs"));
+    assert!(!maps_phone_feature("main"));
+    assert!(!maps_phone_feature("text"));
+    assert!(!maps_phone_feature("textphone"));
+    assert!(!maps_phone_feature("work"));
+    assert!(!maps_phone_feature("home"));
+    assert!(!maps_phone_feature(""));
+}
+
+#[test]
+fn phone_feature_slot_resolution_order_is_fully_determined() {
+    // 1. Single feature slot resolution
+    for (feature, expected_type) in [
+        ("mobile", "CELL"),
+        ("pager", "PAGER"),
+        ("fax", "FAX"),
+        ("voice", "VOICE"),
+        ("video", "VIDEO"),
+    ] {
+        let line = phone_line(None, Some(json!({feature: true})));
+        assert_eq!(
+            line,
+            format!("TEL;X-JMAP-KEY=p1;TYPE={expected_type}:+49 30 111")
+        );
+        assert!(states_phone_feature(Some(&json!({feature: true})), feature));
+    }
+
+    // 2. Pairwise feature precedence: mobile beats all
+    for other in ["pager", "fax", "voice", "video"] {
+        let features = json!({"mobile": true, other: true});
+        let line = phone_line(None, Some(features.clone()));
+        assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=CELL:+49 30 111");
+        assert!(states_phone_feature(Some(&features), "mobile"));
+        assert!(!states_phone_feature(Some(&features), other));
+    }
+
+    // 3. Pairwise feature precedence: pager beats fax, voice, video
+    for other in ["fax", "voice", "video"] {
+        let features = json!({"pager": true, other: true});
+        let line = phone_line(None, Some(features.clone()));
+        assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=PAGER:+49 30 111");
+        assert!(states_phone_feature(Some(&features), "pager"));
+        assert!(!states_phone_feature(Some(&features), other));
+    }
+
+    // 4. Pairwise feature precedence: fax beats voice, video
+    for other in ["voice", "video"] {
+        let features = json!({"fax": true, other: true});
+        let line = phone_line(None, Some(features.clone()));
+        assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=FAX:+49 30 111");
+        assert!(states_phone_feature(Some(&features), "fax"));
+        assert!(!states_phone_feature(Some(&features), other));
+    }
+
+    // 5. Pairwise feature precedence: voice beats video
+    let features = json!({"voice": true, "video": true});
+    let line = phone_line(None, Some(features.clone()));
+    assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=VOICE:+49 30 111");
+    assert!(states_phone_feature(Some(&features), "voice"));
+    assert!(!states_phone_feature(Some(&features), "video"));
+
+    // 6. Multiple contexts with multiple features: DEFAULT_SLOT (HOME) + winning feature
+    let line_multi_ctx_feat = phone_line(
+        Some(json!({"work": true, "private": true})),
+        Some(json!({"voice": true, "fax": true})),
+    );
+    assert_eq!(
+        line_multi_ctx_feat,
+        "TEL;X-JMAP-KEY=p1;TYPE=HOME,FAX:+49 30 111"
+    );
+    let contexts = json!({"work": true, "private": true});
+    assert!(states_context(Some(&contexts), "private"));
+    assert!(!states_context(Some(&contexts), "work"));
 }
