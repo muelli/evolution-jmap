@@ -212,8 +212,15 @@ in the invocation, worth failing loudly on.
   of import/update/destroy, same as the other three tests — via
   `Client::email_state` rather than a state field on `email_get`'s own
   response, since `email_get` splits large id lists across several
-  `Email/get` calls and keeps only their `list`s, not a `state`. Skipped
-  under the same condition as the other three.
+  `Email/get` calls and keeps only their `list`s, not a `state`. Additionally
+  checks `Client::email_query` right after the import and right after the
+  destroy, filtered to the Inbox and sorted `receivedAt` ascending
+  (`EmailQueryFilter::in_mailbox` + `Comparator::ascending("receivedAt")`) —
+  the exact call `jmap-mail-sync::message_ids` makes to enumerate a
+  mailbox's messages, mirroring the `contact_query`/`event_query` checks
+  above but for mail's own listing path, which had no live-server coverage
+  from `get`/`set`/`changes` alone. Skipped under the same condition as the
+  other three.
 - `send_email_delivers_to_a_second_account_on_the_real_server` — sends a
   message via `Client::send_email` (`Email/set` + `EmailSubmission/set`,
   chained) from the write-test account to the second account step 3a seeds,
