@@ -34730,3 +34730,53 @@ again and assert the id is absent. Same throwaway account
 file. `CalendarEvent/query`'s equivalent stays open for a follow-up session
 — matching this chain's established one-type-per-session cadence rather than
 bundling two into one increment.
+
+## 2026-08-18 — Delivered: a ContactCard/query live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `contact_card_create_update_then_destroy_round_trips_through_the_real_api`
+  — right after the create step, calls `Client::contact_query(&account_id,
+  ContactCardQueryFilter::in_address_book(book_id.clone()))` and asserts the
+  new card's id is present; right after the destroy step, calls it again and
+  asserts the id is absent. This is the exact call
+  `jmap-book-sync::list_existing_sync` makes (`lib.rs:88`) to enumerate an
+  address book — the backend's actual listing path — which had zero
+  live-server coverage before this, unlike `get`/`set`/`changes` on the same
+  type.
+- **`docs/manual-test-live-server.md`**: documented the new query checks
+  alongside the existing per-step ones.
+- No production code changed: `Client::contact_query` and
+  `ContactCardQueryFilter::in_address_book` already existed and are already
+  mock-tested; this session's question was only whether a *real* server's
+  `ContactCard/query` answers as this client already assumes for the
+  filter shape the backend actually sends.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent
+  upsert; previous session's password not recoverable by design).
+  `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/`. Note:
+  `stw`'s own napped-VM auto-wake reported "failed to start stalwart-1"
+  again this session, but the VM was already reachable regardless (same
+  false-negative a prior session hit) — `curl`ing `/.well-known/jmap`
+  directly confirmed this before trusting `stw`'s own error.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 10 tests in
+  `live_server.rs` pass, including the extended contact test —
+  `ContactCard/query` filtered by address book lists the newly created card
+  and excludes it after destruction, against Stalwart's own query engine.
+  No client bug found.
+- Full gate: `cargo fmt --check` clean (after `cargo fmt` reflowed two
+  lines this session's own edit left over-width), `cargo clippy -p
+  evolution-jmap-client --all-targets --locked --features live-server --
+  -D warnings` and `cargo clippy --all-targets --locked -- -D warnings`
+  (default-members) both clean, `cargo test --locked` (default-members)
+  green, no failures. `cargo deny`/`reuse lint` unavailable on this VM as
+  usual; the only changed source file (`live_server.rs`) already carries
+  its SPDX header.
+
+`CalendarEvent/query`'s equivalent (`jmap-cal-sync::list_existing_sync`'s
+`CalendarEventQueryFilter::in_calendar`) is the natural next increment in
+this vein, named but deliberately left for a future session per this
+chain's one-type-per-session cadence. With that plus the OAuth2 issuer
+question (maintainer-gated, `docs/BACKLOG.md`), real-server readiness's
+remaining named gaps are down to just that one query test and the
+maintainer's OAuth2 call.

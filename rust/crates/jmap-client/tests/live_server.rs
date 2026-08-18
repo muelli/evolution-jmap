@@ -62,7 +62,7 @@ use std::env;
 
 use jmap_client::{Client, Credentials};
 use jmap_proto::calendars::CalendarEvent;
-use jmap_proto::contacts::ContactCard;
+use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
     keyword, role,
@@ -415,6 +415,13 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
 /// (`lib.rs:153`), and a real server's state tokens and
 /// created/updated/destroyed classification for this type had no
 /// live-server coverage until now.
+///
+/// Also checks `Client::contact_query` right after the create and right
+/// after the destroy: `jmap-book-sync`'s `list_existing_sync` enumerates an
+/// address book via exactly `ContactCardQueryFilter::in_address_book`
+/// (`lib.rs:88`), the backend's actual listing path, which — unlike
+/// `get`/`set`/`changes` above — had no live-server coverage at all before
+/// this test.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
@@ -440,7 +447,11 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
         .state;
 
     let full_name = format!("agent-livewrite-{}", unique_suffix());
-    let card = ContactCard::simple(book_id, &full_name, "agent-livewrite@example.invalid");
+    let card = ContactCard::simple(
+        book_id.clone(),
+        &full_name,
+        "agent-livewrite@example.invalid",
+    );
 
     let created = client
         .contact_create(&account_id, &card)
@@ -467,6 +478,17 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
     assert!(
         changes_after_create.created.contains(&id),
         "ContactCard/changes since before the create does not list the new card as created"
+    );
+
+    let query_after_create = client
+        .contact_query(
+            &account_id,
+            ContactCardQueryFilter::in_address_book(book_id.clone()),
+        )
+        .expect("ContactCard/query failed against the real server");
+    assert!(
+        query_after_create.ids.contains(&id),
+        "ContactCard/query for the address book does not list the new card"
     );
 
     let state_before_update = client.contact_get(&account_id, &[]).unwrap().state;
@@ -508,6 +530,17 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
     assert!(
         changes_after_destroy.destroyed.contains(&id),
         "ContactCard/changes since before the destroy does not list the card as destroyed"
+    );
+
+    let query_after_destroy = client
+        .contact_query(
+            &account_id,
+            ContactCardQueryFilter::in_address_book(book_id),
+        )
+        .expect("ContactCard/query failed against the real server");
+    assert!(
+        !query_after_destroy.ids.contains(&id),
+        "ContactCard/query for the address book still lists the destroyed card"
     );
 }
 
