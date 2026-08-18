@@ -34148,3 +34148,38 @@ scope for this throwaway account, as every prior session in this chain has
 noted) and remain the only unexercised corner of `jmap-client`'s write
 surface. Left `agent-livewrite.net`/`agent1` in place, same reasoning as
 every prior write-path session.
+
+## 2026-08-18 (claim) — Claiming a Mailbox/changes (incremental sync) live-server test
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` still has M1–M10
+all `COMPLETE`, `docs/BACKLOG.md` unchanged (only the parked maintainer-call/
+low-leverage items). The write-path chain that occupied the last five
+sessions (`mailbox_update`, `contact_update`, `event_update`, `email_update`,
+plus the original create/destroy tests) is now closed; the only named
+remaining gap, `send_email`/`submit_email`, needs an SMTP-capable deployment
+this throwaway account cannot provide, so it stays out of scope.
+
+Surveyed `jmap-client/tests/live_server.rs` for what else in the client's
+surface has zero live-server coverage rather than assuming the write-path
+chain was the whole story: `Client::changes`/`all_changes`
+(`jmap-client/src/changes.rs`, RFC 8620 §5.2 incremental sync — the
+primitive every EDS meta-backend's `get_changes_sync` drives) is called
+nowhere in that file. `grep -i changes docs/NIGHT-LOG.md` against
+live-server/real-server context returns nothing, so this is not
+re-treading a prior session's ground. This is real-server-readiness work,
+not backend polish: it exercises state-token semantics (format,
+monotonicity, `hasMoreChanges` pagination, created/updated/destroyed
+classification) against Stalwart's own `/changes` implementation, which the
+mock cannot stand in for.
+
+Confirmed reachable before claiming: `source
+infra/live-server/live-server-env.sh` resolves `STALWART_URL` and the
+internal endpoint answers (307 on `/.well-known/jmap`, expected pre-auth).
+
+Claiming: extend `mailbox_create_rename_then_destroy_round_trips_through_
+the_real_api` in `jmap-client/tests/live_server.rs` — capture
+`mailbox_get`'s `state` before each mutation (create/rename/destroy) and
+assert `Client::all_changes("Mailbox", ...)` since that state reports the
+mailbox's id in the right bucket (`created`/`updated`/`destroyed`) after
+each one. Same throwaway account and gating as every write-path test in
+this file; will update `docs/manual-test-live-server.md` to match.
