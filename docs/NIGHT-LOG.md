@@ -34294,3 +34294,22 @@ than one increment tonight. `send_email`/`submit_email` remain out of scope
 for this throwaway account (no SMTP path configured), unchanged from every
 prior session in this chain. Left `agent-livewrite.net`/`agent1` in place,
 same reasoning as every prior write-path session.
+
+## 2026-08-18 (claim) — Claiming a CalendarEvent/changes live-server test
+
+Re-surveyed: `docs/MILESTONES.md` still has M1–M10 all `COMPLETE`,
+`docs/BACKLOG.md` unchanged. The prior session closed `ContactCard/changes`
+coverage and left two follow-ups open: extend the same `all_changes` check
+to the calendar-event/email write tests, or verify same-page create+update
+classification. Continuing the smaller, better-understood increment first
+(same shape, now proven against both `Mailbox` and `ContactCard`).
+
+Claiming: extend
+`calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
+in `jmap-client/tests/live_server.rs` — capture `CalendarEvent/get`'s `state`
+(via `event_get(&account_id, &[])`, empty ids) before each mutation
+(create/update/destroy) and assert `Client::all_changes(&account_id,
+"CalendarEvent", ...)` since that state reports the event's id in the
+matching bucket after each one. Same throwaway account and gating.
+`Email/changes` coverage and the same-page classification question stay
+open for a future session.
