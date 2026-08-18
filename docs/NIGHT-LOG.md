@@ -34079,3 +34079,28 @@ session flagged. Still open for a future session: `email_update`
 `send_email`/`submit_email` still need an SMTP-capable deployment (out of
 scope for this throwaway account). Left `agent-livewrite.net`/`agent1` in
 place, same reasoning as every prior write-path session.
+
+## 2026-08-18 (claim) — Claiming an Email/set update (mark-as-read) test against the live server
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` still has M1–M10
+all `COMPLETE`, `docs/BACKLOG.md` unchanged (only the parked maintainer-call/
+low-leverage items). The previous four write-path sessions' own "still
+open" notes converge on the same remaining gap: `jmap-client/tests/
+live_server.rs` now covers `Mailbox/set` (create+rename+destroy),
+`ContactCard/set` and `CalendarEvent/set` (create+update+destroy), and
+`Email/import`+`download_blob`, but `Client::email_update` — the
+`PatchObject` path `jmap-mail-sync::MailSync::set_keywords` sends whenever
+a user marks a message read/unread or flags it — has zero live-server
+coverage. Same category as the prior four increments: verifying
+`jmap-client`'s existing write surface against a real deployment's own
+semantics, not backend polish (the mock already covers this path fully via
+`jmap-mail-sync`'s own test suite).
+
+Claiming: extend `email_import_round_trips_through_the_real_api` in
+`jmap-client/tests/live_server.rs` — after confirming the imported
+message's subject via `Email/get`, call `email_update` with a
+`{"keywords/$seen": true}` `PatchObject` (the same shape
+`MailSync::set_keywords` sends), confirm the `$seen` keyword comes back set
+via another `Email/get`, then continue into the existing download/destroy
+steps. Mirrors the mailbox-rename/contact-update/event-update tests'
+shape. Will update `docs/manual-test-live-server.md` to match.
