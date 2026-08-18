@@ -113,7 +113,7 @@ if [[ "${1:-}" == "seed" ]]; then
     trap 'rm -f "$plan"' EXIT
     cat > "$plan" <<PLAN
 {"@type":"upsert","object":"Domain","matchOn":["name"],"value":{"d":{"name":"$dom","isEnabled":true}}}
-{"@type":"upsert","object":"Account","matchOn":["name"],"value":{"a":{"@type":"Individual","name":"$local_part","domainId":"#d","credentials":{"0":{"@type":"Password","secret":"$pass"}}}}}
+{"@type":"upsert","object":"Account","matchOn":["name"],"value":{"a":{"@type":"User","name":"$local_part","domainId":"#d","credentials":{"0":{"@type":"Password","secret":"$pass"}}}}}
 PLAN
     echo "stw: applying seed for ${local_part}@${dom} (password hidden) at $URL" >&2
     stalwart-cli --url "$URL" "${AUTH[@]}" apply --file "$plan"
