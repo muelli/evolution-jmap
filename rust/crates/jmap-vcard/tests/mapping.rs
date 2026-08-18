@@ -3769,3 +3769,41 @@ fn maps_contact_with_unmodeled_office_and_organization_extra_safely() {
     assert_eq!(units[0].name, "Research");
     assert_eq!(units[1].name, "Advanced Optics");
 }
+
+#[test]
+fn reads_a_vcard_with_mixed_case_property_names_and_parameters() {
+    let vcard = concat!(
+        "BEGIN:vcard\r\n",
+        "version:3.0\r\n",
+        "uid:card-mixed-1\r\n",
+        "fn:Alex Mixed\r\n",
+        "email;type=work,pref:alex@work.example\r\n",
+        "tel;TYPE=cell,home:+1234567890\r\n",
+        "adr;type=work:;;100 Work St;Berlin;;10115;Germany\r\n",
+        "categories:Alpha,Beta\r\n",
+        "categories:Gamma\r\n",
+        "x-evolution-spouse:Jordan\r\n",
+        "END:vcard\r\n"
+    );
+    let card = vcard_to_card(vcard).expect("parse mixed case vcard");
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "card-mixed-1");
+    assert_eq!(
+        card.name.as_ref().unwrap().full.as_deref(),
+        Some("Alex Mixed")
+    );
+    let emails = card.emails.as_ref().unwrap();
+    assert_eq!(emails.len(), 1);
+    let email = emails.values().next().unwrap();
+    assert_eq!(email.address, "alex@work.example");
+    assert_eq!(email.pref, Some(1));
+    let phones = card.phones.as_ref().unwrap();
+    let phone = phones.values().next().unwrap();
+    assert_eq!(phone.number, "+1234567890");
+    let keywords = card.keywords.as_ref().unwrap();
+    assert_eq!(keywords.len(), 3);
+    assert!(keywords.contains_key("Alpha"));
+    assert!(keywords.contains_key("Beta"));
+    assert!(keywords.contains_key("Gamma"));
+    let related = card.related_to.as_ref().unwrap();
+    assert!(related.contains_key("Jordan"));
+}
