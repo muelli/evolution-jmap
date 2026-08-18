@@ -34524,3 +34524,38 @@ this throwaway account cannot provide. With this closed, the live-server
 write-path/incremental-sync chain that has occupied the last ~10 sessions
 has no further named follow-up — a future session should re-survey rather
 than assume there is a next increment in this specific vein.
+
+## 2026-08-18 (claim) — Claiming a send_email/EmailSubmission live-server test
+
+Re-surveyed per the prior session's own suggestion: `docs/MILESTONES.md`
+still has M1–M10 all `COMPLETE`, `docs/BACKLOG.md` unchanged (only (B′)/(C),
+both explicit maintainer-call/low-leverage). The live-server
+write-path/incremental-sync chain (`Mailbox`/`ContactCard`/`CalendarEvent`/
+`Email` create+update+destroy, each with `all_changes` coverage, plus the
+same-page create+update fold) is exhausted — every named follow-up in that
+vein is closed.
+
+One corner of "real-server readiness" was left unaddressed across that
+entire chain, each time with the same note: `send_email`/`submit_email`
+"remain out of scope for this throwaway account (no SMTP path configured)".
+That note conflated two different things — *outbound* SMTP relay to the
+public Internet (genuinely out of scope for a throwaway domain with no MX/
+DKIM) and *intra-server* delivery between two accounts on the same Stalwart
+deployment, which needs no outbound relay at all and this VM can provision
+freely (`infra/stalwart/stw seed` is an idempotent upsert; the domain
+`agent-livewrite.net` already exists from prior sessions). Confirmed
+reachable before claiming: `source infra/live-server/live-server-env.sh`
+resolves `STALWART_URL`, `/.well-known/jmap` answers `307` as expected
+pre-auth.
+
+Claiming: seed a second throwaway account (`agent2@agent-livewrite.net`) on
+the existing domain, and add a new test to
+`jmap-client/tests/live_server.rs` — `Client::send_email` from the existing
+write-test account (`agent1@agent-livewrite.net`) addressed to the new
+account, then poll the new account's `Email/query` (filtered by the
+message's unique subject) until the message shows up in its Inbox,
+confirming Stalwart actually delivers rather than merely accepting the
+submission. New env vars `JMAP_LIVE_SERVER_RECIPIENT_USER`/
+`_PASSWORD`, mirroring `connect_for_write`'s shape; skipped like every other
+write-path test when unset. Will update `docs/manual-test-live-server.md`
+to match.
