@@ -34848,3 +34848,36 @@ maintainer-gated). A future session should re-survey
 `docs/ROADMAP.md`/`docs/BACKLOG.md` fresh rather than assume another
 increment in the live-server CRUD/query/changes/send vein — it has no
 further open named follow-up.
+
+## 2026-08-18 (claim) — Claiming an Email/query live-server test
+
+Re-surveyed fresh rather than trusting the prior session's "no further open
+named follow-up" note at face value: `docs/MILESTONES.md` still has M1–M10
+all COMPLETE, `docs/BACKLOG.md`'s open items are unchanged
+(maintainer-gated OAuth2 issuer mismatch, maintainer-gated EDS 3.60+ mapping
+decisions, low-leverage contact/calendar fidelity). But checking the actual
+production listing path rather than assuming the CRUD/query/changes/send
+chain covered it: `jmap-mail-sync::message_ids`
+(`rust/crates/jmap-mail-sync/src/lib.rs:985-1008`) — the call
+`jmap-mail`'s Camel folder summary sync makes to enumerate a mailbox's
+messages — drives `Client::email_query` with `EmailQueryFilter::in_mailbox`,
+sorted `Comparator::ascending("receivedAt")`, and a pagination loop keyed on
+`QueryResponse::limit`. `jmap-client/tests/live_server.rs` has never
+exercised that exact shape: the one existing `Email/query` call in this file
+(inside `send_email_delivers_to_a_second_account_on_the_real_server`) filters
+by mailbox *and* subject, asks for `limit: Some(1)`, and has no sort — a
+polling probe, not the folder-listing path. So unlike `ContactCard/query`
+and `CalendarEvent/query` (closed the last two sessions), `Email/query` as
+`jmap-mail-sync` actually calls it is still an open, real, priority-lane gap
+— the query-coverage thread was not actually exhausted, just the two
+non-mail types were.
+
+Claiming: extend
+`email_import_update_then_destroy_round_trips_through_the_real_api` in
+`jmap-client/tests/live_server.rs` — right after the import step, call
+`Client::email_query(&account_id, EmailQueryFilter::in_mailbox(inbox_id.clone()),
+Some(vec![Comparator::ascending("receivedAt")]), None, 0)` and assert the new
+message's id is present; right after the destroy step, call it again and
+assert the id is absent. Same throwaway write-path account and gating as
+every other write-path test in this file. Will update
+`docs/manual-test-live-server.md` to match.
