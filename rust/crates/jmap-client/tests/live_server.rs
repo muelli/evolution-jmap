@@ -63,7 +63,7 @@ use std::env;
 use jmap_client::{Client, Credentials};
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::contacts::ContactCard;
-use jmap_proto::mail::Mailbox;
+use jmap_proto::mail::{EmailImport, Mailbox, role};
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
 };
@@ -387,4 +387,91 @@ fn calendar_event_create_then_destroy_round_trips_through_the_real_api() {
     client
         .event_destroy(&account_id, &id)
         .expect("CalendarEvent/set destroy failed against the real server");
+}
+
+/// The mail write path's other shape: `Email/import` puts bytes the caller
+/// already has into the store, rather than `Mailbox/set`'s create-from-
+/// properties. Uploads a small RFC 5322 message via [`Client::upload_blob`],
+/// imports it into the account's Inbox, confirms it via `Email/get`,
+/// downloads the blob back through [`Client::download_blob`], then destroys
+/// the message.
+///
+/// Does not assert the downloaded bytes equal the uploaded bytes verbatim:
+/// RFC 8621 §4.8 lets a server repair or re-serialize an imported message
+/// (adding a `Received` header, say), so that would be a legitimate answer,
+/// not a client bug. Instead it checks the downloaded length against the
+/// `size` `Email/get` itself reports, and that the message's (unique, so a
+/// leftover from a prior run cannot be mistaken for this one) subject
+/// survived the round trip.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn email_import_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+    let inbox_id = client
+        .mailbox_get(&account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.role.as_deref() == Some(role::INBOX))
+        .expect("the write-test account needs an Inbox")
+        .id
+        .expect("the server named the Inbox");
+
+    let subject = format!("agent-livewrite-{}", unique_suffix());
+    let message = format!(
+        "From: agent-livewrite@example.invalid\r\n\
+         To: agent-livewrite@example.invalid\r\n\
+         Subject: {subject}\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         \r\n\
+         It arrived as bytes and it stays bytes.\r\n"
+    );
+
+    let upload = client
+        .upload_blob(&account_id, "message/rfc822", message.clone().into_bytes())
+        .expect("blob upload failed against the real server");
+
+    let imported = client
+        .email_import(&account_id, &EmailImport::new(upload.blob_id, inbox_id))
+        .expect("Email/import failed against the real server");
+    let id = imported.id.clone().expect("the server named the new email");
+
+    let fetched = client
+        .email_get(&account_id, std::slice::from_ref(&id), None)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the imported email does not show up in Email/get afterwards");
+    assert_eq!(
+        fetched.subject,
+        Some(subject),
+        "the imported email's subject does not match what was uploaded"
+    );
+    let size = fetched
+        .size
+        .expect("Email/get named a size for the imported email");
+    let blob_id = fetched
+        .blob_id
+        .clone()
+        .expect("Email/get named a blobId for the imported email");
+
+    let downloaded = client
+        .download_blob(&account_id, &blob_id, "message.eml", size)
+        .expect("blob download failed against the real server");
+    assert_eq!(
+        downloaded.len() as u64,
+        size,
+        "the downloaded blob's length does not match the size Email/get reported"
+    );
+
+    client
+        .email_destroy(&account_id, &id)
+        .expect("Email/set destroy failed against the real server");
 }
