@@ -34022,3 +34022,21 @@ session flagged. Still open for a future session: `event_update` and
 `send_email`/`submit_email` still need an SMTP-capable deployment (out of
 scope for this throwaway account). Left `agent-livewrite.net`/`agent1` in
 place, same reasoning as every prior write-path session.
+
+## 2026-08-18 (claim) — Claiming a CalendarEvent/set update test against the live server
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` still has M1–M10
+all `COMPLETE`, `docs/BACKLOG.md` unchanged. The previous entry's own "still
+open" note names the remaining gap precisely:
+`calendar_event_create_then_destroy_round_trips_through_the_real_api` in
+`jmap-client/tests/live_server.rs` has no update step, unlike its
+`Mailbox/set` and `ContactCard/set` siblings, even though
+`Client::event_update` already exists and is exercised against the mock.
+
+Claiming: rename that test to
+`calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
+and insert an update step between create and destroy — same shape as the
+mailbox-rename and contact-update tests — patching the event's `title` via
+`event_update` and confirming the new title via `CalendarEvent/get` before
+destroying it. `email_update` (mark-as-read/flags) stays open for a future
+session; one increment at a time.
