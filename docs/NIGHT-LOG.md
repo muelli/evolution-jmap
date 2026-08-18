@@ -33707,3 +33707,35 @@ This closes the last concrete gap `live_server.rs`'s own doc comment named
 session's environment made a safe way to do so available. No client bug
 found this time — unlike the redirect-auth and apiUrl findings, the write
 path worked correctly on the first real attempt.
+
+## 2026-08-18 (claim) — Claiming contacts/calendars write-path tests against the live server
+
+Re-surveyed rather than re-deriving: `docs/MILESTONES.md` still M1–M10 all
+COMPLETE, `docs/BACKLOG.md` unchanged (only the parked maintainer-call/
+low-leverage items), and the mail write-path test from the previous entry
+covers only `Mailbox/set`. `live_server.rs` still has no write-path
+coverage for `ContactCard/set` or `CalendarEvent/set` — the contacts/
+calendars capabilities are only ever read (`AddressBook/get`,
+`Calendar/get`) in that file, so their mutating paths against a real server
+remain as unverified as the mail path was before the previous session.
+That is real-server-readiness work, not backend polish: it exercises
+`jmap-client`'s write methods against Stalwart's own semantics (id
+assignment, JSContact/JSCalendar-shaped responses), the same category as
+the mailbox test, not a contact-editor/vCard-fidelity refinement.
+
+Confirmed reachable and reusable before claiming: re-sourced
+`infra/live-server/live-server-env.sh`, reseeded `agent-livewrite.net`/
+`agent1` (idempotent `stw seed`, fresh password kept only in this
+session's `/tmp`) rather than trying to recover the previous session's
+password, and confirmed via a raw `curl` `AddressBook/get`+`Calendar/get`
+that Stalwart auto-provisions one default address book and one default
+calendar per account — so, like the mailbox test relying on an always-
+present Inbox, these tests can rely on an always-present default book/
+calendar without creating one first.
+
+Claiming: add `contact_card_create_then_destroy_round_trips_through_the_real_api`
+and `calendar_event_create_then_destroy_round_trips_through_the_real_api` to
+`jmap-client/tests/live_server.rs`, both gated behind `connect_for_write()`
+exactly like the mailbox test, each creating into the account's default
+address book/calendar, verifying via `ContactCard/get`/`CalendarEvent/get`,
+then destroying.
