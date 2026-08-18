@@ -583,6 +583,12 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
 /// `size` `Email/get` itself reports, and that the message's (unique, so a
 /// leftover from a prior run cannot be mistaken for this one) subject
 /// survived the round trip.
+///
+/// Also checks `Client::all_changes` after each of import/update/destroy,
+/// same as the mailbox/contact/event tests: `Client::email_state` (an
+/// `Email/get` naming no ids) supplies the "since" state `Email/changes`
+/// needs, since `email_get` itself never exposes one (it splits large id
+/// lists across several `Email/get` calls and only keeps their `list`s).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn email_import_update_then_destroy_round_trips_through_the_real_api() {
@@ -618,10 +624,22 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
         .upload_blob(&account_id, "message/rfc822", message.clone().into_bytes())
         .expect("blob upload failed against the real server");
 
+    let state_before_import = client
+        .email_state(&account_id)
+        .expect("Email/get failed against the real server");
+
     let imported = client
         .email_import(&account_id, &EmailImport::new(upload.blob_id, inbox_id))
         .expect("Email/import failed against the real server");
     let id = imported.id.clone().expect("the server named the new email");
+
+    let changes_after_import = client
+        .all_changes(&account_id, "Email", &state_before_import)
+        .expect("Email/changes failed against the real server");
+    assert!(
+        changes_after_import.created.contains(&id),
+        "Email/changes since before the import does not list the new message as created"
+    );
 
     let fetched = client
         .email_get(&account_id, std::slice::from_ref(&id), None)
@@ -635,6 +653,9 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
         "the imported email's subject does not match what was uploaded"
     );
 
+    let state_before_update = client
+        .email_state(&account_id)
+        .expect("Email/get failed against the real server");
     client
         .email_update(
             &account_id,
@@ -642,6 +663,14 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
             json!({format!("keywords/{}", keyword::SEEN): true}),
         )
         .expect("Email/set update failed against the real server");
+
+    let changes_after_update = client
+        .all_changes(&account_id, "Email", &state_before_update)
+        .expect("Email/changes failed against the real server");
+    assert!(
+        changes_after_update.updated.contains(&id),
+        "Email/changes since before the update does not list the message as updated"
+    );
 
     let fetched_after_update = client
         .email_get(&account_id, std::slice::from_ref(&id), None)
@@ -675,7 +704,18 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
         "the downloaded blob's length does not match the size Email/get reported"
     );
 
+    let state_before_destroy = client
+        .email_state(&account_id)
+        .expect("Email/get failed against the real server");
     client
         .email_destroy(&account_id, &id)
         .expect("Email/set destroy failed against the real server");
+
+    let changes_after_destroy = client
+        .all_changes(&account_id, "Email", &state_before_destroy)
+        .expect("Email/changes failed against the real server");
+    assert!(
+        changes_after_destroy.destroyed.contains(&id),
+        "Email/changes since before the destroy does not list the message as destroyed"
+    );
 }
