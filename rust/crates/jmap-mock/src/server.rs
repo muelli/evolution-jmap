@@ -96,6 +96,7 @@ pub struct MockServerBuilder {
     size_upload: Option<u64>,
     session_via_redirect: bool,
     advertise_origin: Option<String>,
+    terse_submission_create: bool,
 }
 
 impl MockServerBuilder {
@@ -334,6 +335,21 @@ impl MockServerBuilder {
         self
     }
 
+    /// Omit `identityId`/`emailId` from a created `EmailSubmission`, as a
+    /// server that reads RFC 8620 §5.3 literally does: the `created` map
+    /// need only contain properties "that were not sent by the client", and
+    /// a client always supplies both when it asks to create a submission, so
+    /// neither is server-set. This project's `jmap-client` assumed both
+    /// would always be echoed back until the live Stalwart deployment
+    /// omitted them and `EmailSubmission`'s deserialization panicked on the
+    /// missing fields — see `docs/NIGHT-LOG.md`, "send_email backfills
+    /// identityId/emailId a real server omits". Off by default, matching the
+    /// mock's own prior behaviour and every other test.
+    pub fn terse_submission_create(mut self) -> Self {
+        self.terse_submission_create = true;
+        self
+    }
+
     /// Bind to localhost and start serving on a background thread. The
     /// server stops when the returned handle is dropped.
     pub fn start(self) -> MockServer {
@@ -349,6 +365,7 @@ impl MockServerBuilder {
         state.size_upload = self.size_upload;
         state.session_via_redirect = self.session_via_redirect;
         state.advertise_origin = self.advertise_origin.clone();
+        state.terse_submission_create = self.terse_submission_create;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -408,6 +425,7 @@ impl MockServer {
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
             advertise_origin: None,
+            terse_submission_create: false,
         }
     }
 
