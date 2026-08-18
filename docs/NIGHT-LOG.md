@@ -34471,3 +34471,56 @@ captured as `state_before_create`) and assert the mailbox's id lands in
 Same throwaway account (`agent-livewrite.net`/`agent1`, reseeded via `stw
 seed`) and gating as every write-path test in this file; will update
 `docs/manual-test-live-server.md` to match.
+
+## 2026-08-18 — Delivered: the same-page create+update classification test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: extended
+  `mailbox_create_rename_then_destroy_round_trips_through_the_real_api` —
+  after the existing create+rename steps (each already checked
+  individually via `all_changes` since its own preceding state), added one
+  more `Client::all_changes(&account_id, "Mailbox", &state_before_create)`
+  call spanning *both* mutations, asserting the mailbox's id lands in
+  `created` and is absent from `updated`. `state_before_create` was already
+  captured by the existing test, before either mutation, so this needed no
+  new plumbing — just one more assertion on a sequence already being
+  driven.
+- **`docs/manual-test-live-server.md`**: documented the new
+  cross-mutation `all_changes` check alongside the existing per-step ones.
+- No production code changed: `ChangeSet::classify`
+  (`jmap-client/src/changes.rs:159`) already implements RFC 8620 §5.2's
+  fold rule (create+update in one window → created only) and is mock-tested
+  at `jmap-client/tests/changes.rs:207`. This session's question was
+  whether a *real* server's own `/changes` — whatever it does in the
+  single-response case — still comes out right after the client's own
+  fold; it does.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent
+  upsert; previous session's password not recoverable by design).
+  `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/`.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the extended mailbox test — a mailbox
+  created and then renamed within one `/changes` window since before the
+  create classifies as `created`, not `updated`, against Stalwart's own
+  `/changes`, matching what the client already assumed. No client bug
+  found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --locked`
+  (default-members) green, no failures. `cargo deny`/`reuse lint` still
+  unavailable on this VM; the two changed files already carry SPDX headers
+  where required.
+
+Closes the one `all_changes` question the `Mailbox`/`ContactCard`/
+`CalendarEvent`/`Email` chain left open: the create/update/destroy
+classification rule now has live-server confirmation for both the
+per-mutation case (all four types, prior sessions) and the single-window
+create+update fold (this session, `Mailbox` only — the rule is generic
+over type, so one confirmation stands for all four; there is no reason to
+expect Stalwart's fold behaviour to differ by data type). Still open,
+unchanged: `send_email`/`submit_email` need an SMTP-capable deployment
+this throwaway account cannot provide. With this closed, the live-server
+write-path/incremental-sync chain that has occupied the last ~10 sessions
+has no further named follow-up — a future session should re-survey rather
+than assume there is a next increment in this specific vein.
