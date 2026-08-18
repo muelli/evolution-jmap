@@ -33739,3 +33739,52 @@ and `calendar_event_create_then_destroy_round_trips_through_the_real_api` to
 exactly like the mailbox test, each creating into the account's default
 address book/calendar, verifying via `ContactCard/get`/`CalendarEvent/get`,
 then destroying.
+
+## 2026-08-18 — Delivered: contacts/calendars write-path tests, both passed
+
+- **`jmap-client/tests/live_server.rs`**: added
+  `contact_card_create_then_destroy_round_trips_through_the_real_api`
+  (`ContactCard/set` create, `ContactCard/get` confirms the name, `ContactCard/
+  set` destroy) and `calendar_event_create_then_destroy_round_trips_
+  through_the_real_api` (same shape for `CalendarEvent`), both gated behind
+  the existing `connect_for_write()` — the same throwaway-account credentials
+  the mailbox write test uses, never the read-only suite's. Both create into
+  the account's *default* address book/calendar rather than creating one of
+  their own first: confirmed by hand with a raw `curl` `AddressBook/get`+
+  `Calendar/get` before writing the test that Stalwart auto-provisions
+  exactly one of each per account (`isDefault: true`), the same shape the
+  mailbox test already relies on for a default Inbox. Factored the three
+  write tests' repeated "unique name per run" logic into one `unique_suffix()`
+  helper rather than triplicating the `SystemTime`/`UNIX_EPOCH` dance.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent upsert;
+  the prior session's password was not recoverable, by design — kept only in
+  that session's now-gone `/tmp`) rather than leaving the account
+  unconfirmed. Verified the seeded account still authenticates and carries
+  mail/contacts/calendars capabilities, and that the API's `AddressBook/get`/
+  `Calendar/get` answer one default book/calendar each before trusting that
+  assumption in the test.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 8 tests in
+  `live_server.rs` pass, including the 2 new ones — `ContactCard/set` and
+  `CalendarEvent/set` round-trip correctly against Stalwart's own JSContact/
+  JSCalendar handling, id assignment, and state changes. No client bug found
+  this time either.
+- Full gate: `cargo fmt --check` clean, `cargo clippy --all-targets --locked
+  -- -D warnings` and the same with `-p evolution-jmap-client --features
+  live-server` both clean, `cargo test --workspace --exclude example-module
+  --exclude jmap-functional --locked` green (no failures across the whole
+  suite). `cargo deny`/`reuse lint` still unavailable on this VM; the only
+  changed file with pre-existing SPDX coverage is `live_server.rs` (existing
+  file, header already present).
+- `docs/manual-test-live-server.md` updated: step 3 now describes three
+  write-path tests instead of one, and the "what it worked means" list
+  covers all three with the shared default-book/default-calendar assumption
+  spelled out.
+
+This is the second and third write-path proofs against a real, live JMAP
+server (after `Mailbox/set`), closing out `ContactCard/set`/`CalendarEvent/
+set` as verified real-server-readiness surface alongside mail. Left the
+`agent-livewrite.net`/`agent1` account in place for the same reason the
+prior session did: `stw seed` is an idempotent upsert, so a future session
+that needs it again can just reseed rather than finding it permanently
+unusable. New password kept only in this session's `/tmp`, not committed.

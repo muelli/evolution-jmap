@@ -9,10 +9,14 @@ this project does not control. `rust/crates/jmap-client/tests/live_server.rs`
 is the other half, and this is its recipe.
 
 Almost all of it is read-only — session discovery, `Core/echo`, or listing
-what already exists. One test, `mailbox_create_then_destroy_round_trips_
-through_the_real_api`, does write (`Mailbox/set` create then destroy), and
-it only runs against a separate, dedicated throwaway account (see step 3)
-so it can never touch whatever account the read-only tests are pointed at.
+what already exists. Three tests write: `mailbox_create_then_destroy_
+round_trips_through_the_real_api` (`Mailbox/set`),
+`contact_card_create_then_destroy_round_trips_through_the_real_api`
+(`ContactCard/set`), and
+`calendar_event_create_then_destroy_round_trips_through_the_real_api`
+(`CalendarEvent/set`), each create-then-destroy. All three run only
+against a separate, dedicated throwaway account (see step 3) so they can
+never touch whatever account the read-only tests are pointed at.
 
 ## 1. Get a server
 
@@ -71,15 +75,14 @@ reached, rather than trusting the address the server states. Leave it unset
 by default: it exists for exactly this apiUrl/hostname mismatch, not as a
 routine option.
 
-## 3. (optional) Enable the write-path test
+## 3. (optional) Enable the write-path tests
 
-`mailbox_create_then_destroy_round_trips_through_the_real_api` is skipped,
-not failed, unless a *separate* login is given for it — deliberately not
-the same variables step 2 sets, so pointing the read-only tests at a real
-mailbox can never also point the one mutating test at it. Seed a throwaway
-account for this alone (the Stalwart VM's `infra/stalwart/stw seed`
-wrapper needs `stalwart-cli` on `PATH`; see that script's header for where
-to get it):
+The three mutating tests are skipped, not failed, unless a *separate*
+login is given for them — deliberately not the same variables step 2
+sets, so pointing the read-only tests at a real mailbox can never also
+point the mutating tests at it. Seed a throwaway account for this alone
+(the Stalwart VM's `infra/stalwart/stw seed` wrapper needs `stalwart-cli`
+on `PATH`; see that script's header for where to get it):
 
 ```console
 $ ./infra/stalwart/stw seed agent-livewrite.net agent1 '<a fresh password>'
@@ -127,11 +130,16 @@ in the invocation, worth failing loudly on.
   calendar yet, so the round trip succeeding — proving this client's types
   read what a real server actually sends, not just `jmap-mockd`'s fixtures —
   is the claim. An account with no such capability is reported and skipped.
-- `mailbox_create_then_destroy_round_trips_through_the_real_api` — `Mailbox/
-  set` creates a folder, `Mailbox/get` shows it back with the right name, and
-  `Mailbox/set` destroys it again — the write path, not just reads, against a
-  real server's own id assignment and state changes. Skipped, not failed,
-  when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
+- `mailbox_create_then_destroy_round_trips_through_the_real_api`,
+  `contact_card_create_then_destroy_round_trips_through_the_real_api`, and
+  `calendar_event_create_then_destroy_round_trips_through_the_real_api` —
+  each creates a record (`Mailbox`/`ContactCard`/`CalendarEvent`), confirms
+  it via the matching `/get`, then destroys it — the write path, not just
+  reads, against a real server's own id assignment and state changes. The
+  contact/event tests create into the account's default address book/
+  calendar rather than one of their own making, relying on Stalwart
+  auto-provisioning both per account. Skipped, not failed, when
+  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` (step 3) are not set.
 
 Anything short of that is a finding, not a nuisance — write it down in
 `docs/NIGHT-LOG.md`.
