@@ -60,6 +60,7 @@ pub struct ClientBuilder {
     timeout: Duration,
     transport: Option<Box<dyn Transport>>,
     cancel: Option<CancelFlag>,
+    rebase_urls_to_origin: bool,
 }
 
 impl Default for ClientBuilder {
@@ -68,6 +69,7 @@ impl Default for ClientBuilder {
             timeout: Duration::from_secs(30),
             transport: None,
             cancel: None,
+            rebase_urls_to_origin: false,
         }
     }
 }
@@ -90,6 +92,26 @@ impl ClientBuilder {
         self
     }
 
+    /// After fetching the session, rewrite the scheme and authority of every
+    /// URL it names (`apiUrl`, `downloadUrl`, `uploadUrl`, `eventSourceUrl`)
+    /// to the origin this client connected to, keeping each URL's path and
+    /// query as the server stated them.
+    ///
+    /// Off by default: RFC 8620 states these are the server's own URLs, and a
+    /// deployment reachable at the address it names never needs this. It
+    /// exists for a server whose session document names a scheme/host the
+    /// client cannot route to even though the document itself came from a
+    /// reachable address — a reverse proxy, a NAT boundary, or (the case that
+    /// motivated this) a configured public hostname advertised over `https`
+    /// when only a plain-`http` listener on a different address is actually
+    /// reachable. Turning this on trusts that the origin already reached is
+    /// the same deployment the session names; it is not a substitute for
+    /// verifying that out of band.
+    pub fn rebase_urls_to_origin(mut self, rebase: bool) -> Self {
+        self.rebase_urls_to_origin = rebase;
+        self
+    }
+
     /// Fetch the session object from `origin` (scheme + host + port) and
     /// return a ready client.
     pub fn connect(self, origin: &str, credentials: Credentials) -> Result<Client, Error> {
@@ -109,7 +131,8 @@ impl ClientBuilder {
             }
         };
 
-        let session_url = format!("{}/.well-known/jmap", origin.trim_end_matches('/'));
+        let origin = origin.trim_end_matches('/').to_string();
+        let session_url = format!("{origin}/.well-known/jmap");
         let mut client = Client {
             transport,
             authorization: credentials.authorization_header(),
@@ -117,6 +140,7 @@ impl ClientBuilder {
             session_url,
             session: None,
             next_call_id: AtomicU64::new(0),
+            rebase_origin: self.rebase_urls_to_origin.then_some(origin),
         };
         client.refresh_session()?;
         Ok(client)
@@ -130,6 +154,7 @@ pub struct Client {
     session_url: String,
     session: Option<Session>,
     next_call_id: AtomicU64,
+    rebase_origin: Option<String>,
 }
 
 impl std::fmt::Debug for Client {
@@ -162,7 +187,13 @@ impl Client {
     /// `sessionState` changes).
     pub fn refresh_session(&mut self) -> Result<(), Error> {
         let response = self.execute(HttpMethod::Get, &self.session_url.clone(), None)?;
-        let session: Session = serde_json::from_slice(&response.body)?;
+        let mut session: Session = serde_json::from_slice(&response.body)?;
+        if let Some(origin) = &self.rebase_origin {
+            session.api_url = crate::url::rebase_origin(&session.api_url, origin);
+            session.download_url = crate::url::rebase_origin(&session.download_url, origin);
+            session.upload_url = crate::url::rebase_origin(&session.upload_url, origin);
+            session.event_source_url = crate::url::rebase_origin(&session.event_source_url, origin);
+        }
         self.session = Some(session);
         Ok(())
     }
