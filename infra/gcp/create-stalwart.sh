@@ -60,9 +60,12 @@ cat > "$STARTUP" <<'EOF'
 set -eux
 apt-get update -q && apt-get install -y --no-install-recommends docker.io cron
 
-# Counting rule: how many packets have reached Stalwart's HTTP port. The
-# GCP firewall only admits the operator's IP, so any count movement is
-# genuine use. (Startup scripts run on every boot; guard against dupes.)
+# Activity signal: packets to Stalwart's published HTTP port. Docker DNATs
+# published-port traffic straight to the container (nat PREROUTING), bypassing
+# the filter INPUT chain — so the idle-watchdog below counts the nat DNAT rule,
+# NOT INPUT (an INPUT counter reads 0 forever and naps the VM mid-use). The GCP
+# firewall only admits the operator's IP, so any count movement is genuine use.
+# (Startup scripts run on every boot; guard against dupes.)
 iptables -C INPUT -p tcp --dport 8080 -j ACCEPT 2>/dev/null \
     || iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
 
@@ -73,7 +76,7 @@ cat > /usr/local/bin/idle-watchdog <<'WATCHDOG'
 STAMP=/run/stalwart-last-active
 COUNTS=/run/stalwart-pkt-count
 [ -f "$STAMP" ] || touch "$STAMP"
-pkts=$(iptables -nvxL INPUT | awk '/tcp dpt:8080/ {print $1; exit}')
+pkts=$(iptables -t nat -nvxL | awk '/tcp dpt:8080/ {print $1; exit}')
 prev=$(cat "$COUNTS" 2>/dev/null || echo -1)
 if [ -n "$(who)" ] || [ "$pkts" != "$prev" ]; then
     touch "$STAMP"
