@@ -8,9 +8,10 @@
 //! their own carrying a RECURRENCE-ID.
 
 use jmap_ical::{
-    ICalError, event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
-    maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
-    names_time_zone, prune_time_zones, sends_recurrence_override, unstateable_until,
+    ICalError, defines_time_zone, event_to_ical, ical_to_event, maps_alerts, maps_keyword,
+    maps_locations, maps_recurrence_override, maps_recurrence_rule, maps_time_zone,
+    maps_virtual_locations, names_time_zone, prune_time_zones, sends_recurrence_override,
+    unstateable_until,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -6420,6 +6421,39 @@ fn a_zone_is_sendable_when_something_says_what_it_is() {
         "W. Europe Standard Time",
         json!({"W. Europe Standard Time": custom_zone()}),
     )));
+}
+
+#[test]
+fn windows_time_zone_names_are_refused_as_unsendable_by_design() {
+    // Windows zone names (e.g. from Exchange/Outlook) neither conform to IANA
+    // zone identifier shape nor begin with a solidus as RFC 8984 §1.4.9 requires
+    // for custom identifiers. They are refused by maps_time_zone (unsendable-by-design),
+    // causing jmap_cal_sync to file the appointment floating rather than sending
+    // an invalid or dangling zone identifier to the server.
+    for windows_tz in [
+        "W. Europe Standard Time",
+        "Pacific Standard Time",
+        "Eastern Standard Time",
+        "GMT Standard Time",
+        "Tokyo Standard Time",
+        "Central European Standard Time",
+    ] {
+        assert!(
+            !names_time_zone(windows_tz),
+            "{windows_tz} should not be recognized as IANA name"
+        );
+
+        let event_without_defs = CalendarEvent {
+            time_zone: Some(windows_tz.to_owned()),
+            ..CalendarEvent::default()
+        };
+        assert!(!defines_time_zone(&event_without_defs, windows_tz));
+        assert!(!maps_time_zone(&event_without_defs));
+
+        let event_with_defs = defining(windows_tz, json!({windows_tz: custom_zone()}));
+        assert!(!defines_time_zone(&event_with_defs, windows_tz));
+        assert!(!maps_time_zone(&event_with_defs));
+    }
 }
 
 /// What a save sends is the definitions the event still refers to — not the
