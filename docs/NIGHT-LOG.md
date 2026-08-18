@@ -34780,3 +34780,24 @@ chain's one-type-per-session cadence. With that plus the OAuth2 issuer
 question (maintainer-gated, `docs/BACKLOG.md`), real-server readiness's
 remaining named gaps are down to just that one query test and the
 maintainer's OAuth2 call.
+
+## 2026-08-18 (claim) — Claiming a CalendarEvent/query live-server test
+
+Re-surveyed fresh: `docs/MILESTONES.md` still has M1–M10 all COMPLETE,
+`docs/BACKLOG.md` unchanged (open items are (B′)/(C) and the OAuth2
+issuer mismatch, all explicit maintainer-call/low-leverage). This is the
+one named gap the prior session's own closing note left open: the
+`CalendarEvent/query` equivalent of the `ContactCard/query` test just
+landed (`jmap-cal-sync::list_existing_sync` drives
+`CalendarEventQueryFilter::in_calendar`, `lib.rs:98`, exactly mirroring
+the address-book listing path) has zero live-server coverage, unlike
+`get`/`set`/`changes` on the same type.
+
+Claiming: extend
+`calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
+in `jmap-client/tests/live_server.rs` — right after the create step, call
+`Client::event_query(&account_id, CalendarEventQueryFilter::in_calendar(calendar_id))`
+and assert the new event's id is present; right after the destroy step,
+call it again and assert the id is absent. Same throwaway account
+(`agent-livewrite.net`/`agent1`) and gating as every write-path test in
+this file. Will update `docs/manual-test-live-server.md` to match.
