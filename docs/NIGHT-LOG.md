@@ -33983,3 +33983,42 @@ name via `ContactCard/get`, call `contact_update` with a `PatchObject`
 changing the name, confirm the new name via another `ContactCard/get`, then
 destroy. Mirrors the mailbox-rename test's shape exactly. Will update
 `docs/manual-test-live-server.md` to match.
+
+## 2026-08-18 — Delivered: a ContactCard/set update live-server test, and it passed
+
+- **`jmap-client/tests/live_server.rs`**: renamed
+  `contact_card_create_then_destroy_round_trips_through_the_real_api` to
+  `contact_card_create_update_then_destroy_round_trips_through_the_real_api`
+  and inserted an update step between create and destroy: after confirming
+  the created card's name via `ContactCard/get`, calls `contact_update` with
+  a `{"name/full": ...}` `PatchObject` to a second unique name, confirms via
+  another `ContactCard/get` that the new name comes back, then destroys it —
+  the same shape as the existing mailbox-rename test.
+- **`docs/manual-test-live-server.md`**: updated both the intro's write-test
+  list and the "what it worked means" section for the renamed test and its
+  new update step.
+- Reseeded `agent-livewrite.net`/`agent1` via `stw seed` (idempotent upsert;
+  previous session's password not recoverable by design, as with every prior
+  write-path session). `stalwart-cli` was still cached at
+  `/tmp/stalwart-cli-bin/stalwart-cli-x86_64-unknown-linux-gnu/` from a prior
+  session, so no re-download was needed this time — just putting that
+  directory on `PATH`, per the previous session's note.
+- **Result against the real, live Stalwart** (`$STALWART_URL` over the
+  internal VPC, `JMAP_LIVE_SERVER_REBASE_URLS=1`): all 9 tests in
+  `live_server.rs` pass, including the renamed/extended one —
+  `ContactCard/set` update round-trips a real name change against Stalwart's
+  own state handling, not just create/destroy. No client bug found.
+- Full gate: `cargo fmt --check` clean, `cargo clippy -p evolution-jmap-client
+  --all-targets --locked -- -D warnings` and the same with `--features
+  live-server` both clean, `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo test --locked`
+  (default-members) green, no failures. `cargo deny`/`reuse lint` still
+  unavailable on this VM; the only changed source file (`live_server.rs`)
+  already carries its SPDX header.
+
+Closes the contacts half of the "remaining unexercised corners" the prior
+session flagged. Still open for a future session: `event_update` and
+`email_update` (mark-as-read/flags) have no live-server coverage yet, and
+`send_email`/`submit_email` still need an SMTP-capable deployment (out of
+scope for this throwaway account). Left `agent-livewrite.net`/`agent1` in
+place, same reasoning as every prior write-path session.

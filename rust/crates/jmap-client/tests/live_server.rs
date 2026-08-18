@@ -310,13 +310,15 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
 
 /// The contacts capability's half of the write-path proof: `ContactCard/set`
 /// creates a card in the account's default address book, reads it back
-/// through `ContactCard/get`, then destroys it. Relies on Stalwart
+/// through `ContactCard/get`, renames it (`contact_update`'s `PatchObject`
+/// path — what `jmap-book-sync` sends whenever a user edits a contact),
+/// reads it back again, then destroys it. Relies on Stalwart
 /// auto-provisioning one default address book per account (confirmed by
 /// hand before this test was written) rather than creating one first — the
 /// same assumption the mailbox test makes about a default Inbox.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
-fn contact_card_create_then_destroy_round_trips_through_the_real_api() {
+fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
@@ -353,6 +355,25 @@ fn contact_card_create_then_destroy_round_trips_through_the_real_api() {
             .and_then(|name| name.full),
         Some(full_name),
         "the created card does not show up in ContactCard/get afterwards"
+    );
+
+    let renamed_full_name = format!("agent-livewrite-renamed-{}", unique_suffix());
+    client
+        .contact_update(&account_id, &id, json!({"name/full": renamed_full_name}))
+        .expect("ContactCard/set update failed against the real server");
+
+    let round_tripped_after_update = client
+        .contact_get(&account_id, std::slice::from_ref(&id))
+        .unwrap()
+        .list
+        .into_iter()
+        .next();
+    assert_eq!(
+        round_tripped_after_update
+            .and_then(|card| card.name)
+            .and_then(|name| name.full),
+        Some(renamed_full_name),
+        "the updated card does not show the new name in ContactCard/get afterwards"
     );
 
     client
