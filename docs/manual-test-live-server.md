@@ -187,6 +187,12 @@ in the invocation, worth failing loudly on.
   `/changes` window is reported as created only, and this checks that
   against Stalwart's own `/changes` rather than just the mock (the client
   itself already folds pages this way via `ChangeSet::classify`).
+  The contact test additionally checks `Client::contact_query` right after
+  the create and right after the destroy, filtered to the card's address
+  book (`ContactCardQueryFilter::in_address_book`) — the exact call
+  `jmap-book-sync::list_existing_sync` makes to enumerate an address book,
+  which had no live-server coverage from the `get`/`set`/`changes` checks
+  alone.
 - `email_import_update_then_destroy_round_trips_through_the_real_api` — the
   mail write path's other shape: uploads a small message's bytes via
   `Client::upload_blob`, imports it into the account's Inbox via
