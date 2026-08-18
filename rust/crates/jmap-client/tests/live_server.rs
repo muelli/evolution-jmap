@@ -63,7 +63,10 @@ use std::env;
 use jmap_client::{Client, Credentials};
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::contacts::ContactCard;
-use jmap_proto::mail::{EmailImport, Mailbox, keyword, role};
+use jmap_proto::mail::{
+    Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
+    keyword, role,
+};
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
 };
@@ -235,6 +238,29 @@ fn connect_for_write() -> Option<Client> {
             .rebase_urls_to_origin(rebase)
             .connect(&origin, Credentials::basic(user, password))
             .expect("could not fetch the session document for the write-test account"),
+    )
+}
+
+/// A second throwaway account, distinct from [`connect_for_write`]'s, that
+/// the send-email test delivers a message *to* — proof of actual intra-server
+/// delivery, not just that `EmailSubmission/set` was accepted. Same
+/// present-or-skip shape as `connect_for_write`; see
+/// `docs/manual-test-live-server.md`'s "send-email test" section for how to
+/// seed it (`infra/stalwart/stw seed`, same domain, a different local part).
+fn connect_recipient() -> Option<Client> {
+    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
+    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
+        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
+    );
+    let origin = env::var("JMAP_LIVE_SERVER_URL")
+        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
+    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+
+    Some(
+        Client::builder()
+            .rebase_urls_to_origin(rebase)
+            .connect(&origin, Credentials::basic(user, password))
+            .expect("could not fetch the session document for the recipient account"),
     )
 }
 
@@ -743,4 +769,146 @@ fn email_import_update_then_destroy_round_trips_through_the_real_api() {
         changes_after_destroy.destroyed.contains(&id),
         "Email/changes since before the destroy does not list the message as destroyed"
     );
+}
+
+/// `Client::send_email` — draft creation chained to `EmailSubmission/set` —
+/// against a real server's own submission and delivery machinery, not just
+/// `jmap-mockd`'s outbox stub (`jmap-client/tests/mail_send.rs`). Every prior
+/// live-server session left this out with the same note: "no SMTP path
+/// configured for this throwaway account". That is true of *outbound* relay
+/// to the public Internet, which a throwaway domain with no MX/DKIM cannot
+/// do — but says nothing about *intra-server* delivery between two accounts
+/// on the same deployment, which needs no outbound relay at all. This test
+/// sends from [`connect_for_write`]'s account to [`connect_recipient`]'s
+/// (both on `agent-livewrite.net`) and polls the recipient's `Email/query`
+/// for the message actually landing in its Inbox — proof of delivery, not
+/// merely that the server accepted the submission.
+///
+/// Skipped, not failed, when `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD`
+/// are not set, same as every other write-path test's environment gate.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn send_email_delivers_to_a_second_account_on_the_real_server() {
+    let Some(sender) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the send-email test");
+        return;
+    };
+    let Some(recipient) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the send-email test"
+        );
+        return;
+    };
+
+    let sender_email = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+
+    let sender_account_id = sender
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+    let drafts_id = sender
+        .mailbox_get(&sender_account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.role.as_deref() == Some(role::DRAFTS))
+        .expect("the write-test account needs a Drafts mailbox")
+        .id
+        .expect("the server named the Drafts mailbox");
+    let identity_id = sender
+        .identities(&sender_account_id)
+        .unwrap()
+        .into_iter()
+        .find(|identity| identity.email == sender_email)
+        .expect("the write-test account needs a sending identity for its own address")
+        .id
+        .expect("the server named the identity");
+
+    let subject = format!("agent-livewrite-send-{}", unique_suffix());
+    let draft = Email {
+        mailbox_ids: Some([(drafts_id, true)].into()),
+        keywords: Some([(keyword::DRAFT.to_owned(), true)].into()),
+        from: Some(vec![EmailAddress::new(None, &sender_email)]),
+        to: Some(vec![EmailAddress::new(None, &recipient_email)]),
+        subject: Some(subject.clone()),
+        body_values: Some(
+            [(
+                "1".to_owned(),
+                EmailBodyValue::new("Delivered, not just accepted."),
+            )]
+            .into(),
+        ),
+        text_body: Some(vec![EmailBodyPart {
+            part_id: Some("1".to_owned()),
+            content_type: Some("text/plain".to_owned()),
+            ..EmailBodyPart::default()
+        }]),
+        ..Email::default()
+    };
+
+    let (created_email, submission) = sender
+        .send_email(&sender_account_id, &draft, &identity_id, None)
+        .expect("send_email failed against the real server");
+    assert!(
+        submission.id.is_some(),
+        "the server did not accept the submission"
+    );
+
+    let recipient_account_id = recipient
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the recipient account needs the mail capability");
+    let recipient_inbox_id = recipient
+        .mailbox_get(&recipient_account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.role.as_deref() == Some(role::INBOX))
+        .expect("the recipient account needs an Inbox")
+        .id
+        .expect("the server named the recipient's Inbox");
+
+    // Local delivery is not necessarily synchronous with the submission
+    // response, so poll rather than assume it has already landed.
+    let mut delivered_id = None;
+    for _ in 0..20 {
+        let mut filter = EmailQueryFilter::in_mailbox(recipient_inbox_id.clone());
+        filter.subject = Some(subject.clone());
+        let found = recipient
+            .email_query(&recipient_account_id, filter, None, Some(1), 0)
+            .expect("Email/query failed against the real server");
+        if let Some(id) = found.ids.into_iter().next() {
+            delivered_id = Some(id);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    let delivered_id = delivered_id.unwrap_or_else(|| {
+        panic!("the message never showed up in the recipient's Inbox after 20s of polling")
+    });
+
+    let delivered = recipient
+        .email_get(
+            &recipient_account_id,
+            std::slice::from_ref(&delivered_id),
+            None,
+        )
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the delivered email does not show up in Email/get afterwards");
+    assert_eq!(
+        delivered.subject,
+        Some(subject),
+        "the delivered email's subject does not match what was sent"
+    );
+
+    // Clean up both sides: the draft-turned-sent copy in the sender's
+    // account, and the delivered copy in the recipient's.
+    let sent_id = created_email.id.expect("the server named the sent email");
+    sender
+        .email_destroy(&sender_account_id, &sent_id)
+        .expect("Email/set destroy failed for the sender's copy");
+    recipient
+        .email_destroy(&recipient_account_id, &delivered_id)
+        .expect("Email/set destroy failed for the recipient's copy");
 }

@@ -114,6 +114,16 @@ pub struct ServerState {
     /// nothing routes to). `None` advertises the real origin, matching every
     /// other test.
     pub advertise_origin: Option<String>,
+    /// Omit `identityId`/`emailId` from a created `EmailSubmission`, as
+    /// [`crate::MockServerBuilder::terse_submission_create`] asked — RFC 8620
+    /// §5.3 says the `created` map need only contain properties "that were
+    /// not sent by the client", and a real server (Stalwart, confirmed
+    /// against the live deployment) takes this literally: since the client
+    /// supplies `identityId`/`emailId` itself when creating a submission,
+    /// neither is server-set and a spec-following server may leave both out.
+    /// `false` echoes them back in full, matching every other test and this
+    /// project's own prior assumption before that finding.
+    pub terse_submission_create: bool,
 }
 
 impl ServerState {
@@ -133,6 +143,7 @@ impl ServerState {
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
             advertise_origin: None,
+            terse_submission_create: false,
         }
     }
 
