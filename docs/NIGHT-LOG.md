@@ -33620,3 +33620,36 @@ This raises the `405`-vs-hang finding above to something worth a line in
 ROADMAP.md's real-server-readiness note, since it changes the risk framing
 (silent cross-origin leakage, not just unreachability) — added there
 alongside marking this rebase option as the answer to the apiUrl blocker.
+
+## 2026-08-18 (claim) — Claiming a live-server write-path test
+
+Surveyed the board first: `docs/MILESTONES.md` now has M1–M10 all tagged
+COMPLETE (M7/M9/M10 landed in prior sessions, confirmed by their own
+tagging commits), the calcard and translatable-strings standing directives
+are both done (`po/POTFILES.in`'s own consistency test —
+`jmap-backend-core/tests/potfiles.rs` — passes; `calcard` is a dependency
+of `jmap-ical`/`jmap-vcard`), and `docs/BACKLOG.md`'s items are explicitly
+parked pending the priority phase. So the roadmap's own "CURRENT PRIORITY"
+list is, as of this session's start, entirely closed out — the redirect-auth
+and apiUrl-rebase fixes plus their live confirmation (previous two entries)
+were the last open items in it.
+
+One real gap remains inside "real-server readiness" itself:
+`jmap-client/tests/live_server.rs` states outright, in its own doc comment,
+that it deliberately writes nothing — every test there is read-only,
+because the only account available to prior sessions was the operator's
+shared `admin@example.com`, not safe to mutate. This session's environment
+brief changes that: it explicitly grants creating an own throwaway
+domain/account on the live Stalwart for exactly this purpose. That closes
+the gap the file's own comment names, so it is in scope, not backlog
+polish.
+
+Claiming: add one live-server test that exercises the **write** path —
+`mailbox_create` then `mailbox_destroy` — against a dedicated `agent-*`
+test account seeded on the live Stalwart via `infra/stalwart/stw seed`
+(cached `stalwart-cli` binary at `/tmp/stalwart-cli-bin/...`, found already
+present from a prior session's download), leaving every pre-existing
+account (`alice@example.com`, `admin@example.com`) untouched. If it passes,
+this is the first genuine round-trip proof of `jmap-client`'s mutating
+JMAP calls against a real, non-mock server. If it fails, that is exactly
+the kind of finding this track exists to surface.
