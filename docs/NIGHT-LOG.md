@@ -36952,3 +36952,75 @@ of the standing disk-fills-from-cargo-target wall). Scoping to
 `jmap-client` (`evolution-jmap-client`) only, same as the proto pass.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track A2, mutation testing of `jmap-client` (completes A2)
+
+Continued the claimed increment. `cargo mutants -p evolution-jmap-client
+--baseline run` started from **64 mutants, 28 unviable, 13 missed** (no
+baseline-build bug this time — jmap-client has no `repo_root()`-style
+ancestor-counting helper). Triaged and killed 11 of the 13 with new tests:
+- `changes.rs`'s `ChangeSet::is_empty` (previously exercised only
+  indirectly): `tests/changes.rs` gained
+  `change_set_is_empty_iff_all_three_sets_are`, covering the empty case and
+  each of the three sets non-empty alone — kills the `true`/`false`
+  constant-replacement mutants and both `&&`→`||` mutants (all four
+  needed a case where exactly one set is non-empty to distinguish AND from
+  OR).
+- `changes.rs`'s `ChangeSet::classify`'s "updated only" arm
+  (`(false, false) if disposition.updated`) had no test reaching it — every
+  existing scenario's edited ids were also created or destroyed inside the
+  same window. Added
+  `a_card_from_before_the_window_edited_inside_it_classifies_as_updated`
+  in `tests/changes.rs`: create a card, capture state, update it, assert
+  the change set reports it `updated` and neither `created` nor
+  `destroyed`.
+- `client.rs`'s `rebase_urls_from_env` (env-var truthy/falsy parsing,
+  previously untested): new `tests/rebase_env.rs` — its own process
+  (`tests/*.rs` files each get a fresh binary) since the function reads
+  real process environment and no other test may race it. Covers unset,
+  every documented truthy spelling (`1`, `true`, `TRUE`, `True`) and falsy
+  one (`0`, `false`, `yes`, empty string) — kills the constant-`false`,
+  `||`→`&&`, and `==`→`!=` mutants together.
+- `client.rs`'s `ClientBuilder::timeout` setter (previously untested):
+  `client.rs`'s own `#[cfg(test)]` module (the field is private, so only
+  an in-crate test can see it) gained `timeout_replaces_the_default`,
+  asserting the builder keeps the passed value rather than silently
+  falling back to `Default::default()`.
+- `client.rs`'s `Debug for Client` impl (previously untested): new
+  `client_debug_names_the_session_url_and_auth_state` in
+  `tests/plumbing.rs`, asserting the formatted output names
+  `session_url` and `authenticated: true` — kills the
+  `Ok(Default::default())` mutant (empty output has neither substring).
+- `client.rs:273`'s `api_call`'s size-limit check (`>` vs `>=`, previously
+  only tested strictly-over and strictly-under): new
+  `a_request_exactly_at_the_limit_is_sent` in `tests/request_size.rs`
+  builds a request whose exact byte length matches the server's stated
+  `maxSizeRequest` and asserts it is sent, not refused — distinguishes "at
+  the limit" from "over the limit", same reasoning as the F15 audit
+  finding's own boundary test.
+
+Re-ran after each batch: 13 → 4 → 2 missed, all green with no test
+weakened. **Final: 64 mutants, 34 caught, 28 unviable, 2 missed** — both
+inspected and confirmed **equivalent mutants**, not gaps:
+- `changes.rs:165:35` (`classify`'s `if disposition.updated` guard replaced
+  with literal `true`): every entry in `classify`'s `by_id` map is inserted
+  via `.or_default()` from exactly one of the three `created`/`updated`/
+  `destroyed` response loops, so an entry reaching the `(false, false)`
+  arm (neither created nor destroyed) can only have gotten there through
+  the `updated` loop — `disposition.updated` is therefore always `true`
+  whenever that arm's other two conditions hold. No input can make the
+  real guard and the literal `true` disagree.
+- `client.rs:205:9` (`Client::builder` body `ClientBuilder::default()`
+  replaced with `Default::default()`): `ClientBuilder` derives/implements
+  `Default` and the function's return type is already `ClientBuilder`, so
+  type inference resolves `Default::default()` to the exact same call —
+  byte-identical output on every input, deterministically. No behavioural
+  difference exists to test for.
+
+Track A2 is now complete for both named crates (`jmap-proto` in `d5cf563`,
+`jmap-client` here). Housekeeping: deleted `rust/mutants.out.old/`, a
+stray copy of an earlier run's output this session left behind mid-work
+(untracked, not meant to persist — `rust/mutants.out/` itself is already
+`.gitignore`d from the `jmap-proto` session). Gate before pushing:
+`cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
+and `cargo test --locked` (default-members) all clean/green.

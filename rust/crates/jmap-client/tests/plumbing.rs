@@ -89,6 +89,22 @@ fn auth_bearer_ok() {
 }
 
 #[test]
+fn client_debug_names_the_session_url_and_auth_state() {
+    let server = MockServer::builder().basic_auth("alice", "sekret").start();
+    let client = Client::connect(server.origin(), Credentials::basic("alice", "sekret")).unwrap();
+
+    let debug = format!("{client:?}");
+    assert!(
+        debug.contains("session_url"),
+        "expected a session_url field, got {debug:?}"
+    );
+    assert!(
+        debug.contains("authenticated: true"),
+        "expected authenticated: true, got {debug:?}"
+    );
+}
+
+#[test]
 fn unknown_method_returns_error() {
     let server = MockServer::builder().start();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
