@@ -229,4 +229,23 @@ Running record of headless polish increments on the `antigravity` branch.
   3. In `jmap-vcard`, singleton properties (`FN`, `N`) deterministically pick the first representation in document order for JSContact `Name`, while all multi-valued properties (`NOTE`, `TITLE`, `ROLE`, `ORG`, `ADR`, `NICKNAME`, `URL`, `EMAIL`, `TEL`) preserve all language alternates as distinct keyed entries. Server-side `localizations` and `preferredLanguages` ride in `extra` on the JMAP layer and are left untouched during server sync operations.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — PREF primary selection, tie-breaking & address PREF fidelity (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 4. `PREF` → primary selection: verify that among multiple `EMAIL`/`TEL`/`ADR` the `PREF`-lowest becomes EDS's primary field, and that the ordering round-trips; test the tie-break and the no-`PREF`-present fallback.
+- **Changes:**
+  - Adapted `card_to_vcard` in `rust/crates/jmap-vcard/src/contact.rs` to sort `emails`, `phones`, and `addresses` by `(pref, key)` so that lowest `pref` entries are emitted first in document order, ensuring they populate EDS's primary positions (`E_CONTACT_EMAIL_1`, `E_CONTACT_PHONE_PRIMARY` / `E_CONTACT_PHONE_BUSINESS`, `E_CONTACT_ADDRESS_HOME` / `_WORK`), while deterministically breaking ties by map `key` and preserving deterministic key ordering when no `pref` is present.
+  - Extended address mapping to support `TYPE=PREF` in both directions: `card_to_vcard` emits `TYPE=PREF` on `ADR` and `LABEL` lines when `address.extra` contains `pref`, and `read_address` / `vcard_to_card` extracts `TYPE=PREF` into `address.extra["pref"] = 1`.
+  - Added helper `address_pref` extracting preference ranks from `Address.extra`.
+  - Updated `arb_address` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to fuzz optional `pref` in `extra`.
+  - Added comprehensive TDD suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `email_pref_ordering_primary_selection_and_tie_breaking`: tests ranking order (`pref: 1` < `pref: 2` < `pref: 10` < `pref: None`), tie-breaking by key (`"e_alpha" < "e_beta"`), no-`PREF`-present fallback, and roundtrip stability.
+    - `phone_pref_ordering_primary_selection_and_slotting`: tests phone ranking order, primary work slot selection, tie-breaking by key, and roundtrip stability.
+    - `address_pref_ordering_and_primary_selection_with_label_pairing`: tests address ranking order, `ADR` and `LABEL` `TYPE=PREF` emission, `read_address` extraction into `extra["pref"]`, tie-breaking by key, and roundtrip stability.
+    - `inbound_vcard_pref_parameter_variations_and_reordering`: tests inbound vCards with secondary `TYPE=PREF` lines, confirming parser extracts `pref: 1` and emitter promotes the preferred entry to line 1 (`E_CONTACT_EMAIL_1`).
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `calcard` correctly groups and writes `TYPE=PREF` alongside context and feature parameters across `EMAIL`, `TEL`, and `ADR`/`LABEL` entries.
+  2. vCard 3.0 represents preference as a boolean flag (`TYPE=PREF`) rather than an integer rank (RFC 2426 §3.3.2, §3.2.1, §3.4.2). When reading back from vCard 3.0, any entry with `TYPE=PREF` flattens to `pref: 1` (or `extra["pref"] = 1`), while server synchronization (`jmap-book-sync`'s `PatchObject`) preserves original preference integer ranks (e.g. `pref: 30`) without destructive renumbering.
+  3. Primary field resolution in EDS: `EMAIL` primary selection in Evolution is positional (`E_CONTACT_EMAIL_1` is the first `EMAIL` line in the vCard). Emitting `emails`, `phones`, and `addresses` sorted by `(pref.unwrap_or(u32::MAX), key)` ensures the most preferred entry lands in Evolution's primary field while maintaining deterministic, lossless roundtrips.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
 
