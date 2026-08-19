@@ -190,12 +190,17 @@ impl Session {
     /// through the environment the way `EDS_ADDRESS_BOOK_MODULES` and its
     /// siblings are.
     ///
-    /// Also sets `LD_LIBRARY_PATH` to `/usr/lib/evolution`: the module's
-    /// transitive `libevolution-mail.so` dependency lives there, off the
-    /// default loader path, and `dlopen`ing the module later does not inherit
-    /// `evolution-shell-3.0`'s own `-Wl,-R` rpath the way linking against it
-    /// directly would — found by the 307th session's hand-driven spike
-    /// (`docs/NIGHT-LOG.md`) before this method existed.
+    /// No `LD_LIBRARY_PATH` juggling needed here: `jmap-config-module`'s own
+    /// `build.rs` records `/usr/lib/evolution` in the built module's
+    /// `RUNPATH`, the same way every real Evolution module has it, so
+    /// `dlopen`ing the module resolves its transitive `libevolution-mail.so`
+    /// dependency on its own. That was not always so: the 307th session's
+    /// hand-driven spike (`docs/NIGHT-LOG.md`) found the module missing that
+    /// `RUNPATH` and worked around it here with `LD_LIBRARY_PATH`, without
+    /// tracing why the `RUNPATH` itself was absent; a later session found and
+    /// fixed the actual cause (see `docs/NIGHT-LOG.md`'s "CURRENT PRIORITY
+    /// item 2(a)" entry) and removed the workaround, since a passing test
+    /// that still carried it would not prove the fix.
     pub fn stage_config_lookup_module(&mut self, built_module: &Path) -> PathBuf {
         let directory = self.root.join("config-lookup-module");
         fs::create_dir_all(&directory).expect("create the config-lookup module directory");
@@ -206,8 +211,6 @@ impl Session {
                 built_module.display()
             )
         });
-        self.environment
-            .insert("LD_LIBRARY_PATH".into(), "/usr/lib/evolution".into());
         directory
     }
 
