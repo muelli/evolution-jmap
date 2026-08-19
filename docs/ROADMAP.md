@@ -478,6 +478,48 @@ they close, prioritise in this order:
      real Fastmail API token is the concrete test, and finally proves item 5's
      SRV chain end-to-end); and a wrong or missing token re-prompts rather
      than looping or silently sending nothing.
+7. **Collection-backend discovery + auth-retry loop against a real provider —
+   CLAIMABLE NOW (operator-found 2026-08-19).** Huge milestone first: a real
+   **Fastmail API-token account now connects in real Evolution** — SRV →
+   `api.fastmail.com`, `Bearer`, the receiving mail store loads the **Inbox and
+   reads messages** (operator-verified). The client/SRV/Bearer/token path is
+   fully proven: a bare `ClientBuilder::connect_domain` probe with the real token
+   returned **200**, and Camel `get_message` succeeds. The auth-method
+   propagation fix (`e21f97d`) got the receiving store working. **Two gaps
+   remain, both in the collection backend** (`jmap-backend-collection` /
+   `module-jmap-backend`, which runs in **`evolution-source-registry`, NOT the
+   evolution process** — so `CAMEL_DEBUG` on evolution does not trace it):
+   - **(a) Contacts and Calendar are never created.** The account's children are
+     Collection + Mail Account + Mail Transport + identity only — no
+     `[Address Book]` / `[Calendar]` sources — even though the collection source
+     carries `[Authentication] Method=bearer` and the mail store on the *same*
+     account authenticates fine. The collection backend's discovery/populate is
+     not creating the book/cal children.
+   - **(b) A ~6-second auth-retry loop.** `gnome-keyring` logs `asked to register
+     item …/login/N, but it's already registered` every ~6s, and Evolution
+     re-prompts "enter password for muelli@fastmail.com (host: fastmail.com)"
+     over and over. The login keyring is **unlocked** (`Locked=false`), so this
+     is not a keyring problem — it is a backend that never authenticates
+     successfully, so EDS keeps re-prompting and re-storing. Almost certainly the
+     *same* collection-backend connect as (a): a connect that never succeeds
+     neither discovers book/cal nor stops re-prompting.
+   **Likely locus:** the collection backend's `authenticate`/connect/populate
+   path. Does its `authenticate` vfunc actually receive the credential
+   (`E_SOURCE_CREDENTIAL_PASSWORD` = the API token) and route it through
+   `source::connect` → `connect_target` (SRV) → `source_uses_api_token` →
+   `bearer_credentials`, the way `jmap-mail`'s working store does? Diff the two
+   connect paths. A connect returning the wrong `ESourceAuthenticationResult`
+   (never ACCEPTED, or REJECTED on a non-auth failure) is exactly what produces
+   the re-prompt loop; a discovery step that never runs because that connect
+   never succeeds is what leaves book/cal uncreated.
+   **Trace:** the collection backend uses `log_critical`; instrument its
+   authenticate/connect/discover, restart `evolution-source-registry` with stderr
+   captured, reproduce once. **Cannot be verified headlessly** — needs a real
+   Fastmail **API token** (not an app password — Fastmail app passwords are
+   IMAP/CalDAV only, they 401 JMAP) in real Evolution; scaffold the fix, operator
+   confirms book/cal appear and the prompt loop stops. Reasonable to escalate
+   (EDS collection-backend + credentials machinery). Not the client, SRV, token,
+   or mail store — those are proven; keep the fix inside the collection backend.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
