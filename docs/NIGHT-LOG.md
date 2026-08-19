@@ -37694,3 +37694,49 @@ which is a separate concern from the 404 this closes. The expected change is
 that session discovery now goes to `api.fastmail.com` instead of 404ing at
 `fastmail.com`, and that "Look Up Account Details" finds JMAP instead of
 losing to the generic ISPDB autoconfig.
+
+## 2026-08-19 (claim) — Claiming Track A6 Pattern E: consolidate `fail`/`fail_bool`/`fail_invalid`
+
+Fresh survey: CURRENT PRIORITY item 5 (SRV `Resolver`) landed at `aa711bf`
+just ahead of this session — its code side is complete, and the only thing
+left on the whole CURRENT PRIORITY list is operator/maintainer
+confirmation (Fastmail end-to-end, OAuth2-on-a-TLS-proper-deployment,
+deliberately deferred). M1–M10 and CALCARD are all `COMPLETE`. Walked
+Round 2: Track D1's remaining piece (`create_resource_sync`/
+`delete_resource_sync` vtable wiring) and Track E's remaining piece
+(`ECalBackend get_free_busy_sync` + marshaller) are both GObject-vtable FFI,
+escalation-worthy per the roadmap's own words — not attempting either on
+Sonnet. Track A5 (FFI soundness audit) is explicitly flagged
+escalation-worthy in the roadmap text itself. Track B1, C2's third-party
+notices, and C4 are NEEDS-DECISION. Track F (newer-Evolution/EDS
+portability spike) was claimed at `81dac75` (2026-08-19 08:24:53Z) — under
+an hour before this survey, so a live claim, not an expired lock (the
+deadlock threshold is 24h); leaving it untouched rather than claiming out
+from under a concurrent session.
+
+That leaves `docs/UNSAFE-AUDIT.md`'s own "Prioritized follow-up list" item
+5, Pattern E's still-open half: the generic `fail`/`fail_bool` sentinel-
+return wrapper around `set_raw_gerror`, independently reimplemented in
+`jmap-mail/src/{manage,synchronize,refresh,append,send,subscribe,folders,
+transfer}.rs` (6 plain `gboolean` copies, plus `manage.rs`/`folders.rs`'s
+generic `*mut T` copies) and `jmap-backend-book`/`jmap-backend-cal`'s
+`ops.rs` (`fail`/`fail_invalid` pairs over `SyncError`). The audit already
+did the research (confirmed by reading each site directly this session,
+not just trusting the doc): every copy is the same three-line shape —
+map the failure to a `*mut GError`, call `set_raw_gerror`, return a fixed
+sentinel — and the previously-flagged obstacle ("~10 call sites return
+three different sentinel shapes... needs a real design") resolves to a
+generic `fail<E>(error, failure: &E, to_gerror: impl FnOnce(&E) -> *mut
+GError) -> T` with `T` inferred per call site (a pointer type defaults to
+`ptr::null_mut()`, `gboolean` to `GFALSE`) — the per-site `to_gerror`
+mapping (already nontrivial and staying that way: `StoreError::to_gerror`,
+the book/cal `SyncError`-specific `to_gerror` free functions) is passed in
+as the closure argument rather than baked in, so no behavioural mapping
+changes. `service.rs`'s `CamelAuthenticationResult`-returning
+`fail_disconnected`/`fail_internal` are NOT in scope — the audit's own list
+never named them, and their sentinel depends on the mapped *value*, not
+just its type, which this shape doesn't try to cover. Pure mechanical
+consolidation, no `unsafe`/FFI authoring (the bodies already exist,
+unchanged); every touched crate's existing test suite is the regression
+net, not a red-test-first exercise (there is no new behaviour to test
+red-first for a refactor that changes no mapping). Claiming this now.
