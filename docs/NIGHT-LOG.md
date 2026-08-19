@@ -38595,3 +38595,105 @@ unwired would connect contacts/calendars over Bearer while mail failed
 quietly; and a third `jmap-config` combo entry. TDD against `jmap-mockd`
 (already has `auth_bearer_ok`) and against real `CamelSettings`/`ESource`
 objects, mirroring `tests/oauth2.rs` in both crates.
+
+## 2026-08-19 — Delivered: CURRENT PRIORITY item 6, API-token (Bearer) auth method
+
+Code side of item 6 lands; pending operator verification of the combo itself
+(GTK, needs a real display this VM lacks).
+
+**What changed.** A third authentication method, "API Token", alongside
+Password and OAuth 2.0 — for a Bearer-token JMAP provider (Fastmail's
+concrete case) with no OAuth 2.0 consent flow to discover. `jmap_backend_core::
+api_token` (`API_TOKEN_METHOD = "bearer"`, `method_is_api_token`,
+`source_uses_api_token`) mirrors `oauth2.rs`'s shape exactly, and feeds a
+third branch in `connect_with`'s credential resolution
+(`bearer_credentials`): a stored secret is sent as `Credentials::Bearer`, an
+absent one is `CredentialsRequired` (prompt first, send nothing). `jmap-config`'s
+`AUTH_CHOICES` gained the entry using the *same* shared constant rather than a
+second string literal, so the combo id and the connect-path check structurally
+cannot drift apart the way two independent `"bearer"` literals could.
+
+**The assumption the roadmap flagged, verified rather than trusted.** The plan
+depends on an unregistered `[Authentication] Method` falling through to EDS's
+ordinary password prompt rather than silently doing nothing. Read rather than
+assumed, against the installed EDS 3.52.4 source
+(`/tmp/evolution-data-server-3.52.4`, matches the installed `3.52.3-0ubuntu1.2`
+package close enough for this question):
+`source_credential_provider_ref_impl_for_source`
+(`e-source-credentials-provider.c`) walks every *registered* provider impl's
+`can_process` first — today that is only the OAuth2 impl, whose own
+`can_process` (`e-source-credentials-provider-impl-oauth2.c`) is
+`e_oauth2_services_find(source) != NULL`, true only for `"OAuth2"` or a
+registered service's own name — and falls back to `impl_password`
+unconditionally when nothing in the list matched, because
+`e_source_credentials_provider_impl_password_can_process` always answers TRUE
+("It can process any source by default", read verbatim from the source). So
+`"bearer"` matches nothing in the registered list and reaches the password
+impl: prompted, looked up, and stored through the ordinary
+`E_SOURCE_CREDENTIAL_PASSWORD` machinery, exactly as `bearer_credentials`
+assumes. No new `ESourceCredentialsProviderImpl` needed.
+
+**Wired on the Camel/mail side too, which the roadmap item's own text did not
+name but which correctness requires.** `jmap-backend-collection/src/
+child_source.rs` propagates the collection's `[Authentication] Method` string
+verbatim to every child source it writes, mail included — so an account that
+picked "API Token" would otherwise have contacts and calendars connect over
+Bearer while mail silently sent Basic with an empty password (or nothing at
+all, since a JMAP account names no Camel-visible user for this method).
+`jmap_mail::api_token::uses_api_token` mirrors `jmap-mail::oauth2::uses_oauth2`
+off the same `CamelNetworkSettings:auth-mechanism` field `ESourceCamel` binds
+`[Authentication] Method` to, and `service::attempt` gained the matching third
+branch, reading the same `camel_service_get_password` slot Basic reads and
+sending it as Bearer via a new `jmap_mail::connect::bearer_credentials` (the
+Camel-side sibling of `password_credentials`: no user-name half to a token, so
+an unprompted account sends nothing and lets the server's 401 become the
+retry prompt, exactly as `password_credentials` does today).
+
+**TDD.** `jmap-backend-core/tests/api_token.rs` mirrors `tests/oauth2.rs` (the
+literal, the other methods including `"OAuth2"` itself, the source reader
+including the absent-extension case). `connect.rs`'s own `#[cfg(test)]` module
+gained a case for `bearer_credentials`'s two branches. The most useful new
+coverage is two end-to-end cases in `jmap-backend-book/tests/connect.rs`
+through `connect::connect` with a *real* `ESource` (`[Authentication] Method`
+set to the literal, a real `ENamedParameters` carrying the token under
+`E_SOURCE_CREDENTIAL_PASSWORD`) against `jmap-mock`'s existing
+`bearer_token()` mode — proving the whole path from a real source down to the
+wire, mirroring how `connecting_from_a_source_opens_the_default_address_book_
+and_reports_accepted` proves the password path, not just the pure functions in
+isolation — plus the no-stored-secret prompt case. `jmap-mail/tests/
+api_token.rs` mirrors `jmap-mail/tests/oauth2.rs` against a real
+`CamelSettings`. `check_complete` needed no change, as the roadmap scoped it:
+the token, like the password, is prompted at connect rather than typed on the
+page.
+
+**Gate, and one environment finding logged rather than worked around.**
+`cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+(default-members) and the seven-crate EDS-gated clippy both clean; `cargo test
+--locked` green. The combined seven-crate `cargo test -p a -p b -p c ...`
+invocation hung indefinitely partway through — every test in
+`jmap-backend-collection`'s `delete_resource.rs` stuck at "running" for
+several minutes with no further output, a crate this change never touches.
+Stashed the change and ran that exact test file alone against unmodified
+`master`: 8/8 pass in 0.06s, no hang. So the hang is this VM's resource
+contention from running many EDS test binaries concurrently in one `cargo
+test` invocation (GIO file-monitoring / registry object churn across parallel
+processes is the likely culprit, not confirmed further), not a regression from
+this session's code. Ran the seven crates one `cargo test -p <crate>`
+invocation at a time instead, each well under a minute: all seven green,
+0 failed. Worth a note for future sessions hitting the same "gate before
+push" instruction — prefer per-crate invocations for the EDS-gated set on
+this VM rather than one combined command. `po/evolution-jmap.pot` regenerated
+for the one new marked string, "API Token" (`po/POTFILES.in` already listed
+`jmap-config/src/backend.rs`, so only `po/extract.sh` was needed).
+
+**NEEDS HUMAN VERIFICATION IN REAL EVOLUTION.** `insert_widgets` builds the
+combo box, and GTK 3 will not construct a widget without a display connection
+this VM does not have — the same limitation M7's own setup UI has always had.
+What to check in the VM: the Authentication combo on the JMAP server settings
+page offers "API Token" as a third choice; picking it and connecting prompts
+for a token the ordinary password-prompt way (not the OAuth 2.0 consent
+browser); a real Fastmail API token (Settings → API tokens, scoped
+mail/contacts/calendars) then connects mail, contacts and calendars all three
+— which is also the operator confirmation item 5's SRV chain has been waiting
+on; and a wrong or missing token re-prompts rather than looping silently or
+sending an empty `Authorization: Bearer` header.

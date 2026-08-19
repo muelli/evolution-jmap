@@ -349,6 +349,65 @@ they close, prioritise in this order:
    calendars) connects end-to-end, which finally proves the item-5 SRV chain
    against a real provider. Does NOT touch the autodiscovery-only OAuth decision
    (#1 below) — this is a separate manual method, not OAuth client registration.
+   - **DONE 2026-08-19 (code side; pending operator verification) —** a third
+     `jmap_backend_core::api_token` module (`API_TOKEN_METHOD = "bearer"`,
+     `method_is_api_token`, `source_uses_api_token`, mirroring `oauth2.rs`'s
+     shape) feeds a third branch in `connect_with`'s credential resolution
+     (`bearer_credentials`), and `jmap-config`'s `AUTH_CHOICES` gained an
+     "API Token" entry using the same shared constant, so the combo id and the
+     connect-path check can never drift apart. **Verified against the EDS
+     3.52.4 source rather than assumed, as the roadmap text asked**:
+     `source_credential_provider_ref_impl_for_source`
+     (`e-source-credentials-provider.c`) tries every *registered* impl's
+     `can_process` first (the OAuth2 impl's checks `e_oauth2_services_find`,
+     which only matches `"OAuth2"` or a registered service's own name) and
+     falls back to the always-`can_process=TRUE` password impl when none
+     matched — so an unregistered method string like `"bearer"` reaches the
+     ordinary password prompt/lookup/storage with no new provider impl
+     needed, exactly as assumed.
+     **Also wired on the Camel/mail side**, not named in this item's own text
+     but necessary for correctness: `jmap-backend-collection/src/
+     child_source.rs` propagates the collection's `[Authentication] Method`
+     string verbatim to every child source including the mail account, so an
+     account picking "API Token" would otherwise connect contacts/calendars
+     over Bearer while mail silently sent Basic with an empty password (or
+     nothing). `jmap_mail::api_token::uses_api_token` mirrors `oauth2.rs`'s
+     `uses_oauth2` off the same `CamelNetworkSettings:auth-mechanism` field,
+     and `service::attempt` gained the matching third branch
+     (`bearer_credentials`).
+     TDD: `jmap-backend-core/tests/api_token.rs` (the literal, the other
+     methods, the source reader — mirrors `tests/oauth2.rs`);
+     `jmap-backend-core/src/connect.rs`'s own `#[cfg(test)]` module for
+     `bearer_credentials`'s two cases; `jmap-backend-book/tests/connect.rs`
+     gained two end-to-end cases through `connect::connect` with a real
+     `ESource`/`ENamedParameters` against `jmap-mock`'s existing
+     `bearer_token()` mode — a stored secret sent as Bearer, and no stored
+     secret asking for one before connecting — proving the whole path from a
+     real `[Authentication] Method` down to the wire, not just the pure
+     functions; `jmap-mail/tests/api_token.rs` mirrors
+     `jmap-mail/tests/oauth2.rs` against a real `CamelSettings`. `check_complete`
+     needed no change, as scoped. `po/evolution-jmap.pot` regenerated for the
+     one new marked string ("API Token"). Full gate green: `cargo fmt --check`;
+     `cargo clippy --all-targets --locked -- -D warnings` (default-members) and
+     the seven-crate EDS-gated clippy both clean; `cargo test --locked` and the
+     seven-crate suite both green (run per-crate after the combined
+     multi-package `cargo test` invocation hung indefinitely in
+     `jmap-backend-collection`'s `delete_resource.rs` — confirmed unrelated to
+     this change: the same test file passes in 0.06s run alone against
+     unmodified `master`, so the multi-package run's hang is this VM's
+     resource contention running many EDS test binaries at once, not a
+     regression; logged here rather than in `docs/BACKLOG.md` since it is
+     about the *test run*, not the product). **NEEDS HUMAN VERIFICATION IN
+     REAL EVOLUTION** — `jmap-config`'s combo is built by `insert_widgets`,
+     which needs a real GTK display this VM does not have (see that vfunc's
+     own docs), so nothing here has looked at the actual "API Token" entry in
+     the account dialog. What to check in the VM: the combo offers "API
+     Token" as a third choice; picking it and typing a token into the
+     password-style prompt at connect time lets contacts, calendars, and mail
+     all connect against a server that expects `Authorization: Bearer` (a
+     real Fastmail API token is the concrete test, and finally proves item 5's
+     SRV chain end-to-end); and a wrong or missing token re-prompts rather
+     than looping or silently sending nothing.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner

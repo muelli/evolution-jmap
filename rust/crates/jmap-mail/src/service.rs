@@ -75,7 +75,10 @@ use jmap_backend_core::trampoline::guard_bool;
 use jmap_client::Credentials;
 use jmap_mail_sync::MailSync;
 
-use crate::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail, password_credentials};
+use crate::api_token;
+use crate::connect::{
+    ACCEPTED_AUTHENTICATION, StoreError, bearer_credentials, open_mail, password_credentials,
+};
 use crate::oauth2;
 use crate::server::{ServerConfig, network, take_string};
 
@@ -375,6 +378,8 @@ unsafe fn attempt<T: Connected>(
     // SAFETY: as above; read before `settings` is given back, exactly like
     // `config` itself.
     let uses_oauth2 = unsafe { oauth2::uses_oauth2(settings) };
+    // SAFETY: as above.
+    let uses_api_token = unsafe { api_token::uses_api_token(settings) };
     if !settings.is_null() {
         // SAFETY: the reference `ref_settings` handed over.
         unsafe { g_object_unref(settings.cast::<GObject>()) };
@@ -406,6 +411,14 @@ unsafe fn attempt<T: Connected>(
         // SAFETY: the reference `ref_session` handed over.
         unsafe { g_object_unref(session.cast::<GObject>()) };
         Credentials::bearer(token?)
+    } else if uses_api_token {
+        // The pasted token rides the same password prompt Basic uses — see
+        // `jmap_backend_core::api_token`'s module docs for why — so it is
+        // read exactly where the password is, just below.
+        // SAFETY: a borrowed, NULL-or-NUL-terminated string owned by the
+        // service; `read_string` copies what it needs.
+        let password = unsafe { read_string(camel_service_get_password(service)) };
+        bearer_credentials(password.as_deref())
     } else {
         // The session put it there before calling us, and it is the only
         // credential this code ever sees: nothing reads a password out of the
