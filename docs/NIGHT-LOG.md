@@ -38785,3 +38785,62 @@ warnings` (default-members), `cargo test --locked` (default-members) all
 clean on the host (3.52) — this increment only touched two docs files and
 `docs/ROADMAP.md`; no Rust source changed. reuse lint: no new source files,
 nothing to license-head.
+
+## 2026-08-19 (claim) — CURRENT PRIORITY item 2(a): diagnose why "Look Up Account Details" doesn't run the JMAP worker
+
+Fresh survey: `git fetch` shows local `master` = `origin/master` at `baf962c`
+(Track F closed). Walked Round 2 again: Track A2/A4/A6/A7 are done; A5 and
+A6 Pattern C remain escalation-worthy FFI, declined by many prior sessions;
+Track D1/D2, Track E Phase 0/Path A are done, D2 write-back and Track E
+Phase B/C need a design/maintainer decision first; Track B1/C2/C4 are
+NEEDS-DECISION; Track F is closed. That leaves CURRENT PRIORITY item 2(a) —
+the OAuth Look-Up entry point, "diagnose whether the worker even runs in the
+installed Evolution" — which the roadmap text flags as needing a live
+Evolution session, but which is actually diagnosable headlessly: the module
+loading question is answerable with `dlopen`/`readelf` against the real
+installed Evolution module directory, no display required.
+
+**Diagnosed already, before writing this claim** (verification, not a
+guess): built `module-jmap-configuration.so`
+(`build/install-test/config-module/.../module-jmap-configuration.so`), and
+`readelf -d` shows it carries NO `RUNPATH`/`RPATH`, unlike every real
+Evolution module in `/usr/lib/evolution/modules/*.so` (every one of them,
+including the real `module-config-lookup.so`, carries `RUNPATH=/usr/lib/
+evolution`). `env -u LD_LIBRARY_PATH dlopen()` on the built module fails:
+`libevolution-mail.so.0: cannot open shared object file`. `/usr/lib/
+evolution` is not in `ldconfig`'s cache and has no `/etc/ld.so.conf.d` entry,
+so nothing else makes that directory resolvable. This means
+`module-jmap-configuration.so`, installed into a real Evolution's module
+directory, fails to `dlopen` there too — Evolution's own module scanner does
+not set `LD_LIBRARY_PATH`, only our test harness's `stage_config_lookup_
+module` does (a workaround the 307th session logged without tracing why the
+rpath itself was missing). That is a complete, non-GUI explanation for the
+operator's "Look Up still returns imapx" symptom: our config-lookup worker
+never registers with `EConfigLookup` because the module that would register
+it never successfully loads.
+
+**Root cause, traced to the crate split.** `jmap-config/build.rs` already
+solves exactly this problem (reads `DEP_EVOLUTION_SHELL_LIBDIRS`, published
+by `evo-sys`'s `links = "evolution-shell"` key, and emits `cargo:rustc-link-
+arg=-Wl,-rpath,<dir>`) — but `cargo:rustc-link-arg` is scoped to the package
+whose build script emits it, and the actual installed cdylib
+(`module-jmap-configuration.so`) is built by the separate `jmap-config-
+module` crate (`crate-type = ["cdylib"]`, depending only on `jmap-config` +
+`gobject-sys`, no build script of its own). So `jmap-config`'s rpath fix
+reaches `jmap-config`'s own test binaries (which is why the functional-test
+harness needing a manual `LD_LIBRARY_PATH` looked like the ordinary state of
+affairs) but never reaches the module Evolution actually loads.
+
+**Claiming the fix**: give `jmap-config-module` its own `build.rs`, mirroring
+`jmap-config`'s exactly, via a `evo-sys` build-dependency (metadata-only —
+`DEP_EVOLUTION_SHELL_LIBDIRS` needs a direct dependency on the `links`-owning
+crate; `jmap-config-module` calls none of `evo-sys`'s bindings itself).
+TDD: remove the `LD_LIBRARY_PATH` workaround from `jmap_functional::Session::
+stage_config_lookup_module` first — red, `functional-config-lookup` fails
+exactly the way the standalone `dlopen` probe above did — then add the
+build.rs and confirm it goes green without the workaround, which is the
+actual proof the module is now self-contained the way every other Evolution
+module already is. This does not by itself finish item 2(a) — the discovery/
+registration wiring itself (`config_lookup.rs`'s worker, `discover_and_
+register`) is unaffected and was already correct; this fixes the reason it
+was never being *reached* in a real Evolution install.
