@@ -39388,3 +39388,50 @@ refactor with no user-visible surface, on files whose own test suites
 already exercise every touched code path end to end. Disk was at 91% full
 (5.3G free) going into this session; `cargo clean --profile dev` recommended
 before further build work if it tightens further.
+
+## 2026-08-19 (claim) — Claiming Track A5: FFI soundness audit
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `5f6a443`
+(Pattern D's `follow_collection`/`follow_server` follow-up, previous
+session). Walked CURRENT PRIORITY and Round 2 in full: CURRENT PRIORITY
+items 1/3/4/5/6 are code-complete pending only operator confirmation already
+logged as such; item 2(a)'s remaining half and item 2(b) need the operator's
+live Evolution/Fastmail session. Round 2: Track D1/D2, Track E Phase 0/Path A
+are done pending operator verification (D2 write-back and Track E Phase B/C
+need a design/maintainer decision); Track B1/C2/C4 are NEEDS-DECISION; Track F
+is closed. Track A6 is now **fully** closed — `docs/UNSAFE-AUDIT.md`'s
+prioritized follow-up list shows all five named patterns (A–E) DONE, the only
+remaining Pattern D crumb (`SourceConfig::from_source`) explicitly flagged as
+a behaviour decision, not mechanical work. A2/A4/A7 are done. That leaves
+**A5 (FFI soundness audit)** as the one CLAIMABLE, no-decision-needed Track A
+item left — unlike A6's now-closed IMPROVE list, A5 has never been attempted
+by any session; every one of A6's five patterns was picked ahead of it by
+name in prior surveys.
+
+**Scoping the increment, not treating "escalation-worthy" as blanket cover.**
+The roadmap flags A5 escalation-worthy, but A6's own original audit (`docs/
+UNSAFE-AUDIT.md`, claimed and delivered at `35732`/`35761` with no escalation)
+proves a read-and-document audit of this size is within a single Sonnet
+session's reach — only specific *fixes* the audit turned up (Pattern C's
+`Owned<T>` RAII wrapper, an actual new unsafe abstraction with refcount
+correctness at stake) needed escalating to opus. A5's own scope is four
+narrower questions than a fresh unsafe inventory, and Pattern F in `docs/
+UNSAFE-AUDIT.md` already answers one of them for the whole tree ("every
+`extern "C"` vfunc/trampoline is already routed through `jmap_backend_core::
+trampoline::{guard, guard_bool, guard_ptr, guard_value}`" — catch_unwind
+coverage is therefore already a closed question, not new territory to audit).
+This session's plan: read every vfunc/trampoline across the four backend
+crates plus `jmap-backend-core`/`jmap-config` for the three still-open
+questions — transfer-full vs. transfer-none correctness (`g_free`/`g_object_
+unref` matching what each GIR annotation promises), nullability at each FFI
+boundary (an out-param or return that C may hand back NULL and Rust must not
+blindly deref), and `GCancellable` honoured on every sync vfunc that declares
+one — and write `docs/FFI-SOUNDNESS-AUDIT.md` with KEEP/IMPROVE/INVESTIGATE
+tags per finding, mirroring A6's own report shape. Fixing HIGH-confidence
+trivial findings (a missing NULL check with an obvious one-line fix) in the
+same pass is in scope, same rule A6 and A7 both used; anything that looks
+like it needs new unsafe abstraction design gets logged as IMPROVE with an
+effort estimate and left for a dedicated follow-up (escalated if the finding
+warrants it), not attempted inline.
+
+Claiming this increment now.
