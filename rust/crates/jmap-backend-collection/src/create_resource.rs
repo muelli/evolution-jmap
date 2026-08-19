@@ -66,16 +66,14 @@
 //!   `collection_backend_child_added()` sets it `FALSE` for every child and
 //!   [`crate::child_added`] chains up to that, so the child gets it on publish.
 //!
-//! ## What is deliberately not set: `remote-deletable`
+//! ## What is deliberately not set here: `remote-deletable`
 //!
-//! evolution-ews sets it on every child it creates, and this backend will too —
-//! once `delete_resource_sync` exists. Setting it now would make Evolution offer
-//! "Delete" on a JMAP address book and then answer the click with
-//! `ECollectionBackendJmap does not support deleting remote resources`, which is
-//! a worse thing to ship than an absent menu item. The `AddressBook/set` and
-//! `Calendar/set` *destroy* calls a delete needs are already in `jmap-client`;
-//! what is missing is the vfunc, and being the destructive half it is its own
-//! increment.
+//! evolution-ews sets it at each of the three sites that mint a child, this one
+//! included. This backend sets it in one place instead —
+//! [`crate::delete_resource::offer_deletion`], called from `child_added`, which
+//! is EDS's own funnel for every child of a collection and therefore covers a
+//! created child on its publish as well as a discovered or cached one. So its
+//! absence here is where the flag is written, not whether.
 //!
 //! ## The credentials are looked up, not remembered
 //!
@@ -194,7 +192,10 @@ impl fmt::Display for CreateError {
 
 /// The [`Collection`] a [`ChildKind`] is, so the translated noun is the one
 /// [`Collection::noun`] already carries rather than a second pair of msgids.
-fn collection_of(kind: ChildKind) -> Collection {
+///
+/// Shared with [`crate::delete_resource`], which names the same two things in
+/// its own messages.
+pub(crate) fn collection_of(kind: ChildKind) -> Collection {
     match kind {
         ChildKind::AddressBook => Collection::AddressBook,
         ChildKind::Calendar => Collection::Calendar,
@@ -364,6 +365,10 @@ pub fn kind_noun(kind: ChildKind) -> &'static str {
 /// credentials source, libsecret unavailable) is a system fault worth having on
 /// the record.
 ///
+/// `context` names the vfunc for the critical channel — the same lookup serves
+/// [`crate::delete_resource`]'s vfunc, and a log line that named the wrong one
+/// would send a reader to the wrong module.
+///
 /// [`ConnectError::CredentialsRequired`]: jmap_backend_core::connect::ConnectError::CredentialsRequired
 ///
 /// # Safety
@@ -374,13 +379,14 @@ pub unsafe fn stored_password_of(
     server: *mut ESourceRegistryServer,
     source: *mut ESource,
     cancellable: *mut GCancellable,
+    context: &str,
 ) -> Option<String> {
     if server.is_null() {
         // The registry server is a weak reference on the backend, so NULL means
         // it is gone — during shutdown, say — and then there is nobody to ask.
-        log_critical(
-            "create_resource_sync: the registry server is gone; no credentials to look up",
-        );
+        log_critical(&format!(
+            "{context}: the registry server is gone; no credentials to look up"
+        ));
         return None;
     }
 
@@ -388,13 +394,15 @@ pub unsafe fn stored_password_of(
     // full)`.
     let provider = unsafe { e_source_registry_server_ref_credentials_provider(server) };
     if provider.is_null() {
-        log_critical("create_resource_sync: the registry server has no credentials provider");
+        log_critical(&format!(
+            "{context}: the registry server has no credentials provider"
+        ));
         return None;
     }
 
     // SAFETY: a live provider, a valid source and a cancellable satisfying this
     // function's contract.
-    let password = unsafe { lookup_password(provider, source, cancellable) };
+    let password = unsafe { lookup_password(provider, source, cancellable, context) };
 
     // SAFETY: the reference `ref_credentials_provider` handed over, not used
     // again.
@@ -414,6 +422,7 @@ unsafe fn lookup_password(
     provider: *mut ESourceCredentialsProvider,
     source: *mut ESource,
     cancellable: *mut GCancellable,
+    context: &str,
 ) -> Option<String> {
     let mut credentials: *mut ENamedParameters = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
@@ -436,7 +445,7 @@ unsafe fn lookup_password(
         // which passed to us; its message is a string the struct owns.
         let message = unsafe { take_message(error) };
         log_critical(&format!(
-            "create_resource_sync: the account's credentials could not be looked up: {message}"
+            "{context}: the account's credentials could not be looked up: {message}"
         ));
         return None;
     }
