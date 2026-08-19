@@ -155,6 +155,60 @@ they close, prioritise in this order:
      and was deliberately not attempted in the same increment as (b). The
      GResolver-backed real `Resolver` (FFI) is still unstarted and still the
      escalation candidate.
+   - **DONE 2026-08-19 (later still) — call site (a) wired, both sites now
+     covered.** A research agent first traced the actual production path a
+     plain email+password Fastmail-style setup takes, to confirm this really
+     is the remaining gap: `jmap-config/src/defaults.rs::from_identity`
+     correctly writes the bare email domain into `Authentication:Host` with
+     no port, per RFC 8620 §2.2 — no UI autodiscovery step was missing there.
+     The design: `jmap_backend_core::source` gained `ConnectTarget`
+     (`Origin(String)` for an explicit endpoint or an IP literal, `Domain
+     (String)` for a port-unset+secure+non-IP-literal host — exactly the
+     shape `from_identity` produces, and exactly RFC 8620 §2.2's "the domain
+     is the entry point" case) plus `connect_target()`, sharing `origin()`'s
+     existing host validation and TLS rule (`origin()` is now a thin wrapper
+     over it, so `jmap-backend-collection`'s `Server::origin` display value
+     — asserted verbatim in several tests — keeps its exact old string). A
+     new `jmap_backend_core::source::connect(target, credentials)` dispatches
+     `Origin` to today's `Client::connect` and `Domain` to `ClientBuilder::
+     connect_domain`; `jmap-backend-book`/`cal`'s `connect.rs`, `jmap-mail/
+     src/connect.rs`, and `jmap-backend-collection/src/fan_out.rs` all switch
+     to it. `SourceConfig`, `jmap-mail`'s `ServerConfig`, and `jmap-backend-
+     collection`'s `Server` all carry `target: ConnectTarget` instead of a
+     collapsed `origin: String` (`Server` keeps a separate `origin: String`
+     display field, still built via the `origin()` wrapper, since fan_out's
+     own tests construct `Server::connection` — the fields repeated to
+     children — independently of the address actually dialled, and `.target`
+     is what the connect call now reads instead). `jmap_client::Client`
+     gained a shared `rebase_urls_from_env()` (extracted from `Client::
+     connect`'s existing env-var check) so the `Domain` branch honours
+     `JMAP_LIVE_SERVER_REBASE_URLS` identically to the `Origin` one. TDD:
+     new `connect_target` unit tests in `jmap-backend-core/src/source.rs`
+     (bare domain → `Domain`, explicit port → `Origin`, IP literal even with
+     no port → `Origin`, insecure/missing-host refusals unchanged); every
+     existing `SourceConfig`/`ServerConfig`/`Server`-driven test updated to
+     assert the right `ConnectTarget` variant instead of a bare string —
+     several (`jmap-config`'s `the_defaults_are_the_account_the_address_
+     names`, `the_default_and_the_registry_agree_about_the_server`, and
+     siblings) flip from `Origin("https://example.com")` to
+     `Domain("example.com")`, which is the actual behaviour change this
+     closes: a plain email+password setup's session discovery now tries
+     `_jmap._tcp.<domain>` before the bare-domain `.well-known/jmap`
+     fallback. Behaviour is unchanged today (`NoSrvResolver`, the only
+     resolver anything constructs, never finds a record) until the
+     GResolver-backed real `Resolver` lands — FFI, unstarted, still the
+     escalation candidate for this thread, and the last piece needed before
+     Fastmail's password path can be verified end-to-end.
+     Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets
+     --locked -- -D warnings` (default-members) and `cargo clippy -p
+     evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+     jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+     --all-targets -- -D warnings` (the EDS-gated crates directly, this VM
+     having the headers) both clean; `cargo test --locked` and the same
+     per-crate `cargo test` both green, every `test result: ok`, 0 failed.
+     Disk filled mid-session (`rust/target/debug` at 24G, "No space left on
+     device" on `jmap-mail`'s test build) — `cargo clean --profile dev`
+     recovered it, consistent with prior sessions' standing note.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner

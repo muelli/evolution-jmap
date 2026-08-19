@@ -35971,3 +35971,86 @@ GResolver-backed resolver plugs into, closing out call site (a) alongside
 standing escalation candidate for this thread.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: SRV autodiscovery call site (a), backend connect paths
+
+Followed through on this session's claim (see the earlier "Claiming JMAP SRV
+autodiscovery call site (a)" entry for the research-agent trace confirming
+this is the real remaining gap, not a missing `jmap-config` UI step).
+
+`jmap_backend_core::source` gained `ConnectTarget` (`Origin(String)` for an
+explicit endpoint or an IP literal; `Domain(String)` for a port-unset +
+secure + non-IP-literal host — exactly the shape `jmap-config/src/
+defaults.rs::from_identity` writes for a plain email+password setup, and RFC
+8620 §2.2's own "the domain is the entry point" case) and `connect_target()`,
+sharing `origin()`'s existing host validation and TLS rule — `origin()`
+itself is now a one-line wrapper over `connect_target()`, so every caller
+that only wants a display string (`jmap-backend-collection`'s
+`Server::origin`, `jmap-config`'s `complete.rs` validity check and
+`oauth2_setup.rs`'s issuer-URL builder) is untouched. A new
+`jmap_backend_core::source::connect(target, credentials)` dispatches
+`Origin` to `Client::connect` and `Domain` to `ClientBuilder::connect_domain`
+(the `Resolver` seam from the session-discovery half of this thread);
+`jmap-backend-book`/`cal`'s `connect.rs`, `jmap-mail/src/connect.rs`, and
+`jmap-backend-collection/src/fan_out.rs` all switch their bare
+`Client::connect(&config.origin, …)` call to it.
+
+`SourceConfig`, `jmap-mail`'s `ServerConfig`, and `jmap-backend-collection`'s
+`Server` all carry `target: ConnectTarget` in place of a pre-collapsed
+`origin: String`. `Server` was the one surprise: its own fan_out tests build
+`Server::connection` (the fields repeated to child sources) independently of
+the address the mock server actually listens on, so deriving the connect
+target from `.connection` instead of adding `.target` would have silently
+started dialling the wrong host in every such test — caught by running the
+full suite, not by inspection, before it was ever pushed. `jmap_client::
+Client` gained a shared `rebase_urls_from_env()`, extracted from `Client::
+connect`'s existing `JMAP_LIVE_SERVER_REBASE_URLS` check, so the new
+`Domain` branch honours the same opt-in as `Origin` does rather than growing
+a second copy of the same two comparisons.
+
+TDD: four new `connect_target` unit tests in `jmap-backend-core/src/
+source.rs` (bare domain with no port → `Domain`; explicit port → `Origin`;
+an IP literal → `Origin` even with no port stated, since there is no
+email-style entry point to run SRV autodiscovery against; the insecure and
+missing-host refusals unchanged). Every existing test across
+`jmap-backend-core`, `jmap-backend-book`, `jmap-backend-cal`,
+`jmap-backend-collection`, `jmap-mail`, and `jmap-config` that drove a
+`SourceConfig`/`ServerConfig`/`Server` through an explicit port kept
+asserting `ConnectTarget::Origin(...)` unchanged; every one that used a bare
+domain with no port now asserts `ConnectTarget::Domain(...)` instead — this
+flip *is* the behaviour change: `jmap-config/tests/backend.rs`'s
+`the_defaults_are_the_account_the_address_names` and `jmap-config/tests/
+defaults.rs`'s `the_default_and_the_registry_agree_about_the_server` in
+particular, which are exactly "what a plain email+password setup offers",
+moved from `Ok("https://example.com")` to
+`Ok(ConnectTarget::Domain("example.com"))`.
+
+Behaviour is unchanged today: `NoSrvResolver`, the only resolver anything
+constructs, never finds a record, so every path still ends at the same
+bare-domain `.well-known/jmap` fetch it always did. What's different is that
+every one of these four connect paths — not just the OAuth2 "Look Up Account
+Details" worker from the earlier (b) fix — now has the seam a real
+`Resolver` plugs into. The GResolver-backed implementation
+(`g_resolver_lookup_service()`, FFI) remains unstarted and is the standing
+escalation candidate for this thread; it is also the last piece needed
+before the operator's original Fastmail password-path 404 can be verified
+fixed end-to-end, since this runner has no Fastmail credentials to test
+against directly.
+
+Disk filled mid-session: `rust/target/debug` had grown to 24G and
+`cargo test -p jmap-mail --no-run` failed with "No space left on device"
+(`rustc-LLVM ERROR` and a `Bus error` from the linker) — consistent with the
+standing note from prior sessions. `cargo clean --profile dev` recovered
+24G (`df` back to 24G free from 161M) and every subsequent build succeeded.
+
+Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-
+client -p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p
+jmap-mail -p jmap-backend-collection -p jmap-config --all-targets -- -D
+warnings` (the EDS-gated crates touched, direct-built since this VM has the
+headers) clean; `cargo test --locked` (default-members) and `cargo test` on
+the same crate list both green, every `test result: ok`, 0 failed. No new
+files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
+`cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
+run — its constituent checks were run individually as above, per the
+standing workaround.
