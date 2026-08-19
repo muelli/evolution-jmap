@@ -18,7 +18,7 @@ default = ["mail", "contacts", "calendars", "principals"]
 mail = []
 contacts = []
 calendars = []
-principals = []
+principals = ["calendars"]
 
 [dependencies]
 serde = { workspace = true }
