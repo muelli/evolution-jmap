@@ -173,3 +173,40 @@ hand-rolled code for no fix. Reproduction is small enough to rebuild from the
 description above; the throwaway harness was deliberately not committed
 (a network- and allocator-dependent RSS assertion is not a test that belongs
 in CI).
+
+## `jmap-vcard` round trip is not a fixed point for a value with trailing whitespace (found 2026-08-19)
+
+Found by Track A3's own `proptest` fuzzer, on a random seed, while running the
+full suite for an unrelated increment — confirmed to reproduce on unmodified
+`master` (`6ba07a9`), so it is not a regression from that work.
+
+`prop_vcard_roundtrip_reaches_fixed_point_stability` in
+`rust/crates/jmap-vcard/tests/proptest_fuzz.rs` asserts that re-emitting an
+already-emitted vCard changes nothing. It does not hold when a property value
+ends in a space. Minimal input:
+
+```
+BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n
+```
+
+First emit keeps the trailing space (`NICKNAME;X-JMAP-KEY=k1:! `); parsing
+*that* and emitting again drops it (`NICKNAME;X-JMAP-KEY=k1:!`). So the parse
+side strips trailing whitespace from a value and the emit side does not, and
+one round trip too few hides it.
+
+**Severity: low, and the reason it is filed rather than fixed.** RFC 6350 §3.3
+makes trailing whitespace in a value significant, so this is a real fidelity
+loss — but it costs a trailing space on a contact field, it is not a panic, and
+`jmap-vcard` is part of a closed backend (M3) that the current ROADMAP
+priority explicitly says not to reopen for corner cases. Fixing it means
+picking a side (strip on both, or preserve on both) and re-running the vCard
+fixture suite, which is a hardening-pass increment rather than a priority one.
+
+**Note for whoever takes it:** the failure is seed-dependent, so a green run
+proves nothing. `proptest` persists the failing seed to
+`crates/jmap-vcard/tests/proptest_fuzz.proptest-regressions`; that file was
+deliberately **not** committed, because doing so would turn an intermittent
+red into a permanent one on `master` and block every other lane's gate for a
+low-severity nit. Recreate it by pasting the minimal input above into a
+`#[test]` that asserts the fixed point directly — that is the red test to
+start from, and it is deterministic.

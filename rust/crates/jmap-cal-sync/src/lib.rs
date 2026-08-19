@@ -18,6 +18,7 @@
 //! shape closely enough that the two read as one design.
 
 pub mod error;
+pub mod freebusy;
 pub mod patch;
 
 use std::collections::BTreeMap;
@@ -32,6 +33,7 @@ use jmap_proto::{Id, State};
 use serde_json::Value;
 
 pub use error::{SyncError, Unsendable};
+pub use freebusy::FreeBusy;
 
 /// One event, as the meta backend wants it: an identifier, a change token and
 /// the object itself.

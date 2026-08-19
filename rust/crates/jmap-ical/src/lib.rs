@@ -10,13 +10,16 @@
 //! Evolution headers, so the mapping stays testable everywhere the workspace
 //! builds. It is the calendar-side counterpart of `jmap-vcard`.
 //!
-//! [`event`] is the semantic mapping between JSCalendar and iCalendar.
+//! [`event`] is the semantic mapping between JSCalendar and iCalendar, and
+//! [`freebusy`] renders a principal's busy periods as the `VFREEBUSY` a
+//! meeting scheduler reads.
 //!
 //! [RFC 5545]: https://www.rfc-editor.org/rfc/rfc5545
 //! [RFC 8984]: https://www.rfc-editor.org/rfc/rfc8984
 
 pub mod error;
 pub mod event;
+pub mod freebusy;
 mod zone;
 
 pub use error::ICalError;
@@ -26,3 +29,4 @@ pub use event::{
     maps_recurrence_rule, maps_time_zone, maps_virtual_locations, names_time_zone,
     prune_time_zones, sends_recurrence_override, time_zone_definition, unstateable_until,
 };
+pub use freebusy::{busy_periods_to_vfreebusy, free_busy_type};

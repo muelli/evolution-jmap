@@ -817,6 +817,90 @@ in design §4–§6; the ordered increments:
      VFREEBUSY` marshaller — FFI, unsafe, EDS-only testing, escalation-worthy
      as already flagged, left for a session that wants to take that on
      deliberately (or an escalation to a stronger model).
+   - **DONE 2026-08-19 (on opus, per the escalation at `6ba07a9`) — the vfunc
+     and the marshaller landed; Path A's code side is complete, pending
+     operator confirmation.** Three layers, each tested at its own level:
+     `jmap-ical/src/freebusy.rs` (`busy_periods_to_vfreebusy`,
+     `free_busy_type`) renders a bare `VFREEBUSY`;
+     `jmap-cal-sync/src/freebusy.rs` (`CalSync::free_busy`, `FreeBusy`) does
+     `Principal/query`-by-email → `Principal/getAvailability` per attendee;
+     `jmap-backend-cal` marshals (`marshal::user_list`/`free_busy_list`/
+     `utc_date`), decides (`ops::get_free_busy`, `FreeBusyOutcome`) and
+     installs the slot (`backend.rs::get_free_busy_sync`).
+     **Four decisions taken from the EDS 3.52.4 and evolution-ews 3.52.4
+     sources rather than inferred, each one a way to get it silently wrong:**
+     (a) `get_free_busy_sync` is **not** an `ECalMetaBackendClass` slot — it is
+     declared two classes up on `ECalBackendSyncClass`, which is where
+     `e_cal_backend_sync_get_free_busy` looks it up; installed on the meta
+     backend's own struct it would compile, install, and never be called, so
+     `tests/backend.rs` asserts the slot is ours *and* differs from the
+     parent's. (b) Unlike `create_resource`/`delete_resource`, the parent's
+     implementation is real and useful, so this override **must** chain up:
+     `ecmb_get_free_busy_sync` computes the account owner's own busy times
+     from the offline cache, which is where most of a meeting editor's data
+     comes from and the whole answer when offline. The CalDAV backend arranges
+     exactly this fallback (`ecb_caldav_get_free_busy_sync` chains up when its
+     own lookup found nothing), and `FreeBusyOutcome::NothingKnown` is that
+     path — which is also why "no connection" chains up here instead of
+     reporting `REPOSITORY_OFFLINE` the way every other vfunc in the crate
+     does. (c) The answer is a `GSList` of **`gchar *` iCalendar strings**
+     (`(element-type utf8) (transfer full)`), not of structs like the
+     `ECalMetaBackendInfo` lists elsewhere in this backend — a wrong guess
+     there has `e_data_cal_respond_get_free_busy` read the first bytes of a
+     component as a pointer. (d) The envelope is the incumbents': one bare
+     `VFREEBUSY` per person carrying an `ATTENDEE` that names whose time it
+     is, since all three in-tree implementations build it by prepending
+     `mailto:` to the string EDS handed them — so `users` holds bare
+     addresses. `DTSTART`/`DTEND` restate the requested window (as
+     `ecmb_get_free_busy_sync` does and the Microsoft 365 backend does not),
+     because without them a component with no `FREEBUSY` line cannot be told
+     apart from one about a different window; `UID`/`DTSTAMP` are omitted, as
+     the parent omits them, since both would need a clock `jmap-ical` does not
+     have.
+     **The safety rule this feature turns on, and the one place it inverts the
+     crate's usual habit:** everywhere else in `jmap-ical` an unreadable value
+     is dropped and the object survives. Here dropping a busy period renders
+     an attendee *free* for a time they are not, and a scheduler does not
+     merely display that — it books the slot. So a period that cannot be read
+     refuses the whole component (`busy_periods_to_vfreebusy` answers
+     `Option`), leaving the row blank; and an unknown `busyStatus` maps to
+     `BUSY`, so a later draft revision's fourth value cannot read as free
+     time. The same asymmetry decides the error handling, which is the one
+     deliberate **deviation from CalDAV**: CalDAV clears every per-user error
+     and falls through silently, whereas `CalSync::free_busy` treats only
+     `Principal/query` finding nobody and `getAvailability` answering
+     `notFound` (the draft spells both "no such principal" and "you may not
+     see this one" that way) as *answers*, and reports every other failure —
+     an unreachable server and a server saying nobody is busy are not the same
+     statement. The empty-answer fallback to the cache, which is the useful
+     half of the CalDAV behaviour, is kept.
+     TDD: red first at each layer — `jmap-ical/tests/freebusy.rs` (10 tests)
+     failed to compile on the missing module, `jmap-cal-sync/tests/freebusy.rs`
+     (10 tests against `jmap-mockd`) on the missing method, and
+     `tests/backend.rs`'s new slot assertion failed against the un-installed
+     vfunc; then `tests/ops.rs` gained 7 more driving `ops::get_free_busy` with
+     a real `GSList` of `gchar *` — including a NULL list, a NULL
+     out-parameter, and that a failure writes no out-parameter while
+     `NothingKnown` writes neither out-parameter nor error (the parent is about
+     to `g_set_error` into the same `GError **`). `marshal::utc_date` converts
+     `time_t` → `UTCDate` through `GDateTime` rather than by hand — the one
+     piece of genuine calendar arithmetic in the calendar path, borrowed from a
+     library already linked in rather than written. No new dependency, no new
+     user-facing string (so no `po/` change). Full gate green: `cargo fmt
+     --check`; `cargo clippy --all-targets --locked -- -D warnings`
+     (default-members) and the seven-crate EDS-gated clippy both clean; `cargo
+     test --locked` (90 binaries, exit 0) and the seven-crate `cargo test`
+     (1208 passed, 0 failed) both green.
+     **NEEDS HUMAN VERIFICATION in real Evolution** — nothing headless can
+     drive the meeting scheduler's free/busy panel against a live registry, so
+     Path A is not tagged complete on this.
+     **Unrelated pre-existing failure found and logged, not worked around:**
+     the full-suite run tripped `jmap-vcard`'s `proptest` fixed-point property
+     on a random seed; it reproduces on unmodified `master` (`6ba07a9`) and is
+     a vCard trailing-whitespace round-trip nit, filed in `docs/BACKLOG.md`
+     with its minimal input rather than fixed here (closed backend, low
+     severity, and committing the persisted seed would have turned an
+     intermittent red into a permanent one for every lane).
 
 **OPERATOR CONFIRMATION (you-task, like the OAuth Fastmail test).** The runner
 cannot reach Stalwart (MAINTAINER DECISIONS #3), so the design's "half-day probe:

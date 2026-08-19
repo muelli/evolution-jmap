@@ -38441,3 +38441,128 @@ Claiming the last piece of Track E Path A, on opus per the escalation at
 the `jmap-cal-sync` free/busy call that joins them (attendee address →
 `Principal/query` → `Client::get_availability`). Mock-first TDD against
 `jmap-mockd`; only the vtable slot itself is untestable headlessly.
+
+## 2026-08-19 — Delivered: Track E Path A's `get_free_busy_sync` vfunc and `BusyPeriod → VFREEBUSY`
+
+Running on opus per the escalation at `6ba07a9`. This closes the last piece of
+Path A: Evolution's meeting scheduler can now ask a JMAP calendar when an
+attendee is busy. Three layers, each red-tested at its own level before it
+existed — `jmap-ical/src/freebusy.rs` (the marshaller),
+`jmap-cal-sync/src/freebusy.rs` (the two JMAP calls), `jmap-backend-cal`
+(marshalling, decision, vtable slot). Full detail in ROADMAP Track E; what
+follows is what was learned rather than what was written.
+
+### Reading the EDS source changed the design three times
+
+Every one of these would have compiled and been wrong, and none is guessable
+from the header alone.
+
+**`get_free_busy_sync` is not an `ECalMetaBackend` slot.** It is declared on
+`ECalBackendSyncClass`, two classes up, and `e_cal_backend_sync_get_free_busy`
+dispatches through `E_CAL_BACKEND_SYNC_GET_CLASS`. Written into the
+`ECalMetaBackendClass` half of our class struct — the half every other vfunc in
+this crate lives in — it would install cleanly and never once be called, and
+the symptom would be a free/busy panel that stays blank with no error anywhere.
+`tests/backend.rs` now asserts both halves of that: the slot on the *sync*
+class is `Some`, and it is not the pointer the parent left there.
+
+**This override must chain up, and the previous two must not.** D1's
+`create_resource_sync`/`delete_resource_sync` both had to avoid chaining up,
+because the parent's implementations are `G_IO_ERROR_NOT_SUPPORTED` refusals.
+The instinct to generalise that would have been wrong here:
+`ecmb_get_free_busy_sync` is a real implementation that computes the account
+owner's own busy times out of the offline cache. That is where most of a
+meeting editor's useful data comes from, and the *only* answer available when
+the account is offline or the server has no principals extension at all. The
+CalDAV backend arranges exactly this fallback — its own lookup first, chain up
+when it found nothing — and `ops::FreeBusyOutcome::NothingKnown` is that path.
+It is also why this is the one vfunc in the crate that deliberately does *not*
+go through `with_connection`: no connection means "let the parent answer from
+the cache", not `REPOSITORY_OFFLINE`.
+
+**The out-list is strings, not structs.** `freebusyobjs` is
+`(element-type utf8) (transfer full)` — a `GSList` of `gchar *` iCalendar text,
+which `e_data_cal_respond_get_free_busy` `g_strdup`s node by node. Everything
+else this backend hands back in a `GSList` is `ECalMetaBackendInfo *`, so the
+habit was the trap: a list of infos here would have had EDS read the first
+bytes of a component string as a pointer.
+
+### The safety rule, which is the actual design
+
+`jmap-ical`'s standing habit is that an unreadable value is dropped and the
+object survives — a lost property beats a lost event. Free/busy inverts it. A
+busy period that is dropped renders an attendee **free** for a time they are
+not, and a scheduler does not merely display that: the user books the slot. So
+
+- `busy_periods_to_vfreebusy` returns `Option`, and a period it cannot read
+  refuses the *whole* component. The attendee's row goes blank — "we do not
+  know" — instead of confidently wrong;
+- an unknown `busyStatus` maps to `BUSY`, not to nothing, so a fourth value in
+  a later draft revision cannot read as bookable time;
+- and the same asymmetry decides the error handling, which is the one
+  deliberate deviation from the CalDAV backend. CalDAV clears every per-user
+  error and falls through silently. `CalSync::free_busy` treats exactly two
+  silences as *answers* — `Principal/query` matching nobody (inviting someone
+  outside the organisation is the ordinary case) and `getAvailability`
+  answering `notFound` (the draft spells both "no such principal" and "you may
+  not see this one" that way) — and reports everything else. An unreachable
+  server and a server saying nobody is busy are not the same statement, and
+  only one of them should let a meeting be dropped into the slot. The
+  empty-answer fallback to the cache, which is the *useful* half of CalDAV's
+  behaviour, is kept.
+
+One tolerance was added deliberately in the other direction: RFC 3339 admits a
+fractional second that RFC 5545's `DATE-TIME` does not, and under a rule this
+strict a server sending `…:00.512Z` would cost a whole attendee's answer. The
+fraction is truncated instead.
+
+### Two smaller things worth recording
+
+`marshal::utc_date` converts the vfunc's `time_t` to a JMAP `UTCDate` through
+`GDateTime`. `jmap-ical` and `jmap-mock` both go out of their way to avoid
+calendar arithmetic, and this is the one place in the calendar path that
+genuinely needs it — so it is borrowed from a library already linked in rather
+than written. Worth saying because the first version of its test hard-coded an
+epoch constant computed by hand, and it was four days out; GLib was right and
+the test was wrong, which is the argument for not hand-rolling the real thing.
+
+The attendee string is escaped by calcard's writer, and a test now pins that:
+`users` reaches this vfunc from outside the process (attendee addresses can
+come from an iTIP attachment in an untrusted message), and a raw newline
+written through would end the `ATTENDEE` line and let the rest be read as
+properties of its own. Nothing else in the free/busy path would have noticed
+that protection going away.
+
+### Gate, and one unrelated failure found
+
+`cargo fmt --check` clean; `cargo clippy --all-targets --locked -- -D warnings`
+(default-members) and the seven-crate EDS-gated clippy both clean; `cargo test
+--locked` exit 0 across 90 test binaries, and the seven-crate `cargo test`
+1208 passed / 0 failed. No new dependency; no new user-facing string, so no
+`po/` change.
+
+**Found on the way, not caused here:** the full-suite run tripped
+`jmap-vcard`'s `prop_vcard_roundtrip_reaches_fixed_point_stability` on a random
+seed. It reproduces on unmodified `master` (`6ba07a9`) — verified by stashing
+this work and re-running with the persisted seed — so it predates this
+increment entirely. It is a real fidelity bug (a value's trailing space
+survives one emit and is stripped by the next, so the round trip is not a fixed
+point), but a low-severity one in a closed backend, which the current ROADMAP
+priority says to file rather than reopen. It is in `docs/BACKLOG.md` with its
+minimal input and the red test to start from. The `.proptest-regressions` file
+proptest wrote was deliberately **not** committed: it would have turned an
+intermittent red into a permanent one on `master` and blocked every other
+lane's gate over a trailing space. That is a judgement call, and it is written
+down here so it can be overruled.
+
+**NEEDS HUMAN VERIFICATION IN REAL EVOLUTION.** Nothing headless can drive the
+meeting scheduler, so Path A stays untagged. What to check in the VM, with a
+JMAP account whose server implements `urn:ietf:params:jmap:principals`: open a
+new Meeting, add an attendee the server knows, and switch to the Free/Busy tab
+— their busy blocks should appear for the window shown, and shift when the
+window is dragged. Then check the three that matter more than the happy path:
+an attendee the server has never heard of should leave that row *blank* rather
+than showing them free; the organiser's own busy times should still appear
+(that is the chain-up to the cache, and it should work with the account
+offline); and a server that cannot be reached should surface an error rather
+than an empty, bookable-looking grid.
