@@ -381,7 +381,10 @@ fn the_fan_out_is_given_the_server_the_account_names_and_the_parts_it_left_on() 
 
     assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
     let login = seen.into_inner().expect("the fan-out was not run");
-    assert_eq!(login.server.origin, "https://jmap.example.com:8443");
+    assert_eq!(
+        login.server.target,
+        jmap_backend_core::source::ConnectTarget::Origin("https://jmap.example.com:8443".into())
+    );
     assert_eq!(login.server.connection.host, "jmap.example.com");
     assert_eq!(login.server.connection.port, Some(8443));
     assert_eq!(

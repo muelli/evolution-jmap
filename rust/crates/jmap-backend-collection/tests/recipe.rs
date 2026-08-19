@@ -54,7 +54,7 @@ use jmap_backend_collection::factory::FACTORY_NAME;
 use jmap_backend_collection::mail_child::mail_service_of;
 use jmap_backend_collection::prepare_mail::MAIL_BACKEND_NAME;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_collection_sync::Parts;
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
@@ -280,8 +280,8 @@ fn the_recipes_keyfile_describes_the_mock_server() {
     assert_eq!(
         server
             .expect("the documented account names a server")
-            .origin,
-        "http://127.0.0.1:8080"
+            .target,
+        ConnectTarget::Origin("http://127.0.0.1:8080".into())
     );
     // No user, on purpose. An account that names one makes `populate` ask EDS to
     // resolve a password before anything is contacted, and the recipe's first run
@@ -386,8 +386,8 @@ fn the_mail_runs_account_switches_on_every_part() {
     assert_eq!(
         server
             .expect("the documented account names a server")
-            .origin,
-        "http://127.0.0.1:8080"
+            .target,
+        ConnectTarget::Origin("http://127.0.0.1:8080".into())
     );
     assert_eq!(user, None);
 }
@@ -490,7 +490,9 @@ fn the_documented_transport_reaches_the_mock_server() {
         assert_eq!(
             service.server(),
             Ok(ServerConfig {
-                origin: "http://127.0.0.1:8080".to_owned(),
+                target: jmap_backend_core::source::ConnectTarget::Origin(
+                    "http://127.0.0.1:8080".to_owned()
+                ),
                 user: None,
             }),
             "docs/examples/{name} does not reach the mock server"

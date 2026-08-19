@@ -19,7 +19,7 @@ use std::ptr;
 use eds_sys::{ESource, e_source_new_with_uid};
 use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::server_of;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_collection_sync::Parts;
 use jmap_config::account::{Account, apply};
 use jmap_config::complete::{Incomplete, check};
@@ -42,9 +42,9 @@ impl TestSource {
     }
 
     /// The server as the collection backend reads it back.
-    fn server(&self) -> Result<String, SourceError> {
+    fn server(&self) -> Result<ConnectTarget, SourceError> {
         // SAFETY: a live source.
-        unsafe { server_of(self.0) }.map(|server| server.origin)
+        unsafe { server_of(self.0) }.map(|server| server.target)
     }
 }
 
@@ -177,9 +177,12 @@ fn the_account_a_setup_starts_from_is_one_it_would_commit() {
 #[test]
 fn the_default_and_the_registry_agree_about_the_server() {
     // The second join, the one `tests/complete.rs` makes for the check: the
-    // origin the registry hands a client after this account is committed is the
-    // address's own domain over TLS — the URL RFC 8620's autodiscovery would
-    // have fetched the session document from.
+    // registry hands a client the address's own domain, secure and with no
+    // port stated — RFC 8620 §2.2's own entry point, eligible for
+    // `_jmap._tcp` SRV autodiscovery before the bare-domain fallback.
     let source = TestSource::written(&from_identity("vera@example.com"));
-    assert_eq!(source.server().as_deref(), Ok("https://example.com"));
+    assert_eq!(
+        source.server(),
+        Ok(ConnectTarget::Domain("example.com".into()))
+    );
 }
