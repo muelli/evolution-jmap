@@ -238,8 +238,9 @@ fn a_public_host_in_the_clear_is_written_faithfully_and_refused_by_the_reader() 
     // back, rather than only holding for hand-built `Connection`s.
     //
     // The UI half of it — telling the user before they commit, rather than
-    // after the first sync fails — is `check_complete`'s, and is not written
-    // yet.
+    // after the first sync fails — is `check_complete`'s
+    // (`plaintext_to_a_server_that_is_not_this_machine_is_refused` in
+    // `tests/complete.rs`).
     let mut account = account();
     account.connection.secure = false;
     let source = TestSource::new().written(&account);

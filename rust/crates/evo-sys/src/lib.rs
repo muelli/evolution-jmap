@@ -57,7 +57,10 @@
 //! running GTK whether the classes are what this crate calls them and whether
 //! they are related the way those casts assume. What no test here can do is
 //! *use* them: GTK 3 will not construct a widget without a display connection,
-//! so the page these calls build is only exercisable under M9's Xvfb tier.
+//! so the page these calls build is only exercisable in a real Evolution
+//! session — M9's Xvfb tier launches Evolution but seeds a pre-built
+//! `.source` file rather than driving this page, so it does not exercise it
+//! either; only a human running the account assistant does.
 //!
 //! Like [`eds-sys`], this crate is kept out of the workspace's
 //! `default-members`: it needs Evolution's development headers, and `cargo

@@ -1,16 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The GTK surface M7's `insert_widgets` will build its page out of, held
-// against the GTK this crate was generated from.
+// The GTK surface M7's `insert_widgets` builds its page out of, held against
+// the GTK this crate was generated from.
 //
 // Nothing here constructs a widget, and that is not an oversight. GTK 3 refuses
 // to: `gtk_grid_new()` reaches `GtkWidget`'s instance init, which wants a
 // `GtkStyleContext`, which aborts the process with "Can't create a
 // GtkStyleContext without a display connection" — checked on the machine this
 // was written on, which has no display. So the page itself can only be
-// exercised under M9's Xvfb tier, and this file checks the part that *can* be
-// checked without a display, which is also the part that goes wrong silently:
+// exercised in a real Evolution session (M9's Xvfb tier seeds a pre-built
+// `.source` file instead of driving it), and this file checks the part that
+// *can* be checked without a display, which is also the part that goes wrong
+// silently:
 //
 // - the entry points exist in the libraries this crate links (a missing one is
 //   an `undefined symbol` the moment Evolution dlopens the module, i.e. a

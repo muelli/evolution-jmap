@@ -91,7 +91,7 @@ use crate::config_lookup::JmapConfigLookup;
 /// shell is guaranteed to run. Of the five modules here this is the one whose
 /// strings a user reads while *looking* at a dialog rather than while something
 /// goes wrong: the account setup page's labels, which
-/// [`insert_widgets`](crate::backend) has yet to put on screen.
+/// [`insert_widgets`](crate::backend) now puts on screen.
 ///
 /// [`crate::oauth2::ensure_registered`] does not take `type_module`: unlike
 /// the backend above, `[JMAP OAuth2]`'s extension type is registered

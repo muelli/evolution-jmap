@@ -58,7 +58,7 @@
 //! load-bearing precedent, since Google account setup works today against
 //! this exact prompter. [`REDIRECT_URI`] follows that precedent instead.
 //!
-//! ## What is not yet proven
+//! ## Where `run()`'s live dispatch is proven
 //!
 //! `run()`'s live dispatch — reached by a real `EConfigLookup`, which
 //! `e_config_lookup_new` refuses to construct without a live
@@ -67,13 +67,11 @@
 //! functional harness already sets up (`cmake/Functional.cmake`), which
 //! `cargo test` alone does not have. [`probe_host`] is unit-tested directly
 //! since it needs none of that; the FFI shell below is built and registered
-//! the same way [`crate::oauth2_service::Service`] was, but its own dispatch
-//! through a real `EConfigLookup` is left for that harness, not this crate's
-//! tests — the same honest limit `evo-sys/tests/config_lookup.rs` already
-//! documented for `run`'s offset. Not tagged complete in
-//! `docs/MILESTONES.md` for exactly that reason, on top of the M7 rule that
-//! GUI-adjacent behaviour needs a human running "Look Up Account Details" in
-//! real Evolution before it is.
+//! the same way [`crate::oauth2_service::Service`] was, and its own dispatch
+//! through a real `EConfigLookup` is what
+//! `jmap-functional/tests/config-lookup.rs` now drives — the M9 layer-1
+//! coverage `evo-sys/tests/config_lookup.rs` names as the next increment when
+//! it was written, since landed.
 //!
 //! The 307th session (`docs/NIGHT-LOG.md`) hand-drove this dispatch once,
 //! outside the test suite: a scratch C program linking `evolution-shell-3.0`
