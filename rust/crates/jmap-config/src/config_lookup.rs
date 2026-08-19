@@ -320,7 +320,9 @@ unsafe impl InterfaceImpl for Vtable {
 /// still running — not [`EConfigLookupResult`]'s own `display_name`, which
 /// [`run`] sets per result and which is what the user actually picks from.
 unsafe extern "C" fn get_display_name(_lookup_worker: *mut EConfigLookupWorker) -> *const gchar {
-    i18n::translate_static(N_(c"Look up JMAP account details"))
+    guard("JmapConfigLookup::get_display_name", ptr::null(), || {
+        i18n::translate_static(N_(c"Look up JMAP account details"))
+    })
 }
 
 /// Reads a string parameter out of `params`, or `None` for one that is unset

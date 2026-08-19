@@ -161,7 +161,7 @@ unsafe impl InterfaceImpl for Vtable {
 }
 
 unsafe extern "C" fn get_name(_service: *mut EOAuth2Service) -> *const c_char {
-    NAME.as_ptr()
+    guard("JmapOAuth2Service::get_name", ptr::null(), || NAME.as_ptr())
 }
 
 /// The one user-visible string here — the account editor's label for this
@@ -170,7 +170,9 @@ unsafe extern "C" fn get_name(_service: *mut EOAuth2Service) -> *const c_char {
 /// this function's own, not a `CamelProvider`'s `dgettext` call on a
 /// `'static` constant the way `provider.rs`'s strings are.
 unsafe extern "C" fn get_display_name(_service: *mut EOAuth2Service) -> *const c_char {
-    i18n::translate_static(N_(c"JMAP"))
+    guard("JmapOAuth2Service::get_display_name", ptr::null(), || {
+        i18n::translate_static(N_(c"JMAP"))
+    })
 }
 
 unsafe extern "C" fn get_client_id(
