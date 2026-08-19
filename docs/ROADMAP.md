@@ -171,6 +171,27 @@ tracks follow; the maintainer may reorder anytime.
   every returned GObject/string (g_free correctness); nullability at each
   boundary; `GCancellable` honoured on the sync vfuncs. Deliverable:
   `docs/FFI-SOUNDNESS-AUDIT.md` + TDD fixes for findings. Escalation-worthy.
+- **A6 `[claude]` Unsafe reduction / idiom audit.** Deliverable
+  `docs/UNSAFE-AUDIT.md`: inventory every `unsafe` in `rust/` by category, tag
+  each cluster **KEEP** (intrinsic, well-contained) / **IMPROVE** (a concrete
+  safer or more idiomatic refactor — a pointer-owning newtype with `Drop`, a
+  typed accessor, or an existing safe `glib`/`gobject` binding replacing a
+  hand-rolled FFI call) / **INVESTIGATE**, then a short prioritized IMPROVE list
+  with rough effort. Audit only — land improvements as separate follow-ups. Be
+  balanced: "already solid, here's why" is a valid finding. **Complements A5, not
+  a duplicate:** A5 is *soundness* (catch_unwind, transfer-full/none, nullability,
+  GCancellable); A6 is *reduction / containment / idiom*. Do them together or
+  A5-then-A6.
+- **A7 `[claude]` Stale-comments audit.** Deliverable
+  `docs/STALE-COMMENTS-AUDIT.md`: comments that no longer match the code —
+  renamed/removed items, changed behaviour, done TODOs, resolved-milestone refs
+  ("once M7 lands" when M7 is done), `calcard`/percent-codec leftovers. Precise
+  and conservative; confidence-tag each and include a "looked suspicious but
+  fine" section so the sweep is trustworthy. **Seed already found:**
+  `jmap-config/src/textdomain.rs:17-18` says `insert_widgets` "is unwritten"
+  while `lib.rs:125` says it is now written — verify and fix as part of the
+  sweep. Fixing HIGH-confidence stale comments in the same pass is fine (comments
+  don't affect tests); leave anything uncertain as a logged finding.
 
 ### Track B — Observability (NEEDS-DECISION on approach, then CLAIMABLE)
 - **B1 `[claude]` journald structured logging, TRACE→ERROR.** Replace the ~54
