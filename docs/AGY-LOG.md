@@ -129,3 +129,31 @@ Running record of headless polish increments on the `antigravity` branch.
   2. `calcard` parses multiple consecutive semicolons in structured values into empty string slices without collapsing delimiters, allowing `read_organization` to cleanly filter out intermediate empty components without shifting trailing units.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — Mutation testing on jmap-vcard (cargo-mutants)
+
+- **AGY-TASKS sub-step:** 6. Mutation testing (`cargo-mutants`, stable) on `jmap-vcard` (`contact.rs` and `error.rs`).
+- **Changes:**
+  - Ran `cargo-mutants` against `evolution-jmap-vcard` (418 mutants generated).
+  - Added comprehensive test suites in `rust/crates/jmap-vcard/tests/mapping.rs` to kill 58 surviving behavioral mutants across predicates, parsing, errors, key allocations, and component restoration:
+    - `name_and_address_component_predicates_and_context_mapping_fidelity`: tests `states_name_component`, `maps_context`, `states_address_component`, `states_address`, `address_label`, `states_email`, `states_phone`, `states_note`, `states_link`, `states_nickname`, and `title_kind` on empty, valid, and unmapped inputs.
+    - `calendar_and_spouse_predicates_fidelity`: tests `states_calendar`, `states_spouse`, and `states_nothing_but_the_marriage` with single/multiple relation types, extra fields, and missing URIs.
+    - `media_photo_and_online_service_predicates_and_comparisons`: tests `states_media`, `same_photo` (URI, base64 data, casing, invalid payloads), `states_online_service`, `online_service_handle`, `online_service_uri`, and `same_service`.
+    - `anniversary_date_validation_and_point_in_time_predicates`: tests `states_anniversary`, `states_a_point_in_time`, and `anniversary_date` with out-of-range months (0, 13), days (0, 32), and years (0, 10000).
+    - `restore_address_and_name_components_reconstruction`: tests splitting and restoration of shared address components and double-barrelled given name components when unedited, and preservation of single components when edited.
+    - `vcard_parser_errors_and_error_display_formatting`: tests `VCardError::Unterminated`, `VCardError::NotAVCard`, `VCardError::Malformed`, and `Display` implementations.
+    - `label_entry_with_empty_key_and_duplicate_keys_allocates_fresh_keys`: tests `label_entry` avoiding empty string keys on `X-JMAP-KEY=""` and allocating sequential keys.
+    - `inbound_vcard_with_various_parameter_types_and_component_categories`: tests `CATEGORIES` component values and `PREF` parsing.
+    - `inbound_vcard_with_unquoted_integer_jmap_keys`: tests preservation of unquoted integer parameter keys (`VCardParameterValue::Integer`).
+    - `inbound_vcard_with_multi_component_name_field`: tests multi-component `N` field value parsing (`VCardValue::Component`).
+  - Caught mutants increased from 344 to 402 (plus 1 timeout and 7 unviable).
+- **Deliberately left equivalent mutants:**
+  - `crates/jmap-vcard/src/contact.rs:2446:9`: `VCardParameterValue::Timestamp(stamp)` match arm in `param_text` (defensive exhaustive match on calcard parameter enum variant that does not occur on vCard 3.0 properties).
+  - `crates/jmap-vcard/src/contact.rs:2447:9`: `VCardParameterValue::Bool(true)` match arm in `param_text` (defensive exhaustive match).
+  - `crates/jmap-vcard/src/contact.rs:2448:9`: `VCardParameterValue::Bool(false)` match arm in `param_text` (defensive exhaustive match).
+  - `crates/jmap-vcard/src/contact.rs:2451:9`: `VCardParameterValue::Calscale(scale)` match arm in `param_text` (defensive exhaustive match).
+  - `crates/jmap-vcard/src/contact.rs:2452:9`: `VCardParameterValue::Level(level)` match arm in `param_text` (defensive exhaustive match).
+  - `crates/jmap-vcard/src/contact.rs:2453:9`: `VCardParameterValue::Phonetic(system)` match arm in `param_text` (defensive exhaustive match).
+- **Calcard behaviour-difference findings:** None.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
