@@ -38990,3 +38990,23 @@ transfer-full-vs-transfer-none semantics wrong in `marshal.rs`'s densest
 function (`take_referenced_time_zones`, ~4 distinct owned-pointer exit paths
 in 45 lines) risks a plausible-but-wrong double-free or leak that the
 existing tests may not catch, not a compile error.
+
+## 2026-08-19 (escalated to opus) — claiming Track A6 Pattern C: an `Owned<T>` RAII wrapper for GObject references
+
+Picked up the escalation the previous session wrote to
+`~/.night-shift-escalate` (`db5b098`), unchanged: `origin/master` is still at
+that commit. Claiming **Track A6 Pattern C** — the one safety-adjacent gap
+`docs/UNSAFE-AUDIT.md` found: ~15 manual `component_unref`/`g_object_unref`
+sites in `jmap-backend-cal/src/marshal.rs` whose correctness rests on a human
+re-checking every exit path each time a new early return is added nearby.
+
+Plan: a `jmap_backend_core::owned::Owned<T>` (`from_raw` → `Option`, `as_ptr`,
+`into_raw`, `Drop` calling `g_object_unref`) in the crate all three affected
+crates already depend on, TDD'd against a real `GObject`'s `ref_count` so the
+transfer-full/transfer-none semantics are *measured*, not asserted in a
+comment; then migrate `jmap-backend-cal/src/marshal.rs`'s timezone cluster
+(the densest: `take_referenced_time_zones`, `referenced_tzids`,
+`take_event_time_zones`, `rename_time_zone`, `defines_time_zone`), with the
+existing `tests/marshal.rs`/`tests/zones.rs` round-trip suites as the
+acceptance gate. `jmap-mail`/`jmap-backend-collection` sites are the
+follow-up the audit already scopes as separate, not this increment.
