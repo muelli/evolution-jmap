@@ -1,0 +1,100 @@
+<!--
+SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
+# Fastmail OAuth 2.0 — does the autodiscovery-only design work? (research, 2026-08-19)
+
+**Question (operator-requested):** does Fastmail support OAuth 2.0 *dynamic
+client registration* (RFC 7591)? The project's OAuth design is
+autodiscovery-only (decision #1 in `ROADMAP.md`): discover the provider's
+endpoints, dynamically register a public client, run authorization-code + PKCE
+— with **no** shipped/pre-registered `client_id`. That only works if the
+provider offers open dynamic registration.
+
+**Answer: yes.** Fastmail's live RFC 8414 authorization-server metadata
+advertises a `registration_endpoint`, so the autodiscovery-only design is
+viable against it.
+
+## Evidence — the live metadata, fetched verbatim
+
+`GET https://api.fastmail.com/.well-known/oauth-authorization-server`:
+
+```json
+{
+    "issuer": "https://api.fastmail.com",
+    "registration_endpoint": "https://api.fastmail.com/oauth/register",
+    "authorization_endpoint": "https://api.fastmail.com/oauth/authorize",
+    "token_endpoint": "https://api.fastmail.com/oauth/refresh",
+    "scopes_supported": [
+        "urn:ietf:params:oauth:scope:mail",
+        "urn:ietf:params:oauth:scope:contacts",
+        "urn:ietf:params:oauth:scope:calendars",
+        "https://www.fastmail.com/dev/mcp",
+        "openid", "profile", "email", "offline_access"
+    ],
+    "response_types_supported": ["code"],
+    "grant_types_supported": ["authorization_code", "refresh_token"],
+    "token_endpoint_auth_methods_supported": ["none"],
+    "code_challenge_methods_supported": ["S256"],
+    "authorization_response_iss_parameter_supported": true,
+    "revocation_endpoint": "https://api.fastmail.com/oauth/revoke",
+    "revocation_endpoint_auth_methods_supported": ["none"]
+}
+```
+
+`registration_endpoint` present (RFC 8414 §2 defines it as the RFC 7591
+endpoint) + `token_endpoint_auth_methods_supported: ["none"]` (public clients,
+no secret) + `code_challenge_methods_supported: ["S256"]` (PKCE) is exactly the
+public-client + DCR + PKCE model the design assumes.
+
+## One discrepancy, resolved
+
+Fastmail's *human* doc (`https://www.fastmail.com/for-developers/oauth/`) still
+says clients are "registered manually by contact with Fastmail developers."
+That contradicts the live metadata. Reading: **the doc lags the deployment** —
+dynamic registration looks recently added (note the `https://www.fastmail.com/dev/mcp`
+scope; the MCP OAuth profile mandates DCR). The machine-readable metadata is
+what an RFC 8414 client actually reads at runtime and is the ground truth for
+what the server will accept. The one thing still worth an **empirical** check
+before relying on it: that registration is *open* (no initial access token) —
+confirm by actually `POST`ing to `/oauth/register` from the `--features
+live-server` harness.
+
+## Concrete constraints for our implementation (found pre-implementation)
+
+- **Redirect URI — our current value would be REJECTED.**
+  `config_lookup::REDIRECT_URI = "jmap-oauth2:/redirect"` has no dot. Fastmail's
+  doc requires a private-use scheme in **reverse-DNS notation with at least one
+  dot** (e.g. `com.example:/`), *or* loopback `http://localhost/` (arbitrary
+  port, `127.0.0.1`/`::1` allowed), *or* an owned `https` domain. EDS's
+  `ECredentialsPrompterImplOAuth2` uses an embedded WebKitView (not a loopback
+  server) and extracts `code=` from whatever URI the navigation finishes on, so
+  a private-use scheme is the right shape — but it must be **dotted**
+  reverse-DNS (e.g. `org.gnome.evolution.jmap:/redirect` or similar). Change it.
+- **Scopes:** use the metadata's `urn:ietf:params:oauth:scope:{mail,contacts,calendars}`,
+  not the older `urn:ietf:params:jmap:mail` the stale human doc shows.
+- **Token endpoint** is `https://api.fastmail.com/oauth/refresh` (non-obvious
+  name). Fine *because* we discover it via RFC 8414 — never hardcode `/token`.
+- **PKCE `S256` is mandatory**; the AS advertises only S256.
+- **RFC 8707 `resource` indicator:** absent from both the metadata and the doc.
+  One web-search summary claimed Fastmail's `/authorize` rejects requests
+  lacking a `resource` = the JMAP session URL; unconfirmed against a primary
+  source. Verify empirically whether authorize/token need it.
+
+## Prerequisite already met
+
+Reaching `api.fastmail.com` at all needs the RFC 8620 SRV autodiscovery, which
+the night agents implemented after this was queued (Resolver seam in
+`jmap-client` — `a07f1a6`; both call sites routed through it — `2881ac5`,
+`bdca950`). So the OAuth-via-Look-Up path is the next real-server step, and it
+is still **DEFERRED** pending a TLS-proper deployment + a human running the
+consent round-trip (see `ROADMAP.md`). This document is the input to that work.
+
+## Sources
+
+- Fastmail authorization-server metadata (primary): <https://api.fastmail.com/.well-known/oauth-authorization-server>
+- Fastmail OAuth developer doc: <https://www.fastmail.com/for-developers/oauth/>
+- Fastmail API overview: <https://www.fastmail.com/dev/>
+- RFC 7591 (Dynamic Client Registration): <https://www.rfc-editor.org/rfc/rfc7591>
+- RFC 8414 (Authorization Server Metadata): <https://www.rfc-editor.org/rfc/rfc8414>
