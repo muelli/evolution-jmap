@@ -66,6 +66,8 @@ pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{encode_template_value, rebase_origin};
 
     #[test]
@@ -128,5 +130,28 @@ mod tests {
             rebase_origin("https://example.com/jmap", "http://10.0.0.5:8080/"),
             "http://10.0.0.5:8080/jmap"
         );
+    }
+
+    proptest! {
+        // `url` and `origin` here stand in for `apiUrl`/`downloadUrl`/
+        // `uploadUrl`/`eventSourceUrl` straight off an untrusted server's
+        // session document (see `Client::connect`'s `rebase_origin` calls) —
+        // a malicious or merely buggy server controls both arguments
+        // entirely. Arbitrary Unicode, not just ASCII attack strings: a
+        // multi-byte character straddling where `rebase_origin` slices for
+        // `://` or the first `/` is exactly the kind of input manual
+        // inspection is least trustworthy about.
+        #[test]
+        fn rebase_origin_never_panics_on_hostile_input(url in ".*", origin in ".*") {
+            let _ = rebase_origin(&url, &origin);
+        }
+
+        // `value` stands in for a server-supplied `blobId`/`accountId`, or
+        // this crate's own `name` (a message uid), substituted into a
+        // `downloadUrl`/`uploadUrl` template.
+        #[test]
+        fn encode_template_value_never_panics_on_hostile_input(value in ".*") {
+            let _ = encode_template_value(&value);
+        }
     }
 }
