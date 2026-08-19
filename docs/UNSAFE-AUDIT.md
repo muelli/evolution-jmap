@@ -306,6 +306,26 @@ Rough effort: **~2 hours.** Lowest priority of the five IMPROVE patterns —
 do it opportunistically alongside other work in these files rather than as
 its own increment.
 
+- **DONE 2026-08-19 for the `invalid_arg_gerror` half.**
+  `jmap_backend_core::error::invalid_arg_gerror(message: &str) -> *mut GError`
+  now backs all three named sites: `jmap-backend-book/src/ops.rs::invalid_arg`
+  and `jmap-backend-cal/src/ops.rs::invalid_arg` are deleted (their call
+  sites call the shared helper directly), and
+  `jmap-backend-collection/src/authenticate.rs::no_account_gerror` becomes a
+  one-line wrapper over it (kept as a named function since its call site
+  reads better naming the "no account" case than the raw message). No
+  behaviour change: each of the three was already the same
+  `cstring_lossy` + `e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, ...)`
+  body, and every existing test in the three crates (including
+  `jmap-backend-book/tests/ops.rs`'s and `jmap-backend-cal/tests/ops.rs`'s
+  `E_CLIENT_ERROR_INVALID_ARG`-asserting cases) stayed green unmodified.
+  **Still open:** the generic `fail`/`fail_bool` half — its ~10 call sites
+  return three different sentinel shapes (`gboolean`, `*mut T` for varying
+  `T`, `CamelAuthenticationResult`), so unifying them needs a real design
+  (a trait for "the failure return value" or similar) rather than a
+  mechanical port; left for a session that wants to do that design work,
+  consistent with this pattern's original "lowest priority" framing.
+
 ### Pattern F (positive — no action) — parent-class chain-up, and the panic-guard/subclass infrastructure
 
 `g_type_class_peek(parent_type).cast::<ParentClass>().as_ref()` recurs
