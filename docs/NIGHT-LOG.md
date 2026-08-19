@@ -38382,3 +38382,53 @@ a restart rather than being rediscovered; the account's own mail sources and
 any non-JMAP address book should be unaffected; and a delete attempted while
 the server is unreachable should report an error and leave the source in place
 rather than removing it locally.
+
+## 2026-08-19 (survey) — no tractable Sonnet increment; escalating Track E's `get_free_busy_sync` vfunc
+
+Fresh survey (`git fetch`: local `master` = `origin/master` at `6254f51`,
+Track D1's `delete_resource_sync` delivery — no new maintainer commit since).
+CURRENT PRIORITY is fully done (M7 human-verified, live-server harness
+operator-verified, SRV autodiscovery code-complete pending only an operator
+Fastmail run, M9/M10 done, the percent-encoding win done). Walked Round 2 in
+the maintainer's lead order:
+
+- **Track D** — both `create_resource_sync` and `delete_resource_sync` are
+  now delivered (this session's HEAD); D2's write-back needs a fresh design
+  (no EWS precedent exists, per the prior session's research) and is
+  explicitly not-claimable-yet. Track D is done for now.
+- **Track E** — Phase 0 and Path A's proto/client/mock slice are done
+  (confirmed no `get_free_busy_sync`/`free_busy` in
+  `jmap-backend-cal/src/` — the vfunc genuinely hasn't been started). Per the
+  maintainer's own lead order this is next after Track D, and it is a real
+  user-facing capability (free/busy), not an edge-case polish item. It is
+  GObject-vtable FFI (`ECalBackend::get_free_busy_sync`) plus a
+  `BusyPeriod → VFREEBUSY` marshaller, EDS-only testable, already flagged
+  escalation-worthy in the roadmap text itself.
+- **Track A5** (FFI soundness audit) and **A6 Pattern C** (libical/GObject
+  RAII wrapper) remain the other standing escalation-worthy items; both have
+  been declined by multiple prior sessions in favour of a tractable
+  alternative when one existed. No tractable alternative exists this
+  iteration, but between the three, Track E's vfunc is the one the
+  maintainer's lead order actually names next and delivers a feature rather
+  than an audit/refactor, so it is the single best next step — not
+  escalating all three at once.
+- **Track B1** (journald logging) and **C2's third-party-notices
+  decision**/**C4** remain NEEDS-DECISION — no maintainer approval on record
+  beyond the roadmap's own "recommend the former" text, which prior sessions
+  have consistently treated as insufficient to start (unlike Track E's Path A,
+  which has an explicit "MAINTAINER DECISION: GREENLIT" line). Left alone.
+- **Track F** (newer-Evolution/EDS spike) is a live concurrent claim at
+  `6be9c4f` (2026-08-19 10:40:39Z, ~50 minutes before this survey per the
+  real wall clock) — nowhere near the 24h deadlock threshold. Left untouched.
+- **A1/A3** are `[agy]`-lane items, not this lane's to claim.
+
+No tractable Sonnet-sized item exists this iteration. Per the escalation
+protocol, writing `claude-opus-5` to `~/.night-shift-escalate` and stopping
+here without claiming any work. The next session on this thread should start
+from Track E's roadmap paragraph (`docs/ROADMAP.md` Track E, Path A) and
+`docs/PRINCIPALS-DESIGN.md` §4.2–§4.4: build `ECalBackend::get_free_busy_sync`
+in `jmap-backend-cal` (invoked from `jmap-cal-sync`) plus a
+`BusyPeriod → VFREEBUSY` marshaller in `jmap-ical`, using
+`Client::get_availability`/`Principal/query` (attendee→principal) already
+landed from the mock-side slice. Build and test against `jmap-mockd` — it is
+fully headless-testable that way; only the vfunc registration itself is FFI.
