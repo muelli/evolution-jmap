@@ -38730,3 +38730,58 @@ it now: compile `jmap-config` + `evo-sys` (+ the other EDS-gated crates
 `EMailConfig*`/shell-API drift 3.52→3.60, and write the go/no-go verdict to
 `docs/NEWER-EVOLUTION-SPIKE.md` per the roadmap's own criterion (recommend
 3.52-only if multi-version gating would be messy).
+
+## 2026-08-19 — Delivered: Track F closed, no config/GUI drift on EDS/Evolution 3.60.2
+
+Executed the claim at `3912476`. Reproduced `ci.yml`'s `eds-version-matrix`
+container locally (`sudo docker`, since the invoking user is not in the
+`docker` group on this VM but has passwordless `sudo` for it — worth noting
+for the next session that hits "permission denied" on the bare `docker`
+command): pulled the exact pinned digest, installed the same package set
+`ci.yml` installs, copied a clean `master` checkout in (not the read-only
+bind mount, so `cargo`'s writes to `target/` stay off the host), and ran
+`cargo build --locked` then `cargo test --locked` on `-p eds-sys -p evo-sys
+-p jmap-config` — the narrower set Track F actually asked about, not the
+full `ci/eds-matrix.sh` list (the mail/book/cal/collection crates were
+already closed by M10, see `docs/eds-version-matrix.md`).
+
+**The digest still resolves to `evolution-3.60.2-1.fc44`/
+`evolution-data-server-3.60.2-1.fc44` (Fedora 44)** — same version M10's
+2026-08-17 measurement recorded, confirmed by `rpm -q` rather than trusted
+from the doc. Build: exit 0, zero warnings from `jmap-config` itself (the
+only warnings anywhere are `eds-sys`'s 5 already-documented bindgen/glibc
+`unnecessary_transmute` lints, unrelated to this repo). Test: **290 tests, 0
+failed**, across all three crates — including `evo-sys/tests/layout.rs`'s
+ABI cross-checks for exactly the `EMailConfigServiceBackend`/
+`EMailConfigServicePage` types Track F named, and `eds-sys/tests/layout.rs`'s
+pkg-config/headers/runtime three-way check from `docs/eds-versions.md`. Every
+`jmap-config` suite (`module.rs`, `oauth2*.rs`, `textdomain.rs`, unit tests)
+passed unmodified; the crate has zero `#[cfg]`s today and needed none.
+
+**Turns out the spike's own premise was stale by the time it ran**:
+`ci/eds-matrix.sh` already lists `-p jmap-config`, and
+`docs/eds-version-matrix.md`'s 2026-08-17 entry already reported it green —
+`jmap-config/src/backend.rs` (the `EMailConfigService*` code) was added
+2026-08-10, a week before that measurement, so it was included, not added
+after. This session's run is a targeted re-confirmation (three crates, read
+specifically for shell-API drift) rather than a first look, and it confirms
+the same "green" the wider matrix already found: no `GtkUIManager` usage to
+begin with (grepped, zero hits beyond a comment in `evo-sys/build.rs`), no
+`EMailConfig*` rename or signature change, nothing to gate.
+
+**Go/no-go: no-op, closed.** Wrote the required
+`docs/NEWER-EVOLUTION-SPIKE.md` with the full method and findings; updated
+`docs/ROADMAP.md`'s Track F entry to CLOSED inline rather than leaving it
+open for a maintainer decision that has no decision to make — there is no
+drift to gate and no effort estimate to give, per the roadmap's own "if
+nothing drifts, that is a bonus finding" framing. What is still unverifiable
+here, orthogonal to EDS version and unchanged from every prior M7 session:
+the actual GTK widget behaviour of `EMailConfigServicePage` inside a running
+Evolution 3.60, which needs a human in a VM with that Evolution installed —
+recorded as a fact, not queued as a task.
+
+Gate: `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D
+warnings` (default-members), `cargo test --locked` (default-members) all
+clean on the host (3.52) — this increment only touched two docs files and
+`docs/ROADMAP.md`; no Rust source changed. reuse lint: no new source files,
+nothing to license-head.

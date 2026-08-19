@@ -989,16 +989,20 @@ Reassuringly, our setup UI uses the `EMailConfigServiceBackend`/
 `EMailConfigServicePage` API (`jmap-config/src/backend.rs`), **not** the
 `GtkUIManager` that Evolution ≥3.56 dropped — so that particular churn does not
 touch us, and there is zero `GtkUIManager` usage in `jmap-config`/`evo-sys`.
-**Spike (`[claude]`, deliverable `docs/NEWER-EVOLUTION-SPIKE.md`):** compile
-`jmap-config` + `evo-sys` against the newer-Evolution/EDS container already used
-by `ci/eds-matrix.sh`; characterize any `EMailConfig*` (or other shell/UI) API
-drift 3.52 → 3.56/3.60; then judge honestly whether extending the existing
-`compat.rs`-style build.rs-probed `#[cfg]` gating absorbs it cleanly or whether it
-would sprawl. **Maintainer directive: recommend 3.52-only if it would be messy —
-staying single-version beats carrying spaghetti.** Do NOT implement multi-version
-support in the spike; produce the go/no-go + effort estimate and let the
-maintainer decide. (If it turns out nothing drifts, the bonus finding is that we
-may already build on newer Evolution unchanged.)
+**SPIKE DONE 2026-08-19 — CLOSED, no-op.** See `docs/NEWER-EVOLUTION-SPIKE.md`:
+`jmap-config`+`evo-sys`+`eds-sys` built and fully tested (290 tests, 0 failed,
+zero warnings from `jmap-config` itself) against the exact `ci/eds-matrix.sh`
+container, which already resolves to EDS/Evolution 3.60.2 (confirmed by
+`rpm -q`). `evo-sys/tests/layout.rs`'s `EMailConfigServiceBackend`/
+`EMailConfigServicePage` ABI checks pass unchanged. Turns out this crate was
+already in `ci/eds-matrix.sh`'s set and already reported green in
+`docs/eds-version-matrix.md` (2026-08-17) — the "config/GUI side is untested"
+premise above was stale by the time this spike ran; this was a targeted
+re-confirmation, not a first look. No drift, nothing to gate, no follow-up
+task queued. What still cannot be confirmed headlessly (orthogonal to EDS
+version, same as ever): the real `EMailConfigServicePage` GTK widget's
+on-screen behaviour in an actual Evolution 3.60 session, which needs a human
+in a VM with that Evolution installed.
 
 ### Not doing (protocol-gated)
 - **Tasks (VTODO) / Memos (VJOURNAL).** BLOCKED upstream: draft-ietf-jmap-calendars
