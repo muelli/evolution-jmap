@@ -98,6 +98,23 @@ pub unsafe fn dup_string(value: &str) -> *mut gchar {
     unsafe { g_strdup(text.as_ptr()) }
 }
 
+/// The Rust view of a Camel/GObject instance dispatch already vouches for.
+///
+/// A class's vfuncs are only ever dispatched by GObject on an instance of
+/// that class, so the first argument of `connect_sync`, `get_folder_sync` and
+/// their kin needs no type check before the cast — unlike a pointer that
+/// arrived via an ordinary property or argument, which does (see the
+/// `checked`-family callers instead). This is the trusted half only: a bare
+/// null check, then the cast.
+///
+/// # Safety
+///
+/// `ptr` must be NULL or point at a live instance of `T`.
+pub unsafe fn dispatched_borrow<'a, C, T>(ptr: *mut C) -> Option<&'a T> {
+    // SAFETY: the caller's contract is exactly what makes this cast sound.
+    unsafe { ptr.cast::<T>().as_ref() }
+}
+
 /// Reads `source`'s extension named `name`, without creating it if absent.
 ///
 /// `e_source_get_extension` *creates* the extension it cannot find, which is
