@@ -149,6 +149,20 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 - **URI Scheme Mapping**: `SERVICE_SCHEMES` translates bare URIs (`xmpp:`, `aim:`, `gg:`, `groupwise:`, `icq:`, `msn:`, `msnim:`, `matrix:`, `skype:`, `yahoo:`, `ymsgr:`) into plain handles.
 - **Unslotted / Unmapped Services**: `X-TWITTER` and `X-SIP` are defined in EDS as `EContactAttrList` (`GList*` of `char*`) without `HOME`/`WORK` slots and are deliberately unmapped in `jmap-vcard`.
 
+### 3.8 Categories & Keywords (`CATEGORIES` ↔ `E_CONTACT_CATEGORY_LIST`)
+- **Set vs List Mapping**: JSContact `keywords` (RFC 9553 §2.8.2) is a mathematical `Set` (JSON map with `true` values). vCard 3.0 `CATEGORIES` (RFC 2426 §3.7.1) is a comma-separated list of text values. EDS maps this line to `E_CONTACT_CATEGORY_LIST` (Evolution's Categories field).
+- **Lexicographical Sorting & Stability**: Because sets possess no intrinsic order, `drawn_tags` sorts keyword tags lexicographically before emitting the `CATEGORIES` line. This guarantees deterministic vCard output across serialization cycles, preventing spurious diffs during JMAP sync.
+- **Delimiter & Character Escaping**:
+  - Commas within a category name (e.g. `"Acme, Inc."` -> `Acme\, Inc.`, `"Software, Core"` -> `Software\, Core`) are backslash-escaped on emission and unescaped on parse, preventing categories from splitting into multiple tags.
+  - Semicolons (`\;`), newlines (`\n`), and backslashes (`\\`) are similarly escaped and preserved with 100% roundtrip fidelity.
+- **Multi-Line Inbound Merging & Deduplication**:
+  - RFC 2426 allows multiple `CATEGORIES` lines in a single vCard, but Evolution/EDS only renders the first `CATEGORIES` line in its UI.
+  - `read_keywords` reads all `CATEGORIES` lines across the vCard, flattening `entry_items` and deduplicating identical tags into a unified `keywords` map. Outbound serialization consolidates all tags into a single canonical `CATEGORIES` line.
+- **Whitespace Defense & Refusal Invariants**:
+  - EDS trims leading and trailing whitespace when users edit categories in Evolution.
+  - [`states_keyword`] refuses empty tags (`""`), non-boolean values (`Value::Bool(false)` or strings/numbers), carriage returns (`\r`), and tags with leading or trailing ASCII whitespace (`edged_with_whitespace`). This prevents emitting tags that EDS would silently trim and rename on the server.
+- **Empty / Absent Categories**: Cards with `keywords: None`, empty sets, or only unstated tags emit no `CATEGORIES` line. Inbound vCards with absent `CATEGORIES`, empty values (`CATEGORIES:`), or delimiter-only lines (`CATEGORIES:,,,`) parse to `keywords: None`.
+
 ---
 
 ## 4. Special Semantics & Product Decision Catalog

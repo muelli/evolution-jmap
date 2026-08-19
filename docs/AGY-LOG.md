@@ -339,6 +339,28 @@ Running record of headless polish increments on the `antigravity` branch.
   3. `calcard` handles escaped backslashes preceding delimiters (`\\;`, `\\,`) cleanly without misinterpreting the backslash as escaping the delimiter.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — CATEGORIES ↔ E_CONTACT_CATEGORY_LIST fidelity & roundtrip (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 3. `CATEGORIES` ↔ `E_CONTACT_CATEGORY_LIST`: comma-separated categories round-trip — order preserved, commas within a category escaped — for empty, single, and multiple; pin with tests, else log a finding.
+- **Changes:**
+  - Added comprehensive characterization, boundary, and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `categories_empty_absent_and_refused_permutations_roundtrip`: tests empty, absent, and refused keyword combinations (`keywords: None`, empty `BTreeMap`, inbound `CATEGORIES:`, inbound consecutive commas `CATEGORIES:,,,`, and tags refused by `states_keyword`), verifying that no empty `CATEGORIES` lines are emitted and roundtrips evaluate cleanly to `keywords: None`.
+    - `categories_single_tag_variations_and_escaped_delimiters_roundtrip`: tests single tags containing plain text (`"Work"`), interior spaces (`"Project Alpha"`), embedded commas (`"Acme, Inc."`, `"One, Two, Three"`), semicolons (`"Project;Alpha"`, `"Architecture; Core; Platform"`), backslashes (`"Dept\\Core"`, `"Path\\\\To\\\\Tag"`), newlines (`"Line 1\nLine 2"`), and combinations with all special characters, verifying exact value preservation and fixed-point convergence (`reemitted == vcard`).
+    - `categories_multiple_tags_sorted_order_and_escaping_roundtrip`: tests multiple tags emitted on a single line in lexicographically sorted order (`drawn_tags`), verifying that embedded commas and semicolons inside tags do not cause spurious item splits and roundtrip with fixed-point stability.
+    - `categories_multiple_inbound_lines_merging_deduplication_and_fixed_point`: tests merging and deduplication of multiple inbound `CATEGORIES` lines (e.g. from vCard imports / multiple sources) into a unified `keywords` map by `read_keywords`, and consolidation into a single sorted `CATEGORIES` line on outbound serialization.
+    - `categories_inbound_delimiter_variations_and_empty_item_skipping`: tests inbound vCards with empty items between/around commas (`CATEGORIES:Alpha,,Beta,,,Gamma,`), mixed-case property names (`categories:`, `Categories:`), and parameters (`ALTID`, `LANGUAGE`, custom `X-` parameters).
+    - `categories_unicode_and_multibyte_utf8_roundtrip`: tests non-ASCII and multi-byte UTF-8 categories across various languages (German umlauts, French accents, Japanese Kanji/Kana, Arabic RTL, and emoji tags), verifying lossless round-trips and RFC 2426 line folding without UTF-8 splitting.
+    - `categories_eds_category_list_fidelity_and_states_keyword_invariants`: validates `states_keyword` against exhaustive matrix of valid and refused inputs (empty tags, `\r`, leading/trailing ASCII whitespace, non-boolean values) and tests mixed cards to ensure unstated tags are omitted from emission to protect against EDS whitespace trimming corruption.
+  - Enhanced `arb_card_resources` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` with `arb_keyword_tag` strategy generating tags with spaces, commas, semicolons, backslashes, newlines, UTF-8 unicode, and boundary edge cases.
+  - Updated `docs/VCARD-MAPPING.md` with Section 3.8 documenting `CATEGORIES` ↔ `E_CONTACT_CATEGORY_LIST` architecture, set-vs-list mapping, lexicographical sorting, delimiter escaping, multi-line merging, whitespace defense, and empty tag invariants.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `calcard` automatically handles comma-separated list serialization for `CATEGORIES` (mapping multiple `VCardValue::Text` values into comma-separated items on a single line) and escapes literal commas within individual values as `\,` per RFC 2426 §2.4.2 and §3.7.1.
+  2. `calcard` automatically escapes semicolons as `\;`, newlines as `\n`, carriage returns as `\r`, and backslashes as `\\`, unescaping both lowercase `\n` and uppercase `\N` on parse.
+  3. In `jmap-vcard`, JSContact `keywords` Set is sorted lexicographically by `drawn_tags` before emitting the `CATEGORIES` line, guaranteeing deterministic serialization across passes.
+  4. Multiple inbound `CATEGORIES` lines are merged into a unified set by `read_keywords` so tags on subsequent lines are never lost during sync, while emission produces a single consolidated `CATEGORIES` line matching Evolution's UI display (`E_CONTACT_CATEGORY_LIST`).
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
 
 
 
