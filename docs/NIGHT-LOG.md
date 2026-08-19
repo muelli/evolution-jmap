@@ -34962,3 +34962,33 @@ forward with `JMAP_LIVE_SERVER_REBASE_URLS=1` (the client honours it in
 A real deployment (client connects to the server's own TLS hostname, apiUrl ==
 origin) needs no rebase. Remaining real-server item: the OAuth 2.0 discovery
 issuer-mismatch finding (`2672cb4`) is still open.
+
+## 2026-08-19 (claim) — Claiming the percent-encoding externalisation win
+
+Fresh survey: `docs/MILESTONES.md` has M1–M9 COMPLETE, M7 COMPLETE, M10
+explicitly NOT complete (`1ce7237`: 3 newer-EDS `eds-sys` assertions still
+fail; that leg needs a CI dispatch this runner cannot trigger, so it stays
+off the table tonight). Real-server readiness's two open items are both
+maintainer-gated (OAuth2 issuer mismatch; EDS 3.60+ mapping decisions,
+`docs/BACKLOG.md`). Round 2's Track D/E and Track A's audits (A5/A6/A7) are
+queued but the maintainer's own "Lead order" note says the Claude lane leads
+Round 2 only *after* the two remaining CURRENT PRIORITY items (M10's 3 tests,
+this percent-encoding win) land — so this is the correctly-ordered next
+increment, not Round 2 work.
+
+Checked it is actually still open (not done by a parallel lane): grepped
+`jmap-client/src/url.rs` and `jmap-mock/src/server.rs` — both still hand-roll
+their percent codec; no commit under `--all` mentions "percent-encoding"
+besides the audit doc itself (`8e84893`).
+
+Claiming: ROADMAP priority item 4 — unify `jmap-client/src/url.rs`'s
+`encode_template_value`/`hex_digit` (also reused by `oauth.rs::form_body`)
+and `jmap-mock/src/server.rs`'s `percent_decode`/`hex_value`/the decode half
+of `parse_form_body` onto the `percent-encoding` crate (already in
+`Cargo.lock` v2.3.2 via `ureq`; adding it as a direct dependency of
+`jmap-client` and `jmap-mock` adds no new dependency to the tree). Exact
+scope and behaviour-preservation notes are in
+`docs/EXTERNALISATION-AUDIT.md` §1. Keeping every existing test in
+`url.rs`, `oauth.rs`, and `server.rs` green is the acceptance bar; the
+`+`↔space handling in `parse_form_body` stays hand-written (form-specific,
+not RFC 3986).
