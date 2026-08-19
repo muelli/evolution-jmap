@@ -49,7 +49,7 @@ use jmap_backend_collection::mail_child::{
 };
 use jmap_backend_collection::prepare_mail::MAIL_BACKEND_NAME;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
 
@@ -486,7 +486,7 @@ fn the_transport_sends_through_the_server_the_provider_would_connect_to() {
     assert_eq!(
         transport.server(),
         Ok(ServerConfig {
-            origin: "https://jmap.example.com:8443".to_owned(),
+            target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
             user: Some("vera@example.com".to_owned()),
         })
     );
@@ -521,7 +521,7 @@ fn a_plaintext_account_reaches_its_transport_as_plaintext() {
     assert_eq!(
         transport.server(),
         Ok(ServerConfig {
-            origin: "http://localhost:8080".to_owned(),
+            target: ConnectTarget::Origin("http://localhost:8080".to_owned()),
             user: Some("vera".to_owned()),
         })
     );

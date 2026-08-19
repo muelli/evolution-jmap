@@ -19,7 +19,7 @@ use std::ptr;
 use eds_sys::{ESource, e_source_new_with_uid};
 use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::server_of;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, apply};
@@ -63,9 +63,9 @@ impl TestSource {
     }
 
     /// The server as the collection backend reads it back.
-    fn server(&self) -> Result<String, SourceError> {
+    fn server(&self) -> Result<ConnectTarget, SourceError> {
         // SAFETY: a live source.
-        unsafe { server_of(self.0) }.map(|server| server.origin)
+        unsafe { server_of(self.0) }.map(|server| server.target)
     }
 }
 

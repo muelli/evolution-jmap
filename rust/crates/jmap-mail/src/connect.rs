@@ -53,8 +53,8 @@ use eds_sys::{
 use glib_sys::{GError, GQuark, g_error_new_literal};
 use jmap_backend_core::connect::is_wrong_password;
 use jmap_backend_core::error::cstring_lossy;
-use jmap_backend_core::source::SourceError;
-use jmap_client::{Client, Credentials, Error};
+use jmap_backend_core::source::{self, SourceError};
+use jmap_client::{Credentials, Error};
 use jmap_mail_sync::{FolderRole, MailSync, SyncError};
 use jmap_proto::session::CAPABILITY_MAIL;
 
@@ -361,7 +361,7 @@ pub fn open_mail(config: &ServerConfig, credentials: Credentials) -> Result<Mail
     // pressed once and honoured forever. What cancels a JMAP operation is the
     // scope its vfunc installs — `jmap_backend_core::cancel::observe` — which
     // the client checks in preference to anything it was built with.
-    let client = Client::connect(&config.origin, credentials)?;
+    let client = source::connect(&config.target, credentials)?;
     // Under `urn:ietf:params:jmap:mail`, the way the address book backend
     // resolves its own account under `:contacts`. An account that offers the
     // one and not the other is not a mail account, and a store that ignored

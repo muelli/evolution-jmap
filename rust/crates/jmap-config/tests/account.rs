@@ -28,7 +28,7 @@ use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::{Server, parts_of, server_of, user_of};
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, BACKEND_NAME, apply, read};
@@ -157,7 +157,10 @@ fn the_origin_the_backend_will_fetch_the_session_document_from_is_the_typed_one(
     let source = TestSource::new().written(&account());
 
     let server = source.server().expect("the account names a server");
-    assert_eq!(server.origin, "https://jmap.example.com:8443");
+    assert_eq!(
+        server.target,
+        ConnectTarget::Origin("https://jmap.example.com:8443".into())
+    );
 }
 
 #[test]
@@ -225,7 +228,10 @@ fn a_plain_text_account_is_written_as_one_rather_than_left_to_default() {
     );
     let server = source.server().expect("the account names a server");
     assert!(!server.connection.secure);
-    assert_eq!(server.origin, "http://127.0.0.1:8080");
+    assert_eq!(
+        server.target,
+        ConnectTarget::Origin("http://127.0.0.1:8080".into())
+    );
 }
 
 #[test]
@@ -263,7 +269,10 @@ fn an_account_that_names_no_port_leaves_the_scheme_to_choose_one() {
     // Zero, which is how the keyfile spells "not set", read back as `None`
     // rather than as a request for port zero.
     assert_eq!(server.connection.port, None);
-    assert_eq!(server.origin, "https://jmap.example.com");
+    assert_eq!(
+        server.target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
 }
 
 #[test]

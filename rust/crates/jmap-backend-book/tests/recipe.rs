@@ -28,7 +28,7 @@ use eds_sys::{
     e_source_get_extension, e_source_registry_server_new, g_file_new_for_path, g_object_unref,
 };
 use jmap_backend_book::factory::FACTORY_NAME;
-use jmap_backend_core::source::SourceConfig;
+use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 
 /// The repository root, from the crate this test lives in.
 fn repository() -> PathBuf {
@@ -138,7 +138,10 @@ fn the_recipes_keyfile_describes_the_mock_server() {
 
     // `jmap-mockd`'s default port, in the clear, which `SourceConfig` allows
     // for loopback and nothing else.
-    assert_eq!(config.origin, "http://127.0.0.1:8080");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Origin("http://127.0.0.1:8080".into())
+    );
     // No user, on purpose. A source that names one makes the backend ask EDS
     // for a password before it sends anything, and the recipe's first run
     // would then be a prompt rather than a connection; `jmap-mockd` with no
@@ -176,8 +179,8 @@ fn the_keyfile_spelling_that_turns_tls_on_is_method_not_secure() {
 
     let tls = TemporaryKeyfile::holding(&remote.replace("Method=none", "Method=tls"));
     assert_eq!(
-        RegistrySource::load(tls.path()).config().origin,
-        "https://jmap.example.com:8080"
+        RegistrySource::load(tls.path()).config().target,
+        ConnectTarget::Origin("https://jmap.example.com:8080".into())
     );
 
     let mistake = TemporaryKeyfile::holding(&remote.replace("Method=none", "Secure=true"));

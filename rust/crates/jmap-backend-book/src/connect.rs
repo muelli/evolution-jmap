@@ -15,9 +15,9 @@ use eds_sys::{ENamedParameters, ESource, ESourceAuthenticationResult};
 use gio_sys::GCancellable;
 use glib_sys::GError;
 use jmap_backend_core::connect::{Collection, ConnectError, connect_with, resolve};
-use jmap_backend_core::source::SourceConfig;
+use jmap_backend_core::source::{self, SourceConfig};
 use jmap_book_sync::BookSync;
-use jmap_client::{Client, Credentials};
+use jmap_client::Credentials;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
 pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
@@ -39,7 +39,7 @@ pub fn open_book(
     config: &SourceConfig,
     credentials: Credentials,
 ) -> Result<BookSync, ConnectError> {
-    let client = Client::connect(&config.origin, credentials)?;
+    let client = source::connect(&config.target, credentials)?;
     let account_id = client.primary_account(CAPABILITY_CONTACTS)?;
     let books = client.address_books(&account_id)?;
 

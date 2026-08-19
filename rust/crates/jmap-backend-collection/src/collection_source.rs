@@ -77,18 +77,20 @@ use eds_sys::{
 };
 use glib_sys::GFALSE;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::{SourceError, origin};
+use jmap_backend_core::source::{ConnectTarget, SourceError, connect_target};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 
 /// Where the account says its server is, in the two shapes it is needed in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Server {
-    /// Scheme, host and port, validated: what this backend fetches the session
-    /// document from. Assembled by [`jmap_backend_core::source::origin`], so it
-    /// is the same string the address book and calendar backends would build
-    /// from the [`connection`](Server::connection) beside it.
-    pub origin: String,
+    /// What this backend fetches the session document from — an explicit
+    /// endpoint, or a bare domain eligible for `_jmap._tcp` SRV
+    /// autodiscovery. Decided by [`jmap_backend_core::source::connect_target`]
+    /// from the same fields as the [`connection`](Server::connection) beside
+    /// it, so an address book or calendar backend reconnecting to this
+    /// account's server reaches the same answer.
+    pub target: ConnectTarget,
     /// The same server field by field, for the children to repeat. Not derived
     /// from the origin: [`Child::settings`](jmap_collection_sync::Child::settings)
     /// writes `[Authentication]` and `[Security]` keys, and taking a URL apart
@@ -234,17 +236,18 @@ pub unsafe fn server_of(source: *mut ESource) -> Result<Server, SourceError> {
         )
     };
 
-    // The validation, and the one place it happens: the origin this backend
+    // The validation, and the one place it happens: the target this backend
     // connects to and the host its children are given come out of the same
-    // checked string.
-    let origin = origin(host.as_deref(), port, secure)?;
+    // checked fields.
+    let target = connect_target(host.as_deref(), port, secure)?;
 
     Ok(Server {
-        origin,
+        target,
         connection: Connection {
-            // `origin` returned Ok, so the host is present; unwrapping it here
-            // rather than earlier keeps `MissingHost` a single decision.
-            host: host.expect("a validated origin was built from a host"),
+            // `connect_target` returned Ok, so the host is present;
+            // unwrapping it here rather than earlier keeps `MissingHost` a
+            // single decision.
+            host: host.expect("a validated target was built from a host"),
             // The keyfile writes 0 for "not set", and a child given `Port=0`
             // would ask for port zero instead of the scheme's default.
             port: (port != 0).then_some(port),

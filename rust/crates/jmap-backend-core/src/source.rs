@@ -93,9 +93,10 @@ use crate::marshal::read_string;
 /// What a backend needs from its `ESource` in order to build a client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceConfig {
-    /// Scheme, host and — if the source names one — port, with no trailing
-    /// slash: what `jmap_client::Client::connect` calls the origin.
-    pub origin: String,
+    /// Where to fetch the session document from: an explicit endpoint, or a
+    /// bare domain eligible for `_jmap._tcp` SRV autodiscovery before the
+    /// `.well-known/jmap` fallback. See [`connect`] for what this becomes.
+    pub target: ConnectTarget,
     /// The user name to authenticate as, if the source names one.
     pub user: Option<String>,
     /// The JMAP object this source stands for — an address book id in the
@@ -222,18 +223,62 @@ impl SourceConfig {
         let port = unsafe { e_source_authentication_get_port(auth) };
         let resource_id = unsafe { read_string(e_source_resource_get_identity(resource)) };
 
-        let origin = origin(host.as_deref(), port, secure)?;
+        let target = connect_target(host.as_deref(), port, secure)?;
 
         Ok(Self {
-            origin,
+            target,
             user,
             resource_id,
         })
     }
 }
 
-/// Assembles the origin a JMAP client connects to, and refuses the two ways an
-/// account can point one somewhere it should not go.
+/// Where a JMAP client should look for the server: an already-concrete
+/// endpoint, or a bare domain RFC 8620 §2.2 autodiscovery applies to.
+///
+/// The distinction rides on information [`connect_target`] already has and
+/// would otherwise discard: a source that names a port states an endpoint,
+/// while one that does not is exactly RFC 8620 §2.2's "the domain is the
+/// entry point" case — the shape a plain email+password account setup
+/// produces (`jmap-config/src/defaults.rs`'s `from_identity` writes the bare
+/// email domain as `Authentication:Host` with no port, on purpose, per that
+/// RFC). See [`connect`] for what each variant does at connect time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectTarget {
+    /// Scheme, host and port, with no trailing slash: what
+    /// `jmap_client::Client::connect` calls the origin. Connected to
+    /// directly — SRV autodiscovery does not apply to something that
+    /// already names an exact endpoint.
+    Origin(String),
+    /// A bare domain, secure and with no port stated: eligible for
+    /// `_jmap._tcp.<domain>` SRV autodiscovery before the bare-domain
+    /// `https://<domain>/.well-known/jmap` fallback (RFC 8620 §2.2).
+    Domain(String),
+}
+
+/// Connects to the server `target` names, honouring `_jmap._tcp` SRV
+/// autodiscovery for a [`ConnectTarget::Domain`].
+///
+/// The only resolver anything constructs today is
+/// `jmap_client::resolver::NoSrvResolver`, which never finds a record — so
+/// behaviour is unchanged until a real resolver exists (the EDS integration
+/// layer will supply one backed by `g_resolver_lookup_service()`); this is
+/// the seam it plugs into, the same one `jmap-config`'s "Look Up Account
+/// Details" worker already consults via `ClientBuilder::connect_domain`.
+pub fn connect(
+    target: &ConnectTarget,
+    credentials: jmap_client::Credentials,
+) -> Result<jmap_client::Client, jmap_client::Error> {
+    match target {
+        ConnectTarget::Origin(origin) => jmap_client::Client::connect(origin, credentials),
+        ConnectTarget::Domain(domain) => jmap_client::Client::builder()
+            .rebase_urls_to_origin(jmap_client::rebase_urls_from_env())
+            .connect_domain(domain, credentials),
+    }
+}
+
+/// Decides the [`ConnectTarget`] a JMAP client connects to, and refuses the
+/// two ways an account can point one somewhere it should not go.
 ///
 /// Separate from [`SourceConfig::from_source`] because the mail side reaches
 /// the same decisions from a different place: Camel keeps a service's server on
@@ -249,19 +294,42 @@ impl SourceConfig {
 /// read back as.
 ///
 /// [`read_string`]: crate::marshal::read_string
-pub fn origin(host: Option<&str>, port: u16, secure: bool) -> Result<String, SourceError> {
+pub fn connect_target(
+    host: Option<&str>,
+    port: u16,
+    secure: bool,
+) -> Result<ConnectTarget, SourceError> {
     let host = host.ok_or(SourceError::MissingHost)?;
     let authority = authority(host)?;
     if !secure && !is_loopback(host) {
         return Err(SourceError::InsecureTransport(host.to_owned()));
     }
 
+    // An IP literal is never a domain to run SRV autodiscovery against —
+    // there is no email-style entry point to resolve, only the address
+    // already given.
+    let is_ip_literal = host.parse::<Ipv4Addr>().is_ok() || host.parse::<Ipv6Addr>().is_ok();
+    if port == 0 && secure && !is_ip_literal {
+        return Ok(ConnectTarget::Domain(host.to_owned()));
+    }
+
     let scheme = if secure { "https" } else { "http" };
-    Ok(match port {
+    Ok(ConnectTarget::Origin(match port {
         // The keyfile writes 0 for "not set"; leaving it out lets the
         // scheme's default apply instead of asking for port 0.
         0 => format!("{scheme}://{authority}"),
         port => format!("{scheme}://{authority}:{port}"),
+    }))
+}
+
+/// Assembles the origin string [`connect_target`] would connect to, for a
+/// caller that only wants the resulting endpoint and not the SRV-eligibility
+/// distinction — `jmap-backend-collection`'s `Server::origin`, a display
+/// value repeated into child sources rather than connected to directly.
+pub fn origin(host: Option<&str>, port: u16, secure: bool) -> Result<String, SourceError> {
+    Ok(match connect_target(host, port, secure)? {
+        ConnectTarget::Origin(origin) => origin,
+        ConnectTarget::Domain(domain) => format!("https://{domain}"),
     })
 }
 
@@ -343,6 +411,52 @@ mod tests {
         assert_eq!(
             origin(Some("::1"), 8080, false).as_deref(),
             Ok("http://[::1]:8080")
+        );
+    }
+
+    #[test]
+    fn a_bare_domain_with_no_port_is_srv_eligible() {
+        // The shape a plain email+password setup produces: no port named,
+        // secure by default (RFC 8620 §2.2's "the domain is the entry
+        // point").
+        assert_eq!(
+            connect_target(Some("fastmail.com"), 0, true),
+            Ok(ConnectTarget::Domain("fastmail.com".into()))
+        );
+    }
+
+    #[test]
+    fn an_explicit_port_is_an_origin_not_a_domain() {
+        // Every backend test wires a mock server through an explicit port;
+        // that must keep connecting directly, never through SRV lookup.
+        assert_eq!(
+            connect_target(Some("jmap.example.com"), 8443, true),
+            Ok(ConnectTarget::Origin(
+                "https://jmap.example.com:8443".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn an_ip_literal_is_an_origin_even_with_no_port() {
+        // There is no email-style domain to run SRV autodiscovery against
+        // when the account already names a bare address.
+        assert_eq!(
+            connect_target(Some("203.0.113.5"), 0, true),
+            Ok(ConnectTarget::Origin("https://203.0.113.5".into()))
+        );
+        assert_eq!(
+            connect_target(Some("::1"), 0, false),
+            Ok(ConnectTarget::Origin("http://[::1]".into()))
+        );
+    }
+
+    #[test]
+    fn insecure_and_missing_host_still_refuse_before_the_domain_decision() {
+        assert_eq!(connect_target(None, 0, true), Err(SourceError::MissingHost));
+        assert_eq!(
+            connect_target(Some("jmap.example.com"), 0, false),
+            Err(SourceError::InsecureTransport("jmap.example.com".into()))
         );
     }
 

@@ -48,7 +48,7 @@ use eds_sys::{
 use glib_sys::{g_free, gchar, gpointer};
 use gobject_sys::{GTypeInstance, g_type_check_instance_is_a};
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::{SourceError, origin};
+use jmap_backend_core::source::{ConnectTarget, SourceError, connect_target};
 
 /// What a JMAP store needs from its settings in order to build a client.
 ///
@@ -59,9 +59,9 @@ use jmap_backend_core::source::{SourceError, origin};
 /// [`SourceConfig`]: jmap_backend_core::source::SourceConfig
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerConfig {
-    /// Scheme, host and — if the account names one — port, with no trailing
-    /// slash: what `jmap_client::Client::connect` calls the origin.
-    pub origin: String,
+    /// Where to fetch the session document from — see
+    /// [`jmap_backend_core::source::SourceConfig::target`].
+    pub target: ConnectTarget,
     /// The user name to authenticate as, if the account names one.
     pub user: Option<String>,
 }
@@ -97,7 +97,7 @@ impl ServerConfig {
             != CAMEL_NETWORK_SECURITY_METHOD_NONE;
 
         Ok(Self {
-            origin: origin(host.as_deref(), port, secure)?,
+            target: connect_target(host.as_deref(), port, secure)?,
             user,
         })
     }

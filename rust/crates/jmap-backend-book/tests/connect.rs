@@ -21,7 +21,7 @@ use glib_sys::GError;
 use gobject_sys::g_object_unref;
 use jmap_backend_book::connect;
 use jmap_backend_core::connect::{Collection, ConnectError, credentials};
-use jmap_backend_core::source::SourceConfig;
+use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -62,7 +62,7 @@ impl Fixture {
 
     fn config(&self) -> SourceConfig {
         SourceConfig {
-            origin: self.server.origin().to_owned(),
+            target: ConnectTarget::Origin(self.server.origin().to_owned()),
             user: None,
             resource_id: None,
         }
@@ -147,7 +147,7 @@ fn an_account_that_offers_no_contacts_is_refused() {
         .without_capability(jmap_proto::session::CAPABILITY_CONTACTS)
         .start();
     let config = SourceConfig {
-        origin: server.origin().to_owned(),
+        target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
         resource_id: None,
     };
@@ -225,7 +225,7 @@ fn a_wrong_password_is_reported_as_rejected_so_evolution_re_prompts() {
 fn an_unreachable_server_is_an_error_not_a_credentials_problem() {
     let config = SourceConfig {
         // Port 1 is reserved and nothing listens there.
-        origin: "http://127.0.0.1:1".to_owned(),
+        target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
         resource_id: None,
     };
