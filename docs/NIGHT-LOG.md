@@ -36054,3 +36054,60 @@ files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
 `cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
 run — its constituent checks were run individually as above, per the
 standing workaround.
+
+## 2026-08-19 (claim+delivered) — Track A6 Pattern A: compiler-enforced test-only `detached()`
+
+Fresh survey: every milestone is COMPLETE; CURRENT PRIORITY's SRV
+autodiscovery item (ROADMAP item 5) now has both call sites wired, leaving
+only the GResolver-backed `Resolver` FFI implementation open — unstarted,
+explicitly the standing escalation candidate (`g_resolver_lookup_service()`),
+not attempted here. Per the roadmap's own "Lead order" note, Round 2's
+Track D would lead next, but its one remaining increment (D1's
+`create_resource_sync`/`delete_resource_sync` EDS-vtable wiring) is the same
+GObject-vtable-FFI category the escalation guidance names directly, and a
+tractable non-FFI item exists instead: `docs/UNSAFE-AUDIT.md`'s Track A6
+Pattern A IMPROVE item, explicitly scoped as a separate follow-up when the
+audit landed. Claiming and delivering that in one increment — small,
+mechanical, no FFI/ABI surface touched.
+
+**Delivered:** the six `detached()` test-double constructors the audit found
+(`jmap-backend-book`/`cal`/`collection`'s `backend.rs`, `jmap-config/
+backend.rs`, `jmap-mail`'s `store.rs`/`transport.rs`) each build an instance
+by zeroing memory outside the GObject type system, documented as sound for
+exactly one narrow, named use and unsound for anything else — but were
+`pub fn`s reachable from ordinary code, "test-only" enforced by doc comment
+only. Each is now `#[cfg(feature = "testing")]`-gated (and each file's now-
+conditionally-used `MaybeUninit` import along with it); each of the five
+crates gained a `testing` feature (`[features] testing = []`) and a self
+dev-dependency (`<crate> = { path = ".", features = ["testing"] }`) enabling
+it for that crate's own `cargo test` builds only — the standard Rust idiom
+for a test-only feature that must never be on in a normal build. Confirmed
+empirically, not just by inspection: `cargo build -p <crate>` for each of the
+five compiles clean with `detached()` and its import entirely absent (no
+unused-import warning, since the import is gated identically), while
+`cargo test -p <crate>` builds and passes with `detached()` available,
+proving the feature activates for test builds and only test builds. Every
+call site of `detached()` lives in that same crate's own `tests/*.rs` (no
+cross-crate caller), so no other crate's Cargo.toml needed touching.
+
+Not done: hoisting the zeroing itself into one shared `jmap_backend_core`
+helper (the audit's second, independent IMPROVE for this pattern) — left for
+a future increment, since gating alone already closes the compiler-enforced
+half of the finding and this session's increment stays focused.
+
+Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-
+client -p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p
+jmap-mail -p jmap-backend-collection -p jmap-config --all-targets -- -D
+warnings` (the five touched EDS-gated crates plus their siblings, direct-
+built since this VM has the headers) clean — `--all-targets` builds both the
+gated-off lib and the feature-enabled test targets in the same invocation,
+which is what proved the two configurations don't collide with each other's
+warnings; `cargo test --locked` (default-members) and `cargo test` on the
+same seven-crate list both green, every `test result: ok`, 0 failed. No new
+files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
+`cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
+run — its constituent checks were run individually as above, per the
+standing workaround. Disk filled to 391M free mid-session running the full
+five-crate test sweep; `cargo clean --profile dev` recovered 23.3G, standing
+note confirmed again.
