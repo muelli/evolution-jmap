@@ -39652,3 +39652,68 @@ whether an RFC 8707 `resource` indicator is required at `/authorize` (needs
 either a redirect endpoint this runner can read or the operator's consent
 round-trip) — unchanged, still deferred to the operator. `docs/ROADMAP.md`
 and `docs/OAUTH-FASTMAIL.md` updated in place.
+
+## 2026-08-19 — Fixed: Track A1/A2/A3 docs-sync gap in docs/ROADMAP.md
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `0df34c8`
+(the OAuth2 scope fix, previous session). Walked CURRENT PRIORITY items 1-6
+and Round 2 Tracks A-F in full, same as every recent session's survey.
+Every CURRENT PRIORITY item is code-complete pending only operator/human
+verification already logged as such (M7; item 2(a)'s RUNPATH half and
+2(b)'s scope fix, both done, the rest of both needing the operator's live
+session; items 5 and 6, done pending operator). Round 2: Track D1 done
+pending operator, D2 write-back needs a fresh design (not claimable); Track
+E Phase 0/Path A done pending operator, Phase B/C explicitly blocked on a
+maintainer OK not yet given; Track B1/C2's third-party half/C4 are
+NEEDS-DECISION; Track F closed. Track A's `[claude]` items A4-A7 all carry
+DONE markers already.
+
+That left Track A1/A2/A3 as the only remaining question — none carried a
+DONE marker in `docs/ROADMAP.md`, unlike every other Track A/D/E item, which
+would normally mean "claimable." Checked `docs/NIGHT-LOG.md` and git log
+before claiming anything: A2 (`[claude]`, mutation testing of `jmap-proto`/
+`jmap-client`) was fully delivered two sessions ago (`30571c3`/`d5cf563`,
+`4b8be5c`/`c0480ac`) — its own claim/delivery pair is in this very log under
+"Track A2," just never reflected back into `docs/ROADMAP.md`'s Track A
+section, the identical kind of docs-sync gap the MAINTAINER DECISIONS
+section already found and fixed once for M10. A1 and A3 (`[agy]` lane) are
+also both done — `6206f31`/`8c3c5b3` and `3a92425`, logged in the agy lane's
+own `docs/AGY-LOG.md`, all already merged to master via the "Antigravity
+polish branch" merge (`37bb48f`, an ancestor of current `HEAD`).
+
+So there was no real unclaimed A1/A2/A3 work left to do — only a stale
+roadmap failing to say so, which is exactly the kind of thing that costs a
+future session (of either lane) a wasted re-survey or a duplicate attempt.
+Fixed the roadmap directly rather than logging "still blocked" and stopping:
+added DONE sub-bullets to A1, A2, and A3 in `docs/ROADMAP.md`, each citing
+the actual commits and log entries, in the same style A4-A7 already use.
+One thing surfaced while writing A3's note that is a genuine, still-open
+finding, not just bookkeeping: A3's own acceptance criterion ("fix any panic
+found") is not fully met — later runs of the same fuzzer, on different
+random seeds, found a real `jmap-vcard` round-trip fixed-point nit and a
+real `jmap-ical` panic (a DATE-TIME value sliced before its char-boundary
+check on a non-ASCII byte before offset 6), both already filed in
+`docs/BACKLOG.md` by the sessions that hit them, both left unfixed per the
+CURRENT PRIORITY directive against reopening closed M1-M6/M8 backends. Noted
+in A3's new DONE entry rather than left implicit, since "DONE" without that
+caveat would overstate it.
+
+No Rust source changed (`docs/ROADMAP.md` only), so the full cargo gate
+does not apply; sanity-checked the file renders as intended by re-reading
+the edited section. No new file, so no SPDX/`reuse` concern.
+
+**Scope, stated plainly.** This is bookkeeping, not a milestone increment —
+called out as such rather than dressed up as more. It was still worth doing
+this session rather than reporting BLOCKED: every other tractable, no-
+decision `[claude]` item is genuinely done pending operator/maintainer input,
+and leaving the roadmap's own map of that state wrong is exactly what causes
+the next session (or the next survey within this one) to re-tread the same
+ground the "do NOT re-survey ground already mapped" rule is trying to avoid.
+The one real finding this surfaced (the still-open `jmap-ical` panic,
+already in `docs/BACKLOG.md`) is left for whichever lane next budgets for
+untrusted-input hardening of a closed backend — not this session's to fix,
+per the standing no-reopen directive.
+
+NIGHT-SHIFT: BLOCKED — every CURRENT PRIORITY / Round 2 `[claude]` item with
+no maintainer decision or operator step outstanding is already code-complete;
+only a roadmap docs-sync gap (now fixed) remained to find this session.

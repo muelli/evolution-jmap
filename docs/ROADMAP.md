@@ -501,14 +501,62 @@ tracks follow; the maintainer may reorder anytime.
   (stable; `cargo install` it if absent) on `jmap-vcard` and `jmap-ical`. For
   each *surviving* mutant that is a real behavioural gap, add a round-trip test
   that kills it; log deliberately-left equivalent mutants with a one-line why.
+  - **DONE 2026-08-19 (agy lane; roadmap annotation added 2026-08-19 by a
+    later `[claude]` session — the work landed but this entry was never
+    updated, a docs-sync gap like M10's)** — `6206f31` (`jmap-vcard`) and
+    `8c3c5b3` (`jmap-ical`) ran `cargo-mutants` and added tests killing all
+    high-value survivors (`jmap-vcard`: caught rose 344→402 of 418 generated,
+    1 timeout, 7 unviable; `jmap-ical`: 294 unit/round-trip tests + 8 hostile-
+    input tests added). Deliberately-left equivalent mutants are logged with
+    a one-line why each in `docs/AGY-LOG.md` (defensive exhaustive-match arms
+    on `calcard` parameter-value variants that can't occur on the properties
+    this crate reads; a same-second onset tie-break in `jmap-ical`'s
+    `zone.rs::offset_at`). Full detail in `docs/AGY-LOG.md`'s "Mutation
+    testing on jmap-vcard/jmap-ical" entries, not `docs/NIGHT-LOG.md` — the
+    agy lane keeps its own log.
 - **A2 `[claude]` Mutation testing of the protocol/client core.** Same tool on
   `jmap-proto` and `jmap-client` — they carry the untrusted-server wire
   contract. Strengthen tests to kill high-value survivors.
+  - **DONE 2026-08-19 (roadmap annotation added 2026-08-19 — same docs-sync
+    gap as A1's above; the work landed two sessions earlier)** — `30571c3`/
+    `d5cf563` (`jmap-proto`) and `4b8be5c`/`c0480ac` (`jmap-client`). Fixed a
+    real baseline-build bug along the way (`jmap-proto/tests/milestones.rs`'s
+    `repo_root()` broke inside cargo-mutants' partial-tree copy; made it
+    return `Option` and skip rather than fail with no `.git` ancestor found).
+    `jmap-proto`: 97 mutants, 54→27 missed after new tests (`Session`'s RFC
+    8620 primary-account resolution, `Response::responses_for`, several
+    untested serde wire-format helpers); the 27 remaining are one uniform,
+    non-equivalent, mechanical category (convenience-constructor fields
+    unasserted in-crate, though covered end-to-end by `jmap-client`'s
+    integration tests) — logged as a small follow-up, not equivalent mutants,
+    not silently dropped. `jmap-client`: 64 mutants, 13→2 missed, both
+    inspected and confirmed genuinely equivalent (documented inline above).
+    Full detail in `docs/NIGHT-LOG.md`'s two "Track A2" claim/delivery pairs.
 - **A3 `[agy]` Structure-aware fuzzing of the vCard/iCal round-trips.**
   `proptest` + `arbitrary` as dev-deps on **stable** (NOT `cargo-fuzz`: it needs
   nightly and breaks the pinned-stable reproducibility). Generate random
   JSContact/JSCalendar and random vCard/iCal; assert (a) no panic, (b) round-trip
   stability. Fix any panic found.
+  - **DONE 2026-08-19 (agy lane; roadmap annotation added 2026-08-19, same
+    docs-sync gap as A1/A2 above), with one acceptance criterion left
+    genuinely open, not silently dropped.** `3a92425` added
+    `jmap-vcard/tests/proptest_fuzz.rs` and `jmap-ical/tests/proptest_fuzz.rs`
+    (structure-aware generators plus arbitrary-string fuzzing, both asserting
+    no-panic and round-trip fixed-point stability); full detail in
+    `docs/AGY-LOG.md`'s "Structure-aware fuzzing on jmap-vcard and jmap-ical"
+    entry. **"Fix any panic found" is not fully closed**: on later runs with
+    different random seeds, the same fuzzer surfaced two real findings that
+    later `[claude]` sessions chose to log rather than fix, per the CURRENT
+    PRIORITY directive not to reopen closed M1–M6/M8 backends for hardening —
+    a `jmap-vcard` round-trip fixed-point nit (trailing whitespace) and a real
+    panic in `jmap-ical` (`event.rs`, a DATE-TIME value sliced at a byte
+    offset before its char-boundary/ASCII-digit check, on a non-ASCII byte
+    before offset 6). Both are filed in `docs/BACKLOG.md` with minimal repro
+    and root cause; the `jmap-ical` one is a real security-relevant panic
+    reachable from a hostile/malformed server response (Track A3/A4's own
+    untrusted-boundary concern) and is the more valuable of the two to close
+    — left for whichever lane (agy's A3, or a `[claude]` A4 follow-up) next
+    budgets for it.
 - **A4 `[claude]` Malicious-input hardening of the untrusted-server boundary.**
   proptest/arbitrary harness feeding hostile JMAP *responses* into `jmap-proto`
   deserialization + `jmap-client`, and hostile session `apiUrl`/redirect targets
