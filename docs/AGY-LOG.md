@@ -302,6 +302,25 @@ Running record of headless polish increments on the `antigravity` branch.
 - **Calcard behaviour-difference findings:** None. All 199 unit, proptest fuzz, and roundtrip tests in `jmap-vcard` pass with 100% compliance.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — Line folding / unfolding fidelity & UTF-8 multi-byte protection (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 1. Line folding / unfolding (RFC 2426 §2.6): test round-trip of long `NOTE` and inline base64 `PHOTO`, pre-folded input (CRLF + leading space/tab continuations), multi-byte UTF-8 fold protection, and fixed-point convergence.
+- **Changes:**
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip`: tests emission of long single-line `NOTE` (200+ octets) and inline base64-encoded `PHOTO;ENCODING=b;TYPE=...` (350+ raw bytes / 468+ base64 chars), verifying physical lines target 75 octets and fold with `\r\n `, lossless parsing back to `Note` and `Media` (`kind: Some("photo")`, `media_type: Some("image/jpeg")`, exact data URI payload), and fixed-point stability (`vcard2 == vcard`).
+    - `rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs`: verifies parsing of pre-folded vCards with space (`\r\n `), tab (`\r\n\t`), multiple continuation spaces (distinguishing folding marker from content indentation), and mixed folding across `FN`, `NICKNAME`, `EMAIL`, `TEL`, `ORG`, `TITLE`, `ROLE`, `ADR`, `LABEL`, `NOTE`, `CATEGORIES`, `URL`, and `PHOTO`.
+    - `rfc2426_line_folding_never_splits_multibyte_utf8_sequences`: systematically tests 2-byte (German umlauts, Cyrillic), 3-byte (CJK Kanji, Japanese Hiragana, Devanagari), and 4-byte (Emoji, math symbols) UTF-8 sequences placed across boundary offsets 40..=85, confirming that no line fold ever splits a multi-byte code point, all line slices remain valid UTF-8, and parsing produces zero replacement characters (`\u{FFFD}`).
+    - `rfc2426_line_folding_exact_boundary_lengths_around_75_octets`: tests boundary threshold conditions (70, 73, 74, 75 octets without folding; 78, 80, 100 octets with folding).
+    - `rfc2426_line_folding_with_escaped_delimiters_and_backslashes`: tests interaction of line folding with multiline text containing escaped `\n`, `\;`, `\,`, `\\`.
+  - Added property test `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` asserting line length limits (<= 77 octets) and valid UTF-8 slices across arbitrary generated cards.
+  - Updated Section 4.5 of `docs/VCARD-MAPPING.md` documenting RFC 2426 §2.6 line folding/unfolding architecture, boundary semantics, and multi-byte UTF-8 protection.
+- **Calcard behaviour-difference findings:**
+  1. `calcard` automatically handles RFC 2426 §2.6 line folding at 75 octets with CRLF-space continuations. Because `calcard` iterates over Rust `char` (Unicode scalar values) and evaluates `char::len_utf8()` before outputting characters, multi-byte UTF-8 sequences are never split across fold boundaries.
+  2. In `calcard`, physical lines on the wire may measure up to 76–77 octets before folding when an escape sequence (e.g. `\n`, `\\`, `\;`) or property parameter separator (`:`) occurs at the 74th/75th byte boundary, which is fully compliant with RFC 2426 §2.6 ("lines of more than 75 characters SHOULD be folded").
+  3. `calcard`'s parser losslessly unfolds both CRLF + space (`\r\n `) and CRLF + tab (`\r\n\t`), stripping the CRLF and the first whitespace continuation character while preserving any subsequent whitespace characters as part of the field data.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
 
 
 

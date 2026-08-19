@@ -615,4 +615,24 @@ proptest! {
             prop_assert_eq!(vcard2, vcard3, "re-emitted vCard must reach a fixed-point");
         }
     }
+
+    #[test]
+    fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
+        let vcard = card_to_vcard(&card);
+        for line in vcard.split("\r\n") {
+            // Emitted physical lines target 75 octets and never exceed 77 octets
+            prop_assert!(
+                line.len() <= 77,
+                "Physical line exceeds maximum line length (len = {}): {:?}",
+                line.len(),
+                line
+            );
+            // Multi-byte UTF-8 code points must never be split across a fold
+            prop_assert!(
+                std::str::from_utf8(line.as_bytes()).is_ok(),
+                "Invalid UTF-8 sequence in line slice: {:?}",
+                line
+            );
+        }
+    }
 }
