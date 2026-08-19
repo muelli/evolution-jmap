@@ -6628,3 +6628,407 @@ fn jscontact_server_localizations_and_preferred_languages_characterization() {
     );
     assert!(back.extra.is_empty());
 }
+
+#[test]
+fn email_pref_ordering_primary_selection_and_tie_breaking() {
+    // 1. Multiple emails with distinct pref values: lowest pref must be emitted first
+    // so it lands in EDS's E_CONTACT_EMAIL_1 (primary email), followed by higher ranks and None.
+    let card = ContactCard {
+        emails: Some(
+            [
+                (
+                    "e_sec".to_owned(),
+                    ContactEmail {
+                        address: "second@example.com".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        pref: Some(2),
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_pri".to_owned(),
+                    ContactEmail {
+                        address: "first@example.com".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        pref: Some(1),
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_ten".to_owned(),
+                    ContactEmail {
+                        address: "tenth@example.com".to_owned(),
+                        contexts: Some(json!({"home": true})),
+                        pref: Some(10),
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_none".to_owned(),
+                    ContactEmail {
+                        address: "unranked@example.com".to_owned(),
+                        contexts: Some(json!({"other": true})),
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&card);
+    let email_lines: Vec<&str> = emitted.lines().filter(|l| l.starts_with("EMAIL")).collect();
+    assert_eq!(email_lines.len(), 4, "{emitted}");
+    assert!(
+        email_lines[0].contains("X-JMAP-KEY=e_pri")
+            && email_lines[0].contains("first@example.com")
+            && email_lines[0].contains("PREF"),
+        "1st line must be e_pri: {}",
+        email_lines[0]
+    );
+    assert!(
+        email_lines[1].contains("X-JMAP-KEY=e_sec")
+            && email_lines[1].contains("second@example.com"),
+        "2nd line must be e_sec: {}",
+        email_lines[1]
+    );
+    assert!(
+        email_lines[2].contains("X-JMAP-KEY=e_ten") && email_lines[2].contains("tenth@example.com"),
+        "3rd line must be e_ten: {}",
+        email_lines[2]
+    );
+    assert!(
+        email_lines[3].contains("X-JMAP-KEY=e_none")
+            && email_lines[3].contains("unranked@example.com")
+            && !email_lines[3].contains("PREF"),
+        "4th line must be e_none: {}",
+        email_lines[3]
+    );
+
+    // 2. Tie-breaking: when multiple emails have identical pref (e.g. pref: 1), break tie by key
+    let tie_card = ContactCard {
+        emails: Some(
+            [
+                (
+                    "e_beta".to_owned(),
+                    ContactEmail {
+                        address: "beta@example.com".to_owned(),
+                        pref: Some(1),
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_alpha".to_owned(),
+                    ContactEmail {
+                        address: "alpha@example.com".to_owned(),
+                        pref: Some(1),
+                        ..ContactEmail::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+    let tie_emitted = card_to_vcard(&tie_card);
+    let tie_lines: Vec<&str> = tie_emitted
+        .lines()
+        .filter(|l| l.starts_with("EMAIL"))
+        .collect();
+    assert_eq!(tie_lines.len(), 2);
+    assert!(tie_lines[0].contains("X-JMAP-KEY=e_alpha"));
+    assert!(tie_lines[1].contains("X-JMAP-KEY=e_beta"));
+
+    // 3. No-PREF-present fallback: when all emails have pref: None, fall back to key order
+    let none_card = ContactCard {
+        emails: Some(
+            [
+                (
+                    "e_z".to_owned(),
+                    ContactEmail {
+                        address: "z@example.com".to_owned(),
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_a".to_owned(),
+                    ContactEmail {
+                        address: "a@example.com".to_owned(),
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+    let none_emitted = card_to_vcard(&none_card);
+    let none_lines: Vec<&str> = none_emitted
+        .lines()
+        .filter(|l| l.starts_with("EMAIL"))
+        .collect();
+    assert_eq!(none_lines.len(), 2);
+    assert!(none_lines[0].contains("X-JMAP-KEY=e_a") && !none_lines[0].contains("PREF"));
+    assert!(none_lines[1].contains("X-JMAP-KEY=e_z") && !none_lines[1].contains("PREF"));
+
+    // 4. Fixed-point roundtrip stability
+    let back = vcard_to_card(&emitted).expect("parse back");
+    let re_emitted = card_to_vcard(&back);
+    assert_eq!(emitted, re_emitted);
+}
+
+#[test]
+fn phone_pref_ordering_primary_selection_and_slotting() {
+    // 1. Phones with distinct pref values: lowest pref emitted first
+    let card = ContactCard {
+        phones: Some(
+            [
+                (
+                    "p_work_sec".to_owned(),
+                    ContactPhone {
+                        number: "+1 555 0200".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        features: Some(json!({"voice": true})),
+                        pref: Some(2),
+                        ..ContactPhone::default()
+                    },
+                ),
+                (
+                    "p_work_pri".to_owned(),
+                    ContactPhone {
+                        number: "+1 555 0100".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        features: Some(json!({"voice": true})),
+                        pref: Some(1),
+                        ..ContactPhone::default()
+                    },
+                ),
+                (
+                    "p_home".to_owned(),
+                    ContactPhone {
+                        number: "+1 555 0300".to_owned(),
+                        contexts: Some(json!({"home": true})),
+                        pref: None,
+                        ..ContactPhone::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&card);
+    let phone_lines: Vec<&str> = emitted.lines().filter(|l| l.starts_with("TEL")).collect();
+    assert_eq!(phone_lines.len(), 3, "{emitted}");
+    assert!(
+        phone_lines[0].contains("X-JMAP-KEY=p_work_pri")
+            && phone_lines[0].contains("+1 555 0100")
+            && phone_lines[0].contains("PREF"),
+        "1st line must be p_work_pri: {}",
+        phone_lines[0]
+    );
+    assert!(
+        phone_lines[1].contains("X-JMAP-KEY=p_work_sec") && phone_lines[1].contains("+1 555 0200"),
+        "2nd line must be p_work_sec: {}",
+        phone_lines[1]
+    );
+    assert!(
+        phone_lines[2].contains("X-JMAP-KEY=p_home")
+            && phone_lines[2].contains("+1 555 0300")
+            && !phone_lines[2].contains("PREF"),
+        "3rd line must be p_home: {}",
+        phone_lines[2]
+    );
+
+    // 2. Tie-breaking by key when prefs match
+    let tie_card = ContactCard {
+        phones: Some(
+            [
+                (
+                    "p_b".to_owned(),
+                    ContactPhone {
+                        number: "+1 555 0002".to_owned(),
+                        pref: Some(1),
+                        ..ContactPhone::default()
+                    },
+                ),
+                (
+                    "p_a".to_owned(),
+                    ContactPhone {
+                        number: "+1 555 0001".to_owned(),
+                        pref: Some(1),
+                        ..ContactPhone::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+    let tie_emitted = card_to_vcard(&tie_card);
+    let tie_lines: Vec<&str> = tie_emitted
+        .lines()
+        .filter(|l| l.starts_with("TEL"))
+        .collect();
+    assert_eq!(tie_lines.len(), 2);
+    assert!(tie_lines[0].contains("X-JMAP-KEY=p_a"));
+    assert!(tie_lines[1].contains("X-JMAP-KEY=p_b"));
+
+    // 3. Round-trip stability
+    let back = vcard_to_card(&emitted).expect("parse back");
+    let re_emitted = card_to_vcard(&back);
+    assert_eq!(emitted, re_emitted);
+}
+
+#[test]
+fn address_pref_ordering_and_primary_selection_with_label_pairing() {
+    // 1. Addresses with pref in extra: lowest pref emitted first and carries PREF parameter
+    let mut extra_pri = BTreeMap::new();
+    extra_pri.insert("pref".to_owned(), json!(1));
+
+    let mut extra_sec = BTreeMap::new();
+    extra_sec.insert("pref".to_owned(), json!(2));
+
+    let card = ContactCard {
+        addresses: Some(
+            [
+                (
+                    "a_sec".to_owned(),
+                    Address {
+                        components: Some(vec![AddressComponent::new("name", "Secondary Weg 2")]),
+                        contexts: Some(json!({"home": true})),
+                        full: None,
+                        extra: extra_sec,
+                    },
+                ),
+                (
+                    "a_pri".to_owned(),
+                    Address {
+                        components: Some(vec![AddressComponent::new("name", "Primary Allee 1")]),
+                        contexts: Some(json!({"home": true})),
+                        full: Some("Primary Allee 1\n10115 Berlin\nGermany".to_owned()),
+                        extra: extra_pri,
+                    },
+                ),
+                (
+                    "a_work".to_owned(),
+                    Address {
+                        components: Some(vec![AddressComponent::new("name", "Work Str 42")]),
+                        contexts: Some(json!({"work": true})),
+                        full: None,
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&card);
+    let adr_lines: Vec<&str> = emitted.lines().filter(|l| l.starts_with("ADR")).collect();
+    assert_eq!(adr_lines.len(), 3, "{emitted}");
+    assert!(
+        adr_lines[0].contains("X-JMAP-KEY=a_pri")
+            && adr_lines[0].contains("Primary Allee 1")
+            && adr_lines[0].contains("PREF"),
+        "1st ADR line must be a_pri: {}",
+        adr_lines[0]
+    );
+    assert!(
+        adr_lines[1].contains("X-JMAP-KEY=a_sec") && adr_lines[1].contains("Secondary Weg 2"),
+        "2nd ADR line must be a_sec: {}",
+        adr_lines[1]
+    );
+    assert!(
+        adr_lines[2].contains("X-JMAP-KEY=a_work")
+            && adr_lines[2].contains("Work Str 42")
+            && !adr_lines[2].contains("PREF"),
+        "3rd ADR line must be a_work: {}",
+        adr_lines[2]
+    );
+
+    // LABEL for a_pri also carries PREF parameter
+    let label_line = line(&emitted, "LABEL;X-JMAP-KEY=a_pri");
+    assert!(label_line.contains("PREF"), "{label_line}");
+
+    // Inbound parse of vCard preserves extra["pref"] = 1 for preferred addresses
+    let back = vcard_to_card(&emitted).expect("parse back");
+    let back_addrs = back.addresses.as_ref().expect("addresses");
+    assert_eq!(back_addrs["a_pri"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        back_addrs["a_pri"].full.as_deref(),
+        Some("Primary Allee 1\n10115 Berlin\nGermany")
+    );
+    assert_eq!(back_addrs["a_sec"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(back_addrs["a_work"].extra.get("pref"), None);
+
+    // Re-emission matches fixed point
+    let re_emitted = card_to_vcard(&back);
+    assert_eq!(emitted, re_emitted);
+}
+
+#[test]
+fn inbound_vcard_pref_parameter_variations_and_reordering() {
+    // Inbound vCard where the preferred email appears on the second line:
+    // Parsing extracts pref: 1 on the second entry, and card_to_vcard re-orders it
+    // to the first line (E_CONTACT_EMAIL_1) when emitting.
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Vera Oldenburg\r\n",
+        "EMAIL;X-JMAP-KEY=e1;TYPE=HOME:secondary@home.example\r\n",
+        "EMAIL;X-JMAP-KEY=e2;TYPE=WORK,PREF:primary@work.example\r\n",
+        "TEL;X-JMAP-KEY=p1;TYPE=HOME:+49 30 111111\r\n",
+        "TEL;X-JMAP-KEY=p2;type=work,pref:+49 30 222222\r\n",
+        "ADR;X-JMAP-KEY=a1;TYPE=HOME:;;Secondary Home;;;;\r\n",
+        "ADR;X-JMAP-KEY=a2;TYPE=WORK,PREF:;;Primary Office;;;;\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(raw_vcard).expect("parse");
+    let emails = card.emails.as_ref().unwrap();
+    assert_eq!(emails["e1"].pref, None);
+    assert_eq!(emails["e2"].pref, Some(1));
+
+    let phones = card.phones.as_ref().unwrap();
+    assert_eq!(phones["p1"].pref, None);
+    assert_eq!(phones["p2"].pref, Some(1));
+
+    let addrs = card.addresses.as_ref().unwrap();
+    assert_eq!(addrs["a1"].extra.get("pref"), None);
+    assert_eq!(addrs["a2"].extra.get("pref"), Some(&json!(1)));
+
+    // Re-emitted vCard places e2, p2, a2 first (primary selection)
+    let re_emitted = card_to_vcard(&card);
+    let email_lines: Vec<&str> = re_emitted
+        .lines()
+        .filter(|l| l.starts_with("EMAIL"))
+        .collect();
+    assert!(email_lines[0].contains("X-JMAP-KEY=e2"));
+    assert!(email_lines[1].contains("X-JMAP-KEY=e1"));
+
+    let phone_lines: Vec<&str> = re_emitted
+        .lines()
+        .filter(|l| l.starts_with("TEL"))
+        .collect();
+    assert!(phone_lines[0].contains("X-JMAP-KEY=p2"));
+    assert!(phone_lines[1].contains("X-JMAP-KEY=p1"));
+
+    let adr_lines: Vec<&str> = re_emitted
+        .lines()
+        .filter(|l| l.starts_with("ADR"))
+        .collect();
+    assert!(adr_lines[0].contains("X-JMAP-KEY=a2"));
+    assert!(adr_lines[1].contains("X-JMAP-KEY=a1"));
+}

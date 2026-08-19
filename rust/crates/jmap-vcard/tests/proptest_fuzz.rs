@@ -179,12 +179,17 @@ prop_compose! {
             Just(json!({"work": true})),
             Just(json!({"home": true})),
         ]),
+        pref in prop::option::of(0..100u32),
     ) -> Address {
+        let mut extra = BTreeMap::new();
+        if let Some(p) = pref {
+            extra.insert("pref".to_owned(), json!(p));
+        }
         Address {
             components,
             contexts,
             full,
-            extra: BTreeMap::new(),
+            extra,
         }
     }
 }
