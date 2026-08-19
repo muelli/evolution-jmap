@@ -302,6 +302,7 @@ dependencies = [
  "evolution-jmap-mock",
  "evolution-jmap-proto",
  "getrandom 0.3.4",
+ "percent-encoding",
  "serde",
  "serde_json",
  "sha2",
@@ -343,6 +344,7 @@ version = "0.2.0"
 dependencies = [
  "base64",
  "evolution-jmap-proto",
+ "percent-encoding",
  "serde",
  "serde_json",
  "tiny_http",
