@@ -29,6 +29,51 @@ impl Client {
         Ok(response.list)
     }
 
+    /// Create an address book; returns the stored book (with server-set id).
+    pub fn address_book_create(
+        &self,
+        account_id: &Id,
+        book: &AddressBook,
+    ) -> Result<AddressBook, Error> {
+        let request =
+            SetRequest::<AddressBook>::new(account_id.clone()).create("new", book.clone());
+        let response = self.address_book_set(&request)?;
+        if let Some(created) = response
+            .created
+            .as_ref()
+            .and_then(|created| created.get("new"))
+        {
+            return Ok(created.clone());
+        }
+        Err(set_failure(
+            response.not_created.as_ref().and_then(|map| map.get("new")),
+        ))
+    }
+
+    /// Destroy an address book.
+    pub fn address_book_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
+        let request = SetRequest::<AddressBook>::new(account_id.clone()).destroy(id.clone());
+        let response = self.address_book_set(&request)?;
+        if response
+            .destroyed
+            .as_ref()
+            .is_some_and(|destroyed| destroyed.contains(id))
+        {
+            return Ok(());
+        }
+        Err(set_failure(
+            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
+        ))
+    }
+
+    fn address_book_set(
+        &self,
+        request: &SetRequest<AddressBook>,
+    ) -> Result<SetResponse<AddressBook>, Error> {
+        let arguments = self.single_call(USING, "AddressBook/set", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
     /// Create a contact card; returns the stored card (with server-set id,
     /// uid, …).
     pub fn contact_create(
