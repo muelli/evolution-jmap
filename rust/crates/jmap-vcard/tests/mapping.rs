@@ -5621,3 +5621,406 @@ fn inbound_vcard_with_multi_component_name_field() {
         .expect("given component");
     assert_eq!(given.value, "Alice,Bob");
 }
+
+#[test]
+fn vcard_kind_group_and_member_lines_characterization() {
+    // Characterizes inbound vCard 3.0 / RFC 6473 / RFC 6350 group cards with
+    // `KIND:group` and multiple `MEMBER` lines.
+    //
+    // In JSContact (RFC 9553 §2.1.2 & §2.1.9), group cards have `kind: "group"`
+    // and `members: Map[Id, Boolean]`. In `jmap-vcard`, `kind` and `members`
+    // are unmodeled in `ContactCard` struct fields (they ride in `extra` on the
+    // protocol layer) and are dropped by the vCard 3.0 parser/emitter rather
+    // than misstated.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:group-dev-team\r\n",
+        "FN:Dev Team\r\n",
+        "KIND:group\r\n",
+        "MEMBER:urn:uuid:550e8400-e29b-41d4-a716-446655440000\r\n",
+        "MEMBER:mailto:alice@example.com\r\n",
+        "MEMBER:mailto:bob@example.com\r\n",
+        "NOTE:Core engineering team\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard).expect("group vcard parse must succeed");
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "group-dev-team");
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Dev Team")
+    );
+    let notes = card.notes.as_ref().expect("notes");
+    assert_eq!(
+        notes.values().next().map(|n| n.note.as_str()),
+        Some("Core engineering team")
+    );
+    // `KIND` and `MEMBER` are unmapped properties, so `extra` is empty
+    assert!(card.extra.is_empty());
+
+    // Outbound serialization emits a clean, valid vCard 3.0 envelope without
+    // inventing unmapped KIND/MEMBER lines.
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("FN:Dev Team\r\n"));
+    assert!(emitted.contains("NOTE;X-JMAP-KEY=n1:Core engineering team\r\n"));
+    assert!(!emitted.contains("KIND:"));
+    assert!(!emitted.contains("MEMBER:"));
+
+    // Roundtrip back to JSContact reaches a fixed-point
+    let back = vcard_to_card(&emitted).expect("reparse must succeed");
+    assert_eq!(
+        back.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Dev Team")
+    );
+    assert_eq!(
+        back.notes
+            .as_ref()
+            .and_then(|m| m.get("n1"))
+            .map(|n| n.note.as_str()),
+        Some("Core engineering team")
+    );
+}
+
+#[test]
+fn vcard_apple_and_eds_group_list_extensions_characterization() {
+    // Vendor-specific group cards:
+    // 1. Apple CardDAV extension: `X-ADDRESSBOOKSERVER-KIND:group` + `X-ADDRESSBOOKSERVER-MEMBER:...`
+    // 2. EDS contact list extension: `X-EVOLUTION-LIST:TRUE` (`E_CONTACT_IS_LIST`) + `X-EVOLUTION-DEST-EMAIL:...`
+    let apple_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:apple-group-1\r\n",
+        "FN:Design Team\r\n",
+        "X-ADDRESSBOOKSERVER-KIND:group\r\n",
+        "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:11111111-2222-3333-4444-555555555555\r\n",
+        "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:66666666-7777-8888-9999-000000000000\r\n",
+        "END:VCARD\r\n"
+    );
+    let card1 = vcard_to_card(apple_vcard).expect("apple group vcard parse");
+    assert_eq!(card1.id.as_ref().unwrap().as_str(), "apple-group-1");
+    assert_eq!(
+        card1.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Design Team")
+    );
+    assert!(card1.extra.is_empty());
+
+    let eds_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:eds-list-1\r\n",
+        "FN:Release Coordinators\r\n",
+        "X-EVOLUTION-LIST:TRUE\r\n",
+        "X-EVOLUTION-LIST-SHOW-ADDRESSES:FALSE\r\n",
+        "X-EVOLUTION-DEST-EMAIL:rel-coord@example.com\r\n",
+        "EMAIL;TYPE=WORK:rel-coord@example.com\r\n",
+        "END:VCARD\r\n"
+    );
+    let card2 = vcard_to_card(eds_vcard).expect("eds list vcard parse");
+    assert_eq!(card2.id.as_ref().unwrap().as_str(), "eds-list-1");
+    assert_eq!(
+        card2.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Release Coordinators")
+    );
+    let emails = card2.emails.expect("emails");
+    assert_eq!(
+        emails.values().next().map(|e| e.address.as_str()),
+        Some("rel-coord@example.com")
+    );
+}
+
+#[test]
+fn vcard_non_group_kind_variants_characterization() {
+    // Tests RFC 6473 `KIND` values other than `group` (`individual`, `org`,
+    // `location`, `device`, `application`, `x-custom`).
+    for kind in [
+        "individual",
+        "org",
+        "location",
+        "device",
+        "application",
+        "x-robot",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:card-kind-{kind}\r\nFN:Entity {kind}\r\nKIND:{kind}\r\nORG:Example Corp\r\nNOTE:Test entity\r\nEND:VCARD\r\n"
+        );
+        let card = vcard_to_card(&vcard).expect("kind variant parse");
+        assert_eq!(
+            card.name.as_ref().and_then(|n| n.full.as_deref()),
+            Some(format!("Entity {kind}").as_str()),
+            "FN must parse for KIND:{kind}"
+        );
+        let orgs = card.organizations.as_ref().expect("orgs");
+        assert_eq!(
+            orgs.values().next().and_then(|o| o.name.as_deref()),
+            Some("Example Corp"),
+            "ORG must parse for KIND:{kind}"
+        );
+        let notes = card.notes.as_ref().expect("notes");
+        assert_eq!(
+            notes.values().next().map(|n| n.note.as_str()),
+            Some("Test entity"),
+            "NOTE must parse for KIND:{kind}"
+        );
+
+        let emitted = card_to_vcard(&card);
+        assert!(!emitted.contains("KIND:"));
+        let back = vcard_to_card(&emitted).expect("reparse");
+        assert_eq!(
+            back.name.as_ref().and_then(|n| n.full.as_deref()),
+            Some(format!("Entity {kind}").as_str())
+        );
+    }
+}
+
+#[test]
+fn jscontact_group_card_with_members_map_in_extra_characterization() {
+    // When a JSContact Card from the server has `kind: "group"` and
+    // `members: { ... }` in `extra`, `card_to_vcard` safely ignores the
+    // unmodeled properties without injecting malformed vCard lines or
+    // panicking.
+    let mut extra = BTreeMap::new();
+    extra.insert("kind".to_owned(), json!("group"));
+    extra.insert(
+        "members".to_owned(),
+        json!({
+            "urn:uuid:550e8400-e29b-41d4-a716-446655440000": true,
+            "urn:uuid:66666666-7777-8888-9999-000000000000": true,
+            "mailto:carol@example.com": true
+        }),
+    );
+
+    let card = ContactCard {
+        id: Some("grp-1".into()),
+        uid: Some("urn:uuid:grp-1".to_owned()),
+        card_type: Some("Card".to_owned()),
+        version: Some("1.0".to_owned()),
+        name: Some(Name {
+            full: Some("Frontend Working Group".to_owned()),
+            ..Name::default()
+        }),
+        extra,
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(vcard.contains("FN:Frontend Working Group\r\n"));
+    assert!(vcard.contains("UID:grp-1\r\n"));
+    assert!(vcard.contains("X-JMAP-UID:urn:uuid:grp-1\r\n"));
+    assert!(!vcard.contains("KIND:"));
+    assert!(!vcard.contains("MEMBER:"));
+
+    let back = vcard_to_card(&vcard).expect("reparse");
+    assert_eq!(
+        back.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Frontend Working Group")
+    );
+    assert_eq!(back.id.as_ref().unwrap().as_str(), "grp-1");
+    assert_eq!(back.uid.as_deref(), Some("urn:uuid:grp-1"));
+    assert!(back.extra.is_empty());
+}
+
+#[test]
+fn group_card_coexisting_with_full_suite_of_contact_properties_roundtrip() {
+    // A group card carrying `KIND:group` and `MEMBER` properties alongside all
+    // 12 standard mapped contact properties (`FN`, `NICKNAME`, `EMAIL`, `TEL`,
+    // `ADR`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `URL`, `CATEGORIES`, `PHOTO`,
+    // `X-EVOLUTION-SPOUSE`).
+    //
+    // Asserts that all 12 properties roundtrip losslessly through
+    // vCard -> JSContact -> vCard -> JSContact without degradation or component
+    // shifting.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:arch-wg-01\r\n",
+        "FN:Architecture Working Group\r\n",
+        "KIND:group\r\n",
+        "MEMBER:urn:uuid:11111111-2222-3333-4444-555555555555\r\n",
+        "MEMBER:mailto:chair@example.org\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:arch-wg\r\n",
+        "EMAIL;X-JMAP-KEY=e1;TYPE=WORK:arch-wg@example.org\r\n",
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,VOICE:+4930123456\r\n",
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK:;;Tiergartenstraße 1;Berlin;Berlin;10785;Germany\r\n",
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK:Tiergartenstraße 1\\n10785 Berlin\\nGermany\r\n",
+        "ORG;X-JMAP-KEY=o1:Standards Org;Technical Council;Architecture\r\n",
+        "TITLE;X-JMAP-KEY=t1:Working Group\r\n",
+        "ROLE;X-JMAP-KEY=t2:Standards Development\r\n",
+        "NOTE;X-JMAP-KEY=n1:Meets bi-weekly on Thursdays\r\n",
+        "URL;X-JMAP-KEY=l1:https://standards.example.org/arch-wg\r\n",
+        "CATEGORIES:WorkingGroup,Standards,Architecture\r\n",
+        "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://standards.example.org/logo.png\r\n",
+        "X-EVOLUTION-SPOUSE:Sister Working Group\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("first parse");
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "arch-wg-01");
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Architecture Working Group")
+    );
+    assert_eq!(
+        card.nicknames
+            .as_ref()
+            .and_then(|m| m.get("k1"))
+            .map(|n| n.name.as_str()),
+        Some("arch-wg")
+    );
+    assert_eq!(
+        card.emails
+            .as_ref()
+            .and_then(|m| m.get("e1"))
+            .map(|e| e.address.as_str()),
+        Some("arch-wg@example.org")
+    );
+    assert_eq!(
+        card.phones
+            .as_ref()
+            .and_then(|m| m.get("p1"))
+            .map(|p| p.number.as_str()),
+        Some("+4930123456")
+    );
+    assert_eq!(
+        card.organizations
+            .as_ref()
+            .and_then(|m| m.get("o1"))
+            .and_then(|o| o.name.as_deref()),
+        Some("Standards Org")
+    );
+    assert_eq!(
+        card.titles
+            .as_ref()
+            .and_then(|m| m.get("t1"))
+            .map(|t| t.name.as_str()),
+        Some("Working Group")
+    );
+    assert_eq!(
+        card.titles
+            .as_ref()
+            .and_then(|m| m.get("t2"))
+            .map(|t| t.name.as_str()),
+        Some("Standards Development")
+    );
+    assert_eq!(
+        card.notes
+            .as_ref()
+            .and_then(|m| m.get("n1"))
+            .map(|n| n.note.as_str()),
+        Some("Meets bi-weekly on Thursdays")
+    );
+    assert_eq!(
+        card.links
+            .as_ref()
+            .and_then(|m| m.get("l1"))
+            .map(|l| l.uri.as_str()),
+        Some("https://standards.example.org/arch-wg")
+    );
+    assert!(
+        card.keywords
+            .as_ref()
+            .is_some_and(|k| k.contains_key("Architecture"))
+    );
+    assert!(
+        card.related_to
+            .as_ref()
+            .is_some_and(|r| r.contains_key("Sister Working Group"))
+    );
+
+    // Re-emit via card_to_vcard and re-parse
+    let emitted = card_to_vcard(&card);
+    let back = vcard_to_card(&emitted).expect("second parse");
+    assert_eq!(
+        back.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Architecture Working Group")
+    );
+    assert_eq!(
+        back.nicknames
+            .as_ref()
+            .and_then(|m| m.get("k1"))
+            .map(|n| n.name.as_str()),
+        Some("arch-wg")
+    );
+    assert_eq!(
+        back.emails
+            .as_ref()
+            .and_then(|m| m.get("e1"))
+            .map(|e| e.address.as_str()),
+        Some("arch-wg@example.org")
+    );
+    assert_eq!(
+        back.phones
+            .as_ref()
+            .and_then(|m| m.get("p1"))
+            .map(|p| p.number.as_str()),
+        Some("+4930123456")
+    );
+    assert_eq!(
+        back.organizations
+            .as_ref()
+            .and_then(|m| m.get("o1"))
+            .and_then(|o| o.name.as_deref()),
+        Some("Standards Org")
+    );
+    assert_eq!(
+        back.titles
+            .as_ref()
+            .and_then(|m| m.get("t1"))
+            .map(|t| t.name.as_str()),
+        Some("Working Group")
+    );
+    assert_eq!(
+        back.titles
+            .as_ref()
+            .and_then(|m| m.get("t2"))
+            .map(|t| t.name.as_str()),
+        Some("Standards Development")
+    );
+    assert_eq!(
+        back.notes
+            .as_ref()
+            .and_then(|m| m.get("n1"))
+            .map(|n| n.note.as_str()),
+        Some("Meets bi-weekly on Thursdays")
+    );
+    assert_eq!(
+        back.links
+            .as_ref()
+            .and_then(|m| m.get("l1"))
+            .map(|l| l.uri.as_str()),
+        Some("https://standards.example.org/arch-wg")
+    );
+    assert!(
+        back.keywords
+            .as_ref()
+            .is_some_and(|k| k.contains_key("Architecture"))
+    );
+    assert!(
+        back.related_to
+            .as_ref()
+            .is_some_and(|r| r.contains_key("Sister Working Group"))
+    );
+}
+
+#[test]
+fn group_card_with_parameter_variations_and_empty_values() {
+    // Tests lowercase parameter names, explicit VALUE parameter types,
+    // empty values, and custom parameters on KIND and MEMBER lines.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:param-var-1\r\n",
+        "FN:Variations Group\r\n",
+        "kind;value=text:group\r\n",
+        "KIND:\r\n",
+        "member;VALUE=uri:urn:uuid:12345678-1234-5678-1234-567812345678\r\n",
+        "MEMBER;X-JMAP-KEY=m1:mailto:lead@example.com\r\n",
+        "MEMBER:\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard).expect("parse with parameter variations");
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Variations Group")
+    );
+    assert!(card.extra.is_empty());
+
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("FN:Variations Group\r\n"));
+    assert!(!emitted.contains("KIND:"));
+    assert!(!emitted.contains("MEMBER:"));
+}
