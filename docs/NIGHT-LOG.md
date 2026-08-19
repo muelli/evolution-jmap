@@ -35728,3 +35728,32 @@ Comment-only changes plus one new plain-prose doc file (already covered by
 `REUSE.toml`'s existing `docs/**` annotation, and given its own SPDX header
 regardless, matching `docs/EXTERNALISATION-AUDIT.md`'s style) — no source
 logic changed, so no new tests were needed or written.
+
+## 2026-08-19 (claim) — Claiming Track A6: unsafe reduction / idiom audit
+
+Fresh survey: `docs/MILESTONES.md` has every milestone COMPLETE; CURRENT
+PRIORITY has no open item left (M7 COMPLETE and operator-verified; the
+redirect-auth and apiUrl-scheme real-server bugs are both fixed; OAuth 2.0
+real-server validation and JMAP SRV autodiscovery's `GResolver`-backed leg
+are both explicitly parked/escalation-worthy per the roadmap text, unchanged
+since at least the last three sessions that checked — not re-surveying a
+fourth time). Round 2's "Lead order" wants Track D first, but D1's only
+remaining piece is the `create_resource_sync`/`delete_resource_sync`
+GObject-vtable FFI wiring — the same escalation-worthy category as SRV's
+`GResolver` leg — and D2 is gated on that same wiring; Track D is not
+tractable tonight either. Track B/C2/C3/E are NEEDS-DECISION. That leaves
+Track A: A1/A3 are `[agy]`-lane; A2 (mutation testing `jmap-proto`/
+`jmap-client`) risks an unbounded rebuild-per-mutant loop against a genuinely
+tight disk budget (`df -h .`: 3.6G free, `rust/target/debug` already 20G —
+the same risk the C1-claiming session flagged for A2 specifically); A5 (FFI
+soundness) is explicitly escalation-worthy per its own roadmap text. A6
+(unsafe reduction/idiom audit) is left: read-and-categorize, no FFI writing,
+no rebuild loop, and not marked escalation-worthy — the right-sized item.
+
+Scope check: `grep -rl unsafe` across `rust/crates/**/src` (excluding
+`tests/`) hits ~80 files — effectively every backend/FFI crate. Plan:
+inventory every `unsafe` block by crate/cluster, tag each **KEEP** (intrinsic,
+well-contained) / **IMPROVE** (concrete safer or more idiomatic refactor
+available) / **INVESTIGATE**, write `docs/UNSAFE-AUDIT.md` with a short
+prioritized IMPROVE list and rough effort per item. Audit only, per the
+roadmap text — no code changes this session beyond the doc itself.
