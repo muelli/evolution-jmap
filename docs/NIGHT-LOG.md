@@ -39107,3 +39107,114 @@ entry and `docs/ROADMAP.md`'s A6 entry both record that split rather than
 claiming A6 as a whole. Nothing here needs human verification: it is a
 refcount-preserving refactor of code with no user-visible surface, proven in a
 real EDS process by the functional run.
+
+## 2026-08-19 (later still) — Track A6: migrate `jmap-backend-collection`'s manual unref sites to `Owned<T>`
+
+Fresh survey after the Pattern C delivery at `a362578`: `git fetch` shows
+`origin/master` unchanged, no new maintainer commit. CURRENT PRIORITY items
+1/3/4/5/6 are all still code-complete pending only operator confirmation
+already logged as such — nothing new to do there, and M1–M10/CALCARD are all
+tagged `COMPLETE` in `docs/MILESTONES.md`, so there is no in-progress M7/
+real-server code work left for an agent to pick up. Round 2: Track D1/D2 and
+Track E Phase 0/Path A are done pending operator verification, D2 write-back
+and Track E Phase B/C need a design/maintainer decision, Track B1/C2/C4 are
+NEEDS-DECISION, Track F is closed, A1–A4/A7 are done. That leaves A5 (FFI
+soundness audit, open-ended, no `~/.night-shift-escalate` file present so not
+a live escalation) and A6's own named follow-up — the ROADMAP text for Pattern
+C explicitly scopes it: "the ~10 `jmap-mail` sites and ~4 in
+`jmap-backend-collection` ... now a mechanical migration rather than a design
+question ... the next session on this thread should do it."
+
+Claiming the `jmap-backend-collection` half of that follow-up (the smaller of
+the two piles): apply the `jmap_backend_core::owned::Owned<T>` wrapper Pattern
+C already built and proved correct to this crate's remaining manual
+`g_object_unref` sites. Not a reopening of a completed backend for edge-case
+polish (the rule 0 guardrail this session was run under) — it is the
+maintainer's own Round 2 Track A quality/security lane, and the risky part
+(designing `Owned<T>`, proving its refcount arithmetic against a real GObject
+and libical instance, building the leak/double-free test harness) is already
+done; this is applying an already-tested tool to new call sites, the kind of
+increment the roadmap's own text calls "mechanical."
+
+**Sites found (six, not the audit's rough ~4):**
+`create_resource.rs::stored_password_of` (`ESourceCredentialsProvider`),
+`backend.rs::login_for` and `Live::export` (`ESourceRegistryServer`, one each),
+`fan_out.rs::apply_fanout`'s existing-children loop and `adopt` (`ESource`,
+one each), `populate.rs`'s claimed-resources loop (`ESource`). All were the
+same shape Pattern C already named: a `(transfer full)` pointer, a manual
+NULL check, a use, and a manual `g_object_unref` on every exit path.
+
+**What changed, past the mechanical swap:** `adopt` (`fan_out.rs`) is the
+densest of the six — a three-way match (`Adopted::Uncreated` /
+`Adopted::Written` / `Adopted::Abandoned`) that the old code unreffed once,
+unconditionally, after the match. Wrapping `new_child`'s pointer in `Owned`
+immediately, using `.as_ptr()` for the borrowing calls in between, deletes the
+explicit unref entirely — the reference now releases wherever the function's
+scope ends, on any of the three paths, without a human having to notice a
+fourth path was added later. The other five sites keep the same
+`let Some(x) = Owned::from_raw(...) else { ... }` shape Pattern C used for the
+early-exit sites in `jmap-backend-cal`.
+
+**A false start, corrected before it reached the log as a false finding.**
+Following Pattern C's own lesson — that the existing test suite alone did not
+bite on a deliberate double-unref in `marshal.rs` — this session wrote a new
+refcount regression test for `adopt`, since it was the one site without an
+existing before/after refcount test (`populate.rs`'s loop already had one:
+`every_reference_the_claim_handed_over_is_given_back`, which stayed green
+through the migration unmodified). The first draft asserted the post-`adopt`
+GObject refcount was always `1`. It failed immediately, refcount `2` instead
+— and the instinct to weaken the assertion to match was wrong: reading
+`child_source::apply` explained it correctly instead. Writing even one
+setting (`[Authentication] Host`, say) makes `apply` call
+`e_source_get_extension`, which *creates* the `ESourceAuthentication`
+extension the first time it is asked for — and that extension, once created,
+holds a permanent reference of its own on the source it extends. That
+reference is real and correct (EDS's own, not a bug), but it is not the
+reference `adopt`'s transfer-full contract with `new_child` is answerable
+for. Isolating the test to an empty settings list (`&[]`) — which `apply`
+turns into a no-op loop before touching any extension — removes the confound
+and gives the clean invariant Pattern C's discipline was actually asking for:
+the exact reference `new_child` handed over, and no other, is what `adopt`
+releases. Landed as
+`tests/fan_out.rs::adopt_releases_exactly_the_reference_new_child_handed_over`,
+covering both the newly-created-and-published branch and the
+drawn-from-cache branch. Worth recording as a general note for whoever
+extends this pattern next: a refcount assertion's *baseline* number is not
+obvious by inspection once real EDS extension objects are in play, and is
+worth deriving empirically (a throwaway `eprintln!` probe, as this session
+used, is cheap) rather than guessed.
+
+The other two GObject types this migration touched
+(`ESourceCredentialsProvider`, `ESourceRegistryServer`) are covered by the
+crate's existing behavioural test suite (real `ESource`/registry-server
+fixtures already exercise `login_for`, `Live::export`, and
+`stored_password_of` end to end) rather than a new dedicated refcount test —
+each is a single early-return, not a three-way match, and building a real
+`ESourceRegistryServer` fixture (session-bus-adjacent, per
+`tests/delete_resource.rs`'s own comments on the cost of that fixture) for a
+lower-complexity control flow was judged not worth this increment's budget;
+recorded here rather than silently skipped.
+
+**Gate.** `cargo fmt --check` clean (workspace-wide). `cargo clippy
+--all-targets --locked -- -D warnings` (default-members) and `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets --locked -- -D warnings` (the seven EDS-gated crates) both
+clean. `cargo test --locked` (default-members, 0 failed) and each of the seven
+EDS-gated crates' own `cargo test --locked` (0 failed) all green, including
+`jmap-backend-collection`'s full 156-test suite with the new test passing. No
+new dependency, no new user-facing string (no `po/` change — this crate's
+`gobject_sys` import for `g_object_unref`/`g_object_ref` stays where the test
+double in `tests/fan_out.rs` still needs it directly). Disk was tight this
+session (94% full, 21G in `rust/target/debug`, 3.5G free) — cleaned with
+`cargo clean --profile dev` after the gate ran green, consistent with the
+standing note on this VM.
+
+**Scope, stated plainly.** This closes the `jmap-backend-collection` half of
+A6's own follow-up list. **Still open:** the `jmap-mail` crate's ~10 sites
+(same mechanical migration, same `Owned<T>`, not attempted this session), and
+A5 (the FFI soundness audit) and the rest of A6's IMPROVE list beyond Pattern
+C, both still open-ended items better suited to a session that budgets for
+them deliberately. Nothing here needs human verification: refcount-preserving
+refactor of code with no user-visible surface, on a crate whose real-`ESource`
+integration tests already exercise every touched site end to end.

@@ -548,6 +548,43 @@ tracks follow; the maintainer may reorder anytime.
     (~4) manual-unref sites — the same mechanical migration, now that the type
     exists in a crate both already depend on — and the rest of A6's IMPROVE
     list.
+  - **`jmap-backend-collection` half DONE 2026-08-19** — its six manual
+    `g_object_unref` sites now go through `Owned<T>`:
+    `create_resource.rs::stored_password_of` (an `ESourceCredentialsProvider`),
+    `backend.rs::login_for` and `Live::export` (an `ESourceRegistryServer`
+    each), `fan_out.rs::apply_fanout`'s existing-children loop and `adopt`
+    (both `ESource`), and `populate.rs`'s claimed-resources loop (`ESource`).
+    `adopt` in particular no longer has an explicit unref at all — wrapping
+    the `(transfer full)` pointer from `new_child` in `Owned` right away means
+    its three-way match (`Uncreated`/`Written`/`Abandoned`) releases the
+    reference on every path by falling out of scope, not by a human tracking
+    which of three `return`/fall-through arms needs the same line repeated.
+    **Caught in review, before it reached a test:** the natural first draft of
+    a new leak/double-free regression test asserted the post-`adopt` refcount
+    was always `1`; against a real `ESource`, writing even one setting creates
+    the EDS extension that holds it, which takes its own permanent reference
+    on the source — real, but EDS's, not `adopt`'s own transfer-full contract
+    to answer for. First run of that draft failed with refcount `2`, not
+    because the migration was wrong but because the assumed baseline was; fixed
+    by asserting with an empty settings list (`&[]`, isolating the one
+    reference `adopt` is actually responsible for) rather than by relaxing the
+    assertion. Landed as `tests/fan_out.rs::adopt_releases_exactly_the_reference_new_child_handed_over`,
+    covering both the newly-created-and-published branch and the
+    drawn-from-cache branch; `populate.rs`'s equivalent site already had
+    exactly this kind of test (`every_reference_the_claim_handed_over_is_given_back`),
+    which stayed green unmodified through the migration and is the reason that
+    site needed no new test. `create_resource.rs`/`backend.rs`'s two
+    `ESourceRegistryServer`/`ESourceCredentialsProvider` sites are covered by
+    the crate's existing behavioural suite (real `ESource`/registry-server
+    fixtures already exercise both), not by a new refcount test — heavier
+    fixtures (a real `ESourceRegistryServer`) for a lower-complexity control
+    flow (one early-return each, versus `adopt`'s three-way match) than the
+    budget of this increment called for. Full gate green: `cargo fmt --check`
+    (workspace); `cargo clippy --all-targets --locked -- -D warnings`
+    (default-members) and the seven-crate EDS-gated clippy both clean; `cargo
+    test --locked` (default-members) and all seven EDS-gated crates' own
+    `cargo test --locked` green, 0 failed. **Still open on A6:** the
+    `jmap-mail` (~10 sites) migration and the rest of A6's IMPROVE list.
 - **A7 `[claude]` Stale-comments audit.** Deliverable
   `docs/STALE-COMMENTS-AUDIT.md`: comments that no longer match the code —
   renamed/removed items, changed behaviour, done TODOs, resolved-milestone refs
