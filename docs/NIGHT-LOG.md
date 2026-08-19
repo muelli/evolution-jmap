@@ -37222,3 +37222,53 @@ Claiming this increment now: add
 next to the module's existing `to_gerror`/`set_gerror`/`cstring_lossy`,
 red-test first, then have the three call sites delegate to it, keeping
 every existing test in those three crates green unmodified.
+
+## 2026-08-19 — Delivered: Track A6 Pattern E, the `invalid_arg_gerror` consolidation
+
+Followed through on the claim. Red first: added
+`invalid_arg_gerror_carries_the_invalid_arg_code_and_the_message` to
+`jmap-backend-core/src/error.rs`'s test module, calling a function that did
+not exist yet — confirmed `cargo test -p jmap-backend-core` failed with
+`cannot find function 'invalid_arg_gerror'` before writing it. Green: added
+`pub fn invalid_arg_gerror(message: &str) -> *mut GError` to
+`jmap_backend_core::error`, the same `cstring_lossy` +
+`e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, ...)` body every one of
+the three duplicates had. Switched all three call sites:
+- `jmap-backend-book/src/ops.rs` and `jmap-backend-cal/src/ops.rs`: deleted
+  each crate's own `invalid_arg` fn entirely, both its call sites (the
+  `SyncError::VCard`/`SyncError::ICal`/`SyncError::Unsendable` match arms and
+  `fail_invalid`) now calling the shared helper, and dropped
+  `E_CLIENT_ERROR_INVALID_ARG`/`e_client_error_create` from each file's
+  `eds_sys` import (each was used nowhere else in its file, confirmed by
+  grep before removing).
+- `jmap-backend-collection/src/authenticate.rs::no_account_gerror`: kept as
+  a named function (its one call site, `authenticate_with`'s "no account"
+  branch, reads better naming that case than a raw message literal would),
+  but its body is now one line delegating to the shared helper instead of
+  its own `cstring_lossy`/`e_client_error_create` pair.
+
+No behaviour change anywhere: all three were byte-identical bodies before
+this, so every existing test keeps observing the same `GError` for the same
+inputs — confirmed by running the full suite rather than just re-reading
+the diff. `docs/UNSAFE-AUDIT.md`'s Pattern E updated with what landed and
+what is still open (the `fail`/`fail_bool` generic-return-type half, which
+needs real design — three different sentinel shapes across its ~10 sites —
+not a mechanical port).
+
+Gate before pushing: `cargo fmt --check` clean (after one `cargo fmt` pass,
+which only re-wrapped the `authenticate.rs` import list onto multiple
+lines — no content change); `cargo build -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-backend-collection` clean;
+`cargo clippy -p evolution-jmap-client -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` clean;
+`cargo test --locked` (default-members) and the direct seven-crate
+`cargo test` both green, every `test result: ok`, 0 failed.
+
+Ending the session here — one focused, fully-tested increment, pushed.
+Everything surveyed at claim time still holds: SRV autodiscovery's
+GResolver `Resolver`, A5, A6 Pattern C, and D1's vtable wiring remain
+FFI/refcount escalation-worthy; Track B/C2/C4/E remain NEEDS-DECISION; A6
+Pattern E's remaining `fail`/`fail_bool` half is a real design task, not a
+mechanical one, and is left for a session that wants to take that on
+deliberately.

@@ -22,12 +22,9 @@
 //! - a NULL out-parameter means "not interested" and is skipped, which is why
 //!   the lists are not even built when nobody wants them.
 
-use eds_sys::{
-    E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, EContact,
-    e_book_client_error_create, e_client_error_create,
-};
+use eds_sys::{E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, EContact, e_book_client_error_create};
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
-use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
+use jmap_backend_core::error::{cstring_lossy, invalid_arg_gerror, set_raw_gerror};
 use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
 use jmap_book_sync::{BookSync, SyncError};
 use jmap_proto::State;
@@ -297,15 +294,8 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
         }
         // A vCard Evolution handed us that the mapping cannot read: the
         // argument was bad, not the server.
-        SyncError::VCard(_) => invalid_arg(&failure.to_string()),
+        SyncError::VCard(_) => invalid_arg_gerror(&failure.to_string()),
     }
-}
-
-fn invalid_arg(message: &str) -> *mut GError {
-    let message = cstring_lossy(message);
-    // SAFETY: the code is one of the enum's own values and the message is
-    // copied by the call.
-    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
 }
 
 /// Reports `failure` through `error` and returns the vfunc's FALSE.
@@ -324,6 +314,6 @@ unsafe fn fail(error: *mut *mut GError, failure: &SyncError) -> gboolean {
 ///
 /// As [`set_raw_gerror`].
 unsafe fn fail_invalid(error: *mut *mut GError, message: &str) -> gboolean {
-    unsafe { set_raw_gerror(error, invalid_arg(message)) };
+    unsafe { set_raw_gerror(error, invalid_arg_gerror(message)) };
     GFALSE
 }

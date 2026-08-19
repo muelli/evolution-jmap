@@ -75,14 +75,13 @@
 //! certificate?" dialog.
 
 use eds_sys::{
-    E_CLIENT_ERROR_INVALID_ARG, E_SOURCE_AUTHENTICATION_ERROR, ENamedParameters, ESource,
-    ESourceAuthenticationResult, e_client_error_create,
+    E_SOURCE_AUTHENTICATION_ERROR, ENamedParameters, ESource, ESourceAuthenticationResult,
 };
 use gio_sys::GCancellable;
 use glib_sys::GError;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, ConnectError, credentials as login_as};
-use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
+use jmap_backend_core::error::{invalid_arg_gerror, set_raw_gerror};
 use jmap_backend_core::marshal::password as stored_password;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
 use jmap_client::Credentials;
@@ -238,8 +237,5 @@ where
 
 /// The `GError` for a backend that was handed no account at all.
 fn no_account_gerror() -> *mut GError {
-    let message = cstring_lossy("the JMAP collection backend has no account to authenticate");
-    // SAFETY: the code is one of the enum's own values and the message is
-    // copied by the call.
-    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
+    invalid_arg_gerror("the JMAP collection backend has no account to authenticate")
 }
