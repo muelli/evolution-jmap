@@ -96,6 +96,12 @@ headless, no decision needed; **NEEDS-DECISION** = a design/product call is open
 priority lane, `[agy]` in-lane polish (headless, test-gated). Log completions as
 usual. Do not reopen closed backends except where an item names one.
 
+**Lead order (maintainer, 2026-08-19):** once the two remaining CURRENT PRIORITY
+items (M10's 3 tests, the percent-encoding win) land, the Claude lane leads
+Round 2 with **Track D** (EDS parity — restores evolution-ews parity and has no
+protocol gap). Track E is a **design spike first** (see Track E). The other
+tracks follow; the maintainer may reorder anytime.
+
 ### Track A — Quality & security (CLAIMABLE)
 - **A1 `[agy]` Mutation testing of the mapping crates.** Run `cargo-mutants`
   (stable; `cargo install` it if absent) on `jmap-vcard` and `jmap-ical`. For
@@ -174,9 +180,14 @@ Stalwart implements it. Today we advertise/consume none of it
 serde `extra` bag. Sizable: proto models, client methods, mock support, an
 availability hook, and mapping ACLs onto Evolution's per-source
 read-only/permission flags (replacing the account-wide `read_only` heuristic in
-`jmap-collection-sync/src/children.rs:94`). DECISION: greenlight this track? It
-is the highest-leverage single addition — it answers two of the maintainer's
-asks at once.
+`jmap-collection-sync/src/children.rs:94`). **DECISION (maintainer, 2026-08-19):
+SPIKE FIRST.** Before any code, `[claude]` CLAIMABLE: produce
+`docs/PRINCIPALS-DESIGN.md` — scope RFC 9670 against our
+`jmap-proto`/`jmap-client`/`jmap-mock` and against what Stalwart exposes, with an
+effort estimate and recommended phasing (free/busy-for-slot-picking first vs.
+`shareWith`/`myRights` ACLs first). Do NOT implement until the maintainer
+approves the doc. It remains the highest-leverage single addition — it answers
+two asks (sharing + scheduling) at once.
 
 ### Not doing (protocol-gated)
 - **Tasks (VTODO) / Memos (VJOURNAL).** BLOCKED upstream: draft-ietf-jmap-calendars
