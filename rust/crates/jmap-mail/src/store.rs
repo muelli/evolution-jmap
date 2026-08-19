@@ -31,6 +31,7 @@ use eds_sys::{
 };
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
+use jmap_backend_core::marshal::dispatched_borrow;
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_mail_sync::{
     Filing, FolderInfo, FolderTree, FolderUpdate, KeywordChange, Keywords, MailSync,
@@ -554,7 +555,8 @@ impl JmapStore {
     /// argument satisfies this; anything else has to check with
     /// `G_TYPE_CHECK_INSTANCE_TYPE` first.
     pub unsafe fn borrow<'a>(store: *mut CamelStore) -> Option<&'a Self> {
-        unsafe { store.cast::<Self>().as_ref() }
+        // SAFETY: the doc comment above states the same contract.
+        unsafe { dispatched_borrow(store) }
     }
 
     /// The connection slot, or `None` on an instance whose `instance_init` has

@@ -36260,3 +36260,56 @@ change: same `Option<&Self>` for the same inputs; every existing test in
 `jmap-mail` stays green unmodified.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: `dispatched_borrow` helper, UNSAFE-AUDIT Pattern B (trusted-borrow half)
+
+Followed through on this session's claim. `jmap_backend_core::marshal`
+gained `pub unsafe fn dispatched_borrow<'a, C, T>(ptr: *mut C) -> Option<&'a
+T>` — a null check then `.cast::<T>().as_ref()`, with the "Camel only
+dispatches a class's vfuncs on an instance of that class" contract stated
+once instead of copied three times. `folder.rs::JmapFolder::borrow`,
+`store.rs::JmapStore::borrow`, and `transport.rs::JmapTransport::borrow` all
+switch to it.
+
+One find while implementing that the audit's own listing had slightly
+wrong: `subscribe.rs::borrow` was grouped under Pattern B's "checked" family
+in `docs/UNSAFE-AUDIT.md`, but it does not call `g_type_check_instance_is_a`
+itself — it is a bare `JmapStore::borrow(subscribable.cast::<CamelStore>())`
+delegate (the audit's own grep of the 6 files that do call
+`g_type_check_instance_is_a` correctly did not include `subscribe.rs`; the
+prose bullet above it was just imprecise). So it needed no code change of
+its own: it now goes through `dispatched_borrow` transitively via
+`JmapStore::borrow`. Corrected the record in `docs/UNSAFE-AUDIT.md` rather
+than leaving the imprecision for a future reader to trip on.
+
+No behaviour change: same `Option<&Self>` for the same inputs. Every
+existing test across the touched crates stayed green unmodified.
+
+**Left open, per the claim:** the "checked" family (`folder.rs::
+parent_store`, `server.rs::network`, `envelope.rs::internet`, `summary.rs::
+JmapSummary::borrow`, `message_info.rs::JmapMessageInfo::borrow`,
+`transfer.rs::mailbox_of`) — ~10 sites across 6 files, returning three
+different shapes (`Option<&T>`, `Option<*mut T>`, and `envelope.rs::
+internet`'s `Result<Option<*mut T>, EnvelopeError>` whose type-mismatch case
+is a user-facing error, not just `None`), which needs `checked_borrow`'s
+signature to accommodate more than one return shape — a real design
+question, not a mechanical port, so left for the next session on this
+thread. Logged in `docs/UNSAFE-AUDIT.md`'s Pattern B section and its
+prioritized follow-up list.
+
+Full gate: `cargo fmt --check` clean; `cargo build -p jmap-backend-core -p
+jmap-mail` clean; `cargo clippy --all-targets --locked -- -D warnings`
+(default-members) clean; `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+touched EDS-gated crates plus their siblings, direct-built since this VM
+has the headers) clean; `cargo test --locked` (default-members) and the
+same seven-crate `cargo test --locked` both green, every `test result: ok`,
+0 failed (the `evolution-jmap-CRITICAL **: ... panicked:` lines in the
+output are the panic-guard tests' own expected assertions, not failures).
+No new files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
+`cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
+run — its constituent checks were run individually as above, per the
+standing workaround. Disk at 3.5G free after the full test sweep — did not
+hit the standing "No space left on device" wall this session, so no
+`cargo clean` needed.
