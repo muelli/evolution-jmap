@@ -46,8 +46,7 @@ use eds_sys::{
     camel_network_settings_get_type,
 };
 use glib_sys::{g_free, gchar, gpointer};
-use gobject_sys::{GTypeInstance, g_type_check_instance_is_a};
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{checked_borrow_ptr, read_string};
 use jmap_backend_core::source::{ConnectTarget, SourceError, connect_target};
 
 /// What a JMAP store needs from its settings in order to build a client.
@@ -119,18 +118,9 @@ impl ServerConfig {
 /// `settings` must be NULL or a valid `CamelSettings`. The result borrows it
 /// and must not outlive the caller's reference.
 pub(crate) unsafe fn network(settings: *mut CamelSettings) -> Option<*mut CamelNetworkSettings> {
-    if settings.is_null() {
-        return None;
-    }
     // SAFETY: a non-NULL CamelSettings is a GTypeInstance by the contract
     // above, and the interface type initialises itself.
-    let implements = unsafe {
-        g_type_check_instance_is_a(
-            settings.cast::<GTypeInstance>(),
-            camel_network_settings_get_type(),
-        )
-    };
-    (implements != glib_sys::GFALSE).then(|| settings.cast::<CamelNetworkSettings>())
+    unsafe { checked_borrow_ptr(settings, camel_network_settings_get_type()) }
 }
 
 /// A string a `dup_` accessor just handed over, as an owned `Option<String>`.

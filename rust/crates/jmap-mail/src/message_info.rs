@@ -97,8 +97,9 @@ use glib_sys::{
     g_checksum_free, g_checksum_get_digest, g_checksum_new, g_checksum_update, g_free, gboolean,
     gchar,
 };
-use gobject_sys::{g_object_new, g_object_unref, g_type_check_instance_is_a, g_type_class_peek};
+use gobject_sys::{g_object_new, g_object_unref, g_type_class_peek};
 use jmap_backend_core::instance::Slot;
+use jmap_backend_core::marshal::checked_borrow;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_mail_sync::{KeywordChange, Keywords, MessageFlags, MessageSummary};
@@ -135,16 +136,9 @@ impl JmapMessageInfo {
     ///
     /// `info` must be NULL or point at a live `CamelMessageInfo`.
     unsafe fn borrow<'a>(info: *mut CamelMessageInfo) -> Option<&'a Self> {
-        // SAFETY: the type check is what makes the cast sound; the contract
-        // above is what makes the check itself legal.
-        unsafe {
-            if info.is_null()
-                || g_type_check_instance_is_a(info.cast(), message_info_type()) == GFALSE
-            {
-                return None;
-            }
-            info.cast::<Self>().as_ref()
-        }
+        // SAFETY: the contract above is what makes the type check itself
+        // legal, and the check is what makes the cast inside sound.
+        unsafe { checked_borrow(info, message_info_type()) }
     }
 }
 

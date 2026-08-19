@@ -42,10 +42,10 @@ use eds_sys::{
     CamelService, CamelStore, camel_folder_get_parent_store, camel_folder_set_flags,
     camel_offline_folder_get_type, camel_service_get_user_cache_dir,
 };
-use glib_sys::{GFALSE, GType, gchar};
-use gobject_sys::{g_object_new, g_type_check_instance_is_a};
+use glib_sys::{GType, gchar};
+use gobject_sys::g_object_new;
 use jmap_backend_core::instance::Slot;
-use jmap_backend_core::marshal::dispatched_borrow;
+use jmap_backend_core::marshal::{checked_borrow, dispatched_borrow};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
@@ -133,14 +133,12 @@ impl JmapFolder {
 ///
 /// `folder` must point at a live `CamelFolder`.
 pub(crate) unsafe fn parent_store<'a>(folder: *mut CamelFolder) -> Option<&'a JmapStore> {
-    // SAFETY: the accessor borrows the store the folder holds a reference to,
-    // and the type check is what makes the cast below sound.
+    // SAFETY: the accessor borrows the store the folder holds a reference to;
+    // the contract above is what makes the type check itself legal, and the
+    // check is what makes the cast inside sound.
     unsafe {
         let store = camel_folder_get_parent_store(folder);
-        if store.is_null() || g_type_check_instance_is_a(store.cast(), store_type()) == GFALSE {
-            return None;
-        }
-        JmapStore::borrow(store)
+        checked_borrow(store, store_type())
     }
 }
 
