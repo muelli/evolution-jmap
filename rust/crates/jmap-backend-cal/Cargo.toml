@@ -39,6 +39,10 @@ glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 
 [dev-dependencies]
+# To read `mallinfo2`'s byte-exact heap accounting in `tests/references.rs`,
+# which is how a leaked libical reference is caught — a page-granularity RSS
+# reading is not sensitive enough for a couple of hundred bytes per iteration.
+libc = "0.2.189"
 # Self dev-dependency to turn on `testing` (and so `detached()`) for this
 # crate's own test builds only — see the `[features]` comment above.
 jmap-backend-cal = { path = ".", features = ["testing"] }

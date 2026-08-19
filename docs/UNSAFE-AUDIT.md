@@ -237,6 +237,39 @@ rather than a comment, and the existing round-trip/fixture tests are the
 acceptance suite); the `jmap-mail`/`jmap-backend-collection` sites are a
 natural, smaller follow-up once the type exists.
 
+- **DONE 2026-08-19 (wrapper + the named highest-value target) —**
+  `jmap_backend_core::owned::Owned<T>` landed (`from_raw` → `Option`, so the
+  NULL check and the ownership decision are one thing; `as_ptr` for a borrowing
+  call; `into_raw` for a C function that takes the reference; `Drop` calling
+  `g_object_unref`), and all of
+  `jmap-backend-cal/src/marshal.rs` is migrated onto it: `component_from_ical`,
+  `icalendar_with_time_zones`, `icalendar_from_instances`, `holds_event`,
+  `find_master`, `take_event_time_zones`, `child_components` (now returns
+  `Vec<Owned<ICalComponent>>`), `take_referenced_time_zones`,
+  `defines_time_zone`, `rename_time_zone`, `referenced_tzids`. The crate has
+  **one** `g_object_unref` site left — inside `Owned::drop` — and
+  `marshal.rs` no longer imports `gobject_sys` at all;
+  `marshal::component_unref` stays as the public way for a vfunc to release
+  what `component_from_ical` handed it, implemented as a `drop(Owned::…)`.
+  Scoped to GObject instances (which is what libical-glib's types are);
+  `gchar *` and `GDateTime` keep their own free functions, deliberately.
+  **Verified by breaking it, not only by the round-trip suite passing:** the
+  existing `tests/marshal.rs`/`zones.rs`/`ops.rs` suites all stayed green with
+  the clone in `take_referenced_time_zones` deliberately over-released, so the
+  acceptance suite this audit named is *not* on its own sufficient — hence
+  `jmap-backend-cal/tests/references.rs` (refcount of the component a load
+  hands back vs. libical's own parse; GLib criticals made fatal, which is what
+  catches an over-release; and a repeated-load window that must retain exactly
+  zero bytes by `mallinfo2`, which is what catches a leak) plus
+  `jmap-backend-core/tests/owned.rs` (the wrapper's own `ref_count`
+  arithmetic on a plain `G_TYPE_OBJECT`). Four deliberate breaks — over-release
+  the clone, leak the resolved definition, keep a reference on the returned
+  component, leak the event children — each fail at least one of those tests.
+  **Still open, unchanged:** the `jmap-mail` (~10 sites) and
+  `jmap-backend-collection` (`backend.rs::export`, `fan_out.rs`,
+  `populate.rs`) sites, which is the "natural, smaller follow-up" above — the
+  type they need now exists in a crate both already depend on.
+
 ### Pattern D — IMPROVE: "has_extension, then get_extension, then cast" idiom, ~10+ copies
 
 `jmap-backend-collection/resource_id.rs::resource_id_of`,
