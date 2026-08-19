@@ -123,6 +123,19 @@ they close, prioritise in this order:
    found is already FIXED and operator-verified in `1afebc1`; the OAuth-2.0
    "can't be set up" the operator saw is the intended autodiscovery-only message
    from decision #1 below — not a bug, do not touch it.)
+   - **PARTIAL 2026-08-19** — the `Resolver` trait seam landed in
+     `jmap-client` (`resolver.rs`: `Resolver`/`SrvTarget`/`NoSrvResolver`;
+     `ClientBuilder::resolver`/`connect_domain`), TDD'd in
+     `jmap-client/tests/srv_discovery.rs` against a fake resolver and a fake
+     in-memory transport — see NIGHT-LOG "Delivered: `Resolver` trait seam
+     for JMAP SRV autodiscovery". **Still open, both named call sites
+     unchanged:** (a) nothing yet calls `connect_domain` on the password
+     path; (b) `config_lookup.rs::probe_host` still returns the bare email
+     domain. Also unstarted: a real `Resolver` backed by
+     `g_resolver_lookup_service()` in the EDS integration layer (FFI —
+     likely escalation-worthy). Not claimable-complete; the next session on
+     this thread should wire (a)/(b) into `connect_domain` and build the
+     GResolver-backed implementation.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner

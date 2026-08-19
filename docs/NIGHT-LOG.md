@@ -35067,3 +35067,56 @@ into the EDS-facing crates (`jmap-config`/`jmap-backend-core`, touching
 `config_lookup.rs::probe_host` and the password-path connect flow) is left
 for a follow-up session once this seam exists to wire into; noted below
 rather than attempted in the same increment as the FFI work.
+
+## 2026-08-19 — Delivered: `Resolver` trait seam for JMAP SRV autodiscovery
+
+- **`jmap-client/src/resolver.rs`** (new): a `Resolver` trait —
+  `lookup_srv(&self, domain: &str) -> Option<SrvTarget>` — plus `SrvTarget
+  { host, port }` and the default `NoSrvResolver`, which always returns
+  `None`. Deliberately no DNS crate here (kept out per the design note in
+  ROADMAP item 5): this pure crate never resolves anything itself, only
+  defines the seam an embedder plugs a real lookup into.
+- **`jmap-client/src/client.rs`**: `ClientBuilder` grew a `resolver` field
+  (defaulting to `NoSrvResolver`) and a `.resolver(impl Resolver + 'static)`
+  setter, plus a new `ClientBuilder::connect_domain(domain, credentials)`:
+  asks the resolver for `domain`'s SRV target first and builds the session
+  URL from `https://{host}:{port}/.well-known/jmap` when one is found,
+  otherwise falls back to today's `https://{domain}/.well-known/jmap` — then
+  delegates to the existing `connect`, so session discovery, refresh, and
+  everything downstream of a `Client` are unchanged either way. The existing
+  `connect(origin, …)` (used everywhere today, including `Client::connect`)
+  is untouched — this is an additive entry point, not a behaviour change to
+  any existing caller.
+- **`jmap-client/tests/srv_discovery.rs`** (new, red-then-green): a fake
+  in-memory `Transport` records every URL requested and answers with a
+  fixed session document — no real DNS/network needed, since the question
+  is which URL the client asks for. Three tests: an SRV target redirects
+  session discovery there; no SRV record falls back to the bare domain
+  (both with a fake `Resolver`); and `connect_domain` with no `.resolver(…)`
+  call at all uses the bare domain (`NoSrvResolver`'s default). All red
+  before `resolver.rs`/`connect_domain` existed (confirmed:
+  `unresolved import jmap_client::resolver`), green after.
+- Scope check against the roadmap item's two named call sites
+  (`jmap-client/client.rs`'s own session discovery, and the config-lookup
+  worker's `probe_host` in `jmap-config`): only the client-side seam lands
+  this session, as claimed above. `jmap-config`/`jmap-backend-core` still
+  build their origin from the ESource's `Host` field or the email domain
+  directly and never call `connect_domain` yet — wiring either call site to
+  use it, and supplying a real `GResolver`-backed `Resolver` from
+  `eds-sys`/the EDS integration (FFI: `g_resolver_lookup_service()`), is
+  unstarted and is the next increment in this thread, not a regression from
+  today (both sites' current bare-domain behaviour is unchanged).
+- Full gate: `cargo fmt --check` clean, `cargo clippy --all-targets
+  --locked -- -D warnings` (default-members) clean, `cargo clippy -p
+  evolution-jmap-client --all-targets --locked --features live-server --
+  -D warnings` clean, `cargo test --locked` (default-members) green, 0
+  failures across every crate including the 3 new tests. `cargo
+  deny`/`reuse lint` unavailable on this VM as usual; both new source files
+  carry the SPDX header the lint checks for.
+
+Next step for this thread (not attempted here, flagged as likely
+escalation-worthy per the roadmap item's own note): wire `connect_domain`
+into the password-path connect flow and `config_lookup.rs::probe_host`, and
+add a real `Resolver` backed by `g_resolver_lookup_service()` in the EDS
+integration layer. That second half is FFI/GObject-binding work; this
+session's seam is what it plugs into once attempted.
