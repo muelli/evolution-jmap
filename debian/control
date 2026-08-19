@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+Source: evolution-jmap
+Section: gnome
+Priority: optional
+Maintainer: Tobias Mueller <muelli@cryptobitch.de>
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               ninja-build,
+               pkg-config,
+               cargo,
+               rustc,
+               libglib2.0-dev,
+               libgtk-3-dev,
+               libcamel1.2-dev,
+               libedataserver1.2-dev,
+               libebackend1.2-dev,
+               libebook1.2-dev,
+               libedata-book1.2-dev,
+               libecal2.0-dev,
+               libedata-cal2.0-dev,
+               evolution-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/muelli/evolution-jmap
+Vcs-Browser: https://github.com/muelli/evolution-jmap
+Vcs-Git: https://github.com/muelli/evolution-jmap.git
+Rules-Requires-Root: no
+
+Package: evolution-jmap
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         evolution-data-server (>= 3.52),
+         evolution (>= 3.52)
+Description: JMAP support for GNOME Evolution
+ Backends that let Evolution and evolution-data-server speak JMAP
+ (RFC 8620/8621): an address book backend, a calendar backend, a Camel
+ mail provider, the collection backend that fans one account out into
+ all three, and the account setup module.
+ .
+ The modules are dlopened by evolution-data-server and by Evolution
+ itself, and must be used with the versions they were built against.

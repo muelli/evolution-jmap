@@ -1,0 +1,51 @@
+#!/usr/bin/make -f
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Track C3: a debian/ skeleton for a packager to start from, layered on the
+# same CMake tree cmake/{Rust,Backends,Packaging}.cmake already build and
+# test — but going through dh/dpkg-deb, not the CPack path Track C1 already
+# made lintian-clean, since that is the mechanism an actual Debian source
+# package upload uses. See debian/README.source for what this does NOT yet
+# solve (the ~140 vendored-crate question CPack's build sidesteps by not
+# being a source package at all).
+
+BUILDDIR := obj-debian
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	cmake -S . -B $(BUILDDIR) -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=/usr
+
+override_dh_auto_build:
+	cmake --build $(BUILDDIR)
+
+override_dh_auto_test:
+	# rust-test/rust-test-eds (cargo's own suite) already run in CI
+	# (ci/checks.sh) against the same source. Not re-run here: a
+	# from-scratch dpkg-buildpackage on an offline buildd has no route to
+	# crates.io (see README.source) and would only fail earlier, on the
+	# same missing crates override_dh_auto_install below cannot avoid
+	# either.
+
+override_dh_auto_install:
+	set -e; \
+	for component in book-backend cal-backend camel-provider collection-backend config-module; do \
+		DESTDIR=$(CURDIR)/debian/evolution-jmap \
+			cmake --install $(BUILDDIR) --component $$component; \
+	done
+
+override_dh_auto_clean:
+	rm -rf $(BUILDDIR)
+
+# Same reason cmake/Packaging.cmake asks CPack for
+# CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS: the modules link Evolution's
+# own libevolution-mail.so.0/libevolution-util.so.0, which live in
+# evolution-shell-3.0's private libdir, not on dpkg-shlibdeps' default
+# search path (they are only found at runtime because the Evolution shell
+# process that dlopens these modules has already loaded them itself).
+override_dh_shlibdeps:
+	dh_shlibdeps -a -- -l$(shell pkg-config --variable=privlibdir evolution-shell-3.0)

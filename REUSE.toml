@@ -37,6 +37,14 @@ path = [
     "po/evolution-jmap.pot",
     "infra/night-shift/*.md",
     "infra/agy-night-shift/*.md",
+    # debian/control, /rules and /watch carry their own "#"-comment SPDX
+    # headers already, but reuse's comment-style lookup is by filename/
+    # extension and none of these extensionless Debian-packaging names are
+    # in its recognized list; debian/changelog and debian/copyright are
+    # symlinks to already-annotated docs/packaging/* files under a path of
+    # their own; debian/source/format's content is fixed by dpkg-source's
+    # own format ("3.0 (quilt)"), leaving no room for a comment at all.
+    "debian/**",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Tobias Mueller <muelli@cryptobitch.de>"
