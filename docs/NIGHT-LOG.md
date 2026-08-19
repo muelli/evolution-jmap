@@ -38127,3 +38127,28 @@ appear on the server and in the sidebar immediately (not only after a restart);
 and it should survive a restart under the same uid rather than being duplicated
 by the next populate. An account with both parts switched off should *not* be
 offered.
+
+## 2026-08-19 (session N+1) — claiming Track F (newer-Evolution/EDS spike)
+
+Surveyed the roadmap: M7/real-server readiness/M9/M10 are all done or
+operator-verified; Track D's only remaining scoped piece is `delete_resource_sync`
+(the destructive vtable half, deliberately left for a dedicated session — see
+D1's own note) and Track A6's only remaining item (Pattern C, an `Owned<T>`
+RAII wrapper for libical/GObject pointers in `jmap-backend-cal/marshal.rs`) is
+new unsafe/ownership-transfer reasoning — both match this session's
+escalate-rather-than-risk-it criteria, and a tractable alternative exists, so
+per the driver's own preference ("prefer a different tractable Sonnet-sized
+item first"), not claiming either this iteration.
+
+**Claiming Track F instead: the newer-Evolution/EDS spike** (deliverable
+`docs/NEWER-EVOLUTION-SPIKE.md`). This is audit/build work, not new FFI
+authorship — compile+test `jmap-config`+`evo-sys` against the pinned newer
+container `ci/eds-matrix.sh` already uses (image cached locally, resolves to
+EDS 3.60.2, confirmed via `sudo docker images`), characterize any
+`EMailConfig*`/config-GUI API drift 3.52→3.60, and judge go/no-go on
+`compat.rs`-style multi-version gating per the maintainer's own criterion
+("recommend 3.52-only if it would be messy"). Note: `ci/eds-matrix.sh`
+already runs `-p jmap-config` (and `-p evo-sys`) as part of its crate set, so
+M10's prior green run may have already answered this spike's core question as
+a side effect — this session confirms that explicitly and writes it up rather
+than assuming.
