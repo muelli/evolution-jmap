@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine;
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
@@ -7998,4 +7999,413 @@ fn x_property_name_casing_and_empty_values_handling() {
     let re_emitted = card_to_vcard(&card);
     let back = vcard_to_card(&re_emitted).expect("parse re-emitted");
     assert_eq!(back, card);
+}
+
+#[test]
+fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
+    // 1. Long NOTE round-trip: value longer than 75 octets must fold on write and unfold losslessly on read
+    let long_note_text = "This is an extremely long note that exceeds seventy-five octets by a substantial margin. \
+        It contains detailed historical records, meeting minutes, action items, and extensive documentation \
+        that must be folded across multiple physical lines according to RFC 2426 Section 2.6, and unfolded \
+        with 100% lossless fidelity upon reading back from vCard 3.0 format.";
+
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: long_note_text.to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    // 2. Inline base64 PHOTO round-trip: large binary image payload encoded as data URI
+    let binary_data: Vec<u8> = (0..350).map(|i| (i % 256) as u8).collect();
+    let base64_payload = base64::engine::general_purpose::STANDARD.encode(&binary_data);
+    let photo_uri = format!("data:image/jpeg;base64,{base64_payload}");
+
+    let mut media = BTreeMap::new();
+    media.insert(
+        "m1".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: photo_uri.clone(),
+            media_type: Some("image/jpeg".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-FOLD-1".into()),
+        name: Some(Name {
+            full: Some("Line Folding Verification".to_owned()),
+            ..Name::default()
+        }),
+        notes: Some(notes),
+        media: Some(media),
+        ..ContactCard::default()
+    };
+
+    // Emit vCard
+    let vcard = card_to_vcard(&card);
+
+    // Assert that folding occurred on the NOTE and PHOTO lines
+    assert!(vcard.contains("\r\n "));
+
+    // Assert that physical lines in the vCard output target 75 octets and never exceed 77 octets
+    for physical_line in vcard.split("\r\n") {
+        assert!(
+            physical_line.len() <= 77,
+            "Physical line exceeds maximum line length (len = {}): {:?}",
+            physical_line.len(),
+            physical_line
+        );
+        assert!(
+            std::str::from_utf8(physical_line.as_bytes()).is_ok(),
+            "Invalid UTF-8 in physical line slice: {physical_line:?}"
+        );
+    }
+
+    // Read back and verify lossless unfolding
+    let read_card = vcard_to_card(&vcard).expect("parse folded vcard");
+
+    // Verify NOTE unfolded losslessly
+    let read_notes = read_card.notes.as_ref().expect("notes present");
+    assert_eq!(
+        read_notes["n1"].note, long_note_text,
+        "Folded NOTE did not unfold losslessly"
+    );
+
+    // Verify PHOTO unfolded losslessly and preserved media_type and binary content
+    let read_media = read_card.media.as_ref().expect("media present");
+    assert_eq!(read_media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(read_media["m1"].media_type.as_deref(), Some("image/jpeg"));
+    assert_eq!(read_media["m1"].uri, photo_uri);
+
+    // Verify fixed-point stability: emitting the parsed card produces identical vCard
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(vcard2, vcard, "Emitted folded vCard must be at fixed-point");
+}
+
+#[test]
+fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
+    // RFC 2426 §2.6: Lines can be folded with CRLF + space OR CRLF + tab.
+    // Unfolding removes the CRLF and the immediately following space/tab continuation marker.
+    // If multiple spaces/tabs follow, only the first is the folding marker;
+    // subsequent spaces/tabs are part of the value.
+    let prefolded_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:prefolded-card-1\r\n",
+        "FN;X-JMAP-KEY=name:Dr. Jane \r\n\tWatson\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:The\r\n  Detective\r\n",
+        "EMAIL;X-JMAP-KEY=e1;TYPE=WORK:jane.watson\r\n @example.org\r\n",
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,VOICE:+44 20 \r\n\t7946 0958\r\n",
+        "ORG;X-JMAP-KEY=o1:Metropolitan Police\r\n  Service;Forensics \r\n\tDivision;Ballistics Unit\r\n",
+        "TITLE;X-JMAP-KEY=t1:Senior Forensic \r\n\tConsultant\r\n",
+        "ROLE;X-JMAP-KEY=t2:Lead Ballistics \r\n Specialist\r\n",
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK:PO Box \r\n 999;Suite 400;221B \r\n\tBaker Street;London;Greater \r\n London;NW1 6XE;United \r\n Kingdom\r\n",
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK:221B Baker \r\n Street\\nSuite 400\\nLondon\\nNW1 \r\n\t6XE\\nUnited Kingdom\r\n",
+        "NOTE;X-JMAP-KEY=n1:First line of note.\r\n Continued with space.\r\n\tContinued with tab.\r\n   Three leading spaces (one fold + two data).\r\n",
+        "CATEGORIES:Forensics,Ballistics,Investigation,\r\n\tScotland Yard\r\n",
+        "URL;X-JMAP-KEY=l1:https://example.org/forensics/\r\n deep/case/archive\r\n",
+        "PHOTO;ENCODING=b;TYPE=PNG:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAf\r\n\tFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9aw\r\n AAAABJRU5ErkJggg==\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(prefolded_vcard).expect("parse pre-folded vcard");
+
+    // Assert exact unfolded values:
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Dr. Jane Watson")
+    );
+    assert_eq!(card.nicknames.as_ref().unwrap()["k1"].name, "The Detective");
+    assert_eq!(
+        card.emails.as_ref().unwrap()["e1"].address,
+        "jane.watson@example.org"
+    );
+    assert_eq!(
+        card.phones.as_ref().unwrap()["p1"].number,
+        "+44 20 7946 0958"
+    );
+
+    // ORG: note "  Service" has 2 spaces after CRLF -> 1 space in value
+    let org = &card.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org.name.as_deref(), Some("Metropolitan Police Service"));
+    let units: Vec<&str> = org
+        .units
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|u| u.name.as_str())
+        .collect();
+    assert_eq!(units, ["Forensics Division", "Ballistics Unit"]);
+
+    assert_eq!(
+        card.titles.as_ref().unwrap()["t1"].name,
+        "Senior Forensic Consultant"
+    );
+    assert_eq!(
+        card.titles.as_ref().unwrap()["t2"].name,
+        "Lead Ballistics Specialist"
+    );
+
+    // ADR structured components
+    let adr = &card.addresses.as_ref().unwrap()["a1"];
+    let comp_map: BTreeMap<&str, &str> = adr
+        .components
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|c| (c.kind.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(comp_map.get("postOfficeBox"), Some(&"PO Box 999"));
+    assert_eq!(comp_map.get("apartment"), Some(&"Suite 400"));
+    assert_eq!(comp_map.get("name"), Some(&"221B Baker Street"));
+    assert_eq!(comp_map.get("locality"), Some(&"London"));
+    assert_eq!(comp_map.get("region"), Some(&"Greater London"));
+    assert_eq!(comp_map.get("postcode"), Some(&"NW1 6XE"));
+    assert_eq!(comp_map.get("country"), Some(&"United Kingdom"));
+
+    // LABEL
+    assert_eq!(
+        adr.full.as_deref(),
+        Some("221B Baker Street\nSuite 400\nLondon\nNW1 6XE\nUnited Kingdom")
+    );
+
+    // NOTE: check multiline and leading space preservation
+    let note = &card.notes.as_ref().unwrap()["n1"].note;
+    assert!(note.contains("First line of note.Continued with space.Continued with tab.  Three leading spaces (one fold + two data)."));
+
+    // CATEGORIES
+    let keywords = card.keywords.as_ref().expect("keywords");
+    assert!(keywords.contains_key("Forensics"));
+    assert!(keywords.contains_key("Ballistics"));
+    assert!(keywords.contains_key("Investigation"));
+    assert!(keywords.contains_key("Scotland Yard"));
+
+    // URL
+    assert_eq!(
+        card.links.as_ref().unwrap()["l1"].uri,
+        "https://example.org/forensics/deep/case/archive"
+    );
+
+    // PHOTO
+    let photo = &card.media.as_ref().unwrap()["m1"];
+    assert_eq!(photo.media_type.as_deref(), Some("image/PNG"));
+    assert!(photo.uri.starts_with("data:image/PNG;base64,"));
+
+    // Re-emission must produce valid lines targeting 75 octets and reach fixed point
+    let re_emitted = card_to_vcard(&card);
+    for physical_line in re_emitted.split("\r\n") {
+        assert!(
+            physical_line.len() <= 77,
+            "Re-emitted line exceeds 77 octets: {physical_line:?}"
+        );
+        assert!(std::str::from_utf8(physical_line.as_bytes()).is_ok());
+    }
+    let back = vcard_to_card(&re_emitted).expect("parse re-emitted");
+    assert_eq!(back, card);
+}
+
+#[test]
+fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
+    // Tests that multi-byte UTF-8 sequences (2-byte, 3-byte, 4-byte) positioned
+    // across the 75-octet fold boundary are never split across line folds.
+    // Line folding must break on a valid UTF-8 character boundary.
+
+    let test_cases = [
+        // 2-byte UTF-8 sequences (German umlauts, Cyrillic, accented Latin)
+        ("2-byte umlauts", "äöüßéñДж"),
+        // 3-byte UTF-8 sequences (CJK characters, Japanese Hiragana, Devanagari)
+        ("3-byte CJK & Hiragana", "漢字東京日本語संस्कृत"),
+        // 4-byte UTF-8 sequences (Emoji, musical and math symbols)
+        ("4-byte Emoji", "🦀🚀🌟🎉🔥𝄞𝕬🌍"),
+    ];
+
+    for (label, multibyte_sample) in test_cases {
+        // Test padding lengths from 40 to 85 bytes before the multi-byte characters
+        // to systematically exercise all possible boundary positions relative to 75 octets
+        for pad_len in 40..=85 {
+            let padding = "A".repeat(pad_len);
+            let note_text = format!(
+                "{padding}{multibyte_sample} -- trailing text to force multiple line folds if needed."
+            );
+
+            let mut notes = BTreeMap::new();
+            notes.insert(
+                "n1".to_owned(),
+                Note {
+                    note: note_text.clone(),
+                    extra: BTreeMap::new(),
+                },
+            );
+
+            let card = ContactCard {
+                id: Some("C-UTF8".into()),
+                name: Some(Name {
+                    full: Some(format!("UTF8 Test {label} pad {pad_len}")),
+                    ..Name::default()
+                }),
+                notes: Some(notes),
+                ..ContactCard::default()
+            };
+
+            let vcard = card_to_vcard(&card);
+
+            // 1. Check that EVERY physical line is valid UTF-8 and targets 75 octets (max <= 77)
+            for (line_idx, physical_line) in vcard.split("\r\n").enumerate() {
+                assert!(
+                    physical_line.len() <= 77,
+                    "[{label}, pad {pad_len}, line {line_idx}] line exceeds max limit (len={}): {:?}",
+                    physical_line.len(),
+                    physical_line
+                );
+                // Confirm valid UTF-8 boundary integrity: no split UTF-8 code point
+                assert!(
+                    std::str::from_utf8(physical_line.as_bytes()).is_ok(),
+                    "[{label}, pad {pad_len}, line {line_idx}] invalid UTF-8 in line slice"
+                );
+            }
+
+            // 2. Parse back and assert 100% byte-for-byte exact equality (no corruption, no replacement chars)
+            let read_card = vcard_to_card(&vcard).unwrap_or_else(|e| {
+                panic!(
+                    "[{label}, pad {pad_len}] failed to parse emitted vCard: {e:?}\nvCard:\n{vcard}"
+                )
+            });
+            let read_note = &read_card.notes.as_ref().unwrap()["n1"].note;
+            assert_eq!(
+                read_note, &note_text,
+                "[{label}, pad {pad_len}] UTF-8 content corrupted across line fold"
+            );
+            assert!(
+                !read_note.contains('\u{FFFD}'),
+                "[{label}, pad {pad_len}] UTF-8 replacement character found"
+            );
+
+            // 3. Verify fixed point
+            let vcard2 = card_to_vcard(&read_card);
+            assert_eq!(
+                vcard2, vcard,
+                "[{label}, pad {pad_len}] fixed point failure"
+            );
+        }
+    }
+}
+
+#[test]
+fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
+    // Tests exact line length boundaries around 75 octets:
+    // Property prefix is "NOTE;X-JMAP-KEY=n1:" which is 19 octets.
+    // ASCII characters without escaping.
+    // Lengths <= 75 octets (total line with prefix <= 75) fit in 1 line.
+    // Lengths > 75 octets fold into 2 lines.
+
+    for (target_line_len, expect_folded) in [
+        (70, false),
+        (73, false),
+        (74, false),
+        (75, false),
+        (78, true),
+        (80, true),
+        (100, true),
+    ] {
+        let prefix_len = "NOTE;X-JMAP-KEY=n1:".len(); // 19
+        let value_len = target_line_len - prefix_len;
+        let value = "X".repeat(value_len);
+
+        let mut notes = BTreeMap::new();
+        notes.insert(
+            "n1".to_owned(),
+            Note {
+                note: value.clone(),
+                extra: BTreeMap::new(),
+            },
+        );
+
+        let card = ContactCard {
+            id: Some("C-BOUND".into()),
+            notes: Some(notes),
+            ..ContactCard::default()
+        };
+
+        let vcard = card_to_vcard(&card);
+
+        // Find the lines corresponding to NOTE
+        let note_lines: Vec<&str> = vcard
+            .split("\r\n")
+            .filter(|l| l.starts_with("NOTE") || l.starts_with(' '))
+            .collect();
+
+        if expect_folded {
+            assert!(
+                note_lines.len() >= 2,
+                "Target length {target_line_len} was expected to fold into multiple lines, got: {note_lines:?}"
+            );
+            assert!(
+                note_lines[0].len() <= 77,
+                "First folded line exceeds limit: {}",
+                note_lines[0].len()
+            );
+            assert!(note_lines[1].starts_with(' '));
+        } else {
+            assert_eq!(
+                note_lines.len(),
+                1,
+                "Target length {target_line_len} was expected to fit in 1 line, got: {note_lines:?}"
+            );
+        }
+
+        // Parse back and verify lossless recovery
+        let read_card = vcard_to_card(&vcard).expect("parse bounded card");
+        assert_eq!(read_card.notes.as_ref().unwrap()["n1"].note, value);
+    }
+}
+
+#[test]
+fn rfc2426_line_folding_with_escaped_delimiters_and_backslashes() {
+    // Tests line folding interacting with escaped characters:
+    // RFC 2426 §2 escaping: \n, \;, \,, \\ in Note values.
+    // Verify that newlines, commas, semicolons, and backslashes in multiline text
+    // fold and unfold without splitting escape tokens or losing characters.
+
+    let multiline_note = "Line 1 with text.\nLine 2 with semicolon ; and comma , and backslash \\.\nLine 3 with more text.";
+    let long_note_with_escapes = multiline_note.repeat(4);
+
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: long_note_with_escapes.clone(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-ESC-FOLD".into()),
+        notes: Some(notes),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify all physical lines <= 77 octets
+    for physical_line in vcard.split("\r\n") {
+        assert!(
+            physical_line.len() <= 77,
+            "Physical line exceeds 77 octets: {physical_line:?}"
+        );
+        assert!(std::str::from_utf8(physical_line.as_bytes()).is_ok());
+    }
+
+    // Parse back and verify lossless text recovery
+    let read_card = vcard_to_card(&vcard).expect("parse escaped folded card");
+    assert_eq!(
+        read_card.notes.as_ref().unwrap()["n1"].note,
+        long_note_with_escapes
+    );
+
+    // Fixed point
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(vcard2, vcard);
 }
