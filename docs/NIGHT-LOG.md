@@ -35120,3 +35120,37 @@ into the password-path connect flow and `config_lookup.rs::probe_host`, and
 add a real `Resolver` backed by `g_resolver_lookup_service()` in the EDS
 integration layer. That second half is FFI/GObject-binding work; this
 session's seam is what it plugs into once attempted.
+
+## 2026-08-19 (claim) — Claiming M10: reproduce the newer-EDS leg locally via Docker
+
+Fresh survey: real-server readiness's two named items are maintainer-gated
+(OAuth2 issuer mismatch, EDS 3.60+ mapping decisions). The SRV-autodiscovery
+thread's remaining half (wiring `connect_domain` into the two named call
+sites, and a `GResolver`-backed `Resolver`) is a real `unsafe`/FFI job
+(`g_resolver_lookup_service`, `GList`/`GSrvTarget` ownership, RFC 2782
+priority ordering) with zero observable behaviour until that FFI lands —
+wiring the call sites first would just be inert plumbing. Per the "beyond
+Sonnet's reliable reach" guidance, that FFI is deferred rather than attempted
+here (not claimed this session).
+
+Instead: `docs/ROADMAP.md`'s MAINTAINER DECISIONS #2 names M10 as the "top
+unblocked item" — 3 of 26 `eds-sys` `contacts` assertions fail on newer EDS —
+but every prior session treated it as blocked on a GitHub Actions dispatch
+this runner cannot trigger. Re-checked that assumption: `ci.yml`'s
+`eds-version-matrix` job just runs `ci/eds-matrix.sh` inside a public,
+digest-pinned `docker.io/library/fedora` container — nothing GitHub-specific.
+This runner has a working (if root-only) Docker daemon and already pulled
+that exact digest successfully. So the newer-EDS leg is reproducible
+locally, not runner-blocked at all.
+
+Claiming: pull the pinned Fedora container, install
+`evolution-data-server-devel`/`evolution-devel` + a stable Rust toolchain
+inside it (mirroring the job's own steps), mount this worktree, and run
+`ci/eds-matrix.sh` to reproduce the 3 named failures
+(`contact_date_fields_are_structured_e_contact_date_types`,
+`e_contact_field_id_from_vcard_maps_x_lines`,
+`structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`).
+Then fix the 3 assertions per the maintainer's instruction: version-aware
+expectations, or fix the mapping if 3.60's behaviour is the correct one — in
+`rust/`, not by touching the CI job or loosening the assertions. Will not
+edit `.github/workflows/ci-image.yml` or anything under `infra/`.
