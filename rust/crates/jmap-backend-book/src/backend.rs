@@ -35,7 +35,6 @@
 //! [`observe`]: jmap_backend_core::cancel::observe
 
 use std::ffi::CStr;
-use std::mem::MaybeUninit;
 use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
@@ -50,6 +49,8 @@ use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
+#[cfg(feature = "testing")]
+use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_book_sync::BookSync;
@@ -123,11 +124,12 @@ impl JmapBookBackend {
     /// valid bit pattern (every field is a pointer or an integer, and NULL is
     /// a pointer) but they are not a GObject, so passing one to any EDS
     /// function is undefined behaviour.
+    #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value, and an all-zero `Slot` is its
         // documented empty state.
-        let backend: Box<Self> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        let backend: Box<Self> = unsafe { zeroed_box() };
         backend.session.init(RwLock::new(None));
         backend
     }

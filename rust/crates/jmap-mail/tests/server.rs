@@ -27,7 +27,7 @@ use eds_sys::{
     camel_offline_settings_get_type,
 };
 use gobject_sys::{g_object_new, g_object_unref};
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
 
@@ -78,7 +78,11 @@ fn a_configured_account_becomes_an_https_origin() {
         );
     }
     let config = config_of(settings).expect("a configured account has a server");
-    assert_eq!(config.origin, "https://jmap.example.com");
+    // No port named: RFC 8620 §2.2 SRV autodiscovery applies.
+    assert_eq!(
+        config.target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
     assert_eq!(config.user.as_deref(), Some("vera@example.com"));
 }
 
@@ -87,7 +91,10 @@ fn a_configured_account_becomes_an_https_origin() {
 #[test]
 fn the_port_the_account_names_is_part_of_the_origin() {
     let config = config_of(settings(c"jmap.example.com", 8443, None)).expect("a server");
-    assert_eq!(config.origin, "https://jmap.example.com:8443");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Origin("https://jmap.example.com:8443".into())
+    );
 }
 
 /// Both non-`NONE` security methods mean the same thing here. They are names
@@ -102,7 +109,10 @@ fn every_security_method_but_none_is_just_tls() {
         Some(CAMEL_NETWORK_SECURITY_METHOD_SSL_ON_ALTERNATE_PORT),
     ))
     .expect("a server");
-    assert_eq!(config.origin, "https://jmap.example.com");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
 }
 
 /// The security decision, and the reason this mapping is not a `format!`.
@@ -131,7 +141,10 @@ fn the_mock_server_is_reachable_without_tls() {
         Some(CAMEL_NETWORK_SECURITY_METHOD_NONE),
     ))
     .expect("a server");
-    assert_eq!(config.origin, "http://127.0.0.1:8080");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Origin("http://127.0.0.1:8080".into())
+    );
 
     // An IPv6 literal has to be bracketed, or the colons in it read as the
     // port separator.
@@ -141,7 +154,10 @@ fn the_mock_server_is_reachable_without_tls() {
         Some(CAMEL_NETWORK_SECURITY_METHOD_NONE),
     ))
     .expect("a server");
-    assert_eq!(config.origin, "http://[::1]:8080");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Origin("http://[::1]:8080".into())
+    );
 }
 
 /// The origin is assembled by concatenation, so the host is not just data:
@@ -172,7 +188,10 @@ fn a_host_that_is_not_a_bare_host_name_is_rejected() {
 #[test]
 fn an_internationalised_host_is_punycoded_before_it_is_checked() {
     let config = config_of(settings(c"m\u{fc}nchen.example", 0, None)).expect("a server");
-    assert_eq!(config.origin, "https://xn--mnchen-3ya.example");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Domain("xn--mnchen-3ya.example".into())
+    );
 }
 
 /// A settings object nobody configured names no server. The interesting part

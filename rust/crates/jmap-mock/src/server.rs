@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use jmap_proto::session::{
     Account, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_SUBMISSION, Session,
+    CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER, CAPABILITY_SUBMISSION, Session,
 };
 use serde_json::{Value, json};
 
@@ -859,17 +859,38 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
     let mut accounts = std::collections::BTreeMap::new();
     if authorized {
         for (id, account) in &state.accounts {
+            let mut account_capabilities: std::collections::BTreeMap<String, Value> =
+                ACCOUNT_CAPABILITIES
+                    .iter()
+                    .filter(|capability| !state.omitted_capabilities.contains(**capability))
+                    .map(|capability| ((*capability).to_owned(), json!({})))
+                    .collect();
+            // Unlike the four above, `principals`/`principals:owner`'s account
+            // capability objects carry real content (RFC 9670 §2.5), not an
+            // empty placeholder — so they are built here rather than folded
+            // into `ACCOUNT_CAPABILITIES`'s uniform `json!({})` map.
+            if !state.omitted_capabilities.contains(CAPABILITY_PRINCIPALS) {
+                account_capabilities.insert(
+                    CAPABILITY_PRINCIPALS.to_owned(),
+                    json!({"currentUserPrincipalId": account.current_user_principal_id}),
+                );
+                if let Some(principal_id) = &account.current_user_principal_id {
+                    account_capabilities.insert(
+                        CAPABILITY_PRINCIPALS_OWNER.to_owned(),
+                        json!({
+                            "accountIdForPrincipal": id,
+                            "principalId": principal_id,
+                        }),
+                    );
+                }
+            }
             accounts.insert(
                 id.clone(),
                 Account {
                     name: account.name.clone(),
                     is_personal: true,
                     is_read_only: false,
-                    account_capabilities: ACCOUNT_CAPABILITIES
-                        .iter()
-                        .filter(|capability| !state.omitted_capabilities.contains(**capability))
-                        .map(|capability| ((*capability).to_owned(), json!({})))
-                        .collect(),
+                    account_capabilities,
                     extra: Default::default(),
                 },
             );
@@ -924,6 +945,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             .chain(
                 ACCOUNT_CAPABILITIES
                     .iter()
+                    .chain([&CAPABILITY_PRINCIPALS, &CAPABILITY_PRINCIPALS_OWNER])
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
                     .map(|capability| ((*capability).to_owned(), json!({}))),
             )

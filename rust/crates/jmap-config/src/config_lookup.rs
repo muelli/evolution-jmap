@@ -58,7 +58,7 @@
 //! load-bearing precedent, since Google account setup works today against
 //! this exact prompter. [`REDIRECT_URI`] follows that precedent instead.
 //!
-//! ## What is not yet proven
+//! ## Where `run()`'s live dispatch is proven
 //!
 //! `run()`'s live dispatch — reached by a real `EConfigLookup`, which
 //! `e_config_lookup_new` refuses to construct without a live
@@ -67,13 +67,11 @@
 //! functional harness already sets up (`cmake/Functional.cmake`), which
 //! `cargo test` alone does not have. [`probe_host`] is unit-tested directly
 //! since it needs none of that; the FFI shell below is built and registered
-//! the same way [`crate::oauth2_service::Service`] was, but its own dispatch
-//! through a real `EConfigLookup` is left for that harness, not this crate's
-//! tests — the same honest limit `evo-sys/tests/config_lookup.rs` already
-//! documented for `run`'s offset. Not tagged complete in
-//! `docs/MILESTONES.md` for exactly that reason, on top of the M7 rule that
-//! GUI-adjacent behaviour needs a human running "Look Up Account Details" in
-//! real Evolution before it is.
+//! the same way [`crate::oauth2_service::Service`] was, and its own dispatch
+//! through a real `EConfigLookup` is what
+//! `jmap-functional/tests/config-lookup.rs` now drives — the M9 layer-1
+//! coverage `evo-sys/tests/config_lookup.rs` names as the next increment when
+//! it was written, since landed.
 //!
 //! The 307th session (`docs/NIGHT-LOG.md`) hand-drove this dispatch once,
 //! outside the test suite: a scratch C program linking `evolution-shell-3.0`
@@ -122,7 +120,12 @@ use crate::oauth2_setup::discover_and_register;
 /// [`crate::oauth2_service::Service::get_redirect_uri`] — see the module docs
 /// for why this, and not the RFC 8252 out-of-band URN, is what actually works
 /// against EDS's WebKit-based consent prompter.
-pub const REDIRECT_URI: &str = "jmap-oauth2:/redirect";
+///
+/// Dotted reverse-DNS, not a bare word: some providers (Fastmail's OAuth
+/// doc, confirmed in `docs/OAUTH-FASTMAIL.md`) require a private-use
+/// redirect scheme to contain at least one dot and reject registration
+/// otherwise.
+pub const REDIRECT_URI: &str = "org.gnome.evolution.jmap:/redirect";
 
 /// The host RFC 8414 discovery is asked of, and later written as
 /// `[Authentication] host` in a positive result — a bare domain, not a
@@ -135,19 +138,42 @@ pub const REDIRECT_URI: &str = "jmap-oauth2:/redirect";
 /// tried: unlike CalDAV/CardDAV autodiscovery (`e-webdav-config-lookup.c`,
 /// which tries every listed server because non-JMAP servers may sit at some
 /// and not others), a JMAP deployment names exactly one issuer, so a second
-/// entry would be trying a second server the first one failing.
+/// entry would be trying a second server the first one failing. An explicit
+/// entry is not a bare domain and so is never run through `resolver` — SRV
+/// autodiscovery (RFC 8620 §2.2) is what the email-domain fallback below
+/// exists to correct, not something an already-explicit host needs.
+///
+/// The email-domain fallback consults `resolver` for a `_jmap._tcp.<domain>`
+/// SRV record (see `jmap_client::resolver`) before returning the bare domain
+/// — the same seam and the same fallback order
+/// `jmap_client::ClientBuilder::connect_domain` uses, so a deployment
+/// published only via SRV (Fastmail; see `docs/NIGHT-LOG.md`, "JMAP SRV
+/// autodiscovery") is discovered here too, not just once a `jmap_client`
+/// session is already being fetched.
 ///
 /// What this returns is not yet a host `discover_and_register` can use as-is
-/// — a `servers` entry may carry a scheme and a port, which [`parse_target`]
-/// reads back out.
-pub(crate) fn probe_host(email_address: &str, servers: Option<&str>) -> Option<String> {
+/// — a `servers` entry or an SRV target may carry a scheme and a port, which
+/// [`parse_target`] reads back out; an SRV target is rendered `host:port`,
+/// which `parse_target` parses as a bare, secure host with that port, the
+/// right reading for a target a JMAP SRV record ever names.
+pub(crate) fn probe_host(
+    email_address: &str,
+    servers: Option<&str>,
+    resolver: &dyn jmap_client::resolver::Resolver,
+) -> Option<String> {
     if let Some(servers) = servers
         && let Some(first) = servers.split(';').map(str::trim).find(|s| !s.is_empty())
     {
         return Some(first.to_owned());
     }
     let (_, domain) = email_address.split_once('@')?;
-    (!domain.is_empty()).then(|| domain.to_owned())
+    if domain.is_empty() {
+        return None;
+    }
+    if let Some(target) = resolver.lookup_srv(domain) {
+        return Some(format!("{}:{}", target.host, target.port));
+    }
+    Some(domain.to_owned())
 }
 
 /// Where [`probe_host`]'s answer is actually reached: a bare host, an
@@ -501,7 +527,15 @@ unsafe extern "C" fn run(
             return;
         };
         let servers = param(params, E_CONFIG_LOOKUP_PARAM_SERVERS);
-        let Some(host) = probe_host(&email, servers.as_deref()) else {
+        // RFC 8620 §2.2: the provider may publish its JMAP host as a
+        // `_jmap._tcp` record rather than answer at the bare email domain, and
+        // this worker is where that matters most — it is what decides whether
+        // Evolution offers a JMAP account at all, so a provider missed here
+        // loses to the generic ISPDB autoconfig (which is how the operator's
+        // Fastmail setup ended up being offered imapx; see `docs/NIGHT-LOG.md`,
+        // "JMAP SRV autodiscovery").
+        let resolver = jmap_backend_core::resolver::SystemResolver;
+        let Some(host) = probe_host(&email, servers.as_deref(), &resolver) else {
             return;
         };
         let Some(target) = parse_target(&host) else {
@@ -532,12 +566,39 @@ unsafe extern "C" fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_target, probe_host};
+    use jmap_client::resolver::{NoSrvResolver, Resolver, SrvTarget};
+
+    use super::{REDIRECT_URI, parse_target, probe_host};
+
+    #[test]
+    fn redirect_uri_scheme_is_dotted_reverse_dns() {
+        // Fastmail's OAuth 2.0 doc requires a private-use redirect scheme in
+        // reverse-DNS notation with at least one dot (or a loopback/https
+        // URI, neither of which fits EDS's WebKit-based consent prompter —
+        // see the module docs) — a dot-less scheme is rejected at dynamic
+        // client registration (docs/OAUTH-FASTMAIL.md).
+        let scheme = REDIRECT_URI.split(':').next().expect("a URI has a scheme");
+        assert!(
+            scheme.contains('.'),
+            "redirect URI scheme {scheme:?} has no dot; providers requiring \
+             reverse-DNS notation (e.g. Fastmail) would reject it"
+        );
+    }
+
+    /// Returns one fixed answer for every domain asked, or none — the same
+    /// fake `jmap-client/tests/srv_discovery.rs` uses.
+    struct FakeResolver(Option<SrvTarget>);
+
+    impl Resolver for FakeResolver {
+        fn lookup_srv(&self, _domain: &str) -> Option<SrvTarget> {
+            self.0.clone()
+        }
+    }
 
     #[test]
     fn uses_the_email_domain_when_no_servers_are_given() {
         assert_eq!(
-            probe_host("vera@example.com", None),
+            probe_host("vera@example.com", None, &NoSrvResolver),
             Some("example.com".to_owned())
         );
     }
@@ -545,7 +606,7 @@ mod tests {
     #[test]
     fn an_explicit_servers_entry_wins_over_the_domain() {
         assert_eq!(
-            probe_host("vera@example.com", Some("jmap.example.net")),
+            probe_host("vera@example.com", Some("jmap.example.net"), &NoSrvResolver),
             Some("jmap.example.net".to_owned())
         );
     }
@@ -553,7 +614,11 @@ mod tests {
     #[test]
     fn only_the_first_servers_entry_is_tried() {
         assert_eq!(
-            probe_host("vera@example.com", Some("first.example; second.example")),
+            probe_host(
+                "vera@example.com",
+                Some("first.example; second.example"),
+                &NoSrvResolver
+            ),
             Some("first.example".to_owned())
         );
     }
@@ -561,19 +626,63 @@ mod tests {
     #[test]
     fn blank_servers_fall_back_to_the_domain() {
         assert_eq!(
-            probe_host("vera@example.com", Some("   ")),
+            probe_host("vera@example.com", Some("   "), &NoSrvResolver),
             Some("example.com".to_owned())
         );
     }
 
     #[test]
     fn an_address_with_no_at_sign_has_no_host_to_probe() {
-        assert_eq!(probe_host("not-an-address", None), None);
+        assert_eq!(probe_host("not-an-address", None, &NoSrvResolver), None);
     }
 
     #[test]
     fn an_address_with_an_empty_domain_has_no_host_to_probe() {
-        assert_eq!(probe_host("vera@", None), None);
+        assert_eq!(probe_host("vera@", None, &NoSrvResolver), None);
+    }
+
+    #[test]
+    fn an_srv_record_wins_over_the_bare_domain() {
+        let resolver = FakeResolver(Some(SrvTarget {
+            host: "api.example.com".to_owned(),
+            port: 443,
+        }));
+        assert_eq!(
+            probe_host("vera@example.com", None, &resolver),
+            Some("api.example.com:443".to_owned())
+        );
+    }
+
+    #[test]
+    fn no_srv_record_falls_back_to_the_bare_domain() {
+        let resolver = FakeResolver(None);
+        assert_eq!(
+            probe_host("vera@example.com", None, &resolver),
+            Some("example.com".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_explicit_servers_entry_is_never_resolved_for_srv() {
+        // A resolver that would answer for *any* domain must not be asked at
+        // all when `servers` names an explicit host — that host is not a
+        // bare email domain to autodiscover, it is already the answer.
+        let resolver = FakeResolver(Some(SrvTarget {
+            host: "wrong.example.com".to_owned(),
+            port: 443,
+        }));
+        assert_eq!(
+            probe_host("vera@example.com", Some("jmap.example.net"), &resolver),
+            Some("jmap.example.net".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_srv_target_parses_as_a_bare_secure_host_with_its_port() {
+        let target = parse_target("api.example.com:443").expect("host:port parses");
+        assert_eq!(target.host, "api.example.com");
+        assert_eq!(target.port, 443);
+        assert!(target.secure);
     }
 
     #[test]

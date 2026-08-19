@@ -1,0 +1,16 @@
+evolution-jmap (0.2.0) unstable; urgency=medium
+
+  * Account-setup UI (M7), CI-verified against real Evolution, and the
+    functional/GUI-smoke test suite (M9). FFI safety confirmed across an
+    EDS version matrix (M10).
+  * Full history is kept in docs/NIGHT-LOG.md and docs/MILESTONES.md, not
+    duplicated here.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Wed, 19 Aug 2026 01:10:18 +0000
+
+evolution-jmap (0.1.0) unstable; urgency=medium
+
+  * Initial release: address book, calendar, mail (Camel provider) and
+    collection backends speaking JMAP (RFC 8620/8621) in GNOME Evolution.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Sun, 16 Aug 2026 05:14:07 +0000

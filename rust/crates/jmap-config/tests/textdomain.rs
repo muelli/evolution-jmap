@@ -14,10 +14,10 @@
 //!
 //! Of this repository's five modules, this is the one whose strings a user
 //! reads while *looking* at a dialog rather than while something goes wrong: the
-//! account-setup page's labels. None of them exists yet — `insert_widgets` is
-//! unwritten — which is exactly why the binding goes in now, so that the first
-//! label to be added can be marked for translation and be translated, instead
-//! of being marked and silently not.
+//! account-setup page's labels, which `insert_widgets` now builds. The binding
+//! has to go in before any of them, so that the first label added was already
+//! marked for translation and translated, instead of being marked and silently
+//! not.
 //!
 //! ## Why this is a test binary of its own
 //!

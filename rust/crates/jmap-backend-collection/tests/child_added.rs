@@ -33,7 +33,7 @@ use gobject_sys::g_object_unref;
 use jmap_backend_collection::child_added::{BOUND, follow_collection};
 use jmap_backend_collection::child_source::apply;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::SourceConfig;
+use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind};
 use jmap_proto::Id;
@@ -243,7 +243,7 @@ fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
     assert_eq!(
         child.config(),
         SourceConfig {
-            origin: "https://old.example.com:1234".to_owned(),
+            target: ConnectTarget::Origin("https://old.example.com:1234".to_owned()),
             user: Some("someone-else@example.com".to_owned()),
             resource_id: Some("AB1".to_owned()),
         },
@@ -256,7 +256,7 @@ fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
     assert_eq!(
         child.config(),
         SourceConfig {
-            origin: "https://jmap.example.com:8443".to_owned(),
+            target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
             user: Some("vera@example.com".to_owned()),
             resource_id: Some("AB1".to_owned()),
         },
@@ -275,8 +275,8 @@ fn moving_the_account_to_another_server_moves_its_children() {
     account.set_port(443);
 
     assert_eq!(
-        child.config().origin,
-        "https://jmap.example.org:443",
+        child.config().target,
+        ConnectTarget::Origin("https://jmap.example.org:443".into()),
         "the child stayed with the server the account used to name"
     );
 }
@@ -305,15 +305,15 @@ fn switching_tls_off_on_the_account_reaches_its_children() {
     account.set_secure(false);
     account.set_host("localhost");
     assert_eq!(
-        child.config().origin,
-        "http://localhost:8443",
+        child.config().target,
+        ConnectTarget::Origin("http://localhost:8443".into()),
         "the child still believes the account is on TLS"
     );
 
     account.set_secure(true);
     assert_eq!(
-        child.config().origin,
-        "https://localhost:8443",
+        child.config().target,
+        ConnectTarget::Origin("https://localhost:8443".into()),
         "the child stayed on plain text after the account went back to TLS"
     );
 }
@@ -369,8 +369,8 @@ fn an_account_with_no_authentication_group_is_not_given_one() {
         "the account was given a [Security] group it did not have"
     );
     assert_eq!(
-        child.config().origin,
-        "https://jmap.example.com:8443",
+        child.config().target,
+        ConnectTarget::Origin("https://jmap.example.com:8443".into()),
         "the child was reset from an account that says nothing"
     );
 }
