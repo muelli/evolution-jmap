@@ -35558,3 +35558,67 @@ inaccuracy in today's hand-written file: `docs/packaging/copyright`'s
 the generator instead of by someone remembering to hand-edit a second file.
 A CMake/CTest check keeps the committed file from drifting out of sync with
 the generator's output, the same pattern C1 used for lintian.
+
+## 2026-08-19 — Delivered: Track C2 (own-file slice), `docs/packaging/copyright` generated from `REUSE.toml`
+
+Followed through on this session's claim.
+
+- **`tools/generate-debian-copyright.py`** (new): reads `REUSE.toml`'s
+  `[[annotations]]` via `tomllib` and renders the DEP-5 file. The default
+  `Files: *` stanza's license/copyright are a script constant
+  (`GPL-3.0-or-later` / `2026 Tobias Mueller <muelli@cryptobitch.de>`), but
+  the script refuses to run if `REUSE.toml`'s `aggregate`-precedence
+  annotation ever disagrees with that constant — so a future edit to the
+  aggregate block (the one covering `Cargo.lock`, `docs/**`, and similar
+  header-less files) that changes its license fails the generator loudly
+  instead of silently producing a copyright file that no longer matches
+  `REUSE.toml`. Each `override`-precedence annotation becomes its own
+  `Files:` stanza; `REUSE.toml` today has exactly one — `src/**`,
+  `CMakeLists.txt`, `cmake_uninstall.cmake.in`, and
+  `rust/crates/example-module/**` under `LGPL-2.1-or-later` (the ported
+  upstream Evolution example module) — which the *previous* hand-written
+  copyright file omitted entirely, incorrectly implying the whole source
+  tree was `GPL-3.0-or-later`. Glob translation is a one-line `**`→`*`
+  (DEP-5's `*` already spans `/`, so no doubled-star form exists on that
+  side). License paragraph text (GPL-3.0-or-later, LGPL-2.1-or-later) is a
+  small lookup table of the standard Debian boilerplate for each, emitted
+  once per license id actually used.
+- **`cmake/tests/check-debian-copyright.cmake`** + a `debian-copyright-in-sync`
+  CTest registered in `cmake/Packaging.cmake`, gated on `find_program(python3)`
+  the same way C1's lintian test is gated on finding `lintian` — runs the
+  generator and fails with the regeneration command if its output no longer
+  matches the committed file. TDD'd properly: reverted
+  `docs/packaging/copyright` to the pre-session hand-written version first
+  and confirmed `ctest -R debian-copyright-in-sync` failed (red) with exactly
+  that message, then regenerated and confirmed it passed (green).
+- **`docs/packaging/copyright`** regenerated and committed.
+- Full gate: `ctest --test-dir build` **18/18 passed** (the 17 from C1 plus
+  the new one), including a from-scratch `cpack -G DEB` +
+  `lintian --pedantic` **exit 0** on the package built with the corrected
+  copyright file — confirming the added `Files:`/`License:` stanzas parse
+  cleanly and don't regress C1's lintian-clean gate. No Rust source touched,
+  so `cargo fmt --check`/`cargo clippy --all-targets --locked -- -D
+  warnings`/`cargo test --locked` are unaffected and still clean. Both new
+  files (`tools/generate-debian-copyright.py`,
+  `cmake/tests/check-debian-copyright.cmake`) carry their own SPDX headers
+  in the same style as every other script/`.cmake` file in the tree, so no
+  `REUSE.toml` edit was needed.
+
+**Left open, not attempted — a maintainer call, not a guess to make here:**
+the third-party Cargo crate license enumeration (~140 crates, ~20 distinct
+license expressions per `cargo metadata --locked`) that the roadmap's C2 text
+and the previous copyright file's own wording both point at. DEP-5's `Files:`
+field names paths in the source package; none of those crates' sources are
+vendored into this repo or shipped in the CPack `.deb` (which links them
+statically into the five `.so`s and ships no Rust source), so there is no
+honest `Files:` pattern for them — inventing one risked a malformed or
+misleading copyright file for no verifiable gain, exactly the "plausible but
+wrong" outcome worth stopping short of rather than pushing through. Two real
+paths forward, recorded for the maintainer to pick between: (a) a non-`Files`
+"third-party notices" appendix in this same copyright file (informational,
+not strict DEP-5, but truthful about what's actually linked); or (b) proper
+`dh-cargo` vendoring under Track C3's Debian-source-package work, where the
+crates genuinely would be separate source files DEP-5 can point at. The new
+`docs/packaging/copyright`'s own default-stanza comment states this gap and
+both options inline, so the next session (or the maintainer) has it without
+re-deriving it.

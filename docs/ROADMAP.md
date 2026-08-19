@@ -230,6 +230,18 @@ tracks follow; the maintainer may reorder anytime.
     and a `package-deb-lintian` CTest keeps it that way. See NIGHT-LOG.
 - **C2 `[claude]` Machine-readable DEP-5 `debian/copyright`** generated from the
   REUSE metadata we already maintain — the single biggest ease-of-packaging win.
+  - **PARTIAL 2026-08-19** — the own-source half is done:
+    `tools/generate-debian-copyright.py` renders `docs/packaging/copyright`
+    from `REUSE.toml`'s `[[annotations]]` (fixing a real inaccuracy — the
+    hand-written file omitted the `LGPL-2.1-or-later` example-module
+    override entirely), kept in sync by the `debian-copyright-in-sync` CTest.
+    See NIGHT-LOG "Delivered: Track C2 (own-file slice)". **Still open, and
+    NEEDS-DECISION, not a guess to make headlessly:** the ~140 third-party
+    Cargo crates statically linked into the shipped `.so`s have no honest
+    DEP-5 `Files:` pattern (their sources are neither vendored here nor
+    shipped in the `.deb`) — pick (a) a non-`Files` third-party-notices
+    appendix, or (b) full `dh-cargo` vendoring under Track C3, before a
+    future session attempts the enumeration.
 - **C3 `[claude]` `debian/` skeleton** (control, rules using `dh` over the
   cmake/cargo build, watch file) so a Debian packager starts from a working tree.
   Document the Rust-in-Debian reality (dh-cargo wants every crate dep packaged /
