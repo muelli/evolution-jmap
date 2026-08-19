@@ -100,7 +100,6 @@
 //! [`jmap-mail`'s provider]: ../../jmap_mail/provider/index.html
 
 use std::ffi::CStr;
-use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_MAIL_ACCOUNT,
@@ -308,17 +307,23 @@ pub unsafe fn apply(collection: *mut ESource, sources: &MailSources, account: &A
 /// unwritten while the collection has one — would be a second password prompt
 /// for the same server and a second libsecret entry to fall out of step.
 ///
-/// `[Authentication] Method` is the one field written differently from the
-/// collection's, and it is written as nothing. On a collection it names the EDS
-/// credentials provider implementation; on a mail source `ESourceCamel` also
-/// binds it to `CamelNetworkSettings:auth-mechanism`, where it names a SASL
-/// mechanism. `jmap-mail` passes a NULL mechanism to
-/// `camel_session_authenticate_sync` because JMAP authenticates over HTTP and
-/// advertises none to choose between, so the honest value is the absent one —
-/// which EDS spells `"none"` and `ESourceCamel` converts back to NULL on the way
-/// to Camel. It is *written* rather than left alone for the same reason as every
-/// other field here: a mechanism left over from a previous commit is one
-/// Evolution's account editor would show as this account's authentication type.
+/// `[Authentication] Method` is copied from the collection's, not blanked — and
+/// blanking it was a real bug. On a collection it names the EDS credentials
+/// provider; on a mail source `ESourceCamel` binds it to
+/// `CamelNetworkSettings:auth-mechanism`. It is tempting to write nothing, since
+/// JMAP has no SASL mechanism to choose and `jmap-mail` passes a NULL mechanism
+/// to `camel_session_authenticate_sync` — but `jmap-mail` *reuses* that
+/// `auth-mechanism` field as this project's credential-type selector:
+/// [`crate::backend`]'s combo writes `"none"` (password → Basic),
+/// [`API_TOKEN_METHOD`](jmap_backend_core::api_token::API_TOKEN_METHOD) (`"bearer"`
+/// → an `Authorization: Bearer` of the pasted token), or the OAuth 2.0 method,
+/// and `jmap-mail`'s `uses_api_token`/`uses_oauth2` read it back to decide how to
+/// authenticate. A mail source that blanked it would therefore *always* fall to
+/// Basic and could never carry the account's Bearer or OAuth choice — exactly the
+/// bug an API-token Fastmail account hit, connecting the collection over Bearer
+/// while its mail child re-prompted for a password forever. So the collection's
+/// own method is written through; `"none"` still reaches Camel as the absent
+/// mechanism `ESourceCamel` converts NULL back to.
 ///
 /// # Safety
 ///
@@ -328,6 +333,7 @@ pub unsafe fn apply_server(source: *mut ESource, connection: &Connection) {
     // Outliving every call that borrows them, as in `apply` above.
     let host = cstring_lossy(&connection.host);
     let user = connection.user.as_deref().map(cstring_lossy);
+    let auth_method = connection.auth_method.as_deref().map(cstring_lossy);
     let security_method = if connection.secure {
         MAIL_SECURITY_METHOD_TLS
     } else {
@@ -343,7 +349,7 @@ pub unsafe fn apply_server(source: *mut ESource, connection: &Connection) {
             e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
         e_source_authentication_set_host(auth, host.as_ptr());
         e_source_authentication_set_user(auth, as_ptr(&user));
-        e_source_authentication_set_method(auth, ptr::null());
+        e_source_authentication_set_method(auth, as_ptr(&auth_method));
         // Zero is how `[Authentication] Port` spells "not set", and it is what
         // an unconfigured `CamelNetworkSettings` reads back as as well, so the
         // two ends of the binding agree about the absence and not only about a

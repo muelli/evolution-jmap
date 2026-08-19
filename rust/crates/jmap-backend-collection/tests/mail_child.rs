@@ -437,35 +437,35 @@ fn moving_the_account_to_another_server_moves_its_mail_sources() {
 }
 
 #[test]
-fn the_accounts_authentication_method_is_not_a_mail_sources() {
-    // `[Authentication] Method` is the one field of the four that means
-    // something different on each side: the EDS credentials provider on the
-    // account, a SASL mechanism on a mail source — where `ESourceCamel` binds it
-    // to `CamelNetworkSettings:auth-mechanism`. JMAP authenticates over HTTP and
-    // advertises no mechanism to choose between, so the honest value is the
-    // absent one, which is what `jmap_config::mail::apply_server` writes.
-    //
-    // `Some("none")` and not `None`, for the reason `jmap_config::account` pins
-    // in the same shape: `ESourceAuthentication:method` has no unset state, a
-    // fresh extension already reads `"none"`, and that is the string
-    // `ESourceCamel` converts back to a NULL mechanism on the way to Camel.
+fn the_accounts_authentication_method_reaches_its_mail_sources() {
+    // `[Authentication] Method` is followed like host/port/user. `jmap-mail`
+    // reuses it (via `CamelNetworkSettings:auth-mechanism`) as this project's
+    // credential-type selector — `uses_api_token`/`uses_oauth2` read it to
+    // choose Basic vs Bearer vs OAuth 2.0 — so a mail source that did not follow
+    // it would always authenticate as Basic. That is exactly why a Bearer
+    // (API-token) account's transport re-prompted for a password forever while
+    // its receiving account, whose method is written directly, connected.
     let account = Source::account();
     let transport = Source::service(E_SOURCE_EXTENSION_MAIL_TRANSPORT, MAIL_BACKEND_NAME);
 
     // SAFETY: two live sources.
     unsafe { follow_collection(account.0, transport.0) };
+
+    // The account's Bearer choice must reach the transport, live (the binding
+    // syncs on create and on every later change).
+    account.set_auth_method("bearer");
     assert_eq!(
         transport.auth_method().as_deref(),
-        Some("none"),
-        "the account's credentials-provider name reached a source that reads it \
-         as a SASL mechanism"
+        Some("bearer"),
+        "the transport did not follow the account's Bearer authentication method"
     );
 
-    account.set_auth_method("oauth2");
+    // And a change back to the password method still propagates.
+    account.set_auth_method("none");
     assert_eq!(
         transport.auth_method().as_deref(),
         Some("none"),
-        "the mail source names a SASL mechanism Camel would try to use"
+        "the transport did not follow the account back to the password method"
     );
 }
 

@@ -65,24 +65,23 @@
 //! strings `jmap_config::mail::apply_server` commits, which is what keeps a
 //! source that is committed and then merely re-bound from changing shape.
 //!
-//! ## `[Authentication] Method` is bound nowhere, on purpose
+//! ## `[Authentication] Method` is bound too
 //!
-//! The other three fields of the group mean the same thing on both sources and
-//! are bound. `Method` does not: on the account it names the EDS credentials
-//! provider that resolves the password, on a mail source `ESourceCamel` binds it
-//! to `CamelNetworkSettings:auth-mechanism`, where it names a SASL mechanism.
-//! JMAP authenticates over HTTP and advertises none to choose between —
-//! `jmap-mail` passes a NULL mechanism to `camel_session_authenticate_sync` — so
-//! the honest value is the absent one, which is what
-//! `jmap_config::mail::apply_server` writes and what a group created here starts
-//! out as. Copying the account's would put a mechanism Camel would try to use on
-//! a service that has none.
-//!
-//! Absent is spelled `"none"` rather than nothing, as `jmap_config::account`
-//! pins at length: `ESourceAuthentication:method` has no unset state, a fresh
-//! extension already reads `"none"`, and that is the string `ESourceCamel`
-//! converts back to a NULL mechanism on the way to Camel. So the field a group
-//! created here never touches already says the right thing.
+//! All four fields of the group are bound. `Method` was once excluded on the
+//! theory that on a mail source `ESourceCamel` binds it to
+//! `CamelNetworkSettings:auth-mechanism`, where it would name a SASL mechanism
+//! Camel might try to use — and JMAP has none, so `jmap-mail` passes a NULL
+//! mechanism to `camel_session_authenticate_sync`. But `jmap-mail` *reuses* that
+//! `auth-mechanism` field as this project's credential-type selector:
+//! `uses_api_token`/`uses_oauth2` read it back to choose Basic vs Bearer vs
+//! OAuth 2.0. A mail child that did not follow the collection's `Method` would
+//! therefore always authenticate as Basic — which is exactly why the transport
+//! of a Bearer (API-token) account re-prompted for a password forever while its
+//! receiving account, whose `Method` `jmap_config::mail::apply_server` writes
+//! directly, connected. `"none"` (password → Basic) still reaches Camel as the
+//! absent mechanism `ESourceCamel` converts NULL back to, so following the field
+//! costs the Basic case nothing and is what makes Bearer and OAuth reach the
+//! services at all.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -122,12 +121,19 @@ pub const MAIL_SECURITY_METHOD_TLS: &CStr = c"ssl-on-alternate-port";
 /// `CamelNetworkSecurityMethod`'s first value has the same nick.
 pub const MAIL_SECURITY_METHOD_NONE: &CStr = c"none";
 
-/// The `[Authentication]` properties a mail source of this account follows.
+/// The `[Authentication]` properties a mail source of this account follows —
+/// [`BOUND`](crate::child_added::BOUND)'s four, `method` included.
 ///
-/// [`BOUND`](crate::child_added::BOUND)'s four minus `method`, which means a
-/// SASL mechanism here and a credentials provider there — see the module
-/// comment.
-pub const BOUND_MAIL_AUTHENTICATION: &[&CStr] = &[c"host", c"port", c"user"];
+/// `method` was once excluded here on the theory that on a mail source it names
+/// a Camel SASL mechanism rather than a credentials provider. But `jmap-mail`
+/// reuses that field (`CamelNetworkSettings:auth-mechanism`) as this project's
+/// credential-type selector — `uses_api_token`/`uses_oauth2` read it to choose
+/// Basic vs Bearer vs OAuth 2.0 — so a mail child that does not follow the
+/// collection's `method` silently authenticates as Basic. That left the
+/// transport of a Bearer (API-token) account prompting for a password forever
+/// while the receiving account, whose `method` `jmap_config::mail::apply_server`
+/// writes directly, worked. Following it here keeps the two in step.
+pub const BOUND_MAIL_AUTHENTICATION: &[&CStr] = &[c"host", c"port", c"user", c"method"];
 
 /// The two extensions that make a source one of an account's mail *services*.
 ///
