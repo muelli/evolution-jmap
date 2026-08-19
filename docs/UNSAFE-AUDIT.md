@@ -96,15 +96,23 @@ the compiler to keep them test-only.
 1. Gate each `detached()`/equivalent behind `#[cfg(test)]` (or a `testing`
    feature) so "never call this outside a test" is enforced, not just
    documented. Small, mechanical, per-crate.
+   - **DONE 2026-08-19** — each of the six is now `#[cfg(feature =
+     "testing")]`-gated; each crate gained a `testing` feature turned on for
+     that crate's own `cargo test` builds via a self dev-dependency (`<crate>
+     = { path = ".", features = ["testing"] }`), since every call site lives
+     in that crate's own `tests/*.rs` and integration tests build the library
+     without `cfg(test)`, so a plain `#[cfg(test)]` gate would not have
+     reached them. See NIGHT-LOG "Track A6 Pattern A: compiler-enforced
+     test-only `detached()`".
 2. Hoist the zeroing itself into one `jmap_backend_core` helper, e.g.
    `pub unsafe fn zeroed_box<T>() -> Box<T>` with the safety contract written
    once ("every field of `T` must be valid at all-zero — verify this holds
    for the specific `T` before calling") instead of six near-identical
-   copies of the same paragraph.
+   copies of the same paragraph. **Still open.**
 
 Rough effort: **~1–2 hours** (six call sites, one new helper, no behavior
 change — the tests keep passing since the invariant doesn't move, only where
-it's checked).
+it's checked). Fix 1 above is done; fix 2 remains.
 
 ### Pattern B — IMPROVE: "check the GType, then cast" borrow helper, ~13 copies
 
