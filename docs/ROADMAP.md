@@ -521,6 +521,25 @@ they close, prioritise in this order:
    (EDS collection-backend + credentials machinery). Not the client, SRV, token,
    or mail store — those are proven; keep the fix inside the collection backend.
 
+8. **CI is RED — the OAuth-lookup RUNPATH regressed the lintian-clean .deb.
+   CLAIMABLE NOW (operator-found 2026-08-19, HIGH — unblocks CI).** The `build`
+   job's `package-deb-lintian` test fails:
+   `E: evolution-jmap: custom-library-search-path RUNPATH /usr/lib/evolution`
+   (and `/usr/lib`). That RUNPATH was added by `ac00396` ("give the installed
+   module its own RUNPATH") so `module-jmap-configuration.so` could load its
+   transitive `libevolution-mail.so` for the Look-Up worker — a real need — but it
+   undoes Track C1's lintian-clean `.deb`. **CI's build job has been red since
+   `ac00396`, and the night agents did not notice because their local gate is
+   `cargo test`/`clippy`, not the CMake/ctest packaging job** — so nobody is
+   watching the one check that catches a broken `.deb`. Reconcile: either add a
+   scoped `lintian` override for exactly this RUNPATH (it is deliberate, and the
+   module genuinely lives beside `libevolution-mail.so`), or set the RUNPATH some
+   way lintian accepts, or narrow it. Do NOT just delete the RUNPATH — that would
+   re-break the Look-Up worker's module load (item 2(a)). Verify with the
+   `package-deb-lintian` ctest locally (`ctest --test-dir build -R lintian`).
+   **Also worth a standing fix:** make the agents' pre-push gate run the packaging
+   ctest (or at least lintian) so a red `.deb` cannot land unseen again.
+
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
 cases, and similar refinements are real but LOW-LEVERAGE right now — record
