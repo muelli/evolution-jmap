@@ -24,6 +24,8 @@
 //!   and codes Evolution actually routes on.
 //! - [`marshal`] reads and writes the strings and lists a vfunc's
 //!   out-parameters carry, which every backend does identically.
+//! - [`resolver`] performs the `_jmap._tcp` SRV lookup RFC 8620 §2.2 wants,
+//!   which the client crate defines a seam for but deliberately cannot do.
 //! - [`i18n`] binds this project's gettext domain, so that the strings a user
 //!   reads can be translated at all.
 //!
@@ -40,6 +42,7 @@ pub mod i18n;
 pub mod instance;
 pub mod marshal;
 pub mod oauth2;
+pub mod resolver;
 pub mod source;
 pub mod subclass;
 pub mod trampoline;

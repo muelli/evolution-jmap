@@ -137,3 +137,39 @@ to polish a completed backend. A later hardening pass works through them.
   are in `po/POTFILES.in` and `po/evolution-jmap.pot` is regenerated.
   `ConnectError::OAuth2(message)` stays untouched on purpose — that string is
   EDS's own, not this project's to translate.
+
+## Upstream: GLib 2.80's `g_resolver_lookup_service()` leaks ~1 kB per call
+Found 2026-08-19 while building `jmap-backend-core/src/resolver.rs`
+(`SystemResolver`, the real `_jmap._tcp` SRV lookup). Measured on this VM
+(GLib/GIO 2.80.0): RSS grows linearly at ~1 kB per lookup, over 6000
+consecutive lookups of the *same* domain, on **both** the found and the
+not-found path.
+
+**It is not ours.** A minimal C reference program doing exactly the canonical
+GLib sequence — `g_resolver_get_default()`, `g_resolver_lookup_service()`,
+`g_resolver_free_targets()` on a non-NULL list, `g_error_free()` on a set
+error, `g_object_unref()` on the resolver — leaks at the same ~1 kB/call rate.
+For contrast, the same shape around `g_resolver_lookup_by_name()` /
+`g_resolver_free_addresses()` is flat (delta 0 kB after warm-up), so this is
+specific to the SRV/records path rather than to `GResolver` generally, and it
+is not a bounded DNS cache (it would have plateaued for a repeated domain).
+
+**Not worth working around today, on frequency grounds.** `lookup_srv` runs
+once per `ConnectTarget::Domain` connect — a backend `connect_sync`, a
+collection fan-out authentication, or a click of "Look Up Account Details" —
+not once per sync poll and not per JMAP method call. A long-running EDS
+factory process therefore loses on the order of tens to hundreds of kB, and
+only for accounts set up from a bare email domain (an explicit host:port
+endpoint is `ConnectTarget::Origin` and never resolved).
+
+**If it ever does matter,** the options in order of preference are: (a) report
+it upstream against GLib and pick up the fix, (b) memoize the per-domain
+answer in the resolver — cheap, but it would have to ignore the record's DNS
+TTL, which is a real correctness cost for a process that lives for days, and
+(c) `g_resolver_lookup_records(…, G_RESOLVER_RECORD_SRV, …)`, which is *not*
+an improvement: same GLib code path, so probably the same leak, plus it
+returns raw `GVariant` tuples and drops GLib's RFC 2782 sorting, i.e. more
+hand-rolled code for no fix. Reproduction is small enough to rebuild from the
+description above; the throwaway harness was deliberately not committed
+(a network- and allocator-dependent RSS assertion is not a test that belongs
+in CI).

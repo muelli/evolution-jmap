@@ -401,6 +401,16 @@ point, so its gaps aren't copied forward.
   D), `oauth2.rs` (`access_token`, careful read-before-free ordering), `i18n.rs`
   (gettext FFI, one documented process-lifetime pointer exception at
   `translate_static`). Overwhelmingly KEEP; contributes to Patterns C, D, F.
+  - *Added after this audit's pass, same day:* `resolver.rs`
+    (`SystemResolver`, the `g_resolver_lookup_service()` SRV lookup). Not part
+    of the inventory above, listed so the per-crate picture does not silently
+    go stale. Self-assessed KEEP: one borrow-and-return confined to a single
+    function body by design (a `GResolver` ref, a transfer-full `GSrvTarget`
+    list, and a transfer-none hostname read into owned Rust data before the
+    list is freed), no shared idiom to extract because it is the only DNS
+    call site in the tree. Worth a look from Track A5's *soundness* angle
+    since it is new transfer-full territory; the read-before-free ordering
+    is the same shape `oauth2.rs::access_token` already gets right.
 - **`jmap-backend-book`, `jmap-backend-cal`, `jmap-backend-collection`**
   (+ their thin `*-module` crates): structurally parallel (book/cal
   deliberately not merged — the module docs explain why and the reasoning

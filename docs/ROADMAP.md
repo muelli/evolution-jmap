@@ -240,6 +240,56 @@ they close, prioritise in this order:
      end-to-end confirmation to the operator in the VM (real Fastmail, using an
      **app password / API token**, not the login password — that 401s, a
      separate concern from this 404). FFI — reasonable to escalate.
+   - **DONE 2026-08-19 (on opus, per the escalation at `a4533d1`) — the real
+     resolver landed; item 5's code side is complete, pending operator
+     confirmation.** `jmap-backend-core/src/resolver.rs` adds
+     `SystemResolver`, a `jmap_client::resolver::Resolver` implementation
+     backed by `g_resolver_lookup_service()` — already bound in `gio-sys`
+     0.22, so **no new dependency and no hand-written DNS**, exactly as the
+     maintainer preference above directed. It lives in `jmap-backend-core`
+     because that is the one EDS-integration crate *both* call sites can
+     reach (`jmap-config` already depends on it), and it is now installed at
+     both, replacing `NoSrvResolver`: `jmap_backend_core::source::connect`'s
+     `Domain` branch (via `ClientBuilder::resolver`) and
+     `jmap_config::config_lookup::run`. Two GLib guarantees, checked against
+     the installed `Gio-2.0.gir` doc text rather than assumed, are what keep
+     the implementation small: the returned `GSrvTarget` list is **already
+     sorted into RFC 2782 preference order** (so the first node is the answer
+     — no hand-rolled priority/weight sort) and it is **NULL on failure,
+     non-empty on success**, freed as a whole by `g_resolver_free_targets`.
+     Every unresolvable case — no record, a failed lookup, a domain Rust
+     cannot even hand to C (interior NUL), a `.` target (RFC 2782's "no
+     service here"), a zero port — answers `None`, which is the direction
+     that matters: an SRV record can only *redirect* discovery, never break
+     the deployments that answer at their own domain (Stalwart, self-hosted,
+     the in-repo mock). A fully-qualified target loses its trailing dot.
+     **Deliberate limit:** the lookup is not cancellable, because the
+     `Resolver` trait passes no `GCancellable` and storing a raw one in a
+     `Send + Sync` value is the worse trade for a lookup this short; the
+     system resolver's own timeout bounds it. TDD: red test first
+     (`jmap-backend-core/tests/resolver.rs` failed to compile on the missing
+     module), then the deterministic cases — a `.invalid` domain (RFC 6761
+     guarantees it never resolves, so the test holds with or without DNS
+     egress), the interior-NUL refusal, and 64 repetitions of the failing
+     path so an unbalanced ref/free has somewhere to show — plus pure-helper
+     unit tests for the host normalisation. The success path cannot be
+     hermetic, so it is an `#[ignore]`d live test against
+     `_jmap._tcp.fastmail.com`; **it was run, and passes** —
+     `api.fastmail.com:443`, which is the one thing no fake can prove (that
+     the `GSrvTarget` list is walked and read correctly). Full gate green:
+     `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D
+     warnings` (default-members) and the seven-crate EDS-gated clippy both
+     clean; `cargo test --locked` (84 binaries, 0 failed) and the
+     seven-crate `cargo test` (1178 passed, 0 failed) both green.
+     **Finding, logged not worked around:** GLib 2.80's
+     `g_resolver_lookup_service()` leaks ~1 kB per call — proven upstream, not
+     ours, by a minimal C reference doing the identical canonical sequence
+     (while `g_resolver_lookup_by_name` is flat). Once per connect is a
+     frequency that makes it not worth a TTL-ignoring cache; see
+     `docs/BACKLOG.md`. **Still open, and now the only thing left on item 5:**
+     operator end-to-end confirmation against real Fastmail in the VM, using
+     an **app password / API token** (the login password 401s — a separate
+     concern from the 404 this closes).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner

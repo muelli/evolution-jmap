@@ -37590,3 +37590,107 @@ Claiming: implement `jmap_client::resolver::Resolver` for a real
 (`jmap-backend-core`, which both call sites can reach — `jmap-config` already
 depends on it), and inject it where `NoSrvResolver` is constructed today:
 `jmap_backend_core::source::connect` and `jmap_config::config_lookup::run`.
+
+### Delivered: the real SRV `Resolver` (`SystemResolver`, GLib `GResolver`)
+
+Ran on **opus** (the previous session's escalation at `a4533d1`), and the
+escalation was the right call for a reason worth recording: the risk was not
+"does it compile" but the transfer-full ownership of a `GSrvTarget` `GList`,
+which no mock test can catch — a wrong free is a leak or a crash under real
+use only. So the increment was built to make that checkable rather than
+assumed.
+
+**What landed.** `jmap-backend-core/src/resolver.rs`: `SystemResolver`, a
+`jmap_client::resolver::Resolver` implementation over
+`g_resolver_lookup_service()`. No new dependency — `gio-sys` 0.22 was already
+a dependency of both crates involved and already binds the function and the
+`GSrvTarget` accessors. Installed at both call sites, replacing
+`NoSrvResolver`: `jmap_backend_core::source::connect`'s `Domain` branch (via
+`ClientBuilder::resolver`) and `jmap_config::config_lookup::run`. It lives in
+`jmap-backend-core` because that is the one EDS-integration crate both sites
+can reach — `jmap-config` already depends on it — rather than a new crate.
+
+**Two GLib guarantees are why the code is short, and both were checked, not
+assumed.** Read out of the installed `/usr/share/gir-1.0/Gio-2.0.gir` doc
+text: the returned list is *"non-empty ... sorted in order of preference"*
+(RFC 2782 order — so the first node is the answer, and the hand-rolled
+priority/weight sort the roadmap anticipated is not needed; GLib's own
+`g_srv_target_list_sort` has already run), and it is *NULL on error*, freed
+as a whole via `g_resolver_free_targets`. All the ownership therefore lives in
+one function body on purpose: take the `GResolver` ref, take the list, read
+the transfer-none hostname into an owned `String` **before** freeing, then
+free the list, the `GError` and the ref on every path. Reading the order
+right off the page is the check.
+
+**Everything unresolvable answers `None`**, which is the direction that
+matters — an SRV record can only *redirect* discovery, never break the
+deployments that answer at their own domain (Stalwart, self-hosted, the
+in-repo mock, and every existing test). That covers: no record, a failed
+lookup, a domain with an interior NUL that cannot be a C string at all (it
+comes from a hand-writable keyfile, so this must not panic inside a vfunc), a
+`.` target — RFC 2782's "the service is decidedly not available here", read
+here as the weaker "fall back", because a 404 is a better failure than an
+account that cannot be attempted — and a zero port. A fully-qualified target
+loses its trailing dot so the host matches the one every certificate and log
+line elsewhere uses.
+
+**Deliberate limit:** the lookup blocks and is not cancellable. The
+`Resolver` trait passes no `GCancellable`, and giving `SystemResolver` one
+would mean storing a raw `GCancellable` pointer in a `Send + Sync` value —
+the worse trade for a lookup the system resolver already timeouts. Both call
+sites are already on a worker thread. Documented in place.
+
+**TDD.** Red first: `tests/resolver.rs` failed to compile on the missing
+module. Then green on the deterministic cases — a `.invalid` domain (RFC 6761
+guarantees it never resolves, so the assertion holds whether or not this
+runner has DNS egress), the interior-NUL refusal, and 64 repetitions of the
+failing path so an unbalanced ref or free has somewhere to show — plus
+pure-helper unit tests for the host normalisation (trailing dot, `.`, empty).
+The success path cannot be hermetic — it needs a third party's live DNS — so
+it is an `#[ignore]`d test against `_jmap._tcp.fastmail.com`, and **it was
+run and passes**: `api.fastmail.com:443`. That is the one assertion no fake
+can make, that the `GList` is walked and read correctly, so it was worth
+having even un-CI-able.
+
+**Finding: GLib 2.80's `g_resolver_lookup_service()` leaks ~1 kB per call,
+and it is not ours.** Noticed because the repetition test above invited
+measuring it: RSS grows linearly at ~1 kB/lookup over 6000 consecutive
+lookups of the *same* domain, on both the found and the not-found path — and
+the not-found path returns no list at all, which is what first pointed away
+from our list handling. Proven upstream with a minimal C program doing the
+identical canonical GLib sequence: same ~1 kB/call. The same shape around
+`g_resolver_lookup_by_name()`/`g_resolver_free_addresses()` is flat (0 kB
+after warm-up), so it is the SRV/records path specifically, and it is not a
+bounded DNS cache (that would plateau for a repeated domain). **Not worked
+around**, on frequency grounds: `lookup_srv` runs once per
+`ConnectTarget::Domain` connect — a `connect_sync`, a fan-out
+authentication, a click of "Look Up Account Details" — never per sync poll or
+per JMAP method call, so a long-running factory process loses tens to
+hundreds of kB, and only for bare-email-domain accounts. Recorded in
+`docs/BACKLOG.md` with the reproduction and the three options if it ever
+matters (upstream report > TTL-ignoring memoization > `lookup_records`, which
+is *not* an improvement: same code path, plus raw `GVariant` and no sorting).
+The RSS harness was deliberately **not** committed — a network- and
+allocator-dependent memory assertion does not belong in CI.
+
+`docs/UNSAFE-AUDIT.md`'s `jmap-backend-core` bullet gained a line for the new
+cluster, marked as added after that audit's pass rather than folded into it,
+so the audit neither goes stale nor claims to have reviewed code written
+after it.
+
+**Gate:** `cargo fmt --check` clean; `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy both
+clean; `cargo test --locked` green across 84 test binaries and the
+seven-crate `cargo test` green at 1178 passed — 0 failed in both. `reuse`
+is unavailable on this VM per the standing note; both new files carry
+in-file SPDX `GPL-3.0-or-later` headers in the same style as their
+neighbours, and neither needs a `REUSE.toml` entry (`.rs` is a recognised
+comment style).
+
+**Needs the operator, and is now the only thing left on ROADMAP item 5:**
+end-to-end confirmation against real Fastmail in the VM. Use an **app
+password / API token**, not the login password — the login password 401s,
+which is a separate concern from the 404 this closes. The expected change is
+that session discovery now goes to `api.fastmail.com` instead of 404ing at
+`fastmail.com`, and that "Look Up Account Details" finds JMAP instead of
+losing to the generic ISPDB autoconfig.
