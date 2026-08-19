@@ -37024,3 +37024,30 @@ stray copy of an earlier run's output this session left behind mid-work
 `.gitignore`d from the `jmap-proto` session). Gate before pushing:
 `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
 and `cargo test --locked` (default-members) all clean/green.
+
+## 2026-08-19 (claim) — Claiming: fix OAuth2 redirect URI scheme (dot-less, would be rejected by Fastmail)
+
+Fresh survey after `0341d0a` (`docs/OAUTH-FASTMAIL.md`, landed mid-survey
+by a concurrent session) merged in: all milestones COMPLETE; CURRENT
+PRIORITY's remaining thread (SRV autodiscovery's GResolver-backed real
+`Resolver`) and Round 2's A5/A6-Pattern-C/D1 are all still the same
+standing FFI/refcount escalation candidates this thread has flagged for
+~15 sessions running, with nothing new making them tractable. But
+`docs/OAUTH-FASTMAIL.md` (research, not yet acted on) surfaced a concrete,
+non-FFI, TDD-able bug: `jmap-config/src/config_lookup.rs:123`'s
+`REDIRECT_URI = "jmap-oauth2:/redirect"` uses a private-use URI scheme
+with no dot. Fastmail's OAuth developer doc requires such schemes in
+reverse-DNS notation with at least one dot (or loopback/https); a
+dot-less scheme would be rejected at dynamic client registration, which
+would break Fastmail's OAuth path (the very account the operator is
+targeting) independently of the still-deferred TLS/real-server
+validation. This is plain-Rust, no FFI, no maintainer decision (the
+module's own doc already settled *that* a private-use scheme is right,
+following EDS's Google precedent — this only fixes its shape to satisfy a
+constraint discovered after that decision), and grep confirms
+`REDIRECT_URI` has exactly one definition site and no other test
+hardcodes its literal value (`oauth2_setup.rs`'s test `REDIRECT_URI` is
+an unrelated local constant using an `https://` value). Claiming this
+increment now: change the scheme to a dotted reverse-DNS form
+(`org.gnome.evolution.jmap:/redirect`), red-test first that `REDIRECT_URI`
+is dotted reverse-DNS, then green.
