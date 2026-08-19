@@ -252,7 +252,7 @@ const CLIENT_RESPONSE_TYPES: [&str; 1] = ["code"];
 const CLIENT_AUTH_METHOD: &str = "none";
 
 /// What this client asks an RFC 7591 registration endpoint to register it
-/// as. `client_name` and `redirect_uris` are the only fields that vary
+/// as. `client_name`, `redirect_uris` and `scope` are the fields that vary
 /// between deployments; grant types, response types and the auth method
 /// follow from this being one native EDS client talking the
 /// authorization-code grant, and are not parameters.
@@ -265,6 +265,18 @@ pub struct ClientRegistrationRequest<'a> {
     /// `redirect_uris`. At least one is required by RFC 6749 §3.1.2 for the
     /// authorization-code grant this client registers for.
     pub redirect_uris: &'a [&'a str],
+    /// RFC 7591 §2's `scope`: a space-delimited list that becomes this
+    /// client's *default* granted scope for an authorization request that
+    /// itself names none (RFC 6749 §3.3) — which is exactly the request this
+    /// client sends, since JMAP itself defines no scope vocabulary of its own
+    /// to pick from. `None` omits the field, asking the server for whatever it
+    /// treats as a default; some deployments' default is an *empty* scope —
+    /// confirmed against a real deployment's registration endpoint, not
+    /// assumed — which would silently register a client that can be
+    /// authorized into a token with no access at all. Callers that discovered
+    /// a non-empty `scopes_supported` should pass it joined here rather than
+    /// risk that.
+    pub scope: Option<&'a str>,
 }
 
 /// A client registered with a deployment, as RFC 7591 §3.2.1 hands one back.
@@ -289,7 +301,9 @@ pub struct ClientRegistration {
 }
 
 /// The registration request body, RFC 7591 §2's fields this client sends and
-/// no others.
+/// no others. `scope` is omitted entirely, not sent empty, when the caller
+/// named none — an absent field is what asks the server for its own default,
+/// where an explicit empty string is itself a (likely wrong) scope request.
 #[derive(Serialize)]
 struct RegistrationBody<'a> {
     client_name: &'a str,
@@ -297,6 +311,8 @@ struct RegistrationBody<'a> {
     grant_types: &'a [&'a str],
     response_types: &'a [&'a str],
     token_endpoint_auth_method: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a str>,
 }
 
 /// The response as it arrives, before it has been checked for a `client_id`.
@@ -350,6 +366,7 @@ pub fn register_client(
         grant_types: &CLIENT_GRANT_TYPES,
         response_types: &CLIENT_RESPONSE_TYPES,
         token_endpoint_auth_method: CLIENT_AUTH_METHOD,
+        scope: request.scope,
     })?;
 
     let headers = [
