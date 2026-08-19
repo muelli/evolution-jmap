@@ -36439,3 +36439,65 @@ their `Box::new(unsafe { MaybeUninit::zeroed().assume_init() })` to
 behaviour change: same all-zero `Box<Self>` for the same six types.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: `zeroed_box` helper, UNSAFE-AUDIT Pattern A fix 2
+
+Followed through on this session's claim. `jmap_backend_core::instance`
+(home of `Slot<T>`, whose own doc comment already states the "GObject hands
+`instance_init` zeroed memory" fact this trades on) gained `pub unsafe fn
+zeroed_box<T>() -> Box<T>`: same `Box::new(MaybeUninit::zeroed()
+.assume_init())` body every site already had, with the "every field of `T`
+must be valid at all-zero" safety contract stated once instead of six
+near-identical paragraphs.
+
+`jmap-backend-core` gained its own `testing = []` feature, and each of the
+five call-site crates' existing `testing` feature (added for Pattern A's
+fix 1, two sessions ago) became `testing = ["jmap-backend-core/testing"]` —
+enabling a crate's own `testing` (already wired via its self dev-dependency)
+now reaches through to unlock the helper too, keeping it exactly as
+compiler-enforced test-only as the `detached()` methods it backs. A plain
+`cargo build` of all six crates (no `testing` feature) still succeeds,
+confirming `zeroed_box` and every `detached()` stay compiled out.
+
+All six sites — `jmap-backend-book`, `jmap-backend-cal`,
+`jmap-backend-collection`, `jmap-config`'s `backend.rs`, `jmap-mail`'s
+`store.rs`/`transport.rs` — switch their `Box::new(unsafe {
+MaybeUninit::zeroed().assume_init() })` to `unsafe { zeroed_box() }`,
+dropping the now-unused per-file `MaybeUninit` import. No behaviour change:
+same all-zero `Box<Self>` for the same six types, and every existing test
+in every touched crate stayed green unmodified.
+
+This was the last open item on Pattern A and the first item on the audit's
+own prioritized follow-up list — both its fixes (test-only gating, then this
+shared helper) are now done. `docs/UNSAFE-AUDIT.md` updated accordingly.
+
+Hit the standing disk-fills-from-cargo-target wall mid-session: the
+seven-crate direct `cargo test` failed with a linker `Bus error` (SIGBUS,
+signal 7) rather than the usual "No space left on device" message — same
+root cause, different symptom, worth recording in case a future session
+sees the same signal and wonders whether it is something new. `df` showed
+`/` at 100% (238M free, `rust/target/debug` at 23G); `cargo clean --profile
+dev` recovered 24G and the same test run then passed clean.
+
+Full gate: `cargo fmt --check` clean (after one `cargo fmt` pass to settle
+import ordering across the six touched files — a mechanical reordering, not
+a content change); `cargo build -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-backend-collection -p jmap-config -p jmap-mail`
+(no `testing` feature) clean; `cargo clippy --all-targets --locked --
+-D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-client
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
+-p jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+touched EDS-gated crates plus their siblings, direct-built since this VM has
+the headers) clean; `cargo test --locked` (default-members) and the same
+seven-crate `cargo test` both green, every `test result: ok`, 0 failed (the
+one `camel-CRITICAL **: ... assertion ... failed` line is a test's own
+expected assertion, not a failure). No new files, so no `REUSE.toml`/SPDX
+changes needed; `reuse`/`pipx`/`uvx`/`cargo-deny` remain unavailable on this
+VM, so `ci/checks.sh` itself was not run — its constituent checks were run
+individually as above, per the standing workaround.
+
+**Left for a future session, per the audit's own list:** Pattern C (no RAII
+wrapper for libical/GObject ref-counted pointers — refcount reasoning,
+escalation-worthy) and Pattern E (small `fail()`/`invalid_arg()` duplication,
+low priority, fold into other work in those files rather than its own
+increment). Ending the session here — one focused increment, pushed.

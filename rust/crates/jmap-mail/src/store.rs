@@ -19,8 +19,6 @@
 //! interface's vtable is filled through GObject rather than through our class.
 
 use std::ffi::CStr;
-#[cfg(feature = "testing")]
-use std::mem::MaybeUninit;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
@@ -31,6 +29,8 @@ use eds_sys::{
 };
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
+#[cfg(feature = "testing")]
+use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::dispatched_borrow;
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_mail_sync::{
@@ -540,7 +540,7 @@ impl JmapStore {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value, and an all-zero `Slot` is its
         // documented empty state.
-        let store: Box<Self> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        let store: Box<Self> = unsafe { zeroed_box() };
         store.connection.init(RwLock::new(None));
         store.folders.init(RwLock::new(None));
         store

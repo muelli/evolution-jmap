@@ -51,13 +51,13 @@
 //! [`MailSync::send_message`]: jmap_mail_sync::MailSync::send_message
 
 use std::ffi::CStr;
-#[cfg(feature = "testing")]
-use std::mem::MaybeUninit;
 use std::sync::RwLock;
 
 use eds_sys::{CamelServiceClass, CamelTransport, CamelTransportClass, camel_transport_get_type};
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
+#[cfg(feature = "testing")]
+use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::dispatched_borrow;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::MailSync;
@@ -198,7 +198,7 @@ impl JmapTransport {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value, and an all-zero `Slot` is its
         // documented empty state.
-        let transport: Box<Self> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        let transport: Box<Self> = unsafe { zeroed_box() };
         transport.connection.init(RwLock::new(None));
         transport
     }

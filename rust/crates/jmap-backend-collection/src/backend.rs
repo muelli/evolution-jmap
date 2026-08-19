@@ -17,8 +17,6 @@
 //! that from being invisible.
 
 use std::ffi::CStr;
-#[cfg(feature = "testing")]
-use std::mem::MaybeUninit;
 use std::ptr;
 
 use std::ffi::CString;
@@ -38,6 +36,8 @@ use gio_sys::{GCancellable, GTlsCertificateFlags};
 use glib_sys::{GError, GFALSE, GList, GType, g_list_free, gchar};
 use gobject_sys::{g_object_unref, g_type_class_peek};
 use jmap_backend_core::error::cstring_lossy;
+#[cfg(feature = "testing")]
+use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::dup_string;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, guard_value, log_critical};
@@ -88,7 +88,7 @@ impl JmapCollectionBackend {
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value.
-        Box::new(unsafe { MaybeUninit::zeroed().assume_init() })
+        unsafe { zeroed_box() }
     }
 }
 
