@@ -6024,3 +6024,607 @@ fn group_card_with_parameter_variations_and_empty_values() {
     assert!(!emitted.contains("KIND:"));
     assert!(!emitted.contains("MEMBER:"));
 }
+
+#[test]
+fn vcard_altid_and_language_singleton_properties_deterministic_selection() {
+    // Characterizes vCards carrying multiple `FN` and `N` representations in
+    // several languages grouped by `ALTID` and marked with `LANGUAGE` / `SCRIPT`.
+    //
+    // In JSContact (RFC 9553 §2.2.1), `Name` models a single display name (`full`)
+    // and component list for the default card language, while alternate
+    // language representations live in the server-level `localizations` map.
+    //
+    // In `jmap-vcard`, `read_name` evaluates `card.entries` in document order
+    // and deterministically selects the FIRST `FN` and `N` properties encountered,
+    // safely ignoring secondary language alternates. Outbound serialization
+    // generates clean, non-duplicate `FN` and `N` lines matching the selected primary.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:altid-singleton-01\r\n",
+        "FN;ALTID=1;LANGUAGE=en:Dr. Alexander Mueller\r\n",
+        "FN;ALTID=1;LANGUAGE=de:Herr Dr. Alexander Müller\r\n",
+        "FN;ALTID=1;LANGUAGE=ja;SCRIPT=Jpan:ミュラー・アレクサンダー\r\n",
+        "FN;ALTID=1;LANGUAGE=ja;SCRIPT=Latn:Alex Mueller\r\n",
+        "N;ALTID=1;LANGUAGE=en:Mueller;Alexander;;Dr.;\r\n",
+        "N;ALTID=1;LANGUAGE=de:Müller;Alexander;;Herr Dr.;\r\n",
+        "N;ALTID=1;LANGUAGE=ja:ミュラー;アレクサンダー;;;\r\n",
+        "NOTE:Research Director\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse multilingual singleton vcard");
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "altid-singleton-01");
+    let name = card.name.as_ref().expect("name must be present");
+    assert_eq!(
+        name.full.as_deref(),
+        Some("Dr. Alexander Mueller"),
+        "primary (first in document order) FN must be selected"
+    );
+    let components = name.components.as_ref().expect("components");
+    assert_eq!(components.len(), 3);
+    assert_eq!(
+        components
+            .iter()
+            .find(|c| c.kind == "surname")
+            .unwrap()
+            .value,
+        "Mueller"
+    );
+    assert_eq!(
+        components.iter().find(|c| c.kind == "given").unwrap().value,
+        "Alexander"
+    );
+    assert_eq!(
+        components.iter().find(|c| c.kind == "title").unwrap().value,
+        "Dr."
+    );
+
+    // Outbound serialization emits standard FN and N lines without duplicating
+    let emitted = card_to_vcard(&card);
+    assert_eq!(line(&emitted, "FN:"), "FN:Dr. Alexander Mueller");
+    assert_eq!(line(&emitted, "N:"), "N:Mueller;Alexander;;Dr.;");
+    assert_eq!(
+        emitted.lines().filter(|l| l.starts_with("FN:")).count(),
+        1,
+        "exactly one FN line must be emitted"
+    );
+    assert_eq!(
+        emitted.lines().filter(|l| l.starts_with("N:")).count(),
+        1,
+        "exactly one N line must be emitted"
+    );
+
+    // Fixed-point roundtrip stability
+    let back = vcard_to_card(&emitted).expect("roundtrip parse");
+    assert_eq!(back.name, card.name);
+    let re_emitted = card_to_vcard(&back);
+    assert_eq!(emitted, re_emitted);
+}
+
+#[test]
+fn vcard_altid_and_language_multivalued_properties_preservation_and_roundtrip() {
+    // Characterizes vCards carrying multiple alternate representations grouped
+    // by `ALTID` and `LANGUAGE` across all supported multi-valued property types:
+    // `NOTE`, `TITLE`, `ROLE`, `ORG`, `NICKNAME`, `URL`, `EMAIL`, `TEL`.
+    //
+    // In `jmap-vcard`, all multi-valued properties are stored in keyed JSContact
+    // maps (`notes`, `titles`, `organizations`, `nicknames`, `links`, `emails`,
+    // `phones`). Every incoming alternate representation line is preserved as a
+    // distinct keyed entry (keyed via `X-JMAP-KEY` or sequentially allocated
+    // `n1`, `n2`, `t1`, `t2`, etc.) rather than being dropped or overwriting
+    // preceding entries.
+    //
+    // Outbound serialization writes each entry with an `X-JMAP-KEY` parameter,
+    // guaranteeing lossless round-trip stability.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:altid-multivalue-01\r\n",
+        "FN:Elena Rostova\r\n",
+        "N:Rostova;Elena;;;\r\n",
+        "NOTE;ALTID=1;LANGUAGE=en:Primary project maintainer\r\n",
+        "NOTE;ALTID=1;LANGUAGE=de:Hauptverantwortliche Projektleiterin\r\n",
+        "NOTE;ALTID=1;LANGUAGE=fr:Responsable principale du projet\r\n",
+        "TITLE;ALTID=1;LANGUAGE=en:Principal Research Scientist\r\n",
+        "TITLE;ALTID=1;LANGUAGE=de:Leitende Wissenschaftlerin\r\n",
+        "ROLE;ALTID=2;LANGUAGE=en:Technical Steering Committee Member\r\n",
+        "ROLE;ALTID=2;LANGUAGE=de:Mitglied des Technischen Lenkungsausschusses\r\n",
+        "ORG;ALTID=1;LANGUAGE=en:Open Standards Foundation;Engineering Division;Core Architecture\r\n",
+        "ORG;ALTID=1;LANGUAGE=de:Offene Standards Stiftung;Ingenieurwesen;Kernarchitektur\r\n",
+        "NICKNAME;ALTID=1;LANGUAGE=en:Lena\r\n",
+        "NICKNAME;ALTID=1;LANGUAGE=ru:Лена\r\n",
+        "URL;ALTID=1;LANGUAGE=en:https://example.org/en/elena\r\n",
+        "URL;ALTID=1;LANGUAGE=de:https://example.org/de/elena\r\n",
+        "EMAIL;ALTID=1;LANGUAGE=en;TYPE=WORK:elena.en@example.org\r\n",
+        "EMAIL;ALTID=1;LANGUAGE=de;TYPE=WORK:elena.de@example.org\r\n",
+        "TEL;ALTID=1;LANGUAGE=en;TYPE=WORK,VOICE:+14155550100\r\n",
+        "TEL;ALTID=1;LANGUAGE=de;TYPE=WORK,VOICE:+4930123456\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse multi-valued ALTID vcard");
+
+    // 1. NOTES: all 3 language variants preserved
+    let notes = card.notes.as_ref().expect("notes");
+    assert_eq!(notes.len(), 3, "all 3 NOTE alternates must be preserved");
+    let note_texts: Vec<&str> = notes.values().map(|n| n.note.as_str()).collect();
+    assert!(note_texts.contains(&"Primary project maintainer"));
+    assert!(note_texts.contains(&"Hauptverantwortliche Projektleiterin"));
+    assert!(note_texts.contains(&"Responsable principale du projet"));
+
+    // 2. TITLES & ROLES: all 4 alternates preserved
+    let titles = card.titles.as_ref().expect("titles");
+    assert_eq!(
+        titles.len(),
+        4,
+        "all 2 TITLE + 2 ROLE alternates must be preserved"
+    );
+    let title_names: Vec<&str> = titles.values().map(|t| t.name.as_str()).collect();
+    assert!(title_names.contains(&"Principal Research Scientist"));
+    assert!(title_names.contains(&"Leitende Wissenschaftlerin"));
+    assert!(title_names.contains(&"Technical Steering Committee Member"));
+    assert!(title_names.contains(&"Mitglied des Technischen Lenkungsausschusses"));
+
+    // 3. ORGANIZATIONS: both 3-component orgs preserved
+    let orgs = card.organizations.as_ref().expect("organizations");
+    assert_eq!(orgs.len(), 2, "both ORG alternates must be preserved");
+    let org_en = orgs
+        .values()
+        .find(|o| o.name.as_deref() == Some("Open Standards Foundation"))
+        .expect("English ORG");
+    let units_en: Vec<&str> = org_en
+        .units
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|u| u.name.as_str())
+        .collect();
+    assert_eq!(units_en, vec!["Engineering Division", "Core Architecture"]);
+
+    let org_de = orgs
+        .values()
+        .find(|o| o.name.as_deref() == Some("Offene Standards Stiftung"))
+        .expect("German ORG");
+    let units_de: Vec<&str> = org_de
+        .units
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|u| u.name.as_str())
+        .collect();
+    assert_eq!(units_de, vec!["Ingenieurwesen", "Kernarchitektur"]);
+
+    // 4. NICKNAMES: both Latin and Cyrillic nicknames preserved
+    let nicks = card.nicknames.as_ref().expect("nicknames");
+    assert_eq!(nicks.len(), 2, "both NICKNAME alternates must be preserved");
+    let nick_names: Vec<&str> = nicks.values().map(|n| n.name.as_str()).collect();
+    assert!(nick_names.contains(&"Lena"));
+    assert!(nick_names.contains(&"Лена"));
+
+    // 5. LINKS: both URLs preserved
+    let links = card.links.as_ref().expect("links");
+    assert_eq!(links.len(), 2, "both URL alternates must be preserved");
+    let uris: Vec<&str> = links.values().map(|l| l.uri.as_str()).collect();
+    assert!(uris.contains(&"https://example.org/en/elena"));
+    assert!(uris.contains(&"https://example.org/de/elena"));
+
+    // 6. EMAILS & PHONES: both language-specific emails and phone numbers preserved
+    let emails = card.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 2, "both EMAIL alternates must be preserved");
+    let phones = card.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 2, "both TEL alternates must be preserved");
+
+    // Outbound serialization emits all preserved alternates with X-JMAP-KEY
+    let emitted = card_to_vcard(&card);
+    let unfolded_vcard = unfolded(&emitted);
+    assert!(unfolded_vcard.contains("NOTE;X-JMAP-KEY=n1:Primary project maintainer"));
+    assert!(unfolded_vcard.contains("NOTE;X-JMAP-KEY=n2:Hauptverantwortliche Projektleiterin"));
+    assert!(unfolded_vcard.contains("NOTE;X-JMAP-KEY=n3:Responsable principale du projet"));
+    assert!(unfolded_vcard.contains("TITLE;X-JMAP-KEY=t1:Principal Research Scientist"));
+    assert!(unfolded_vcard.contains("TITLE;X-JMAP-KEY=t2:Leitende Wissenschaftlerin"));
+    assert!(unfolded_vcard.contains("ROLE;X-JMAP-KEY=t3:Technical Steering Committee Member"));
+    assert!(
+        unfolded_vcard.contains("ROLE;X-JMAP-KEY=t4:Mitglied des Technischen Lenkungsausschusses")
+    );
+    assert!(unfolded_vcard.contains(
+        "ORG;X-JMAP-KEY=o1:Open Standards Foundation;Engineering Division;Core Architecture"
+    ));
+    assert!(
+        unfolded_vcard
+            .contains("ORG;X-JMAP-KEY=o2:Offene Standards Stiftung;Ingenieurwesen;Kernarchitektur")
+    );
+    assert!(unfolded_vcard.contains("NICKNAME;X-JMAP-KEY=k1:Lena"));
+    assert!(unfolded_vcard.contains("NICKNAME;X-JMAP-KEY=k2:Лена"));
+    assert!(unfolded_vcard.contains("URL;X-JMAP-KEY=l1:https://example.org/en/elena"));
+    assert!(unfolded_vcard.contains("URL;X-JMAP-KEY=l2:https://example.org/de/elena"));
+
+    // Fixed-point roundtrip stability across repeated passes
+    let back = vcard_to_card(&emitted).expect("second parse");
+    let re_emitted = card_to_vcard(&back);
+    assert_eq!(
+        emitted, re_emitted,
+        "roundtrip must converge to fixed-point"
+    );
+}
+
+#[test]
+fn vcard_altid_and_language_multilingual_structured_address_and_label_pairing() {
+    // Tests structured addresses and written-out labels carrying `ALTID` and
+    // `LANGUAGE` parameters in English, Spanish, and German with work and home contexts.
+    //
+    // Verifies that:
+    // 1. Each `ADR` line maps into a distinct `Address` entry in `addresses` (`a1`, `a2`, `a3`).
+    // 2. `label_entry` accurately pairs each `LABEL` with its corresponding unlabelled
+    //    address of matching context, setting `full` on each address accurately.
+    // 3. Round-trip serialization emits both `ADR` and `LABEL` with matching `X-JMAP-KEY`.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:altid-adr-01\r\n",
+        "FN:Multilingual Address Test\r\n",
+        "ADR;ALTID=1;LANGUAGE=en;TYPE=WORK:;;100 Innovation Way;Tech City;CA;94016;USA\r\n",
+        "LABEL;ALTID=1;LANGUAGE=en;TYPE=WORK:100 Innovation Way\\nTech City, CA 94016\\nUSA\r\n",
+        "ADR;ALTID=1;LANGUAGE=es;TYPE=WORK:;;Calle Innovación 100;Ciudad Tecnológica;CA;94016;EE.UU.\r\n",
+        "LABEL;ALTID=1;LANGUAGE=es;TYPE=WORK:Calle Innovación 100\\nCiudad Tecnológica, CA 94016\\nEE.UU.\r\n",
+        "ADR;ALTID=2;LANGUAGE=de;TYPE=HOME:;;Hauptstraße 42;Berlin;Berlin;10115;Deutschland\r\n",
+        "LABEL;ALTID=2;LANGUAGE=de;TYPE=HOME:Hauptstraße 42\\n10115 Berlin\\nDeutschland\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse multilingual ADR vcard");
+    let addresses = card.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.len(), 3, "all 3 addresses must be preserved");
+
+    // Address 1 (English Work)
+    let a1 = &addresses["a1"];
+    assert_eq!(a1.contexts, Some(json!({"work": true})));
+    assert_eq!(
+        a1.full.as_deref(),
+        Some("100 Innovation Way\nTech City, CA 94016\nUSA")
+    );
+    let comps_1: Vec<(&str, &str)> = a1
+        .components
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|c| (c.kind.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(
+        comps_1,
+        vec![
+            ("name", "100 Innovation Way"),
+            ("locality", "Tech City"),
+            ("region", "CA"),
+            ("postcode", "94016"),
+            ("country", "USA"),
+        ]
+    );
+
+    // Address 2 (Spanish Work)
+    let a2 = &addresses["a2"];
+    assert_eq!(a2.contexts, Some(json!({"work": true})));
+    assert_eq!(
+        a2.full.as_deref(),
+        Some("Calle Innovación 100\nCiudad Tecnológica, CA 94016\nEE.UU.")
+    );
+    let comps_2: Vec<(&str, &str)> = a2
+        .components
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|c| (c.kind.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(
+        comps_2,
+        vec![
+            ("name", "Calle Innovación 100"),
+            ("locality", "Ciudad Tecnológica"),
+            ("region", "CA"),
+            ("postcode", "94016"),
+            ("country", "EE.UU."),
+        ]
+    );
+
+    // Address 3 (German Home)
+    let a3 = &addresses["a3"];
+    assert_eq!(a3.contexts, Some(json!({"private": true})));
+    assert_eq!(
+        a3.full.as_deref(),
+        Some("Hauptstraße 42\n10115 Berlin\nDeutschland")
+    );
+    let comps_3: Vec<(&str, &str)> = a3
+        .components
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|c| (c.kind.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(
+        comps_3,
+        vec![
+            ("name", "Hauptstraße 42"),
+            ("locality", "Berlin"),
+            ("region", "Berlin"),
+            ("postcode", "10115"),
+            ("country", "Deutschland"),
+        ]
+    );
+
+    // Outbound serialization and round-trip verification
+    let emitted = card_to_vcard(&card);
+    let unfolded_vcard = unfolded(&emitted);
+    assert!(
+        unfolded_vcard
+            .contains("ADR;X-JMAP-KEY=a1;TYPE=WORK:;;100 Innovation Way;Tech City;CA;94016;USA")
+    );
+    assert!(unfolded_vcard.contains(
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK:100 Innovation Way\\nTech City\\, CA 94016\\nUSA"
+    ));
+    assert!(unfolded_vcard.contains(
+        "ADR;X-JMAP-KEY=a2;TYPE=WORK:;;Calle Innovación 100;Ciudad Tecnológica;CA;94016;EE.UU."
+    ));
+    assert!(unfolded_vcard.contains(
+        "LABEL;X-JMAP-KEY=a2;TYPE=WORK:Calle Innovación 100\\nCiudad Tecnológica\\, CA 94016\\nEE.UU."
+    ));
+    assert!(
+        unfolded_vcard.contains(
+            "ADR;X-JMAP-KEY=a3;TYPE=HOME:;;Hauptstraße 42;Berlin;Berlin;10115;Deutschland"
+        )
+    );
+    assert!(
+        unfolded_vcard
+            .contains("LABEL;X-JMAP-KEY=a3;TYPE=HOME:Hauptstraße 42\\n10115 Berlin\\nDeutschland")
+    );
+
+    let back = vcard_to_card(&emitted).expect("roundtrip parse");
+    assert_eq!(back.addresses, card.addresses);
+}
+
+#[test]
+fn vcard_altid_and_language_categories_and_keywords_union_and_deduplication() {
+    // Tests multiple `CATEGORIES` lines carrying `ALTID` and `LANGUAGE` parameters.
+    //
+    // Verifies that:
+    // 1. `read_keywords` aggregates all categories across all lines, deduplicating
+    //    shared tags and retaining language-specific tags into a unified `BTreeMap`.
+    // 2. Outbound serialization emits a single canonical, sorted `CATEGORIES` line.
+    // 3. Round-trip reaches fixed-point stability.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:altid-cat-01\r\n",
+        "FN:Category Test\r\n",
+        "CATEGORIES;ALTID=1;LANGUAGE=en:Software,Architecture,OpenSource\r\n",
+        "CATEGORIES;ALTID=1;LANGUAGE=de:Software,Architektur,OpenSource\r\n",
+        "CATEGORIES;ALTID=2;LANGUAGE=fr:Logiciel,Architecture\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse multilingual categories");
+    let keywords = card.keywords.as_ref().expect("keywords map");
+    assert_eq!(
+        keywords.len(),
+        5,
+        "union of tags across languages deduplicated"
+    );
+    assert!(keywords.contains_key("Architecture"));
+    assert!(keywords.contains_key("Architektur"));
+    assert!(keywords.contains_key("Logiciel"));
+    assert!(keywords.contains_key("OpenSource"));
+    assert!(keywords.contains_key("Software"));
+
+    let emitted = card_to_vcard(&card);
+    assert!(
+        emitted.contains("CATEGORIES:Architecture,Architektur,Logiciel,OpenSource,Software\r\n")
+    );
+    assert_eq!(
+        emitted.matches("CATEGORIES:").count(),
+        1,
+        "single combined CATEGORIES line emitted"
+    );
+
+    let back = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(back.keywords, card.keywords);
+}
+
+#[test]
+fn vcard_altid_and_language_explicit_and_colliding_jmap_keys_handling() {
+    // Tests vCards where `ALTID`/`LANGUAGE` lines carry explicit `X-JMAP-KEY`
+    // parameters, verifying:
+    // 1. Distinct explicit keys are preserved (`custom-en`, `custom-de`).
+    // 2. Colliding explicit keys (e.g. legacy generator wrote duplicate keys)
+    //    are resolved by `entry_key` allocating a fresh unique key (`n1`),
+    //    preventing accidental overwriting or loss of the second alternate.
+    // 3. Empty `X-JMAP-KEY=""` parameters allocate fresh sequential keys.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:altid-keys-01\r\n",
+        "FN:Key Test\r\n",
+        "NOTE;ALTID=1;LANGUAGE=en;X-JMAP-KEY=note-en:English Note\r\n",
+        "NOTE;ALTID=1;LANGUAGE=de;X-JMAP-KEY=note-de:Deutsche Notiz\r\n",
+        "TITLE;ALTID=1;LANGUAGE=en;X-JMAP-KEY=dup-key:Lead Architect\r\n",
+        "TITLE;ALTID=1;LANGUAGE=de;X-JMAP-KEY=dup-key:Chefarchitekt\r\n",
+        "NICKNAME;ALTID=1;LANGUAGE=en;X-JMAP-KEY=\"\":Speedy\r\n",
+        "NICKNAME;ALTID=1;LANGUAGE=de:Flitzi\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse vcard with explicit keys");
+
+    // Notes: distinct explicit keys preserved
+    let notes = card.notes.as_ref().expect("notes");
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes["note-en"].note, "English Note");
+    assert_eq!(notes["note-de"].note, "Deutsche Notiz");
+
+    // Titles: duplicate keys resolved without dropping entries
+    let titles = card.titles.as_ref().expect("titles");
+    assert_eq!(
+        titles.len(),
+        2,
+        "duplicate key must be resolved into distinct entries"
+    );
+    assert!(titles.contains_key("dup-key"));
+    assert!(titles.contains_key("t1"));
+    let title_texts: Vec<&str> = titles.values().map(|t| t.name.as_str()).collect();
+    assert!(title_texts.contains(&"Lead Architect"));
+    assert!(title_texts.contains(&"Chefarchitekt"));
+
+    // Nicknames: empty key assigned 'k1', second assigned 'k2'
+    let nicks = card.nicknames.as_ref().expect("nicknames");
+    assert_eq!(nicks.len(), 2);
+    assert!(nicks.contains_key("k1"));
+    assert!(nicks.contains_key("k2"));
+    assert_eq!(nicks["k1"].name, "Speedy");
+    assert_eq!(nicks["k2"].name, "Flitzi");
+
+    // Roundtrip verification
+    let emitted = card_to_vcard(&card);
+    let back = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(back.notes, card.notes);
+    assert_eq!(back.titles, card.titles);
+    assert_eq!(back.nicknames, card.nicknames);
+}
+
+#[test]
+fn vcard_altid_and_language_parameter_variations_and_boundary_cases() {
+    // Tests varied RFC 5646 language tags (subtags, scripts, regions), quoted
+    // ALTID values, mixed case parameter names, empty values, and custom parameters.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:altid-params-01\r\n",
+        "fn;altid=\"group-1\";language=en-US:Dr. Jane Roe\r\n",
+        "FN;ALTID=\"group-1\";LANGUAGE=zh-Hant-HK:張愛玲博士\r\n",
+        "FN;ALTID=\"group-1\";LANGUAGE=sr-Latn-RS:Dr Jane Roe\r\n",
+        "note;altid=100;language=en-GB;type=work:Note with mixed case params\r\n",
+        "NOTE;ALTID=;LANGUAGE=:Note with empty params\r\n",
+        "TITLE;ALTID=2;LANGUAGE=de:Softwareentwickler\r\n",
+        "TITLE;ALTID=2;LANGUAGE=en:Software Developer\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse param variations");
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Dr. Jane Roe")
+    );
+
+    let notes = card.notes.as_ref().expect("notes");
+    assert_eq!(notes.len(), 2);
+    let note_values: Vec<&str> = notes.values().map(|n| n.note.as_str()).collect();
+    assert!(note_values.contains(&"Note with mixed case params"));
+    assert!(note_values.contains(&"Note with empty params"));
+
+    let titles = card.titles.as_ref().expect("titles");
+    assert_eq!(titles.len(), 2);
+    let title_values: Vec<&str> = titles.values().map(|t| t.name.as_str()).collect();
+    assert!(title_values.contains(&"Softwareentwickler"));
+    assert!(title_values.contains(&"Software Developer"));
+
+    let emitted = card_to_vcard(&card);
+    let back = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(back.name, card.name);
+    assert_eq!(back.notes, card.notes);
+    assert_eq!(back.titles, card.titles);
+}
+
+#[test]
+fn jscontact_server_localizations_and_preferred_languages_characterization() {
+    // Characterizes server-originated JSContact cards containing RFC 9553 §1.7.3
+    // `localizations` (per-language patches) and §1.5.3 `preferredLanguages`.
+    //
+    // In `jmap-proto`, these unmodeled fields ride in `extra` on `ContactCard`.
+    // `card_to_vcard` safely ignores unmodeled JSON fields in `extra` rather
+    // than misrepresenting them as non-standard vCard lines. Server-side sync
+    // (`jmap-book-sync`) leaves unmapped `extra` properties untouched via
+    // JSON PatchObject updates.
+    let mut extra = BTreeMap::new();
+    extra.insert(
+        "preferredLanguages".to_owned(),
+        json!({
+            "l1": {"@type": "LanguagePref", "language": "de-DE", "pref": 1},
+            "l2": {"@type": "LanguagePref", "language": "en-US", "pref": 2}
+        }),
+    );
+    extra.insert(
+        "localizations".to_owned(),
+        json!({
+            "de": {
+                "titles/t1/name": "Chefarchitekt",
+                "notes/n1/note": "Deutsche Notiz"
+            },
+            "fr": {
+                "titles/t1/name": "Architecte en chef",
+                "notes/n1/note": "Note en français"
+            }
+        }),
+    );
+
+    let card = ContactCard {
+        id: Some("srv-loc-01".into()),
+        uid: Some("urn:uuid:srv-loc-01".to_owned()),
+        card_type: Some("Card".to_owned()),
+        version: Some("1.0".to_owned()),
+        name: Some(Name {
+            full: Some("Clara Schumann".to_owned()),
+            ..Name::default()
+        }),
+        titles: Some(
+            [(
+                "t1".to_owned(),
+                Title {
+                    name: "Chief Architect".to_owned(),
+                    kind: Some("title".to_owned()),
+                    ..Title::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        notes: Some(
+            [(
+                "n1".to_owned(),
+                Note {
+                    note: "English Note".to_owned(),
+                    ..Note::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        extra,
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("FN:Clara Schumann\r\n"));
+    assert!(emitted.contains("TITLE;X-JMAP-KEY=t1:Chief Architect\r\n"));
+    assert!(emitted.contains("NOTE;X-JMAP-KEY=n1:English Note\r\n"));
+    assert!(
+        !emitted.contains("preferredLanguages"),
+        "extra must not leak into vCard"
+    );
+    assert!(
+        !emitted.contains("localizations"),
+        "extra must not leak into vCard"
+    );
+
+    let back = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(back.id.as_ref().unwrap().as_str(), "srv-loc-01");
+    assert_eq!(
+        back.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Clara Schumann")
+    );
+    assert_eq!(
+        back.titles
+            .as_ref()
+            .and_then(|m| m.get("t1"))
+            .map(|t| t.name.as_str()),
+        Some("Chief Architect")
+    );
+    assert_eq!(
+        back.notes
+            .as_ref()
+            .and_then(|m| m.get("n1"))
+            .map(|n| n.note.as_str()),
+        Some("English Note")
+    );
+    assert!(back.extra.is_empty());
+}
