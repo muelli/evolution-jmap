@@ -146,6 +146,29 @@ Rough effort: **~2–3 hours** (mostly mechanical call-site updates once the
 two helpers exist; touches 9 files across `jmap-mail`, so needs a careful
 `cargo test -p jmap-mail` pass, not a rebuild-the-world one).
 
+- **DONE 2026-08-19 for the trusted/dispatched family.**
+  `jmap_backend_core::marshal::dispatched_borrow<C, T>` (null check, then
+  `.cast::<T>().as_ref()`, contract stated once) now backs `folder.rs::
+  JmapFolder::borrow`, `store.rs::JmapStore::borrow`, and `transport.rs::
+  JmapTransport::borrow`. `subscribe.rs::borrow` needed no separate change:
+  it was already a thin cast-and-delegate to `JmapStore::borrow` rather than
+  its own `g_type_check_instance_is_a` call (this audit's own grep of the 6
+  files that actually call it did not include `subscribe.rs` — its listing
+  above under "Checked" was imprecise), so it now goes through
+  `dispatched_borrow` transitively with no code change of its own. No
+  behaviour change; every existing `jmap-mail` test stayed green unmodified.
+  **Still open — the checked family, ~10 sites across 6 files**
+  (`folder.rs::parent_store`, `server.rs::network`, `envelope.rs::internet`,
+  `summary.rs::JmapSummary::borrow`, `message_info.rs::
+  JmapMessageInfo::borrow`, `transfer.rs::mailbox_of`): these return three
+  different shapes (`Option<&T>`, `Option<*mut T>`, and `envelope.rs::
+  internet`'s `Result<Option<*mut T>, EnvelopeError>`, whose type-mismatch
+  case is a user-facing error, not just `None`), so `checked_borrow`'s exact
+  signature needs to accommodate at least a pointer-returning variant
+  alongside the reference-returning one — deliberately not attempted in the
+  same increment as the simpler trusted half. Left for the next session on
+  this thread.
+
 ### Pattern C — IMPROVE (the one real safety-adjacent gap): no RAII wrapper for libical/GObject ref-counted pointers
 
 Concentrated in **`jmap-backend-cal/src/marshal.rs`** — confirmed by grep:
@@ -379,6 +402,10 @@ point, so its gaps aren't copied forward.
      unguarded `AUTHENTICATION`/`RESOURCE` reads).
 3. **Pattern B** (checked/trusted borrow helpers, ~13 sites across
    `jmap-mail`) — two generic helpers in `jmap-backend-core`. **~2–3 hours.**
+   - **DONE 2026-08-19 for the trusted/dispatched family (3 sites +
+     `subscribe.rs::borrow`'s transitive one)** — see Pattern B's own
+     section above. **Still open:** the checked family, ~10 sites across 6
+     files, whose three different return shapes want their own increment.
 4. **Pattern C** (no RAII wrapper for libical/GObject ref-counted
    pointers) — `Owned<T>` newtype, migrate `jmap-backend-cal/marshal.rs`'s
    timezone cluster first. **~1 day.** Highest safety value of the five, but

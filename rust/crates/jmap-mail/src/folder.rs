@@ -45,6 +45,7 @@ use eds_sys::{
 use glib_sys::{GFALSE, GType, gchar};
 use gobject_sys::{g_object_new, g_type_check_instance_is_a};
 use jmap_backend_core::instance::Slot;
+use jmap_backend_core::marshal::dispatched_borrow;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
@@ -109,7 +110,8 @@ impl JmapFolder {
     /// argument satisfies this; anything else has to check with
     /// `G_TYPE_CHECK_INSTANCE_TYPE` first.
     pub unsafe fn borrow<'a>(folder: *mut CamelFolder) -> Option<&'a Self> {
-        unsafe { folder.cast::<Self>().as_ref() }
+        // SAFETY: the doc comment above states the same contract.
+        unsafe { dispatched_borrow(folder) }
     }
 }
 
