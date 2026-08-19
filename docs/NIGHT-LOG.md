@@ -39717,3 +39717,52 @@ per the standing no-reopen directive.
 NIGHT-SHIFT: BLOCKED — every CURRENT PRIORITY / Round 2 `[claude]` item with
 no maintainer decision or operator step outstanding is already code-complete;
 only a roadmap docs-sync gap (now fixed) remained to find this session.
+
+## 2026-08-19 (claim) — Claiming: OAuth `resource`-indicator empirical probe + Track A7 docs-sync gap
+
+Fresh survey (`git fetch`: `origin/master` unchanged at `fe3cb21`, the
+previous session's A1/A2/A3 docs-sync fix). Re-walked CURRENT PRIORITY and
+Round 2 in full, same conclusion the last several sessions independently
+reached: every item with no maintainer decision or operator step outstanding
+is code-complete. Two things surfaced this pass that the previous session's
+BLOCKED report did not:
+
+1. **Track A7 (stale-comments audit) carries no DONE marker in
+   `docs/ROADMAP.md`**, unlike A1–A6 — but `docs/STALE-COMMENTS-AUDIT.md`
+   exists and `docs/NIGHT-LOG.md` already has a full claim/delivery pair for
+   it (search "Claiming Track A7"/"Delivered: Track A7"), landed and gated
+   green in a prior session. Same docs-sync-gap pattern M10 and A1/A2/A3 both
+   already had — fixing it now rather than re-treading it a third time.
+2. **CURRENT PRIORITY 2(b)'s last open sub-item — whether Fastmail's
+   `/authorize` requires an RFC 8707 `resource` indicator — has a path this
+   runner can actually complete, contrary to how the roadmap text currently
+   frames it** ("needs the redirect landing somewhere this runner can read,
+   or the operator's consent round-trip"). The redirect *is* directly
+   readable: `/authorize`'s response is itself a `302` naming the next hop
+   in a `Location` header, which `curl -i` reads with no browser and no
+   session, the same empirical-probe pattern the maintainer already sanctioned
+   for the registration-endpoint checks earlier this same day (`0df34c8`).
+   Confirmed reachability first: `curl -s -o /dev/null -w '%{http_code}'
+   https://api.fastmail.com/.well-known/oauth-authorization-server` → `200`,
+   ordinary internet egress, same as the registration probes.
+
+Separately, confirmed this runner **cannot** reach the internal Stalwart test
+server this session: `infra/live-server/live-server-env.sh` sets
+`STALWART_URL` to `stalwart-1.europe-west3-c.c.evolution-jmap-ci-18696.internal`,
+but this runner is `gha-runner-1` in `europe-west1-b`, and `getent hosts`/`dig`
+against that zonal DNS name resolve nothing (`dig +short` empty, repeated
+3×); `gcloud compute instances describe` on either instance fails with
+"insufficient authentication scopes," so the service account can't even
+introspect or wake it. Not a code finding and not touching `infra/`, but
+logging it since it means item 2's live-server harness work and any further
+Stalwart-side probing are off the table this session, not merely
+deprioritized.
+
+Claiming: (a) the `/authorize` `resource`-indicator probe (registering one
+more throwaway DCR client the same way the earlier session did, GET
+`/authorize` with no `resource` param, read the `302`'s `Location` — no
+consent, no credentials, nothing destructive), and (b) the Track A7
+docs-sync fix. Both are documentation-only outcomes (a `docs/OAUTH-FASTMAIL.md`
++ `docs/ROADMAP.md` update either way) — no Rust source changes anticipated,
+so the usual cargo gate does not apply; will say so plainly in the delivery
+entry rather than skip it silently.
