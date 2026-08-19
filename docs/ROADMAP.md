@@ -488,35 +488,57 @@ tracks follow; the maintainer may reorder anytime.
     wiring is not done yet — out of scope here, as the roadmap text already
     said.
 
-### Track E — Sharing + scheduling (SPIKE DONE → NEEDS-DECISION on the doc)
-Design spike **complete**: see `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). It
-corrected two premises after checking datatracker — the earlier framing here was
-wrong:
+### Track E — Sharing + scheduling — Path A APPROVED (2026-08-19)
+Design: `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). Two premises the spike
+corrected against datatracker, kept because they shape the work:
 - **Free/busy slot-picking is NOT in RFC 9670.** `Principal/getAvailability`
-  lives in the **JMAP-for-Calendars draft** (this repo already pins draft -27);
-  RFC 9670 supplies the shared `Principal` vocabulary + capability URNs
-  (`urn:ietf:params:jmap:principals`, `…:principals:owner`) that the availability
-  and sharing methods both build on.
-- **Mail has permissions but not sharing.** `Mailbox` carries `myRights`
-  (RFC 8621) but there is **no standard `Mailbox.shareWith`** — a *mailbox* cannot
-  be shared under current specs, only its rights read. Calendar/AddressBook
-  `shareWith` live in their respective drafts.
+  lives in the **JMAP-for-Calendars draft** (repo pins -27); RFC 9670 supplies the
+  shared `Principal` vocabulary + capability URNs (`urn:ietf:params:jmap:principals`,
+  `…:principals:owner`) that both availability and sharing build on.
+- **Mail has permissions but not sharing.** `Mailbox` has `myRights` (RFC 8621)
+  but **no standard `Mailbox.shareWith`** — a mailbox cannot be shared under
+  current specs, only its rights read. Calendar/AddressBook `shareWith` are draft.
 
-Today we advertise/consume none of it (`jmap-proto/src/session.rs:14-18`);
-server-sent `myRights` lands unread in the serde `extra` bag, and read-only is an
-account-wide heuristic (`jmap-collection-sync/src/children.rs:93`).
-**Recommended plan (from the doc):** a small shared "Principal floor" (proto type
-+ two capability constants + client/mock support), then **Path A (free/busy
-availability) first** — it answers the scheduling ask soonest, is
-read-only/low-blast-radius, and its very first step is a half-day Stalwart probe
-to confirm the server actually answers `getAvailability` before committing to the
-(unsafe-FFI, EDS-only) `ECalBackend` free/busy vfunc. Rough effort: **~2.5–3.5
-weeks** for floor + Path A (scheduling); **~+1 week** for Path B (per-source
-`myRights` correctness, mostly published-RFC surface, replaces the read-only
-heuristic); write-side `shareWith`/`ShareNotification` deferred to a later phase
-(least spec-stable, only destructive surface). OAuth (M7) does not block it.
-**DECISION (maintainer): approve the doc's plan to start Path A, or adjust — no
-implementation until then.**
+**MAINTAINER DECISION (2026-08-19): Path A is GREENLIT — "make the basics work."**
+Build Phase 0, then Path A. Do NOT start Phase B or Phase C (recorded as future
+work below) until Path A lands and the maintainer approves the next phase.
+
+**CLAIMABLE NOW — Phase 0, then Path A (mock-first, TDD, headless).** Full detail
+in design §4–§6; the ordered increments:
+1. **Phase 0 — shared floor.** `jmap-proto`: new feature-gated `principals.rs`
+   (`Principal` type; `capabilities` stays a `Value` bag so one unknown per-principal
+   capability can't sink the response) + the two capability constants in
+   `session.rs`. `jmap-client`: new `principals.rs` — `principals()` (Principal/get),
+   `principal_query()` (Principal/query). `jmap-mock`: Principal/get|query handlers,
+   advertise the two URNs, seed a couple of Principals. Pure-additive (design §4.1–4.3).
+2. **Path A — availability.** `Principal/getAvailability` request/response +
+   `BusyPeriod` in proto; `get_availability()` client method (using-set names BOTH
+   principals AND calendars); mock computes `BusyPeriod`s from seeded CalendarEvents
+   (deterministic slot tests). Then the one heavy piece: the `ECalBackend`
+   `get_free_busy_sync` vfunc in `jmap-backend-cal` + a `BusyPeriod→VFREEBUSY`
+   marshaller in `jmap-ical` (invoked from `jmap-cal-sync`), attendee→principal via
+   `Principal/query` (design §4.2–4.4). That vfunc is **L / escalation-worthy**
+   (unsafe FFI, EDS-only testing); everything above it is ordinary additive work.
+   **Build and test against the mock — it is fully headless-testable that way.**
+
+**OPERATOR CONFIRMATION (you-task, like the OAuth Fastmail test).** The runner
+cannot reach Stalwart (MAINTAINER DECISIONS #3), so the design's "half-day probe:
+fire `Principal/getAvailability` at Stalwart and record the draft field spelling"
+is an **operator** step, not a blocker on the mock-side build. Run it when
+convenient to confirm the real field names match the proto/mock; if Stalwart does
+not implement `getAvailability`, report it and we reorder to Phase B.
+
+**FUTURE WORK — recorded for a future agent (do NOT start until Path A lands + maintainer OK):**
+- **Phase B — per-source permissions.** Typed `myRights`/`shareWith` on
+  Mailbox/AddressBook/Calendar (design §4.1) + rewire `children.rs`/`layout.rs` so
+  per-source read-only derives from `myRights.mayWrite` — **narrows, never widens**;
+  absent rights → today's account-wide fallback unchanged. Makes the known-wrong
+  heuristic at `children.rs:93-97` correct. Effort S (types) + M (rewire), mostly
+  published-RFC surface. Design §4.1, §4.4, §5–6.
+- **Phase C — write-side sharing.** `shareWith` writes + `ShareNotification`
+  (design §4.1 stub, §5). Deliberately LAST: least spec-stable (calendars draft,
+  absent for mail), the only destructive surface, and needs a share-dialog UI that
+  does not exist. Effort L. **Needs a fresh maintainer decision before starting.**
 
 ### Track F — Portability to newer Evolution/EDS (SPIKE FIRST — gated on "no spaghetti")
 The **data/backend** side is already version-portable: `eds-sys/build.rs` probes
