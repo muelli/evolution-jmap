@@ -35863,3 +35863,64 @@ Disk: 3.6G free (`df -h .`) — same tight budget prior sessions have flagged.
 This change is a small, targeted edit to one already-built crate
 (`jmap-config`), not a mutation-testing rebuild loop, so it should not be at
 risk.
+
+## 2026-08-19 — Delivered: SRV autodiscovery call site (b), config_lookup::probe_host
+
+Followed through on this session's claim. `jmap-config/src/config_lookup.rs::
+probe_host` now takes a `&dyn jmap_client::resolver::Resolver` parameter: an
+explicit `servers` entry still wins outright and is never passed through the
+resolver (it already names a host, not a domain to autodiscover); the
+email-domain fallback consults `resolver.lookup_srv(domain)` first and only
+falls back to the bare domain when it answers `None` — the identical seam
+and fallback order `jmap_client::ClientBuilder::connect_domain` already
+uses. An SRV target renders as `"host:port"`, which the existing
+`parse_target` already parses correctly as a bare, secure host with that
+port (added a test pinning that reading explicitly, since nothing
+previously exercised a bare `host:port` string through it). `run()` passes
+`jmap_client::resolver::NoSrvResolver` for now, with a comment marking it as
+the one line a real `g_resolver_lookup_service()`-backed resolver replaces
+— that FFI work is unstarted and stays the escalation candidate, not
+attempted here.
+
+TDD: five new unit tests in `config_lookup.rs`'s existing `#[cfg(test)]`
+module, using the same `FakeResolver` shape as `jmap-client/tests/
+srv_discovery.rs` — an SRV record wins over the bare domain, no record falls
+back to the bare domain (both against a fresh `FakeResolver`, not just
+`NoSrvResolver`, so the fallback path is proven for a resolver capable of
+answering, not only for one that never can), an explicit `servers` entry is
+never resolved even against a resolver primed to answer for any domain (a
+regression a future real resolver could otherwise silently introduce), plus
+the `parse_target` pin above. All eleven pre-existing `probe_host`/
+`parse_target` tests kept, updated only to pass `&NoSrvResolver` where the
+function used to take no resolver at all — same inputs, same expected
+outputs, confirming behaviour is unchanged by default.
+
+Deliberately not touched, and not a guess to make in the same increment:
+call site (a), the real backend connect paths (`jmap-backend-collection/src/
+fan_out.rs`, `jmap-backend-book`/`cal`'s `connect.rs`, `jmap-mail`'s
+`connect.rs`) — every one calls `Client::connect(&config.origin, …)`, where
+`origin` is a fully-assembled `scheme://host:port` string from
+`jmap_backend_core::source::origin(host, port, secure)`. `connect_domain`
+only ever builds `https://<domain>` with no port; reconciling the two would
+need either widening `connect_domain` to accept a port/scheme or teaching
+`origin()`'s callers when a host is "still the bare default" versus an
+explicit override, and every backend's own tests wire an explicit
+mock-server port through `origin` today. That is a real design decision, not
+a mechanical wire-up, so it stays open for a future session (or the
+maintainer) rather than being guessed at here. The real `Resolver` backed by
+`g_resolver_lookup_service()` also remains unstarted and the standing
+escalation candidate for this thread.
+
+Full gate: `cargo fmt --check` clean; `cargo clippy -p jmap-config
+--all-targets --locked -- -D warnings` clean; `cargo clippy --all-targets
+--locked -- -D warnings` (default-members) clean; `cargo test --locked`
+(default-members) green, every `test result: ok`, 0 failed; `cargo test -p
+jmap-config --locked` (this EDS-gated crate directly, since this VM has the
+EDS headers even though it stays out of `default-members`) green, every
+`test result: ok`, 0 failed, including the 17 `config_lookup` unit tests
+(11 pre-existing + 6 new, one of which — the `parse_target` pin — is not
+new behaviour, just a previously-unwritten assertion). No new files, so no
+`REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/`cargo-deny` remain
+unavailable on this VM (see memory), so `ci/checks.sh` itself was not run —
+its constituent checks were run individually as above, per the standing
+workaround.

@@ -136,6 +136,25 @@ they close, prioritise in this order:
      likely escalation-worthy). Not claimable-complete; the next session on
      this thread should wire (a)/(b) into `connect_domain` and build the
      GResolver-backed implementation.
+   - **PARTIAL 2026-08-19 (later same day) — call site (b) wired.**
+     `config_lookup.rs::probe_host` now takes a `&dyn jmap_client::resolver::
+     Resolver` and consults it for `_jmap._tcp.<domain>` before falling back
+     to the bare domain, exactly the seam and fallback order
+     `ClientBuilder::connect_domain` already uses; an SRV target renders as
+     `host:port`, which `parse_target` already reads as a bare, secure host
+     with that port. `run()` passes `NoSrvResolver` — behaviour is
+     unchanged until a real resolver exists — with a comment marking that as
+     the one line the future GResolver-backed resolver replaces. TDD'd with
+     the same `FakeResolver` shape as `srv_discovery.rs`. **Still open:**
+     call site (a) — `fan_out.rs`/the backend `connect.rs` files all call
+     `Client::connect(&config.origin, …)` where `origin` is a fully-assembled
+     `scheme://host:port` string from `jmap_backend_core::source::origin`;
+     reconciling that structured host/port/secure model with
+     `connect_domain`'s bare-`https`-only argument is a real design question
+     (every backend test wires an explicit mock-server port through `origin`)
+     and was deliberately not attempted in the same increment as (b). The
+     GResolver-backed real `Resolver` (FFI) is still unstarted and still the
+     escalation candidate.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
