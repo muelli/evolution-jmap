@@ -37950,3 +37950,180 @@ No new bindgen work is needed for any of it: every symbol involved
 `_write_directory`, `e_collection_backend_get_cache_dir`,
 `e_source_set_parent`, `e_source_get_uid`, the credentials provider pair) is
 already generated under the existing allowlist prefixes.
+
+### Delivered: Track D1's `create_resource_sync` vtable wiring
+
+Landed the claim above in full, and only the claim: Evolution can now ask a
+JMAP account to create an address book or a calendar *on the server*.
+`delete_resource_sync` is deliberately still EDS's refusal — see below.
+
+**The shape, and why it is split across two crates.** The decision in the
+middle needs no EDS headers, so it went where every other
+what-is-a-child decision already lives: `jmap-collection-sync/src/create.rs`
+holds `Requested` (kind + name), `CreateFailure` and `create_collection`,
+which resolves the JMAP account through the existing `CollectionLayout`,
+calls `AddressBook/set`/`Calendar/set`, and derives the `Child`. That last
+step goes through a **new `Child::for_resource`** which `Fanout::children()`
+now also uses, so a created child cannot silently drift from a discovered
+one — the failure mode being not an error but a second row in the sidebar
+for one server-side address book, or a child whose cache file EDS deletes.
+The blank-name rule a listing applies is likewise shared, as
+`resources::shown_name`, rather than written a second time. Both are covered
+by a test that creates a collection and then asserts the created `Child` is
+`==` the one `Fanout::discover` writes for it.
+
+`jmap-backend-collection/src/create_resource.rs` holds the EDS ends:
+`requested_of` (kind + display name off the scratch source, through a new
+`resource_id::kind_of` — the half of `resource_id_of` that does not need
+`[Resource] Identity`, which a scratch source has not got yet),
+`adopt_created` (the settings, plus the three `EServerSideSource` properties),
+`stored_password_of`, and `CreateError`. `backend.rs` has the vfunc and the
+four things only a live instance can answer.
+
+**Three things read out of the actual sources rather than inferred** — the
+standing note about the EDS container applies to old APIs too, so this
+session downloaded and read `evolution-data-server-3.52.4` and
+`evolution-ews-3.52.4` from download.gnome.org before writing anything:
+
+1. **The parent's `create_resource_sync` is a refusal, not a default.**
+   `collection_backend_create_resource()` does exactly one thing —
+   `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
+   creating remote resources")` — and the default `create_resource_sync`
+   drives it through an `EAsyncClosure`. So this is the **one override in
+   this crate that must not chain up**, the opposite of `child_added`, where
+   chaining up first is what puts the child in the backend's table. Had this
+   been written from the header alone, "chain up like the neighbour does"
+   would have compiled and turned every successful create into a reported
+   failure.
+2. **The scratch source is a real `EServerSideSource`, in the wrong place,
+   and EDS will not finish it.** `server_side_source_remote_create_cb()`
+   builds it with `e_server_side_source_new_user_file()` — the registry's
+   own directory, not the collection's cache — sets the keyfile Evolution
+   sent onto it, and its comment says explicitly that it is "up to the
+   ECollectionBackend whether to use source as given or create its own
+   equivalent", so it is *not* added to the registry. Using it as given is
+   what evolution-ews does, and finishing it means `parent`,
+   `write_directory` and `writable` — which is exactly
+   `collection_backend_new_source()`'s own set for a child EDS mints, minus
+   the `removable = FALSE` that `collection_backend_child_added()` applies to
+   every child on publish and that this crate already chains up to. Three of
+   those four are `EServerSideSource` properties, which is why the new test
+   builds its scratch source with `e_server_side_source_new` (the daemon-free
+   half of the registry `tests/recipe.rs` already uses) rather than with
+   `e_source_new_with_uid`: on a plain `ESource` every one of them is a
+   `g_return_if_fail` critical and nothing else, so the test would have
+   passed while asserting nothing.
+3. **`remote-creatable` is the gate, and without it the vfunc is dead
+   code.** `server_side_source_remote_create_sync()` refuses outright, before
+   any backend is consulted, for a collection source that does not carry it.
+   evolution-ews sets it in `constructed`; this crate has no `constructed`
+   override and adding one would mean writing a slot in `GObjectClass` — a
+   third class struct, further up than `authenticate_sync`'s `EBackendClass`
+   — for a one-line effect, so it goes in `populate` instead. The setter
+   early-returns when the value is unchanged, so running it on every populate
+   costs nothing.
+
+**A design call worth recording: the flag is a decision, not a constant.**
+Rather than an untestable line in the vfunc body, it became
+`Populating::offer_creation(bool)`, called by `crate::populate::populate` with
+`parts.wants(AddressBook) || parts.wants(Calendar)` — the same gate the
+password is asked behind, because an account with neither part switched on has
+no children of this backend's at all, so a collection created in it would be
+one the very next populate treats as dormant. It is written on every populate
+**in both directions**, because the parts are a setting the user can change:
+an account whose owner switches contacts off has to stop being offered without
+being removed and re-added. Two new `tests/populate.rs` cases hold that, and
+the three existing call-order assertions gained the new call.
+
+**Credentials are looked up, not remembered — and that is a departure from
+the reference implementation.** evolution-ews keeps the `ENamedParameters`
+its `authenticate_sync` was handed in `backend->priv->credentials` and
+rebuilds a connection from them on demand (`e_ews_backend_ref_connection_sync`
+returns NULL outright when it has none). Copying that would have meant a
+`Slot<RwLock<Option<Credentials>>>` on the instance, an `instance_init`, a
+`finalize`, and the account's password sitting in the registry process for as
+long as the account exists. It turned out to be unnecessary:
+`e_source_registry_server_ref_credentials_provider()` and
+`e_source_credentials_provider_lookup_sync()` are **already in `eds-sys`'s
+generated bindings** — the `e_source_.*` allowlist prefix covers both — and
+that provider reaches the very libsecret store `authenticate_sync`'s
+credentials come out of, resolving the credentials *source* itself. So the
+password is fetched at the moment it is needed and dropped when the call
+returns; there is no new instance state; and a create works in a process where
+no `authenticate_sync` has run for this account yet, which the cached-secret
+design cannot do. OAuth 2.0 keeps going through
+`jmap_backend_core::oauth2::access_token`, so its token is always fresh rather
+than a remembered one that has since expired — which is the second thing a
+cache would have got wrong.
+
+To keep the OAuth2-vs-password rule from being written twice, `authenticate.rs`
+grew `login_of(source, parts, password, cancellable) -> Result<Login,
+LoginError>` and `authenticate_with` now goes through it. `LoginError` exists
+because the two halves must not be treated alike: a broken *account* is never a
+password problem and so must never become a prompt (`ERROR` always), while a
+missing credential is nothing but (`ConnectError::auth_result`'s own rule).
+
+**What is deliberately NOT in this increment.** `delete_resource_sync`, and
+with it the `remote-deletable` flag that would make it reachable. Two reasons,
+both about correctness rather than about time: it is the destructive half — a
+wrong kind or a wrong id there costs the user a server-side collection with no
+undo, whereas a botched create leaves an unwanted empty address book — and
+setting `remote-deletable` before the vfunc exists would have Evolution offer
+"Delete" and then answer the click with EDS's own `ECollectionBackendJmap does
+not support deleting remote resources`, which is worse than an absent menu
+item. Both facts are asserted rather than merely commented:
+`tests/backend.rs` checks `delete_resource_sync` is still exactly the
+inherited slot, and `tests/create_resource.rs` checks a freshly created child
+is not `remote-deletable`. Everything the delete half needs is now built and
+tested — the login lookup, `kind_of`, the client's `address_book_destroy`/
+`calendar_destroy` — so it is a small follow-up on tested foundations.
+
+**One honest limit on the create's failure path.** If the collection is made
+on the server and a setting cannot then be written onto the source,
+`adopt_created` fails the whole create and nothing is exported. That leaves a
+collection on the server with no child for it, which the next populate finds
+and writes properly. It is the right way round: the alternative is exporting a
+half-written child, which is precisely what `crate::child_source` exists to
+prevent, and a leftover the user can see beats a source that looks right and
+reaches no server.
+
+**TDD.** The red test already existed and was exactly the one the escalating
+session named: `tests/backend.rs:340` asserted `create_resource_sync` was *not*
+overridden, and it failed the moment the slot was installed. It was flipped
+into `class_init_replaces_the_default_create_resource_sync_rather_than_leaving_it`
+plus a neighbours-inherited test now pinned from the far side by
+`create_resource`/`create_resource_finish`. New behavioural tests: 6 in
+`jmap-collection-sync/tests/create.rs` (against `jmap-mockd`, including that an
+address book and a calendar created with the same server-assigned id stay two
+children, and the created-equals-discovered join) and 9 in
+`jmap-backend-collection/tests/create_resource.rs` (against a real
+`EServerSideSource` and a real mock — kind and name read back, no extension
+created by the read, the resource id round-trip that stops a duplicate, the
+`SourceConfig` the book backend will read, and the three server-side-source
+properties).
+
+New user-facing strings are gettext-marked at introduction per the standing
+directive, reusing `connect::Collection::noun()` rather than adding a second
+pair of "address book"/"calendar" msgids; `po/POTFILES.in` gained
+`create_resource.rs` and `po/evolution-jmap.pot` was regenerated with
+`po/extract.sh`. `CreateFailure`'s own `Display` stays untranslated on purpose
+— `jmap-collection-sync` builds without gettext, so the user-facing spelling of
+`Unserved` is written on the backend side.
+
+Full gate before pushing: `cargo fmt --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings` (default-members) and `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets -- -D warnings` both clean; `cargo test --locked` (85 binaries)
+and the same seven-crate `cargo test` (1190 passed) both green, 0 failed in
+either. Disk stayed comfortable (~4.9G free).
+
+**NEEDS HUMAN VERIFICATION IN REAL EVOLUTION.** Nothing headless can drive
+File → New → Address Book against a live `evolution-source-registry`, so D1 is
+*not* tagged complete. What to check in the VM: with a JMAP account that has
+contacts (or calendars) switched on, the account should appear as a choice in
+the "New Address Book"/"New Calendar" type list; creating one should make it
+appear on the server and in the sidebar immediately (not only after a restart);
+and it should survive a restart under the same uid rather than being duplicated
+by the next populate. An account with both parts switched off should *not* be
+offered.

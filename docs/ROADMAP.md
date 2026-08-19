@@ -512,6 +512,61 @@ tracks follow; the maintainer may reorder anytime.
     not attempted this session (kept out of an increment that is otherwise
     pure safe Rust). Not claimable-complete; the next session on this thread
     should do the FFI wiring.
+  - **PARTIAL 2026-08-19 (on opus, per the escalation at `7dd8a00`) — the
+    `create_resource_sync` half of the vtable wiring landed; only
+    `delete_resource_sync` is left.** `ECollectionBackendClass::
+    create_resource_sync` is now overridden in
+    `jmap-backend-collection/src/backend.rs`, and the account source is made
+    `remote-creatable` from `populate` (through a new
+    `Populating::offer_creation`, so *whether* it is offered is a tested
+    decision rather than an untestable line in the vfunc) — without which the
+    vfunc is unreachable dead code, since `server_side_source_remote_create_sync`
+    refuses outright for a collection source that lacks the flag. The decisions
+    are split the way the crates are: `jmap-collection-sync/src/create.rs`
+    (`Requested`, `CreateFailure`, `create_collection`) resolves the JMAP account
+    through the existing `CollectionLayout`, calls `AddressBook/set`/
+    `Calendar/set`, and derives the `Child` through a new `Child::for_resource`
+    that `Fanout::children()` now also uses — so a created child cannot drift
+    from a discovered one; `jmap-backend-collection/src/create_resource.rs` holds
+    the EDS ends (`requested_of`, `adopt_created`, `stored_password_of`).
+    **Three findings from reading the EDS 3.52.4 and evolution-ews 3.52.4
+    sources rather than inferring:** (a) the parent's `create_resource_sync` is a
+    `G_IO_ERROR_NOT_SUPPORTED` refusal, so this is the one override in the crate
+    that must *not* chain up; (b) the scratch `ESource` is a real
+    `EServerSideSource` EDS builds in the *user* source directory and
+    deliberately does not add to the registry, so the backend has to finish it —
+    `parent`/`write_directory`/`writable`, which is
+    `collection_backend_new_source()`'s own set minus the `removable = FALSE`
+    that `child_added` supplies; (c) credentials need not be cached the way
+    evolution-ews caches them, because
+    `e_source_registry_server_ref_credentials_provider()` +
+    `e_source_credentials_provider_lookup_sync()` were already in `eds-sys`'s
+    generated bindings — so the password is looked up on demand: no secret held
+    for the life of the account, no instance state, and a create works in a
+    process where no `authenticate_sync` has run yet. `authenticate.rs` grew a
+    shared `login_of`/`LoginError` so the OAuth2-vs-password rule stays written
+    once. **Deliberately NOT done, and not an omission:** `delete_resource_sync`
+    and the `remote-deletable` flag that would reach it. It is the destructive
+    half — a wrong kind or id there costs a server-side collection with no undo
+    — and setting `remote-deletable` before the vfunc exists would make
+    Evolution offer "Delete" and answer the click with EDS's "does not support
+    deleting remote resources". `tests/backend.rs` and
+    `tests/create_resource.rs` both assert the current state on purpose, so the
+    gap is visible rather than forgotten. TDD: the pre-existing
+    `tests/backend.rs:340` assertion (that `create_resource_sync` is NOT
+    overridden) was the red test and was flipped; new
+    `jmap-collection-sync/tests/create.rs` (6 tests against `jmap-mockd`,
+    including "the created child equals the one the next discovery writes") and
+    `jmap-backend-collection/tests/create_resource.rs` (9 tests against a real
+    `EServerSideSource` built the way EDS builds one), plus 2 new `populate`
+    tests for the creatable flag. New user-facing strings are gettext-marked and
+    `po/POTFILES.in`/`po/evolution-jmap.pot` regenerated. Full gate green:
+    `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+    (default-members) and the seven-crate EDS-gated clippy both clean; `cargo
+    test --locked` (85 binaries) and the seven-crate `cargo test` (1190 passed)
+    both green, 0 failed. **NEEDS HUMAN VERIFICATION in real Evolution** — no
+    headless test can drive "New Address Book" against a live registry, so do
+    not tag D1 complete on this.
 - **D2 `[claude]` Calendar colour.** `Calendar.color` is parsed
   (`jmap-proto/src/calendars.rs:29`) then dropped — thread it Resource→Child and
   emit an ESourceSelectable `("Calendar","Color", …)` setting in
