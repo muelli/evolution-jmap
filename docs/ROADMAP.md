@@ -209,6 +209,30 @@ they close, prioritise in this order:
      Disk filled mid-session (`rust/target/debug` at 24G, "No space left on
      device" on `jmap-mail`'s test build) — `cargo clean --profile dev`
      recovered it, consistent with prior sessions' standing note.
+   - **CLAIMABLE NOW — build the real SRV `Resolver` (the last piece before a
+     Fastmail end-to-end test).** Both call sites now route through the seam but
+     still construct `NoSrvResolver`, so no real SRV happens yet and Fastmail's
+     password path still 404s. Build a resolver that actually looks up
+     `_jmap._tcp.<domain>` and inject it where `NoSrvResolver` is constructed
+     today (`jmap_backend_core::source::connect` and `config_lookup::run`).
+     **Maintainer preference (2026-08-19): reuse a library over hand-rolled code
+     — a crate if one fits, else a system library, and only "own code" if
+     neither works (rather own code than no code).** Given the workspace is
+     deliberately blocking / tokio-free and the resolver is built in the
+     EDS-integration layer where GLib is already linked, the recommended answer
+     is **GLib's `GResolver` via `g_resolver_lookup_service()`**: an existing,
+     well-maintained library, synchronous, **zero new Cargo dependency** — the
+     only new code is a thin `eds-sys`/`glib` FFI binding plus a `Resolver` impl
+     mapping its `GSrvTarget` list (RFC 2782 order: lowest priority, then highest
+     weight) to `SrvTarget`. A pure-Rust SRV crate is acceptable *only* if it is
+     blocking, license-allowlisted (`deny.toml`), and drags no async runtime into
+     the lean tree — most (e.g. hickory) are tokio-based, so evaluate before
+     adding; hand-rolled DNS packet parsing is the last resort, not the default.
+     Test against a fake as `srv_discovery.rs` does; a live
+     `_jmap._tcp.fastmail.com` lookup is network-dependent, so leave true
+     end-to-end confirmation to the operator in the VM (real Fastmail, using an
+     **app password / API token**, not the login password — that 401s, a
+     separate concern from this 404). FFI — reasonable to escalate.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
