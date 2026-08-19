@@ -35757,3 +35757,76 @@ well-contained) / **IMPROVE** (concrete safer or more idiomatic refactor
 available) / **INVESTIGATE**, write `docs/UNSAFE-AUDIT.md` with a short
 prioritized IMPROVE list and rough effort per item. Audit only, per the
 roadmap text — no code changes this session beyond the doc itself.
+
+## 2026-08-19 — Delivered: Track A6, `docs/UNSAFE-AUDIT.md`
+
+Split the read across four parallel research passes (foundational
+`eds-sys`/`evo-sys`/`jmap-backend-core`; the three EDS backend crates;
+`jmap-mail`, the largest at ~9,800 lines/~400 unsafe sites; `jmap-config` +
+the demo `example-module`), each inventorying every `unsafe` block's
+`// SAFETY:` reasoning with a KEEP/IMPROVE/INVESTIGATE tag, then personally
+cross-checked the highest-value cross-cutting claims by grep against the
+actual source before writing them up — the same "verify a subagent's claim
+before trusting it" discipline the A7 session used, and it paid off here:
+each individual pass could only see 2–3 occurrences of the
+`MaybeUninit::zeroed().assume_init()` test-double idiom within its own
+scope, but grepping across all crates found 6, spanning 5 crates
+(`jmap-backend-book`/`cal`/`collection`'s `backend.rs`, `jmap-config/backend.rs`,
+`jmap-mail`'s `store.rs`/`transport.rs`) — the true cross-cutting shape only
+visible once the four reports were combined.
+
+**Headline: the codebase is unusually disciplined.** The overwhelming
+majority of ~80 files' unsafe blocks are **KEEP** — accurate SAFETY
+comments, already-minimal scope, every vfunc/trampoline already routed
+through `jmap_backend_core::trampoline`'s `catch_unwind` guards and
+`subclass::ObjectSubclass`'s shared registration. The audit's real yield is
+six cross-cutting patterns where an already-safe idiom is hand-copied
+across files with no shared helper:
+
+- **Pattern A (INVESTIGATE→IMPROVE)**: the 6-site zeroed-memory test-double
+  idiom above — none `#[cfg(test)]`-gated, so "never call this outside a
+  test" is enforced by doc comment, not the compiler.
+- **Pattern B**: a "check the GType, then cast" borrow helper, ~13
+  independent copies across `jmap-mail` (2 trust levels: dispatched/trusted
+  vs. checked).
+- **Pattern C** — the one genuinely safety-adjacent gap, not just style: no
+  RAII wrapper for libical/GObject reference-counted pointers.
+  `jmap-backend-cal/src/marshal.rs` has 15 manual `component_unref`/
+  `g_object_unref` call sites (confirmed by grep) with no owning newtype —
+  every site unrefs correctly today, but the invariant is "a human re-checks
+  every exit path," the same category of thing `populate.rs::Frozen` and
+  `jmap-mail`'s `Changes`/`FolderInfoChain`/`MessageCache` already solve
+  elsewhere in the tree, just not for GObject/libical pointers.
+- **Pattern D**: the "has_extension, then get_extension, then cast" idiom
+  the roadmap's own A6 text named directly, ~10+ sites across
+  `jmap-backend-core`/`jmap-backend-collection`.
+- **Pattern E**: small repeated `fail()`/`invalid_arg()` GError-builder
+  helpers, ~11 sites, lowest priority (already minimal, just not shared).
+- **Pattern F (positive, no action)**: the panic-guard/subclass
+  infrastructure itself is already exactly this kind of consolidation done
+  right — called out so the doc doesn't read as "why so many KEEPs with no
+  explanation."
+
+`example-module` (out of `default-members`, a demo/reference module on Rust
+edition 2021, not 2024) stands apart: no SAFETY comments, hand-rolled GObject
+registration duplicated across two files instead of using the shared
+`subclass` machinery, no panic guards on its `extern "C"` callbacks, and one
+unbounded-lifetime `&'static mut` accessor (`shell_view_extension.rs::get_private`)
+worth tightening if it's ever promoted out of demo status. Recorded, not
+prioritized — it's demo code, not a shipped milestone.
+
+**Prioritized IMPROVE list, rough effort**: Pattern A (~1–2h, do first — the
+one INVESTIGATE item with a cheap compiler-enforced fix), Pattern D (~2–3h,
+the roadmap's own named target), Pattern B (~2–3h), Pattern C (~1 day,
+highest safety value but the largest single increment — its own session,
+existing round-trip/fixture tests as the acceptance bar), Pattern E (~2h,
+fold into other work rather than scheduling separately). None of these were
+attempted this session, per the roadmap's "audit only" instruction for this
+item — logged here for whoever picks Pattern A up next.
+
+No code changes; `docs/UNSAFE-AUDIT.md` is the deliverable, covered by
+`REUSE.toml`'s existing `docs/**` annotation with its own SPDX header. No
+Rust source touched, so `cargo fmt --check`/`cargo clippy --all-targets
+--locked -- -D warnings`/`cargo test --locked` are unaffected by this
+change (not re-run for a docs-only diff, consistent with the A7 session's
+same reasoning for its own doc-only file).
