@@ -160,6 +160,21 @@ pub unsafe trait Populating {
     /// `authenticate_sync` now, with no credentials, which is what an account
     /// that names no user is authenticated with.
     fn authenticate_anonymously(&self);
+
+    /// `e_server_side_source_set_remote_creatable (account_source, offer)`:
+    /// whether Evolution may offer this account as the place a new address book
+    /// or calendar is created.
+    ///
+    /// The one thing a populate writes onto the *account* rather than onto a
+    /// child, and the gate on `create_resource_sync` being reachable at all:
+    /// `server_side_source_remote_create_sync()` refuses outright for a
+    /// collection source that does not carry the flag, so the vfunc is dead code
+    /// without it.
+    ///
+    /// Called on every populate with the answer for the account as it stands
+    /// *now*, in both directions — see [`populate`] on why it is not a
+    /// once-at-construction fact.
+    fn offer_creation(&self, offer: bool);
 }
 
 /// How this populate asked to be authenticated — which is what turns a populate
@@ -194,6 +209,9 @@ pub struct Restored {
     pub unidentified: usize,
     /// How the account was asked to authenticate, if it was.
     pub asked: Asked,
+    /// Whether this account was left one Evolution may create an address book or
+    /// a calendar in — see [`Populating::offer_creation`].
+    pub creatable: bool,
 }
 
 /// `ECollectionBackendClass::populate` for a JMAP collection, minus the
@@ -261,9 +279,23 @@ pub unsafe fn populate<P: Populating + ?Sized>(
         unsafe { g_object_unref(source.cast()) };
     }
 
+    // Whether this account is one Evolution may create a collection in, and the
+    // same condition that decides whether it is worth authenticating: an account
+    // with neither contacts nor calendars switched on has no children of this
+    // backend's at all, so offering to create one would offer a source the very
+    // next populate treats as dormant.
+    //
+    // Written on every populate rather than once, and in both directions,
+    // because the condition is a *setting* the user can change: an account whose
+    // owner switches contacts back on has to become creatable again without
+    // being removed and re-added. EDS's setter early-returns when the value is
+    // unchanged, so the repetition costs nothing.
+    report.creatable = parts.wants(ChildKind::AddressBook) || parts.wants(ChildKind::Calendar);
+    collection.offer_creation(report.creatable);
+
     // Last, because the cached children have to be in the sidebar before a login
     // that may never succeed — see the module comment on the order.
-    report.asked = if parts.wants(ChildKind::AddressBook) || parts.wants(ChildKind::Calendar) {
+    report.asked = if report.creatable {
         match user {
             Some(_) => {
                 collection.request_credentials();

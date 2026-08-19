@@ -39,12 +39,14 @@
 
 pub mod child_source;
 pub mod children;
+pub mod create;
 pub mod layout;
 pub mod parts;
 pub mod resources;
 
 pub use child_source::{BACKEND_NAME, Connection, Setting, resource_id_for};
 pub use children::{Child, ChildKind, parse_resource_id};
+pub use create::{CreateFailure, Requested, create_collection};
 pub use layout::{CollectionLayout, MailService, ServiceAccount};
 pub use parts::Parts;
 pub use resources::{Fanout, Resource};

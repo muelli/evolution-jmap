@@ -115,6 +115,9 @@ struct Collection {
     published: RefCell<Vec<*mut ESource>>,
     /// Makes `publish` panic, for the one thing a populate must do even then.
     publish_panics: bool,
+    /// Every value `offer_creation` was called with, in order — the flag that
+    /// decides whether Evolution may create a collection in this account.
+    offered: RefCell<Vec<bool>>,
 }
 
 impl Collection {
@@ -193,6 +196,11 @@ unsafe impl Populating for Collection {
     fn authenticate_anonymously(&self) {
         self.calls.borrow_mut().push("authenticate_anonymously");
     }
+
+    fn offer_creation(&self, offer: bool) {
+        self.calls.borrow_mut().push("offer_creation");
+        self.offered.borrow_mut().push(offer);
+    }
 }
 
 /// The populate under test, with the account's two answers spelled out.
@@ -250,6 +258,7 @@ fn the_cache_is_claimed_after_the_chain_up_and_before_any_password_is_asked_for(
             "chain_up",
             "claim_all_resources",
             "publish",
+            "offer_creation",
             "request_credentials",
             "thaw",
         ]
@@ -376,8 +385,69 @@ fn an_account_with_only_mail_switched_on_is_not_asked_for_a_password() {
     assert_eq!(report.asked, Asked::Nothing);
     assert_eq!(
         collection.calls(),
-        ["freeze", "chain_up", "claim_all_resources", "thaw"]
+        [
+            "freeze",
+            "chain_up",
+            "claim_all_resources",
+            "offer_creation",
+            "thaw"
+        ]
     );
+}
+
+#[test]
+fn an_account_that_makes_children_is_offered_as_a_place_to_create_them() {
+    // The flag `create_resource_sync` is unreachable without:
+    // `server_side_source_remote_create_sync` refuses outright for a collection
+    // source that does not carry `remote-creatable`, so an account this backend
+    // makes address books and calendars for has to be told it may make more.
+    for parts in [
+        Parts::ALL,
+        Parts {
+            mail: false,
+            contacts: true,
+            calendars: false,
+        },
+        Parts {
+            mail: false,
+            contacts: false,
+            calendars: true,
+        },
+    ] {
+        let collection = Collection::with(vec![]);
+
+        let report =
+            run(&collection, parts, Some("vera@example.com")).expect("nothing holds the freeze");
+
+        assert!(report.creatable, "{parts:?} makes children of this backend");
+        assert_eq!(collection.offered.borrow().as_slice(), [true]);
+    }
+}
+
+#[test]
+fn an_account_that_makes_no_children_is_not_offered_as_a_place_to_create_them() {
+    // The same gate the password is asked behind, and for the same reason: an
+    // account with neither contacts nor calendars switched on has no children of
+    // this backend's, so a collection created in it would be one the very next
+    // populate treats as dormant. Written as FALSE rather than left alone
+    // because the parts are a *setting*: an account whose owner switches
+    // contacts off has to stop being offered without being removed and re-added,
+    // and one who switches them back on has to start again.
+    let collection = Collection::with(vec![]);
+
+    let report = run(
+        &collection,
+        Parts {
+            mail: true,
+            contacts: false,
+            calendars: false,
+        },
+        Some("vera@example.com"),
+    )
+    .expect("nothing holds the freeze");
+
+    assert!(!report.creatable);
+    assert_eq!(collection.offered.borrow().as_slice(), [false]);
 }
 
 #[test]
@@ -430,6 +500,7 @@ fn an_account_that_names_no_user_is_authenticated_without_a_password() {
             "freeze",
             "chain_up",
             "claim_all_resources",
+            "offer_creation",
             "authenticate_anonymously",
             "thaw",
         ]
