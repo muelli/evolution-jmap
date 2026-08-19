@@ -37104,3 +37104,33 @@ sessions already found it to be: FFI/refcount escalation-worthy (SRV
 autodiscovery's GResolver `Resolver`, A5, A6 Pattern C, D1's vtable
 wiring) or NEEDS-DECISION (B1, C2's third-party notices, C4, Track E) —
 unchanged by this increment, not re-litigated further.
+
+## 2026-08-19 (claim) — Claiming Track A6 Pattern B remainder: `envelope.rs::internet`'s checked-borrow helper
+
+Fresh survey: all milestones COMPLETE; CURRENT PRIORITY's remaining
+threads (SRV autodiscovery's GResolver leg, OAuth2 real-server validation)
+are both parked/escalation-worthy FFI, unchanged since the last several
+sessions. Round 2's lead-order Track D's open item (D1's
+`create_resource_sync`/`delete_resource_sync` vtable wiring) is
+GObject-vtable FFI, escalation-worthy. Track B/C2/C4/E are NEEDS-DECISION.
+Track A's `[claude]` items are done (A2, A4, A7) or escalation-worthy in
+full (A5, A6 Pattern C — the `Owned<T>` RAII migration touching
+libical/GObject refcounting).
+
+`docs/UNSAFE-AUDIT.md`'s Pattern B (the "check the GType, then cast"
+borrow-helper consolidation) has exactly one site left open:
+`jmap-mail/src/envelope.rs::internet`, explicitly logged by the prior
+session that closed the rest of Pattern B as "left as its own smaller
+follow-up" because its `Result<Option<*mut T>, EnvelopeError>` return
+shape doesn't fit either existing helper (`checked_borrow`/
+`checked_borrow_ptr`, both `Option`-returning). This is a small, mechanical,
+no-behaviour-change consolidation of already-audited-correct unsafe code
+into one more shared helper in `jmap-backend-core::marshal` — not new
+`unsafe`/FFI surface, not refcount reasoning (no ownership transfer here,
+just a borrowed type-checked pointer) — so it is Sonnet-tractable unlike
+Pattern C. Claiming this increment now: add
+`checked_borrow_ptr_or<C, T, E>(ptr, gtype, err) -> Result<Option<*mut T>, E>`
+to `jmap-backend-core::marshal`, then have `envelope.rs::internet` delegate
+to it, keeping every existing `envelope.rs`/`jmap-mail` test green
+unmodified (same `Option`/`Err` outcomes for the same inputs — TDD here
+means proving that equivalence, not adding new behaviour).
