@@ -36702,3 +36702,36 @@ constituent checks were run individually as above, per the standing
 workaround (`--offline` used in place of `--locked` since `Cargo.lock`
 itself changed by one line this session; the lock file's actual content was
 reviewed by hand instead).
+
+## 2026-08-19 (claim) — Claiming Track C3: debian/ packaging skeleton
+
+Fresh survey: all milestones COMPLETE; CURRENT PRIORITY has no open Sonnet-
+sized item left (SRV autodiscovery's GResolver leg and OAuth2 real-server
+validation are both parked/escalation-worthy, unchanged for many sessions).
+Round 2 lead-order Track D's one open item (D1's create_resource_sync/
+delete_resource_sync vtable wiring) is GObject-vtable FFI, escalation-
+worthy. Track A's CLAIMABLE [claude] items are exhausted (A4, A6, A7 done;
+A2 risks an unbounded mutation-testing rebuild loop against this VM's
+standing disk problem; A5 is explicitly escalation-worthy). Track B/C2/C4/E
+are NEEDS-DECISION. Several recent sessions lumped **Track C3** in with
+C2/B/E as "NEEDS-DECISION" without individually assessing it, but the
+roadmap text itself does not tag C3 NEEDS-DECISION — only C2's third-party
+license enumeration and C4 (official Debian upload) are. C3 asks for a
+debian/ skeleton (control, rules, watch file) "so a Debian packager starts
+from a working tree," explicitly telling the agent to "document the
+Rust-in-Debian reality... rather than pretend it away" — i.e. acknowledge
+the ~140-crate vendoring gap (the same one blocking C2), not resolve it.
+That framing makes C3 tractable without the maintainer call C2 is stuck on.
+
+Checked tooling first: `dpkg-buildpackage`/`dpkg-source` (dpkg-dev) are
+present; `debhelper` (the `dh` sequencer) is not — `ci/install-deps.sh`
+never names it, since the existing CMake+CPack path (Track C1) does not
+need it. Installed it locally via `sudo apt-get install --no-install-
+recommends debhelper` to verify the skeleton actually builds, rather than
+writing it untested; not added to ci/install-deps.sh or any CI job in this
+increment (out of scope, and .github/workflows stays untouched per the
+standing rule). `rust/target` was at 13G; ran the standing `cargo clean
+--profile dev` first (recovered 12.9GiB, 24G free) since a full release
+workspace build is part of verifying this.
+
+Claiming this increment now.
