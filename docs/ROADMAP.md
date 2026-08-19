@@ -95,6 +95,17 @@ they close, prioritise in this order:
    build the session URL from `https://{target-host}[:port]/.well-known/jmap`;
    fall back to today's bare-domain URL when there is no SRV record (preserves
    the Stalwart/self-hosted path and every current test).
+   **Two sites share this bare-domain assumption — fix both, or you fix the
+   password 404 while OAuth-detect stays broken:** (a) `client.rs:135` (session
+   discovery, the password/Bearer path); and (b) the "Look Up Account Details"
+   worker `config_lookup.rs::probe_host` (line ~143), which returns the bare
+   email domain for its RFC 8414 / JMAP discovery. (b) is *why OAuth was not
+   detected for the operator's Fastmail account and why the assistant fell back
+   to suggesting imapx* — the worker probed `fastmail.com`, found no JMAP, and
+   returned nothing, so Evolution's generic ISPDB autoconfig won. The OAuth
+   machinery (discovery, dynamic registration, `EOAuth2Service`, the lookup
+   worker) is otherwise built and mock-verified; this SRV gap is what keeps it
+   from firing against a real SRV-published provider.
    **Design (pre-decided, to keep `jmap-client` dependency-lean — do NOT add a
    Rust DNS crate to it):** add a `Resolver` trait seam to the client; the pure
    crate's default resolver does no SRV (today's behaviour), and the EDS
