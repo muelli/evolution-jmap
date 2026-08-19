@@ -28,6 +28,7 @@
 
 use eds_sys::{
     E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, ETimezoneCache, ICalComponent, e_cal_client_error_create,
+    time_t,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
@@ -379,4 +380,81 @@ fn refusal(reason: &Unsendable) -> String {
             c"This event repeats in a way that cannot be stored on the server, so it was not created. Stating the recurrence as a repeat count is the spelling that always works.",
         ),
     }
+}
+
+/// What `get_free_busy` decided — the same three-way answer
+/// [`Outcome`] carries, for the same reason.
+#[derive(Debug)]
+pub enum FreeBusyOutcome {
+    /// `out_freebusy` is filled in; the vfunc returns without chaining up.
+    Reported,
+    /// Nothing was learned, and that is not a failure: the caller chains up to
+    /// `ECalMetaBackend`'s own `get_free_busy_sync`, which answers for the
+    /// account's *own* address out of the offline cache. Nothing has been
+    /// written and no error has been set.
+    NothingKnown,
+    /// `error` is set; the vfunc returns without chaining up.
+    Failed,
+}
+
+/// The busy periods of the people EDS named — `get_free_busy_sync`.
+///
+/// Unlike every other vfunc here this one is `void`: it says "I could not"
+/// by setting `error`, and says "I have nothing" by leaving `out_freebusy`
+/// alone. The two are different, and keeping them different is the point of
+/// [`FreeBusyOutcome`] — an attendee we could not ask about must not come back
+/// looking like an attendee with a free diary, because a scheduler books the
+/// second.
+///
+/// Falling through to the parent on an empty answer follows the CalDAV backend,
+/// which does the same: its own lookup first, `ECalMetaBackend`'s cache after.
+/// The organiser's own busy times usually come from that fallback, so it is
+/// where most of a meeting editor's useful data comes from on a server with no
+/// principals at all.
+///
+/// # Safety
+///
+/// `users` must be NULL or a valid `GSList` of NUL-terminated strings valid for
+/// the call, `out_freebusy` NULL or a writable, currently-NULL `GSList *`, and
+/// `error` NULL or a valid, currently-NULL `GError **`. That is what an EDS
+/// vfunc receives.
+pub unsafe fn get_free_busy(
+    sync: &CalSync,
+    users: *const GSList,
+    start: time_t,
+    end: time_t,
+    out_freebusy: *mut *mut GSList,
+    error: *mut *mut GError,
+) -> FreeBusyOutcome {
+    // SAFETY: the caller guarantees a well-formed list of live strings.
+    let users = unsafe { marshal::user_list(users) };
+    if users.is_empty() {
+        return FreeBusyOutcome::NothingKnown;
+    }
+
+    // An instant `GDateTime` cannot state, which is a window no calendar view
+    // can scroll to. The parent takes the same two `time_t`s and needs no such
+    // conversion, so this is a reason to let it answer, not to fail.
+    let (Some(utc_start), Some(utc_end)) = (marshal::utc_date(start), marshal::utc_date(end))
+    else {
+        return FreeBusyOutcome::NothingKnown;
+    };
+
+    let answers = match sync.free_busy(&users, &utc_start, &utc_end) {
+        Ok(answers) => answers,
+        Err(failure) => {
+            // SAFETY: `error` satisfies set_raw_gerror's contract by this
+            // function's own.
+            unsafe { fail_bool(error, &failure, to_gerror) };
+            return FreeBusyOutcome::Failed;
+        }
+    };
+    if answers.is_empty() {
+        return FreeBusyOutcome::NothingKnown;
+    }
+
+    // SAFETY: as above for the out-parameter; the list and its strings are GLib
+    // allocations ownership of which passes to the caller.
+    unsafe { set_out_list(out_freebusy, || marshal::free_busy_list(&answers)) };
+    FreeBusyOutcome::Reported
 }

@@ -22,9 +22,9 @@ use std::mem::{MaybeUninit, size_of};
 use std::ptr;
 
 use eds_sys::{
-    E_CAL_OPERATION_FLAG_NONE, E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalMetaBackend,
-    ECalMetaBackendClass, ECalMetaBackendInfo, ICalComponent, e_cal_meta_backend_get_type,
-    e_cal_meta_backend_info_free, e_client_error_quark,
+    E_CAL_OPERATION_FLAG_NONE, E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalBackendSyncClass,
+    ECalMetaBackend, ECalMetaBackendClass, ECalMetaBackendInfo, ICalComponent,
+    e_cal_meta_backend_get_type, e_cal_meta_backend_info_free, e_client_error_quark,
 };
 use glib_sys::{
     GError, GFALSE, GSList, GTRUE, g_error_free, g_free, g_slist_free_full, g_slist_length,
@@ -60,6 +60,13 @@ impl Class {
     fn vfuncs(&self) -> &ECalMetaBackendClass {
         // SAFETY: the class is referenced and leads with the parent's.
         unsafe { &(*self.0).parent_class }
+    }
+
+    /// The `ECalBackendSyncClass` half, two levels up: `get_free_busy_sync` is
+    /// declared there rather than on `ECalMetaBackend`, which merely fills it
+    /// in like any other subclass would.
+    fn sync_vfuncs(&self) -> &ECalBackendSyncClass {
+        &self.vfuncs().parent_class
     }
 }
 
@@ -230,6 +237,45 @@ fn the_search_slots_are_left_to_the_meta_backend_cache() {
         class.vfuncs().search_components_sync.map(|f| f as usize),
         parent.search_components_sync.map(|f| f as usize),
         "search_components_sync was overridden"
+    );
+}
+
+/// `get_free_busy_sync` is not one of `ECalMetaBackend`'s own slots — it is
+/// declared two classes up, on `ECalBackendSync`, which is where this backend
+/// has to install it and where `E_CAL_BACKEND_SYNC_GET_CLASS` looks. Installed
+/// on the wrong struct it would silently never be called, and the free/busy
+/// panel would stay blank with nothing to show for it.
+#[test]
+fn class_init_installs_get_free_busy_on_the_sync_class_where_it_is_dispatched() {
+    let class = Class::get();
+    let parent = parent_class().expect("ECalMetaBackendClass is initialised");
+
+    let ours = class
+        .sync_vfuncs()
+        .get_free_busy_sync
+        .expect("get_free_busy_sync is not installed");
+    assert_ne!(
+        ours as usize,
+        parent
+            .parent_class
+            .get_free_busy_sync
+            .expect("ECalMetaBackend installs one") as usize,
+        "the slot still holds ECalMetaBackend's implementation",
+    );
+}
+
+/// And the parent's has to still be there to fall back on. It answers out of
+/// the offline cache for the account's *own* address, which is the whole
+/// answer when the account is offline and the only answer for the organiser
+/// themselves on a server with no principals — so chaining up is not a
+/// courtesy, it is where most of the useful data comes from.
+#[test]
+fn the_parent_class_offers_a_get_free_busy_sync_to_chain_up_to() {
+    let _class = Class::get();
+    let parent = parent_class().expect("ECalMetaBackendClass is initialised");
+    assert!(
+        parent.parent_class.get_free_busy_sync.is_some(),
+        "ECalMetaBackend has no get_free_busy_sync of its own to fall back on"
     );
 }
 

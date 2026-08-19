@@ -7,7 +7,7 @@
 //! [`connect`] opens the connection, [`ops`] is the vfunc bodies,
 //! [`marshal`](crate::marshal) the C conversions. What is left here, and only
 //! here, is the part that cannot be tested against a live instance: the
-//! instance and class structs, the seven vfunc slots, and the lookup of the
+//! instance and class structs, the eight vfunc slots, and the lookup of the
 //! connection an instance holds.
 //!
 //! So the code below is deliberately dull, and it is the address book's
@@ -17,10 +17,16 @@
 //! there is no vfunc slot the two backends could both be installed into. The
 //! decisions those slots make are what `jmap-backend-core` already holds.
 //!
-//! The one exception to the dullness is `get_changes_sync`, which has a third
-//! answer — chain up to `ECalMetaBackend`'s own implementation — and that
-//! chain-up needs the parent class pointer, which is why it could not live in
-//! `ops` with the decision that produces it.
+//! The exceptions to the dullness are the two vfuncs that have a third answer
+//! — chain up to `ECalMetaBackend`'s own implementation — because that chain-up
+//! needs the parent class pointer, which is why neither could live in `ops`
+//! with the decision that produces it. `get_changes_sync` chains up to have the
+//! whole calendar listed and diffed against the cache; `get_free_busy_sync`
+//! chains up to have the account owner's own busy times computed from it.
+//!
+//! `get_free_busy_sync` is also the one slot here that is not an
+//! `ECalMetaBackend` one: it is declared two classes up, on `ECalBackendSync`,
+//! and has to be installed there — see its own comment.
 //!
 //! ## What is left to the parent
 //!
@@ -51,10 +57,10 @@ use std::ffi::CStr;
 use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalMetaBackend, ECalMetaBackendClass, ECalOperationFlags,
-    EConflictResolution, ENamedParameters, ESourceAuthenticationResult, GTlsCertificateFlags,
-    ICalComponent, e_backend_get_source, e_cal_backend_set_writable, e_cal_meta_backend_get_type,
-    e_client_error_create,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalBackendSync, ECalMetaBackend, ECalMetaBackendClass,
+    ECalOperationFlags, EConflictResolution, EDataCal, ENamedParameters,
+    ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent, e_backend_get_source,
+    e_cal_backend_set_writable, e_cal_meta_backend_get_type, e_client_error_create, time_t,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar};
@@ -65,7 +71,7 @@ use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::subclass::ObjectSubclass;
-use jmap_backend_core::trampoline::guard_bool;
+use jmap_backend_core::trampoline::{guard_bool, guard_value};
 use jmap_cal_sync::CalSync;
 
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
@@ -178,6 +184,13 @@ unsafe impl ObjectSubclass for JmapCalBackend {
         vfuncs.load_component_sync = Some(load_component_sync);
         vfuncs.save_component_sync = Some(save_component_sync);
         vfuncs.remove_component_sync = Some(remove_component_sync);
+
+        // Two levels up rather than one. `get_free_busy_sync` is declared on
+        // `ECalBackendSyncClass`, which `ECalMetaBackend` merely fills in like
+        // any other subclass — and `e_cal_backend_sync_get_free_busy` looks it
+        // up there. Written into the `ECalMetaBackendClass` half instead it
+        // would compile, install, and never once be called.
+        vfuncs.parent_class.get_free_busy_sync = Some(get_free_busy_sync);
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
@@ -460,6 +473,72 @@ unsafe extern "C" fn remove_component_sync(
             error,
             |sync| ops::remove_component(sync, uid, error),
         )
+    }
+}
+
+/// The one vfunc here that is not an `ECalMetaBackend` slot, does not return a
+/// `gboolean`, and does not go through [`with_connection`].
+///
+/// All three follow from the same thing: it has a useful answer even with no
+/// connection. `ECalMetaBackend`'s own implementation computes the account
+/// owner's busy times from the offline cache, so "not connected" is a reason to
+/// chain up, not to report `REPOSITORY_OFFLINE` — which is what
+/// [`with_connection`] would do, and which would leave the meeting editor with
+/// nothing where it could have had the organiser's own diary. The CalDAV
+/// backend arranges the same fallback the same way.
+///
+/// Being `void` is why the guard is [`guard_value`] with a `()` fallback: a
+/// panic still cannot cross into C, and still sets `error`, but there is no
+/// return value to turn into a failure.
+#[allow(clippy::too_many_arguments)] // the vfunc's signature, not ours
+unsafe extern "C" fn get_free_busy_sync(
+    backend: *mut ECalBackendSync,
+    cal: *mut EDataCal,
+    cancellable: *mut GCancellable,
+    users: *const GSList,
+    start: time_t,
+    end: time_t,
+    out_freebusy: *mut *mut GSList,
+    error: *mut *mut GError,
+) {
+    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours, a
+    // NULL-or-valid GCancellable and user list, and out-parameters that are
+    // NULL or writable.
+    unsafe {
+        guard_value("get_free_busy_sync", error, (), || {
+            let _cancel = observe(cancellable);
+            // The read guard is scoped so it is released before the chain-up:
+            // the parent goes off into the EDS cache, and holding this
+            // backend's connection lock across that would block a concurrent
+            // connect or disconnect for no reason.
+            let outcome = {
+                let session = instance(backend.cast()).and_then(JmapCalBackend::session);
+                let guard = session.map(read);
+                match guard.as_deref().and_then(Option::as_ref) {
+                    Some(sync) => ops::get_free_busy(sync, users, start, end, out_freebusy, error),
+                    None => ops::FreeBusyOutcome::NothingKnown,
+                }
+            };
+
+            if matches!(outcome, ops::FreeBusyOutcome::NothingKnown)
+                && let Some(chain_up) =
+                    parent_class().and_then(|class| class.parent_class.get_free_busy_sync)
+            {
+                // Nothing has been written and no error set, which is the state
+                // the parent expects to be called in — and it must be, since it
+                // will `g_set_error` into the same `GError **`.
+                chain_up(
+                    backend,
+                    cal,
+                    cancellable,
+                    users,
+                    start,
+                    end,
+                    out_freebusy,
+                    error,
+                );
+            }
+        })
     }
 }
 

@@ -22,7 +22,7 @@
 //!   for, over the shared `connect_sync` machinery in `jmap-backend-core`.
 //!
 //! - [`backend`] is the `ECalMetaBackend` subclass those three hang off: the
-//!   instance and class structs, and the seven vfunc slots EDS dispatches
+//!   instance and class structs, and the eight vfunc slots EDS dispatches
 //!   through.
 //!
 //! On top of that sit the two pieces EDS actually reaches first: [`module`], the

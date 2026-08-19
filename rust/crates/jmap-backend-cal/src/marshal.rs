@@ -29,12 +29,16 @@ use eds_sys::{
     i_cal_component_new_from_string, i_cal_component_new_vcalendar, i_cal_component_take_component,
     i_cal_parameter_get_tzid, i_cal_property_get_first_parameter, i_cal_property_set_tzid,
     i_cal_timezone_get_builtin_timezone, i_cal_timezone_get_builtin_timezone_from_tzid,
-    i_cal_timezone_get_component,
+    i_cal_timezone_get_component, time_t,
 };
-use glib_sys::{GSList, g_free, g_slist_prepend, gchar};
+use glib_sys::{
+    GSList, g_date_time_format, g_date_time_new_from_unix_utc, g_date_time_unref, g_free,
+    g_slist_prepend, gchar,
+};
 use gobject_sys::g_object_unref;
 use jmap_backend_core::error::cstring_lossy;
-use jmap_cal_sync::ComponentInfo;
+use jmap_backend_core::marshal::{dup_string, read_string};
+use jmap_cal_sync::{ComponentInfo, FreeBusy};
 
 /// The event a save is about, extracted from the instances EDS handed over.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -639,5 +643,91 @@ unsafe fn take_string(raw: *mut gchar) -> Option<String> {
         let value = CStr::from_ptr(raw).to_string_lossy().into_owned();
         g_free(raw.cast());
         Some(value)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// free/busy
+
+/// The addresses `get_free_busy_sync` was asked about, read out of its `GSList`
+/// of `gchar *`.
+///
+/// EDS still owns the list and every string in it, so nothing here is freed.
+/// Empty and NULL entries are dropped rather than carried: they name nobody,
+/// and each one would otherwise cost a `Principal/query` round trip that can
+/// only come back empty.
+///
+/// # Safety
+///
+/// `users` must be NULL or a valid `GSList` whose `data` pointers are NULL or
+/// NUL-terminated strings, all valid for the duration of the call.
+pub unsafe fn user_list(users: *const GSList) -> Vec<String> {
+    let mut addresses = Vec::new();
+    let mut node = users;
+    // SAFETY: the caller guarantees a well-formed list, which ends at NULL, and
+    // strings valid for the call.
+    unsafe {
+        while !node.is_null() {
+            if let Some(user) = read_string((*node).data.cast()) {
+                addresses.push(user);
+            }
+            node = (*node).next;
+        }
+    }
+    addresses
+}
+
+/// The answers as the `GSList` of `gchar *` `get_free_busy_sync` hands back,
+/// in the order given.
+///
+/// A list of plain strings, unlike [`info_list`]'s structs: the vfunc's
+/// `freebusyobjs` is documented `(element-type utf8) (transfer full)`, and
+/// `e_data_cal_respond_get_free_busy` reads each node as an iCalendar string.
+/// Ownership of the list and of every string in it passes to the caller, which
+/// frees them with `g_free`.
+pub fn free_busy_list(answers: &[FreeBusy]) -> *mut GSList {
+    let mut list = ptr::null_mut();
+    // Prepending is the only O(1) GSList insertion, so walk backwards and the
+    // result comes out in the order the caller gave.
+    for answer in answers.iter().rev() {
+        // SAFETY: the duplicate is a GLib allocation ownership of which passes
+        // into the list, and from the list to EDS.
+        let node = unsafe { dup_string(&answer.icalendar) };
+        // SAFETY: `list` is a valid GSList (initially the empty one).
+        list = unsafe { g_slist_prepend(list, node.cast()) };
+    }
+    list
+}
+
+/// A `time_t` as the JMAP `UTCDate` (RFC 3339, `Z`) that
+/// `Principal/getAvailability` takes.
+///
+/// Through GLib rather than by hand: turning seconds-since-the-epoch into a
+/// broken-down UTC date is calendar arithmetic — leap years, and the leap
+/// seconds the Unix epoch does not count — and `GDateTime` already does it,
+/// correctly, in a library this backend is linked against anyway. `jmap-ical`
+/// and `jmap-mock` both go out of their way to avoid date arithmetic; this is
+/// the one place in the calendar path that genuinely needs it, and it is
+/// borrowed rather than written.
+///
+/// `None` for an instant outside `GDateTime`'s range (years 1 to 9999), which
+/// no calendar view can scroll to; the caller chains up rather than reporting a
+/// failure, since the parent takes the same `time_t` and can still answer.
+pub fn utc_date(seconds: time_t) -> Option<String> {
+    // `seconds` goes straight through: `time_t` and `gint64` are both `i64` on
+    // every target this backend builds for, and glibc's 64-bit-`time_t`
+    // transition has made that true of 32-bit Linux too. A target where they
+    // differ would be a type error here rather than a silently truncated date.
+    //
+    // SAFETY: no preconditions; NULL is the documented answer for an
+    // out-of-range instant, and the reference taken is released below.
+    unsafe {
+        let datetime = g_date_time_new_from_unix_utc(seconds);
+        if datetime.is_null() {
+            return None;
+        }
+        let formatted = g_date_time_format(datetime, c"%Y-%m-%dT%H:%M:%SZ".as_ptr());
+        g_date_time_unref(datetime);
+        take_string(formatted)
     }
 }

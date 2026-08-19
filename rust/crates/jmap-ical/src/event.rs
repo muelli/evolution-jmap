@@ -165,14 +165,14 @@ const DISPLAY_ALERT: (&str, &str) = ("display", "DISPLAY");
 const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Component {
+pub(crate) struct Component {
     component_type: ICalendarComponentType,
     entries: Vec<ICalendarEntry>,
     children: Vec<Component>,
 }
 
 impl Component {
-    fn new(name: &str) -> Self {
+    pub(crate) fn new(name: &str) -> Self {
         let component_type = ICalendarComponentType::parse(name.as_bytes())
             .unwrap_or_else(|| ICalendarComponentType::Other(name.to_ascii_uppercase()));
         Self {
@@ -182,7 +182,7 @@ impl Component {
         }
     }
 
-    fn with(mut self, entry: ICalendarEntry) -> Self {
+    pub(crate) fn with(mut self, entry: ICalendarEntry) -> Self {
         self.entries.push(entry);
         self
     }
@@ -203,20 +203,20 @@ impl Component {
         write!(out, "END:{}\r\n", self.component_type.as_str()).unwrap();
     }
 
-    fn to_ics(&self) -> String {
+    pub(crate) fn to_ics(&self) -> String {
         let mut out = String::new();
         self.write_into(&mut out);
         out
     }
 }
 
-fn make_entry(name: &str, value: &str) -> ICalendarEntry {
+pub(crate) fn make_entry(name: &str, value: &str) -> ICalendarEntry {
     let prop = ICalendarProperty::parse(name.as_bytes())
         .unwrap_or_else(|| ICalendarProperty::Other(name.to_ascii_uppercase()));
     ICalendarEntry::new(prop).with_value(ICalendarValue::Text(value.to_owned()))
 }
 
-trait EntryExt {
+pub(crate) trait EntryExt {
     fn with_named_param(self, name: &str, value: &str) -> Self;
     fn with_named_params<I, S>(self, name: &str, values: I) -> Self
     where
@@ -3845,7 +3845,7 @@ fn is_utc(zone: &str) -> bool {
 /// are refused rather than guessed at. A sub-second fraction, which neither
 /// format's DATE-TIME carries, falls out of [`strip`]'s digit count and is
 /// refused the same way.
-fn to_utc_date_time(value: &str) -> Option<String> {
+pub(crate) fn to_utc_date_time(value: &str) -> Option<String> {
     let local = value.strip_suffix(['Z', 'z'])?;
     to_ical_date_time(local).map(|stamp| format!("{stamp}Z"))
 }
@@ -3892,7 +3892,7 @@ pub(crate) fn to_local_date_time(value: &str) -> Option<String> {
 }
 
 /// Remove `separator` and check that exactly `digits` digits are left.
-fn strip(value: &str, separator: char, digits: usize) -> Option<String> {
+pub(crate) fn strip(value: &str, separator: char, digits: usize) -> Option<String> {
     let stripped: String = value.chars().filter(|c| *c != separator).collect();
     (stripped.len() == digits && stripped.bytes().all(|b| b.is_ascii_digit())).then_some(stripped)
 }
@@ -3912,7 +3912,7 @@ fn strip(value: &str, separator: char, digits: usize) -> Option<String> {
 ///
 /// Both callers have already established that the arguments are 8 and 6 ASCII
 /// digits.
-fn exists(date: &str, time: &str) -> bool {
+pub(crate) fn exists(date: &str, time: &str) -> bool {
     let field = |value: &str| value.parse::<u32>().unwrap_or(u32::MAX);
     let (year, month, day) = (field(&date[..4]), field(&date[4..6]), field(&date[6..8]));
     let (hour, minute, second) = (field(&time[..2]), field(&time[2..4]), field(&time[4..6]));

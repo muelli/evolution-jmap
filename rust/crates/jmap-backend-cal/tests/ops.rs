@@ -872,3 +872,279 @@ fn gerror_message(failure: &SyncError) -> String {
         message
     }
 }
+
+// ---------------------------------------------------------------------------
+// get_free_busy
+
+/// Seconds since the epoch for the window the tests ask about —
+/// 2026-09-01T00:00:00Z to 2026-09-02T00:00:00Z. Written as constants rather
+/// than computed, so the test states the instant it means and
+/// `marshal::utc_date` is the only thing converting.
+const WINDOW_START: i64 = 1_788_220_800;
+const WINDOW_END: i64 = 1_788_307_200;
+
+/// EDS's `users` argument: a `GSList` of `gchar *` it owns. The strings are
+/// kept alive by the returned `Vec`, exactly as EDS's own are alive for the
+/// duration of the call.
+struct Users {
+    list: *mut GSList,
+    _owned: Vec<CString>,
+}
+
+impl Users {
+    fn new(users: &[&str]) -> Self {
+        let owned: Vec<CString> = users.iter().map(|u| CString::new(*u).unwrap()).collect();
+        let mut list = ptr::null_mut();
+        for user in owned.iter().rev() {
+            // SAFETY: `list` is a valid GSList and the pointer stays valid for
+            // as long as `owned` does, which is as long as this struct.
+            list = unsafe { g_slist_prepend(list, user.as_ptr() as *mut _) };
+        }
+        Self {
+            list,
+            _owned: owned,
+        }
+    }
+}
+
+impl Drop for Users {
+    fn drop(&mut self) {
+        // The nodes only, never the strings: `owned` holds those, as EDS holds
+        // its own.
+        unsafe { g_slist_free(self.list) };
+    }
+}
+
+/// Seeds a principal that will answer for `email`.
+fn seed_principal(fixture: &Fixture, email: &str) {
+    let state = fixture.server.state();
+    let mut state = state.lock().unwrap();
+    let account = state.account_mut(&fixture.account_id).unwrap();
+    account.seed_principal(jmap_proto::principals::Principal {
+        principal_type: Some("individual".to_owned()),
+        name: email.to_owned(),
+        email: Some(email.to_owned()),
+        ..Default::default()
+    });
+}
+
+/// Reads the answer list the way `e_data_cal_respond_get_free_busy` does — as
+/// plain strings, not as structs — and frees it.
+unsafe fn take_free_busy(list: *mut GSList) -> Vec<String> {
+    unsafe {
+        let mut answers = Vec::new();
+        for n in 0..g_slist_length(list) {
+            let text = g_slist_nth_data(list, n).cast::<gchar>();
+            assert!(!text.is_null(), "no node {n}");
+            answers.push(CStr::from_ptr(text).to_string_lossy().into_owned());
+        }
+        g_slist_free_full(list, Some(g_free));
+        answers
+    }
+}
+
+#[test]
+fn get_free_busy_reports_a_vfreebusy_per_attendee_it_could_answer_for() {
+    let fixture = Fixture::start();
+    seed_principal(&fixture, "bob@example.com");
+    fixture.seed(&fixture.ours, "Standup", "2026-09-01T09:00:00");
+    let users = Users::new(&["bob@example.com"]);
+    let mut out: *mut GSList = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    let outcome = unsafe {
+        ops::get_free_busy(
+            &fixture.sync(),
+            users.list,
+            WINDOW_START,
+            WINDOW_END,
+            &mut out,
+            &mut error,
+        )
+    };
+
+    assert!(
+        matches!(outcome, ops::FreeBusyOutcome::Reported),
+        "{outcome:?}"
+    );
+    assert!(error.is_null(), "an error was set on success");
+    let answers = unsafe { take_free_busy(out) };
+    assert_eq!(answers.len(), 1);
+    assert!(
+        answers[0].contains("ATTENDEE:mailto:bob@example.com"),
+        "{}",
+        answers[0],
+    );
+    // The window EDS asked about, as the two `time_t`s converted: this is the
+    // one assertion that pins `marshal::utc_date` end to end.
+    assert!(
+        answers[0].contains("DTSTART:20260901T000000Z"),
+        "{}",
+        answers[0]
+    );
+    assert!(
+        answers[0].contains("DTEND:20260902T000000Z"),
+        "{}",
+        answers[0]
+    );
+    assert!(
+        answers[0].contains("FREEBUSY;FBTYPE=BUSY:20260901T090000Z/20260901T100000Z"),
+        "{}",
+        answers[0],
+    );
+}
+
+/// The answer that makes the vfunc chain up. Nothing may be written on this
+/// path — the parent is about to write the same out-parameter, and a `GError`
+/// left set would make its own `g_set_error` a critical.
+#[test]
+fn get_free_busy_answers_nothing_known_without_touching_the_out_parameters() {
+    let fixture = Fixture::start();
+    fixture.seed(&fixture.ours, "Standup", "2026-09-01T09:00:00");
+
+    for users in [
+        // Nobody asked about at all.
+        Users::new(&[]),
+        // Asked about, but the server has no principal for them.
+        Users::new(&["stranger@example.net"]),
+    ] {
+        let mut out: *mut GSList = ptr::null_mut();
+        let mut error: *mut GError = ptr::null_mut();
+
+        let outcome = unsafe {
+            ops::get_free_busy(
+                &fixture.sync(),
+                users.list,
+                WINDOW_START,
+                WINDOW_END,
+                &mut out,
+                &mut error,
+            )
+        };
+
+        assert!(
+            matches!(outcome, ops::FreeBusyOutcome::NothingKnown),
+            "{outcome:?}",
+        );
+        assert!(out.is_null(), "the out-parameter was written anyway");
+        assert!(error.is_null(), "an error was set anyway");
+    }
+}
+
+/// A real failure sets the error and does *not* chain up, because chaining up
+/// would answer the user with the account owner's cached diary and no sign
+/// that the attendees they asked about were never looked up.
+#[test]
+fn get_free_busy_reports_a_server_failure_rather_than_falling_through() {
+    let fixture = Fixture::start();
+    seed_principal(&fixture, "bob@example.com");
+    let sync = CalSync::new(
+        fixture.client(),
+        Id::new("no-such-account"),
+        fixture.ours.clone(),
+    );
+    let users = Users::new(&["bob@example.com"]);
+    let mut out: *mut GSList = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+
+    let outcome = unsafe {
+        ops::get_free_busy(
+            &sync,
+            users.list,
+            WINDOW_START,
+            WINDOW_END,
+            &mut out,
+            &mut error,
+        )
+    };
+
+    assert!(
+        matches!(outcome, ops::FreeBusyOutcome::Failed),
+        "{outcome:?}"
+    );
+    assert!(out.is_null(), "the out-parameter was written on failure");
+    assert!(!error.is_null(), "the failure was not reported");
+    unsafe { g_error_free(error) };
+}
+
+/// A NULL `users` is what EDS passes for "nobody", and reading it as a list
+/// would dereference it.
+#[test]
+fn get_free_busy_survives_a_null_user_list() {
+    let fixture = Fixture::start();
+    let mut error: *mut GError = ptr::null_mut();
+
+    let outcome = unsafe {
+        ops::get_free_busy(
+            &fixture.sync(),
+            ptr::null(),
+            WINDOW_START,
+            WINDOW_END,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+
+    assert!(
+        matches!(outcome, ops::FreeBusyOutcome::NothingKnown),
+        "{outcome:?}",
+    );
+    assert!(error.is_null());
+}
+
+/// A NULL out-parameter means "not interested", and must not be written
+/// through — `set_out_list` is what keeps that true, and the answer is still
+/// `Reported` because the work was done.
+#[test]
+fn get_free_busy_skips_an_out_parameter_the_caller_did_not_ask_for() {
+    let fixture = Fixture::start();
+    seed_principal(&fixture, "bob@example.com");
+    fixture.seed(&fixture.ours, "Standup", "2026-09-01T09:00:00");
+    let users = Users::new(&["bob@example.com"]);
+    let mut error: *mut GError = ptr::null_mut();
+
+    let outcome = unsafe {
+        ops::get_free_busy(
+            &fixture.sync(),
+            users.list,
+            WINDOW_START,
+            WINDOW_END,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+
+    assert!(
+        matches!(outcome, ops::FreeBusyOutcome::Reported),
+        "{outcome:?}"
+    );
+    assert!(error.is_null());
+}
+
+/// `marshal::utc_date` is the only calendar arithmetic in the calendar path,
+/// and it is GLib's rather than ours — these pin the two ends and the epoch
+/// itself, which is where an off-by-a-timezone would show.
+#[test]
+fn a_time_t_becomes_the_utc_date_the_draft_asks_for() {
+    assert_eq!(
+        marshal::utc_date(0).as_deref(),
+        Some("1970-01-01T00:00:00Z"),
+    );
+    assert_eq!(
+        marshal::utc_date(WINDOW_START).as_deref(),
+        Some("2026-09-01T00:00:00Z"),
+    );
+    // A leap day, which is the cheapest proof this is not string arithmetic.
+    assert_eq!(
+        marshal::utc_date(1_709_164_800).as_deref(),
+        Some("2024-02-29T00:00:00Z"),
+    );
+}
+
+/// Out of `GDateTime`'s range is `None` rather than a wrong date — the caller
+/// reads that as "let the parent answer", never as an instant.
+#[test]
+fn a_time_t_no_calendar_can_show_is_refused_rather_than_wrapped() {
+    assert_eq!(marshal::utc_date(i64::MAX), None);
+    assert_eq!(marshal::utc_date(i64::MIN), None);
+}
