@@ -37301,3 +37301,24 @@ passed, 0 failed" entry) — so compile-level survival of `jmap-config`/
 session verifies that firsthand (container Evolution/EDS version, any
 `EMailConfig*` signature drift) rather than resting on the earlier run's
 framing, and turns it into Track F's actual deliverable doc + recommendation.
+
+## 2026-08-19 (claim) — Claiming Track E Phase 0: the RFC 9670 `Principal` shared floor
+
+Fresh survey after `9942fa8` (roadmap: greenlight Track E Path A) landed
+just ahead of this session: Track E's Phase 0 — `Principal` proto type +
+capability constants + `Principal/get`/`query` in client + mock support,
+per `docs/PRINCIPALS-DESIGN.md` §4.1–4.3 — is now explicitly CLAIMABLE NOW
+and, per that design doc, pure-additive plain Rust (no FFI, no unsafe): a
+new type, two capability constants, two client methods, and mock handlers,
+mirroring the existing `contacts`/`calendars` modules end to end. Checked
+for a live claim first: `81dac75` (claim Track F) is a genuinely
+in-progress lock from a concurrent session (committed minutes before this
+one started, per its timestamp), not stale — left untouched. Every other
+open thread is unchanged from what the last several sessions found:
+CURRENT PRIORITY's SRV `Resolver` (GResolver, FFI), A5, A6 Pattern C, D1's
+vtable wiring are escalation-worthy; Track B/C2/C4 are NEEDS-DECISION;
+A6 Pattern E's `fail`/`fail_bool` half needs real design. Track E Phase 0
+is the one open, unclaimed, non-FFI, headless, TDD-able increment left.
+Claiming it now, scoped exactly to Phase 0 (not Path A's
+`getAvailability`/free-busy vfunc, which is a separate, larger, partly
+escalation-worthy increment per the design's own phasing).
