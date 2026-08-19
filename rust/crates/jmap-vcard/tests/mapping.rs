@@ -10005,3 +10005,873 @@ fn url_and_calendar_properties_coexistence_and_slotting() {
     // Fixed-point stability
     assert_eq!(card_to_vcard(&parsed), vcard);
 }
+
+#[test]
+fn non_ascii_multilingual_names_and_components_roundtrip() {
+    // Tests across diverse world writing systems and scripts:
+    // French accents, German umlauts/eszett, Spanish tildes, Icelandic thorn/eth,
+    // Polish crossed-L, Russian Cyrillic, Greek, Hebrew, Arabic RTL, Chinese Hanzi,
+    // Japanese Kanji/Kana, Korean Hangul, Hindi Devanagari, Vietnamese, and Emoji.
+    let test_cases = [
+        (
+            "French",
+            "René François de Chateaubriand",
+            Some("Chateaubriand"),
+            Some("René"),
+            Some("François"),
+            Some("de"),
+            None,
+        ),
+        (
+            "German",
+            "Dr. Jörg Weiß-Müller Jr.",
+            Some("Weiß-Müller"),
+            Some("Jörg"),
+            None,
+            Some("Dr."),
+            Some("Jr."),
+        ),
+        (
+            "Spanish",
+            "María José Carreño Quiñones",
+            Some("Carreño Quiñones"),
+            Some("María"),
+            Some("José"),
+            None,
+            None,
+        ),
+        (
+            "Icelandic",
+            "Guðmundur Þórðarson",
+            Some("Þórðarson"),
+            Some("Guðmundur"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Polish",
+            "Stanisław Lem",
+            Some("Lem"),
+            Some("Stanisław"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Russian Cyrillic",
+            "Граф Лев Николаевич Толстой",
+            Some("Толстой"),
+            Some("Лев"),
+            Some("Николаевич"),
+            Some("Граф"),
+            None,
+        ),
+        (
+            "Greek",
+            "Σωκράτης",
+            Some("Σωκράτης"),
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "Hebrew",
+            "שלום עליכם",
+            Some("עליכם"),
+            Some("שלום"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Arabic",
+            "نجيب محفوظ",
+            Some("محفوظ"),
+            Some("نجيب"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Chinese Hanzi",
+            "李白",
+            Some("李"),
+            Some("白"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Japanese Kanji and Kana",
+            "宮崎 駿 (みやざき はやお)",
+            Some("宮崎"),
+            Some("駿"),
+            Some("みやざき はやお"),
+            None,
+            None,
+        ),
+        (
+            "Korean Hangul",
+            "김연아",
+            Some("김"),
+            Some("연아"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Hindi Devanagari",
+            "रवीन्द्रनाथ ठाकुर",
+            Some("ठाकुर"),
+            Some("रवीन्द्रनाथ"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Vietnamese",
+            "Nguyễn Du",
+            Some("Nguyễn"),
+            Some("Du"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Emoji and Symbols",
+            "🧑‍💻 Alice Smith 🚀",
+            Some("Smith"),
+            Some("Alice"),
+            Some("🧑‍💻"),
+            None,
+            Some("🚀"),
+        ),
+    ];
+
+    for (label, full_name, surname, given, middle, prefix, suffix) in test_cases {
+        let mut components = Vec::new();
+        if let Some(s) = surname {
+            components.push(NameComponent::new("surname", s));
+        }
+        if let Some(g) = given {
+            components.push(NameComponent::new("given", g));
+        }
+        if let Some(m) = middle {
+            components.push(NameComponent::new("given2", m));
+        }
+        if let Some(p) = prefix {
+            components.push(NameComponent::new("title", p));
+        }
+        if let Some(suf) = suffix {
+            components.push(NameComponent::new("credential", suf));
+        }
+
+        let card = ContactCard {
+            id: Some(format!("C-NAME-{}", label.replace(' ', "-")).into()),
+            name: Some(Name {
+                full: Some(full_name.to_owned()),
+                components: (!components.is_empty()).then_some(components),
+                extra: BTreeMap::new(),
+            }),
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        // Verify line is valid UTF-8 and starts with standard envelope
+        assert!(
+            vcard1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"),
+            "label: {label}"
+        );
+        assert!(
+            vcard1.contains(&format!("FN:{full_name}")),
+            "label: {label}, vcard: {vcard1}"
+        );
+
+        let parsed1 =
+            vcard_to_card(&vcard1).unwrap_or_else(|e| panic!("{label} parse error: {e:?}"));
+        let p_name = parsed1
+            .name
+            .as_ref()
+            .unwrap_or_else(|| panic!("{label} missing name"));
+        assert_eq!(p_name.full.as_deref(), Some(full_name), "label: {label}");
+
+        // Verify components match
+        if let Some(comps) = &p_name.components {
+            let get_comp = |kind: &str| {
+                comps
+                    .iter()
+                    .find(|c| c.kind == kind)
+                    .map(|c| c.value.as_str())
+            };
+            assert_eq!(get_comp("surname"), surname, "surname mismatch for {label}");
+            assert_eq!(get_comp("given"), given, "given mismatch for {label}");
+            assert_eq!(get_comp("given2"), middle, "middle mismatch for {label}");
+            assert_eq!(get_comp("title"), prefix, "prefix mismatch for {label}");
+            assert_eq!(
+                get_comp("credential"),
+                suffix,
+                "suffix mismatch for {label}"
+            );
+        }
+
+        // Fixed-point stability
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("re-parse second pass");
+        let vcard3 = card_to_vcard(&parsed2);
+        assert_eq!(vcard2, vcard3, "fixed-point stability for {label}");
+    }
+}
+
+#[test]
+fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
+    let mut orgs = BTreeMap::new();
+    orgs.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some("Société Générale & Compagnie".to_owned()),
+            units: Some(vec![
+                OrgUnit::new("Direction des Systèmes d'Information"),
+                OrgUnit::new("Pôle Innovation & Recherche"),
+                OrgUnit::new("Équipe Cryptographie"),
+            ]),
+            extra: BTreeMap::new(),
+        },
+    );
+    orgs.insert(
+        "o2".to_owned(),
+        Organization {
+            name: Some("ООО \"Яндекс\"".to_owned()),
+            units: Some(vec![
+                OrgUnit::new("Департамент разработки"),
+                OrgUnit::new("Группа поисковых технологий"),
+            ]),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut titles = BTreeMap::new();
+    titles.insert(
+        "t1".to_owned(),
+        Title {
+            name: "Directeur Général Adjoint".to_owned(),
+            kind: Some("title".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    titles.insert(
+        "t2".to_owned(),
+        Title {
+            name: "Главный архитектор систем".to_owned(),
+            kind: Some("role".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    titles.insert(
+        "t3".to_owned(),
+        Title {
+            name: "開発最高責任者".to_owned(),
+            kind: Some("title".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-NONASCII-ORG-TITLE".into()),
+        organizations: Some(orgs),
+        titles: Some(titles),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let parsed1 = vcard_to_card(&vcard1).expect("parse non-ascii org and titles");
+
+    let p_orgs = parsed1.organizations.as_ref().expect("orgs present");
+    assert_eq!(p_orgs.len(), 2);
+    assert_eq!(
+        p_orgs["o1"].name.as_deref(),
+        Some("Société Générale & Compagnie")
+    );
+    assert_eq!(
+        p_orgs["o1"].units.as_ref().unwrap(),
+        &[
+            OrgUnit::new("Direction des Systèmes d'Information"),
+            OrgUnit::new("Pôle Innovation & Recherche"),
+            OrgUnit::new("Équipe Cryptographie"),
+        ]
+    );
+    assert_eq!(p_orgs["o2"].name.as_deref(), Some("ООО \"Яндекс\""));
+    assert_eq!(
+        p_orgs["o2"].units.as_ref().unwrap(),
+        &[
+            OrgUnit::new("Департамент разработки"),
+            OrgUnit::new("Группа поисковых технологий"),
+        ]
+    );
+
+    let p_titles = parsed1.titles.as_ref().expect("titles present");
+    assert_eq!(p_titles.len(), 3);
+    assert_eq!(p_titles["t1"].name, "Directeur Général Adjoint");
+    assert_eq!(p_titles["t1"].kind, None); // default kind "title"
+    assert_eq!(p_titles["t2"].name, "Главный архитектор систем");
+    assert_eq!(p_titles["t2"].kind.as_deref(), Some("role"));
+    assert_eq!(p_titles["t3"].name, "開発最高責任者");
+    assert_eq!(p_titles["t3"].kind, None); // default kind "title"
+
+    // Fixed-point stability
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("re-parse second pass");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3);
+}
+
+#[test]
+fn non_ascii_structured_addresses_and_labels_roundtrip() {
+    let mut addrs = BTreeMap::new();
+    // French address with accents and special characters
+    addrs.insert(
+        "a_fr".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("postOfficeBox", "Boîte Postale 42"),
+                AddressComponent::new("apartment", "Bâtiment B, Étage 3, Porte 12"),
+                AddressComponent::new("name", "12 Rue de l'Étoile"),
+                AddressComponent::new("locality", "Épinay-sur-Seine"),
+                AddressComponent::new("region", "Île-de-France"),
+                AddressComponent::new("postcode", "93800"),
+                AddressComponent::new("country", "France"),
+            ]),
+            full: Some(
+                "12 Rue de l'Étoile\nBâtiment B, Étage 3\n93800 Épinay-sur-Seine\nFrance"
+                    .to_owned(),
+            ),
+            contexts: Some(json!({"work": true})),
+            extra: BTreeMap::new(),
+        },
+    );
+    // German address with umlauts and eszett
+    addrs.insert(
+        "a_de".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("apartment", "Hinterhaus 2. Stock"),
+                AddressComponent::new("name", "Goethestraße 42"),
+                AddressComponent::new("locality", "München"),
+                AddressComponent::new("region", "Bayern"),
+                AddressComponent::new("postcode", "80336"),
+                AddressComponent::new("country", "Deutschland"),
+            ]),
+            full: Some("Goethestraße 42\n80336 München\nDeutschland".to_owned()),
+            contexts: Some(json!({"home": true})),
+            extra: BTreeMap::new(),
+        },
+    );
+    // Japanese address with Kanji
+    addrs.insert(
+        "a_ja".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("name", "千代田区千代田1-1"),
+                AddressComponent::new("region", "東京都"),
+                AddressComponent::new("postcode", "100-8111"),
+                AddressComponent::new("country", "日本"),
+            ]),
+            full: Some("〒100-8111 東京都千代田区千代田1-1\n日本".to_owned()),
+            contexts: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-NONASCII-ADR".into()),
+        addresses: Some(addrs),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let parsed1 = vcard_to_card(&vcard1).expect("parse non-ascii addresses");
+
+    let p_addrs = parsed1.addresses.as_ref().expect("addresses present");
+    assert_eq!(p_addrs.len(), 3);
+
+    let a_fr = &p_addrs["a_fr"];
+    let comps_fr = a_fr.components.as_ref().expect("french comps");
+    let get_comp = |comps: &[AddressComponent], k: &str| -> Option<String> {
+        comps.iter().find(|c| c.kind == k).map(|c| c.value.clone())
+    };
+    assert_eq!(
+        get_comp(comps_fr, "postOfficeBox").as_deref(),
+        Some("Boîte Postale 42")
+    );
+    assert_eq!(
+        get_comp(comps_fr, "apartment").as_deref(),
+        Some("Bâtiment B, Étage 3, Porte 12")
+    );
+    assert_eq!(
+        get_comp(comps_fr, "name").as_deref(),
+        Some("12 Rue de l'Étoile")
+    );
+    assert_eq!(
+        get_comp(comps_fr, "locality").as_deref(),
+        Some("Épinay-sur-Seine")
+    );
+    assert_eq!(
+        get_comp(comps_fr, "region").as_deref(),
+        Some("Île-de-France")
+    );
+    assert_eq!(get_comp(comps_fr, "postcode").as_deref(), Some("93800"));
+    assert_eq!(get_comp(comps_fr, "country").as_deref(), Some("France"));
+    assert_eq!(
+        a_fr.full.as_deref(),
+        Some("12 Rue de l'Étoile\nBâtiment B, Étage 3\n93800 Épinay-sur-Seine\nFrance")
+    );
+
+    let a_de = &p_addrs["a_de"];
+    let comps_de = a_de.components.as_ref().expect("german comps");
+    assert_eq!(
+        get_comp(comps_de, "name").as_deref(),
+        Some("Goethestraße 42")
+    );
+    assert_eq!(get_comp(comps_de, "locality").as_deref(), Some("München"));
+    assert_eq!(get_comp(comps_de, "region").as_deref(), Some("Bayern"));
+    assert_eq!(
+        get_comp(comps_de, "country").as_deref(),
+        Some("Deutschland")
+    );
+
+    let a_ja = &p_addrs["a_ja"];
+    let comps_ja = a_ja.components.as_ref().expect("japanese comps");
+    assert_eq!(
+        get_comp(comps_ja, "name").as_deref(),
+        Some("千代田区千代田1-1")
+    );
+    assert_eq!(get_comp(comps_ja, "region").as_deref(), Some("東京都"));
+    assert_eq!(get_comp(comps_ja, "country").as_deref(), Some("日本"));
+
+    // Fixed-point stability
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("re-parse second pass");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3);
+}
+
+#[test]
+fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut nicknames = BTreeMap::new();
+    nicknames.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "Schätzchen".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicknames.insert(
+        "k2".to_owned(),
+        Nickname {
+            name: "Маша (Мария)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicknames.insert(
+        "k3".to_owned(),
+        Nickname {
+            name: "たなか (田中)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut keywords = BTreeMap::new();
+    keywords.insert("Amis".to_owned(), json!(true));
+    keywords.insert("Collègues de travail".to_owned(), json!(true));
+    keywords.insert("Familie & Freunde".to_owned(), json!(true));
+    keywords.insert("仕事関係".to_owned(), json!(true));
+    keywords.insert("VIP ★ 🌟".to_owned(), json!(true));
+
+    let mut related_to = BTreeMap::new();
+    let mut spouse_rel = BTreeMap::new();
+    spouse_rel.insert("spouse".to_owned(), json!(true));
+    related_to.insert(
+        "Hélène Müller-Mayer".to_owned(),
+        Relation {
+            relation: Some(spouse_rel),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-NONASCII-MIXED".into()),
+        notes: Some(notes),
+        nicknames: Some(nicknames),
+        keywords: Some(keywords),
+        related_to: Some(related_to),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let parsed1 = vcard_to_card(&vcard1).expect("parse non-ascii mixed properties");
+
+    let p_notes = parsed1.notes.as_ref().expect("notes present");
+    assert_eq!(
+        p_notes["n1"].note,
+        "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)"
+    );
+
+    let p_nicknames = parsed1.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(p_nicknames["k1"].name, "Schätzchen");
+    assert_eq!(p_nicknames["k2"].name, "Маша (Мария)");
+    assert_eq!(p_nicknames["k3"].name, "たなか (田中)");
+
+    let p_keywords = parsed1.keywords.as_ref().expect("keywords present");
+    assert!(p_keywords.contains_key("Amis"));
+    assert!(p_keywords.contains_key("Collègues de travail"));
+    assert!(p_keywords.contains_key("Familie & Freunde"));
+    assert!(p_keywords.contains_key("仕事関係"));
+    assert!(p_keywords.contains_key("VIP ★ 🌟"));
+
+    let p_rel = parsed1.related_to.as_ref().expect("related_to present");
+    assert!(p_rel.contains_key("Hélène Müller-Mayer"));
+    assert!(states_spouse(
+        "Hélène Müller-Mayer",
+        &p_rel["Hélène Müller-Mayer"]
+    ));
+
+    // Fixed-point stability
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("re-parse second pass");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3);
+}
+
+#[test]
+fn inbound_vcard_charset_parameter_variations_and_normalization() {
+    // Tests inbound vCards carrying CHARSET parameters across case variations
+    // and multiple properties. vCard 3.0 specifies UTF-8 unconditionally, so
+    // our reader accepts CHARSET=UTF-8 for compatibility with older/buggy clients,
+    // while card_to_vcard normalizes outbound output to clean vCard 3.0 without
+    // redundant CHARSET parameters.
+    let vcard_inbound = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;CHARSET=UTF-8:René Müller\r\n",
+        "N;CHARSET=utf-8:Müller;René;François;Dr.;Jr.\r\n",
+        "ORG;CHARSET=UTF-8;X-JMAP-KEY=o1:Société Générale;Pôle Innovation\r\n",
+        "TITLE;CHARSET=Utf-8;X-JMAP-KEY=t1:Ingénieur en chef\r\n",
+        "ROLE;charset=UTF-8;X-JMAP-KEY=t2:Développeur sénior\r\n",
+        "NOTE;CHARSET=UTF-8;X-JMAP-KEY=n1:München ist schön\r\n",
+        "NICKNAME;CHARSET=UTF-8;X-JMAP-KEY=k1:Schätzchen\r\n",
+        "CATEGORIES;CHARSET=UTF-8:Amis,Collègues,Familie\r\n",
+        "X-EVOLUTION-SPOUSE;CHARSET=UTF-8:Hélène Müller\r\n",
+        "ADR;TYPE=HOME;CHARSET=UTF-8;X-JMAP-KEY=a1:;;12 Rue de l'Étoile;Paris;;75008;France\r\n",
+        "LABEL;TYPE=HOME;CHARSET=UTF-8;X-JMAP-KEY=a1:12 Rue de l'Étoile\\n75008 Paris\\nFrance\r\n",
+        "TEL;TYPE=WORK,VOICE;CHARSET=UTF-8;X-JMAP-KEY=p1:+33 1 23 45 67 89\r\n",
+        "EMAIL;TYPE=INTERNET;CHARSET=UTF-8;X-JMAP-KEY=e1:rene.muller@example.fr\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed1 =
+        vcard_to_card(vcard_inbound).expect("parse inbound vcard with CHARSET parameters");
+
+    // Assert accurate extraction into JSContact fields
+    let name = parsed1.name.as_ref().expect("name present");
+    assert_eq!(name.full.as_deref(), Some("René Müller"));
+    let comps = name.components.as_ref().expect("name components");
+    let get_comp = |kind: &str| {
+        comps
+            .iter()
+            .find(|c| c.kind == kind)
+            .map(|c| c.value.as_str())
+    };
+    assert_eq!(get_comp("given"), Some("René"));
+    assert_eq!(get_comp("given2"), Some("François"));
+    assert_eq!(get_comp("surname"), Some("Müller"));
+    assert_eq!(get_comp("title"), Some("Dr."));
+    assert_eq!(get_comp("credential"), Some("Jr."));
+
+    let orgs = parsed1.organizations.as_ref().expect("orgs present");
+    assert_eq!(orgs["o1"].name.as_deref(), Some("Société Générale"));
+    assert_eq!(
+        orgs["o1"].units.as_ref().unwrap(),
+        &[OrgUnit::new("Pôle Innovation")]
+    );
+
+    let titles = parsed1.titles.as_ref().expect("titles present");
+    assert_eq!(titles["t1"].name, "Ingénieur en chef");
+    assert_eq!(titles["t1"].kind, None); // default kind "title"
+    assert_eq!(titles["t2"].name, "Développeur sénior");
+    assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
+
+    let notes = parsed1.notes.as_ref().expect("notes present");
+    assert_eq!(notes["n1"].note, "München ist schön");
+
+    let nicks = parsed1.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(nicks["k1"].name, "Schätzchen");
+
+    let cats = parsed1.keywords.as_ref().expect("keywords present");
+    assert!(cats.contains_key("Amis"));
+    assert!(cats.contains_key("Collègues"));
+    assert!(cats.contains_key("Familie"));
+
+    let rels = parsed1.related_to.as_ref().expect("related_to present");
+    assert!(rels.contains_key("Hélène Müller"));
+
+    let addrs = parsed1.addresses.as_ref().expect("addresses present");
+    assert_eq!(
+        addrs["a1"].full.as_deref(),
+        Some("12 Rue de l'Étoile\n75008 Paris\nFrance")
+    );
+
+    let phones = parsed1.phones.as_ref().expect("phones present");
+    assert_eq!(phones["p1"].number, "+33 1 23 45 67 89");
+
+    let emails = parsed1.emails.as_ref().expect("emails present");
+    assert_eq!(emails["e1"].address, "rene.muller@example.fr");
+
+    // Outbound normalization: standard vCard 3.0 emission must NOT include CHARSET=UTF-8
+    let vcard_out = card_to_vcard(&parsed1);
+    assert!(
+        !vcard_out.contains("CHARSET="),
+        "Outbound vCard 3.0 must not carry CHARSET params: {vcard_out}"
+    );
+    assert!(
+        !vcard_out.contains("charset="),
+        "Outbound vCard 3.0 must not carry charset params: {vcard_out}"
+    );
+    assert!(vcard_out.contains("FN:René Müller\r\n"), "{vcard_out}");
+    assert!(
+        vcard_out.contains("N:Müller;René;François;Dr.;Jr.\r\n"),
+        "{vcard_out}"
+    );
+    assert!(
+        vcard_out.contains("ORG;X-JMAP-KEY=o1:Société Générale;Pôle Innovation\r\n"),
+        "{vcard_out}"
+    );
+    assert!(
+        vcard_out.contains("NOTE;X-JMAP-KEY=n1:München ist schön\r\n"),
+        "{vcard_out}"
+    );
+
+    // Fixed-point convergence
+    let parsed2 = vcard_to_card(&vcard_out).expect("re-parse outbound vcard");
+    let vcard_out2 = card_to_vcard(&parsed2);
+    assert_eq!(
+        vcard_out, vcard_out2,
+        "Emitted vCard must reach fixed point"
+    );
+}
+
+#[test]
+fn inbound_vcard_quoted_printable_encoding_with_charset_utf8_and_latin1() {
+    // Tests inbound legacy/vCard 2.1 QUOTED-PRINTABLE encoded properties.
+    // 1. QP with explicit CHARSET=UTF-8 (UTF-8 multi-byte octets in =XX)
+    // 2. QP with explicit CHARSET=ISO-8859-1 (Single byte Latin-1 in =XX)
+    // 3. QP with explicit CHARSET=WINDOWS-1252
+    // 4. QP without CHARSET parameter (defaults to Latin-1 per vCard 2.1 RFC 2045)
+    let vcard_qp_utf8 = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:Ren=C3=A9=20M=C3=BCller\r\n",
+        "N;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:M=C3=BCller;Ren=C3=A9;Fran=C3=A7ois;Dr.;\r\n",
+        "ORG;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=o1:Soci=C3=A9t=C3=A9=20G=C3=A9n=C3=A9rale;P=C3=B4le=20R&D\r\n",
+        "TITLE;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=t1:Ing=C3=A9nieur=20en=20chef\r\n",
+        "NOTE;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=n1:M=C3=BCnchen=20ist=20eine=20sch=C3=B6ne=20Stadt\r\n",
+        "X-EVOLUTION-SPOUSE;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:H=C3=A9l=C3=A8ne\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed_utf8 = vcard_to_card(vcard_qp_utf8).expect("parse QP with CHARSET=UTF-8");
+    let name_utf8 = parsed_utf8.name.as_ref().expect("name present");
+    assert_eq!(name_utf8.full.as_deref(), Some("René Müller"));
+    let comps_utf8 = name_utf8.components.as_ref().expect("components");
+    let get_comp_utf8 = |kind: &str| {
+        comps_utf8
+            .iter()
+            .find(|c| c.kind == kind)
+            .map(|c| c.value.as_str())
+    };
+    assert_eq!(get_comp_utf8("given"), Some("René"));
+    assert_eq!(get_comp_utf8("given2"), Some("François"));
+    assert_eq!(get_comp_utf8("surname"), Some("Müller"));
+    assert_eq!(get_comp_utf8("title"), Some("Dr."));
+
+    let orgs_utf8 = parsed_utf8.organizations.as_ref().expect("orgs present");
+    assert_eq!(orgs_utf8["o1"].name.as_deref(), Some("Société Générale"));
+    assert_eq!(
+        orgs_utf8["o1"].units.as_ref().unwrap(),
+        &[OrgUnit::new("Pôle R&D")]
+    );
+
+    let titles_utf8 = parsed_utf8.titles.as_ref().expect("titles present");
+    assert_eq!(titles_utf8["t1"].name, "Ingénieur en chef");
+
+    let notes_utf8 = parsed_utf8.notes.as_ref().expect("notes present");
+    assert_eq!(notes_utf8["n1"].note, "München ist eine schöne Stadt");
+
+    let rels_utf8 = parsed_utf8.related_to.as_ref().expect("related_to present");
+    assert!(rels_utf8.contains_key("Hélène"));
+
+    // 2. QP with CHARSET=ISO-8859-1 (0xE9 -> é, 0xFC -> ü, 0xF4 -> ô, 0xE8 -> è)
+    let vcard_qp_latin1 = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE;CHARSET=ISO-8859-1:Ren=E9=20M=FCller\r\n",
+        "N;ENCODING=QUOTED-PRINTABLE;CHARSET=ISO-8859-1:M=FCller;Ren=E9;;;\r\n",
+        "NOTE;ENCODING=QUOTED-PRINTABLE;CHARSET=ISO-8859-1;X-JMAP-KEY=n1:M=FCnchen=20sch=F6n\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed_latin1 = vcard_to_card(vcard_qp_latin1).expect("parse QP with CHARSET=ISO-8859-1");
+    let name_latin1 = parsed_latin1.name.as_ref().expect("name present");
+    assert_eq!(name_latin1.full.as_deref(), Some("René Müller"));
+    assert_eq!(
+        parsed_latin1.notes.as_ref().unwrap()["n1"].note,
+        "München schön"
+    );
+
+    // 3. QP with CHARSET=WINDOWS-1252
+    let vcard_qp_win1252 = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE;CHARSET=WINDOWS-1252:Ren=E9=20M=FCller\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_win1252 =
+        vcard_to_card(vcard_qp_win1252).expect("parse QP with CHARSET=WINDOWS-1252");
+    assert_eq!(
+        parsed_win1252.name.as_ref().unwrap().full.as_deref(),
+        Some("René Müller")
+    );
+
+    // 4. QP without CHARSET parameter (defaults to Latin-1)
+    let vcard_qp_no_charset = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE:Ren=E9=20M=FCller\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_no_charset =
+        vcard_to_card(vcard_qp_no_charset).expect("parse QP without CHARSET parameter");
+    assert_eq!(
+        parsed_no_charset.name.as_ref().unwrap().full.as_deref(),
+        Some("René Müller")
+    );
+
+    // Outbound emission of QP-decoded cards: must emit clean standard vCard 3.0 UTF-8
+    let vcard_out = card_to_vcard(&parsed_utf8);
+    assert!(
+        !vcard_out.contains("ENCODING="),
+        "Outbound vCard 3.0 must not carry ENCODING=QP: {vcard_out}"
+    );
+    assert!(
+        !vcard_out.contains("QUOTED-PRINTABLE"),
+        "Outbound vCard 3.0 must not carry QUOTED-PRINTABLE: {vcard_out}"
+    );
+    assert!(vcard_out.contains("FN:René Müller\r\n"), "{vcard_out}");
+
+    // Fixed-point stability
+    let parsed_out = vcard_to_card(&vcard_out).expect("re-parse outbound vcard");
+    let vcard_out2 = card_to_vcard(&parsed_out);
+    assert_eq!(vcard_out, vcard_out2);
+}
+
+#[test]
+fn inbound_vcard_quoted_printable_soft_line_breaks_and_escaped_delimiters() {
+    // Tests QUOTED-PRINTABLE soft line breaks (=\r\n and =\n) and encoded delimiters:
+    // =3D ('='), =3B (';'), =2C (','), =0D=0A (CRLF).
+    let vcard_qp_soft_breaks = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:Alice=\r\n",
+        "=20Smith\r\n",
+        "NOTE;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=n1:This is a long note that was folded=\r\n",
+        "=20using quoted-printable soft line breaks=\r\n",
+        "=20and contains an equals sign (=3D) and a semicolon (=3B).\r\n",
+        "ADR;TYPE=HOME;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=a1:;;12 Rue de l'=C3=89toile;Paris;;75008;France\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard_qp_soft_breaks).expect("parse QP with soft line breaks");
+    assert_eq!(
+        parsed.name.as_ref().unwrap().full.as_deref(),
+        Some("Alice Smith")
+    );
+
+    let note = &parsed.notes.as_ref().unwrap()["n1"].note;
+    assert_eq!(
+        note,
+        "This is a long note that was folded using quoted-printable soft line breaks and contains an equals sign (=) and a semicolon (;)."
+    );
+
+    let addrs = parsed.addresses.as_ref().unwrap();
+    let street = addrs["a1"]
+        .components
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|c| c.kind == "name")
+        .unwrap();
+    assert_eq!(street.value, "12 Rue de l'Étoile");
+
+    // Outbound emission and fixed-point convergence
+    let vcard_out = card_to_vcard(&parsed);
+    assert!(!vcard_out.contains("ENCODING="));
+    let parsed2 = vcard_to_card(&vcard_out).expect("re-parse emitted vcard");
+    let vcard_out2 = card_to_vcard(&parsed2);
+    assert_eq!(vcard_out, vcard_out2);
+}
+
+#[test]
+fn inbound_vcard_encoding_parameter_8bit_7bit_and_base64_fidelity() {
+    // Tests ENCODING=8BIT, ENCODING=7BIT, ENCODING=b, ENCODING=BASE64, ENCODING=B
+    let vcard_encodings = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=8BIT:René Müller\r\n",
+        "N;ENCODING=8BIT:Müller;René;;;\r\n",
+        "NOTE;ENCODING=7BIT;X-JMAP-KEY=n1:ASCII note content\r\n",
+        "PHOTO;ENCODING=b;TYPE=JPEG:AQIDBA==\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed =
+        vcard_to_card(vcard_encodings).expect("parse vcard with 8bit, 7bit, and b encodings");
+    assert_eq!(
+        parsed.name.as_ref().unwrap().full.as_deref(),
+        Some("René Müller")
+    );
+    assert_eq!(
+        parsed.notes.as_ref().unwrap()["n1"].note,
+        "ASCII note content"
+    );
+
+    let media = parsed.media.as_ref().expect("media present");
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].media_type.as_deref(), Some("image/JPEG"));
+    assert_eq!(media["m1"].uri, "data:image/JPEG;base64,AQIDBA==");
+
+    // Outbound emission: ENCODING=8BIT and 7BIT are stripped on text; ENCODING=b is emitted on photo
+    let vcard_out = card_to_vcard(&parsed);
+    assert_eq!(line(&vcard_out, "FN:"), "FN:René Müller");
+    assert_eq!(
+        line(&vcard_out, "NOTE"),
+        "NOTE;X-JMAP-KEY=n1:ASCII note content"
+    );
+    assert!(line(&vcard_out, "PHOTO").starts_with("PHOTO;"));
+    assert!(line(&vcard_out, "PHOTO").contains("ENCODING=b"));
+    assert!(line(&vcard_out, "PHOTO").contains("TYPE=JPEG"));
+    assert!(line(&vcard_out, "PHOTO").ends_with(":AQIDBA=="));
+
+    // Fixed-point stability
+    let parsed2 = vcard_to_card(&vcard_out).expect("re-parse emitted vcard");
+    let vcard_out2 = card_to_vcard(&parsed2);
+    assert_eq!(vcard_out, vcard_out2);
+}

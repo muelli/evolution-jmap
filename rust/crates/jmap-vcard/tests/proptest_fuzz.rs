@@ -577,6 +577,16 @@ prop_compose! {
                 Just(";X-JMAP-KEY=k1".to_string()),
                 Just(";VALUE=uri".to_string()),
                 Just(";ENCODING=b".to_string()),
+                Just(";ENCODING=BASE64".to_string()),
+                Just(";ENCODING=8BIT".to_string()),
+                Just(";ENCODING=7BIT".to_string()),
+                Just(";ENCODING=QUOTED-PRINTABLE".to_string()),
+                Just(";CHARSET=UTF-8".to_string()),
+                Just(";CHARSET=utf-8".to_string()),
+                Just(";CHARSET=ISO-8859-1".to_string()),
+                Just(";CHARSET=WINDOWS-1252".to_string()),
+                Just(";ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8".to_string()),
+                Just(";ENCODING=QUOTED-PRINTABLE;CHARSET=ISO-8859-1".to_string()),
                 Just(";ALTID=1".to_string()),
                 Just(";LANGUAGE=en-US".to_string()),
                 Just(";LANGUAGE=de".to_string()),
@@ -721,5 +731,79 @@ proptest! {
         let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip vcard");
         let vcard3 = card_to_vcard(&parsed2);
         prop_assert_eq!(vcard2, vcard3, "Escaped value must reach fixed point");
+    }
+
+    #[test]
+    fn prop_non_ascii_unicode_card_roundtrips_without_corruption(
+        given in prop_oneof![
+            Just("René".to_string()),
+            Just("Jörg".to_string()),
+            Just("María José".to_string()),
+            Just("Лев".to_string()),
+            Just("Σωκράτης".to_string()),
+            Just("שלום".to_string()),
+            Just("نجيب".to_string()),
+            Just("李".to_string()),
+            Just("駿".to_string()),
+            Just("김".to_string()),
+            Just("रवीन्द्रनाथ".to_string()),
+            Just("🧑‍💻".to_string()),
+            "\\PC{1,15}",
+        ],
+        surname in prop_oneof![
+            Just("Müller".to_string()),
+            Just("Weiß".to_string()),
+            Just("Carreño".to_string()),
+            Just("Толстой".to_string()),
+            Just("محفوظ".to_string()),
+            Just("白".to_string()),
+            Just("宮崎".to_string()),
+            Just("연아".to_string()),
+            Just("ठाकुर".to_string()),
+            Just("🚀".to_string()),
+            "\\PC{1,15}",
+        ],
+        note_text in prop_oneof![
+            Just("Café & Croissants in München.\n∀x ∈ ℝ: x² ≥ 0 🌟".to_string()),
+            Just("Привет, мир! 🌍".to_string()),
+            Just("こんにちは 世界 🌸".to_string()),
+            Just("مرحبا بالعالم".to_string()),
+            "\\PC{1,50}",
+        ],
+    ) {
+        let full = format!("{given} {surname}");
+        let card = ContactCard {
+            id: Some("C-PROP-UNICODE".into()),
+            name: Some(Name {
+                full: Some(full.clone()),
+                components: Some(vec![
+                    NameComponent::new("given", &given),
+                    NameComponent::new("surname", &surname),
+                ]),
+                extra: BTreeMap::new(),
+            }),
+            notes: Some([(
+                "n1".to_owned(),
+                Note {
+                    note: note_text.clone(),
+                    extra: BTreeMap::new(),
+                },
+            )].into()),
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("parse non-ascii unicode card");
+
+        let p_name = parsed1.name.as_ref().expect("name present");
+        prop_assert_eq!(p_name.full.as_deref(), Some(full.as_str()));
+
+        let p_note = &parsed1.notes.as_ref().expect("notes present")["n1"].note;
+        prop_assert_eq!(p_note, &note_text);
+
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip");
+        let vcard3 = card_to_vcard(&parsed2);
+        prop_assert_eq!(vcard2, vcard3, "Unicode card must reach fixed point");
     }
 }
