@@ -3868,7 +3868,7 @@ pub(crate) fn to_local_date_time(value: &str) -> Option<String> {
         Some((date, time)) => (date, time),
         None => (value, "000000"),
     };
-    if date.len() != 8 || time.len() < 6 {
+    if date.len() != 8 || time.len() < 6 || !date.is_char_boundary(8) || !time.is_char_boundary(6) {
         return None;
     }
     // Sub-second precision is legal in neither format's DATE-TIME, but a

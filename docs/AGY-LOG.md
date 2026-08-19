@@ -248,4 +248,26 @@ Running record of headless polish increments on the `antigravity` branch.
   3. Primary field resolution in EDS: `EMAIL` primary selection in Evolution is positional (`E_CONTACT_EMAIL_1` is the first `EMAIL` line in the vCard). Emitting `emails`, `phones`, and `addresses` sorted by `(pref.unwrap_or(u32::MAX), key)` ensures the most preferred entry lands in Evolution's primary field while maintaining deterministic, lossless roundtrips.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — Full structured ADR + LABEL fidelity & parameter roundtrip (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 5. Full structured `ADR` + `LABEL`: confirm all seven `ADR` components (po-box, ext, street, locality, region, postcode, country) plus a `LABEL` param round-trip vCard↔JSContact↔EDS without loss; test empty-component and multi-value cases.
+- **Changes:**
+  - Extended `read_address` in `rust/crates/jmap-vcard/src/contact.rs` to extract `LABEL` parameters directly from `ADR` property lines (vCard 4.0 / RFC 6350 §6.3.1) into `Address.full`, and handle addresses containing only a `LABEL` parameter without structured components.
+  - Updated `label_entry` in `rust/crates/jmap-vcard/src/contact.rs` to match standalone `LABEL` lines against addresses that already carry matching labels (or unlabelled addresses) rather than generating spurious duplicate address entries.
+  - Hardened `to_local_date_time` in `rust/crates/jmap-ical/src/event.rs` to verify UTF-8 char boundary before slicing fixed-length time segments during property-based fuzzing.
+  - Updated `arb_vcard_property_line` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to fuzz `LABEL` parameters and `PREF` combinations on address property lines.
+  - Added comprehensive TDD suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `adr_all_seven_structured_components_roundtrip`: verifies complete roundtrips of addresses with all 7 structured RFC 2426 §3.2.1 components (`postOfficeBox`, `apartment` extended address, `name` street, `locality`, `region`, `postcode`, `country`) and written-out `LABEL`, asserting exact component extraction and fixed-point convergence (`vcard2 == vcard3`).
+    - `adr_label_parameter_parsing_and_emission_fidelity`: tests parsing of vCard 4.0 `ADR;LABEL=...` parameters, emission to standard vCard 3.0 `ADR` and standalone `LABEL` properties for EDS compatibility, and label-only addresses (`ADR;LABEL=...:;;;;;;`).
+    - `adr_empty_and_sparse_components_permutations`: tests all 7 single-component address permutations, intermediate empty components (e.g. indices 0, 2, 4, 6 populated with 1, 3, 5 empty), truncated components (fewer than 7 components on the wire), and all-empty component omission.
+    - `adr_multi_value_and_escaped_delimiters_roundtrip`: tests multi-valued structured address components and escaped commas (`\,`), semicolons (`\;`), and newlines (`\n`) in `ADR` and `LABEL` values.
+    - `multiple_addresses_with_mixed_labels_and_contexts_pairing`: tests coexisting Work, Home, label-only postal, and unlabelled structured addresses on a single card without cross-contamination.
+    - `adr_predicates_and_component_restoration_comprehensive`: tests `states_address_component`, `states_address`, `address_label`, and `restore_address_components` across all standard, joined (`number`), and unmapped kinds.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `calcard` automatically escapes commas (`,`) as `\,` in structured and free-text vCard 3.0 properties (such as `LABEL` and `ADR` multi-valued components) per RFC 2426 §2.4.2 and RFC 2426 §3.2.2, while unescaping them back to literal commas upon parsing.
+  2. `calcard` automatically handles RFC 2426 line folding at 75 octets for long structured `ADR` and `LABEL` lines with multi-byte code point protection, and unfolds them losslessly on input.
+  3. Structured `ADR` vs `LABEL` representation: vCard 4.0 / RFC 6350 supports `LABEL` as a property parameter on `ADR`, whereas vCard 3.0 / EDS models `LABEL` as a standalone property (`E_CONTACT_ADDRESS_LABEL_WORK`, `_HOME`, `_OTHER`). `jmap-vcard` accepts both inbound formats into JSContact `Address.full` and emits standard vCard 3.0 `ADR` and `LABEL` properties with matching `X-JMAP-KEY` and `TYPE` parameters, ensuring 100% interoperability and lossless round-trips.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
 
