@@ -334,13 +334,15 @@ fn a_created_child_is_parented_writable_and_written_back_to_the_collections_cach
 }
 
 #[test]
-fn a_created_child_is_not_yet_offered_for_deletion() {
-    // Deliberate, and the one place it would be noticed if it changed:
-    // evolution-ews sets `remote-deletable` on every child it creates, and this
-    // backend will too — once `delete_resource_sync` exists. Setting it before
-    // then would make Evolution offer "Delete" and answer the click with EDS's
-    // `does not support deleting remote resources`, which is worse than an
-    // absent menu item.
+fn adopting_a_created_child_is_not_what_offers_it_for_deletion() {
+    // Deliberate, and where it would be noticed if it changed: evolution-ews
+    // sets `remote-deletable` at each of the three sites that mint a child, this
+    // one included, while this backend sets it in one place —
+    // `delete_resource::offer_deletion`, from the `child_added` that fires when
+    // this source is published a moment later. So a created child *is* offered
+    // for deletion in Evolution; what this pins is that adopting one is not the
+    // place that decides it, because a second site here could drift from the
+    // funnel and offer "Delete" on something the funnel would have refused.
     let server = MockServer::builder().start();
     let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
@@ -349,6 +351,6 @@ fn a_created_child_is_not_yet_offered_for_deletion() {
     // SAFETY: a live source this test holds a reference to.
     assert!(
         unsafe { eds_sys::e_source_get_remote_deletable(scratch.source) } == GFALSE,
-        "a child was offered for deletion before delete_resource_sync exists"
+        "adopt_created set remote-deletable; the flag has two homes now"
     );
 }
