@@ -193,6 +193,7 @@ mod tests {
             id: Id::new(id),
             name: format!("Collection {id}"),
             is_default: false,
+            color: None,
         }
     }
 

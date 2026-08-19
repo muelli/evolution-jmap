@@ -55,19 +55,21 @@ use std::ffi::CStr;
 use std::fmt;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
-    ESource, ESourceAuthentication, ESourceBackend, ESourceResource, ESourceSecurity,
-    e_source_address_book_get_type, e_source_authentication_get_type,
-    e_source_authentication_set_host, e_source_authentication_set_method,
-    e_source_authentication_set_port, e_source_authentication_set_user,
-    e_source_backend_set_backend_name, e_source_calendar_get_type, e_source_get_extension,
-    e_source_resource_get_type, e_source_resource_set_identity, e_source_security_get_type,
-    e_source_security_set_method, e_source_set_display_name,
+    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_RESOURCE,
+    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceBackend, ESourceResource,
+    ESourceSecurity, ESourceSelectable, e_source_address_book_get_type,
+    e_source_authentication_get_type, e_source_authentication_set_host,
+    e_source_authentication_set_method, e_source_authentication_set_port,
+    e_source_authentication_set_user, e_source_backend_set_backend_name,
+    e_source_calendar_get_type, e_source_get_extension, e_source_resource_get_type,
+    e_source_resource_set_identity, e_source_security_get_type, e_source_security_set_method,
+    e_source_selectable_set_color, e_source_set_display_name,
 };
 use jmap_backend_core::error::cstring_lossy;
 use jmap_collection_sync::Setting;
 use jmap_collection_sync::child_source::{
-    EXTENSION_AUTHENTICATION, EXTENSION_DATA_SOURCE, EXTENSION_RESOURCE, EXTENSION_SECURITY,
+    EXTENSION_AUTHENTICATION, EXTENSION_CALENDAR, EXTENSION_DATA_SOURCE, EXTENSION_RESOURCE,
+    EXTENSION_SECURITY,
 };
 
 use crate::resource_id::KIND_EXTENSIONS;
@@ -210,6 +212,19 @@ unsafe fn write(source: *mut ESource, setting: &Setting) -> Result<(), Unwritabl
             unsafe {
                 let security: *mut ESourceSecurity = extension(source, E_SOURCE_EXTENSION_SECURITY);
                 e_source_security_set_method(security, value.as_ptr());
+            }
+        }
+        (EXTENSION_CALENDAR, "Color") => {
+            // `ESourceCalendar` derives from `ESourceSelectable`
+            // (`e-source-calendar.h`), so the same "Calendar" extension
+            // object answers `e_source_selectable_set_color` too — no second
+            // extension to look up or register.
+            // SAFETY: as above, with `ESourceSelectable` the base class the
+            // "Calendar" extension's own type derives from.
+            unsafe {
+                let selectable: *mut ESourceSelectable =
+                    extension(source, E_SOURCE_EXTENSION_CALENDAR);
+                e_source_selectable_set_color(selectable, value.as_ptr());
             }
         }
         _ => return Err(UnwritableSetting::unknown(setting)),
