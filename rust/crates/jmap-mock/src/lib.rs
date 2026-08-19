@@ -19,6 +19,7 @@ mod dispatch;
 mod mail;
 mod message;
 mod patch;
+mod principals;
 mod server;
 mod setops;
 mod state;
