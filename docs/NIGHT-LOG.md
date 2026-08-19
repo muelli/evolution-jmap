@@ -38566,3 +38566,32 @@ than showing them free; the organiser's own busy times should still appear
 (that is the chain-up to the cache, and it should work with the account
 offline); and a server that cannot be reached should surface an error rather
 than an empty, bookable-looking grid.
+
+## 2026-08-19 (claim) — CURRENT PRIORITY item 6: API-token (Bearer) auth method
+
+Fresh survey: `git fetch` shows local `master` = `origin/master` at `55e8699`
+(Track E Path A's `get_free_busy_sync` delivery), plus two roadmap-only
+commits (`87f0acb`, `f904dde`) queuing new CLAIMABLE work — no other agent has
+claimed anything since. CURRENT PRIORITY items 1 (M7), 3 (M9/M10), 4
+(percent-encoding) are done; item 5 (SRV autodiscovery) is code-complete
+pending only an operator Fastmail run. That leaves item 2's OAuth Look-Up
+entry point (needs a live Evolution session to even diagnose, per its own
+text) and item 6 — a self-contained, headless-testable, ordinary-Rust wiring
+task with no FFI beyond what already exists. Claiming item 6: add a third
+JMAP authentication method, "API token", alongside Password and OAuth 2.0, so
+a Bearer-token provider (Fastmail's concrete case — its docs say JMAP wants
+an API token over Bearer, not the account password) can be reached without
+OAuth 2.0's browser consent flow.
+
+Plan: a `jmap_backend_core::api_token` module (`API_TOKEN_METHOD = "bearer"`,
+`method_is_api_token`, `source_uses_api_token`, mirroring `oauth2.rs`'s shape)
+feeding a third branch in `connect_with`'s credential resolution; the mirror
+on the Camel/mail side (`jmap_mail::api_token`, wired into `service::attempt`)
+so a Bearer-token account's mail leg does not silently fall back to Basic
+with an empty password — `jmap-backend-collection/src/child_source.rs`
+propagates the collection's `[Authentication] Method` string verbatim to
+every child source including the mail account, so leaving `jmap-mail`
+unwired would connect contacts/calendars over Bearer while mail failed
+quietly; and a third `jmap-config` combo entry. TDD against `jmap-mockd`
+(already has `auth_bearer_ok`) and against real `CamelSettings`/`ESource`
+objects, mirroring `tests/oauth2.rs` in both crates.
