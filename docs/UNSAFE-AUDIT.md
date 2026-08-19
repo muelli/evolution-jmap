@@ -108,7 +108,14 @@ the compiler to keep them test-only.
    `pub unsafe fn zeroed_box<T>() -> Box<T>` with the safety contract written
    once ("every field of `T` must be valid at all-zero — verify this holds
    for the specific `T` before calling") instead of six near-identical
-   copies of the same paragraph. **Still open.**
+   copies of the same paragraph.
+   - **DONE 2026-08-19** — `jmap_backend_core::instance::zeroed_box<T>`
+     landed, `#[cfg(feature = "testing")]`-gated like the `detached()`
+     call sites it backs (a new `testing` feature on `jmap-backend-core`
+     itself, reached through each consumer crate's existing `testing`
+     feature). All six sites now call it instead of
+     `Box::new(unsafe { MaybeUninit::zeroed().assume_init() })`, dropping
+     the now-unused per-file `MaybeUninit` import. No behaviour change.
 
 Rough effort: **~1–2 hours** (six call sites, one new helper, no behavior
 change — the tests keep passing since the invariant doesn't move, only where
@@ -410,7 +417,9 @@ point, so its gaps aren't copied forward.
 1. **Pattern A** (zeroed-memory test doubles, 6 sites, 5 crates) —
    `#[cfg(test)]`-gate + one shared helper. **~1–2 hours.** Do first: it's
    the one INVESTIGATE-tagged item with a concrete, cheap, compiler-enforced
-   fix (test-only gating) available today.
+   fix (test-only gating) available today. **DONE 2026-08-19** — both the
+   gate (fix 1) and the shared `zeroed_box` helper (fix 2) have landed; see
+   Pattern A's own section above.
 2. **Pattern D** (`has_extension`-then-`get_extension` idiom, ~10+ sites) —
    one `extension_if_present<T>` helper in `jmap-backend-core`. **~2–3
    hours.** Named directly by this audit's own brief; clear highest-value

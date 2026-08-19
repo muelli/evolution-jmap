@@ -91,8 +91,6 @@
 //! [`evo-sys`]: ../../evo_sys/index.html
 
 use std::ffi::CStr;
-#[cfg(feature = "testing")]
-use std::mem::MaybeUninit;
 use std::ptr;
 
 use eds_sys::{
@@ -120,6 +118,8 @@ use gobject_sys::{
 };
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate};
+#[cfg(feature = "testing")]
+use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
@@ -165,7 +165,7 @@ impl JmapConfigServiceBackend {
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value.
-        Box::new(unsafe { MaybeUninit::zeroed().assume_init() })
+        unsafe { zeroed_box() }
     }
 }
 
