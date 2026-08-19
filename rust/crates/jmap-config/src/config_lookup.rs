@@ -133,19 +133,42 @@ pub const REDIRECT_URI: &str = "jmap-oauth2:/redirect";
 /// tried: unlike CalDAV/CardDAV autodiscovery (`e-webdav-config-lookup.c`,
 /// which tries every listed server because non-JMAP servers may sit at some
 /// and not others), a JMAP deployment names exactly one issuer, so a second
-/// entry would be trying a second server the first one failing.
+/// entry would be trying a second server the first one failing. An explicit
+/// entry is not a bare domain and so is never run through `resolver` — SRV
+/// autodiscovery (RFC 8620 §2.2) is what the email-domain fallback below
+/// exists to correct, not something an already-explicit host needs.
+///
+/// The email-domain fallback consults `resolver` for a `_jmap._tcp.<domain>`
+/// SRV record (see `jmap_client::resolver`) before returning the bare domain
+/// — the same seam and the same fallback order
+/// `jmap_client::ClientBuilder::connect_domain` uses, so a deployment
+/// published only via SRV (Fastmail; see `docs/NIGHT-LOG.md`, "JMAP SRV
+/// autodiscovery") is discovered here too, not just once a `jmap_client`
+/// session is already being fetched.
 ///
 /// What this returns is not yet a host `discover_and_register` can use as-is
-/// — a `servers` entry may carry a scheme and a port, which [`parse_target`]
-/// reads back out.
-pub(crate) fn probe_host(email_address: &str, servers: Option<&str>) -> Option<String> {
+/// — a `servers` entry or an SRV target may carry a scheme and a port, which
+/// [`parse_target`] reads back out; an SRV target is rendered `host:port`,
+/// which `parse_target` parses as a bare, secure host with that port, the
+/// right reading for a target a JMAP SRV record ever names.
+pub(crate) fn probe_host(
+    email_address: &str,
+    servers: Option<&str>,
+    resolver: &dyn jmap_client::resolver::Resolver,
+) -> Option<String> {
     if let Some(servers) = servers
         && let Some(first) = servers.split(';').map(str::trim).find(|s| !s.is_empty())
     {
         return Some(first.to_owned());
     }
     let (_, domain) = email_address.split_once('@')?;
-    (!domain.is_empty()).then(|| domain.to_owned())
+    if domain.is_empty() {
+        return None;
+    }
+    if let Some(target) = resolver.lookup_srv(domain) {
+        return Some(format!("{}:{}", target.host, target.port));
+    }
+    Some(domain.to_owned())
 }
 
 /// Where [`probe_host`]'s answer is actually reached: a bare host, an
@@ -499,7 +522,13 @@ unsafe extern "C" fn run(
             return;
         };
         let servers = param(params, E_CONFIG_LOOKUP_PARAM_SERVERS);
-        let Some(host) = probe_host(&email, servers.as_deref()) else {
+        // No real SRV lookup yet — that needs a `g_resolver_lookup_service()`-
+        // backed `Resolver`, unstarted (see `docs/NIGHT-LOG.md`, "JMAP SRV
+        // autodiscovery"). `NoSrvResolver` matches today's bare-domain-only
+        // behaviour exactly, and is what the real resolver replaces here once
+        // it exists.
+        let resolver = jmap_client::resolver::NoSrvResolver;
+        let Some(host) = probe_host(&email, servers.as_deref(), &resolver) else {
             return;
         };
         let Some(target) = parse_target(&host) else {
@@ -530,12 +559,24 @@ unsafe extern "C" fn run(
 
 #[cfg(test)]
 mod tests {
+    use jmap_client::resolver::{NoSrvResolver, Resolver, SrvTarget};
+
     use super::{parse_target, probe_host};
+
+    /// Returns one fixed answer for every domain asked, or none — the same
+    /// fake `jmap-client/tests/srv_discovery.rs` uses.
+    struct FakeResolver(Option<SrvTarget>);
+
+    impl Resolver for FakeResolver {
+        fn lookup_srv(&self, _domain: &str) -> Option<SrvTarget> {
+            self.0.clone()
+        }
+    }
 
     #[test]
     fn uses_the_email_domain_when_no_servers_are_given() {
         assert_eq!(
-            probe_host("vera@example.com", None),
+            probe_host("vera@example.com", None, &NoSrvResolver),
             Some("example.com".to_owned())
         );
     }
@@ -543,7 +584,7 @@ mod tests {
     #[test]
     fn an_explicit_servers_entry_wins_over_the_domain() {
         assert_eq!(
-            probe_host("vera@example.com", Some("jmap.example.net")),
+            probe_host("vera@example.com", Some("jmap.example.net"), &NoSrvResolver),
             Some("jmap.example.net".to_owned())
         );
     }
@@ -551,7 +592,11 @@ mod tests {
     #[test]
     fn only_the_first_servers_entry_is_tried() {
         assert_eq!(
-            probe_host("vera@example.com", Some("first.example; second.example")),
+            probe_host(
+                "vera@example.com",
+                Some("first.example; second.example"),
+                &NoSrvResolver
+            ),
             Some("first.example".to_owned())
         );
     }
@@ -559,19 +604,63 @@ mod tests {
     #[test]
     fn blank_servers_fall_back_to_the_domain() {
         assert_eq!(
-            probe_host("vera@example.com", Some("   ")),
+            probe_host("vera@example.com", Some("   "), &NoSrvResolver),
             Some("example.com".to_owned())
         );
     }
 
     #[test]
     fn an_address_with_no_at_sign_has_no_host_to_probe() {
-        assert_eq!(probe_host("not-an-address", None), None);
+        assert_eq!(probe_host("not-an-address", None, &NoSrvResolver), None);
     }
 
     #[test]
     fn an_address_with_an_empty_domain_has_no_host_to_probe() {
-        assert_eq!(probe_host("vera@", None), None);
+        assert_eq!(probe_host("vera@", None, &NoSrvResolver), None);
+    }
+
+    #[test]
+    fn an_srv_record_wins_over_the_bare_domain() {
+        let resolver = FakeResolver(Some(SrvTarget {
+            host: "api.example.com".to_owned(),
+            port: 443,
+        }));
+        assert_eq!(
+            probe_host("vera@example.com", None, &resolver),
+            Some("api.example.com:443".to_owned())
+        );
+    }
+
+    #[test]
+    fn no_srv_record_falls_back_to_the_bare_domain() {
+        let resolver = FakeResolver(None);
+        assert_eq!(
+            probe_host("vera@example.com", None, &resolver),
+            Some("example.com".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_explicit_servers_entry_is_never_resolved_for_srv() {
+        // A resolver that would answer for *any* domain must not be asked at
+        // all when `servers` names an explicit host — that host is not a
+        // bare email domain to autodiscover, it is already the answer.
+        let resolver = FakeResolver(Some(SrvTarget {
+            host: "wrong.example.com".to_owned(),
+            port: 443,
+        }));
+        assert_eq!(
+            probe_host("vera@example.com", Some("jmap.example.net"), &resolver),
+            Some("jmap.example.net".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_srv_target_parses_as_a_bare_secure_host_with_its_port() {
+        let target = parse_target("api.example.com:443").expect("host:port parses");
+        assert_eq!(target.host, "api.example.com");
+        assert_eq!(target.port, 443);
+        assert!(target.secure);
     }
 
     #[test]
