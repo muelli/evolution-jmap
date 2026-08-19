@@ -45,14 +45,16 @@ use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, guard_bool, guard_value, log_critical};
 use jmap_collection_sync::Parts;
 
-use crate::authenticate::{authenticate_with, login_of};
+use crate::authenticate::{Login, authenticate_with, login_of};
 use crate::child_added::follow_collection;
 use crate::collection_source::{parts_of, user_of};
 use crate::create_resource::{
     CreateError, adopt_created, create_on_server, kind_noun, requested_of, stored_password_of,
 };
+use crate::delete_resource::{DeleteError, delete_on_server, doomed_of, offer_deletion};
 use crate::fan_out::{Collection, Populated, fan_out};
 use crate::populate::Populating;
+use crate::removal::remove_source;
 use crate::resource_id::resource_id_of;
 
 /// The JMAP collection backend.
@@ -117,13 +119,15 @@ unsafe impl ObjectSubclass for JmapCollectionBackend {
         vfuncs.dup_resource_id = Some(dup_resource_id);
         vfuncs.populate = Some(populate);
         vfuncs.child_added = Some(child_added);
-        // The one slot whose EDS default is a *refusal* rather than a wrong
-        // answer: `collection_backend_create_resource()` returns
-        // `G_IO_ERROR_NOT_SUPPORTED` and nothing else, so leaving this
-        // uninstalled is an account that cannot create address books, which is
-        // visible. Which is why this override, unlike `child_added`'s, must not
-        // chain up — see `crate::create_resource`.
+        // The two slots whose EDS default is a *refusal* rather than a wrong
+        // answer: `collection_backend_create_resource()` and its delete twin
+        // return `G_IO_ERROR_NOT_SUPPORTED` and nothing else, so leaving either
+        // uninstalled is an account that cannot create or delete address books,
+        // which is visible. Which is why these two overrides, unlike
+        // `child_added`'s, must not chain up — see `crate::create_resource` and
+        // `crate::delete_resource`.
         vfuncs.create_resource_sync = Some(create_resource_sync);
+        vfuncs.delete_resource_sync = Some(delete_resource_sync);
         // A grandparent's slot, not the collection backend's own: EDS's own
         // default for it accepts every account without contacting anything, so
         // the one thing worse than not writing here is writing to the wrong
@@ -261,6 +265,19 @@ unsafe extern "C" fn child_added(backend: *mut ECollectionBackend, child_source:
             // binding below is still worth making.
             None => log_critical("child_added: the parent class has no child_added to chain up to"),
         }
+
+        // Every child of a collection passes through here exactly once —
+        // fanned-out, drawn from the cache by a populate, or just published by a
+        // create — which is what makes this the one place the flag is written,
+        // and the same place EDS's own `collection_backend_child_added` writes
+        // `removable = FALSE`. It is deliberately before the account read below:
+        // whether a child may be deleted from the server is a property of the
+        // child alone, so an account this code cannot find must not cost the
+        // user the menu item.
+        // SAFETY: a child source of a collection, which
+        // `evolution-source-registry` holds only as `EServerSideSource`s, alive
+        // for the length of the vfunc.
+        unsafe { offer_deletion(child_source) };
 
         // `(transfer none)`, and NULL only for a backend EDS did not construct
         // from a source.
@@ -404,35 +421,18 @@ unsafe extern "C" fn create_resource_sync(
             };
         }
 
-        // The account's own credentials, from the store `authenticate_sync`'s
-        // come out of — see `crate::create_resource` on why they are looked up
-        // rather than remembered. An OAuth 2.0 account ignores this and gets a
-        // fresh token inside `login_of`.
         // SAFETY: a live backend, a valid account source and a cancellable that
-        // is NULL or EDS's own.
-        let password = unsafe {
-            let server = e_collection_backend_ref_server(backend);
-            let password = stored_password_of(server, account, cancellable);
-            if !server.is_null() {
-                // SAFETY: the reference `ref_server` handed over, not used again.
-                g_object_unref(server.cast());
-            }
-            password
-        };
-
-        // SAFETY: a valid account source and a cancellable that satisfies
-        // `login_of`'s contract by this vfunc's own.
+        // is NULL or EDS's own — `login_for`'s contract exactly.
         let login =
-            unsafe { login_of(account, parts_of(account), password.as_deref(), cancellable) };
-        let login = match login {
-            Ok(login) => login,
-            // SAFETY: `error` is untouched so far.
-            Err(failure) => {
-                return unsafe {
-                    fail_bool(error, &CreateError::from(failure), CreateError::to_gerror)
-                };
-            }
-        };
+            match unsafe { login_for(backend, account, cancellable, "create_resource_sync") } {
+                Ok(login) => login,
+                // SAFETY: `error` is untouched so far.
+                Err(failure) => {
+                    return unsafe {
+                        fail_bool(error, &CreateError::from(failure), CreateError::to_gerror)
+                    };
+                }
+            };
 
         // Held for the length of the create and no longer, as in
         // `authenticate_sync`.
@@ -511,6 +511,153 @@ unsafe extern "C" fn create_resource_sync(
     // NULL `GError`. Every path above that sets it then returns, so a panic can
     // never unwind past an already-set error into the guard's own.
     unsafe { guard_bool("create_resource_sync", error, create) }
+}
+
+/// What EDS calls when the user chooses "Delete" on an address book or a
+/// calendar of this account — the one request that destroys something on the
+/// server.
+///
+/// The decisions are [`crate::delete_resource`]'s and
+/// [`jmap_collection_sync::delete`]'s; what is here is the two things only a
+/// live instance can answer — the account source and, through it, the account's
+/// credentials — and the order the three steps go in.
+///
+/// **No chain-up**, for the reason `create_resource_sync` gives: the parent's
+/// implementation is the `G_IO_ERROR_NOT_SUPPORTED` this override replaces.
+///
+/// **The destroy comes before the removal**, and that order is the error
+/// handling — see [`crate::delete_resource`] on which of the two half-done
+/// states is recoverable and which loses the child's uid and offline cache for
+/// nothing.
+///
+/// A panic becomes `FALSE` with the error set. The collection may or may not
+/// still exist on the server afterwards, and the next populate is what
+/// reconciles that — the same answer a failed create gets.
+unsafe extern "C" fn delete_resource_sync(
+    backend: *mut ECollectionBackend,
+    child_source: *mut ESource,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> gboolean {
+    let delete = || {
+        // Which collection this source stands for, read the same way
+        // `dup_resource_id` reads it. A source that answers nothing is not one
+        // of ours, and nothing of ours may be destroyed for it.
+        // SAFETY: EDS hands us one of its own sources, alive for the call.
+        let Some(doomed) = (unsafe { doomed_of(child_source) }) else {
+            // SAFETY: `error` is what an EDS vfunc receives, and nothing has
+            // written to it yet.
+            return unsafe { fail_bool(error, &DeleteError::NotOurs, DeleteError::to_gerror) };
+        };
+
+        // `(transfer none)`, and NULL only for a backend EDS did not construct
+        // from a source — which is also the case in which there is no account to
+        // read a server off, so it is an error here rather than the logged
+        // critical `populate` answers it with.
+        // SAFETY: EDS hands us one of its own backends, alive for the call, and
+        // `ECollectionBackend` derives from `EBackend`.
+        let account = unsafe { e_backend_get_source(backend.cast()) };
+        if account.is_null() {
+            // SAFETY: as above.
+            return unsafe {
+                fail_invalid(
+                    error,
+                    "the JMAP collection backend has no account to delete a collection from",
+                )
+            };
+        }
+
+        // SAFETY: a live backend, a valid account source and a cancellable that
+        // is NULL or EDS's own — `login_for`'s contract exactly.
+        let login =
+            match unsafe { login_for(backend, account, cancellable, "delete_resource_sync") } {
+                Ok(login) => login,
+                // SAFETY: `error` is untouched so far.
+                Err(failure) => {
+                    return unsafe {
+                        fail_bool(error, &DeleteError::from(failure), DeleteError::to_gerror)
+                    };
+                }
+            };
+
+        // Held for the length of the delete and no longer, as in
+        // `create_resource_sync`.
+        // SAFETY: `cancellable` is NULL or a valid `GCancellable` EDS keeps alive
+        // for the duration of the vfunc.
+        let _cancel = unsafe { observe(cancellable) };
+
+        if let Err(failure) =
+            delete_on_server(&login.server.target, login.credentials.clone(), &doomed)
+        {
+            // SAFETY: as above.
+            return unsafe { fail_bool(error, &failure, DeleteError::to_gerror) };
+        }
+
+        // EDS's documented obligation, and only now that the collection is
+        // really gone: "the implementor must also remove @source from the
+        // @backend's #ECollectionBackend:server". `e_source_remove_sync` on a
+        // server-side source is that removal — it unexports the object and
+        // deletes the key file — which is why this is `crate::removal`'s call
+        // rather than a second one written here.
+        // SAFETY: a child source of this collection, alive for the call, and a
+        // cancellable that is NULL or EDS's own.
+        if let Err(reason) = unsafe { remove_source(child_source, cancellable) } {
+            // SAFETY: as above.
+            return unsafe {
+                fail_bool(error, &DeleteError::Stale(reason), DeleteError::to_gerror)
+            };
+        }
+
+        debug_print(&format!(
+            "delete_resource_sync: deleted {} {}",
+            kind_noun(doomed.kind),
+            doomed.collection_id
+        ));
+        GTRUE
+    };
+
+    // SAFETY: as `create_resource_sync`'s — every path above that sets the error
+    // then returns, so a panic can never unwind past an already-set one.
+    unsafe { guard_bool("delete_resource_sync", error, delete) }
+}
+
+/// The account's [`Login`], for the two vfuncs EDS hands no `ENamedParameters`.
+///
+/// `authenticate_sync` is given the credentials EDS resolved; `create_resource_sync`
+/// and `delete_resource_sync` are not, so they have to ask for them — see
+/// [`crate::create_resource`] on why the store is asked at the moment the
+/// password is needed rather than a secret being held for the life of the
+/// account. An OAuth 2.0 account ignores the password entirely and gets a fresh
+/// token inside [`login_of`].
+///
+/// `context` names the calling vfunc, for the critical channel.
+///
+/// # Safety
+///
+/// `backend` must be a valid `ECollectionBackend`, `account` the valid `ESource`
+/// EDS constructed it from, and `cancellable` NULL or a valid `GCancellable` —
+/// which is what both vfuncs receive.
+unsafe fn login_for(
+    backend: *mut ECollectionBackend,
+    account: *mut ESource,
+    cancellable: *mut GCancellable,
+    context: &str,
+) -> Result<Login, crate::authenticate::LoginError> {
+    // SAFETY: a valid backend by this function's contract; the server comes back
+    // `(transfer full)` and is released before it goes out of scope.
+    let password = unsafe {
+        let server = e_collection_backend_ref_server(backend);
+        let password = stored_password_of(server, account, cancellable, context);
+        if !server.is_null() {
+            // SAFETY: the reference `ref_server` handed over, not used again.
+            g_object_unref(server.cast());
+        }
+        password
+    };
+
+    // SAFETY: a valid account source and a cancellable that satisfies
+    // `login_of`'s contract by this function's own.
+    unsafe { login_of(account, parts_of(account), password.as_deref(), cancellable) }
 }
 
 /// What one fan-out did, on the two channels a vfunc that has already answered

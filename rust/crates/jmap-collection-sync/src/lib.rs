@@ -31,6 +31,12 @@
 //! machine — here against a hand-written session document for the shapes a
 //! server may present, and against `jmap-mockd` for the one a server does.
 //!
+//! [`create`] and [`delete`] are the two directions that do not merely mirror
+//! the server: what Evolution's "New Address Book"/"New Calendar" and "Delete"
+//! ask it to hold, or stop holding. They live beside the discovery for the same
+//! reason as everything else here — the decision needs no headers, so it is
+//! tested against a running `jmap-mockd`.
+//!
 //! *Creating* the `ESource`s is deliberately not here: the `ECollectionBackend`
 //! subclass, the `e_source_get_extension` calls and the keyfile they write need
 //! the headers, and [`Child`] and its [`Child::settings`] are what they will be
@@ -40,6 +46,7 @@
 pub mod child_source;
 pub mod children;
 pub mod create;
+pub mod delete;
 pub mod layout;
 pub mod parts;
 pub mod resources;
@@ -47,6 +54,7 @@ pub mod resources;
 pub use child_source::{BACKEND_NAME, Connection, Setting, resource_id_for};
 pub use children::{Child, ChildKind, parse_resource_id};
 pub use create::{CreateFailure, Requested, create_collection};
+pub use delete::{DeleteFailure, Doomed, delete_collection};
 pub use layout::{CollectionLayout, MailService, ServiceAccount};
 pub use parts::Parts;
 pub use resources::{Fanout, Resource};
