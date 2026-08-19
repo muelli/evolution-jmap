@@ -38152,3 +38152,64 @@ already runs `-p jmap-config` (and `-p evo-sys`) as part of its crate set, so
 M10's prior green run may have already answered this spike's core question as
 a side effect — this session confirms that explicitly and writes it up rather
 than assuming.
+
+## 2026-08-19 (survey) — no tractable Sonnet increment; escalating Track D1's `delete_resource_sync`
+
+Fresh survey (`git fetch`: local `master` = `origin/master` at `6be9c4f`, no
+new maintainer commit). CURRENT PRIORITY is fully done except
+operator-confirmation items already logged as such. Walked Round 2 in the
+maintainer's lead order:
+
+- **Track D1's `delete_resource_sync`** — the only remaining piece of the
+  lead track — is GObject-vtable FFI, destructive (a wrong kind/id costs a
+  server-side collection with no undo), and was already treated as
+  escalation-worthy alongside `create_resource_sync` (which went to opus at
+  `7dd8a00`/`03994b7`). Not attempting on Sonnet.
+- **Track D2's write-back** (a local calendar-colour edit reaching the
+  server) looked possibly newly-unblocked now that `create_resource_sync`
+  landed, so this session actually researched it rather than assuming it was
+  escalation-worthy by category alone: downloaded/read
+  `evolution-ews-3.52.4` (cached at `/tmp/evolution-ews-3.52.4`) for
+  precedent. Finding: **evolution-ews has no server round-trip for calendar
+  colour at all** — `e-ews-folder.c`'s colour handling
+  (`e_ews_folder_utils_pick_color_spec`) only ever *assigns* a colour locally
+  from a fixed palette when a folder is first discovered; it is never read
+  from the server and never written back. So there is no incumbent
+  EDS/EWS pattern to mirror for "local edit → push to server" the way
+  `child_added`/`create_resource_sync` had one to copy. Building it needs a
+  new design: detecting an `ESourceSelectable` colour change (a GObject
+  `"notify::color"` signal on the child `ESource`, fired on whatever thread
+  touches the source) and getting that safely across to a `Calendar/set`
+  call made from `ECalMetaBackend`'s sync worker thread — genuine new
+  signal-lifecycle/concurrency FFI reasoning, not a mechanical port. Logging
+  this as a finding in `docs/ROADMAP.md`'s D2 entry rather than attempting
+  it; it is not "CLAIMABLE NOW" until that design exists.
+- **Track F** (newer-Evolution/EDS spike) was claimed at `6be9c4f`
+  (2026-08-19 10:40:39Z), 14 minutes before this survey (`date -u` read
+  10:54:42Z) — a live concurrent claim, nowhere near the 24h deadlock
+  threshold. Left untouched.
+- **A5** (FFI soundness audit) is explicitly flagged escalation-worthy in
+  the roadmap's own text and has been declined on that basis by every prior
+  session that surveyed it (see this file's Track A6 Pattern E claim entry);
+  no new information this session changes that judgement.
+- **A6 Pattern C** (libical/GObject RAII wrapper) and **Track E's
+  `get_free_busy_sync` vfunc** are unchanged, both flagged FFI/escalation-worthy
+  in the roadmap text itself.
+- **B1, C2's third-party-notices decision, C4** remain NEEDS-DECISION.
+
+No tractable Sonnet-sized item exists this iteration. Per the escalation
+protocol, writing `claude-opus-5` to `~/.night-shift-escalate` and stopping
+here without claiming any work — Track D1's `delete_resource_sync` is the
+best next step (top of the maintainer's lead order, genuinely FFI/destructive,
+and now buildable on tested foundations: `login_of`, `kind_of`,
+`address_book_destroy`/`calendar_destroy`, `requested_of`/`adopt_created`'s
+shape are all already landed from the create-side work). The next session on
+this thread should start from Track D1's roadmap paragraph and the
+"Deliberately NOT in this increment" note in this file's `create_resource_sync`
+delivery entry, which already names what delete needs: the `remote-deletable`
+flag (set from `populate` alongside `remote-creatable`, same
+`Populating::offer_creation` gate), the vfunc override (parent's default is
+also `G_IO_ERROR_NOT_SUPPORTED`, needs the same non-chain-up treatment as
+create), calling `address_book_destroy`/`calendar_destroy`, and removing the
+child `ESource` from the registry server on success — TDD against a red test
+analogous to `tests/backend.rs:340`'s flipped create assertion.

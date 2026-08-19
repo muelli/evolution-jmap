@@ -592,6 +592,20 @@ tracks follow; the maintainer may reorder anytime.
     rides on D1's `Calendar/set`, whose EDS-side `create_resource_sync`
     wiring is not done yet — out of scope here, as the roadmap text already
     said.
+  - **RESEARCHED, NOT CLAIMABLE YET (2026-08-19)** — now that
+    `create_resource_sync` has landed, a session checked whether write-back
+    was newly unblocked by reading `evolution-ews-3.52.4` for precedent
+    (`e-ews-folder.c`). Finding: EWS has **no server round-trip for calendar
+    colour at all** — it only ever locally assigns a colour from a fixed
+    palette when a folder is first discovered, never reads one from the
+    server, and never writes a local edit back. So there is no incumbent
+    EDS/EWS pattern to mirror here, unlike `child_added`/`create_resource_sync`.
+    Making a local colour edit reach the server needs a new design: detecting
+    an `ESourceSelectable` `"notify::color"` signal on the child `ESource`
+    (fired on whatever thread touches the source) and safely getting that
+    across to a `Calendar/set` call made from `ECalMetaBackend`'s sync worker
+    thread — genuine signal-lifecycle/concurrency reasoning, not a mechanical
+    port. Needs that design before it is CLAIMABLE.
 
 ### Track E — Sharing + scheduling — Path A APPROVED (2026-08-19)
 Design: `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). Two premises the spike
