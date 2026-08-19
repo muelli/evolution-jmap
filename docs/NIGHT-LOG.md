@@ -35660,3 +35660,71 @@ the current code, confidence-tag every finding, write
 `docs/STALE-COMMENTS-AUDIT.md`, and fix the HIGH-confidence ones in the same
 pass (comment-only changes don't affect tests, per the roadmap's own
 carve-out for this item).
+
+## 2026-08-19 — Delivered: Track A7, stale-comments audit
+
+Followed through on this session's claim. `docs/STALE-COMMENTS-AUDIT.md`
+records the sweep and its method. Delegated the read-heavy grep-and-verify
+pass across ~35 candidate files to a research subagent (read-only, no edits),
+then personally re-verified every finding it reported HIGH/MEDIUM confidence
+against the actual current code before touching anything, since a subagent's
+claim that code "still says X" is exactly the kind of thing worth checking
+rather than trusting — same principle as the FFI-audit and DOCUMENTATION
+memories about verifying against source rather than a report's framing.
+
+Seven HIGH-confidence stale comments fixed, all in one family: prose written
+while M7 was still in progress and never updated once the described gap
+closed.
+
+- `jmap-config/tests/textdomain.rs:17` and `jmap-config/src/module.rs:94`:
+  both said `insert_widgets` "is unwritten"/"has yet to put on screen" —
+  it has built every field for some time (`src/lib.rs:125` already said so).
+- `jmap-config/src/backend.rs`'s `insert_widgets` doc: said the page is "not
+  tagged complete until a human confirms it" and needs "a real Evolution
+  session (or M9's Xvfb tier)" — M7 is `COMPLETE` via two operator rounds
+  already recorded, and the M9-Xvfb parenthetical was itself wrong (below).
+- `jmap-backend-collection/tests/oauth2_service.rs:94`: "once M7's setup UI
+  writes OAuth2 accounts" (future tense) — it does this today.
+- `jmap-client/src/oauth.rs:28-31`: said the `EOAuth2Service` interface
+  needed to wire OAuth2 into EDS "is a later slice" — `jmap-config/src/
+  oauth2_service.rs` implements and registers it.
+- `jmap-config/tests/account.rs:241-242`: said `check_complete`'s insecure-
+  transport UI refusal "is not written yet" — it is, tested by
+  `tests/complete.rs::plaintext_to_a_server_that_is_not_this_machine_is_refused`.
+- `jmap-config/src/config_lookup.rs`'s "What is not yet proven" section and
+  `evo-sys/tests/config_lookup.rs`'s matching note: both described a real
+  `EConfigLookup` dispatching `JmapConfigLookup::run` as future work for "the
+  next increment" — `jmap-functional/tests/config-lookup.rs` ("M9 layer 1,
+  config lookup") already does exactly that.
+
+One MEDIUM-confidence finding fixed alongside: `evo-sys/src/lib.rs:60` and
+`evo-sys/tests/gtk.rs:11-12` both claimed the account-setup page "is only
+exercisable under M9's Xvfb tier" — checked `ci/gui-smoke.sh` directly rather
+than trusting the claim: it copies three pre-built `.source` keyfiles into
+place, never driving the account assistant, so M9's Tier-2 test does not
+exercise `insert_widgets` either. Reworded both to say only a human running
+the assistant in real Evolution exercises it (which is what actually
+happened for M7's sign-off).
+
+No calcard or percent-encoding migration leftovers found — both migrations'
+comments accurately describe the current, migrated code. No stale milestone
+references found outside the M7/config-lookup family above; the audit doc's
+"Looked suspicious but fine" section lists what was checked and ruled
+accurate, including several genuine, still-open gaps that read similarly at
+a glance (the collection backend's mail-source-host gap, deliberate
+VTODO/VJOURNAL non-support, Camel's own "not written back" terminology for
+its summary-dirty state) so the audit is falsifiable rather than a bare
+hit-list.
+
+Full gate: `cargo fmt --check` clean, `cargo clippy --all-targets --locked
+-- -D warnings` clean (default-members), `cargo test --locked` green
+(default-members, every `test result: ok`, 0 failed across all crates), and
+`cargo clippy -p jmap-config -p jmap-backend-collection -p evo-sys
+--all-targets --locked -- -D warnings` + `cargo test -p jmap-config -p
+jmap-backend-collection -p evo-sys --locked` both clean/green (the three
+EDS-gated crates this session's comment edits touch, built directly since
+this VM has the EDS headers even though they stay out of `default-members`).
+Comment-only changes plus one new plain-prose doc file (already covered by
+`REUSE.toml`'s existing `docs/**` annotation, and given its own SPDX header
+regardless, matching `docs/EXTERNALISATION-AUDIT.md`'s style) — no source
+logic changed, so no new tests were needed or written.

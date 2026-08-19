@@ -24,11 +24,11 @@
 //! offers it, register this client for a `client_id` ([`register_client`]),
 //! and redeem an authorization code or a refresh token for an access token
 //! ([`exchange_code`], [`refresh_access_token`]) — nothing here is a
-//! compiled-in constant, unlike EDS's Google/Outlook/Yahoo services. What is
-//! still missing is the consent exchange itself: sending the user to
-//! `authorization_endpoint` and getting a code back needs a browser and a
-//! real provider, and the vfuncs that wire any of this to EDS need the
-//! `EOAuth2Service` interface, which is a later slice.
+//! compiled-in constant, unlike EDS's Google/Outlook/Yahoo services. The
+//! vfuncs that wire this to EDS are `jmap-config`'s `EOAuth2Service`
+//! implementation. What is still missing is the consent exchange itself
+//! against a real deployment: sending the user to `authorization_endpoint`
+//! and getting a code back needs a browser and a real provider.
 //!
 //! ## What is enforced, and what is not
 //!
