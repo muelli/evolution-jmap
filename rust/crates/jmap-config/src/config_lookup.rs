@@ -527,12 +527,14 @@ unsafe extern "C" fn run(
             return;
         };
         let servers = param(params, E_CONFIG_LOOKUP_PARAM_SERVERS);
-        // No real SRV lookup yet — that needs a `g_resolver_lookup_service()`-
-        // backed `Resolver`, unstarted (see `docs/NIGHT-LOG.md`, "JMAP SRV
-        // autodiscovery"). `NoSrvResolver` matches today's bare-domain-only
-        // behaviour exactly, and is what the real resolver replaces here once
-        // it exists.
-        let resolver = jmap_client::resolver::NoSrvResolver;
+        // RFC 8620 §2.2: the provider may publish its JMAP host as a
+        // `_jmap._tcp` record rather than answer at the bare email domain, and
+        // this worker is where that matters most — it is what decides whether
+        // Evolution offers a JMAP account at all, so a provider missed here
+        // loses to the generic ISPDB autoconfig (which is how the operator's
+        // Fastmail setup ended up being offered imapx; see `docs/NIGHT-LOG.md`,
+        // "JMAP SRV autodiscovery").
+        let resolver = jmap_backend_core::resolver::SystemResolver;
         let Some(host) = probe_host(&email, servers.as_deref(), &resolver) else {
             return;
         };
