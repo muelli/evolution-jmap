@@ -18,9 +18,12 @@ out="$2"   # output SBOM path
 ts="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
 ver="${GITHUB_REF_NAME:-$(git describe --tags --always)}"
 
-# 1. Rust crates -> CycloneDX 1.5 (one file per workspace member). --locked
-#    ties it to the committed Cargo.lock.
-( cd rust && cargo cyclonedx --locked --format json --spec-version 1.5 )
+# 1. Rust crates -> CycloneDX 1.5 (one file per workspace member). cargo-cyclonedx
+#    has no --locked flag of its own (it reads whatever `cargo metadata` resolves),
+#    so verify the committed Cargo.lock is current first — that keeps the SBOM tied
+#    to the lock without passing a flag cargo-cyclonedx rejects — then generate.
+( cd rust && cargo metadata --locked --format-version 1 >/dev/null )
+( cd rust && cargo cyclonedx --format json --spec-version 1.5 )
 
 # Fold every member's component list into one deduplicated array (robust
 # whether the pinned cargo-cyclonedx emits per-crate or aggregate files).
