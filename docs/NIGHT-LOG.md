@@ -37878,3 +37878,75 @@ Everything else surveyed at claim time is unchanged: A5, A6 Pattern C, and
 Track E's vfunc remain escalation-worthy FFI; Track B1/C2/C4 remain
 NEEDS-DECISION; Track F remains a live concurrent claim (`81dac75`), not
 stale.
+
+## 2026-08-19 — claiming Track D1's `create_resource_sync` vtable wiring (on opus)
+
+`~/.night-shift-escalate` held `claude-opus-5`, written by the previous
+session (`7dd8a00`) which surveyed Round 2 in the maintainer's lead order and
+stopped at Track D1's remaining piece rather than attempt GObject-vtable FFI
+on Sonnet. This session is that re-run. `git fetch` shows local `master`
+equals `origin/master` (`7dd8a00`); no new maintainer commit.
+
+**Claiming: the `create_resource_sync` half of Track D1's EDS-side wiring**
+— `ECollectionBackendClass::create_resource_sync` in
+`jmap-backend-collection`, calling the `AddressBook/set`/`Calendar/set`
+creates that landed in `jmap-client` at the earlier D1 increment, plus
+`e_server_side_source_set_remote_creatable` on the account source, without
+which the vfunc is unreachable dead code.
+
+**Deliberately NOT in this increment: `delete_resource_sync`.** Two reasons,
+both about correctness rather than time. (1) It is the destructive half:
+`remote-deletable` on a child makes Evolution offer "Delete" on a JMAP
+address book, and a wrong kind or a wrong id there costs the user a
+server-side collection with no undo. Create is additive — its worst failure
+mode is an unwanted empty address book. (2) Every piece of plumbing the two
+share is built here (the credentials lookup, kind-from-`ESource`, the
+account/collection resolution, the error mapping), so delete becomes a small
+follow-up on tested foundations rather than half of one large, partly-verified
+commit. It stays open on the D1 thread, named as such.
+
+**Research first, per the standing "read the source, not the error list"
+note.** Downloaded and read the actual EDS 3.52.4 and evolution-ews 3.52.4
+tarballs from download.gnome.org rather than inferring the contract:
+- `ECollectionBackendClass`'s default `create_resource_sync` answers
+  `G_IO_ERROR_NOT_SUPPORTED` ("%s does not support creating remote
+  resources"), so this vfunc must **not** chain up on the paths it handles —
+  the opposite of `child_added`, where chaining up first is what puts the
+  child in the backend's table.
+- `e_collection_backend_create_resource_sync`'s own docs state the two
+  obligations: examine the passed `ESource` to decide what the server-side
+  resource is (and *error* if it is ambiguous), and after the create
+  succeeds add an `ESource` to the backend's registry server — which may be
+  the passed source itself.
+- The vfunc is reachable only if the *collection* source has
+  `remote-creatable` (`server_side_source_remote_create_sync` in
+  `e-server-side-source.c` refuses otherwise), and it is handed the new
+  child's **scratch** source, not a source of ours.
+- `e_ews_backend_create_resource_sync` is the live reference (M365's is
+  `#if 0`'d out): set parent to the account uid, write directory to the
+  collection's cache dir, `set_writable(TRUE)`, `set_remote_deletable(TRUE)`,
+  then `e_source_registry_server_add_source`. `remote-creatable` is set once,
+  in `ews_backend_constructed`.
+- `e_server_side_source_set_remote_creatable` early-returns when the value
+  is unchanged, so setting it from `populate` (this crate has no
+  `constructed` override, and adding one would be a fourth vtable-slot write
+  for a one-line effect) is idempotent rather than a repeated D-Bus export.
+
+**Credentials: looked up on demand, not cached.** EWS caches the
+`ENamedParameters` `authenticate_sync` was handed and rebuilds a connection
+from them. This crate will not: `e_source_registry_server_ref_credentials_
+provider()` + `e_source_credentials_provider_lookup_sync()` are both already
+in `eds-sys`'s generated bindings (the `e_source_.*` allowlist covers them),
+so the account's password can be read from the same libsecret store
+`authenticate_sync` gets it from, at the moment it is needed. That means no
+secret held in this backend's instance for the life of the account, no new
+instance state, no `instance_init`/`finalize` pair, and a create that works
+in a process where no `authenticate_sync` has run yet. OAuth 2.0 keeps going
+through `jmap_backend_core::oauth2::access_token`, so its token is always
+fresh rather than a cached one that may have expired.
+
+No new bindgen work is needed for any of it: every symbol involved
+(`e_server_side_source_set_remote_creatable`/`_deletable`/`_writable`/
+`_write_directory`, `e_collection_backend_get_cache_dir`,
+`e_source_set_parent`, `e_source_get_uid`, the credentials provider pair) is
+already generated under the existing allowlist prefixes.
