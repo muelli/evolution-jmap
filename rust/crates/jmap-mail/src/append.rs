@@ -78,7 +78,7 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, g_strdup, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
+use jmap_backend_core::error::{fail_bool, set_raw_gerror};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_mail_sync::Keywords;
@@ -128,7 +128,11 @@ unsafe extern "C" fn append_message_sync(
             let _cancel = observe(cancellable);
 
             let Some(mailbox) = JmapFolder::borrow(folder).and_then(JmapFolder::mailbox) else {
-                return fail(error, &StoreError::NoFolder(name_of(folder)));
+                return fail_bool(
+                    error,
+                    &StoreError::NoFolder(name_of(folder)),
+                    StoreError::to_gerror,
+                );
             };
 
             // Before the connection is looked for, because it is the one step
@@ -154,14 +158,14 @@ unsafe extern "C" fn append_message_sync(
             let received_at = received_at(info);
 
             let Some(store) = parent_store(folder) else {
-                return fail(error, &StoreError::Disconnected);
+                return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
             match store.import_message(mailbox, source, &keywords, received_at) {
                 Ok(uid) => {
                     report(appended_uid, &uid);
                     GTRUE
                 }
-                Err(problem) => fail(error, &problem),
+                Err(problem) => fail_bool(error, &problem, StoreError::to_gerror),
             }
         })
     }
@@ -253,16 +257,4 @@ unsafe fn name_of(folder: *mut CamelFolder) -> String {
     // SAFETY: the accessor returns a string the folder owns and outlives the
     // call; `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
-}
-
-/// Reports a failure and answers with it.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &StoreError) -> gboolean {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    GFALSE
 }

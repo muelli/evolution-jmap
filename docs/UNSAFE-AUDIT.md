@@ -325,6 +325,35 @@ its own increment.
   (a trait for "the failure return value" or similar) rather than a
   mechanical port; left for a session that wants to do that design work,
   consistent with this pattern's original "lowest priority" framing.
+- **DONE 2026-08-19 for the `fail`/`fail_bool` half.** The "needs a real
+  design" obstacle above resolves without a trait: `jmap_backend_core::error`
+  gained `fail<E, T>(error, failure: &E, to_gerror: impl FnOnce(&E) -> *mut
+  GError) -> *mut T` and `fail_bool<E>(…) -> gboolean`, generic over the
+  failure type with the mapping passed in as a closure/fn-item argument
+  rather than baked in — so each crate's own nontrivial `to_gerror`
+  (`StoreError::to_gerror`'s per-variant domain/code branching in
+  `jmap-mail`, the free `to_gerror(&SyncError)` functions in
+  `jmap-backend-book`/`jmap-backend-cal`'s `ops.rs`) keeps deciding the
+  mapping unchanged; only the "call it, `set_raw_gerror`, return a fixed
+  sentinel" body is shared. `fail_invalid(error, message: &str) -> gboolean`
+  (the `_invalid` variant, no failure value to map at all) is the third
+  helper, backing both backend crates' `fail_invalid`. All ten named
+  call-site definitions (`jmap-mail`'s 8 modules' `fail`/`fail_bool`, plus
+  `jmap-backend-book`/`jmap-backend-cal`'s `fail`/`fail_invalid` pairs) are
+  deleted; call sites pass their crate's existing `to_gerror` as the mapper
+  (`StoreError::to_gerror` as a fn-item value, or the local free function).
+  **Deliberately out of scope, and not a gap:** `jmap-mail/src/service.rs`'s
+  `fail_disconnected`/`fail_internal`, which return `CamelAuthenticationResult`
+  — never named by this pattern's original ~10-site list, and their sentinel
+  depends on the mapped *value* (`ERROR` vs `REJECTED`/`ACCEPTED`), not just
+  its type, which this shape doesn't try to cover; forcing it in would be the
+  over-generalisation the "lowest priority" framing warned against. Pure
+  mechanical consolidation otherwise, no behaviour change: every touched
+  crate's existing test suite stayed green unmodified. Gate green: `cargo fmt
+  --check`; `cargo clippy --all-targets --locked -- -D warnings`
+  (default-members) and the seven-crate EDS-gated clippy both clean; `cargo
+  test --locked` and the same seven-crate `cargo test` both green, every
+  `test result: ok`, 0 failed. Pattern E is now fully closed.
 
 ### Pattern F (positive — no action) — parent-class chain-up, and the panic-guard/subclass infrastructure
 
@@ -483,7 +512,9 @@ point, so its gaps aren't copied forward.
    a quick pass.
 5. **Pattern E** (`fail()`/`invalid_arg()` duplication) — **~2 hours**,
    lowest priority; fold into whichever of the above touches those files
-   anyway rather than scheduling separately.
+   anyway rather than scheduling separately. **DONE 2026-08-19** (both
+   halves — `invalid_arg_gerror` and `fail`/`fail_bool`/`fail_invalid`); see
+   Pattern E's own section above.
 
 `example-module`'s gaps (no panic guards, hand-rolled registration,
 `get_private`'s unbounded lifetime) are recorded above but intentionally
