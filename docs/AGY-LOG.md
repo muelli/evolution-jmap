@@ -173,5 +173,22 @@ Running record of headless polish increments on the `antigravity` branch.
 - **Calcard behaviour-difference findings:** None.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — Structure-aware fuzzing on jmap-vcard and jmap-ical (proptest)
 
-
+- **AGY-TASKS sub-step:** 7. Structure-aware fuzzing of the vCard↔JSContact and iCal↔JSCalendar round-trips with `proptest`.
+- **Changes:**
+  - Added `proptest = "1"` dev-dependency to `rust/crates/jmap-vcard/Cargo.toml` and `rust/crates/jmap-ical/Cargo.toml`.
+  - Added `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` providing property-based generators (`arb_contact_card`, `arb_raw_vcard`) and fuzzing suites asserting:
+    - `prop_card_to_vcard_never_panics`: arbitrary `ContactCard` structures generate valid vCard envelopes without panic.
+    - `prop_vcard_to_card_never_panics_on_raw_vcard`: structured raw vCards with arbitrary properties, parameters, and trailing content parse without panic.
+    - `prop_vcard_to_card_never_panics_on_arbitrary_string`: completely unstructured strings never panic `vcard_to_card`.
+    - `prop_card_roundtrip_reaches_fixed_point_stability`: emitting a generated card, parsing it back, and re-emitting reaches a fixed point (`vcard2 == vcard3`).
+    - `prop_vcard_roundtrip_reaches_fixed_point_stability`: parsing raw vCard input, emitting, and re-parsing reaches a fixed point (`vcard1 == vcard2`).
+  - Added `rust/crates/jmap-ical/tests/proptest_fuzz.rs` providing property-based generators (`arb_calendar_event`, `arb_recurrence_rule`, `arb_raw_ical`) and fuzzing suites asserting:
+    - `prop_event_to_ical_never_panics`: arbitrary `CalendarEvent` structures generate valid iCalendar envelopes without panic.
+    - `prop_ical_to_event_never_panics_on_raw_ical`: structured raw iCalendars with arbitrary properties, parameters, and trailing content parse without panic.
+    - `prop_ical_to_event_never_panics_on_arbitrary_string`: completely unstructured strings never panic `ical_to_event`.
+    - `prop_event_roundtrip_reaches_fixed_point_stability`: emitting a generated event, parsing it back, and re-emitting reaches a fixed point (`ical2 == ical3`).
+    - `prop_ical_roundtrip_reaches_fixed_point_stability`: parsing raw iCalendar input, emitting, and re-parsing reaches a fixed point (`ical1 == ical2`).
+- **Calcard behaviour-difference findings:** None. All fuzzed random inputs, malformed envelopes, and arbitrary UTF-8 strings parse safely or error out cleanly with zero panics and full round-trip fixed-point stability.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
