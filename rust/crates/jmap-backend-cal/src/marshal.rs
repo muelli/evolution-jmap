@@ -35,9 +35,9 @@ use glib_sys::{
     GSList, g_date_time_format, g_date_time_new_from_unix_utc, g_date_time_unref, g_free,
     g_slist_prepend, gchar,
 };
-use gobject_sys::g_object_unref;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::{dup_string, read_string};
+use jmap_backend_core::owned::Owned;
 use jmap_cal_sync::{ComponentInfo, FreeBusy};
 
 /// The event a save is about, extracted from the instances EDS handed over.
@@ -124,19 +124,22 @@ pub fn removed_info_list(uids: &[String]) -> *mut GSList {
 pub fn component_from_ical(icalendar: &str) -> *mut ICalComponent {
     let text = cstring_lossy(icalendar);
     // SAFETY: `text` is a valid NUL-terminated string for the duration of the
-    // call, which copies what it needs.
-    let component = unsafe { i_cal_component_new_from_string(text.as_ptr()) };
-    if component.is_null() {
+    // call, which copies what it needs. The reference it hands back is ours, and
+    // an `Owned` is what releases it on the path that does not return it.
+    let component = unsafe { Owned::from_raw(i_cal_component_new_from_string(text.as_ptr())) };
+    let Some(component) = component else {
         return ptr::null_mut();
-    }
-    // SAFETY: `component` is the fresh allocation just checked for NULL.
-    if unsafe { holds_event(component) } {
+    };
+    // SAFETY: `component` holds a live reference for the rest of this scope.
+    if unsafe { holds_event(component.as_ptr()) } {
         // SAFETY: as above; the component is ours and this only adds to it.
-        unsafe { take_event_time_zones(component) };
-        component
+        unsafe { take_event_time_zones(component.as_ptr()) };
+        // The caller takes the reference over, and drops it with
+        // [`component_unref`].
+        component.into_raw()
     } else {
-        // SAFETY: the reference is ours and is being dropped unreturned.
-        unsafe { component_unref(component) };
+        // Not something to hand back: the reference goes out with the scope,
+        // rather than by an unref this branch has to remember.
         ptr::null_mut()
     }
 }
@@ -164,19 +167,18 @@ pub fn component_from_ical(icalendar: &str) -> *mut ICalComponent {
 pub fn icalendar_with_time_zones(icalendar: &str) -> String {
     let text = cstring_lossy(icalendar);
     // SAFETY: `text` is valid for the call; the component is a fresh allocation
-    // this scope owns and drops.
+    // this scope owns, and the `Owned` drops it on every path out — including
+    // the "not a calendar object" one that returns the text untouched.
     unsafe {
-        let calendar = i_cal_component_new_from_string(text.as_ptr());
-        if calendar.is_null() {
+        let Some(calendar) = Owned::from_raw(i_cal_component_new_from_string(text.as_ptr())) else {
             return icalendar.to_owned();
-        }
-        let defined = take_event_time_zones(calendar);
+        };
+        let defined = take_event_time_zones(calendar.as_ptr());
         let rendered = if defined {
-            ical_from_component(calendar)
+            ical_from_component(calendar.as_ptr())
         } else {
             None
         };
-        component_unref(calendar);
         rendered.unwrap_or_else(|| icalendar.to_owned())
     }
 }
@@ -281,35 +283,36 @@ pub unsafe fn icalendar_from_instances(
     // SAFETY: a fresh envelope, and clones of the instances to put in it —
     // `take_component` takes ownership, and they are not ours to give.
     let icalendar = unsafe {
-        let calendar = i_cal_component_new_vcalendar();
-        if calendar.is_null() {
-            return None;
-        }
-        take_referenced_time_zones(calendar, &components, zones);
-        i_cal_component_take_component(calendar, i_cal_component_clone(master));
+        let calendar = Owned::from_raw(i_cal_component_new_vcalendar())?;
+        take_referenced_time_zones(calendar.as_ptr(), &components, zones);
+        i_cal_component_take_component(calendar.as_ptr(), i_cal_component_clone(master));
         for instance in &components {
             if !ptr::eq(*instance, master) {
-                i_cal_component_take_component(calendar, i_cal_component_clone(*instance));
+                i_cal_component_take_component(calendar.as_ptr(), i_cal_component_clone(*instance));
             }
         }
-        let rendered = ical_from_component(calendar);
-        component_unref(calendar);
-        rendered?
+        // The `?` is the exit path this used to have to unref on by hand: an
+        // envelope that will not render is still an envelope to release.
+        ical_from_component(calendar.as_ptr())?
     };
     Some(SavedComponent { uid, icalendar })
 }
 
 /// Drops a reference taken by [`component_from_ical`].
 ///
+/// Kept as a function because [`component_from_ical`] hands the vfuncs a raw
+/// pointer — that is the shape `load_component_sync` needs — so somebody outside
+/// this module still has to release one. Inside, it is the same [`Owned`] every
+/// other reference here goes through, so the crate has exactly one unref site.
+///
 /// # Safety
 ///
 /// `component` must be NULL or a valid `ICalComponent` this caller owns a
 /// reference to.
 pub unsafe fn component_unref(component: *mut ICalComponent) {
-    if !component.is_null() {
-        // SAFETY: ICalComponent is a GObject and the caller owns the reference.
-        unsafe { g_object_unref(component.cast()) }
-    }
+    // SAFETY: the caller guarantees NULL or an owned reference, which is
+    // `Owned::from_raw`'s own contract; the drop is the unref.
+    drop(unsafe { Owned::from_raw(component) });
 }
 
 /// Whether `component` is an event or contains one.
@@ -323,10 +326,13 @@ unsafe fn holds_event(component: *mut ICalComponent) -> bool {
         if i_cal_component_isa(component) == I_CAL_VEVENT_COMPONENT {
             return true;
         }
-        let event = i_cal_component_get_first_component(component, I_CAL_VEVENT_COMPONENT);
-        // The returned reference is ours; we only wanted to know it exists.
-        component_unref(event);
-        !event.is_null()
+        // The returned reference is ours; we only wanted to know it exists, so
+        // asking the `Owned` whether there is one is also what releases it.
+        Owned::from_raw(i_cal_component_get_first_component(
+            component,
+            I_CAL_VEVENT_COMPONENT,
+        ))
+        .is_some()
     }
 }
 
@@ -364,17 +370,16 @@ unsafe fn instance_components(instances: *const GSList) -> Vec<*mut ICalComponen
 ///
 /// Each of `components` must be a valid `ICalComponent`.
 unsafe fn find_master(components: &[*mut ICalComponent]) -> Option<*mut ICalComponent> {
-    // SAFETY: the caller guarantees valid components.
+    // SAFETY: the caller guarantees valid components. A property reference is
+    // ours to drop, like a component's — and the `Owned` drops it whichever
+    // answer it gave, which the two-branch version had to write twice.
     unsafe {
         components.iter().copied().find(|inner| {
-            let recurrence_id =
-                i_cal_component_get_first_property(*inner, I_CAL_RECURRENCEID_PROPERTY);
-            if recurrence_id.is_null() {
-                return true;
-            }
-            // A property reference is ours to drop, like a component's.
-            g_object_unref(recurrence_id.cast());
-            false
+            Owned::from_raw(i_cal_component_get_first_property(
+                *inner,
+                I_CAL_RECURRENCEID_PROPERTY,
+            ))
+            .is_none()
         })
     }
 }
@@ -398,18 +403,17 @@ unsafe fn take_event_time_zones(calendar: *mut ICalComponent) -> bool {
             return false;
         }
         let events = child_components(calendar, I_CAL_VEVENT_COMPONENT);
+        // Borrowed for the call, which only reads them: the `Owned`s stay the
+        // ones that release the references, at the end of this scope.
+        let borrowed: Vec<*mut ICalComponent> = events.iter().map(Owned::as_ptr).collect();
         // No cache: this is the way *out*, and an object built by `jmap-ical`
         // carries the definition of any zone it names that is not an IANA one.
-        let defined = take_referenced_time_zones(calendar, &events, ptr::null_mut());
-        for event in events {
-            component_unref(event);
-        }
-        defined
+        take_referenced_time_zones(calendar, &borrowed, ptr::null_mut())
     }
 }
 
-/// The children of `component` of the given kind, each an owned reference the
-/// caller drops.
+/// The children of `component` of the given kind, each an owned reference which
+/// goes out with the `Vec` the caller holds.
 ///
 /// # Safety
 ///
@@ -417,14 +421,16 @@ unsafe fn take_event_time_zones(calendar: *mut ICalComponent) -> bool {
 unsafe fn child_components(
     component: *mut ICalComponent,
     kind: ICalComponentKind,
-) -> Vec<*mut ICalComponent> {
+) -> Vec<Owned<ICalComponent>> {
     let mut children = Vec::new();
     // SAFETY: the caller guarantees the component; each reference the iteration
-    // hands back is ours, and is handed on to the caller.
+    // hands back is ours, and is handed on to the caller inside an `Owned` —
+    // which is also the loop's NULL test, so the end of the iteration and the
+    // ownership of what it produced are the same decision.
     unsafe {
         let mut child = i_cal_component_get_first_component(component, kind);
-        while !child.is_null() {
-            children.push(child);
+        while let Some(owned) = Owned::from_raw(child) {
+            children.push(owned);
             child = i_cal_component_get_next_component(component, kind);
         }
     }
@@ -467,9 +473,11 @@ unsafe fn take_referenced_time_zones(
     for tzid in unsafe { referenced_tzids(components) } {
         let name = cstring_lossy(&tzid);
         // SAFETY: `name` is valid for the calls, which copy what they keep.
-        // Every lookup hands back a zone its owner keeps — the library's builtin
-        // table or the calendar's cache — transfer none, so none is unreffed
-        // here.
+        // Every zone *lookup* hands back a zone its owner keeps — the library's
+        // builtin table or the calendar's cache — transfer none, which is why
+        // `resolve_time_zone`'s answer stays a raw pointer while everything here
+        // that *is* ours is an `Owned`. That is the distinction this function had
+        // to make in prose, across four early exits, before the type made it.
         unsafe {
             if defines_time_zone(calendar, name.as_ptr()) {
                 continue;
@@ -480,23 +488,21 @@ unsafe fn take_referenced_time_zones(
             }
             // This reference *is* ours (transfer full), whatever the native
             // component behind it belongs to, so the clone is what goes in the
-            // envelope and this is dropped.
-            let definition = i_cal_timezone_get_component(zone);
-            if definition.is_null() {
+            // envelope and this goes out with the iteration.
+            let Some(definition) = Owned::from_raw(i_cal_timezone_get_component(zone)) else {
                 continue;
-            }
-            let copy = i_cal_component_clone(definition);
-            component_unref(definition);
-            if copy.is_null() {
+            };
+            let Some(copy) = Owned::from_raw(i_cal_component_clone(definition.as_ptr())) else {
                 continue;
-            }
+            };
             // A definition under another name defines another zone, so a copy
-            // that cannot be renamed is not put in at all.
-            if rename_time_zone(copy, name.as_ptr()) {
-                i_cal_component_take_component(calendar, copy);
+            // that cannot be renamed is not put in at all — and is released by
+            // its own drop, not by an `else` branch that says so.
+            if rename_time_zone(copy.as_ptr(), name.as_ptr()) {
+                // `take_component` takes the reference, so it is handed over
+                // rather than borrowed.
+                i_cal_component_take_component(calendar, copy.into_raw());
                 defined = true;
-            } else {
-                component_unref(copy);
             }
         }
     }
@@ -558,15 +564,8 @@ unsafe fn resolve_time_zone(tzid: *const gchar, zones: *mut ETimezoneCache) -> *
 /// string.
 unsafe fn defines_time_zone(calendar: *mut ICalComponent, tzid: *const gchar) -> bool {
     // SAFETY: the caller guarantees both; the zone comes back transfer full and
-    // is dropped here — only its existence was asked about.
-    unsafe {
-        let zone = i_cal_component_get_timezone(calendar, tzid);
-        if zone.is_null() {
-            return false;
-        }
-        g_object_unref(zone.cast());
-        true
-    }
+    // is released by the `Owned`'s drop — only its existence was asked about.
+    unsafe { Owned::from_raw(i_cal_component_get_timezone(calendar, tzid)).is_some() }
 }
 
 /// Sets the `TZID` of the `VTIMEZONE` `definition`, or false if it has none —
@@ -580,12 +579,13 @@ unsafe fn rename_time_zone(definition: *mut ICalComponent, tzid: *const gchar) -
     // SAFETY: the caller guarantees both; the property reference is ours to
     // drop, and `set_tzid` copies the string.
     unsafe {
-        let property = i_cal_component_get_first_property(definition, I_CAL_TZID_PROPERTY);
-        if property.is_null() {
+        let Some(property) = Owned::from_raw(i_cal_component_get_first_property(
+            definition,
+            I_CAL_TZID_PROPERTY,
+        )) else {
             return false;
-        }
-        i_cal_property_set_tzid(property, tzid);
-        g_object_unref(property.cast());
+        };
+        i_cal_property_set_tzid(property.as_ptr(), tzid);
         true
     }
 }
@@ -607,21 +607,25 @@ unsafe fn referenced_tzids(components: &[*mut ICalComponent]) -> Vec<String> {
         // SAFETY: the caller guarantees a valid component; each property and
         // parameter reference the iteration hands back is ours to drop.
         unsafe {
-            let mut property = i_cal_component_get_first_property(*component, I_CAL_ANY_PROPERTY);
-            while !property.is_null() {
-                let parameter = i_cal_property_get_first_parameter(property, I_CAL_TZID_PARAMETER);
-                if !parameter.is_null() {
-                    let tzid = i_cal_parameter_get_tzid(parameter);
+            let mut next = i_cal_component_get_first_property(*component, I_CAL_ANY_PROPERTY);
+            // Two nested references per property, each released by its own
+            // scope: the parameter at the end of the `if let`, the property at
+            // the end of the iteration. The identifier is copied out of the
+            // parameter while it is still held.
+            while let Some(property) = Owned::from_raw(next) {
+                if let Some(parameter) = Owned::from_raw(i_cal_property_get_first_parameter(
+                    property.as_ptr(),
+                    I_CAL_TZID_PARAMETER,
+                )) {
+                    let tzid = i_cal_parameter_get_tzid(parameter.as_ptr());
                     if !tzid.is_null() {
                         let tzid = CStr::from_ptr(tzid).to_string_lossy().into_owned();
                         if !tzid.is_empty() && !tzids.contains(&tzid) {
                             tzids.push(tzid);
                         }
                     }
-                    g_object_unref(parameter.cast());
                 }
-                g_object_unref(property.cast());
-                property = i_cal_component_get_next_property(*component, I_CAL_ANY_PROPERTY);
+                next = i_cal_component_get_next_property(*component, I_CAL_ANY_PROPERTY);
             }
         }
     }
