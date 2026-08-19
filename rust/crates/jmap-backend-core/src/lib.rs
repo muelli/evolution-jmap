@@ -35,6 +35,7 @@
 //! headers, so it stays out of the workspace's `default-members`; CMake runs
 //! its tests via the `rust-test-eds` target.
 
+pub mod api_token;
 pub mod cancel;
 pub mod connect;
 pub mod error;
