@@ -37575,3 +37575,18 @@ module alongside it), inject it in place of `NoSrvResolver` at both named
 call sites, and TDD it the way `srv_discovery.rs` already does against a
 fake — true end-to-end confirmation against `_jmap._tcp.fastmail.com` is
 still an operator step (no creds on this runner).
+
+## 2026-08-19 09:14Z — Claiming the real SRV `Resolver` (GResolver via `gio-sys`)
+
+Running on **opus** per the previous session's escalation (`a4533d1` wrote
+`claude-opus-5` to `~/.night-shift-escalate` and stopped without claiming).
+Taking the item that escalation named: ROADMAP CURRENT PRIORITY item 5's
+"CLAIMABLE NOW — build the real SRV `Resolver`".
+
+Claiming: implement `jmap_client::resolver::Resolver` for a real
+`GResolver`-backed lookup of `_jmap._tcp.<domain>` using the
+`g_resolver_lookup_service()` / `GSrvTarget` accessors already bound in
+`gio-sys` 0.22 (no new dependency), place it in the EDS-integration layer
+(`jmap-backend-core`, which both call sites can reach — `jmap-config` already
+depends on it), and inject it where `NoSrvResolver` is constructed today:
+`jmap_backend_core::source::connect` and `jmap_config::config_lookup::run`.
