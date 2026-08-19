@@ -21,6 +21,7 @@ mod error;
 pub mod limits;
 mod mail;
 pub mod oauth;
+pub mod resolver;
 pub mod transport;
 mod url;
 
