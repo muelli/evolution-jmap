@@ -289,6 +289,20 @@ Running record of headless polish increments on the `antigravity` branch.
   2. `calcard` parses arbitrary custom property names matching `X-[A-Za-z0-9-]+` and custom parameters safely without errors, allowing `jmap-vcard` to selectively extract supported `X-` extensions while safely dropping unknown extensions.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — vCard ↔ JSContact ↔ EDS Contact Mapping Reference (docs/VCARD-MAPPING.md)
+
+- **AGY-TASKS sub-step:** 7. `docs/VCARD-MAPPING.md` — a reference table: each vCard property/param → its JSContact representation → the EDS `E_CONTACT_*` field it lands in, with a note on any lossy or product-decision cases (cross-reference the findings in `docs/AGY-LOG.md`).
+- **Changes:**
+  - Created `docs/VCARD-MAPPING.md` providing a comprehensive, authoritative reference manual and specification across vCard 3.0/4.0 (`calcard`), JSContact (RFC 9553/9555, `jmap-proto`), and Evolution Data Server (libebook-contacts 3.52, `EContactField`).
+  - Documented the three-tier mapping architecture, selective sync safety (`PatchObject`), predicate safeguards, identity keying (`X-JMAP-KEY`, `X-JMAP-UID`), and deterministic fixed-point convergence.
+  - Constructed the master property mapping table detailing all 28+ property/parameter mappings across `UID`, `X-JMAP-UID`, `FN`, `N`, `NICKNAME`, `EMAIL`, `TEL`, `ADR`, `LABEL`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `URL`, `CALURI`, `FBURL`, `PHOTO`, `CATEGORIES`, `BDAY`, `X-EVOLUTION-ANNIVERSARY`, `X-EVOLUTION-SPOUSE`, and all 10 slotted instant-messaging services (`X-AIM` through `X-YAHOO`).
+  - Added detailed subsystem specifications for names (double-barrelled restoration), telephony (context and feature slot narrowing), postal addresses (7 structured components, street/number joining, label pairing), organizational hierarchies, anniversaries, visual media pairing, and online service URI schemes.
+  - Codified the complete catalog of product decisions and lossy edge case rationales (dropped-by-design unknown `X-` properties, group card isolation, multilingual `ALTID`/`LANGUAGE` resolution, positional `EMAIL` slotting, date clamping >= 1000, whitespace trimming defense).
+  - Included a complete function and predicate index covering all public and private helper functions in `jmap-vcard/src/contact.rs`.
+- **Calcard behaviour-difference findings:** None. All 199 unit, proptest fuzz, and roundtrip tests in `jmap-vcard` pass with 100% compliance.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
 
 
 
