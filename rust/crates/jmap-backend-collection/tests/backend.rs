@@ -315,13 +315,46 @@ fn class_init_replaces_the_default_child_added_rather_than_leaving_it() {
 }
 
 #[test]
-fn installing_child_added_left_the_slots_beside_it_inherited() {
-    // `child_added` is the first slot this crate writes into the middle of
-    // `ECollectionBackendClass` — `dup_resource_id` and `populate` sit at the
-    // front of it — and its neighbours are the pair of signal closures and the
-    // resource vfuncs, all of which EDS fills in. A write one slot out does not
-    // fail to compile; it replaces a function of another signature, which is a
-    // call through a bad pointer the first time EDS uses it.
+fn class_init_replaces_the_default_create_resource_sync_rather_than_leaving_it() {
+    // The one slot of the five whose EDS default is a *refusal* rather than a
+    // wrong answer: `collection_backend_create_resource()` does nothing but
+    // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
+    // creating remote resources")`, which the default `create_resource_sync`
+    // drives through a closure. So an override that is written but not installed
+    // is not a silent misbehaviour — it is Evolution answering "New Address
+    // Book" with that message — and it is also why this override must NOT chain
+    // up: the parent is the refusal being replaced.
+    let class = Class::get();
+    // SAFETY: the parent type's class is alive for as long as ours is.
+    let parent: *mut ECollectionBackendClass =
+        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+    assert!(!parent.is_null(), "the parent class was not referenced");
+
+    let ours = class
+        .vfuncs()
+        .create_resource_sync
+        .expect("class_init installed no create_resource_sync");
+    // SAFETY: a live class struct.
+    let inherited = unsafe { (*parent).create_resource_sync }
+        .expect("EDS installs a default that refuses every create");
+
+    assert!(
+        ours as usize != inherited as usize,
+        "the slot still holds EDS's default, which refuses every create"
+    );
+}
+
+#[test]
+fn installing_the_middle_slots_left_the_ones_beside_them_inherited() {
+    // `child_added` and `create_resource_sync` are the slots this crate writes
+    // into the middle of `ECollectionBackendClass` — `dup_resource_id` and
+    // `populate` sit at the front of it — and their neighbours are the other
+    // signal closure and the rest of the resource vfuncs, all of which EDS fills
+    // in. A write one slot out does not fail to compile; it replaces a function
+    // of another signature, which is a call through a bad pointer the first time
+    // EDS uses it. `create_resource` and `create_resource_finish` sit
+    // immediately *after* the slot this crate now writes, so they are the two
+    // that pin it from the far side.
     let class = Class::get();
     // SAFETY: as above.
     let parent: *mut ECollectionBackendClass =
@@ -338,10 +371,19 @@ fn installing_child_added_left_the_slots_beside_it_inherited() {
         "class_init overwrote child_removed"
     );
     assert_eq!(
-        ours.create_resource_sync.map(|f| f as usize),
-        inherited.create_resource_sync.map(|f| f as usize),
-        "class_init overwrote create_resource_sync"
+        ours.create_resource.map(|f| f as usize),
+        inherited.create_resource.map(|f| f as usize),
+        "class_init overwrote create_resource"
     );
+    assert_eq!(
+        ours.create_resource_finish.map(|f| f as usize),
+        inherited.create_resource_finish.map(|f| f as usize),
+        "class_init overwrote create_resource_finish"
+    );
+    // Still inherited on purpose, not by omission: the delete half is the
+    // destructive one and is its own increment. Until it is written, this slot
+    // must stay EDS's `G_IO_ERROR_NOT_SUPPORTED`, which is also why nothing here
+    // sets `remote-deletable` on a child — see `crate::create_resource`.
     assert_eq!(
         ours.delete_resource_sync.map(|f| f as usize),
         inherited.delete_resource_sync.map(|f| f as usize),

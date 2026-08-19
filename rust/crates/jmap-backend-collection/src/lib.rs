@@ -61,6 +61,17 @@
 //!   The four calls on a live collection it needs are a trait, so the order and
 //!   the decisions are testable against a real `jmap-mockd` and real `ESource`s
 //!   on a machine with no `evolution-source-registry`.
+//! - [`create_resource`] is the one request that goes the other way. Everything
+//!   above mirrors what the server holds; this makes the server hold something
+//!   new, because Evolution's "New Address Book" and "New Calendar" asked it to.
+//!   `ECollectionBackendClass::create_resource_sync` is the vfunc, and unlike
+//!   every other slot this crate fills, the implementation it replaces is a
+//!   *refusal* — `G_IO_ERROR_NOT_SUPPORTED` — so it is the one override that
+//!   must not chain up. What is here is the EDS ends: the kind and name read off
+//!   the scratch `ESource` EDS hands the vfunc, and the same [`Child::settings`]
+//!   a fan-out writes, written back onto it so that a created child and a
+//!   discovered one are the same source. The decision in between is
+//!   [`jmap_collection_sync::create`]'s.
 //! - [`populate`] is the vfunc EDS reaches all of that through first, and the
 //!   half of it that needs no server: the cached children of previous sessions,
 //!   claimed and exported so that an account works *offline*, and then the one
@@ -118,6 +129,7 @@ pub mod backend;
 pub mod child_added;
 pub mod child_source;
 pub mod collection_source;
+pub mod create_resource;
 pub mod factory;
 pub mod fan_out;
 pub mod mail_child;
