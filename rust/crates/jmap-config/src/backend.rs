@@ -392,12 +392,14 @@ const STATUS_COLLECTION_KEY: &CStr = c"jmap-config-status-collection";
 /// machine does not have (see [`evo_sys`]'s module docs). Every call below is
 /// one `evo-sys`'s `tests/gtk.rs` and `tests/page.rs` already hold against the
 /// linked library and the types it takes; what no test here can do is run
-/// this function and see the result. It needs a real Evolution session (or
-/// M9's Xvfb tier) to confirm the page actually shows three entries, an
-/// authentication combo and a check button filled with what `setup_defaults`
-/// offered, and that editing any of them toggles *Next* — recorded in
-/// `docs/NIGHT-LOG.md` as exactly that, and not tagged complete until a human
-/// confirms it.
+/// this function and see the result. It needs a real Evolution session to
+/// confirm the page actually shows three entries, an authentication combo and
+/// a check button filled with what `setup_defaults` offered, and that editing
+/// any of them toggles *Next* — M9's Xvfb tier launches Evolution but seeds a
+/// pre-built `.source` file rather than driving this page, so only a human
+/// running the account assistant exercises it. Two operator rounds in real
+/// Evolution have now confirmed exactly that (`docs/NIGHT-LOG.md`,
+/// `docs/MILESTONES.md`'s `M7 COMPLETE`).
 ///
 /// ## Failure
 ///
