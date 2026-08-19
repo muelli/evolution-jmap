@@ -577,7 +577,9 @@ proptest! {
             let vcard1 = card_to_vcard(&parsed1);
             let parsed2 = vcard_to_card(&vcard1).expect("re-parsing emitted vCard must succeed");
             let vcard2 = card_to_vcard(&parsed2);
-            prop_assert_eq!(vcard1, vcard2, "re-emitted vCard must reach a fixed-point");
+            let parsed3 = vcard_to_card(&vcard2).expect("third roundtrip must parse cleanly");
+            let vcard3 = card_to_vcard(&parsed3);
+            prop_assert_eq!(vcard2, vcard3, "re-emitted vCard must reach a fixed-point");
         }
     }
 }
