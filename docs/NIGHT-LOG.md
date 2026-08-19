@@ -37740,3 +37740,85 @@ consolidation, no `unsafe`/FFI authoring (the bodies already exist,
 unchanged); every touched crate's existing test suite is the regression
 net, not a red-test-first exercise (there is no new behaviour to test
 red-first for a refactor that changes no mapping). Claiming this now.
+
+## 2026-08-19 — Delivered: Track A6 Pattern E, the `fail`/`fail_bool`/`fail_invalid` consolidation
+
+Followed through on the claim. `jmap_backend_core::error` gained three
+helpers alongside the already-shared `invalid_arg_gerror`:
+
+- `fail<E, T>(error, failure: &E, to_gerror: impl FnOnce(&E) -> *mut GError)
+  -> *mut T` — the pointer-sentinel shape `jmap-mail`'s `manage.rs` and
+  `folders.rs` needed.
+- `fail_bool<E>(error, failure: &E, to_gerror: impl FnOnce(&E) -> *mut
+  GError) -> gboolean` — the `gboolean` shape every other named site needed.
+- `fail_invalid(error, message: &str) -> gboolean` — the `_invalid` variant
+  that takes a raw message with no failure value to map, backing both
+  `jmap-backend-book`/`jmap-backend-cal`'s `ops.rs`.
+
+The obstacle the last several sessions' surveys kept citing ("~10 call
+sites return three different sentinel shapes... needs a real design")
+turned out not to need a trait: making the mapping a closure/fn-item
+argument, rather than an inherent method the helper assumes, is enough —
+each crate's own already-nontrivial `to_gerror` (`StoreError::to_gerror`'s
+per-variant domain/code branching in `jmap-mail`, and the free
+`to_gerror(&SyncError)` functions in `jmap-backend-book`/
+`jmap-backend-cal`'s `ops.rs`) is passed in unchanged as
+`StoreError::to_gerror` (a fn-item value) or the local free function, and
+only the "call the mapper, `set_raw_gerror`, return a fixed sentinel" body
+is shared.
+
+**Ten local definitions deleted**, one per file: `jmap-mail/src/
+{manage,synchronize,refresh,append,send,subscribe,folders,transfer}.rs`'s
+`fail`/`fail_bool` (`manage.rs`/`folders.rs` had the pointer-generic form,
+the other six the `gboolean` form), and `jmap-backend-book`/
+`jmap-backend-cal`'s `ops.rs` `fail`/`fail_invalid` pairs. Every call site
+updated to pass the mapper explicitly (e.g. `fail_bool(error,
+&StoreError::Disconnected, StoreError::to_gerror)`); `append.rs`/`send.rs`
+kept their own unrelated `set_raw_gerror` call sites (`unwritable`/
+`unsendable`, which build their own domain-specific `GError`s and are not
+part of this pattern) and their imports adjusted accordingly rather than
+losing the import entirely. One near-miss caught by the build, not the
+initial read-through: `append.rs` had an 11th `fail(...)` call this
+session's scoping research (and my own first pass) missed on the first
+grep, resolving after the local `fail` was deleted to an inaccessible
+private `fail` in `crate::message` of the same name — `cargo build` caught
+it immediately as `cannot find function` with a note naming the
+inaccessible sibling, fixed by routing it through `fail_bool` like every
+other site in the file.
+
+**Deliberately out of scope, not a silently-dropped gap:**
+`jmap-mail/src/service.rs`'s `fail_disconnected`/`fail_internal`, which
+return `CamelAuthenticationResult` rather than `gboolean`/`*mut T` — never
+part of this pattern's originally-named ~10 sites, and their sentinel
+depends on the mapped *value* (`ERROR` vs `REJECTED`/`ACCEPTED`), not just
+its type, which would need a different, value-dependent shape; forcing them
+into the same two helpers would be exactly the over-generalisation the
+pattern's own "lowest priority, ~2 hours" framing warned against. Left
+alone. `docs/UNSAFE-AUDIT.md`'s Pattern E section and its "Prioritized
+follow-up list" item 5 are both updated to DONE.
+
+No behaviour change anywhere: every mapping decision (which domain, which
+code, which message) is byte-for-byte what it was before, only relocated
+from an inherent-method call to an explicit fn-item argument. Pure
+mechanical consolidation — this is a refactor with the existing test suites
+as the regression net, not new behaviour to TDD red-first.
+
+Gate before pushing: `cargo fmt --check` clean (one `cargo fmt` pass —
+line-wrapping only, mechanical); `cargo clippy --all-targets --locked -- -D
+warnings` (default-members) and `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+seven EDS-gated crates) both clean; `cargo test --locked` (default-members)
+and the same seven-crate `cargo test` both green, every `test result: ok`,
+0 failed across every suite in both runs. Disk stayed comfortable (5.5G
+free after the builds), no `cargo clean` needed.
+
+Ending the session here — one focused, fully green increment, pushed.
+Track A6 (unsafe/idiom audit) is now fully closed: every IMPROVE pattern is
+either done (A, B, D's clean sites, E) or explicitly left as its own
+larger, escalation-worthy session (C — the libical/GObject RAII wrapper,
+~1 day, highest safety value but the largest single increment). Everything
+else surveyed at claim time is unchanged: CURRENT PRIORITY is fully done
+pending operator/maintainer confirmation; Track D1/E's remaining pieces and
+A5 remain escalation-worthy FFI; Track B1/C2/C4 remain NEEDS-DECISION;
+Track F remains a live concurrent claim (`81dac75`), not stale.

@@ -82,9 +82,9 @@ use eds_sys::{
     camel_folder_get_folder_summary, camel_folder_get_full_name,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GTRUE, gboolean};
+use glib_sys::{GError, GTRUE, gboolean};
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
+use jmap_backend_core::error::fail_bool;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_mail_sync::MessageUpdate;
@@ -131,10 +131,14 @@ unsafe extern "C" fn refresh_info_sync(
             let _cancel = observe(cancellable);
 
             let Some((mailbox, summary)) = target(folder) else {
-                return fail(error, &StoreError::NoFolder(name_of(folder)));
+                return fail_bool(
+                    error,
+                    &StoreError::NoFolder(name_of(folder)),
+                    StoreError::to_gerror,
+                );
             };
             let Some(store) = parent_store(folder) else {
-                return fail(error, &StoreError::Disconnected);
+                return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
 
             // The question this folder is in a position to ask. A summary that
@@ -156,7 +160,7 @@ unsafe extern "C" fn refresh_info_sync(
             };
             let update = match update {
                 Ok(update) => update,
-                Err(failure) => return fail(error, &failure),
+                Err(failure) => return fail_bool(error, &failure, StoreError::to_gerror),
             };
 
             let (state, changes) = match update {
@@ -227,16 +231,4 @@ unsafe fn name_of(folder: *mut CamelFolder) -> String {
     // SAFETY: the accessor returns a string the folder owns and outlives the
     // call; `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
-}
-
-/// Reports a failure and answers with it.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &StoreError) -> gboolean {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    GFALSE
 }

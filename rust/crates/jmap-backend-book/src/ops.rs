@@ -24,7 +24,9 @@
 
 use eds_sys::{E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, EContact, e_book_client_error_create};
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
-use jmap_backend_core::error::{cstring_lossy, invalid_arg_gerror, set_raw_gerror};
+use jmap_backend_core::error::{
+    cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, set_raw_gerror,
+};
 use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
 use jmap_book_sync::{BookSync, SyncError};
 use jmap_proto::State;
@@ -63,7 +65,7 @@ pub unsafe fn list_existing(
         Ok(listed) => listed,
         // SAFETY: `error` satisfies set_raw_gerror's contract by this
         // function's own.
-        Err(failure) => return unsafe { fail(error, &failure) },
+        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
     };
 
     // SAFETY: as above for the out-parameters; both allocations are GLib ones
@@ -166,7 +168,7 @@ pub unsafe fn load_contact(
     let info = match sync.load_contact(&uid) {
         Ok(info) => info,
         // SAFETY: as above.
-        Err(failure) => return unsafe { fail(error, &failure) },
+        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
     };
 
     let contact = marshal::contact_from_vcard(&info.vcard);
@@ -239,7 +241,7 @@ pub unsafe fn save_contact(
     let info = match sync.save_contact(&vcard, existing_uid.as_deref()) {
         Ok(info) => info,
         // SAFETY: as above.
-        Err(failure) => return unsafe { fail(error, &failure) },
+        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
     };
 
     // SAFETY: `out_new_uid` satisfies the contract by this function's own, and
@@ -268,7 +270,7 @@ pub unsafe fn remove_contact(
     match sync.remove_contact(&uid) {
         Ok(()) => GTRUE,
         // SAFETY: as above.
-        Err(failure) => unsafe { fail(error, &failure) },
+        Err(failure) => unsafe { fail_bool(error, &failure, to_gerror) },
     }
 }
 
@@ -296,24 +298,4 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
         // argument was bad, not the server.
         SyncError::VCard(_) => invalid_arg_gerror(&failure.to_string()),
     }
-}
-
-/// Reports `failure` through `error` and returns the vfunc's FALSE.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &SyncError) -> gboolean {
-    unsafe { set_raw_gerror(error, to_gerror(failure)) };
-    GFALSE
-}
-
-/// The same, for the arguments EDS itself got wrong.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail_invalid(error: *mut *mut GError, message: &str) -> gboolean {
-    unsafe { set_raw_gerror(error, invalid_arg_gerror(message)) };
-    GFALSE
 }
