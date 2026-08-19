@@ -1436,7 +1436,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    for (key, email) in card.emails.iter().flatten() {
+    let mut emails: Vec<_> = card.emails.iter().flatten().collect();
+    emails.sort_by_key(|(key, email)| (email.pref.unwrap_or(u32::MAX), *key));
+    for (key, email) in emails {
         if !states_email(email) {
             continue;
         }
@@ -1462,7 +1464,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    for (key, phone) in card.phones.iter().flatten() {
+    let mut phones: Vec<_> = card.phones.iter().flatten().collect();
+    phones.sort_by_key(|(key, phone)| (phone.pref.unwrap_or(u32::MAX), *key));
+    for (key, phone) in phones {
         if !states_phone(phone) {
             continue;
         }
@@ -1492,11 +1496,18 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    for (key, address) in card.addresses.iter().flatten() {
+    let mut addresses: Vec<_> = card.addresses.iter().flatten().collect();
+    addresses.sort_by_key(|(key, address)| (address_pref(address).unwrap_or(u32::MAX), *key));
+    for (key, address) in addresses {
         let mut type_params = Vec::new();
         if let Some(slot) = context_slot(address.contexts.as_ref()) {
             type_params.push(VCardParameter::typ(VCardParameterValue::Text(
                 slot.to_owned(),
+            )));
+        }
+        if address_pref(address).is_some() {
+            type_params.push(VCardParameter::typ(VCardParameterValue::Text(
+                "PREF".to_owned(),
             )));
         }
         if let Some(fields) = address_fields(address) {
@@ -1948,14 +1959,17 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
             continue;
         }
         let contexts = read_flags(&CONTEXTS, entry);
-        let key = label_entry(entry, contexts.as_ref(), &addresses);
-        addresses
-            .entry(key)
-            .or_insert_with(|| Address {
-                contexts,
-                ..Address::default()
-            })
-            .full = Some(full);
+        let key = label_entry(entry, contexts.as_ref(), &addresses, &full);
+        let address = addresses.entry(key).or_insert_with(|| Address {
+            contexts,
+            ..Address::default()
+        });
+        address.full = Some(full);
+        if entry_has_type(entry, "PREF") && !address.extra.contains_key("pref") {
+            address
+                .extra
+                .insert("pref".to_owned(), serde_json::Value::from(1));
+        }
     }
 
     Ok(ContactCard {
@@ -2230,6 +2244,16 @@ fn restore_shared_fields<T: Clone>(
     restored
 }
 
+/// The preference rank of an address, stored in its `extra` map (as `Address`
+/// in JSContact RFC 9553 §2.5.1 has a `pref` property), or `None` if unranked.
+fn address_pref(address: &Address) -> Option<u32> {
+    address
+        .extra
+        .get("pref")
+        .and_then(|v| v.as_u64())
+        .and_then(|n| u32::try_from(n).ok())
+}
+
 /// The address an `ADR` line states, or `None` when every field of it is
 /// empty — the same "nothing was said" an `EMAIL:` with no address is.
 fn read_address(entry: &VCardEntry) -> Option<Address> {
@@ -2241,15 +2265,19 @@ fn read_address(entry: &VCardEntry) -> Option<Address> {
         };
         components.push(AddressComponent::new(kind, value));
     }
-    if components.is_empty() {
+    let full = entry_param(entry, "LABEL").filter(|label| !label.is_empty());
+    if components.is_empty() && full.is_none() {
         return None;
     }
+    let mut extra = BTreeMap::new();
+    if entry_has_type(entry, "PREF") {
+        extra.insert("pref".to_owned(), serde_json::Value::from(1));
+    }
     Some(Address {
-        components: Some(components),
+        components: (!components.is_empty()).then_some(components),
         contexts: read_flags(&CONTEXTS, entry),
-        // Filled in by the `LABEL` line, if the card has one for this address.
-        full: None,
-        extra: BTreeMap::new(),
+        full,
+        extra,
     })
 }
 
@@ -2314,17 +2342,18 @@ fn label_entry(
     entry: &VCardEntry,
     contexts: Option<&Value>,
     addresses: &BTreeMap<String, Address>,
+    full: &str,
 ) -> String {
-    let unlabelled = |address: &Address| address.full.is_none();
+    let unlabelled_or_matching =
+        |address: &Address| address.full.is_none() || address.full.as_deref() == Some(full);
     if let Some(key) = entry_param(entry, X_JMAP_KEY).filter(|key| !key.is_empty())
-        && addresses.get(&key).is_none_or(unlabelled)
+        && addresses.get(&key).is_none_or(unlabelled_or_matching)
     {
         return key;
     }
-    if let Some((key, _)) = addresses
-        .iter()
-        .find(|(_, address)| unlabelled(address) && address.contexts.as_ref() == contexts)
-    {
+    if let Some((key, _)) = addresses.iter().find(|(_, address)| {
+        unlabelled_or_matching(address) && address.contexts.as_ref() == contexts
+    }) {
         return key.clone();
     }
     entry_key(entry, "a", addresses)
