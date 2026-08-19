@@ -13,8 +13,5 @@ M6 COMPLETE d0eb034 2026-08-10
 M8 COMPLETE 24d0b57 2026-08-10
 M9 COMPLETE bd3ae60 2026-08-16
 M7 COMPLETE c3cac2d 2026-08-17
+M10 COMPLETE 00271f9 2026-08-17
 CALCARD COMPLETE 4bd6383 2026-08-18
-# M10 is NOT complete: compile drift is fixed but the newer-EDS (3.60) leg
-# still fails 3 of 26 eds-sys `contacts` assertions. Per ROADMAP.md CURRENT
-# PRIORITY item 2 ("Top unblocked item"), M10 may be tagged only once that
-# leg is green. Do not re-add an M10 COMPLETE line before then.

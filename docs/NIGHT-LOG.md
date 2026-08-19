@@ -35043,3 +35043,180 @@ OAuth2 issuer mismatch, EDS 3.60+ mapping decisions). ROADMAP's "Lead order"
 note said the Claude lane leads Round 2 once M10's 3 tests and this win both
 land — M10 is still open (needs a CI dispatch this runner cannot trigger), so
 Round 2 is not yet unlocked by this session's work alone.
+
+## 2026-08-19 (claim) — Claiming ROADMAP priority item 5: JMAP SRV autodiscovery, client-side seam
+
+Fresh survey: M10's 3 newer-EDS assertions need a CI dispatch this runner
+cannot trigger (unchanged, still off the table). Real-server readiness's two
+named items are maintainer-gated. Round 2 (Track D/E, Track A audits) is not
+yet unlocked per the maintainer's own "Lead order" note, since M10 is still
+open. That leaves ROADMAP priority item 5 — JMAP SRV autodiscovery — marked
+"CLAIMABLE NOW" and unblocked: confirmed by grep that no `_jmap._tcp`/SRV
+support exists anywhere in `rust/` yet.
+
+Scoping this session's increment: the item's own design note says the real
+fix needs a `Resolver` trait seam in `jmap-client` (pure crate, kept
+dependency-lean — no DNS crate) plus an EDS-side implementation backed by
+`g_resolver_lookup_service()` (FFI, in `eds-sys`/the EDS integration crates),
+and explicitly says "reasonable to escalate if the `Resolver` seam or the
+GResolver binding proves gnarly." Splitting it: this increment builds and
+TDD-tests the `Resolver` trait seam and the SRV-vs-bare-domain decision in
+`jmap-client` only (pure Rust, no unsafe, fully mock/fake-testable) — the
+part squarely in Sonnet's reach. Wiring a real `GResolver`-backed resolver
+into the EDS-facing crates (`jmap-config`/`jmap-backend-core`, touching
+`config_lookup.rs::probe_host` and the password-path connect flow) is left
+for a follow-up session once this seam exists to wire into; noted below
+rather than attempted in the same increment as the FFI work.
+
+## 2026-08-19 — Delivered: `Resolver` trait seam for JMAP SRV autodiscovery
+
+- **`jmap-client/src/resolver.rs`** (new): a `Resolver` trait —
+  `lookup_srv(&self, domain: &str) -> Option<SrvTarget>` — plus `SrvTarget
+  { host, port }` and the default `NoSrvResolver`, which always returns
+  `None`. Deliberately no DNS crate here (kept out per the design note in
+  ROADMAP item 5): this pure crate never resolves anything itself, only
+  defines the seam an embedder plugs a real lookup into.
+- **`jmap-client/src/client.rs`**: `ClientBuilder` grew a `resolver` field
+  (defaulting to `NoSrvResolver`) and a `.resolver(impl Resolver + 'static)`
+  setter, plus a new `ClientBuilder::connect_domain(domain, credentials)`:
+  asks the resolver for `domain`'s SRV target first and builds the session
+  URL from `https://{host}:{port}/.well-known/jmap` when one is found,
+  otherwise falls back to today's `https://{domain}/.well-known/jmap` — then
+  delegates to the existing `connect`, so session discovery, refresh, and
+  everything downstream of a `Client` are unchanged either way. The existing
+  `connect(origin, …)` (used everywhere today, including `Client::connect`)
+  is untouched — this is an additive entry point, not a behaviour change to
+  any existing caller.
+- **`jmap-client/tests/srv_discovery.rs`** (new, red-then-green): a fake
+  in-memory `Transport` records every URL requested and answers with a
+  fixed session document — no real DNS/network needed, since the question
+  is which URL the client asks for. Three tests: an SRV target redirects
+  session discovery there; no SRV record falls back to the bare domain
+  (both with a fake `Resolver`); and `connect_domain` with no `.resolver(…)`
+  call at all uses the bare domain (`NoSrvResolver`'s default). All red
+  before `resolver.rs`/`connect_domain` existed (confirmed:
+  `unresolved import jmap_client::resolver`), green after.
+- Scope check against the roadmap item's two named call sites
+  (`jmap-client/client.rs`'s own session discovery, and the config-lookup
+  worker's `probe_host` in `jmap-config`): only the client-side seam lands
+  this session, as claimed above. `jmap-config`/`jmap-backend-core` still
+  build their origin from the ESource's `Host` field or the email domain
+  directly and never call `connect_domain` yet — wiring either call site to
+  use it, and supplying a real `GResolver`-backed `Resolver` from
+  `eds-sys`/the EDS integration (FFI: `g_resolver_lookup_service()`), is
+  unstarted and is the next increment in this thread, not a regression from
+  today (both sites' current bare-domain behaviour is unchanged).
+- Full gate: `cargo fmt --check` clean, `cargo clippy --all-targets
+  --locked -- -D warnings` (default-members) clean, `cargo clippy -p
+  evolution-jmap-client --all-targets --locked --features live-server --
+  -D warnings` clean, `cargo test --locked` (default-members) green, 0
+  failures across every crate including the 3 new tests. `cargo
+  deny`/`reuse lint` unavailable on this VM as usual; both new source files
+  carry the SPDX header the lint checks for.
+
+Next step for this thread (not attempted here, flagged as likely
+escalation-worthy per the roadmap item's own note): wire `connect_domain`
+into the password-path connect flow and `config_lookup.rs::probe_host`, and
+add a real `Resolver` backed by `g_resolver_lookup_service()` in the EDS
+integration layer. That second half is FFI/GObject-binding work; this
+session's seam is what it plugs into once attempted.
+
+## 2026-08-19 (claim) — Claiming M10: reproduce the newer-EDS leg locally via Docker
+
+Fresh survey: real-server readiness's two named items are maintainer-gated
+(OAuth2 issuer mismatch, EDS 3.60+ mapping decisions). The SRV-autodiscovery
+thread's remaining half (wiring `connect_domain` into the two named call
+sites, and a `GResolver`-backed `Resolver`) is a real `unsafe`/FFI job
+(`g_resolver_lookup_service`, `GList`/`GSrvTarget` ownership, RFC 2782
+priority ordering) with zero observable behaviour until that FFI lands —
+wiring the call sites first would just be inert plumbing. Per the "beyond
+Sonnet's reliable reach" guidance, that FFI is deferred rather than attempted
+here (not claimed this session).
+
+Instead: `docs/ROADMAP.md`'s MAINTAINER DECISIONS #2 names M10 as the "top
+unblocked item" — 3 of 26 `eds-sys` `contacts` assertions fail on newer EDS —
+but every prior session treated it as blocked on a GitHub Actions dispatch
+this runner cannot trigger. Re-checked that assumption: `ci.yml`'s
+`eds-version-matrix` job just runs `ci/eds-matrix.sh` inside a public,
+digest-pinned `docker.io/library/fedora` container — nothing GitHub-specific.
+This runner has a working (if root-only) Docker daemon and already pulled
+that exact digest successfully. So the newer-EDS leg is reproducible
+locally, not runner-blocked at all.
+
+Claiming: pull the pinned Fedora container, install
+`evolution-data-server-devel`/`evolution-devel` + a stable Rust toolchain
+inside it (mirroring the job's own steps), mount this worktree, and run
+`ci/eds-matrix.sh` to reproduce the 3 named failures
+(`contact_date_fields_are_structured_e_contact_date_types`,
+`e_contact_field_id_from_vcard_maps_x_lines`,
+`structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`).
+Then fix the 3 assertions per the maintainer's instruction: version-aware
+expectations, or fix the mapping if 3.60's behaviour is the correct one — in
+`rust/`, not by touching the CI job or loosening the assertions. Will not
+edit `.github/workflows/ci-image.yml` or anything under `infra/`.
+
+## 2026-08-19 — Delivered: M10 re-verified green on newer EDS; fixed a docs-sync bug, not a code bug
+
+Followed through on this session's claim. Built the exact `eds-version-matrix`
+job locally: `sudo docker run` the digest-pinned
+`docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898`
+`ci.yml` names, `dnf install`ed the same packages the job's `run:` step lists,
+installed stable Rust the same way, mounted this worktree read-write, and ran
+`ci/eds-matrix.sh` against current `master` (`eb9f785`) — `pkg-config
+--modversion evolution-data-server-1.2` confirmed EDS 3.60.2 inside the
+container, matching `docs/eds-version-matrix.md`. Result: **1132 tests
+passed, 0 failed**, across every crate `ci/eds-matrix.sh` runs, including the
+3 assertions the roadmap's CURRENT PRIORITY text named as still-failing
+(`contact_date_fields_are_structured_e_contact_date_types`,
+`e_contact_field_id_from_vcard_maps_x_lines`,
+`structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`) — all
+three pass.
+
+**Why this wasn't already known:** it already was, just not where the last
+several sessions were looking. `git log` shows the actual fix landed same-day
+back on 2026-08-17 — `00271f9` ("make contact-model test assertions
+version-aware for 3.60") — verified green in this exact container at the
+time (`b7946df`, "record M10 eds-matrix green session") and fully written up
+in `docs/eds-version-matrix.md`'s "(B) Fixed 2026-08-17" section, which has
+said "0 failures on both legs" ever since. What never got updated to match
+was `docs/ROADMAP.md`'s CURRENT PRIORITY item 2 / MAINTAINER DECISIONS text —
+it was written 15 minutes *before* `00271f9` landed and kept describing the
+pre-fix "3 assertions still fail" state. A later session (`1ce7237`,
+2026-08-18) found an `M10 COMPLETE` line in `docs/MILESTONES.md` that
+predated the fix too (`a26578b`, based on a CI dispatch at a commit before
+`00271f9`) and — reasonably, from what it could see — un-tagged it by
+deferring to ROADMAP.md's text, without cross-checking
+`docs/eds-version-matrix.md`, which already had the true, current answer. At
+least two sessions between (`e19c69e`/"fifteenth re-verification",
+`aaf895a`/"sixteenth re-verification") tried to recheck this and reported
+being blocked by docker/disk access rather than by any actual failure —
+consistent with this being a stale-docs problem compounded by
+environment-access noise, not a real regression anyone ever reproduced.
+
+**Fixed the docs, not the code** (no `rust/` changes — nothing needed one):
+- `docs/ROADMAP.md`: MAINTAINER DECISIONS #2 rewritten to state M10 is done,
+  both legs green, and to record this session's independent re-verification
+  plus the docs-sync root cause above, so the next session sees the current
+  truth without re-deriving it.
+- `docs/MILESTONES.md`: `M10 COMPLETE 00271f9 2026-08-17` re-added (citing
+  the commit whose fix this session's run actually verified, per the file's
+  own convention — see `M9`/`M7`/etc. citing their completing commit, not
+  the tagging commit).
+- Also worth recording for whoever hits it next: the container's `dnf
+  install`/`cargo build` writes as root on a `-v host:container` bind mount,
+  so a run that fills the disk mid-build (as this session's first attempt
+  did — `rust/target` had regrown past headroom from a prior session, see
+  the standing disk-fills-from-cargo-target issue) leaves root-owned files
+  the host user cannot `cargo clean`; `sudo rm -rf rust/target` is what
+  actually recovers, not a plain `cargo clean`.
+- No test/code changed, so no gate beyond the container run itself was
+  needed for this fix; `git status` after the container run was clean
+  (Cargo.lock untouched — offline resolution matched).
+
+Real-server readiness's two named items remain maintainer-gated. The
+SRV-autodiscovery thread's remaining half (wiring `connect_domain` into the
+password path + `config_lookup.rs::probe_host`, and a `GResolver`-backed
+`Resolver`) is still the next tractable-but-FFI item, flagged escalation-worthy
+by the prior session — not attempted here since this session found a
+higher-value, lower-risk item (a genuinely unblocked, pure-verification M10
+close-out) instead.
