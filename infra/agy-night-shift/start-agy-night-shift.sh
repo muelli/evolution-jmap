@@ -15,7 +15,11 @@
 #
 # Sentinels (checked only between iterations, so a running increment always
 # finishes first):
-#   ~/.agy-shift-paused  durable  — stays down across reboots until removed
+#   ~/.agy-shift-paused  durable  — stays down across reboots. A "blocked <hash>"
+#     pause (lane drained) AUTO-CLEARS when docs/AGY-TASKS.md changes on
+#     origin/master: refill the lane and agy resumes on the next self-heal start,
+#     no SSH needed (the skill's "steer by pushing a commit"). A "merge-conflict"
+#     or a manual/empty pause stays until removed by hand.
 #   ~/.agy-shift-stop    one-shot — one clean exit (the lossless driver-swap seam)
 # Blocked: the prompt makes agy print "AGY-SHIFT: BLOCKED" when the polish lane
 # has nothing unblocked; after BLOCKED_LIMIT in a row the driver sets the durable
@@ -55,7 +59,27 @@ consecutive_noop=0
 consecutive_merge_fail=0
 
 while true; do
-    if [ -f "$PAUSE_FILE" ]; then log "paused ($PAUSE_FILE); exiting between iterations. rm it to resume."; exit 0; fi
+    if [ -f "$PAUSE_FILE" ]; then
+        # A "blocked <hash>" pause (lane drained) auto-clears once the maintainer
+        # refills docs/AGY-TASKS.md on origin/master — so a git push resumes agy on
+        # the next self-heal start, no SSH. Any other content (merge-conflict, or a
+        # manual/empty pause) stays until removed by hand.
+        read -r _pause_reason _paused_tasks_hash < "$PAUSE_FILE" 2>/dev/null || true
+        if [ "${_pause_reason:-}" = "blocked" ]; then
+            git fetch origin --quiet >> "$LOG" 2>&1 || true
+            _cur_tasks_hash=$(git rev-parse origin/master:docs/AGY-TASKS.md 2>/dev/null || true)
+            if [ -n "$_cur_tasks_hash" ] && [ "$_cur_tasks_hash" != "${_paused_tasks_hash:-}" ]; then
+                rm -f "$PAUSE_FILE"
+                log "AGY-TASKS.md changed since the BLOCKED pause — maintainer refilled the lane; auto-resuming."
+            else
+                log "paused (blocked, lane unchanged); exiting. Refill docs/AGY-TASKS.md to auto-resume, or rm $PAUSE_FILE."
+                exit 0
+            fi
+        else
+            log "paused (${_pause_reason:-manual}); exiting. rm $PAUSE_FILE to resume."
+            exit 0
+        fi
+    fi
     if [ -f "$STOP_FILE" ]; then rm -f "$STOP_FILE"; log "stop requested; exiting cleanly between iterations."; exit 0; fi
 
     # Stay on the antigravity polish branch and keep it current with master. We
@@ -73,8 +97,8 @@ while true; do
         consecutive_merge_fail=$(( consecutive_merge_fail + 1 ))
         log "merge of origin/master conflicted (${consecutive_merge_fail}/${MERGE_CONFLICT_LIMIT}); skipping this round"
         if [ "$consecutive_merge_fail" -ge "$MERGE_CONFLICT_LIMIT" ]; then
-            touch "$PAUSE_FILE"
-            log "cannot merge master into antigravity ${MERGE_CONFLICT_LIMIT}x — the polish lane has collided with master's. Pausing (touched $PAUSE_FILE); resolve the branch conflict, then rm it and relaunch."
+            echo 'merge-conflict' > "$PAUSE_FILE"
+            log "cannot merge master into antigravity ${MERGE_CONFLICT_LIMIT}x — the polish lane has collided with master's. Pausing; resolve the branch conflict, then rm $PAUSE_FILE and relaunch. (A task refill will NOT auto-clear this one — it needs a human merge.)"
             exit 0
         fi
     fi
@@ -124,8 +148,8 @@ while true; do
         consecutive_blocked=$(( consecutive_blocked + 1 ))
         log "agy reported BLOCKED ${consecutive_blocked}/${BLOCKED_LIMIT}"
         if [ "$consecutive_blocked" -ge "$BLOCKED_LIMIT" ]; then
-            touch "$PAUSE_FILE"
-            log "polish lane blocked ${BLOCKED_LIMIT}x — pausing (touched $PAUSE_FILE). rm it and relaunch to resume."
+            printf 'blocked %s\n' "$(git rev-parse origin/master:docs/AGY-TASKS.md 2>/dev/null)" > "$PAUSE_FILE"
+            log "polish lane blocked ${BLOCKED_LIMIT}x — pausing. Refill docs/AGY-TASKS.md to auto-resume on the next self-heal (no SSH), or rm $PAUSE_FILE and relaunch."
             exit 0
         fi
         sleep 120; continue
