@@ -602,6 +602,7 @@ dependencies = [
  "gio-sys",
  "glib-sys",
  "gobject-sys",
+ "jmap-backend-book",
  "jmap-backend-core",
 ]
 
@@ -626,6 +627,7 @@ dependencies = [
  "gio-sys",
  "glib-sys",
  "gobject-sys",
+ "jmap-backend-cal",
  "jmap-backend-core",
  "serde_json",
 ]
@@ -650,6 +652,7 @@ dependencies = [
  "gio-sys",
  "glib-sys",
  "gobject-sys",
+ "jmap-backend-collection",
  "jmap-backend-core",
  "jmap-config",
  "jmap-mail",
@@ -690,6 +693,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-collection",
  "jmap-backend-core",
+ "jmap-config",
  "jmap-mail",
  "serde_json",
 ]
@@ -724,6 +728,7 @@ dependencies = [
  "glib-sys",
  "gobject-sys",
  "jmap-backend-core",
+ "jmap-mail",
 ]
 
 [[package]]

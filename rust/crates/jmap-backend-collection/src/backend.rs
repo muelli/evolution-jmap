@@ -17,6 +17,7 @@
 //! that from being invisible.
 
 use std::ffi::CStr;
+#[cfg(feature = "testing")]
 use std::mem::MaybeUninit;
 use std::ptr;
 
@@ -83,6 +84,7 @@ impl JmapCollectionBackend {
     /// That is why the populate *body* is [`crate::populate`]'s, behind a trait,
     /// and why the only thing `tests/backend.rs` can say about the slot is that
     /// it is installed and is not the one it replaced.
+    #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value.
