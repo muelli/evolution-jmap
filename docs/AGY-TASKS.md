@@ -9,74 +9,73 @@ items when merging `antigravity → master`).
 
 ## ⚠ COLLISION AVOIDANCE — read first (2026-08-19)
 To keep the `antigravity → master` merge trivial, **stay inside `jmap-vcard`**
-(its `src/` and `tests/`) for every task below. Claude (master) is actively
-editing these — do **NOT** touch them from this lane:
-- `jmap-ical`, `jmap-cal-sync`, `jmap-backend-cal` — Claude adds the
-  `BusyPeriod → VFREEBUSY` free/busy marshaller and the `get_free_busy_sync`
-  vfunc here for Track E Path A (scheduling).
-- `jmap-proto`, `jmap-client`, `jmap-mock` — Track E Phase 0 (`principals.rs`),
-  Track D (create/delete book+calendar), and SRV autodiscovery live here.
+(its `src/` and `tests/`, plus `docs/VCARD-MAPPING.md`) for every task below.
+Claude (master) is actively editing these — do **NOT** touch them from this lane:
+- `jmap-ical`, `jmap-cal-sync`, `jmap-backend-cal` — free/busy marshaller and the
+  `get_free_busy_sync` vfunc (Track E Path A). `jmap-ical` fidelity stays **frozen
+  for this lane** until Path A lands; Claude owns that crate for now.
+- `jmap-proto`, `jmap-client`, `jmap-mock` — Track E principals, Track D
+  create/delete book+calendar, SRV autodiscovery.
 - `jmap-collection-sync`, `jmap-backend-{book,collection,core}`, `jmap-config`,
-  `jmap-mail*` — Track D wiring, SRV call site (b), the unsafe-audit helpers.
+  `jmap-mail*`, and the packaging/CI files — collection discovery + the auth-retry
+  loop (roadmap item 7) and the lintian/RUNPATH CI fix (item 8) live here.
 
 If a task would need a file outside `jmap-vcard`, **log it as a finding in
-`docs/AGY-LOG.md` and skip it** — do not reach into Claude's lane. `jmap-ical`
-fidelity (former item 5/6) is **frozen for this lane** until Path A lands; Claude
-owns that crate for now. Adding a dev-dep touches the shared `Cargo.lock`; that
-is fine (it merges), but keep `Cargo.toml` edits limited to `jmap-vcard`.
+`docs/AGY-LOG.md` and skip it** — do not reach into Claude's lane. Adding a
+dev-dep touches the shared `Cargo.lock` (fine, it merges), but keep `Cargo.toml`
+edits limited to `jmap-vcard`.
 
 ## Done and pruned (2026-08-19)
-Items 1–6 of the previous list are **complete** (see `docs/AGY-LOG.md`):
-multi-`TYPE` phones, IM/social schemes, multi-component `ORG`/`TITLE`, bare-year
-dates, `merge_units` empty-name, and mutation testing of both crates
-(`jmap-vcard` caught-mutants 344→402; `jmap-ical` to 294 tests). The new items
-are all **`jmap-vcard`-only** so they never collide with the Path A / Track D
-work on the calendar and protocol crates.
+Complete (see `docs/AGY-LOG.md`), pruned on the `antigravity → master` merge
+(`f4c1ae7`):
+- **First batch:** multi-`TYPE` phones, IM/social schemes, multi-component
+  `ORG`/`TITLE`, bare-year dates, `merge_units` empty-name, mutation testing of
+  both crates (`jmap-vcard` caught-mutants 344→402; `jmap-ical` to 294 tests).
+- **Second batch:** structure-aware round-trip fuzzing (`proptest` — zero panics,
+  fixed-point stable); `KIND`+`MEMBER` group cards; `ALTID`/`LANGUAGE`
+  alternates; `PREF` → primary selection + ordering; full structured `ADR`+`LABEL`;
+  unknown `X-` property preservation (dropped-by-design, sync-safe); and the
+  `docs/VCARD-MAPPING.md` reference. All `jmap-vcard`-only.
 
-## Contact / vCard fidelity & robustness (`jmap-vcard` ONLY) — HEADLESS
-Same rules as before: TDD, whole-crate tests green at every push, one
-self-contained increment per session, log completions in `docs/AGY-LOG.md`,
-**check the current code first** (some may be partly done — do the undone parts).
-A behaviour choice that is a genuine product decision is a **finding to log**,
-not something to guess at.
+## Contact / vCard 3.0 fidelity & robustness (`jmap-vcard` ONLY) — HEADLESS (refill 2026-08-19)
+`jmap-vcard` maps JSContact ↔ **vCard 3.0** (RFC 2426), the format EDS/Evolution
+3.52 uses — so these are 3.0 concerns, not 4.0 conversions. Same rules as before:
+TDD, whole-crate tests green at every push, one self-contained increment per
+session, log completions in `docs/AGY-LOG.md`, **check the current code first**
+(some may be partly done — do the undone parts). A behaviour choice that is a
+genuine product decision is a **finding to log**, not something to guess at.
 
-1. **Structure-aware round-trip fuzzing of `jmap-vcard`** with `proptest` +
-   `arbitrary` (dev-deps, **stable** — never `cargo-fuzz`, it needs nightly and
-   breaks the pinned-stable reproducibility). Generate random JSContact and random
-   vCard; assert (a) no panic and (b) round-trip stability (vCard→JSContact→vCard
-   and JSContact→vCard→JSContact converge). Fix any panic found, or log it as a
-   finding if the input is genuinely out of contract. Keep generators shrinking so
-   failures are minimal. **Scope: `jmap-vcard` only** — the iCal side is frozen
-   for this lane (see collision note).
-2. **`KIND` + `MEMBER` (group cards).** Characterize how a vCard `KIND:group`
-   with `MEMBER` lines maps through JSContact and to EDS (`E_CONTACT_LIST` /
-   list members), and whether it round-trips without dropping members. Pin with
-   round-trip tests; improve the mapping where the right answer is unambiguous,
-   else log a finding.
-3. **`ALTID` / `LANGUAGE` alternate representations.** vCards can carry the same
-   property in several languages grouped by `ALTID`. Characterize whether our
-   mapping preserves the alternates (or deterministically picks one) rather than
-   dropping or duplicating them; add round-trip tests pinning the behaviour.
-4. **`PREF` → primary selection.** Beyond parsing `PREF` (already done), verify
-   that among multiple `EMAIL`/`TEL`/`ADR` the `PREF`-lowest becomes EDS's primary
-   field, and that the ordering round-trips. Test the tie-break and the
-   no-`PREF`-present fallback; log a finding if the "which is primary" rule is a
-   product decision.
-5. **Full structured `ADR` + `LABEL`.** Confirm all seven `ADR` components
-   (po-box, ext, street, locality, region, postcode, country) plus a `LABEL`
-   param round-trip vCard↔JSContact↔EDS without loss; test empty-component and
-   multi-value cases.
-6. **Unknown `X-` property preservation.** Verify that `X-` properties we do not
-   explicitly map survive a round-trip (carried through, not silently dropped);
-   add tests. If they are dropped by design, log that as a finding with the
-   rationale rather than forcing preservation.
+1. **Line folding / unfolding (RFC 2426 §2.6).** A value longer than 75 octets
+   must fold on write and unfold losslessly on read. Test round-trip of a long
+   `NOTE` and an inline base64 `PHOTO`; test pre-folded input (CRLF + leading
+   space/tab continuations); and confirm a multi-byte UTF-8 sequence is never
+   split across a fold. Fix or log a finding if any of these lose data.
+2. **Value escaping (RFC 2426 §2).** `\n`, `\,`, `\;`, `\\` in text values must
+   escape on write and unescape on read with no loss and no double-escaping.
+   Test a `NOTE` containing all four, a comma inside an `ORG` unit, and a
+   semicolon inside an `ADR` component; assert fixed-point convergence.
+3. **`CATEGORIES` ↔ `E_CONTACT_CATEGORY_LIST`.** Comma-separated categories
+   round-trip — order preserved, commas within a category escaped — for empty,
+   single, and multiple; pin with tests, else log a finding.
+4. **`NICKNAME` and `URL`.** Characterize `NICKNAME` (single and multiple) and
+   one-or-more `URL` properties into their EDS fields (`E_CONTACT_NICKNAME`,
+   homepage/blog/etc.); pin round-trips; log a finding where the slotting is a
+   product decision rather than obvious.
+5. **Non-ASCII and `CHARSET`/`ENCODING` params.** Evolution and older clients
+   export vCard 3.0 with `;CHARSET=UTF-8` and sometimes
+   `;ENCODING=QUOTED-PRINTABLE`. Verify non-ASCII names/values round-trip; decide
+   (and pin, or log as a finding) whether a QUOTED-PRINTABLE-encoded value is in
+   contract or cleanly rejected.
+6. **Inline `PHOTO` (base64) vs URI.** A `PHOTO;ENCODING=b;TYPE=JPEG:` inline
+   image round-trips to the EDS photo field and back with its media type intact;
+   test the URI-valued `PHOTO` variant too. Log a finding if either is lossy by
+   design.
 
 ## Documentation (zero-collision, `jmap-vcard` scope)
-7. **`docs/VCARD-MAPPING.md`** — a reference table: each vCard property/param →
-   its JSContact representation → the EDS `E_CONTACT_*` field it lands in, with a
-   note on any lossy or product-decision cases (cross-reference the findings in
-   `docs/AGY-LOG.md`). A brand-new file only this lane touches, so it never
-   collides. Keep it accurate to the current `contact.rs`; cite function names.
+7. **Keep `docs/VCARD-MAPPING.md` current.** As items 1–6 are characterized,
+   extend the reference table and the product-decision/lossy-case notes so the
+   doc stays accurate to `contact.rs` (cite function names). This file is only
+   touched by this lane, so it never collides.
 
 Only when you exhaust these AND find no further in-lane `jmap-vcard` sub-step
 should you report `AGY-SHIFT: BLOCKED` — the maintainer refills this file then.
