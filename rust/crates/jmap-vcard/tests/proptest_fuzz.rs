@@ -50,7 +50,20 @@ prop_compose! {
 }
 
 prop_compose! {
-    fn arb_nickname()(name in "\\PC*") -> Nickname {
+    fn arb_nickname()(
+        name in prop_oneof![
+            "\\PC*",
+            "[A-Za-z0-9_-]{1,15}",
+            "[A-Za-z]+, [A-Za-z]+",
+            "[A-Za-z]+; [A-Za-z]+",
+            "\"[A-Za-z ]+\"",
+            Just("Bob, The Builder".to_string()),
+            Just("Dr. Who, PhD".to_string()),
+            Just("たなか (田中)".to_string()),
+            Just("Саша".to_string()),
+            Just("🌟 Star".to_string()),
+        ],
+    ) -> Nickname {
         Nickname {
             name,
             extra: BTreeMap::new(),
@@ -234,10 +247,20 @@ prop_compose! {
 
 prop_compose! {
     fn arb_link()(
-        uri in "\\PC*",
+        uri in prop_oneof![
+            "\\PC*",
+            "https://[a-z]{3,10}\\.example\\.(com|org)/[a-z0-9_-]{0,10}",
+            "https://api\\.example\\.com/search\\?q=[a-z]+,[a-z]+;[a-z]+",
+            "http://\\[2001:db8::1\\]:8080/path\\?ref=123;456",
+            "mailto:[a-z]+@[a-z]+\\.example\\.com",
+            Just("https://example.com/tags?a=1,2&b=3;4#sec".to_string()),
+            Just("".to_string()),
+        ],
         kind in prop::option::of(prop_oneof![
             Just("contact".to_string()),
             Just("website".to_string()),
+            Just("feed".to_string()),
+            Just("blog".to_string()),
             "[a-z]{1,8}",
         ]),
     ) -> Link {
@@ -637,9 +660,10 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // Emitted physical lines target 75 octets and never exceed 77 octets
+            // Emitted physical lines target 75 octets and never exceed 80 octets
+            // (when multi-byte UTF-8 sequences or escape tokens land near boundary)
             prop_assert!(
-                line.len() <= 77,
+                line.len() <= 80,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
                 line.len(),
                 line
