@@ -74,17 +74,19 @@
 //! with a self-signed certificate fails with an error instead of a "trust this
 //! certificate?" dialog.
 
+use std::fmt;
+
 use eds_sys::{
-    E_CLIENT_ERROR_INVALID_ARG, E_SOURCE_AUTHENTICATION_ERROR, ENamedParameters, ESource,
-    ESourceAuthenticationResult, e_client_error_create,
+    E_SOURCE_AUTHENTICATION_ERROR, ENamedParameters, ESource, ESourceAuthenticationResult,
 };
 use gio_sys::GCancellable;
 use glib_sys::GError;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, ConnectError, credentials as login_as};
-use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
+use jmap_backend_core::error::{invalid_arg_gerror, set_raw_gerror};
 use jmap_backend_core::marshal::password as stored_password;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
+use jmap_backend_core::source::SourceError;
 use jmap_client::Credentials;
 use jmap_collection_sync::Parts;
 
@@ -168,46 +170,17 @@ where
         return ACCEPTED_AUTH_RESULT;
     }
 
-    // SAFETY: as above.
-    let server = match unsafe { server_of(source) } {
-        Ok(server) => server,
-        Err(failure) => {
-            // A missing host, a host that is not a host, or plain HTTP to a
-            // remote server: none of them is fixed by a password, so none of
-            // them is ever REQUIRED or REJECTED.
-            // SAFETY: as above.
-            unsafe { set_raw_gerror(error, failure.to_gerror()) };
-            return E_SOURCE_AUTHENTICATION_ERROR;
-        }
-    };
-
     // SAFETY: `credentials` is NULL — which is what EDS passes before it has
     // asked libsecret for anything — or a valid `ENamedParameters` that
     // outlives the call.
     let password = unsafe { stored_password(credentials) };
-    // Which authentication scheme this account uses is decided the same way
-    // `connect_with` decides it for the address book and calendar backends —
-    // see `jmap_backend_core::oauth2`'s module docs for whose rule this is.
-    // An OAuth 2.0 account can name no `[Authentication] User` at all, so
-    // reading a missing user as "anonymous" here, the way a plain password
-    // account's absent user means, would silently skip OAuth 2.0 and fan the
-    // account out with no credentials whatsoever.
-    // SAFETY: `source` is a valid ESource, checked non-NULL above; `cancellable`
-    // satisfies `access_token`'s contract by this function's own.
-    let resolved = unsafe {
-        if source_uses_oauth2(source) {
-            access_token(source, cancellable).map(Credentials::bearer)
-        } else {
-            login_as(server.connection.user.as_deref(), password.as_deref())
-        }
-    };
-    let credentials = match resolved {
-        Ok(credentials) => credentials,
+    // SAFETY: a valid source, checked non-NULL above, and a cancellable that
+    // satisfies `login_of`'s contract by this function's own.
+    let login = match unsafe { login_of(source, parts, password.as_deref(), cancellable) } {
+        Ok(login) => login,
         Err(failure) => {
-            // The prompt, and the only path that produces one: the account
-            // names a user and EDS has no password for it yet, or the account
-            // is OAuth 2.0 and no access token could be had.
-            // SAFETY: as above.
+            // SAFETY: the out-parameter satisfies the contract by this
+            // function's.
             unsafe { set_raw_gerror(error, failure.to_gerror()) };
             return failure.auth_result();
         }
@@ -221,11 +194,7 @@ where
     // alive for the duration of the vfunc, which outlives this scope.
     let _cancel = unsafe { observe(cancellable) };
 
-    match fan_out(Login {
-        server,
-        parts,
-        credentials,
-    }) {
+    match fan_out(login) {
         Ok(()) => ACCEPTED_AUTH_RESULT,
         Err(failure) => {
             let failure = ConnectError::from(failure);
@@ -236,10 +205,131 @@ where
     }
 }
 
+/// One read of the account and one set of credentials, as the [`Login`] every
+/// operation against this account's server needs.
+///
+/// Split out of [`authenticate_with`] because `authenticate_sync` is no longer
+/// the only vfunc that needs one: `create_resource_sync` has to reach the same
+/// server as the same account with the same credentials, and the rule that
+/// decides *which* credentials — OAuth 2.0 by the account's
+/// `[Authentication] Method`, otherwise the stored password — is one rule.
+/// Written twice it would be two, and the way it fails is silent: an account
+/// whose OAuth 2.0-ness one path reads and the other does not is one that fans
+/// out fine and then creates address books anonymously.
+///
+/// `parts` is passed in rather than read here so that [`authenticate_with`]
+/// keeps its documented order — an account with every part switched off is
+/// answered before its host is even looked at — and so that a caller for whom
+/// the parts do not gate anything (a create is about a collection that exists on
+/// the server whatever the account has switched on) still reports the account's
+/// real parts in the `Login`.
+///
+/// `password` is what EDS resolved out of libsecret, in the form
+/// [`jmap_backend_core::marshal::password`] and
+/// [`crate::create_resource::stored_password_of`] both produce. `None` is "there
+/// is none yet", which for an account that names a user is
+/// [`ConnectError::CredentialsRequired`] and so a prompt.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` — the account EDS constructed the backend
+/// from — and `cancellable` NULL or a valid `GCancellable`. That is what an EDS
+/// vfunc receives.
+pub unsafe fn login_of(
+    source: *mut ESource,
+    parts: Parts,
+    password: Option<&str>,
+    cancellable: *mut GCancellable,
+) -> Result<Login, LoginError> {
+    // SAFETY: a valid source by this function's contract.
+    let server = unsafe { server_of(source) }?;
+
+    // Which authentication scheme this account uses is decided the same way
+    // `connect_with` decides it for the address book and calendar backends —
+    // see `jmap_backend_core::oauth2`'s module docs for whose rule this is.
+    // An OAuth 2.0 account can name no `[Authentication] User` at all, so
+    // reading a missing user as "anonymous" here, the way a plain password
+    // account's absent user means, would silently skip OAuth 2.0 and connect
+    // with no credentials whatsoever.
+    // SAFETY: a valid source by this function's contract; `cancellable`
+    // satisfies `access_token`'s contract by this function's own.
+    let credentials = unsafe {
+        if source_uses_oauth2(source) {
+            access_token(source, cancellable).map(Credentials::bearer)
+        } else {
+            login_as(server.connection.user.as_deref(), password)
+        }
+    }?;
+
+    Ok(Login {
+        server,
+        parts,
+        credentials,
+    })
+}
+
+/// Why an account could not be turned into a [`Login`].
+///
+/// Two variants because the two halves fail differently and Evolution has to
+/// treat them differently: a broken *account* is never a password problem, so it
+/// must never become a prompt, while a missing credential is nothing but.
+#[derive(Debug)]
+pub enum LoginError {
+    /// The account does not name a server this backend may contact — see
+    /// [`SourceError`].
+    Account(SourceError),
+    /// The account names a server and there is no credential to reach it with.
+    Credentials(ConnectError),
+}
+
+impl From<SourceError> for LoginError {
+    fn from(failure: SourceError) -> Self {
+        Self::Account(failure)
+    }
+}
+
+impl From<ConnectError> for LoginError {
+    fn from(failure: ConnectError) -> Self {
+        Self::Credentials(failure)
+    }
+}
+
+impl fmt::Display for LoginError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Account(failure) => failure.fmt(f),
+            Self::Credentials(failure) => failure.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for LoginError {}
+
+impl LoginError {
+    /// The `GError` an operation reports this through.
+    pub fn to_gerror(&self) -> *mut GError {
+        match self {
+            Self::Account(failure) => failure.to_gerror(),
+            Self::Credentials(failure) => failure.to_gerror(),
+        }
+    }
+
+    /// What `authenticate_sync` writes into its return value.
+    ///
+    /// [`LoginError::Account`] is always `ERROR`: a missing host, a host that is
+    /// not a host, or plain HTTP to a remote server: none of them is fixed by a
+    /// password, so none of them is ever `REQUIRED` or `REJECTED`. The
+    /// credentials half keeps [`ConnectError::auth_result`]'s own rule, which is
+    /// the one that produces the prompt.
+    pub fn auth_result(&self) -> ESourceAuthenticationResult {
+        match self {
+            Self::Account(_) => E_SOURCE_AUTHENTICATION_ERROR,
+            Self::Credentials(failure) => failure.auth_result(),
+        }
+    }
+}
+
 /// The `GError` for a backend that was handed no account at all.
 fn no_account_gerror() -> *mut GError {
-    let message = cstring_lossy("the JMAP collection backend has no account to authenticate");
-    // SAFETY: the code is one of the enum's own values and the message is
-    // copied by the call.
-    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
+    invalid_arg_gerror("the JMAP collection backend has no account to authenticate")
 }

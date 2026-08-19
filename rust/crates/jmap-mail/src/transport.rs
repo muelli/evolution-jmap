@@ -51,12 +51,14 @@
 //! [`MailSync::send_message`]: jmap_mail_sync::MailSync::send_message
 
 use std::ffi::CStr;
-use std::mem::MaybeUninit;
 use std::sync::RwLock;
 
 use eds_sys::{CamelServiceClass, CamelTransport, CamelTransportClass, camel_transport_get_type};
 use glib_sys::GType;
 use jmap_backend_core::instance::Slot;
+#[cfg(feature = "testing")]
+use jmap_backend_core::instance::zeroed_box;
+use jmap_backend_core::marshal::dispatched_borrow;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::MailSync;
 
@@ -191,11 +193,12 @@ impl JmapTransport {
     /// Nothing but the slot may be touched through the result.
     ///
     /// [`JmapStore::detached`]: crate::store::JmapStore::detached
+    #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value, and an all-zero `Slot` is its
         // documented empty state.
-        let transport: Box<Self> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        let transport: Box<Self> = unsafe { zeroed_box() };
         transport.connection.init(RwLock::new(None));
         transport
     }
@@ -209,7 +212,8 @@ impl JmapTransport {
     /// vfunc's argument satisfies this; anything else has to check with
     /// `G_TYPE_CHECK_INSTANCE_TYPE` first.
     pub unsafe fn borrow<'a>(transport: *mut CamelTransport) -> Option<&'a Self> {
-        unsafe { transport.cast::<Self>().as_ref() }
+        // SAFETY: the doc comment above states the same contract.
+        unsafe { dispatched_borrow(transport) }
     }
 
     /// The connection slot, or `None` on an instance whose `instance_init` has

@@ -119,8 +119,9 @@ use eds_sys::{
 use glib_sys::{
     GError, GFALSE, GTRUE, GType, g_free, g_string_free, g_string_new, gboolean, gchar,
 };
-use gobject_sys::{g_object_new, g_object_unref, g_type_check_instance_is_a, g_type_class_peek};
+use gobject_sys::{g_object_new, g_object_unref, g_type_class_peek};
 use jmap_backend_core::instance::Slot;
+use jmap_backend_core::marshal::checked_borrow;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_mail_sync::MessageSummary;
@@ -164,16 +165,9 @@ impl JmapSummary {
     ///
     /// `summary` must be NULL or point at a live `CamelFolderSummary`.
     unsafe fn borrow<'a>(summary: *mut CamelFolderSummary) -> Option<&'a Self> {
-        // SAFETY: the type check is what makes the cast sound; the contract
-        // above is what makes the check itself legal.
-        unsafe {
-            if summary.is_null()
-                || g_type_check_instance_is_a(summary.cast(), summary_type()) == GFALSE
-            {
-                return None;
-            }
-            summary.cast::<Self>().as_ref()
-        }
+        // SAFETY: the contract above is what makes the type check itself
+        // legal, and the check is what makes the cast inside sound.
+        unsafe { checked_borrow(summary, summary_type()) }
     }
 }
 

@@ -136,6 +136,160 @@ they close, prioritise in this order:
      likely escalation-worthy). Not claimable-complete; the next session on
      this thread should wire (a)/(b) into `connect_domain` and build the
      GResolver-backed implementation.
+   - **PARTIAL 2026-08-19 (later same day) — call site (b) wired.**
+     `config_lookup.rs::probe_host` now takes a `&dyn jmap_client::resolver::
+     Resolver` and consults it for `_jmap._tcp.<domain>` before falling back
+     to the bare domain, exactly the seam and fallback order
+     `ClientBuilder::connect_domain` already uses; an SRV target renders as
+     `host:port`, which `parse_target` already reads as a bare, secure host
+     with that port. `run()` passes `NoSrvResolver` — behaviour is
+     unchanged until a real resolver exists — with a comment marking that as
+     the one line the future GResolver-backed resolver replaces. TDD'd with
+     the same `FakeResolver` shape as `srv_discovery.rs`. **Still open:**
+     call site (a) — `fan_out.rs`/the backend `connect.rs` files all call
+     `Client::connect(&config.origin, …)` where `origin` is a fully-assembled
+     `scheme://host:port` string from `jmap_backend_core::source::origin`;
+     reconciling that structured host/port/secure model with
+     `connect_domain`'s bare-`https`-only argument is a real design question
+     (every backend test wires an explicit mock-server port through `origin`)
+     and was deliberately not attempted in the same increment as (b). The
+     GResolver-backed real `Resolver` (FFI) is still unstarted and still the
+     escalation candidate.
+   - **DONE 2026-08-19 (later still) — call site (a) wired, both sites now
+     covered.** A research agent first traced the actual production path a
+     plain email+password Fastmail-style setup takes, to confirm this really
+     is the remaining gap: `jmap-config/src/defaults.rs::from_identity`
+     correctly writes the bare email domain into `Authentication:Host` with
+     no port, per RFC 8620 §2.2 — no UI autodiscovery step was missing there.
+     The design: `jmap_backend_core::source` gained `ConnectTarget`
+     (`Origin(String)` for an explicit endpoint or an IP literal, `Domain
+     (String)` for a port-unset+secure+non-IP-literal host — exactly the
+     shape `from_identity` produces, and exactly RFC 8620 §2.2's "the domain
+     is the entry point" case) plus `connect_target()`, sharing `origin()`'s
+     existing host validation and TLS rule (`origin()` is now a thin wrapper
+     over it, so `jmap-backend-collection`'s `Server::origin` display value
+     — asserted verbatim in several tests — keeps its exact old string). A
+     new `jmap_backend_core::source::connect(target, credentials)` dispatches
+     `Origin` to today's `Client::connect` and `Domain` to `ClientBuilder::
+     connect_domain`; `jmap-backend-book`/`cal`'s `connect.rs`, `jmap-mail/
+     src/connect.rs`, and `jmap-backend-collection/src/fan_out.rs` all switch
+     to it. `SourceConfig`, `jmap-mail`'s `ServerConfig`, and `jmap-backend-
+     collection`'s `Server` all carry `target: ConnectTarget` instead of a
+     collapsed `origin: String` (`Server` keeps a separate `origin: String`
+     display field, still built via the `origin()` wrapper, since fan_out's
+     own tests construct `Server::connection` — the fields repeated to
+     children — independently of the address actually dialled, and `.target`
+     is what the connect call now reads instead). `jmap_client::Client`
+     gained a shared `rebase_urls_from_env()` (extracted from `Client::
+     connect`'s existing env-var check) so the `Domain` branch honours
+     `JMAP_LIVE_SERVER_REBASE_URLS` identically to the `Origin` one. TDD:
+     new `connect_target` unit tests in `jmap-backend-core/src/source.rs`
+     (bare domain → `Domain`, explicit port → `Origin`, IP literal even with
+     no port → `Origin`, insecure/missing-host refusals unchanged); every
+     existing `SourceConfig`/`ServerConfig`/`Server`-driven test updated to
+     assert the right `ConnectTarget` variant instead of a bare string —
+     several (`jmap-config`'s `the_defaults_are_the_account_the_address_
+     names`, `the_default_and_the_registry_agree_about_the_server`, and
+     siblings) flip from `Origin("https://example.com")` to
+     `Domain("example.com")`, which is the actual behaviour change this
+     closes: a plain email+password setup's session discovery now tries
+     `_jmap._tcp.<domain>` before the bare-domain `.well-known/jmap`
+     fallback. Behaviour is unchanged today (`NoSrvResolver`, the only
+     resolver anything constructs, never finds a record) until the
+     GResolver-backed real `Resolver` lands — FFI, unstarted, still the
+     escalation candidate for this thread, and the last piece needed before
+     Fastmail's password path can be verified end-to-end.
+     Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets
+     --locked -- -D warnings` (default-members) and `cargo clippy -p
+     evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+     jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+     --all-targets -- -D warnings` (the EDS-gated crates directly, this VM
+     having the headers) both clean; `cargo test --locked` and the same
+     per-crate `cargo test` both green, every `test result: ok`, 0 failed.
+     Disk filled mid-session (`rust/target/debug` at 24G, "No space left on
+     device" on `jmap-mail`'s test build) — `cargo clean --profile dev`
+     recovered it, consistent with prior sessions' standing note.
+   - **CLAIMABLE NOW — build the real SRV `Resolver` (the last piece before a
+     Fastmail end-to-end test).** Both call sites now route through the seam but
+     still construct `NoSrvResolver`, so no real SRV happens yet and Fastmail's
+     password path still 404s. Build a resolver that actually looks up
+     `_jmap._tcp.<domain>` and inject it where `NoSrvResolver` is constructed
+     today (`jmap_backend_core::source::connect` and `config_lookup::run`).
+     **Maintainer preference (2026-08-19): reuse a library over hand-rolled code
+     — a crate if one fits, else a system library, and only "own code" if
+     neither works (rather own code than no code).** Given the workspace is
+     deliberately blocking / tokio-free and the resolver is built in the
+     EDS-integration layer where GLib is already linked, the recommended answer
+     is **GLib's `GResolver` via `g_resolver_lookup_service()`**, and the binding
+     is **already in the tree**: `gio-sys` 0.22 is already in `Cargo.lock`
+     (sibling of the `glib-sys`/`gobject-sys` this project already uses, MIT,
+     `deny.toml`-allowlisted) and exposes `g_resolver_get_default`,
+     `g_resolver_lookup_service`, and the `GSrvTarget` accessors
+     (`g_srv_target_get_hostname/_port/_priority/_weight`). So there is **no new
+     dependency and no hand-written FFI to maintain** — just a `Resolver` impl
+     that calls them and maps the returned `GSrvTarget` `GList` (RFC 2782 order:
+     lowest priority, then highest weight) to `SrvTarget`, freeing the list after.
+     `g_resolver_lookup_service` is frozen GLib API (since 2.22, 2009), so drift
+     risk is minimal — this is the opposite of the EDS-vCard surface that drifted
+     on 3.60. A pure-Rust SRV crate is acceptable *only* if it is
+     blocking, license-allowlisted (`deny.toml`), and drags no async runtime into
+     the lean tree — most (e.g. hickory) are tokio-based, so evaluate before
+     adding; hand-rolled DNS packet parsing is the last resort, not the default.
+     Test against a fake as `srv_discovery.rs` does; a live
+     `_jmap._tcp.fastmail.com` lookup is network-dependent, so leave true
+     end-to-end confirmation to the operator in the VM (real Fastmail, using an
+     **app password / API token**, not the login password — that 401s, a
+     separate concern from this 404). FFI — reasonable to escalate.
+   - **DONE 2026-08-19 (on opus, per the escalation at `a4533d1`) — the real
+     resolver landed; item 5's code side is complete, pending operator
+     confirmation.** `jmap-backend-core/src/resolver.rs` adds
+     `SystemResolver`, a `jmap_client::resolver::Resolver` implementation
+     backed by `g_resolver_lookup_service()` — already bound in `gio-sys`
+     0.22, so **no new dependency and no hand-written DNS**, exactly as the
+     maintainer preference above directed. It lives in `jmap-backend-core`
+     because that is the one EDS-integration crate *both* call sites can
+     reach (`jmap-config` already depends on it), and it is now installed at
+     both, replacing `NoSrvResolver`: `jmap_backend_core::source::connect`'s
+     `Domain` branch (via `ClientBuilder::resolver`) and
+     `jmap_config::config_lookup::run`. Two GLib guarantees, checked against
+     the installed `Gio-2.0.gir` doc text rather than assumed, are what keep
+     the implementation small: the returned `GSrvTarget` list is **already
+     sorted into RFC 2782 preference order** (so the first node is the answer
+     — no hand-rolled priority/weight sort) and it is **NULL on failure,
+     non-empty on success**, freed as a whole by `g_resolver_free_targets`.
+     Every unresolvable case — no record, a failed lookup, a domain Rust
+     cannot even hand to C (interior NUL), a `.` target (RFC 2782's "no
+     service here"), a zero port — answers `None`, which is the direction
+     that matters: an SRV record can only *redirect* discovery, never break
+     the deployments that answer at their own domain (Stalwart, self-hosted,
+     the in-repo mock). A fully-qualified target loses its trailing dot.
+     **Deliberate limit:** the lookup is not cancellable, because the
+     `Resolver` trait passes no `GCancellable` and storing a raw one in a
+     `Send + Sync` value is the worse trade for a lookup this short; the
+     system resolver's own timeout bounds it. TDD: red test first
+     (`jmap-backend-core/tests/resolver.rs` failed to compile on the missing
+     module), then the deterministic cases — a `.invalid` domain (RFC 6761
+     guarantees it never resolves, so the test holds with or without DNS
+     egress), the interior-NUL refusal, and 64 repetitions of the failing
+     path so an unbalanced ref/free has somewhere to show — plus pure-helper
+     unit tests for the host normalisation. The success path cannot be
+     hermetic, so it is an `#[ignore]`d live test against
+     `_jmap._tcp.fastmail.com`; **it was run, and passes** —
+     `api.fastmail.com:443`, which is the one thing no fake can prove (that
+     the `GSrvTarget` list is walked and read correctly). Full gate green:
+     `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D
+     warnings` (default-members) and the seven-crate EDS-gated clippy both
+     clean; `cargo test --locked` (84 binaries, 0 failed) and the
+     seven-crate `cargo test` (1178 passed, 0 failed) both green.
+     **Finding, logged not worked around:** GLib 2.80's
+     `g_resolver_lookup_service()` leaks ~1 kB per call — proven upstream, not
+     ours, by a minimal C reference doing the identical canonical sequence
+     (while `g_resolver_lookup_by_name` is flat). Once per connect is a
+     frequency that makes it not worth a TTL-ignoring cache; see
+     `docs/BACKLOG.md`. **Still open, and now the only thing left on item 5:**
+     operator end-to-end confirmation against real Fastmail in the VM, using
+     an **app password / API token** (the login password 401s — a separate
+     concern from the 404 this closes).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
@@ -178,6 +332,46 @@ tracks follow; the maintainer may reorder anytime.
   into `transport.rs`. The server is NOT trusted: assert no panic and no auth
   leak on redirect (same surface as the 86fea00 redirect-auth fix). Aligns with
   the standing "Recurring security re-audit" directive.
+  - **PARTIAL 2026-08-19** — the `jmap-proto` deserialization half landed:
+    `jmap-proto/tests/malicious_input.rs` feeds a bounded-depth, bounded-
+    breadth arbitrary-JSON `proptest` strategy into `Session`, `Request`,
+    `Response`, `MethodError`, and `RequestError` deserialization, asserting
+    only "no panic" (`Ok`/`Err` both pass). No `arbitrary` crate needed — a
+    hand-rolled recursive JSON strategy in `proptest` alone was enough,
+    keeping the new dev-dependency to one crate. All five properties pass on
+    the first run; a manual read of the deserialization paths first
+    (`Invocation`'s hand-rolled `Deserialize` delegates to serde's own
+    length-checked tuple machinery, not custom indexing) found no panic
+    site, so this is a regression net rather than a bug fix, consistent with
+    A3's "fix any panic found" wording allowing for none. **Still open:**
+    the `jmap-client` half (hostile `apiUrl`/redirect targets into
+    `transport.rs`/`url::rebase_origin`) — a manual read of `rebase_origin`
+    during scoping found every slice index it uses comes from `str::find`,
+    which only ever returns valid char-boundary offsets, so it looks
+    panic-safe by inspection; a proptest harness proving that (rather than
+    inspecting it) is the next session's increment on this thread.
+  - **DONE 2026-08-19** — the `jmap-client` half landed:
+    `jmap-client/src/url.rs`'s `#[cfg(test)]` module gained a `proptest!`
+    block with two properties over an unconstrained `.*` (arbitrary Unicode)
+    string strategy — `rebase_origin_never_panics_on_hostile_input(url,
+    origin)`, standing in for a malicious/buggy server's fully-controlled
+    `apiUrl`/`downloadUrl`/`uploadUrl`/`eventSourceUrl`, and
+    `encode_template_value_never_panics_on_hostile_input(value)`, standing in
+    for a server-supplied `blobId`/`accountId` substituted into a blob-URL
+    template. Both had to live inside `url.rs` itself rather than a `tests/`
+    integration binary, since both functions are `pub(crate)`. Both
+    properties pass on the first run (256 cases each), confirming rather
+    than resting on the prior session's by-inspection reasoning — another
+    regression net, no panic found, consistent with A3's wording. The
+    "no auth leak on redirect" half of A4's acceptance criterion is separate
+    coverage, not proptest: `UreqTransport::new`'s `redirect_auth_headers =
+    SameHost` and `jmap-client/tests/redirect_auth.rs` (from the 86fea00 fix)
+    already assert a cross-host redirect drops the `Authorization` header;
+    this session did not add fuzzing over arbitrary redirect targets on top
+    of that fixed-case test, so treat that as the one narrower thing left on
+    this thread if a future session wants to broaden it — Track A4 itself is
+    otherwise complete (both named halves, `jmap-proto` and `jmap-client`,
+    done).
 - **A5 `[claude]` FFI soundness audit.** Worth doing, and timely — Tracks D/B add
   FFI surface and M10 already exposed cross-version FFI drift. Scope: every vfunc
   trampoline `catch_unwind`-wrapped; transfer-full vs transfer-none ownership on
@@ -223,12 +417,72 @@ tracks follow; the maintainer may reorder anytime.
 - **C1 `[claude]` Lintian-clean .deb.** Run `lintian` on the CPack `.deb`; fix
   warnings (Section, Priority, extended description, Depends/Recommends). Add a
   CI check that lintian stays clean.
+  - **DONE 2026-08-19** — `lintian --pedantic` was clean on Section/Priority/
+    extended description/Depends already; the four real findings — unstripped
+    binaries, a missing `changelog`/`copyright` under `/usr/share/doc/`, and
+    group-writable (0775) directories from the builder's umask — are fixed,
+    and a `package-deb-lintian` CTest keeps it that way. See NIGHT-LOG.
 - **C2 `[claude]` Machine-readable DEP-5 `debian/copyright`** generated from the
   REUSE metadata we already maintain — the single biggest ease-of-packaging win.
+  - **PARTIAL 2026-08-19** — the own-source half is done:
+    `tools/generate-debian-copyright.py` renders `docs/packaging/copyright`
+    from `REUSE.toml`'s `[[annotations]]` (fixing a real inaccuracy — the
+    hand-written file omitted the `LGPL-2.1-or-later` example-module
+    override entirely), kept in sync by the `debian-copyright-in-sync` CTest.
+    See NIGHT-LOG "Delivered: Track C2 (own-file slice)". **Still open, and
+    NEEDS-DECISION, not a guess to make headlessly:** the ~140 third-party
+    Cargo crates statically linked into the shipped `.so`s have no honest
+    DEP-5 `Files:` pattern (their sources are neither vendored here nor
+    shipped in the `.deb`) — pick (a) a non-`Files` third-party-notices
+    appendix, or (b) full `dh-cargo` vendoring under Track C3, before a
+    future session attempts the enumeration.
 - **C3 `[claude]` `debian/` skeleton** (control, rules using `dh` over the
   cmake/cargo build, watch file) so a Debian packager starts from a working tree.
   Document the Rust-in-Debian reality (dh-cargo wants every crate dep packaged /
   vendored) rather than pretend it away.
+  - **DONE 2026-08-19 (skeleton only — not upload-ready, see below)** —
+    `debian/control` (Build-Depends mirroring `ci/install-deps.sh` plus
+    `debhelper-compat (= 13)`/`cargo`/`rustc`), `debian/rules` (dh over the
+    existing `cmake/{Rust,Backends,Packaging}.cmake` tree, `-G Ninja`, an
+    `override_dh_auto_install` looping `cmake --install --component` over
+    the same five components Track C1's CPack path names, so the demo
+    `src/` module stays excluded the same way), `debian/watch` (GitHub tags,
+    matching the `vX.Y.Z` tags already pushed), `debian/source/format`
+    (`3.0 (quilt)`, empty patch queue), and `debian/README.source`.
+    `debian/changelog`/`debian/copyright` are symlinks to
+    `docs/packaging/{changelog,copyright}` rather than second copies, since
+    those are already in the right formats and already kept current (by
+    hand, and by Track C2's generator, respectively). Verified for real,
+    not just written: installed `debhelper` locally (`ci/install-deps.sh`
+    never needed it — Track C1's CPack path doesn't use `dh`) and ran
+    `dpkg-buildpackage -us -uc -b -d` end to end; needed one fix
+    `dh_shlibdeps` doesn't get for free — Evolution's private libdir
+    (`pkg-config --variable=privlibdir evolution-shell-3.0`), the same one
+    `cmake/Packaging.cmake` already passes to CPack's `dpkg-shlibdeps` —
+    passed via an `override_dh_shlibdeps`. Resulting `.deb`: `lintian
+    --pedantic` clean, same standard as Track C1's package.
+    **Explicitly not solved, and said so in `debian/README.source`:** the
+    build only succeeds because `~/.cargo/registry` already holds the ~140
+    crates from ordinary `cargo build`/`cargo test` use on this VM — a real
+    Debian buildd has no network and no such cache, so this is a stress-free
+    local demo of the skeleton, not proof it survives an official build.
+    Two ways to actually close that gap are recorded in
+    `debian/README.source` (mirroring Track C2's own copyright-file note of
+    the identical problem, since it's the same missing vendoring
+    decision from both directions): `cargo vendor` into the source package,
+    or `debcargo`-generated `librust-*-dev` packages per dependency —
+    neither attempted here, a maintainer call plus real effort either way.
+    `debian/watch` is unverified against the live GitHub tags page (no
+    `uscan`/`devscripts` on this VM). `dh_auto_test` is a deliberate no-op
+    (same crates.io-access reasoning; the Rust suite already runs via
+    `ci/checks.sh`/CTest against this exact source). `.gitignore` gained the
+    dh/dpkg build-product entries (`/obj-debian/`, `/debian/evolution-jmap/`,
+    etc.) and `REUSE.toml` a `debian/**` entry — `control`/`rules`/`watch`
+    carry in-file SPDX headers already, but reuse's comment-style lookup is
+    by filename/extension and none of these extensionless Debian-packaging
+    names are in its recognized list; `changelog`/`copyright` are symlinks
+    needing their own annotated path; `source/format`'s content is fixed by
+    dpkg-source's own format string, leaving no room for a comment.
 - **C4 NEEDS-DECISION (maintainer/social):** filing an ITP and uploading to
   Debian proper is a human process, not agent work. Flagged only.
 
@@ -258,6 +512,61 @@ tracks follow; the maintainer may reorder anytime.
     not attempted this session (kept out of an increment that is otherwise
     pure safe Rust). Not claimable-complete; the next session on this thread
     should do the FFI wiring.
+  - **PARTIAL 2026-08-19 (on opus, per the escalation at `7dd8a00`) — the
+    `create_resource_sync` half of the vtable wiring landed; only
+    `delete_resource_sync` is left.** `ECollectionBackendClass::
+    create_resource_sync` is now overridden in
+    `jmap-backend-collection/src/backend.rs`, and the account source is made
+    `remote-creatable` from `populate` (through a new
+    `Populating::offer_creation`, so *whether* it is offered is a tested
+    decision rather than an untestable line in the vfunc) — without which the
+    vfunc is unreachable dead code, since `server_side_source_remote_create_sync`
+    refuses outright for a collection source that lacks the flag. The decisions
+    are split the way the crates are: `jmap-collection-sync/src/create.rs`
+    (`Requested`, `CreateFailure`, `create_collection`) resolves the JMAP account
+    through the existing `CollectionLayout`, calls `AddressBook/set`/
+    `Calendar/set`, and derives the `Child` through a new `Child::for_resource`
+    that `Fanout::children()` now also uses — so a created child cannot drift
+    from a discovered one; `jmap-backend-collection/src/create_resource.rs` holds
+    the EDS ends (`requested_of`, `adopt_created`, `stored_password_of`).
+    **Three findings from reading the EDS 3.52.4 and evolution-ews 3.52.4
+    sources rather than inferring:** (a) the parent's `create_resource_sync` is a
+    `G_IO_ERROR_NOT_SUPPORTED` refusal, so this is the one override in the crate
+    that must *not* chain up; (b) the scratch `ESource` is a real
+    `EServerSideSource` EDS builds in the *user* source directory and
+    deliberately does not add to the registry, so the backend has to finish it —
+    `parent`/`write_directory`/`writable`, which is
+    `collection_backend_new_source()`'s own set minus the `removable = FALSE`
+    that `child_added` supplies; (c) credentials need not be cached the way
+    evolution-ews caches them, because
+    `e_source_registry_server_ref_credentials_provider()` +
+    `e_source_credentials_provider_lookup_sync()` were already in `eds-sys`'s
+    generated bindings — so the password is looked up on demand: no secret held
+    for the life of the account, no instance state, and a create works in a
+    process where no `authenticate_sync` has run yet. `authenticate.rs` grew a
+    shared `login_of`/`LoginError` so the OAuth2-vs-password rule stays written
+    once. **Deliberately NOT done, and not an omission:** `delete_resource_sync`
+    and the `remote-deletable` flag that would reach it. It is the destructive
+    half — a wrong kind or id there costs a server-side collection with no undo
+    — and setting `remote-deletable` before the vfunc exists would make
+    Evolution offer "Delete" and answer the click with EDS's "does not support
+    deleting remote resources". `tests/backend.rs` and
+    `tests/create_resource.rs` both assert the current state on purpose, so the
+    gap is visible rather than forgotten. TDD: the pre-existing
+    `tests/backend.rs:340` assertion (that `create_resource_sync` is NOT
+    overridden) was the red test and was flipped; new
+    `jmap-collection-sync/tests/create.rs` (6 tests against `jmap-mockd`,
+    including "the created child equals the one the next discovery writes") and
+    `jmap-backend-collection/tests/create_resource.rs` (9 tests against a real
+    `EServerSideSource` built the way EDS builds one), plus 2 new `populate`
+    tests for the creatable flag. New user-facing strings are gettext-marked and
+    `po/POTFILES.in`/`po/evolution-jmap.pot` regenerated. Full gate green:
+    `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+    (default-members) and the seven-crate EDS-gated clippy both clean; `cargo
+    test --locked` (85 binaries) and the seven-crate `cargo test` (1190 passed)
+    both green, 0 failed. **NEEDS HUMAN VERIFICATION in real Evolution** — no
+    headless test can drive "New Address Book" against a live registry, so do
+    not tag D1 complete on this.
 - **D2 `[claude]` Calendar colour.** `Calendar.color` is parsed
   (`jmap-proto/src/calendars.rs:29`) then dropped — thread it Resource→Child and
   emit an ESourceSelectable `("Calendar","Color", …)` setting in
@@ -283,36 +592,150 @@ tracks follow; the maintainer may reorder anytime.
     rides on D1's `Calendar/set`, whose EDS-side `create_resource_sync`
     wiring is not done yet — out of scope here, as the roadmap text already
     said.
+  - **RESEARCHED, NOT CLAIMABLE YET (2026-08-19)** — now that
+    `create_resource_sync` has landed, a session checked whether write-back
+    was newly unblocked by reading `evolution-ews-3.52.4` for precedent
+    (`e-ews-folder.c`). Finding: EWS has **no server round-trip for calendar
+    colour at all** — it only ever locally assigns a colour from a fixed
+    palette when a folder is first discovered, never reads one from the
+    server, and never writes a local edit back. So there is no incumbent
+    EDS/EWS pattern to mirror here, unlike `child_added`/`create_resource_sync`.
+    Making a local colour edit reach the server needs a new design: detecting
+    an `ESourceSelectable` `"notify::color"` signal on the child `ESource`
+    (fired on whatever thread touches the source) and safely getting that
+    across to a `Calendar/set` call made from `ECalMetaBackend`'s sync worker
+    thread — genuine signal-lifecycle/concurrency reasoning, not a mechanical
+    port. Needs that design before it is CLAIMABLE.
 
-### Track E — Sharing + scheduling (SPIKE DONE → NEEDS-DECISION on the doc)
-Design spike **complete**: see `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). It
-corrected two premises after checking datatracker — the earlier framing here was
-wrong:
+### Track E — Sharing + scheduling — Path A APPROVED (2026-08-19)
+Design: `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). Two premises the spike
+corrected against datatracker, kept because they shape the work:
 - **Free/busy slot-picking is NOT in RFC 9670.** `Principal/getAvailability`
-  lives in the **JMAP-for-Calendars draft** (this repo already pins draft -27);
-  RFC 9670 supplies the shared `Principal` vocabulary + capability URNs
-  (`urn:ietf:params:jmap:principals`, `…:principals:owner`) that the availability
-  and sharing methods both build on.
-- **Mail has permissions but not sharing.** `Mailbox` carries `myRights`
-  (RFC 8621) but there is **no standard `Mailbox.shareWith`** — a *mailbox* cannot
-  be shared under current specs, only its rights read. Calendar/AddressBook
-  `shareWith` live in their respective drafts.
+  lives in the **JMAP-for-Calendars draft** (repo pins -27); RFC 9670 supplies the
+  shared `Principal` vocabulary + capability URNs (`urn:ietf:params:jmap:principals`,
+  `…:principals:owner`) that both availability and sharing build on.
+- **Mail has permissions but not sharing.** `Mailbox` has `myRights` (RFC 8621)
+  but **no standard `Mailbox.shareWith`** — a mailbox cannot be shared under
+  current specs, only its rights read. Calendar/AddressBook `shareWith` are draft.
 
-Today we advertise/consume none of it (`jmap-proto/src/session.rs:14-18`);
-server-sent `myRights` lands unread in the serde `extra` bag, and read-only is an
-account-wide heuristic (`jmap-collection-sync/src/children.rs:93`).
-**Recommended plan (from the doc):** a small shared "Principal floor" (proto type
-+ two capability constants + client/mock support), then **Path A (free/busy
-availability) first** — it answers the scheduling ask soonest, is
-read-only/low-blast-radius, and its very first step is a half-day Stalwart probe
-to confirm the server actually answers `getAvailability` before committing to the
-(unsafe-FFI, EDS-only) `ECalBackend` free/busy vfunc. Rough effort: **~2.5–3.5
-weeks** for floor + Path A (scheduling); **~+1 week** for Path B (per-source
-`myRights` correctness, mostly published-RFC surface, replaces the read-only
-heuristic); write-side `shareWith`/`ShareNotification` deferred to a later phase
-(least spec-stable, only destructive surface). OAuth (M7) does not block it.
-**DECISION (maintainer): approve the doc's plan to start Path A, or adjust — no
-implementation until then.**
+**MAINTAINER DECISION (2026-08-19): Path A is GREENLIT — "make the basics work."**
+Build Phase 0, then Path A. Do NOT start Phase B or Phase C (recorded as future
+work below) until Path A lands and the maintainer approves the next phase.
+
+**CLAIMABLE NOW — Phase 0, then Path A (mock-first, TDD, headless).** Full detail
+in design §4–§6; the ordered increments:
+1. **Phase 0 — shared floor.** `jmap-proto`: new feature-gated `principals.rs`
+   (`Principal` type; `capabilities` stays a `Value` bag so one unknown per-principal
+   capability can't sink the response) + the two capability constants in
+   `session.rs`. `jmap-client`: new `principals.rs` — `principals()` (Principal/get),
+   `principal_query()` (Principal/query). `jmap-mock`: Principal/get|query handlers,
+   advertise the two URNs, seed a couple of Principals. Pure-additive (design §4.1–4.3).
+   - **DONE 2026-08-19** — landed exactly as scoped: `jmap-proto::principals`
+     (feature `principals`, on by default alongside `mail`/`contacts`/
+     `calendars`) with `Principal`/`PrincipalQueryFilter`, and
+     `CAPABILITY_PRINCIPALS`/`CAPABILITY_PRINCIPALS_OWNER` in `session.rs`;
+     `jmap-client::principals()`/`principal_query()`; `jmap-mock`'s
+     `Principal/get`/`Principal/query` handlers, `AccountState::
+     seed_principal`/`seed_current_user_principal`, and a session document
+     that advertises both URNs (server-wide, and per-account with real
+     content — `currentUserPrincipalId`, and `accountIdForPrincipal`/
+     `principalId` once an account has an owning principal — unlike the
+     other four account capabilities' uniform empty-object placeholder).
+     TDD'd in `jmap-client/tests/principals.rs` (list, query-by-email hit
+     and miss, and the session document itself). Full gate green: `cargo
+     fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+     (default-members) and the seven-crate EDS-gated clippy both clean;
+     `cargo test --locked` and the seven-crate `cargo test` both green.
+     Path A (`getAvailability`, the mock computation, and the escalation-
+     worthy free/busy vfunc) is next on this thread.
+2. **Path A — availability.** `Principal/getAvailability` request/response +
+   `BusyPeriod` in proto; `get_availability()` client method (using-set names BOTH
+   principals AND calendars); mock computes `BusyPeriod`s from seeded CalendarEvents
+   (deterministic slot tests). Then the one heavy piece: the `ECalBackend`
+   `get_free_busy_sync` vfunc in `jmap-backend-cal` + a `BusyPeriod→VFREEBUSY`
+   marshaller in `jmap-ical` (invoked from `jmap-cal-sync`), attendee→principal via
+   `Principal/query` (design §4.2–4.4). That vfunc is **L / escalation-worthy**
+   (unsafe FFI, EDS-only testing); everything above it is ordinary additive work.
+   **Build and test against the mock — it is fully headless-testable that way.**
+   - **PARTIAL 2026-08-19 (proto/client/mock slice DONE, vfunc still open)** —
+     landed exactly the non-FFI half: `jmap-proto::principals` gained
+     `GetAvailabilityRequest`/`GetAvailabilityResponse`/`BusyPeriod` (bespoke
+     shapes per design §4.1, `principals` feature now pulls in `calendars` for
+     `BusyPeriod.event: Option<CalendarEvent>`); `jmap-client::get_availability
+     (account_id, principal_id, utc_start, utc_end, show_details)` naming both
+     `CAPABILITY_PRINCIPALS` and `CAPABILITY_CALENDARS` in its `using` set;
+     `jmap-mock`'s `Principal/getAvailability` handler computes `BusyPeriod`s
+     from the account's seeded `CalendarEvent`s — skips `cancelled` events and
+     ones explicitly marked `freeBusyStatus: "free"` (RFC 8984 §4.4.2 defaults
+     unset to busy), returns `notFound` when the principal's per-principal
+     `urn:ietf:params:jmap:calendars` capability says `mayGetAvailability:
+     false` (absent the capability, allowed), and includes the full event only
+     when `showDetails` is true (`eventProperties` projection not implemented —
+     no test needs it yet). `busyStatus` is `tentative` when the source event's
+     `status` is, else `confirmed`; the draft's third value, `unavailable`, has
+     no source concept in this crate's `CalendarEvent` and is not produced.
+     TDD'd: proto round-trip tests in `principals.rs`; three new
+     `jmap-client/tests/principals.rs` cases (in-window busy periods sorted by
+     start with an out-of-window and an explicitly-free event both excluded,
+     `showDetails` including the event, and the denied-principal `notFound`);
+     mock-side unit tests for the small duration-to-end helper. **Deliberate
+     scope limits, both left open and documented in place, not silently
+     dropped:** (a) the draft's other named error, `tooLarge` (window too
+     wide) — no clean way to check window width without the calendar-date
+     arithmetic `UtcDate`'s own doc says this crate avoids, and no test needs
+     it yet; (b) computing a `BusyPeriod`'s end from the event's `duration`
+     is a same-day, second-of-day-only helper (`jmap-mock/src/
+     principals.rs::busy_end`) — no month/leap-year/midnight-crossing
+     arithmetic, consistent with `UtcDate`'s "this crate never does date
+     arithmetic" stance; a duration it can't parse or that would cross
+     midnight falls back to a zero-length period rather than guessing. Full
+     gate green: `cargo fmt --check`; `cargo clippy --all-targets --locked --
+     -D warnings` (default-members) and the seven-crate EDS-gated clippy both
+     clean; `cargo test --locked` and the seven-crate `cargo test` both green,
+     every `test result: ok`, 0 failed. **Still open, and the last piece of
+     Path A:** the `ECalBackend get_free_busy_sync` vfunc + `BusyPeriod→
+     VFREEBUSY` marshaller — FFI, unsafe, EDS-only testing, escalation-worthy
+     as already flagged, left for a session that wants to take that on
+     deliberately (or an escalation to a stronger model).
+
+**OPERATOR CONFIRMATION (you-task, like the OAuth Fastmail test).** The runner
+cannot reach Stalwart (MAINTAINER DECISIONS #3), so the design's "half-day probe:
+fire `Principal/getAvailability` at Stalwart and record the draft field spelling"
+is an **operator** step, not a blocker on the mock-side build. Run it when
+convenient to confirm the real field names match the proto/mock; if Stalwart does
+not implement `getAvailability`, report it and we reorder to Phase B.
+
+**FUTURE WORK — recorded for a future agent (do NOT start until Path A lands + maintainer OK):**
+- **Phase B — per-source permissions.** Typed `myRights`/`shareWith` on
+  Mailbox/AddressBook/Calendar (design §4.1) + rewire `children.rs`/`layout.rs` so
+  per-source read-only derives from `myRights.mayWrite` — **narrows, never widens**;
+  absent rights → today's account-wide fallback unchanged. Makes the known-wrong
+  heuristic at `children.rs:93-97` correct. Effort S (types) + M (rewire), mostly
+  published-RFC surface. Design §4.1, §4.4, §5–6.
+- **Phase C — write-side sharing.** `shareWith` writes + `ShareNotification`
+  (design §4.1 stub, §5). Deliberately LAST: least spec-stable (calendars draft,
+  absent for mail), the only destructive surface, and needs a share-dialog UI that
+  does not exist. Effort L. **Needs a fresh maintainer decision before starting.**
+
+### Track F — Portability to newer Evolution/EDS (SPIKE FIRST — gated on "no spaghetti")
+The **data/backend** side is already version-portable: `eds-sys/build.rs` probes
+the installed headers and `eds-sys/src/compat.rs` selects `#[cfg]`-gated wrappers
+(`eds_vcard_version_enum`, `camel_*`, …); M10's `eds-version-matrix` proves it
+green on EDS 3.52 **and** 3.60. The **config/GUI** side is the untested axis.
+Reassuringly, our setup UI uses the `EMailConfigServiceBackend`/
+`EMailConfigServicePage` API (`jmap-config/src/backend.rs`), **not** the
+`GtkUIManager` that Evolution ≥3.56 dropped — so that particular churn does not
+touch us, and there is zero `GtkUIManager` usage in `jmap-config`/`evo-sys`.
+**Spike (`[claude]`, deliverable `docs/NEWER-EVOLUTION-SPIKE.md`):** compile
+`jmap-config` + `evo-sys` against the newer-Evolution/EDS container already used
+by `ci/eds-matrix.sh`; characterize any `EMailConfig*` (or other shell/UI) API
+drift 3.52 → 3.56/3.60; then judge honestly whether extending the existing
+`compat.rs`-style build.rs-probed `#[cfg]` gating absorbs it cleanly or whether it
+would sprawl. **Maintainer directive: recommend 3.52-only if it would be messy —
+staying single-version beats carrying spaghetti.** Do NOT implement multi-version
+support in the spike; produce the go/no-go + effort estimate and let the
+maintainer decide. (If it turns out nothing drifts, the bonus finding is that we
+may already build on newer Evolution unchanged.)
 
 ### Not doing (protocol-gated)
 - **Tasks (VTODO) / Memos (VJOURNAL).** BLOCKED upstream: draft-ietf-jmap-calendars

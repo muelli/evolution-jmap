@@ -35416,3 +35416,2800 @@ Followed through on this session's claim. `color: Option<String>` now flows
 - **Still open, as the roadmap text already said:** write-back — a locally
   edited calendar colour reaching the server via `Calendar/set` — rides on
   D1's EDS-side `create_resource_sync` wiring, which is not done yet.
+
+## 2026-08-19 (claim) — Claiming Track C1: lintian-clean .deb
+
+Fresh survey after D2: `docs/MILESTONES.md` has every milestone COMPLETE.
+CURRENT PRIORITY's one open item, JMAP SRV autodiscovery, is already
+correctly flagged by the prior two sessions as needing a
+`g_resolver_lookup_service()`-backed `Resolver` — checked `gio-sys` 0.22.8's
+vendored bindings before deciding (`g_resolver_lookup_service`,
+`GSrvTarget`/`g_srv_target_get_hostname`/`_get_port`, `g_resolver_free_targets`
+are all already there, so no new bindgen work is needed, refining that
+finding), but wiring it in still means new unsafe FFI reasoning about
+transfer-full `GList`/`GSrvTarget` ownership and `GError` freeing across two
+call sites — the "new unsafe/FFI work" category the night-shift brief says to
+escalate rather than risk a plausible-but-wrong commit on. Not re-claiming it
+this session; it needs the escalation the prior session already logged, not
+a repeat survey. Per the roadmap's Round 2 lead order (Claude lane leads with
+Track D, whose own remaining item — D1's `create_resource_sync` vtable wiring
+— is the same category), moved to Track A/C for a tractable item instead.
+
+Picked **C1** (lintian-clean `.deb`): concrete, tool-verifiable, no FFI, and
+unlike A2/A4 (mutation testing / fuzzing the protocol core) it is not betting
+session time on a probably-negative result — this codebase's untrusted-input
+boundary is already free of the unwrap/index/panic patterns those would
+hunt for (checked by grep before ruling them out for tonight), so a fuzz
+harness would likely report "nothing found," a legitimate but low-value use
+of the increment. `lintian` was not installed; `sudo apt-get install -y
+lintian` (passwordless sudo, as `ci/install-deps.sh` already assumes)
+succeeded, and a `cmake --build build && cpack` produced a real `.deb` to
+point it at.
+
+## 2026-08-19 — Delivered: Track C1, `lintian --pedantic` clean on the CPack `.deb`, kept that way by CI
+
+`lintian --pedantic evolution-jmap_0.2.0_amd64.deb` on today's `.deb` found
+14 lines, all real:
+
+- **`unstripped-binary-or-object` × 5** (every module). `install(PROGRAMS
+  ...)` has no per-target `STRIP` the way `install(TARGETS ...)` does, and
+  `CPACK_STRIP_FILES TRUE` was tried first and left all five untouched —
+  confirmed by rebuilding with only that variable set and re-running lintian
+  before reaching for the alternative. Fixed with an explicit
+  `install(CODE "execute_process(COMMAND \"${CMAKE_STRIP}\" ...)")` appended
+  to `add_cargo_cdylib()` (`cmake/Rust.cmake`), which strips the file in
+  place wherever the generated install script runs it — a real
+  `cmake --install` and CPack's own re-run into its staging tree alike.
+- **`no-changelog` / `no-copyright-file`.** Debian policy asks every package
+  for both under `/usr/share/doc/<package>/`; neither existed. Added
+  `docs/packaging/changelog` (plain-text, real version history for 0.1.0/
+  0.2.0) and `docs/packaging/copyright` (hand-written DEP-5 — the shipped
+  five components are all GPL-3.0-or-later per `REUSE.toml`/`LICENSES/`, the
+  LGPL example-module is not one of the five packaged components; the file
+  says outright that it does not yet enumerate every statically-linked Rust
+  crate's own license, which is Track C2's machine-generated job). The
+  changelog is gzipped at build time (`cmake/Packaging.cmake`, a
+  `configure_file`+`add_custom_command` pair) with `gzip -n` specifically —
+  without `-n` the compressed *bytes* embed the wall-clock compression time,
+  which would have broken `package-deb-reproducible` even though CPack's own
+  entry-timestamp normalisation (`cpack-project-config.cmake.in`) does not
+  reach inside an already-compressed file to fix that. Both files added to
+  `EXPECTED_PACKAGE_FILES` (the `check-deb-package.cmake` equality list).
+- **`non-standard-dir-perm 0775 != 0755` × 8** (every directory the package
+  creates). This VM's umask is `0002`, and `install()`'s directory-creation
+  step inherits it unless told otherwise. Fixed with
+  `CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS` set explicitly in the root
+  `CMakeLists.txt`, before `include(cmake/Rust.cmake)` — has to be set before
+  any `install()` call runs, since the permission is read at that point, not
+  deferred to packaging time.
+
+Re-ran `lintian --pedantic` after each fix in turn to attribute which change
+closed which finding rather than fixing all four at once and hoping; final
+run is clean (exit 0, no output).
+
+**CI check added**, per C1's own ask: `cmake/tests/check-deb-lintian.cmake`
+(mirrors `check-deb-package.cmake`'s and `check-deb-reproducible.cmake`'s
+shape — `cpack -G DEB` into a scratch stage dir, then run the tool),
+registered as CTest `package-deb-lintian` in `cmake/Packaging.cmake` — but
+only `if(LINTIAN_EXECUTABLE)`, since not every machine building this tree has
+lintian and the two existing packaging tests both hard-require their tools
+(`cpack`/`dpkg`) rather than skip. `lintian` added to `ci/install-deps.sh`'s
+package list so the CI `build` job (which already runs the full `ctest`) has
+it; `.github/workflows/ci-image.yml` untouched.
+
+Full gate: `ninja -C build` clean, `cpack`/`dpkg-deb --contents`/`lintian`
+manually inspected at each step, `ctest --test-dir build` **17/17 passed**
+(includes the new `package-deb-lintian` alongside the pre-existing
+`package-deb`/`package-deb-reproducible`) — six tests failed on the first
+full run with "No space left on device" from `rust/target/debug` (the known
+disk-fills-from-cargo-target issue, unrelated to this change); `cargo clean
+--profile dev` freed 24 GiB and the re-run was 17/17 green. `cargo fmt
+--check`, `cargo clippy --all-targets --locked -- -D warnings`, and `cargo
+test --locked` all clean on `default-members` (no Rust source touched this
+session — the whole increment is CMake plumbing plus two new plain-prose doc
+files, both already covered by `REUSE.toml`'s existing `docs/**`
+plain-prose annotation, so no new SPDX headers or REUSE.toml edits needed).
+
+**Left for Track C2, not attempted here:** the copyright file's own text says
+so — a full, machine-generated DEP-5 accounting of every third-party Rust
+crate's license (mostly MIT/Apache-2.0 per `rust/Cargo.lock`) is a separate,
+larger piece of work the roadmap already tracks under C2.
+
+## 2026-08-19 (claim) — Claiming Track C2: generate `docs/packaging/copyright`'s own-file stanzas from `REUSE.toml`
+
+Fresh survey: every milestone in `docs/MILESTONES.md` is `COMPLETE`. CURRENT
+PRIORITY's one open item, SRV autodiscovery, is unchanged since the last two
+sessions checked it — still needs a `g_resolver_lookup_service()`-backed
+`Resolver` (real unsafe FFI, `GList`/`GSrvTarget` transfer-full ownership),
+already flagged escalation-worthy twice; not re-surveying it a third time.
+Per the roadmap's Round 2 lead order, Track D's only remaining item (D1's
+`create_resource_sync`/`delete_resource_sync` vtable wiring) is the same FFI
+category. Track C1 (previous session) left an explicit next step: Track C2.
+
+**Scoping it before starting, since "generate the DEP-5 accounting of every
+third-party Cargo crate" turns out bigger and riskier than it first reads.**
+`cargo metadata --locked` on the whole workspace (164 packages, including the
+EDS-gated crates this VM can build) shows ~20 distinct license expressions
+across ~140 third-party crates (`MIT OR Apache-2.0`, `Apache-2.0 WITH
+LLVM-exception`, etc.) — real work, but DEP-5's `Files:` field is a glob over
+paths *in the source package*, and none of those crates' sources are vendored
+into this repo or shipped in the CPack `.deb` (which links them statically
+into five `.so`s and ships no Rust source at all) — so there is no path
+pattern that honestly satisfies the field for them. Inventing one risks a
+technically-malformed copyright file that could regress C1's newly-green
+`lintian --pedantic` gate, which is exactly the "plausible but wrong"
+outcome the night-shift brief says to avoid rather than push through. That
+enumeration is real work Track C2 still owns, but it wants a maintainer call
+on representation (a non-Files license-notice appendix vs. full dh-cargo
+vendoring under Track C3) more than it wants a guess from this session — left
+open below, not attempted.
+
+**Claiming the smaller, unambiguous slice instead**, which is squarely
+"generated from the REUSE metadata we already maintain" and closes a real
+inaccuracy in today's hand-written file: `docs/packaging/copyright`'s
+`Files: *` stanza currently claims the entire source tree is
+`GPL-3.0-or-later`, but `REUSE.toml` itself says otherwise — `src/**`,
+`CMakeLists.txt`, `cmake_uninstall.cmake.in`, and
+`rust/crates/example-module/**` are Red-Hat-copyright `LGPL-2.1-or-later`
+(the ported example module). Generating the file's own-source stanzas from
+`REUSE.toml` (`tools/generate-debian-copyright.py`, driven by its
+`[[annotations]]`) fixes that inaccuracy and makes future REUSE.toml edits
+(a new override, a license change) update the copyright file by re-running
+the generator instead of by someone remembering to hand-edit a second file.
+A CMake/CTest check keeps the committed file from drifting out of sync with
+the generator's output, the same pattern C1 used for lintian.
+
+## 2026-08-19 — Delivered: Track C2 (own-file slice), `docs/packaging/copyright` generated from `REUSE.toml`
+
+Followed through on this session's claim.
+
+- **`tools/generate-debian-copyright.py`** (new): reads `REUSE.toml`'s
+  `[[annotations]]` via `tomllib` and renders the DEP-5 file. The default
+  `Files: *` stanza's license/copyright are a script constant
+  (`GPL-3.0-or-later` / `2026 Tobias Mueller <muelli@cryptobitch.de>`), but
+  the script refuses to run if `REUSE.toml`'s `aggregate`-precedence
+  annotation ever disagrees with that constant — so a future edit to the
+  aggregate block (the one covering `Cargo.lock`, `docs/**`, and similar
+  header-less files) that changes its license fails the generator loudly
+  instead of silently producing a copyright file that no longer matches
+  `REUSE.toml`. Each `override`-precedence annotation becomes its own
+  `Files:` stanza; `REUSE.toml` today has exactly one — `src/**`,
+  `CMakeLists.txt`, `cmake_uninstall.cmake.in`, and
+  `rust/crates/example-module/**` under `LGPL-2.1-or-later` (the ported
+  upstream Evolution example module) — which the *previous* hand-written
+  copyright file omitted entirely, incorrectly implying the whole source
+  tree was `GPL-3.0-or-later`. Glob translation is a one-line `**`→`*`
+  (DEP-5's `*` already spans `/`, so no doubled-star form exists on that
+  side). License paragraph text (GPL-3.0-or-later, LGPL-2.1-or-later) is a
+  small lookup table of the standard Debian boilerplate for each, emitted
+  once per license id actually used.
+- **`cmake/tests/check-debian-copyright.cmake`** + a `debian-copyright-in-sync`
+  CTest registered in `cmake/Packaging.cmake`, gated on `find_program(python3)`
+  the same way C1's lintian test is gated on finding `lintian` — runs the
+  generator and fails with the regeneration command if its output no longer
+  matches the committed file. TDD'd properly: reverted
+  `docs/packaging/copyright` to the pre-session hand-written version first
+  and confirmed `ctest -R debian-copyright-in-sync` failed (red) with exactly
+  that message, then regenerated and confirmed it passed (green).
+- **`docs/packaging/copyright`** regenerated and committed.
+- Full gate: `ctest --test-dir build` **18/18 passed** (the 17 from C1 plus
+  the new one), including a from-scratch `cpack -G DEB` +
+  `lintian --pedantic` **exit 0** on the package built with the corrected
+  copyright file — confirming the added `Files:`/`License:` stanzas parse
+  cleanly and don't regress C1's lintian-clean gate. No Rust source touched,
+  so `cargo fmt --check`/`cargo clippy --all-targets --locked -- -D
+  warnings`/`cargo test --locked` are unaffected and still clean. Both new
+  files (`tools/generate-debian-copyright.py`,
+  `cmake/tests/check-debian-copyright.cmake`) carry their own SPDX headers
+  in the same style as every other script/`.cmake` file in the tree, so no
+  `REUSE.toml` edit was needed.
+
+**Left open, not attempted — a maintainer call, not a guess to make here:**
+the third-party Cargo crate license enumeration (~140 crates, ~20 distinct
+license expressions per `cargo metadata --locked`) that the roadmap's C2 text
+and the previous copyright file's own wording both point at. DEP-5's `Files:`
+field names paths in the source package; none of those crates' sources are
+vendored into this repo or shipped in the CPack `.deb` (which links them
+statically into the five `.so`s and ships no Rust source), so there is no
+honest `Files:` pattern for them — inventing one risked a malformed or
+misleading copyright file for no verifiable gain, exactly the "plausible but
+wrong" outcome worth stopping short of rather than pushing through. Two real
+paths forward, recorded for the maintainer to pick between: (a) a non-`Files`
+"third-party notices" appendix in this same copyright file (informational,
+not strict DEP-5, but truthful about what's actually linked); or (b) proper
+`dh-cargo` vendoring under Track C3's Debian-source-package work, where the
+crates genuinely would be separate source files DEP-5 can point at. The new
+`docs/packaging/copyright`'s own default-stanza comment states this gap and
+both options inline, so the next session (or the maintainer) has it without
+re-deriving it.
+
+## 2026-08-19 (claim) — Claiming Track A7: stale-comments audit
+
+Fresh survey: every milestone in `docs/MILESTONES.md` is `COMPLETE`. CURRENT
+PRIORITY's one open item, SRV autodiscovery, is unchanged since the last two
+sessions checked it — still needs a `g_resolver_lookup_service()`-backed
+`Resolver` (real unsafe FFI, `GList`/`GSrvTarget` transfer-full ownership),
+already flagged escalation-worthy twice; not re-surveying it a third time.
+Track D's only remaining item (D1's `create_resource_sync`/
+`delete_resource_sync` vtable wiring) is the same FFI category. Track C is
+NEEDS-DECISION (C2's third-party enumeration) or a bigger skeleton (C3);
+Track B is NEEDS-DECISION on approach; Track E is NEEDS-DECISION on the
+maintainer approving the design doc's plan. Of the remaining CLAIMABLE `[claude]`
+Track A items (A2, A4, A5, A6, A7), A5 is explicitly escalation-worthy
+(FFI soundness), and this VM's disk is tight (6.4G free per `df -h .` — a
+prior session already hit "No space left on device" from
+`rust/target/debug`) which makes A2's mutation-testing rebuild-per-mutant
+loop a real risk for an unbounded session. A7 needs neither: it is a reading
+and grepping pass over comments already in the tree, checked against the
+current code they describe, bounded in scope, and it already has a seed —
+the roadmap's own text names `jmap-config/src/textdomain.rs:17-18` claiming
+`insert_widgets` "is unwritten" while `lib.rs:125` says it is now written.
+
+Checked the seed before claiming: `jmap-config/src/textdomain.rs` no longer
+exists (renamed at some point) — the actual stale comment is in
+`jmap-config/tests/textdomain.rs:17`, whose module doc says "None of them
+exists yet — `insert_widgets` is unwritten", while `jmap-config/src/lib.rs:125`
+and `jmap-config/src/backend.rs:59` both say `insert_widgets` "now builds
+every field". Confirmed stale — will fix in this pass along with whatever
+else the sweep finds.
+
+**Plan:** grep for resolved-milestone references ("once M7 lands", "not yet
+implemented", "TODO", "unwritten", "is not written", stale `calcard`/
+percent-codec leftovers per the roadmap's own examples), read each hit against
+the current code, confidence-tag every finding, write
+`docs/STALE-COMMENTS-AUDIT.md`, and fix the HIGH-confidence ones in the same
+pass (comment-only changes don't affect tests, per the roadmap's own
+carve-out for this item).
+
+## 2026-08-19 — Delivered: Track A7, stale-comments audit
+
+Followed through on this session's claim. `docs/STALE-COMMENTS-AUDIT.md`
+records the sweep and its method. Delegated the read-heavy grep-and-verify
+pass across ~35 candidate files to a research subagent (read-only, no edits),
+then personally re-verified every finding it reported HIGH/MEDIUM confidence
+against the actual current code before touching anything, since a subagent's
+claim that code "still says X" is exactly the kind of thing worth checking
+rather than trusting — same principle as the FFI-audit and DOCUMENTATION
+memories about verifying against source rather than a report's framing.
+
+Seven HIGH-confidence stale comments fixed, all in one family: prose written
+while M7 was still in progress and never updated once the described gap
+closed.
+
+- `jmap-config/tests/textdomain.rs:17` and `jmap-config/src/module.rs:94`:
+  both said `insert_widgets` "is unwritten"/"has yet to put on screen" —
+  it has built every field for some time (`src/lib.rs:125` already said so).
+- `jmap-config/src/backend.rs`'s `insert_widgets` doc: said the page is "not
+  tagged complete until a human confirms it" and needs "a real Evolution
+  session (or M9's Xvfb tier)" — M7 is `COMPLETE` via two operator rounds
+  already recorded, and the M9-Xvfb parenthetical was itself wrong (below).
+- `jmap-backend-collection/tests/oauth2_service.rs:94`: "once M7's setup UI
+  writes OAuth2 accounts" (future tense) — it does this today.
+- `jmap-client/src/oauth.rs:28-31`: said the `EOAuth2Service` interface
+  needed to wire OAuth2 into EDS "is a later slice" — `jmap-config/src/
+  oauth2_service.rs` implements and registers it.
+- `jmap-config/tests/account.rs:241-242`: said `check_complete`'s insecure-
+  transport UI refusal "is not written yet" — it is, tested by
+  `tests/complete.rs::plaintext_to_a_server_that_is_not_this_machine_is_refused`.
+- `jmap-config/src/config_lookup.rs`'s "What is not yet proven" section and
+  `evo-sys/tests/config_lookup.rs`'s matching note: both described a real
+  `EConfigLookup` dispatching `JmapConfigLookup::run` as future work for "the
+  next increment" — `jmap-functional/tests/config-lookup.rs` ("M9 layer 1,
+  config lookup") already does exactly that.
+
+One MEDIUM-confidence finding fixed alongside: `evo-sys/src/lib.rs:60` and
+`evo-sys/tests/gtk.rs:11-12` both claimed the account-setup page "is only
+exercisable under M9's Xvfb tier" — checked `ci/gui-smoke.sh` directly rather
+than trusting the claim: it copies three pre-built `.source` keyfiles into
+place, never driving the account assistant, so M9's Tier-2 test does not
+exercise `insert_widgets` either. Reworded both to say only a human running
+the assistant in real Evolution exercises it (which is what actually
+happened for M7's sign-off).
+
+No calcard or percent-encoding migration leftovers found — both migrations'
+comments accurately describe the current, migrated code. No stale milestone
+references found outside the M7/config-lookup family above; the audit doc's
+"Looked suspicious but fine" section lists what was checked and ruled
+accurate, including several genuine, still-open gaps that read similarly at
+a glance (the collection backend's mail-source-host gap, deliberate
+VTODO/VJOURNAL non-support, Camel's own "not written back" terminology for
+its summary-dirty state) so the audit is falsifiable rather than a bare
+hit-list.
+
+Full gate: `cargo fmt --check` clean, `cargo clippy --all-targets --locked
+-- -D warnings` clean (default-members), `cargo test --locked` green
+(default-members, every `test result: ok`, 0 failed across all crates), and
+`cargo clippy -p jmap-config -p jmap-backend-collection -p evo-sys
+--all-targets --locked -- -D warnings` + `cargo test -p jmap-config -p
+jmap-backend-collection -p evo-sys --locked` both clean/green (the three
+EDS-gated crates this session's comment edits touch, built directly since
+this VM has the EDS headers even though they stay out of `default-members`).
+Comment-only changes plus one new plain-prose doc file (already covered by
+`REUSE.toml`'s existing `docs/**` annotation, and given its own SPDX header
+regardless, matching `docs/EXTERNALISATION-AUDIT.md`'s style) — no source
+logic changed, so no new tests were needed or written.
+
+## 2026-08-19 (claim) — Claiming Track A6: unsafe reduction / idiom audit
+
+Fresh survey: `docs/MILESTONES.md` has every milestone COMPLETE; CURRENT
+PRIORITY has no open item left (M7 COMPLETE and operator-verified; the
+redirect-auth and apiUrl-scheme real-server bugs are both fixed; OAuth 2.0
+real-server validation and JMAP SRV autodiscovery's `GResolver`-backed leg
+are both explicitly parked/escalation-worthy per the roadmap text, unchanged
+since at least the last three sessions that checked — not re-surveying a
+fourth time). Round 2's "Lead order" wants Track D first, but D1's only
+remaining piece is the `create_resource_sync`/`delete_resource_sync`
+GObject-vtable FFI wiring — the same escalation-worthy category as SRV's
+`GResolver` leg — and D2 is gated on that same wiring; Track D is not
+tractable tonight either. Track B/C2/C3/E are NEEDS-DECISION. That leaves
+Track A: A1/A3 are `[agy]`-lane; A2 (mutation testing `jmap-proto`/
+`jmap-client`) risks an unbounded rebuild-per-mutant loop against a genuinely
+tight disk budget (`df -h .`: 3.6G free, `rust/target/debug` already 20G —
+the same risk the C1-claiming session flagged for A2 specifically); A5 (FFI
+soundness) is explicitly escalation-worthy per its own roadmap text. A6
+(unsafe reduction/idiom audit) is left: read-and-categorize, no FFI writing,
+no rebuild loop, and not marked escalation-worthy — the right-sized item.
+
+Scope check: `grep -rl unsafe` across `rust/crates/**/src` (excluding
+`tests/`) hits ~80 files — effectively every backend/FFI crate. Plan:
+inventory every `unsafe` block by crate/cluster, tag each **KEEP** (intrinsic,
+well-contained) / **IMPROVE** (concrete safer or more idiomatic refactor
+available) / **INVESTIGATE**, write `docs/UNSAFE-AUDIT.md` with a short
+prioritized IMPROVE list and rough effort per item. Audit only, per the
+roadmap text — no code changes this session beyond the doc itself.
+
+## 2026-08-19 — Delivered: Track A6, `docs/UNSAFE-AUDIT.md`
+
+Split the read across four parallel research passes (foundational
+`eds-sys`/`evo-sys`/`jmap-backend-core`; the three EDS backend crates;
+`jmap-mail`, the largest at ~9,800 lines/~400 unsafe sites; `jmap-config` +
+the demo `example-module`), each inventorying every `unsafe` block's
+`// SAFETY:` reasoning with a KEEP/IMPROVE/INVESTIGATE tag, then personally
+cross-checked the highest-value cross-cutting claims by grep against the
+actual source before writing them up — the same "verify a subagent's claim
+before trusting it" discipline the A7 session used, and it paid off here:
+each individual pass could only see 2–3 occurrences of the
+`MaybeUninit::zeroed().assume_init()` test-double idiom within its own
+scope, but grepping across all crates found 6, spanning 5 crates
+(`jmap-backend-book`/`cal`/`collection`'s `backend.rs`, `jmap-config/backend.rs`,
+`jmap-mail`'s `store.rs`/`transport.rs`) — the true cross-cutting shape only
+visible once the four reports were combined.
+
+**Headline: the codebase is unusually disciplined.** The overwhelming
+majority of ~80 files' unsafe blocks are **KEEP** — accurate SAFETY
+comments, already-minimal scope, every vfunc/trampoline already routed
+through `jmap_backend_core::trampoline`'s `catch_unwind` guards and
+`subclass::ObjectSubclass`'s shared registration. The audit's real yield is
+six cross-cutting patterns where an already-safe idiom is hand-copied
+across files with no shared helper:
+
+- **Pattern A (INVESTIGATE→IMPROVE)**: the 6-site zeroed-memory test-double
+  idiom above — none `#[cfg(test)]`-gated, so "never call this outside a
+  test" is enforced by doc comment, not the compiler.
+- **Pattern B**: a "check the GType, then cast" borrow helper, ~13
+  independent copies across `jmap-mail` (2 trust levels: dispatched/trusted
+  vs. checked).
+- **Pattern C** — the one genuinely safety-adjacent gap, not just style: no
+  RAII wrapper for libical/GObject reference-counted pointers.
+  `jmap-backend-cal/src/marshal.rs` has 15 manual `component_unref`/
+  `g_object_unref` call sites (confirmed by grep) with no owning newtype —
+  every site unrefs correctly today, but the invariant is "a human re-checks
+  every exit path," the same category of thing `populate.rs::Frozen` and
+  `jmap-mail`'s `Changes`/`FolderInfoChain`/`MessageCache` already solve
+  elsewhere in the tree, just not for GObject/libical pointers.
+- **Pattern D**: the "has_extension, then get_extension, then cast" idiom
+  the roadmap's own A6 text named directly, ~10+ sites across
+  `jmap-backend-core`/`jmap-backend-collection`.
+- **Pattern E**: small repeated `fail()`/`invalid_arg()` GError-builder
+  helpers, ~11 sites, lowest priority (already minimal, just not shared).
+- **Pattern F (positive, no action)**: the panic-guard/subclass
+  infrastructure itself is already exactly this kind of consolidation done
+  right — called out so the doc doesn't read as "why so many KEEPs with no
+  explanation."
+
+`example-module` (out of `default-members`, a demo/reference module on Rust
+edition 2021, not 2024) stands apart: no SAFETY comments, hand-rolled GObject
+registration duplicated across two files instead of using the shared
+`subclass` machinery, no panic guards on its `extern "C"` callbacks, and one
+unbounded-lifetime `&'static mut` accessor (`shell_view_extension.rs::get_private`)
+worth tightening if it's ever promoted out of demo status. Recorded, not
+prioritized — it's demo code, not a shipped milestone.
+
+**Prioritized IMPROVE list, rough effort**: Pattern A (~1–2h, do first — the
+one INVESTIGATE item with a cheap compiler-enforced fix), Pattern D (~2–3h,
+the roadmap's own named target), Pattern B (~2–3h), Pattern C (~1 day,
+highest safety value but the largest single increment — its own session,
+existing round-trip/fixture tests as the acceptance bar), Pattern E (~2h,
+fold into other work rather than scheduling separately). None of these were
+attempted this session, per the roadmap's "audit only" instruction for this
+item — logged here for whoever picks Pattern A up next.
+
+No code changes; `docs/UNSAFE-AUDIT.md` is the deliverable, covered by
+`REUSE.toml`'s existing `docs/**` annotation with its own SPDX header. No
+Rust source touched, so `cargo fmt --check`/`cargo clippy --all-targets
+--locked -- -D warnings`/`cargo test --locked` are unaffected by this
+change (not re-run for a docs-only diff, consistent with the A7 session's
+same reasoning for its own doc-only file).
+
+## 2026-08-19 (claim) — Claiming JMAP SRV autodiscovery call site (b): config_lookup.rs::probe_host
+
+Fresh survey: every milestone in `docs/MILESTONES.md` is COMPLETE. CURRENT
+PRIORITY's one open item is JMAP SRV autodiscovery (ROADMAP item 5), PARTIAL
+since the `Resolver` trait seam landed (`jmap-client/src/resolver.rs`,
+`ClientBuilder::resolver`/`connect_domain`, TDD'd in
+`jmap-client/tests/srv_discovery.rs`). Two named call sites are still
+unwired: (a) the real backend connect paths (`jmap-backend-collection/src/
+fan_out.rs::fan_out`, `jmap-backend-book`/`cal`'s `connect.rs`, `jmap-mail`'s
+`connect.rs`) all call `Client::connect(&config.origin, …)` where `origin` is
+a fully-assembled `scheme://host:port` string from
+`jmap_backend_core::source::origin(host, port, secure)` — reconciling that
+structured host/port/secure model with `connect_domain`'s bare-`https`-only
+domain argument is a real design decision (every existing backend test wires
+an explicit mock-server port through `origin`), not a quick swap, and is left
+open, not attempted this session; (b) `jmap-config/src/config_lookup.rs::
+probe_host`, which still unconditionally returns the bare email domain for
+the "Look Up Account Details" OAuth2-discovery worker. (b) is self-contained
+(one pure function, already unit-tested, no FFI, does not touch any of the
+real connect paths or their mock-backed tests) and does not need the
+GResolver-backed real resolver to be *wired in correctly* — only to actually
+*find* a record, which stays future work. Claiming (b) only: thread a
+`&dyn jmap_client::resolver::Resolver` through `probe_host`, defaulting to
+`NoSrvResolver` in `run()` until a real `g_resolver_lookup_service()`-backed
+resolver exists (that FFI work stays escalation-worthy, unstarted, per the
+roadmap). Behaviour is unchanged today (`NoSrvResolver` never finds a
+record); this is the plumbing the real resolver plugs into next.
+
+Disk: 3.6G free (`df -h .`) — same tight budget prior sessions have flagged.
+This change is a small, targeted edit to one already-built crate
+(`jmap-config`), not a mutation-testing rebuild loop, so it should not be at
+risk.
+
+## 2026-08-19 — Delivered: SRV autodiscovery call site (b), config_lookup::probe_host
+
+Followed through on this session's claim. `jmap-config/src/config_lookup.rs::
+probe_host` now takes a `&dyn jmap_client::resolver::Resolver` parameter: an
+explicit `servers` entry still wins outright and is never passed through the
+resolver (it already names a host, not a domain to autodiscover); the
+email-domain fallback consults `resolver.lookup_srv(domain)` first and only
+falls back to the bare domain when it answers `None` — the identical seam
+and fallback order `jmap_client::ClientBuilder::connect_domain` already
+uses. An SRV target renders as `"host:port"`, which the existing
+`parse_target` already parses correctly as a bare, secure host with that
+port (added a test pinning that reading explicitly, since nothing
+previously exercised a bare `host:port` string through it). `run()` passes
+`jmap_client::resolver::NoSrvResolver` for now, with a comment marking it as
+the one line a real `g_resolver_lookup_service()`-backed resolver replaces
+— that FFI work is unstarted and stays the escalation candidate, not
+attempted here.
+
+TDD: five new unit tests in `config_lookup.rs`'s existing `#[cfg(test)]`
+module, using the same `FakeResolver` shape as `jmap-client/tests/
+srv_discovery.rs` — an SRV record wins over the bare domain, no record falls
+back to the bare domain (both against a fresh `FakeResolver`, not just
+`NoSrvResolver`, so the fallback path is proven for a resolver capable of
+answering, not only for one that never can), an explicit `servers` entry is
+never resolved even against a resolver primed to answer for any domain (a
+regression a future real resolver could otherwise silently introduce), plus
+the `parse_target` pin above. All eleven pre-existing `probe_host`/
+`parse_target` tests kept, updated only to pass `&NoSrvResolver` where the
+function used to take no resolver at all — same inputs, same expected
+outputs, confirming behaviour is unchanged by default.
+
+Deliberately not touched, and not a guess to make in the same increment:
+call site (a), the real backend connect paths (`jmap-backend-collection/src/
+fan_out.rs`, `jmap-backend-book`/`cal`'s `connect.rs`, `jmap-mail`'s
+`connect.rs`) — every one calls `Client::connect(&config.origin, …)`, where
+`origin` is a fully-assembled `scheme://host:port` string from
+`jmap_backend_core::source::origin(host, port, secure)`. `connect_domain`
+only ever builds `https://<domain>` with no port; reconciling the two would
+need either widening `connect_domain` to accept a port/scheme or teaching
+`origin()`'s callers when a host is "still the bare default" versus an
+explicit override, and every backend's own tests wire an explicit
+mock-server port through `origin` today. That is a real design decision, not
+a mechanical wire-up, so it stays open for a future session (or the
+maintainer) rather than being guessed at here. The real `Resolver` backed by
+`g_resolver_lookup_service()` also remains unstarted and the standing
+escalation candidate for this thread.
+
+Full gate: `cargo fmt --check` clean; `cargo clippy -p jmap-config
+--all-targets --locked -- -D warnings` clean; `cargo clippy --all-targets
+--locked -- -D warnings` (default-members) clean; `cargo test --locked`
+(default-members) green, every `test result: ok`, 0 failed; `cargo test -p
+jmap-config --locked` (this EDS-gated crate directly, since this VM has the
+EDS headers even though it stays out of `default-members`) green, every
+`test result: ok`, 0 failed, including the 17 `config_lookup` unit tests
+(11 pre-existing + 6 new, one of which — the `parse_target` pin — is not
+new behaviour, just a previously-unwritten assertion). No new files, so no
+`REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/`cargo-deny` remain
+unavailable on this VM (see memory), so `ci/checks.sh` itself was not run —
+its constituent checks were run individually as above, per the standing
+workaround.
+
+## 2026-08-19 (claim) — Claiming JMAP SRV autodiscovery call site (a): real backend connect paths
+
+Fresh survey: every milestone is COMPLETE; ROADMAP's CURRENT PRIORITY item 5
+(JMAP SRV autodiscovery) is the one open thread, PARTIAL with call site (a) —
+the real backend connect paths (`jmap-backend-book`/`cal`'s `connect.rs`,
+`jmap-mail/src/connect.rs`, `jmap-backend-collection/src/fan_out.rs`) still
+calling `Client::connect(&config.origin, …)` on a pre-assembled
+`scheme://host[:port]` string with no SRV/well-known-domain distinction —
+named as the next step.
+
+Dispatched a research agent first to confirm this is really where the
+password-path 404 lives rather than in `jmap-config`'s M7 setup UI (a
+plausible alternate culprit, and the roadmap's item 5 originally pointed at
+`client.rs:135` before `connect_domain` existed). Confirmed: a plain
+email+password Fastmail-style setup writes `Authentication:Host` = the bare
+email domain via `jmap-config/src/defaults.rs::from_identity`/`domain_of`,
+which is *correct* per RFC 8620 §2.2 ("domain is the entry point") — no UI
+autodiscovery step is missing. The gap is purely at connect time: nothing
+between "a bare domain landed in `Authentication:Host`, port unset" and "the
+request goes out" tries `_jmap._tcp.<domain>` first. So call site (a) is the
+real, sole remaining gap, and now has a design answer: `jmap_backend_core::
+source::origin(host, port, secure)` already receives enough information
+(port `0` is EDS's "not set" sentinel) to tell "a bare domain, https implied"
+apart from "an explicit endpoint" — every existing backend test that wires a
+mock server through `SourceConfig`/`ServerConfig` sets an explicit port, so
+this distinction is free, not a guess.
+
+**Design:** add `jmap_backend_core::source::ConnectTarget` (`Origin(String)`
+for an explicit endpoint or an IP literal — SRV lookups on an IP make no
+sense; `Domain(String)` for port-unset+secure+non-IP-literal, RFC 8620 §2.2's
+own shape) alongside a `connect_target()` constructor sharing `origin()`'s
+existing host validation and TLS rule (`origin()` itself becomes a thin
+wrapper over it, so `jmap-backend-collection`'s `Server.origin` — used in
+several test assertions — keeps its exact current string unchanged). A new
+`jmap_backend_core::source::connect(target, credentials)` dispatches
+`Origin` to today's `Client::connect` and `Domain` to `ClientBuilder::
+connect_domain` (the already-TDD'd `Resolver` seam from the session-discovery
+half of this thread), both call sites' four backends switch to it.
+Behaviour is unchanged today (`NoSrvResolver`, the only resolver anything
+constructs yet, never finds a record — same as `probe_host`'s (b) fix), but
+every one of these four connect paths now has the seam the eventual
+GResolver-backed resolver plugs into, closing out call site (a) alongside
+(b). The GResolver FFI implementation itself remains unstarted and the
+standing escalation candidate for this thread.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: SRV autodiscovery call site (a), backend connect paths
+
+Followed through on this session's claim (see the earlier "Claiming JMAP SRV
+autodiscovery call site (a)" entry for the research-agent trace confirming
+this is the real remaining gap, not a missing `jmap-config` UI step).
+
+`jmap_backend_core::source` gained `ConnectTarget` (`Origin(String)` for an
+explicit endpoint or an IP literal; `Domain(String)` for a port-unset +
+secure + non-IP-literal host — exactly the shape `jmap-config/src/
+defaults.rs::from_identity` writes for a plain email+password setup, and RFC
+8620 §2.2's own "the domain is the entry point" case) and `connect_target()`,
+sharing `origin()`'s existing host validation and TLS rule — `origin()`
+itself is now a one-line wrapper over `connect_target()`, so every caller
+that only wants a display string (`jmap-backend-collection`'s
+`Server::origin`, `jmap-config`'s `complete.rs` validity check and
+`oauth2_setup.rs`'s issuer-URL builder) is untouched. A new
+`jmap_backend_core::source::connect(target, credentials)` dispatches
+`Origin` to `Client::connect` and `Domain` to `ClientBuilder::connect_domain`
+(the `Resolver` seam from the session-discovery half of this thread);
+`jmap-backend-book`/`cal`'s `connect.rs`, `jmap-mail/src/connect.rs`, and
+`jmap-backend-collection/src/fan_out.rs` all switch their bare
+`Client::connect(&config.origin, …)` call to it.
+
+`SourceConfig`, `jmap-mail`'s `ServerConfig`, and `jmap-backend-collection`'s
+`Server` all carry `target: ConnectTarget` in place of a pre-collapsed
+`origin: String`. `Server` was the one surprise: its own fan_out tests build
+`Server::connection` (the fields repeated to child sources) independently of
+the address the mock server actually listens on, so deriving the connect
+target from `.connection` instead of adding `.target` would have silently
+started dialling the wrong host in every such test — caught by running the
+full suite, not by inspection, before it was ever pushed. `jmap_client::
+Client` gained a shared `rebase_urls_from_env()`, extracted from `Client::
+connect`'s existing `JMAP_LIVE_SERVER_REBASE_URLS` check, so the new
+`Domain` branch honours the same opt-in as `Origin` does rather than growing
+a second copy of the same two comparisons.
+
+TDD: four new `connect_target` unit tests in `jmap-backend-core/src/
+source.rs` (bare domain with no port → `Domain`; explicit port → `Origin`;
+an IP literal → `Origin` even with no port stated, since there is no
+email-style entry point to run SRV autodiscovery against; the insecure and
+missing-host refusals unchanged). Every existing test across
+`jmap-backend-core`, `jmap-backend-book`, `jmap-backend-cal`,
+`jmap-backend-collection`, `jmap-mail`, and `jmap-config` that drove a
+`SourceConfig`/`ServerConfig`/`Server` through an explicit port kept
+asserting `ConnectTarget::Origin(...)` unchanged; every one that used a bare
+domain with no port now asserts `ConnectTarget::Domain(...)` instead — this
+flip *is* the behaviour change: `jmap-config/tests/backend.rs`'s
+`the_defaults_are_the_account_the_address_names` and `jmap-config/tests/
+defaults.rs`'s `the_default_and_the_registry_agree_about_the_server` in
+particular, which are exactly "what a plain email+password setup offers",
+moved from `Ok("https://example.com")` to
+`Ok(ConnectTarget::Domain("example.com"))`.
+
+Behaviour is unchanged today: `NoSrvResolver`, the only resolver anything
+constructs, never finds a record, so every path still ends at the same
+bare-domain `.well-known/jmap` fetch it always did. What's different is that
+every one of these four connect paths — not just the OAuth2 "Look Up Account
+Details" worker from the earlier (b) fix — now has the seam a real
+`Resolver` plugs into. The GResolver-backed implementation
+(`g_resolver_lookup_service()`, FFI) remains unstarted and is the standing
+escalation candidate for this thread; it is also the last piece needed
+before the operator's original Fastmail password-path 404 can be verified
+fixed end-to-end, since this runner has no Fastmail credentials to test
+against directly.
+
+Disk filled mid-session: `rust/target/debug` had grown to 24G and
+`cargo test -p jmap-mail --no-run` failed with "No space left on device"
+(`rustc-LLVM ERROR` and a `Bus error` from the linker) — consistent with the
+standing note from prior sessions. `cargo clean --profile dev` recovered
+24G (`df` back to 24G free from 161M) and every subsequent build succeeded.
+
+Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-
+client -p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p
+jmap-mail -p jmap-backend-collection -p jmap-config --all-targets -- -D
+warnings` (the EDS-gated crates touched, direct-built since this VM has the
+headers) clean; `cargo test --locked` (default-members) and `cargo test` on
+the same crate list both green, every `test result: ok`, 0 failed. No new
+files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
+`cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
+run — its constituent checks were run individually as above, per the
+standing workaround.
+
+## 2026-08-19 (claim+delivered) — Track A6 Pattern A: compiler-enforced test-only `detached()`
+
+Fresh survey: every milestone is COMPLETE; CURRENT PRIORITY's SRV
+autodiscovery item (ROADMAP item 5) now has both call sites wired, leaving
+only the GResolver-backed `Resolver` FFI implementation open — unstarted,
+explicitly the standing escalation candidate (`g_resolver_lookup_service()`),
+not attempted here. Per the roadmap's own "Lead order" note, Round 2's
+Track D would lead next, but its one remaining increment (D1's
+`create_resource_sync`/`delete_resource_sync` EDS-vtable wiring) is the same
+GObject-vtable-FFI category the escalation guidance names directly, and a
+tractable non-FFI item exists instead: `docs/UNSAFE-AUDIT.md`'s Track A6
+Pattern A IMPROVE item, explicitly scoped as a separate follow-up when the
+audit landed. Claiming and delivering that in one increment — small,
+mechanical, no FFI/ABI surface touched.
+
+**Delivered:** the six `detached()` test-double constructors the audit found
+(`jmap-backend-book`/`cal`/`collection`'s `backend.rs`, `jmap-config/
+backend.rs`, `jmap-mail`'s `store.rs`/`transport.rs`) each build an instance
+by zeroing memory outside the GObject type system, documented as sound for
+exactly one narrow, named use and unsound for anything else — but were
+`pub fn`s reachable from ordinary code, "test-only" enforced by doc comment
+only. Each is now `#[cfg(feature = "testing")]`-gated (and each file's now-
+conditionally-used `MaybeUninit` import along with it); each of the five
+crates gained a `testing` feature (`[features] testing = []`) and a self
+dev-dependency (`<crate> = { path = ".", features = ["testing"] }`) enabling
+it for that crate's own `cargo test` builds only — the standard Rust idiom
+for a test-only feature that must never be on in a normal build. Confirmed
+empirically, not just by inspection: `cargo build -p <crate>` for each of the
+five compiles clean with `detached()` and its import entirely absent (no
+unused-import warning, since the import is gated identically), while
+`cargo test -p <crate>` builds and passes with `detached()` available,
+proving the feature activates for test builds and only test builds. Every
+call site of `detached()` lives in that same crate's own `tests/*.rs` (no
+cross-crate caller), so no other crate's Cargo.toml needed touching.
+
+Not done: hoisting the zeroing itself into one shared `jmap_backend_core`
+helper (the audit's second, independent IMPROVE for this pattern) — left for
+a future increment, since gating alone already closes the compiler-enforced
+half of the finding and this session's increment stays focused.
+
+Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-
+client -p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p
+jmap-mail -p jmap-backend-collection -p jmap-config --all-targets -- -D
+warnings` (the five touched EDS-gated crates plus their siblings, direct-
+built since this VM has the headers) clean — `--all-targets` builds both the
+gated-off lib and the feature-enabled test targets in the same invocation,
+which is what proved the two configurations don't collide with each other's
+warnings; `cargo test --locked` (default-members) and `cargo test` on the
+same seven-crate list both green, every `test result: ok`, 0 failed. No new
+files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
+`cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
+run — its constituent checks were run individually as above, per the
+standing workaround. Disk filled to 391M free mid-session running the full
+five-crate test sweep; `cargo clean --profile dev` recovered 23.3G, standing
+note confirmed again.
+
+## 2026-08-19 (claim) — Claiming UNSAFE-AUDIT Track A6 Pattern D: `extension_if_present` helper
+
+Fresh survey: every milestone is COMPLETE. CURRENT PRIORITY's one open thread
+(JMAP SRV autodiscovery, item 5) has both call sites wired; all that is left
+on it is the `g_resolver_lookup_service()`-backed real `Resolver` — FFI work
+this thread has repeatedly flagged as the standing escalation candidate, not
+attempted again this session. Round 2's lead order points at Track D next,
+but its one open item (D1's `create_resource_sync`/`delete_resource_sync`
+EDS-vtable wiring) is the same GObject-vtable-FFI category. Track E is
+NEEDS-DECISION (blocked on the maintainer). So this session claims a
+tractable, non-novel-FFI item instead: `docs/UNSAFE-AUDIT.md`'s Track A6
+Pattern D, one of the IMPROVE patterns the audit scoped as a separate
+follow-up (Pattern A's follow-up was delivered two sessions ago).
+
+**Pattern D** is the "`has_extension`, then `get_extension`, then cast" idiom
+repeated ~10+ times across `jmap-backend-core` and `jmap-backend-collection`
+— reading an `ESource` extension without triggering
+`e_source_get_extension`'s create-on-miss side effect. The audit named the
+fix directly: a shared `extension_if_present<T>(source, name) -> Option<*mut
+T>` in `jmap-backend-core`. This is a mechanical consolidation of an
+already-understood, already-tested pattern (not new unsafe/FFI surface), so
+it stays on this side of the escalation line, unlike Pattern C's libical/
+GObject RAII wrapper (~1 day, its own session) or the GResolver work.
+
+Scope for this increment: the helper plus every call site whose shape is a
+clean single-source guard-then-cast — `resource_id.rs::resource_id_of`,
+`collection_source.rs::parts_of`/`user_of`/`server_of` (both its guards),
+`mail_child.rs::mail_service_of`, and `oauth2.rs::source_uses_oauth2`.
+Deliberately NOT touched: `child_added.rs::follow_collection` and
+`mail_child.rs::follow_server`, which mix this idiom with a genuine
+create-if-absent read on a second source in the same function (composing the
+helper there is a real call-shape change, not a 1:1 substitution); and
+`jmap-backend-core/src/source.rs::SourceConfig::from_source`'s
+`AUTHENTICATION`/`RESOURCE` reads, which — per the audit's own §2 — skip the
+`has_extension` guard entirely today, a latent side effect nothing currently
+tests for, so routing them through `extension_if_present` is a behaviour
+decision, not a mechanical port. Logging these three as open follow-ups
+rather than guessing.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: `extension_if_present` helper, UNSAFE-AUDIT Pattern D
+
+Followed through on this session's claim. `jmap_backend_core::marshal` gained
+`pub unsafe fn extension_if_present<T>(source: *mut ESource, name: &CStr) ->
+Option<*mut T>`, alongside `read_string` — the module's other type-agnostic
+FFI helper — collapsing the "`e_source_has_extension` guard, then
+`e_source_get_extension` and cast" idiom the audit found duplicated ~10+
+times to one call: `None` when the extension is absent, `Some` of the cast
+pointer when it is present, never triggering `e_source_get_extension`'s
+create-on-miss side effect.
+
+Six call sites, all the ones whose shape was a plain single-source
+guard-then-cast, now use it in place of their own copy:
+`jmap-backend-collection/src/resource_id.rs::resource_id_of` (the
+`[Resource]` guard), `collection_source.rs::parts_of` (`[Collection]`),
+`user_of` (`[Authentication]`), `server_of` (both its `[Security]` and
+`[Authentication]` guards), `mail_child.rs::mail_service_of` (`[Mail
+Account]`/`[Mail Transport]`), and `jmap-backend-core/src/oauth2.rs::
+source_uses_oauth2` (`[Authentication]`). `jmap-backend-core/src/source.rs::
+SourceConfig::from_source`'s `[Security]` guard — the same idiom, one more
+site — also moved onto the helper.
+
+No behaviour change: every touched function keeps returning the same
+`None`/error/default it did before for an absent extension, and every one of
+these functions' existing tests stayed green unmodified —
+`jmap-backend-collection/tests/{resource_id,collection_source,mail_child}.rs`
+and `jmap-backend-core/tests/{source,oauth2}.rs` — several of which
+specifically assert the guarded extension is *not* created by the read
+(`resource_id.rs`'s `a_child_with_no_identity_is_not_claimed_and_is_not_
+given_one`, three separate assertions in `collection_source.rs`), so a
+mistake in the port that started calling `get_extension` unconditionally
+would have failed loudly rather than silently.
+
+Deliberately not touched, per the claim: `child_added.rs::follow_collection`
+and `mail_child.rs::follow_server` mix this idiom with a second source read
+that is genuinely create-if-absent in the same function — composing the
+helper there is a real call-shape change, not a substitution, and is left
+open; and `SourceConfig::from_source`'s `AUTHENTICATION`/`RESOURCE` reads,
+which skip the `has_extension` guard entirely today (unlike its own
+`SECURITY` guard, which *was* converted) — fixing that is a behaviour
+decision (does reading an account's source get to leave it exactly as it
+was, or has something always quietly created those two groups and nothing
+noticed), not a mechanical port, and nothing in `jmap-backend-core/tests/
+source.rs` currently distinguishes the two so it needs its own red test
+first. Both logged as open follow-ups in `docs/UNSAFE-AUDIT.md`'s Pattern D
+section rather than guessed at here. The GResolver-backed real `Resolver`
+(FFI, `g_resolver_lookup_service()`) remains the standing escalation
+candidate for the SRV-autodiscovery thread, untouched this session.
+
+Full gate: `cargo fmt --check` clean (after `cargo fmt` fixed two lines this
+refactor's `let`-else/`.map()` shapes reflowed); `cargo build --workspace`
+clean; `cargo clippy --all-targets --locked -- -D warnings` (default-members)
+clean; `cargo clippy -p evolution-jmap-client -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail -p jmap-backend-collection
+-p jmap-config --all-targets -- -D warnings` (the six touched EDS-gated
+crates plus their siblings, direct-built since this VM has the headers)
+clean; `cargo test --locked` (default-members) and the same seven-crate
+`cargo test --locked` both green, every `test result: ok`, 0 failed. No new
+files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
+`cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
+run — its constituent checks were run individually as above, per the
+standing workaround.
+
+## 2026-08-19 (claim) — Claiming UNSAFE-AUDIT Track A6 Pattern B (trusted-borrow half)
+
+Fresh survey: every milestone is COMPLETE (`docs/MILESTONES.md`).
+CURRENT PRIORITY's one open thread (JMAP SRV autodiscovery) has both call
+sites wired; the one thing left on it is the `g_resolver_lookup_service()`-
+backed real `Resolver` — FFI, the standing escalation candidate, not
+attempted again here. Round 2's lead-order Track D's one open item (D1's
+`create_resource_sync`/`delete_resource_sync` EDS-vtable wiring) is the same
+GObject-vtable-FFI category. Track E is NEEDS-DECISION. So, as the last two
+sessions on this thread did, claiming the next item on `docs/
+UNSAFE-AUDIT.md`'s own prioritized follow-up list: **Pattern B**, "checked/
+trusted borrow helpers" across `jmap-mail`, ~13 sites, next after Pattern A
+and Pattern D (both delivered in prior sessions).
+
+Pattern B is two families, not one: three sites (`folder.rs::JmapFolder::
+borrow`, `store.rs::JmapStore::borrow`, `transport.rs::JmapTransport::
+borrow`) are the **trusted/dispatched** shape — a bare null-check-then-cast,
+sound because Camel only ever dispatches a class's vfuncs on an instance of
+that class — while the other ~10 (`folder.rs::parent_store`, `server.rs::
+network`, `envelope.rs::internet`, `summary.rs::JmapSummary::borrow`,
+`message_info.rs::JmapMessageInfo::borrow`, `subscribe.rs::borrow`,
+`transfer.rs::mailbox_of`) are the **checked** shape — `g_type_check_
+instance_is_a` first, because the pointer arrived via an ordinary property
+or argument, not vfunc dispatch — and return different shapes (`Option<&T>`,
+`Option<*mut T>`, and one `Result<Option<*mut T>, EnvelopeError>` in
+`envelope.rs::internet`, whose error case is load-bearing, not merely
+defensive). Scoping this increment to the **trusted/dispatched** family
+only: it is the simpler, lower-risk half (no type-check semantics to get
+subtly wrong), and the checked family's shape variety is enough to want its
+own increment. `docs/UNSAFE-AUDIT.md` will get the checked half logged as
+the explicit next step, same pattern as Pattern D's `follow_collection`/
+`follow_server` carve-out.
+
+**Design:** `jmap_backend_core::marshal` gains `pub unsafe fn dispatched_
+borrow<'a, T>(ptr: *mut impl Copy) -> Option<&'a T>` (or the concrete cast
+shape once written) alongside `extension_if_present`/`read_string` — null
+check, then `.cast::<T>().as_ref()`, with the "Camel only dispatches on an
+instance of this class" contract stated once in its doc comment instead of
+three times. `folder.rs::JmapFolder::borrow`, `store.rs::JmapStore::borrow`,
+`transport.rs::JmapTransport::borrow` all switch to it. No behaviour
+change: same `Option<&Self>` for the same inputs; every existing test in
+`jmap-mail` stays green unmodified.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: `dispatched_borrow` helper, UNSAFE-AUDIT Pattern B (trusted-borrow half)
+
+Followed through on this session's claim. `jmap_backend_core::marshal`
+gained `pub unsafe fn dispatched_borrow<'a, C, T>(ptr: *mut C) -> Option<&'a
+T>` — a null check then `.cast::<T>().as_ref()`, with the "Camel only
+dispatches a class's vfuncs on an instance of that class" contract stated
+once instead of copied three times. `folder.rs::JmapFolder::borrow`,
+`store.rs::JmapStore::borrow`, and `transport.rs::JmapTransport::borrow` all
+switch to it.
+
+One find while implementing that the audit's own listing had slightly
+wrong: `subscribe.rs::borrow` was grouped under Pattern B's "checked" family
+in `docs/UNSAFE-AUDIT.md`, but it does not call `g_type_check_instance_is_a`
+itself — it is a bare `JmapStore::borrow(subscribable.cast::<CamelStore>())`
+delegate (the audit's own grep of the 6 files that do call
+`g_type_check_instance_is_a` correctly did not include `subscribe.rs`; the
+prose bullet above it was just imprecise). So it needed no code change of
+its own: it now goes through `dispatched_borrow` transitively via
+`JmapStore::borrow`. Corrected the record in `docs/UNSAFE-AUDIT.md` rather
+than leaving the imprecision for a future reader to trip on.
+
+No behaviour change: same `Option<&Self>` for the same inputs. Every
+existing test across the touched crates stayed green unmodified.
+
+**Left open, per the claim:** the "checked" family (`folder.rs::
+parent_store`, `server.rs::network`, `envelope.rs::internet`, `summary.rs::
+JmapSummary::borrow`, `message_info.rs::JmapMessageInfo::borrow`,
+`transfer.rs::mailbox_of`) — ~10 sites across 6 files, returning three
+different shapes (`Option<&T>`, `Option<*mut T>`, and `envelope.rs::
+internet`'s `Result<Option<*mut T>, EnvelopeError>` whose type-mismatch case
+is a user-facing error, not just `None`), which needs `checked_borrow`'s
+signature to accommodate more than one return shape — a real design
+question, not a mechanical port, so left for the next session on this
+thread. Logged in `docs/UNSAFE-AUDIT.md`'s Pattern B section and its
+prioritized follow-up list.
+
+Full gate: `cargo fmt --check` clean; `cargo build -p jmap-backend-core -p
+jmap-mail` clean; `cargo clippy --all-targets --locked -- -D warnings`
+(default-members) clean; `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+touched EDS-gated crates plus their siblings, direct-built since this VM
+has the headers) clean; `cargo test --locked` (default-members) and the
+same seven-crate `cargo test --locked` both green, every `test result: ok`,
+0 failed (the `evolution-jmap-CRITICAL **: ... panicked:` lines in the
+output are the panic-guard tests' own expected assertions, not failures).
+No new files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
+`cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
+run — its constituent checks were run individually as above, per the
+standing workaround. Disk at 3.5G free after the full test sweep — did not
+hit the standing "No space left on device" wall this session, so no
+`cargo clean` needed.
+
+## 2026-08-19 (claim) — Claiming UNSAFE-AUDIT Pattern B (checked-borrow family)
+
+Fresh survey: all milestones COMPLETE (`docs/MILESTONES.md`); CURRENT
+PRIORITY's one open thread (SRV autodiscovery) has both call sites wired,
+leaving only the `g_resolver_lookup_service()`-backed real `Resolver` — FFI,
+the standing escalation candidate, not attempted again here. Round 2's
+lead-order Track D's one open item (D1's EDS-vtable wiring) is the same
+GObject-vtable-FFI category. Track E is NEEDS-DECISION. So, continuing the
+Pattern B thread the last two sessions worked (trusted half done, Pattern D
+done before that): the **checked** family — `folder.rs::parent_store`,
+`server.rs::network`, `envelope.rs::internet`, `summary.rs::JmapSummary::
+borrow`, `message_info.rs::JmapMessageInfo::borrow`, `transfer.rs::
+mailbox_of` — ~10 sites across 6 `jmap-mail` files, each independently
+reimplementing "null-check, `g_type_check_instance_is_a`, then cast."
+
+**Design:** two helpers in `jmap_backend_core::marshal`, alongside
+`dispatched_borrow`: `checked_borrow<'a, C, T>(ptr, gtype) -> Option<&'a T>`
+for sites that hand out a Rust-owned struct reference (`summary.rs`,
+`message_info.rs`, and `folder.rs::parent_store`/`transfer.rs::mailbox_of`,
+both of which currently do the check then delegate to another type's
+`::borrow` — collapsible to one direct `checked_borrow` call since the
+delegate's own cast was already unconditional/trusted), and
+`checked_borrow_ptr<C, T>(ptr, gtype) -> Option<*mut T>` for sites that need
+the raw pointer because `T` is a foreign C type this crate doesn't own the
+layout of (`server.rs::network`'s `CamelNetworkSettings`). `envelope.rs::
+internet` is scoped out of this increment: its `Result<Option<*mut T>,
+EnvelopeError>` distinguishes a NULL input (valid, "no address") from a
+wrong-type input (a user-facing error) — a third return shape the audit
+itself flagged as not a mechanical fit for either helper above, so it is
+left as its own follow-up rather than forcing a shape onto it.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: `checked_borrow`/`checked_borrow_ptr`, UNSAFE-AUDIT Pattern B (checked family)
+
+Followed through on this session's claim. `jmap_backend_core::marshal`
+gained `checked_borrow<'a, C, T>(ptr, gtype) -> Option<&'a T>` and
+`checked_borrow_ptr<C, T>(ptr, gtype) -> Option<*mut T>` — same
+null-then-cast shape as `dispatched_borrow`, plus
+`g_type_check_instance_is_a` before the cast, with the "does this pointer
+need a type check or does dispatch already vouch for it" choice now explicit
+at each call site instead of buried in ~10 near-identical private copies.
+
+Five of the six remaining checked-family sites now use one of the two:
+`summary.rs::JmapSummary::borrow` and `message_info.rs::
+JmapMessageInfo::borrow` switch to `checked_borrow` (their target is a Rust
+struct this crate owns); `server.rs::network` switches to
+`checked_borrow_ptr` (its target, `CamelNetworkSettings`, is a foreign C
+type only forwarded to further Camel calls, not something to hand out a
+Rust reference to). `folder.rs::parent_store` and `transfer.rs::mailbox_of`
+collapse one step further than a mechanical port: both previously did the
+type check inline and then delegated to another type's own `::borrow`
+(`JmapStore::borrow`, `JmapFolder::borrow`) — which, since the trusted-family
+increment two sessions ago, is just `dispatched_borrow` (an unconditional
+null+cast, no check of its own). Because the caller had already validated
+non-null and the exact type before that delegate ran, the two calls were
+doing one job; both now call `checked_borrow::<_, JmapStore>`/
+`checked_borrow::<_, JmapFolder>` directly and drop the delegate. No
+behaviour change in any of the five: same `Option` for the same inputs.
+
+**Left open, per the claim:** `envelope.rs::internet` alone. Its
+`Result<Option<*mut CamelInternetAddress>, EnvelopeError>` distinguishes a
+NULL input (valid — "no address" — reported `Ok(None)`) from a wrong-type
+input (a user-facing `EnvelopeError::NotInternet`, not just `None`) — a
+third return shape that doesn't fit `checked_borrow`'s `Option`-returning
+contract without either collapsing that distinction or threading an
+unrelated error type through a generic helper's signature. Logged in
+`docs/UNSAFE-AUDIT.md`'s Pattern B section and its prioritized follow-up
+list as the one site left in this pattern.
+
+Removed now-unused imports at each touched call site
+(`g_type_check_instance_is_a` from `folder.rs`/`message_info.rs`/
+`server.rs`/`transfer.rs`, `GTypeInstance` from `server.rs`, `GFALSE` from
+`folder.rs` where nothing else in the file used it) rather than leaving
+dead `use`s for clippy to flag later.
+
+Full gate: `cargo fmt --check` clean; `cargo build -p jmap-backend-core -p
+jmap-mail` clean; `cargo clippy --all-targets --locked -- -D warnings`
+(default-members) clean; `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+touched EDS-gated crates plus their siblings, direct-built since this VM
+has the headers) clean; `cargo test --locked` (default-members) and the
+same seven-crate `cargo test --locked` both green, every `test result: ok`,
+0 failed. No new files, so no `REUSE.toml`/SPDX changes needed;
+`reuse`/`pipx`/`uvx`/`cargo-deny` remain unavailable on this VM, so
+`ci/checks.sh` itself was not run — its constituent checks were run
+individually as above, per the standing workaround. 3.5G free on disk after
+the full sweep — did not hit the standing "No space left on device" wall
+this session.
+
+## 2026-08-19 (claim) — Claiming UNSAFE-AUDIT Pattern A, fix 2 (shared `zeroed_box` helper)
+
+Fresh survey: all milestones COMPLETE (`docs/MILESTONES.md`); CURRENT
+PRIORITY's one open thread (SRV autodiscovery) is down to the
+`g_resolver_lookup_service()`-backed real `Resolver` — FFI, the standing
+escalation candidate. Round 2's lead-order Track D's one open item (D1's
+EDS-vtable wiring for `create_resource_sync`/`delete_resource_sync`) is the
+same GObject-vtable-FFI category, also standing-escalation. Track E is
+NEEDS-DECISION. Continuing the thread the last three sessions worked
+(`docs/UNSAFE-AUDIT.md` Track A6): Pattern D and Pattern B are now done or
+down to sites that need a design call; Pattern A's `#[cfg(feature =
+"testing")]` gating (fix 1) landed two sessions ago, but its fix 2 — hoisting
+the zeroing itself into one shared `jmap_backend_core` helper instead of six
+near-identical copies of the same safety paragraph — is still open and is
+first in the audit's own prioritized list. It is small, mechanical, and
+touches only already-`testing`-gated code, so no new correctness risk: a
+good next Sonnet-sized increment.
+
+**Design:** `jmap_backend_core::instance` (home of `Slot<T>`, which already
+documents the "GObject hands `instance_init` zeroed memory" fact this trades
+on) gains `pub unsafe fn zeroed_box<T>() -> Box<T>`, `#[cfg(feature =
+"testing")]`-gated, with the "every field of `T` must be valid at all-zero"
+contract stated once. `jmap-backend-core` gets its own `testing = []`
+feature; each of the five call-site crates' existing `testing` feature
+becomes `testing = ["jmap-backend-core/testing"]` so enabling a crate's own
+`testing` (already wired via its self dev-dependency, per Pattern A fix 1)
+reaches through to unlock the helper. All six `detached()` sites
+(`jmap-backend-book`, `jmap-backend-cal`, `jmap-backend-collection`,
+`jmap-config`'s `backend.rs`, `jmap-mail`'s `store.rs`/`transport.rs`) switch
+their `Box::new(unsafe { MaybeUninit::zeroed().assume_init() })` to
+`zeroed_box()`, dropping the now-unused `MaybeUninit` import at each site. No
+behaviour change: same all-zero `Box<Self>` for the same six types.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: `zeroed_box` helper, UNSAFE-AUDIT Pattern A fix 2
+
+Followed through on this session's claim. `jmap_backend_core::instance`
+(home of `Slot<T>`, whose own doc comment already states the "GObject hands
+`instance_init` zeroed memory" fact this trades on) gained `pub unsafe fn
+zeroed_box<T>() -> Box<T>`: same `Box::new(MaybeUninit::zeroed()
+.assume_init())` body every site already had, with the "every field of `T`
+must be valid at all-zero" safety contract stated once instead of six
+near-identical paragraphs.
+
+`jmap-backend-core` gained its own `testing = []` feature, and each of the
+five call-site crates' existing `testing` feature (added for Pattern A's
+fix 1, two sessions ago) became `testing = ["jmap-backend-core/testing"]` —
+enabling a crate's own `testing` (already wired via its self dev-dependency)
+now reaches through to unlock the helper too, keeping it exactly as
+compiler-enforced test-only as the `detached()` methods it backs. A plain
+`cargo build` of all six crates (no `testing` feature) still succeeds,
+confirming `zeroed_box` and every `detached()` stay compiled out.
+
+All six sites — `jmap-backend-book`, `jmap-backend-cal`,
+`jmap-backend-collection`, `jmap-config`'s `backend.rs`, `jmap-mail`'s
+`store.rs`/`transport.rs` — switch their `Box::new(unsafe {
+MaybeUninit::zeroed().assume_init() })` to `unsafe { zeroed_box() }`,
+dropping the now-unused per-file `MaybeUninit` import. No behaviour change:
+same all-zero `Box<Self>` for the same six types, and every existing test
+in every touched crate stayed green unmodified.
+
+This was the last open item on Pattern A and the first item on the audit's
+own prioritized follow-up list — both its fixes (test-only gating, then this
+shared helper) are now done. `docs/UNSAFE-AUDIT.md` updated accordingly.
+
+Hit the standing disk-fills-from-cargo-target wall mid-session: the
+seven-crate direct `cargo test` failed with a linker `Bus error` (SIGBUS,
+signal 7) rather than the usual "No space left on device" message — same
+root cause, different symptom, worth recording in case a future session
+sees the same signal and wonders whether it is something new. `df` showed
+`/` at 100% (238M free, `rust/target/debug` at 23G); `cargo clean --profile
+dev` recovered 24G and the same test run then passed clean.
+
+Full gate: `cargo fmt --check` clean (after one `cargo fmt` pass to settle
+import ordering across the six touched files — a mechanical reordering, not
+a content change); `cargo build -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-backend-collection -p jmap-config -p jmap-mail`
+(no `testing` feature) clean; `cargo clippy --all-targets --locked --
+-D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-client
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
+-p jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+touched EDS-gated crates plus their siblings, direct-built since this VM has
+the headers) clean; `cargo test --locked` (default-members) and the same
+seven-crate `cargo test` both green, every `test result: ok`, 0 failed (the
+one `camel-CRITICAL **: ... assertion ... failed` line is a test's own
+expected assertion, not a failure). No new files, so no `REUSE.toml`/SPDX
+changes needed; `reuse`/`pipx`/`uvx`/`cargo-deny` remain unavailable on this
+VM, so `ci/checks.sh` itself was not run — its constituent checks were run
+individually as above, per the standing workaround.
+
+**Left for a future session, per the audit's own list:** Pattern C (no RAII
+wrapper for libical/GObject ref-counted pointers — refcount reasoning,
+escalation-worthy) and Pattern E (small `fail()`/`invalid_arg()` duplication,
+low priority, fold into other work in those files rather than its own
+increment). Ending the session here — one focused increment, pushed.
+
+## 2026-08-19 (claim) — Claiming Track A4: proptest fuzzing of `jmap-proto` deserialization (untrusted-server boundary)
+
+Fresh survey: all milestones COMPLETE (`docs/MILESTONES.md`); CURRENT
+PRIORITY's one open thread (SRV autodiscovery) is down to the
+`g_resolver_lookup_service()`-backed real `Resolver` (FFI, standing
+escalation candidate). Round 2's lead-order Track D's one open item (D1's
+EDS-vtable wiring) is the same GObject-vtable-FFI category. Track E is
+NEEDS-DECISION. UNSAFE-AUDIT (Track A6) is down to Pattern C
+(refcount-reasoning, escalation-worthy) and Pattern E (explicitly "fold
+into other work, not its own increment") — the last four sessions' thread
+is exhausted of Sonnet-sized items. So, per this session's brief ("if the
+only thing left is edge-case polish, switch to priority work" — and here
+even the backlog's easy items are used up), moving to a fresh Round 2
+Track A item: **A4, malicious-input hardening of the untrusted-server
+boundary** — CLAIMABLE, `[claude]` lane, unclaimed (grepped `docs/
+NIGHT-LOG.md` for "mutation"/"proptest"/"malicious-input": no prior A2/A4/A5
+session; `proptest`/`arbitrary` are not yet a dependency anywhere in
+`rust/Cargo.lock`). Unlike A2 (`cargo-mutants` on `jmap-proto`/
+`evolution-jmap-client`, a rebuild-per-mutant loop flagged in an earlier
+session as expensive on this VM's disk) this needs no extra tooling — just
+`proptest`, stable-friendly and additive.
+
+**Scoping this increment to one half of A4's stated scope:** a `proptest`
+harness in `jmap-proto` feeding arbitrary/hostile JSON into `Session`,
+`Request`, and `Response` deserialization (the three envelope types a
+malicious or buggy server response has to pass through before this crate's
+typed surface sees anything), asserting no panic — `Ok`/`Err` are both fine,
+a panic is not. Manual read of the deserialization paths first (`id.rs`'s
+`Id` is a transparent `String` newtype; `request.rs`'s `Invocation` hand-rolls
+`Deserialize` via a `(String, Value, String)` tuple, which is serde's own
+length-checked tuple machinery, not custom indexing) found no obvious panic
+site, so this is expected to be a regression net rather than a bug hunt —
+consistent with A3's own "fix any panic found" wording allowing for none.
+Left for a follow-up, not attempted here: the second half of A4 (hostile
+`apiUrl`/redirect targets into `jmap-client`'s `transport.rs` /
+`url::rebase_origin`) — a manual read of `rebase_origin` during scoping
+found every `str` slice index it uses comes from `str::find`, which only
+ever returns valid char-boundary offsets, so it looks panic-safe by
+inspection already; worth a proptest harness of its own rather than folding
+it into this crate's increment.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track A4 (partial), `proptest` fuzzing of `jmap-proto` deserialization
+
+Followed through on this session's claim. `rust/Cargo.toml` gained a
+workspace `proptest = "1"` (dev-dependency only, stable-friendly — no
+`cargo-fuzz`/nightly needed), and `jmap-proto` a matching `[dev-dependencies]`
+entry. New `jmap-proto/tests/malicious_input.rs`: a bounded-depth (4),
+bounded-breadth (8-wide, 64 desired size) recursive `proptest` strategy
+generating arbitrary JSON — null/bool/i64/short-string leaves, array/object
+branches — serialized to text and fed straight into `serde_json::from_str`
+for `Session`, `Request`, `Response`, `MethodError`, and `RequestError`. The
+only property asserted is "no panic"; `Ok` and `Err` both satisfy it, since
+the point is that garbage input from an untrusted server must fail cleanly,
+not that it must be rejected in any particular way. Depth/breadth are capped
+for generation cost, not to under-approximate hostility: a `Deserialize`
+impl that indexes/unwraps/slices on an assumed shape (missing field, wrong
+type, short array) is exercised exactly as well by a shallow-wide document
+as a deep one — unbounded nesting depth is a `serde_json` parser concern,
+not this crate's `Deserialize` impls'.
+
+No `arbitrary` crate needed: a hand-rolled JSON `Strategy` in `proptest`
+alone (`Just`/`prop_oneof!`/`prop_recursive`/`prop::collection::{vec,
+btree_map}`) was sufficient, keeping the new dependency surface to one
+crate's dev-deps rather than two. All five properties passed on their first
+run (256 cases each, `proptest`'s default). A manual read of every
+deserialization path first, specifically hunting for the panic risk this
+harness would need to catch: `Id` is a transparent `String` newtype (no
+custom logic); `request.rs`'s hand-rolled `Invocation::deserialize`
+delegates to `<(String, Value, String)>::deserialize`, i.e. serde's own
+length-checked tuple machinery, not manual array indexing. So this landed
+as a regression net rather than a bug fix — the same outcome A3's own
+wording ("fix any panic found") already allows for, since the point of the
+harness is the ongoing guarantee, not a one-time find.
+
+New transitive dependencies pulled in by `proptest` (`rand`, `rand_core`,
+`rand_chacha`, `rand_xorshift`, `bit-set`, `bit-vec`, `fnv`, `quick-error`,
+`rusty-fork`, `tempfile`, `fastrand`, `ppv-lite86`, `wait-timeout`,
+`unarray`, `errno`, `linux-raw-sys`, `rustix`) checked individually via
+`cargo metadata`: every one is `MIT OR Apache-2.0` (or an equivalent
+dual/OR-license spelling) — no copyleft or non-standard license entered the
+tree.
+
+**Left open, per the claim:** the `jmap-client` half of A4 — hostile
+`apiUrl`/redirect targets into `transport.rs`/`url::rebase_origin`. Scoping
+this session read `rebase_origin` closely enough to be fairly confident it
+is already panic-safe (every slice index comes from `str::find`, which only
+returns valid char-boundary offsets), but "looks safe by inspection" is
+exactly the kind of claim this audit exists to stop making on faith — a
+`jmap-client`-side `proptest` harness proving it, rather than asserting it,
+is the natural next increment on this thread, together with a redirect
+scenario through `jmap-mock` asserting the `Authorization` header does not
+reach a cross-host target (regression coverage for the class of bug
+86fea00 already fixed once).
+
+Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) clean; `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets -- -D warnings` (the EDS-gated crates, direct-built since this
+VM has the headers) clean; `cargo test --locked` (default-members) and the
+same seven-crate `cargo test --locked` both green, every `test result: ok`,
+0 failed. No `REUSE.toml` changes needed — the new test file carries its own
+SPDX header, matching every other test file in the tree; `Cargo.lock` is not
+a REUSE-covered source file. `reuse`/`pipx`/`uvx`/`cargo-deny` remain
+unavailable on this VM, so `ci/checks.sh` itself was not run — its
+constituent checks were run individually as above, per the standing
+workaround. Disk at 7.7G free after the sweep — did not hit the standing
+"No space left on device" wall this session.
+
+## 2026-08-19 (claim) — Claiming Track A4 (remainder): proptest fuzzing of `jmap-client`'s untrusted-server URL handling
+
+Fresh survey: all milestones COMPLETE; CURRENT PRIORITY's one open thread
+(SRV autodiscovery) is down to the `g_resolver_lookup_service()`-backed real
+`Resolver` (FFI, standing escalation candidate). Round 2's lead-order Track D
+item (D1's EDS-vtable wiring) is the same GObject-vtable-FFI category. Track
+E and Track B are NEEDS-DECISION. UNSAFE-AUDIT (A6) is down to Pattern C
+(refcount reasoning, escalation-worthy) and Pattern E (explicitly "fold into
+other work"). The last session's own log entry named the exact next
+increment: A4's still-open half — hostile session URLs into `jmap-client`.
+
+Traced the two functions every server-controlled session URL passes through:
+`jmap-client/src/url.rs`'s `rebase_origin` (rewrites `apiUrl`/`downloadUrl`/
+`uploadUrl`/`eventSourceUrl` when `JMAP_LIVE_SERVER_REBASE_URLS`/
+`rebase_urls_to_origin` is set — see `client.rs:236-240`) and
+`encode_template_value` (substitutes `blobId`/`accountId`/`name` into the
+`downloadUrl`/`uploadUrl` templates). Both are pure `&str` transforms, no
+FFI, `pub(crate)` — a proptest harness for them is Sonnet-sized, unlike the
+GResolver/FFI items above. Both already looked panic-safe by inspection
+(prior sessions' notes on `rebase_origin`; `encode_template_value` delegates
+to `percent_encoding::utf8_percent_encode`, a maintained crate), so per A3/A4
+precedent this is expected to land as a regression net, not a bug hunt —
+proving the claim with generated hostile input rather than resting on
+inspection.
+
+Since both functions are `pub(crate)`, the harness has to live inside
+`jmap-client/src/url.rs`'s own `#[cfg(test)]` module (a `tests/` integration
+binary cannot see `pub(crate)` items), using `proptest!` over an unconstrained
+`.*` string strategy for both the URL/origin arguments and the template
+value — arbitrary Unicode, not just ASCII attack strings.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track A4 complete, `proptest` fuzzing of `jmap-client`'s untrusted-server URL handling
+
+Followed through on this session's claim. `jmap-client/Cargo.toml` gained a
+`proptest = { workspace = true }` dev-dependency (already a workspace dep
+since the `jmap-proto` half of A4; adding jmap-client as a second dependent
+only appended one line to `Cargo.lock` — no new crate versions, so no new
+licenses to check). `jmap-client/src/url.rs`'s existing `#[cfg(test)] mod
+tests` gained a `proptest!` block with two properties, each over an
+unconstrained `.*` string strategy (arbitrary Unicode, not restricted to
+ASCII attack characters — a multi-byte character straddling where
+`rebase_origin` slices for `://` or the first `/` is exactly the case manual
+inspection is least trustworthy about):
+
+- `rebase_origin_never_panics_on_hostile_input(url, origin)` — stands in for
+  a malicious/buggy server's `apiUrl`/`downloadUrl`/`uploadUrl`/
+  `eventSourceUrl` reaching `Client::connect`'s `rebase_origin` calls
+  (`client.rs:236-240`), fully server-controlled on both arguments.
+- `encode_template_value_never_panics_on_hostile_input(value)` — stands in
+  for a server-supplied `blobId`/`accountId` or this crate's own `name`
+  substituted into a blob-URL template.
+
+Both properties passed on the first run (proptest's default 256 cases each),
+confirming rather than merely asserting by inspection that both functions
+are panic-safe on hostile input — consistent with prior sessions' manual
+reasoning (`rebase_origin`'s slice indices all come from `str::find`, which
+only returns valid char-boundary offsets; `encode_template_value` delegates
+to the maintained `percent_encoding` crate) but now backed by generated
+cases rather than resting on that reasoning alone. As expected going in,
+this landed as a regression net, not a bug fix — no panic found, same as
+A3's own wording allows for.
+
+This closes out Track A4's stated scope in full: both halves (the
+`jmap-proto` deserialization boundary, done two sessions ago, and this
+session's `jmap-client` URL-handling boundary) now have proptest coverage
+against the untrusted-server surface.
+
+Hit the standing disk-fills-from-cargo-target wall again this session:
+`rust/target/debug` at 23G, `/` at 100% full, a `cargo test` failing with a
+linker SIGBUS (signal 7) — same root cause as two sessions ago, same fix:
+`cargo clean --profile dev` recovered 24G and every subsequent run was
+clean.
+
+Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets --offline
+-- -D warnings` (default-members) clean; `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets --offline -- -D warnings` (the EDS-gated crates, direct-built
+since this VM has the headers) clean; `cargo test --offline`
+(default-members) and the same seven-crate `cargo test --offline` both
+green, every `test result: ok`, 0 failed, exit 0. No new files, so no
+`REUSE.toml`/SPDX changes needed. `reuse`/`pipx`/`uvx`/`cargo-deny` remain
+unavailable on this VM, so `ci/checks.sh` itself was not run — its
+constituent checks were run individually as above, per the standing
+workaround (`--offline` used in place of `--locked` since `Cargo.lock`
+itself changed by one line this session; the lock file's actual content was
+reviewed by hand instead).
+
+## 2026-08-19 (claim) — Claiming Track C3: debian/ packaging skeleton
+
+Fresh survey: all milestones COMPLETE; CURRENT PRIORITY has no open Sonnet-
+sized item left (SRV autodiscovery's GResolver leg and OAuth2 real-server
+validation are both parked/escalation-worthy, unchanged for many sessions).
+Round 2 lead-order Track D's one open item (D1's create_resource_sync/
+delete_resource_sync vtable wiring) is GObject-vtable FFI, escalation-
+worthy. Track A's CLAIMABLE [claude] items are exhausted (A4, A6, A7 done;
+A2 risks an unbounded mutation-testing rebuild loop against this VM's
+standing disk problem; A5 is explicitly escalation-worthy). Track B/C2/C4/E
+are NEEDS-DECISION. Several recent sessions lumped **Track C3** in with
+C2/B/E as "NEEDS-DECISION" without individually assessing it, but the
+roadmap text itself does not tag C3 NEEDS-DECISION — only C2's third-party
+license enumeration and C4 (official Debian upload) are. C3 asks for a
+debian/ skeleton (control, rules, watch file) "so a Debian packager starts
+from a working tree," explicitly telling the agent to "document the
+Rust-in-Debian reality... rather than pretend it away" — i.e. acknowledge
+the ~140-crate vendoring gap (the same one blocking C2), not resolve it.
+That framing makes C3 tractable without the maintainer call C2 is stuck on.
+
+Checked tooling first: `dpkg-buildpackage`/`dpkg-source` (dpkg-dev) are
+present; `debhelper` (the `dh` sequencer) is not — `ci/install-deps.sh`
+never names it, since the existing CMake+CPack path (Track C1) does not
+need it. Installed it locally via `sudo apt-get install --no-install-
+recommends debhelper` to verify the skeleton actually builds, rather than
+writing it untested; not added to ci/install-deps.sh or any CI job in this
+increment (out of scope, and .github/workflows stays untouched per the
+standing rule). `rust/target` was at 13G; ran the standing `cargo clean
+--profile dev` first (recovered 12.9GiB, 24G free) since a full release
+workspace build is part of verifying this.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track C3, `debian/` packaging skeleton
+
+Followed through on this session's claim. Added `debian/control`,
+`debian/rules`, `debian/watch`, `debian/source/format`, and
+`debian/README.source`; `debian/changelog` and `debian/copyright` are
+symlinks to `docs/packaging/{changelog,copyright}` (already the right
+formats, already kept current by hand and by Track C2's generator
+respectively) rather than a third copy of either to keep in sync.
+
+`debian/rules` reuses the existing `cmake/{Rust,Backends,Packaging}.cmake`
+build rather than reinventing it: `override_dh_auto_configure` runs
+`cmake -G Ninja`, `override_dh_auto_build` runs `cmake --build`, and
+`override_dh_auto_install` loops `cmake --install --component` over the
+same five components `cmake/Packaging.cmake`'s `CPACK_COMPONENTS_ALL`
+names, for the same reason: `src/`'s demo C module has no `COMPONENT` of
+its own, so installing everything unfiltered would ship it. Kept `dh`'s
+sequencer (`%: dh $@`) rather than hand-rolling `binary`/`build`/`clean`
+targets, since compat 13 gets strip/compress/permissions/shlibdeps for
+free — the same things Track C1 had to earn one CPack variable at a time.
+
+**Verified, not just written:** `debhelper` is not in `ci/install-deps.sh`
+(Track C1's CPack `.deb` path never needed `dh`) and wasn't on this VM;
+installed it locally (`sudo apt-get install --no-install-recommends
+debhelper`) specifically to run this for real rather than trust it by
+inspection. First `dpkg-buildpackage -us -uc -b -d` run failed at
+`dh_shlibdeps`: `cannot find library libevolution-mail.so.0` /
+`libevolution-util.so.0` — the exact problem `cmake/Packaging.cmake`
+already solved for CPack via `CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS`
+(Evolution keeps its own libraries in `evolution-shell-3.0`'s private
+libdir, found only because the shell process that dlopens these modules
+has already loaded them itself — `dpkg-shlibdeps` doesn't know that).
+Same fix, dh-shaped: `override_dh_shlibdeps: dh_shlibdeps -a -- -l$(shell
+pkg-config --variable=privlibdir evolution-shell-3.0)`. Second run
+succeeded end to end: `../evolution-jmap_0.2.0_amd64.deb` built, and
+`lintian --pedantic` on it came back with **zero output** — clean, the
+same bar Track C1 already holds the CPack package to.
+
+**Explicitly not solved, and said so in `debian/README.source` (mirroring
+Track C2's copyright-file note of the identical problem from the other
+direction):** the build above only worked because `~/.cargo/registry`
+already holds all ~140 crates in `rust/Cargo.lock` from ordinary
+`cargo build`/`cargo test` use on this VM. A real Debian buildd has no
+network and no such warm cache, so a `.dsc` built from this skeleton would
+fail at the first `cargo build` invocation on an official builder. Two real
+paths forward are on record in `debian/README.source`, neither attempted
+here (real effort, and arguably a maintainer call on which): (a) `cargo
+vendor` the dependency graph into the source package (`orig.tar` + `dh-cargo`
+checksums — the common pattern for Rust "leaf" packages already in Debian),
+or (b) `debcargo`-generate a `librust-*-dev` binary package per dependency,
+official policy's preferred shape but a large ongoing undertaking against a
+graph that shifts on every `cargo update`. Also flagged as unverified:
+`debian/watch` follows the standard GitHub-tags convention against the real
+`v0.1.0`/`v0.2.0` tags, but `uscan`/`devscripts` aren't installed here, so
+it has never actually run; `dh_auto_test` is a deliberate no-op (comment in
+`debian/rules` explains why — same crates.io-access reasoning, and the
+suite already runs via `ci/checks.sh`/CTest against this exact source).
+
+`.gitignore` gained the dh/dpkg build-product paths (`/obj-debian/`,
+`/debian/evolution-jmap/`, `/debian/.debhelper/`, etc.) so a local
+`dpkg-buildpackage` run doesn't leave build products for `git status` to
+notice. `REUSE.toml` gained `debian/**` in the existing "files that don't
+carry recognized comment headers" aggregate block: `control`/`rules`/
+`watch` do carry `#`-comment SPDX headers, but reuse's comment-style lookup
+keys off filename/extension and none of these extensionless
+Debian-packaging names are in its built-in table; `changelog`/`copyright`
+are symlinks that need their own annotated path even though their targets
+are already covered under `docs/**`; `source/format`'s content is fixed by
+dpkg-source's own format string, with no room for a comment at all.
+`reuse`/`pipx`/`uvx` remain unavailable on this VM (standing limitation),
+so this reasoning is by inspection of REUSE.toml's existing pattern for the
+same problem (`docs/**`'s own comment explains it identically), not a
+lint run.
+
+`rust/target` was cleaned to 91M by `dh_clean` (dpkg-buildpackage's own
+Cargo target dir lives under the now-removed `obj-debian/`, not
+`rust/target/`), so this session never touched the standing
+disk-fills-from-cargo-target problem. No Rust source changed this session
+(packaging files only), so the full Rust gate was not re-run in full;
+`cargo fmt --check` (fast, and the thing most likely to catch an
+accidental edit) stayed clean as a sanity check.
+
+## 2026-08-19 (claim) — Claiming Track A2: mutation testing of jmap-proto and jmap-client
+
+Fresh survey: every CURRENT PRIORITY item is complete or blocked
+(SRV autodiscovery's GResolver leg and OAuth2 real-server validation are
+both parked/escalation-worthy; Round 2's lead-order Track D item (D1's
+create_resource_sync/delete_resource_sync vtable wiring) is GObject-vtable
+FFI, escalation-worthy; Track B/C2/C4/E are NEEDS-DECISION; Track A's other
+[claude] items are done (A4, A7) or explicitly escalation-worthy (A5, A6
+Pattern C)). That leaves **A2** — mutation testing of `jmap-proto`
+(`evolution-jmap-proto`) and `jmap-client` (`evolution-jmap-client`) via
+`cargo-mutants` — the one CLAIMABLE, no-FFI, no-decision-needed item left.
+A prior session (Track C3 claim) flagged A2 as risky due to this VM's
+standing disk-fills-from-cargo-target problem without actually attempting
+it; `rust/target` is at 91M right now (cleaned during that same session),
+so re-assessing: installed `cargo-mutants` (network to crates.io works;
+`cargo install cargo-mutants` succeeded, v27.1.0), plan to scope this
+increment to `jmap-proto` only (smaller, self-contained wire-format crate)
+given mutation testing's rebuild-per-mutant cost, watch disk with `df -h`
+between runs, and hand off `jmap-client` to a follow-up session same as
+other Round 2 tracks have split across sessions.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track A2, mutation testing of `jmap-proto` (first pass)
+
+Followed through on this session's Track A2 claim. Running `cargo mutants
+-p evolution-jmap-proto` hit a real bug before it ever got to a mutant:
+the **baseline** `cargo test` failed in cargo-mutants' copied tree, so no
+mutants were tested at all. Root cause: `crates/jmap-proto/tests/
+milestones.rs`'s `repo_root()` (and its sibling in `crates/jmap-backend-
+core/tests/potfiles.rs`) locates the checkout root by a hardcoded
+`ancestors().nth(3)` from `CARGO_MANIFEST_DIR` — true only when the crate
+sits three directories below the actual repo root. cargo-mutants copies
+just the `rust/` workspace subtree into a scratch dir to build/test each
+mutant, so in that copy `nth(3)` lands on `/tmp` (or wherever the scratch
+dir's parent is), `docs/MILESTONES.md` is naturally absent there (`docs/`
+was never copied — it lives beside `rust/`, not inside it), and
+`milestones_file_exists_and_parses` hard-failed on a `path.exists()`
+assertion that two sibling tests in the same file already knew to treat as
+"not in a checkout, skip" (`if !path.exists() { return; }`) rather than a
+bug. Fixed by making `repo_root()` return `Option<PathBuf>` — search
+ancestors for one that actually has a `.git` (the true checkout-root
+marker, present in a real checkout, absent from cargo-mutants' partial
+copy) — and having all four call sites in `milestones.rs` skip (not fail)
+when no such ancestor is found, matching the tolerance the other three
+tests already had. Only `milestones.rs` was touched; `potfiles.rs` has the
+identical pattern but lives in the EDS-gated `jmap-backend-core` (out of
+this session's `jmap-proto`-only scope), left as a note for whoever next
+runs `cargo-mutants -p jmap-backend-core`. TDD: two new unit tests,
+`find_repo_root_finds_the_nearest_git_ancestor` /
+`_returns_none_without_a_git_ancestor`, using scratch dirs under the system
+temp dir (guaranteed no `.git` ancestor, unlike `CARGO_TARGET_TMPDIR`,
+which sits inside this checkout and would have silently passed the
+"none" case by finding this repo's own `.git` on the way up).
+
+With the baseline fixed, `cargo mutants -p evolution-jmap-proto --baseline
+run` completed: **97 mutants, 28 unviable, 54 missed** on the first real
+pass. Triaged the missed list and added killing tests in `tests/core.rs`
+for the real behavioural gaps, prioritising `session.rs`'s RFC 8620
+primary-account resolution — the most complex untested logic in the crate,
+and squarely the "untrusted wire contract" surface A2 names — over
+mechanical one-liners:
+- `Session::resolve_primary_account`/`primary_account`/`sole_personal_account`
+  (previously *zero* tests): added cases for a trusted `primaryAccounts`
+  entry, an unnamed capability, the documented "contradiction" case (the
+  fixture's own `contacts` entry names an account that never claims
+  `contacts` — already in `core/session.json`, just never asserted
+  against), the sole-personal-account fallback when `primaryAccounts` omits
+  an entry, and two mutants that needed narrow fixtures to distinguish from
+  each other: `is_personal && has_capability` requires *both* — one test
+  with personal-but-lacking-the-capability, another with capability-but-
+  not-personal, since either alone can be masked by `resolve_primary_account`'s
+  own follow-up capability check.
+- `Session::max_objects_in_get` (the fourth of four sibling core-capability
+  limits — the other three already had a "names it" + "omits it" test
+  pair; this one had neither).
+- `Response::responses_for` (grouping by call id, in order — untested
+  entirely), `Invocation::is_error` (only the "true" case was asserted;
+  added the missing "false" case), `Id`'s `AsRef<str>`/`Display`, and
+  `State`/`UtcDate`'s `as_str`/`Display` (all one-liners with no test at
+  all).
+- `QueryRequest`'s `is_default_position`/`is_false`/`default_true` serde
+  helpers (control whether `position`/`calculateTotal`/`isAscending`
+  appear on the wire for `Foo/query` — untested despite being real
+  wire-format logic) and `GetRequest::ids` (the builder never asserted to
+  actually set `ids`).
+
+Re-ran `cargo mutants` after each batch to confirm kills rather than
+trusting the read: **54 → 35 → 27 missed**, all without weakening or
+`#[ignore]`-ing anything. Final state: **27 missed, 42 caught, 28
+unviable**. The 27 remaining are one uniform, distinct category — "delete
+a field from a `Self { .. }` struct-literal expression" (plus the matching
+"replace whole builder with `Default::default()`") in `calendars.rs`'s
+`CalendarEvent::simple`/`CalendarEventQueryFilter::{in_calendar,
+time_range}`, `contacts.rs`'s `ContactCard::simple`/
+`ContactCardQueryFilter::in_address_book`, and `mail.rs`'s `EmailImport::
+{keyword,received_at}`/`EmailQueryFilter::in_mailbox` — convenience
+constructors whose fields are asserted end-to-end against `jmap-mockd` in
+`jmap-client`'s integration tests (out of `cargo mutants -p
+evolution-jmap-proto`'s scope, since that only runs jmap-proto's own
+suite) but never against a plain in-crate assertion that the field the
+constructor claims to set is actually set. Real, mechanical, same fix
+shape repeated ~9 times (one round-trip assertion per constructor) — left
+for a follow-up increment rather than padding this one further; logged
+here rather than silently dropped. `jmap-client`'s own mutation-testing
+half (the other name on Track A2) is still fully unstarted, same as the
+claim already flagged.
+
+Housekeeping: `rust/mutants.out/` (cargo-mutants' output directory) was
+untracked cruft after each run; added it to `.gitignore` rather than
+leaving it for `git status` to keep noticing. Gate run before pushing:
+`cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
+and `cargo test --locked` (default-members) all clean/green. No source
+files changed (only two `tests/` files and `.gitignore`), so the EDS-gated
+seven-crate leg was not re-run — nothing in it depends on jmap-proto's
+test-only files.
+
+## 2026-08-19 (claim) — Claiming Track A2 remainder: mutation testing of `jmap-client`
+
+Fresh survey: all milestones M1-M10 COMPLETE, CALCARD COMPLETE. CURRENT
+PRIORITY's remaining items (SRV autodiscovery's GResolver leg, OAuth2
+real-server validation) are both explicitly parked/deferred by the
+maintainer or escalation-worthy FFI, not Sonnet-sized. Round 2's lead-order
+Track D's open item (D1's `create_resource_sync`/`delete_resource_sync`
+vtable wiring) is GObject-vtable FFI, escalation-worthy. Track B/C2/C4/E are
+NEEDS-DECISION. Track A's other `[claude]` items are done (A4, A7) or
+escalation-worthy (A5, A6 Pattern C). That leaves **A2's second half**: the
+previous session (delivered in `d5cf563`) did `jmap-proto`'s mutation
+testing and explicitly logged `jmap-client`'s half as "fully unstarted" —
+CLAIMABLE, no FFI, no decision needed. `cargo-mutants` 27.1.0 is already
+installed from that session; disk currently at 17G free on `/` (well clear
+of the standing disk-fills-from-cargo-target wall). Scoping to
+`jmap-client` (`evolution-jmap-client`) only, same as the proto pass.
+
+Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track A2, mutation testing of `jmap-client` (completes A2)
+
+Continued the claimed increment. `cargo mutants -p evolution-jmap-client
+--baseline run` started from **64 mutants, 28 unviable, 13 missed** (no
+baseline-build bug this time — jmap-client has no `repo_root()`-style
+ancestor-counting helper). Triaged and killed 11 of the 13 with new tests:
+- `changes.rs`'s `ChangeSet::is_empty` (previously exercised only
+  indirectly): `tests/changes.rs` gained
+  `change_set_is_empty_iff_all_three_sets_are`, covering the empty case and
+  each of the three sets non-empty alone — kills the `true`/`false`
+  constant-replacement mutants and both `&&`→`||` mutants (all four
+  needed a case where exactly one set is non-empty to distinguish AND from
+  OR).
+- `changes.rs`'s `ChangeSet::classify`'s "updated only" arm
+  (`(false, false) if disposition.updated`) had no test reaching it — every
+  existing scenario's edited ids were also created or destroyed inside the
+  same window. Added
+  `a_card_from_before_the_window_edited_inside_it_classifies_as_updated`
+  in `tests/changes.rs`: create a card, capture state, update it, assert
+  the change set reports it `updated` and neither `created` nor
+  `destroyed`.
+- `client.rs`'s `rebase_urls_from_env` (env-var truthy/falsy parsing,
+  previously untested): new `tests/rebase_env.rs` — its own process
+  (`tests/*.rs` files each get a fresh binary) since the function reads
+  real process environment and no other test may race it. Covers unset,
+  every documented truthy spelling (`1`, `true`, `TRUE`, `True`) and falsy
+  one (`0`, `false`, `yes`, empty string) — kills the constant-`false`,
+  `||`→`&&`, and `==`→`!=` mutants together.
+- `client.rs`'s `ClientBuilder::timeout` setter (previously untested):
+  `client.rs`'s own `#[cfg(test)]` module (the field is private, so only
+  an in-crate test can see it) gained `timeout_replaces_the_default`,
+  asserting the builder keeps the passed value rather than silently
+  falling back to `Default::default()`.
+- `client.rs`'s `Debug for Client` impl (previously untested): new
+  `client_debug_names_the_session_url_and_auth_state` in
+  `tests/plumbing.rs`, asserting the formatted output names
+  `session_url` and `authenticated: true` — kills the
+  `Ok(Default::default())` mutant (empty output has neither substring).
+- `client.rs:273`'s `api_call`'s size-limit check (`>` vs `>=`, previously
+  only tested strictly-over and strictly-under): new
+  `a_request_exactly_at_the_limit_is_sent` in `tests/request_size.rs`
+  builds a request whose exact byte length matches the server's stated
+  `maxSizeRequest` and asserts it is sent, not refused — distinguishes "at
+  the limit" from "over the limit", same reasoning as the F15 audit
+  finding's own boundary test.
+
+Re-ran after each batch: 13 → 4 → 2 missed, all green with no test
+weakened. **Final: 64 mutants, 34 caught, 28 unviable, 2 missed** — both
+inspected and confirmed **equivalent mutants**, not gaps:
+- `changes.rs:165:35` (`classify`'s `if disposition.updated` guard replaced
+  with literal `true`): every entry in `classify`'s `by_id` map is inserted
+  via `.or_default()` from exactly one of the three `created`/`updated`/
+  `destroyed` response loops, so an entry reaching the `(false, false)`
+  arm (neither created nor destroyed) can only have gotten there through
+  the `updated` loop — `disposition.updated` is therefore always `true`
+  whenever that arm's other two conditions hold. No input can make the
+  real guard and the literal `true` disagree.
+- `client.rs:205:9` (`Client::builder` body `ClientBuilder::default()`
+  replaced with `Default::default()`): `ClientBuilder` derives/implements
+  `Default` and the function's return type is already `ClientBuilder`, so
+  type inference resolves `Default::default()` to the exact same call —
+  byte-identical output on every input, deterministically. No behavioural
+  difference exists to test for.
+
+Track A2 is now complete for both named crates (`jmap-proto` in `d5cf563`,
+`jmap-client` here). Housekeeping: deleted `rust/mutants.out.old/`, a
+stray copy of an earlier run's output this session left behind mid-work
+(untracked, not meant to persist — `rust/mutants.out/` itself is already
+`.gitignore`d from the `jmap-proto` session). Gate before pushing:
+`cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
+and `cargo test --locked` (default-members) all clean/green.
+
+## 2026-08-19 (claim) — Claiming: fix OAuth2 redirect URI scheme (dot-less, would be rejected by Fastmail)
+
+Fresh survey after `0341d0a` (`docs/OAUTH-FASTMAIL.md`, landed mid-survey
+by a concurrent session) merged in: all milestones COMPLETE; CURRENT
+PRIORITY's remaining thread (SRV autodiscovery's GResolver-backed real
+`Resolver`) and Round 2's A5/A6-Pattern-C/D1 are all still the same
+standing FFI/refcount escalation candidates this thread has flagged for
+~15 sessions running, with nothing new making them tractable. But
+`docs/OAUTH-FASTMAIL.md` (research, not yet acted on) surfaced a concrete,
+non-FFI, TDD-able bug: `jmap-config/src/config_lookup.rs:123`'s
+`REDIRECT_URI = "jmap-oauth2:/redirect"` uses a private-use URI scheme
+with no dot. Fastmail's OAuth developer doc requires such schemes in
+reverse-DNS notation with at least one dot (or loopback/https); a
+dot-less scheme would be rejected at dynamic client registration, which
+would break Fastmail's OAuth path (the very account the operator is
+targeting) independently of the still-deferred TLS/real-server
+validation. This is plain-Rust, no FFI, no maintainer decision (the
+module's own doc already settled *that* a private-use scheme is right,
+following EDS's Google precedent — this only fixes its shape to satisfy a
+constraint discovered after that decision), and grep confirms
+`REDIRECT_URI` has exactly one definition site and no other test
+hardcodes its literal value (`oauth2_setup.rs`'s test `REDIRECT_URI` is
+an unrelated local constant using an `https://` value). Claiming this
+increment now: change the scheme to a dotted reverse-DNS form
+(`org.gnome.evolution.jmap:/redirect`), red-test first that `REDIRECT_URI`
+is dotted reverse-DNS, then green.
+
+## 2026-08-19 — Delivered: fix OAuth2 redirect URI scheme (dotted reverse-DNS)
+
+Followed through on this session's claim. Red test first:
+`config_lookup::tests::redirect_uri_scheme_is_dotted_reverse_dns` asserts
+`REDIRECT_URI`'s scheme (the substring before the first `:`) contains a
+dot; it failed against `"jmap-oauth2:/redirect"` (`scheme "jmap-oauth2"
+has no dot`), confirming the bug `docs/OAUTH-FASTMAIL.md` flagged. Green:
+changed the constant to `"org.gnome.evolution.jmap:/redirect"` — still a
+private-use URI scheme (the shape the module docs already settled on,
+following EDS's own `e-oauth2-service-google.c` precedent), just reshaped
+to satisfy providers that require reverse-DNS notation with a dot, per
+Fastmail's OAuth doc. `org.gnome.evolution.jmap` was chosen over inventing
+a novel prefix since it names this project under a namespace Evolution
+itself already occupies (no formal reverse-DNS app id exists elsewhere in
+this repo yet — checked `CMakeLists.txt`'s `GETTEXT_PACKAGE`, which is
+still the `example-module` placeholder, and found no `.desktop`/metainfo
+file to match instead).
+
+Confirmed no other test hardcodes this literal (grepped for
+`"jmap-oauth2:/redirect"`): `jmap-config/tests/oauth2_setup.rs`'s own
+`REDIRECT_URI` is an unrelated local test constant (an arbitrary
+`https://client.example.org/callback`) exercising `discover_and_register`
+generically, not this production value; `jmap-config/tests/
+oauth2_service.rs`'s redirect-URI assertions likewise use their own
+`config()` test fixture's value. So this was a single-site fix plus one
+new regression test, not a rename sweep.
+
+This closes a concrete gap `docs/OAUTH-FASTMAIL.md` (landed `0341d0a`,
+research from a concurrent session) found before it was ever exercised
+against a real provider: dynamic client registration against Fastmail
+would have registered a dot-less scheme, and per that research, providers
+requiring reverse-DNS notation reject it — so the bug would have surfaced
+as an opaque registration failure during the still-deferred real-server
+OAuth2 validation, not before. Fixing it now, ahead of that validation,
+means one fewer thing to debug blind against a live server later.
+
+Gate before pushing (jmap-config is EDS-gated, out of default-members):
+`cargo fmt --check` clean; `cargo clippy --all-targets --locked --
+-D warnings` (default-members, unaffected by this change) and
+`cargo clippy -p evolution-jmap-client -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+EDS-gated crates, this VM having the headers) both clean; `cargo test
+--locked` (default-members) and the same seven-crate `cargo test` both
+green, every `test result: ok`, 0 failed.
+
+Ending the session here — one focused increment, pushed. Every other
+[claude]-lane item surveyed this session remains what the last several
+sessions already found it to be: FFI/refcount escalation-worthy (SRV
+autodiscovery's GResolver `Resolver`, A5, A6 Pattern C, D1's vtable
+wiring) or NEEDS-DECISION (B1, C2's third-party notices, C4, Track E) —
+unchanged by this increment, not re-litigated further.
+
+## 2026-08-19 (claim) — Claiming Track A6 Pattern B remainder: `envelope.rs::internet`'s checked-borrow helper
+
+Fresh survey: all milestones COMPLETE; CURRENT PRIORITY's remaining
+threads (SRV autodiscovery's GResolver leg, OAuth2 real-server validation)
+are both parked/escalation-worthy FFI, unchanged since the last several
+sessions. Round 2's lead-order Track D's open item (D1's
+`create_resource_sync`/`delete_resource_sync` vtable wiring) is
+GObject-vtable FFI, escalation-worthy. Track B/C2/C4/E are NEEDS-DECISION.
+Track A's `[claude]` items are done (A2, A4, A7) or escalation-worthy in
+full (A5, A6 Pattern C — the `Owned<T>` RAII migration touching
+libical/GObject refcounting).
+
+`docs/UNSAFE-AUDIT.md`'s Pattern B (the "check the GType, then cast"
+borrow-helper consolidation) has exactly one site left open:
+`jmap-mail/src/envelope.rs::internet`, explicitly logged by the prior
+session that closed the rest of Pattern B as "left as its own smaller
+follow-up" because its `Result<Option<*mut T>, EnvelopeError>` return
+shape doesn't fit either existing helper (`checked_borrow`/
+`checked_borrow_ptr`, both `Option`-returning). This is a small, mechanical,
+no-behaviour-change consolidation of already-audited-correct unsafe code
+into one more shared helper in `jmap-backend-core::marshal` — not new
+`unsafe`/FFI surface, not refcount reasoning (no ownership transfer here,
+just a borrowed type-checked pointer) — so it is Sonnet-tractable unlike
+Pattern C. Claiming this increment now: add
+`checked_borrow_ptr_or<C, T, E>(ptr, gtype, err) -> Result<Option<*mut T>, E>`
+to `jmap-backend-core::marshal`, then have `envelope.rs::internet` delegate
+to it, keeping every existing `envelope.rs`/`jmap-mail` test green
+unmodified (same `Option`/`Err` outcomes for the same inputs — TDD here
+means proving that equivalence, not adding new behaviour).
+
+## 2026-08-19 — Delivered: Track A6 Pattern B remainder (`envelope.rs::internet`), closing Pattern B
+
+Followed through on the claim. Red first: added three unit tests to
+`jmap-backend-core/tests/marshal.rs` (`a_null_pointer_is_ok_none_not_the_
+supplied_error`, `a_pointer_of_the_right_type_is_ok_some`,
+`a_pointer_of_the_wrong_type_is_the_supplied_error`) calling a
+`marshal::checked_borrow_ptr_or` that did not exist yet — confirmed the
+build failed with `cannot find function` before writing it. Green: added
+`checked_borrow_ptr_or<C, T, E>(ptr, gtype, err) -> Result<Option<*mut T>, E>`
+to `jmap-backend-core::marshal`, same null-check-then-
+`g_type_check_instance_is_a`-then-cast shape as `checked_borrow`/
+`checked_borrow_ptr`, but returning the caller's `err` on a failed type
+check instead of collapsing that into `None` — exactly the third return
+shape `envelope.rs::internet` needed and the other two helpers don't
+provide. `envelope.rs::internet` now delegates to it with
+`EnvelopeError::NotInternet(which)` as the error, dropping its own
+`g_type_check_instance_is_a` call and the now-unused `gobject_sys` import.
+No behaviour change: `jmap-mail/tests/envelope.rs`'s existing 11 tests
+(covering NULL, right-type, and wrong-type inputs to `internet` via
+`read_envelope`) all stayed green unmodified, proving the refactor
+preserves every outcome rather than asserting it by inspection.
+
+This closes `docs/UNSAFE-AUDIT.md`'s Pattern B in full (updated there) —
+all ~13 "check the GType, then cast" call sites now go through one of
+three shared, individually-audited helpers (`dispatched_borrow`,
+`checked_borrow`/`checked_borrow_ptr`, `checked_borrow_ptr_or`) instead of
+independently reimplementing the pattern.
+
+Gate before pushing: `cargo fmt --check` clean (after `cargo fmt`);
+`cargo clippy --all-targets --locked -- -D warnings` (default-members) and
+`cargo clippy -p evolution-jmap-client -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+EDS-gated crates) both clean; `cargo test --locked` (default-members) and
+the same seven-crate `cargo test` both green, every `test result: ok`, 0
+failed. `rust/target` was cleaned (`cargo clean --profile dev`, 18G freed)
+at the start of this session per the standing disk-fills-from-cargo-target
+note, before any build ran.
+
+Ending the session here — one focused, fully-tested increment, pushed.
+Everything else surveyed remains FFI/refcount escalation-worthy (SRV
+autodiscovery's GResolver `Resolver`, A5, A6 Pattern C, D1's vtable wiring)
+or NEEDS-DECISION (B1, C2's third-party notices, C4, Track E).
+
+## 2026-08-19 (claim) — Claiming Track A6 Pattern E: the `invalid_arg`/`no_account_gerror` GError-builder consolidation
+
+Fresh survey, same ground the last several sessions have mapped: all
+milestones COMPLETE; CURRENT PRIORITY's one open thread (SRV
+autodiscovery's `g_resolver_lookup_service()`-backed `Resolver`) and Round
+2's Track D (D1's vtable wiring) and A6 Pattern C (libical/GObject RAII)
+are all the same standing FFI/refcount escalation candidates, unchanged.
+Track B/C2/C4/E are NEEDS-DECISION. Track A's other `[claude]` items are
+done (A2, A4, A6 Pattern A/B/D's clean sites, A7) or escalation-worthy
+(A5, A6 Pattern C).
+
+That leaves `docs/UNSAFE-AUDIT.md`'s Pattern E — the `invalid_arg()`/
+`no_account_gerror()` GError-builder, independently reimplemented
+byte-for-byte identically in three crates
+(`jmap-backend-book/src/ops.rs:304`, `jmap-backend-cal/src/ops.rs:383`,
+`jmap-backend-collection/src/authenticate.rs:240` — confirmed by reading
+all three: each is exactly `cstring_lossy(message)` then
+`e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, ...)`, and each of the
+two symbols involved has exactly one other use in its file, the import
+line, so removing both cleanly drops the duplicate). The audit itself
+tags this "low priority... fold into other work in those files rather
+than its own increment" — a deliberate deprioritisation, not a ban, and
+made on the assumption something higher-priority would come along to fold
+it into. Nothing has, for many sessions running; the audit's own
+higher-priority item on this same list (Pattern C) is the escalation
+candidate, and every other lane is exhausted or gated. Doing this small,
+purely mechanical, zero-behaviour-change consolidation now — the same
+shape as the Pattern B/D helpers already landed this thread — is a better
+use of this session than a `BLOCKED` report when a genuine, safe,
+in-scope increment exists. Scoping to exactly the audit's named
+recommendation (`invalid_arg_gerror`); the `fail`/`fail_bool` half of
+Pattern E is generic over return type (`gboolean`, `*mut T`,
+`CamelAuthenticationResult` all appear across the ~10 call sites) and
+would need real design work to unify cleanly, which is what the audit's
+deprioritisation was actually protecting against — leaving that half
+open, as the audit's own text already scoped it as the "lowest priority"
+part.
+
+Claiming this increment now: add
+`jmap_backend_core::error::invalid_arg_gerror(message: &str) -> *mut GError`
+next to the module's existing `to_gerror`/`set_gerror`/`cstring_lossy`,
+red-test first, then have the three call sites delegate to it, keeping
+every existing test in those three crates green unmodified.
+
+## 2026-08-19 — Delivered: Track A6 Pattern E, the `invalid_arg_gerror` consolidation
+
+Followed through on the claim. Red first: added
+`invalid_arg_gerror_carries_the_invalid_arg_code_and_the_message` to
+`jmap-backend-core/src/error.rs`'s test module, calling a function that did
+not exist yet — confirmed `cargo test -p jmap-backend-core` failed with
+`cannot find function 'invalid_arg_gerror'` before writing it. Green: added
+`pub fn invalid_arg_gerror(message: &str) -> *mut GError` to
+`jmap_backend_core::error`, the same `cstring_lossy` +
+`e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, ...)` body every one of
+the three duplicates had. Switched all three call sites:
+- `jmap-backend-book/src/ops.rs` and `jmap-backend-cal/src/ops.rs`: deleted
+  each crate's own `invalid_arg` fn entirely, both its call sites (the
+  `SyncError::VCard`/`SyncError::ICal`/`SyncError::Unsendable` match arms and
+  `fail_invalid`) now calling the shared helper, and dropped
+  `E_CLIENT_ERROR_INVALID_ARG`/`e_client_error_create` from each file's
+  `eds_sys` import (each was used nowhere else in its file, confirmed by
+  grep before removing).
+- `jmap-backend-collection/src/authenticate.rs::no_account_gerror`: kept as
+  a named function (its one call site, `authenticate_with`'s "no account"
+  branch, reads better naming that case than a raw message literal would),
+  but its body is now one line delegating to the shared helper instead of
+  its own `cstring_lossy`/`e_client_error_create` pair.
+
+No behaviour change anywhere: all three were byte-identical bodies before
+this, so every existing test keeps observing the same `GError` for the same
+inputs — confirmed by running the full suite rather than just re-reading
+the diff. `docs/UNSAFE-AUDIT.md`'s Pattern E updated with what landed and
+what is still open (the `fail`/`fail_bool` generic-return-type half, which
+needs real design — three different sentinel shapes across its ~10 sites —
+not a mechanical port).
+
+Gate before pushing: `cargo fmt --check` clean (after one `cargo fmt` pass,
+which only re-wrapped the `authenticate.rs` import list onto multiple
+lines — no content change); `cargo build -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-backend-collection` clean;
+`cargo clippy -p evolution-jmap-client -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` clean;
+`cargo test --locked` (default-members) and the direct seven-crate
+`cargo test` both green, every `test result: ok`, 0 failed.
+
+Ending the session here — one focused, fully-tested increment, pushed.
+Everything surveyed at claim time still holds: SRV autodiscovery's
+GResolver `Resolver`, A5, A6 Pattern C, and D1's vtable wiring remain
+FFI/refcount escalation-worthy; Track B/C2/C4/E remain NEEDS-DECISION; A6
+Pattern E's remaining `fail`/`fail_bool` half is a real design task, not a
+mechanical one, and is left for a session that wants to take that on
+deliberately.
+
+## 2026-08-19 (claim) — Claiming Track F: the newer-Evolution/EDS portability spike
+
+Fresh survey (same ground the last several sessions mapped, re-confirmed
+rather than re-litigated): all milestones COMPLETE; CURRENT PRIORITY's one
+open thread (SRV autodiscovery's GResolver `Resolver`) and Round 2's Track
+D (D1 vtable wiring) and A6 Pattern C (libical/GObject RAII) are
+FFI/refcount escalation-worthy, unchanged. Track B/C2/C4/E are
+NEEDS-DECISION. A6 Pattern E's remaining `fail`/`fail_bool` half needs real
+design, not a mechanical port. A7 (stale-comments audit) is already done.
+
+Track F (queued `0b186d8`, never yet attempted) is different from all of
+those: it is a **spike** — compile `jmap-config` + `evo-sys` against the
+newer-Evolution/EDS container `ci/eds-matrix.sh` already uses, characterize
+any `EMailConfig*`/shell API drift, and write the go/no-go verdict to
+`docs/NEWER-EVOLUTION-SPIKE.md` — no new `unsafe`, no FFI authoring, just
+investigation against a container this VM can already run (`sudo docker`
+works; the exact digest-pinned `fedora@sha256:6c75d5bf57cb…` image from
+`ci.yml`'s `eds-version-matrix` job is already pulled locally). Claiming it
+now.
+
+Note before starting: `ci/eds-matrix.sh`'s crate list already includes
+`-p jmap-config`, and M10's 2026-08-19 re-verification ran that exact
+script against this exact image fresh (see this file's earlier "1132
+passed, 0 failed" entry) — so compile-level survival of `jmap-config`/
+`evo-sys` against this container is already evidenced, not unknown. This
+session verifies that firsthand (container Evolution/EDS version, any
+`EMailConfig*` signature drift) rather than resting on the earlier run's
+framing, and turns it into Track F's actual deliverable doc + recommendation.
+
+## 2026-08-19 (claim) — Claiming Track E Phase 0: the RFC 9670 `Principal` shared floor
+
+Fresh survey after `9942fa8` (roadmap: greenlight Track E Path A) landed
+just ahead of this session: Track E's Phase 0 — `Principal` proto type +
+capability constants + `Principal/get`/`query` in client + mock support,
+per `docs/PRINCIPALS-DESIGN.md` §4.1–4.3 — is now explicitly CLAIMABLE NOW
+and, per that design doc, pure-additive plain Rust (no FFI, no unsafe): a
+new type, two capability constants, two client methods, and mock handlers,
+mirroring the existing `contacts`/`calendars` modules end to end. Checked
+for a live claim first: `81dac75` (claim Track F) is a genuinely
+in-progress lock from a concurrent session (committed minutes before this
+one started, per its timestamp), not stale — left untouched. Every other
+open thread is unchanged from what the last several sessions found:
+CURRENT PRIORITY's SRV `Resolver` (GResolver, FFI), A5, A6 Pattern C, D1's
+vtable wiring are escalation-worthy; Track B/C2/C4 are NEEDS-DECISION;
+A6 Pattern E's `fail`/`fail_bool` half needs real design. Track E Phase 0
+is the one open, unclaimed, non-FFI, headless, TDD-able increment left.
+Claiming it now, scoped exactly to Phase 0 (not Path A's
+`getAvailability`/free-busy vfunc, which is a separate, larger, partly
+escalation-worthy increment per the design's own phasing).
+
+## 2026-08-19 — Delivered: Track E Phase 0, the RFC 9670 `Principal` shared floor
+
+Followed through on the claim, scoped exactly to `docs/PRINCIPALS-DESIGN.md`
+§4.1–§4.3 (Phase 0 only — not Path A's `getAvailability`/free-busy, a
+separate, larger, partly escalation-worthy increment).
+
+**`jmap-proto`**: new feature-gated `principals.rs` (feature `principals`,
+added to `default` alongside `mail`/`contacts`/`calendars` so every existing
+consumer picks it up unchanged, exactly like those three) with `Principal`
+(`id`, `type` → `principal_type`, `name`, `description`, `email`,
+`timeZone`, a `capabilities: BTreeMap<String, Value>` bag — deliberately
+untyped, so one server's unknown per-principal capability, e.g. a future
+draft revision of the calendars extension's `mayGetAvailability`, can't sink
+the whole `Principal/get` — `accounts`, and the usual `extra` catch-all) and
+`PrincipalQueryFilter` (`name`/`email`/`text`). `session.rs` gained
+`CAPABILITY_PRINCIPALS`/`CAPABILITY_PRINCIPALS_OWNER`. Two unit tests: a
+camelCase round trip and an unmodeled-property-survives-in-`extra` check —
+the same two invariants every other proto type in this crate is tested for.
+
+**`jmap-client`**: new `principals.rs` (private module, `impl Client`,
+same shape as `calendars.rs`/`contacts.rs`) — `principals(account_id)`
+(`Principal/get`, `ids: null`) and `principal_query(account_id, filter)`
+(`Principal/query`), `using` set `[CORE, PRINCIPALS]`.
+
+**`jmap-mock`**: `AccountState` gained `principals: Store<Principal>` and
+`current_user_principal_id: Option<Id>` (RFC 9670 §2.5's "which principal is
+*me* in this account"); new `principals.rs` module with `principal_get`/
+`principal_query` handlers (mirroring `contacts.rs`'s `address_book_get`/
+`contact_card_query` almost line for line) and two `AccountState` seeding
+helpers, `seed_principal`/`seed_current_user_principal`. `dispatch.rs` grew
+the two registry arms. `server.rs`'s `session_document` now advertises both
+URNs server-wide (empty-object placeholders, like the other four) **and**
+per-account with real content, which the other four don't have: `principals`
+carries `currentUserPrincipalId` (`null` until a test seeds one) and, only
+once an account has an owning principal, `principals:owner` carries
+`accountIdForPrincipal`/`principalId` — built as its own block rather than
+folded into `ACCOUNT_CAPABILITIES`'s uniform `json!({})` map, since those two
+are the first account capabilities here whose object isn't empty.
+
+TDD: `jmap-client/tests/principals.rs` — seeds two principals (the account's
+"me" and one attendee) against the mock, then asserts `principals()` lists
+both with the right ids/emails, `principal_query(email: "…")` resolves the
+attendee by exact email and returns nothing for an unknown one, and the
+session document's `principals` account capability names the seeded
+`currentUserPrincipalId`. All four passed on the first run (types and
+handlers were written from the design doc's exact shapes, not iterated into
+shape by failing tests) — the `cannot find method`/`cannot find type` in
+`jmap-client` before `principals.rs` existed was this increment's actual red
+state, confirmed by building before either file was in place.
+
+No behaviour change to anything that existed before this: mail, contacts,
+and calendar tests are all untouched and stayed green — this is additive
+surface only, exactly as Phase 0 is scoped to be. `docs/ROADMAP.md` records
+Phase 0 DONE; Path A (the `getAvailability` proto/client/mock slice, then
+the escalation-worthy `ECalBackend` free/busy vfunc) is next on this thread
+for a future session.
+
+Gate before pushing: `cargo fmt --check` clean (after one `cargo fmt` pass —
+line-wrapping only, in the new files); `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) and `cargo clippy -p evolution-jmap-client
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+seven EDS-gated crates, this VM having the headers) both clean; `cargo test
+--locked` (default-members) and the same seven-crate `cargo test` both
+green, every `test result: ok`, 0 failed. Disk filled mid-session
+(`rust/target/debug` hit the limit again during the seven-crate build,
+"No space left on device") — `cargo clean --profile dev` (23.2 GiB freed)
+recovered it, consistent with the standing disk-fills-from-cargo-target
+note; both gates re-ran clean afterward.
+
+Ending the session here — one focused, fully-tested increment, pushed.
+`docs/PRINCIPALS-DESIGN.md`'s Track E Path A (getAvailability + free/busy)
+and Phase B (`myRights`/`shareWith` typed rights, per-source read-only
+rewire) remain open for a future session; everything else surveyed at claim
+time is unchanged — FFI/refcount escalation-worthy (SRV `Resolver`, A5, A6
+Pattern C, D1's vtable wiring) or NEEDS-DECISION (B1, C2's third-party
+notices, C4).
+
+## 2026-08-19 (claim) — Claiming Track E Path A: `Principal/getAvailability` proto/client/mock slice
+
+Fresh survey: all milestones COMPLETE; Track E Phase 0 (the `Principal`
+shared floor) landed just ahead of this session (`7f1fea9`). Per
+`docs/ROADMAP.md`'s Track E and `docs/PRINCIPALS-DESIGN.md` §5, Path A is
+next: `Principal/getAvailability` request/response + `BusyPeriod` in proto,
+a `get_availability()` client method, and a mock computation over seeded
+`CalendarEvent`s — explicitly scoped as "fully headless-testable against the
+mock" (design §4.2–4.3). The one heavy piece on this thread, the
+`ECalBackend get_free_busy_sync` vfunc + `BusyPeriod→VFREEBUSY` marshaller,
+is explicitly flagged L/escalation-worthy (unsafe FFI, EDS-only testing) and
+is NOT part of this claim — this increment stops at the mock-testable proto/
+client/server slice, same boundary the design itself draws. Every other open
+thread is unchanged from what recent sessions found: CURRENT PRIORITY's SRV
+`Resolver` (GResolver, FFI), A5, A6 Pattern C, D1's vtable wiring are
+escalation-worthy; Track B/C2/C4 are NEEDS-DECISION; A6 Pattern E's
+`fail`/`fail_bool` half needs real design. Claiming Path A's non-FFI slice
+now.
+
+## 2026-08-19 — Delivered: Track E Path A's proto/client/mock slice (`Principal/getAvailability`)
+
+Followed through on the claim, scoped exactly to the non-FFI half of Path A
+(`docs/PRINCIPALS-DESIGN.md` §4.2–§4.3) — not the `ECalBackend
+get_free_busy_sync` vfunc, which stays escalation-worthy FFI and untouched.
+
+**`jmap-proto`**: `principals.rs` gained `GetAvailabilityRequest`
+(`accountId`, `id`, `utcStart`/`utcEnd` as `UtcDate`, `showDetails`,
+`eventProperties`), `GetAvailabilityResponse { list: Vec<BusyPeriod> }`, and
+`BusyPeriod` (`utcStart`, `utcEnd`, `busyStatus`, `event:
+Option<CalendarEvent>`) — bespoke shapes per the design, not the generic
+`GetRequest`/`GetResponse`. The `principals` feature now depends on
+`calendars` (`Cargo.toml`) since `BusyPeriod.event` needs `CalendarEvent`;
+every existing consumer has both on by default already, so this is invisible
+to them. Four new round-trip/shape unit tests.
+
+**`jmap-client`**: `get_availability(account_id, principal_id, utc_start,
+utc_end, show_details)` on `principals.rs`, using a dedicated
+`AVAILABILITY_USING` set naming both `CAPABILITY_PRINCIPALS` and
+`CAPABILITY_CALENDARS` (design §4.2's requirement — the object is a
+principal but the method is a calendars-draft extension).
+
+**`jmap-mock`**: `Principal/getAvailability` handler (registered in
+`dispatch.rs`) computing `BusyPeriod`s from the account's seeded
+`CalendarEvent`s:
+- `notFound` when the principal doesn't exist, or when its per-principal
+  `urn:ietf:params:jmap:calendars` capability explicitly says
+  `mayGetAvailability: false` (absent the capability entirely, allowed) —
+  the exact two seeding shapes design §4.3 calls for.
+- An event counts as busy unless its `status` is `cancelled` or its
+  `freeBusyStatus` is explicitly `free` (RFC 8984 §4.4.2 defaults an unset
+  `freeBusyStatus` to `busy`, so `None` counts as busy here, same "nothing
+  said" vs "said busy" distinction `CalendarEvent`'s own doc comments already
+  draw for this field).
+- Window matching reuses `calendars.rs::event_matches`'s existing
+  documented simplification: `start`/`utcStart`/`utcEnd` compared textually,
+  correct for `Etc/UTC` fixtures, not arbitrary time zones.
+- `busyStatus` is `tentative` when the event's `status` is, else
+  `confirmed`; the draft's third value, `unavailable`, has no source concept
+  in this crate's `CalendarEvent` model and is never produced — documented,
+  not silently wrong.
+- `event` is populated with the full `CalendarEvent` only when `showDetails`
+  is true; `eventProperties` projection is parsed but not applied (no test
+  needs it yet — logged as a known gap, not implemented-and-silent).
+- A busy period's `utcEnd` comes from a new small helper (`busy_end`) that
+  adds a simple `PT<h>H<m>M<s>S` duration to the event's local start as
+  same-day second-of-day arithmetic only — deliberately not real calendar
+  arithmetic (`UtcDate`'s own doc says this crate never does date math); an
+  unparseable duration, or one that would cross midnight, leaves the period
+  zero-length (`end == start`) instead of guessing. Six unit tests cover the
+  duration parser and this helper directly.
+- The draft's other named error, `tooLarge` (window too wide), is **not**
+  implemented: there's no clean way to bound window width without doing the
+  same calendar-date arithmetic just ruled out, and no test needs it yet —
+  logged as an open gap rather than faked.
+
+TDD: `jmap-client/tests/principals.rs` grew three cases —
+`get_availability_returns_busy_periods_in_the_window_sorted_by_start` (four
+events: two in-window busy ones sorted by start, one out-of-window, one
+explicitly `free` — asserts exactly the two expected ones with correct
+`utcStart`/`utcEnd`/`busyStatus`), `get_availability_includes_the_event_
+when_show_details_is_true`, and `get_availability_is_not_found_when_the_
+principal_denies_it`. All new tests were red before the handler/client
+method existed (confirmed by building before either was in place — `cannot
+find method`/`cannot find type`), green after. Every existing test in every
+touched crate stayed green unmodified — this is additive surface, same as
+Phase 0.
+
+Gate before pushing: `cargo fmt --check` clean (after one `cargo fmt` pass —
+line-wrapping only); `cargo clippy --all-targets --locked -- -D warnings`
+(default-members) and `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+seven EDS-gated crates) both clean; `cargo test --locked` (default-members)
+and the same seven-crate `cargo test` both green, every `test result: ok`,
+0 failed. Disk stayed comfortable this session (7.3G free after the builds),
+no `cargo clean` needed.
+
+Ending the session here — one focused, fully-tested increment, pushed.
+`docs/ROADMAP.md` records Path A's proto/client/mock slice DONE, with the
+`ECalBackend get_free_busy_sync` vfunc (+ `BusyPeriod→VFREEBUSY` marshaller
+in `jmap-ical`) left as the one remaining, escalation-worthy piece of Path A.
+`tooLarge` and `eventProperties` projection are logged above as deliberate,
+documented gaps rather than silently dropped. Everything else surveyed at
+claim time is unchanged: CURRENT PRIORITY's SRV `Resolver` (GResolver, FFI),
+A5, A6 Pattern C, D1's vtable wiring remain escalation-worthy; Track B/C2/C4
+remain NEEDS-DECISION; A6 Pattern E's `fail`/`fail_bool` half needs real
+design.
+
+## 2026-08-19 — escalating the real SRV `Resolver` (GResolver FFI), not attempting it
+
+Fresh survey: all milestones (M1–M10, CALCARD) tagged COMPLETE in
+`docs/MILESTONES.md`; `git fetch` shows local `master` already equals
+`origin/master` (`efea5f4`) — no new maintainer commit to `docs/ROADMAP.md`.
+Checked `~/.night-shift-escalate` first: absent, so no pending escalation to
+honour or re-run.
+
+Walked the CURRENT PRIORITY order the task names (M7 → real-server readiness
+→ M9/M10) before anything else: M7 is COMPLETE and operator-verified; OAuth2
+real-server validation is explicitly DEFERRED by the maintainer (not a bug,
+not to touch); the `--features live-server` harness and the redirect-auth /
+`apiUrl` scheme fixes are DONE; M9 and M10 are both COMPLETE. That leaves
+CURRENT PRIORITY item 5's one open piece: **build the real SRV `Resolver`**
+(`_jmap._tcp.<domain>` via `g_resolver_lookup_service()`/`gio-sys`) — both
+call sites (`jmap_backend_core::source::connect`, `config_lookup::run`)
+already route through the `Resolver` trait seam but still construct
+`NoSrvResolver`, so Fastmail's password path still 404s. The roadmap names
+this "FFI — reasonable to escalate" itself, not just a past session's
+judgment call.
+
+Before treating it as the only candidate, re-checked every other thread this
+repo's Round 2 backlog names, rather than trusting the last entry's list at
+face value: Track A's `[claude]` items are done (A2, A4, A7) or explicitly
+escalation-worthy (A5, A6 Pattern C — both named as such in
+`docs/UNSAFE-AUDIT.md`/the roadmap, not inferred here); Track B/C2/C4 are
+NEEDS-DECISION; Track C1/C3 are DONE; Track D1's remaining piece is
+GObject-vtable FFI wiring, same category; Track D2's write-back is blocked on
+D1; Track E's remaining piece (`ECalBackend get_free_busy_sync` +
+`BusyPeriod→VFREEBUSY`) is FFI, explicitly flagged escalation-worthy in the
+design; Track F was claimed at `81dac75` (2026-08-19 08:24:53Z, ~42 minutes
+before this session started at 09:06Z per `git log`) — a live, non-stale
+lock (well under the 24h expiry rule), so left untouched, not claimed out
+from under a concurrent session. `docs/BACKLOG.md` is unchanged and still
+out of scope by the current-priority directive.
+
+So, for the first time across this long run of sessions that have repeatedly
+*noted* the SRV resolver as escalation-worthy while finding something else
+tractable, there genuinely is nothing else: every remaining `[claude]`-lane
+item is either FFI/unsafe (escalation-worthy by the roadmap's own words),
+NEEDS-DECISION, or a live concurrent claim. The SRV `Resolver` is also the
+highest-priority item among the escalation-worthy set (CURRENT PRIORITY,
+not Round 2).
+
+Why this one is genuinely FFI risk, not just "uses `unsafe`": the
+implementation calls `g_resolver_lookup_service()` (already bound via
+`gio-sys`, no new dependency), walks the returned `GList` of `GSrvTarget`s
+via `g_srv_target_get_hostname/_port/_priority/_weight`, sorts by RFC 2782
+order, and must free the list correctly (`g_resolver_free_targets`) on every
+path including the error/empty ones — transfer-full ownership over a
+GLib-owned list is exactly the "plausible-but-wrong-but-compiles" shape this
+project's own escalation criteria and its FFI-soundness audit (A5) call out:
+a wrong free (double-free, leak, or freeing before reading every element)
+would not show up as a compile error or even as a mock-test failure (no fake
+`GResolver` exists to catch it), only as a leak or crash under real use.
+
+Not attempting it on Sonnet. Wrote `claude-opus-5` to
+`~/.night-shift-escalate` and stopping here without claiming the work, no
+lock taken (nothing is in progress to hold a lock against). The next session
+on opus should start from `docs/ROADMAP.md`'s CURRENT PRIORITY item 5's
+"CLAIMABLE NOW" paragraph: implement `Resolver` for a real `GResolver`
+in the EDS integration layer (likely `jmap-backend-core` or a small new
+module alongside it), inject it in place of `NoSrvResolver` at both named
+call sites, and TDD it the way `srv_discovery.rs` already does against a
+fake — true end-to-end confirmation against `_jmap._tcp.fastmail.com` is
+still an operator step (no creds on this runner).
+
+## 2026-08-19 09:14Z — Claiming the real SRV `Resolver` (GResolver via `gio-sys`)
+
+Running on **opus** per the previous session's escalation (`a4533d1` wrote
+`claude-opus-5` to `~/.night-shift-escalate` and stopped without claiming).
+Taking the item that escalation named: ROADMAP CURRENT PRIORITY item 5's
+"CLAIMABLE NOW — build the real SRV `Resolver`".
+
+Claiming: implement `jmap_client::resolver::Resolver` for a real
+`GResolver`-backed lookup of `_jmap._tcp.<domain>` using the
+`g_resolver_lookup_service()` / `GSrvTarget` accessors already bound in
+`gio-sys` 0.22 (no new dependency), place it in the EDS-integration layer
+(`jmap-backend-core`, which both call sites can reach — `jmap-config` already
+depends on it), and inject it where `NoSrvResolver` is constructed today:
+`jmap_backend_core::source::connect` and `jmap_config::config_lookup::run`.
+
+### Delivered: the real SRV `Resolver` (`SystemResolver`, GLib `GResolver`)
+
+Ran on **opus** (the previous session's escalation at `a4533d1`), and the
+escalation was the right call for a reason worth recording: the risk was not
+"does it compile" but the transfer-full ownership of a `GSrvTarget` `GList`,
+which no mock test can catch — a wrong free is a leak or a crash under real
+use only. So the increment was built to make that checkable rather than
+assumed.
+
+**What landed.** `jmap-backend-core/src/resolver.rs`: `SystemResolver`, a
+`jmap_client::resolver::Resolver` implementation over
+`g_resolver_lookup_service()`. No new dependency — `gio-sys` 0.22 was already
+a dependency of both crates involved and already binds the function and the
+`GSrvTarget` accessors. Installed at both call sites, replacing
+`NoSrvResolver`: `jmap_backend_core::source::connect`'s `Domain` branch (via
+`ClientBuilder::resolver`) and `jmap_config::config_lookup::run`. It lives in
+`jmap-backend-core` because that is the one EDS-integration crate both sites
+can reach — `jmap-config` already depends on it — rather than a new crate.
+
+**Two GLib guarantees are why the code is short, and both were checked, not
+assumed.** Read out of the installed `/usr/share/gir-1.0/Gio-2.0.gir` doc
+text: the returned list is *"non-empty ... sorted in order of preference"*
+(RFC 2782 order — so the first node is the answer, and the hand-rolled
+priority/weight sort the roadmap anticipated is not needed; GLib's own
+`g_srv_target_list_sort` has already run), and it is *NULL on error*, freed
+as a whole via `g_resolver_free_targets`. All the ownership therefore lives in
+one function body on purpose: take the `GResolver` ref, take the list, read
+the transfer-none hostname into an owned `String` **before** freeing, then
+free the list, the `GError` and the ref on every path. Reading the order
+right off the page is the check.
+
+**Everything unresolvable answers `None`**, which is the direction that
+matters — an SRV record can only *redirect* discovery, never break the
+deployments that answer at their own domain (Stalwart, self-hosted, the
+in-repo mock, and every existing test). That covers: no record, a failed
+lookup, a domain with an interior NUL that cannot be a C string at all (it
+comes from a hand-writable keyfile, so this must not panic inside a vfunc), a
+`.` target — RFC 2782's "the service is decidedly not available here", read
+here as the weaker "fall back", because a 404 is a better failure than an
+account that cannot be attempted — and a zero port. A fully-qualified target
+loses its trailing dot so the host matches the one every certificate and log
+line elsewhere uses.
+
+**Deliberate limit:** the lookup blocks and is not cancellable. The
+`Resolver` trait passes no `GCancellable`, and giving `SystemResolver` one
+would mean storing a raw `GCancellable` pointer in a `Send + Sync` value —
+the worse trade for a lookup the system resolver already timeouts. Both call
+sites are already on a worker thread. Documented in place.
+
+**TDD.** Red first: `tests/resolver.rs` failed to compile on the missing
+module. Then green on the deterministic cases — a `.invalid` domain (RFC 6761
+guarantees it never resolves, so the assertion holds whether or not this
+runner has DNS egress), the interior-NUL refusal, and 64 repetitions of the
+failing path so an unbalanced ref or free has somewhere to show — plus
+pure-helper unit tests for the host normalisation (trailing dot, `.`, empty).
+The success path cannot be hermetic — it needs a third party's live DNS — so
+it is an `#[ignore]`d test against `_jmap._tcp.fastmail.com`, and **it was
+run and passes**: `api.fastmail.com:443`. That is the one assertion no fake
+can make, that the `GList` is walked and read correctly, so it was worth
+having even un-CI-able.
+
+**Finding: GLib 2.80's `g_resolver_lookup_service()` leaks ~1 kB per call,
+and it is not ours.** Noticed because the repetition test above invited
+measuring it: RSS grows linearly at ~1 kB/lookup over 6000 consecutive
+lookups of the *same* domain, on both the found and the not-found path — and
+the not-found path returns no list at all, which is what first pointed away
+from our list handling. Proven upstream with a minimal C program doing the
+identical canonical GLib sequence: same ~1 kB/call. The same shape around
+`g_resolver_lookup_by_name()`/`g_resolver_free_addresses()` is flat (0 kB
+after warm-up), so it is the SRV/records path specifically, and it is not a
+bounded DNS cache (that would plateau for a repeated domain). **Not worked
+around**, on frequency grounds: `lookup_srv` runs once per
+`ConnectTarget::Domain` connect — a `connect_sync`, a fan-out
+authentication, a click of "Look Up Account Details" — never per sync poll or
+per JMAP method call, so a long-running factory process loses tens to
+hundreds of kB, and only for bare-email-domain accounts. Recorded in
+`docs/BACKLOG.md` with the reproduction and the three options if it ever
+matters (upstream report > TTL-ignoring memoization > `lookup_records`, which
+is *not* an improvement: same code path, plus raw `GVariant` and no sorting).
+The RSS harness was deliberately **not** committed — a network- and
+allocator-dependent memory assertion does not belong in CI.
+
+`docs/UNSAFE-AUDIT.md`'s `jmap-backend-core` bullet gained a line for the new
+cluster, marked as added after that audit's pass rather than folded into it,
+so the audit neither goes stale nor claims to have reviewed code written
+after it.
+
+**Gate:** `cargo fmt --check` clean; `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy both
+clean; `cargo test --locked` green across 84 test binaries and the
+seven-crate `cargo test` green at 1178 passed — 0 failed in both. `reuse`
+is unavailable on this VM per the standing note; both new files carry
+in-file SPDX `GPL-3.0-or-later` headers in the same style as their
+neighbours, and neither needs a `REUSE.toml` entry (`.rs` is a recognised
+comment style).
+
+**Needs the operator, and is now the only thing left on ROADMAP item 5:**
+end-to-end confirmation against real Fastmail in the VM. Use an **app
+password / API token**, not the login password — the login password 401s,
+which is a separate concern from the 404 this closes. The expected change is
+that session discovery now goes to `api.fastmail.com` instead of 404ing at
+`fastmail.com`, and that "Look Up Account Details" finds JMAP instead of
+losing to the generic ISPDB autoconfig.
+
+## 2026-08-19 (claim) — Claiming Track A6 Pattern E: consolidate `fail`/`fail_bool`/`fail_invalid`
+
+Fresh survey: CURRENT PRIORITY item 5 (SRV `Resolver`) landed at `aa711bf`
+just ahead of this session — its code side is complete, and the only thing
+left on the whole CURRENT PRIORITY list is operator/maintainer
+confirmation (Fastmail end-to-end, OAuth2-on-a-TLS-proper-deployment,
+deliberately deferred). M1–M10 and CALCARD are all `COMPLETE`. Walked
+Round 2: Track D1's remaining piece (`create_resource_sync`/
+`delete_resource_sync` vtable wiring) and Track E's remaining piece
+(`ECalBackend get_free_busy_sync` + marshaller) are both GObject-vtable FFI,
+escalation-worthy per the roadmap's own words — not attempting either on
+Sonnet. Track A5 (FFI soundness audit) is explicitly flagged
+escalation-worthy in the roadmap text itself. Track B1, C2's third-party
+notices, and C4 are NEEDS-DECISION. Track F (newer-Evolution/EDS
+portability spike) was claimed at `81dac75` (2026-08-19 08:24:53Z) — under
+an hour before this survey, so a live claim, not an expired lock (the
+deadlock threshold is 24h); leaving it untouched rather than claiming out
+from under a concurrent session.
+
+That leaves `docs/UNSAFE-AUDIT.md`'s own "Prioritized follow-up list" item
+5, Pattern E's still-open half: the generic `fail`/`fail_bool` sentinel-
+return wrapper around `set_raw_gerror`, independently reimplemented in
+`jmap-mail/src/{manage,synchronize,refresh,append,send,subscribe,folders,
+transfer}.rs` (6 plain `gboolean` copies, plus `manage.rs`/`folders.rs`'s
+generic `*mut T` copies) and `jmap-backend-book`/`jmap-backend-cal`'s
+`ops.rs` (`fail`/`fail_invalid` pairs over `SyncError`). The audit already
+did the research (confirmed by reading each site directly this session,
+not just trusting the doc): every copy is the same three-line shape —
+map the failure to a `*mut GError`, call `set_raw_gerror`, return a fixed
+sentinel — and the previously-flagged obstacle ("~10 call sites return
+three different sentinel shapes... needs a real design") resolves to a
+generic `fail<E>(error, failure: &E, to_gerror: impl FnOnce(&E) -> *mut
+GError) -> T` with `T` inferred per call site (a pointer type defaults to
+`ptr::null_mut()`, `gboolean` to `GFALSE`) — the per-site `to_gerror`
+mapping (already nontrivial and staying that way: `StoreError::to_gerror`,
+the book/cal `SyncError`-specific `to_gerror` free functions) is passed in
+as the closure argument rather than baked in, so no behavioural mapping
+changes. `service.rs`'s `CamelAuthenticationResult`-returning
+`fail_disconnected`/`fail_internal` are NOT in scope — the audit's own list
+never named them, and their sentinel depends on the mapped *value*, not
+just its type, which this shape doesn't try to cover. Pure mechanical
+consolidation, no `unsafe`/FFI authoring (the bodies already exist,
+unchanged); every touched crate's existing test suite is the regression
+net, not a red-test-first exercise (there is no new behaviour to test
+red-first for a refactor that changes no mapping). Claiming this now.
+
+## 2026-08-19 — Delivered: Track A6 Pattern E, the `fail`/`fail_bool`/`fail_invalid` consolidation
+
+Followed through on the claim. `jmap_backend_core::error` gained three
+helpers alongside the already-shared `invalid_arg_gerror`:
+
+- `fail<E, T>(error, failure: &E, to_gerror: impl FnOnce(&E) -> *mut GError)
+  -> *mut T` — the pointer-sentinel shape `jmap-mail`'s `manage.rs` and
+  `folders.rs` needed.
+- `fail_bool<E>(error, failure: &E, to_gerror: impl FnOnce(&E) -> *mut
+  GError) -> gboolean` — the `gboolean` shape every other named site needed.
+- `fail_invalid(error, message: &str) -> gboolean` — the `_invalid` variant
+  that takes a raw message with no failure value to map, backing both
+  `jmap-backend-book`/`jmap-backend-cal`'s `ops.rs`.
+
+The obstacle the last several sessions' surveys kept citing ("~10 call
+sites return three different sentinel shapes... needs a real design")
+turned out not to need a trait: making the mapping a closure/fn-item
+argument, rather than an inherent method the helper assumes, is enough —
+each crate's own already-nontrivial `to_gerror` (`StoreError::to_gerror`'s
+per-variant domain/code branching in `jmap-mail`, and the free
+`to_gerror(&SyncError)` functions in `jmap-backend-book`/
+`jmap-backend-cal`'s `ops.rs`) is passed in unchanged as
+`StoreError::to_gerror` (a fn-item value) or the local free function, and
+only the "call the mapper, `set_raw_gerror`, return a fixed sentinel" body
+is shared.
+
+**Ten local definitions deleted**, one per file: `jmap-mail/src/
+{manage,synchronize,refresh,append,send,subscribe,folders,transfer}.rs`'s
+`fail`/`fail_bool` (`manage.rs`/`folders.rs` had the pointer-generic form,
+the other six the `gboolean` form), and `jmap-backend-book`/
+`jmap-backend-cal`'s `ops.rs` `fail`/`fail_invalid` pairs. Every call site
+updated to pass the mapper explicitly (e.g. `fail_bool(error,
+&StoreError::Disconnected, StoreError::to_gerror)`); `append.rs`/`send.rs`
+kept their own unrelated `set_raw_gerror` call sites (`unwritable`/
+`unsendable`, which build their own domain-specific `GError`s and are not
+part of this pattern) and their imports adjusted accordingly rather than
+losing the import entirely. One near-miss caught by the build, not the
+initial read-through: `append.rs` had an 11th `fail(...)` call this
+session's scoping research (and my own first pass) missed on the first
+grep, resolving after the local `fail` was deleted to an inaccessible
+private `fail` in `crate::message` of the same name — `cargo build` caught
+it immediately as `cannot find function` with a note naming the
+inaccessible sibling, fixed by routing it through `fail_bool` like every
+other site in the file.
+
+**Deliberately out of scope, not a silently-dropped gap:**
+`jmap-mail/src/service.rs`'s `fail_disconnected`/`fail_internal`, which
+return `CamelAuthenticationResult` rather than `gboolean`/`*mut T` — never
+part of this pattern's originally-named ~10 sites, and their sentinel
+depends on the mapped *value* (`ERROR` vs `REJECTED`/`ACCEPTED`), not just
+its type, which would need a different, value-dependent shape; forcing them
+into the same two helpers would be exactly the over-generalisation the
+pattern's own "lowest priority, ~2 hours" framing warned against. Left
+alone. `docs/UNSAFE-AUDIT.md`'s Pattern E section and its "Prioritized
+follow-up list" item 5 are both updated to DONE.
+
+No behaviour change anywhere: every mapping decision (which domain, which
+code, which message) is byte-for-byte what it was before, only relocated
+from an inherent-method call to an explicit fn-item argument. Pure
+mechanical consolidation — this is a refactor with the existing test suites
+as the regression net, not new behaviour to TDD red-first.
+
+Gate before pushing: `cargo fmt --check` clean (one `cargo fmt` pass —
+line-wrapping only, mechanical); `cargo clippy --all-targets --locked -- -D
+warnings` (default-members) and `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+seven EDS-gated crates) both clean; `cargo test --locked` (default-members)
+and the same seven-crate `cargo test` both green, every `test result: ok`,
+0 failed across every suite in both runs. Disk stayed comfortable (5.5G
+free after the builds), no `cargo clean` needed.
+
+Ending the session here — one focused, fully green increment, pushed.
+Track A6 (unsafe/idiom audit) is now fully closed: every IMPROVE pattern is
+either done (A, B, D's clean sites, E) or explicitly left as its own
+larger, escalation-worthy session (C — the libical/GObject RAII wrapper,
+~1 day, highest safety value but the largest single increment). Everything
+else surveyed at claim time is unchanged: CURRENT PRIORITY is fully done
+pending operator/maintainer confirmation; Track D1/E's remaining pieces and
+A5 remain escalation-worthy FFI; Track B1/C2/C4 remain NEEDS-DECISION;
+Track F remains a live concurrent claim (`81dac75`), not stale.
+
+## 2026-08-19 — escalating Track D1's vtable wiring (GObject-vtable FFI), not attempting it
+
+Fresh survey before claiming anything: `git fetch` shows local `master`
+already equals `origin/master` (`1e0547d`) — no new maintainer commit, and
+`~/.night-shift-escalate` was empty (the prior SRV-`Resolver` escalation was
+already delivered on opus at `aa711bf`). All milestones M1–M10 + CALCARD are
+`COMPLETE`; CURRENT PRIORITY's remaining items are all operator-verification
+waits, not code work (Fastmail SRV end-to-end, OAuth2 real-server, both
+explicitly deferred to the operator).
+
+Walked Round 2 in the maintainer's stated lead order (Track D first for the
+`[claude]` lane): Track A's `[claude]` items are done (A2, A4, A7) or
+explicitly escalation-worthy (A5, A6 Pattern C — both named as such in
+`docs/UNSAFE-AUDIT.md`); Track B1 and C2/C4 are NEEDS-DECISION; C1/C3 are
+DONE; **Track D1's remaining piece is next in the lead order** — wiring
+`create_resource_sync`/`delete_resource_sync` on `ECollectionBackendClass`
+to call the now-landed `AddressBook/set`/`Calendar/set` and mint/remove the
+child `ESource`, mirroring `child_added`'s existing vtable-trampoline
+pattern (`jmap-backend-collection/src/backend.rs`, chaining to
+`parent_class()` through `unsafe extern "C" fn` vfuncs) — real GObject-vtable
+FFI, the exact category this task's escalation criteria names by name.
+Track D2's write-back is blocked on D1. Track E's remaining piece
+(`ECalBackend get_free_busy_sync` + `BusyPeriod→VFREEBUSY`) is the same FFI
+category but sits behind D1 in the lead order. Track F was claimed at
+`81dac75` (2026-08-19 08:24:53Z, roughly 90 minutes before this session) —
+still well under the 24h staleness threshold, so left untouched as a live
+concurrent claim, not re-picked.
+
+So the best next step in priority order is Track D1's vtable wiring, and
+it is genuinely FFI/vtable risk, not just "uses `unsafe`": two new vfunc
+bodies need to override `ECollectionBackendClass::create_resource_sync`/
+`delete_resource_sync`, correctly chain to (or deliberately not chain to)
+the parent implementation, construct/destroy a child `ESource` with the
+right ownership (transfer-full vs transfer-none on the returned/consumed
+GObject), and map `AddressBook/set`/`Calendar/set` failures back through
+`GError` correctly — exactly the "plausible-but-wrong-but-compiles" shape
+this project's own escalation criteria and FFI-soundness audit (A5) call
+out, and untestable by any existing fake vtable in this codebase today.
+
+Not attempting it on Sonnet. Wrote `claude-opus-5` to
+`~/.night-shift-escalate` and stopping here without claiming the work, no
+lock taken. The next session on opus should start from Track D1's roadmap
+paragraph: add `create_resource_sync`/`delete_resource_sync` overrides in
+`jmap-backend-collection/src/backend.rs`, following the `child_added`
+trampoline's existing shape (guard/catch_unwind, chain-to-parent pattern),
+calling `Client::address_book_create`/`calendar_create` (and the `_destroy`
+pair) already landed in `jmap-client`, and minting/removing the child
+`ESource` the way mail folders already do via `Mailbox/set`
+(`jmap-mail/src/manage.rs:227`). TDD against `jmap-mock`'s now-existing
+`AddressBook/set`/`Calendar/set` handlers; `tests/backend.rs:340`'s current
+assertion (that these vfuncs are NOT overridden) is the red test to flip.
+Everything else surveyed at claim time is unchanged: A5, A6 Pattern C, and
+Track E's vfunc remain escalation-worthy FFI; Track B1/C2/C4 remain
+NEEDS-DECISION; Track F remains a live concurrent claim (`81dac75`), not
+stale.
+
+## 2026-08-19 — claiming Track D1's `create_resource_sync` vtable wiring (on opus)
+
+`~/.night-shift-escalate` held `claude-opus-5`, written by the previous
+session (`7dd8a00`) which surveyed Round 2 in the maintainer's lead order and
+stopped at Track D1's remaining piece rather than attempt GObject-vtable FFI
+on Sonnet. This session is that re-run. `git fetch` shows local `master`
+equals `origin/master` (`7dd8a00`); no new maintainer commit.
+
+**Claiming: the `create_resource_sync` half of Track D1's EDS-side wiring**
+— `ECollectionBackendClass::create_resource_sync` in
+`jmap-backend-collection`, calling the `AddressBook/set`/`Calendar/set`
+creates that landed in `jmap-client` at the earlier D1 increment, plus
+`e_server_side_source_set_remote_creatable` on the account source, without
+which the vfunc is unreachable dead code.
+
+**Deliberately NOT in this increment: `delete_resource_sync`.** Two reasons,
+both about correctness rather than time. (1) It is the destructive half:
+`remote-deletable` on a child makes Evolution offer "Delete" on a JMAP
+address book, and a wrong kind or a wrong id there costs the user a
+server-side collection with no undo. Create is additive — its worst failure
+mode is an unwanted empty address book. (2) Every piece of plumbing the two
+share is built here (the credentials lookup, kind-from-`ESource`, the
+account/collection resolution, the error mapping), so delete becomes a small
+follow-up on tested foundations rather than half of one large, partly-verified
+commit. It stays open on the D1 thread, named as such.
+
+**Research first, per the standing "read the source, not the error list"
+note.** Downloaded and read the actual EDS 3.52.4 and evolution-ews 3.52.4
+tarballs from download.gnome.org rather than inferring the contract:
+- `ECollectionBackendClass`'s default `create_resource_sync` answers
+  `G_IO_ERROR_NOT_SUPPORTED` ("%s does not support creating remote
+  resources"), so this vfunc must **not** chain up on the paths it handles —
+  the opposite of `child_added`, where chaining up first is what puts the
+  child in the backend's table.
+- `e_collection_backend_create_resource_sync`'s own docs state the two
+  obligations: examine the passed `ESource` to decide what the server-side
+  resource is (and *error* if it is ambiguous), and after the create
+  succeeds add an `ESource` to the backend's registry server — which may be
+  the passed source itself.
+- The vfunc is reachable only if the *collection* source has
+  `remote-creatable` (`server_side_source_remote_create_sync` in
+  `e-server-side-source.c` refuses otherwise), and it is handed the new
+  child's **scratch** source, not a source of ours.
+- `e_ews_backend_create_resource_sync` is the live reference (M365's is
+  `#if 0`'d out): set parent to the account uid, write directory to the
+  collection's cache dir, `set_writable(TRUE)`, `set_remote_deletable(TRUE)`,
+  then `e_source_registry_server_add_source`. `remote-creatable` is set once,
+  in `ews_backend_constructed`.
+- `e_server_side_source_set_remote_creatable` early-returns when the value
+  is unchanged, so setting it from `populate` (this crate has no
+  `constructed` override, and adding one would be a fourth vtable-slot write
+  for a one-line effect) is idempotent rather than a repeated D-Bus export.
+
+**Credentials: looked up on demand, not cached.** EWS caches the
+`ENamedParameters` `authenticate_sync` was handed and rebuilds a connection
+from them. This crate will not: `e_source_registry_server_ref_credentials_
+provider()` + `e_source_credentials_provider_lookup_sync()` are both already
+in `eds-sys`'s generated bindings (the `e_source_.*` allowlist covers them),
+so the account's password can be read from the same libsecret store
+`authenticate_sync` gets it from, at the moment it is needed. That means no
+secret held in this backend's instance for the life of the account, no new
+instance state, no `instance_init`/`finalize` pair, and a create that works
+in a process where no `authenticate_sync` has run yet. OAuth 2.0 keeps going
+through `jmap_backend_core::oauth2::access_token`, so its token is always
+fresh rather than a cached one that may have expired.
+
+No new bindgen work is needed for any of it: every symbol involved
+(`e_server_side_source_set_remote_creatable`/`_deletable`/`_writable`/
+`_write_directory`, `e_collection_backend_get_cache_dir`,
+`e_source_set_parent`, `e_source_get_uid`, the credentials provider pair) is
+already generated under the existing allowlist prefixes.
+
+### Delivered: Track D1's `create_resource_sync` vtable wiring
+
+Landed the claim above in full, and only the claim: Evolution can now ask a
+JMAP account to create an address book or a calendar *on the server*.
+`delete_resource_sync` is deliberately still EDS's refusal — see below.
+
+**The shape, and why it is split across two crates.** The decision in the
+middle needs no EDS headers, so it went where every other
+what-is-a-child decision already lives: `jmap-collection-sync/src/create.rs`
+holds `Requested` (kind + name), `CreateFailure` and `create_collection`,
+which resolves the JMAP account through the existing `CollectionLayout`,
+calls `AddressBook/set`/`Calendar/set`, and derives the `Child`. That last
+step goes through a **new `Child::for_resource`** which `Fanout::children()`
+now also uses, so a created child cannot silently drift from a discovered
+one — the failure mode being not an error but a second row in the sidebar
+for one server-side address book, or a child whose cache file EDS deletes.
+The blank-name rule a listing applies is likewise shared, as
+`resources::shown_name`, rather than written a second time. Both are covered
+by a test that creates a collection and then asserts the created `Child` is
+`==` the one `Fanout::discover` writes for it.
+
+`jmap-backend-collection/src/create_resource.rs` holds the EDS ends:
+`requested_of` (kind + display name off the scratch source, through a new
+`resource_id::kind_of` — the half of `resource_id_of` that does not need
+`[Resource] Identity`, which a scratch source has not got yet),
+`adopt_created` (the settings, plus the three `EServerSideSource` properties),
+`stored_password_of`, and `CreateError`. `backend.rs` has the vfunc and the
+four things only a live instance can answer.
+
+**Three things read out of the actual sources rather than inferred** — the
+standing note about the EDS container applies to old APIs too, so this
+session downloaded and read `evolution-data-server-3.52.4` and
+`evolution-ews-3.52.4` from download.gnome.org before writing anything:
+
+1. **The parent's `create_resource_sync` is a refusal, not a default.**
+   `collection_backend_create_resource()` does exactly one thing —
+   `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
+   creating remote resources")` — and the default `create_resource_sync`
+   drives it through an `EAsyncClosure`. So this is the **one override in
+   this crate that must not chain up**, the opposite of `child_added`, where
+   chaining up first is what puts the child in the backend's table. Had this
+   been written from the header alone, "chain up like the neighbour does"
+   would have compiled and turned every successful create into a reported
+   failure.
+2. **The scratch source is a real `EServerSideSource`, in the wrong place,
+   and EDS will not finish it.** `server_side_source_remote_create_cb()`
+   builds it with `e_server_side_source_new_user_file()` — the registry's
+   own directory, not the collection's cache — sets the keyfile Evolution
+   sent onto it, and its comment says explicitly that it is "up to the
+   ECollectionBackend whether to use source as given or create its own
+   equivalent", so it is *not* added to the registry. Using it as given is
+   what evolution-ews does, and finishing it means `parent`,
+   `write_directory` and `writable` — which is exactly
+   `collection_backend_new_source()`'s own set for a child EDS mints, minus
+   the `removable = FALSE` that `collection_backend_child_added()` applies to
+   every child on publish and that this crate already chains up to. Three of
+   those four are `EServerSideSource` properties, which is why the new test
+   builds its scratch source with `e_server_side_source_new` (the daemon-free
+   half of the registry `tests/recipe.rs` already uses) rather than with
+   `e_source_new_with_uid`: on a plain `ESource` every one of them is a
+   `g_return_if_fail` critical and nothing else, so the test would have
+   passed while asserting nothing.
+3. **`remote-creatable` is the gate, and without it the vfunc is dead
+   code.** `server_side_source_remote_create_sync()` refuses outright, before
+   any backend is consulted, for a collection source that does not carry it.
+   evolution-ews sets it in `constructed`; this crate has no `constructed`
+   override and adding one would mean writing a slot in `GObjectClass` — a
+   third class struct, further up than `authenticate_sync`'s `EBackendClass`
+   — for a one-line effect, so it goes in `populate` instead. The setter
+   early-returns when the value is unchanged, so running it on every populate
+   costs nothing.
+
+**A design call worth recording: the flag is a decision, not a constant.**
+Rather than an untestable line in the vfunc body, it became
+`Populating::offer_creation(bool)`, called by `crate::populate::populate` with
+`parts.wants(AddressBook) || parts.wants(Calendar)` — the same gate the
+password is asked behind, because an account with neither part switched on has
+no children of this backend's at all, so a collection created in it would be
+one the very next populate treats as dormant. It is written on every populate
+**in both directions**, because the parts are a setting the user can change:
+an account whose owner switches contacts off has to stop being offered without
+being removed and re-added. Two new `tests/populate.rs` cases hold that, and
+the three existing call-order assertions gained the new call.
+
+**Credentials are looked up, not remembered — and that is a departure from
+the reference implementation.** evolution-ews keeps the `ENamedParameters`
+its `authenticate_sync` was handed in `backend->priv->credentials` and
+rebuilds a connection from them on demand (`e_ews_backend_ref_connection_sync`
+returns NULL outright when it has none). Copying that would have meant a
+`Slot<RwLock<Option<Credentials>>>` on the instance, an `instance_init`, a
+`finalize`, and the account's password sitting in the registry process for as
+long as the account exists. It turned out to be unnecessary:
+`e_source_registry_server_ref_credentials_provider()` and
+`e_source_credentials_provider_lookup_sync()` are **already in `eds-sys`'s
+generated bindings** — the `e_source_.*` allowlist prefix covers both — and
+that provider reaches the very libsecret store `authenticate_sync`'s
+credentials come out of, resolving the credentials *source* itself. So the
+password is fetched at the moment it is needed and dropped when the call
+returns; there is no new instance state; and a create works in a process where
+no `authenticate_sync` has run for this account yet, which the cached-secret
+design cannot do. OAuth 2.0 keeps going through
+`jmap_backend_core::oauth2::access_token`, so its token is always fresh rather
+than a remembered one that has since expired — which is the second thing a
+cache would have got wrong.
+
+To keep the OAuth2-vs-password rule from being written twice, `authenticate.rs`
+grew `login_of(source, parts, password, cancellable) -> Result<Login,
+LoginError>` and `authenticate_with` now goes through it. `LoginError` exists
+because the two halves must not be treated alike: a broken *account* is never a
+password problem and so must never become a prompt (`ERROR` always), while a
+missing credential is nothing but (`ConnectError::auth_result`'s own rule).
+
+**What is deliberately NOT in this increment.** `delete_resource_sync`, and
+with it the `remote-deletable` flag that would make it reachable. Two reasons,
+both about correctness rather than about time: it is the destructive half — a
+wrong kind or a wrong id there costs the user a server-side collection with no
+undo, whereas a botched create leaves an unwanted empty address book — and
+setting `remote-deletable` before the vfunc exists would have Evolution offer
+"Delete" and then answer the click with EDS's own `ECollectionBackendJmap does
+not support deleting remote resources`, which is worse than an absent menu
+item. Both facts are asserted rather than merely commented:
+`tests/backend.rs` checks `delete_resource_sync` is still exactly the
+inherited slot, and `tests/create_resource.rs` checks a freshly created child
+is not `remote-deletable`. Everything the delete half needs is now built and
+tested — the login lookup, `kind_of`, the client's `address_book_destroy`/
+`calendar_destroy` — so it is a small follow-up on tested foundations.
+
+**One honest limit on the create's failure path.** If the collection is made
+on the server and a setting cannot then be written onto the source,
+`adopt_created` fails the whole create and nothing is exported. That leaves a
+collection on the server with no child for it, which the next populate finds
+and writes properly. It is the right way round: the alternative is exporting a
+half-written child, which is precisely what `crate::child_source` exists to
+prevent, and a leftover the user can see beats a source that looks right and
+reaches no server.
+
+**TDD.** The red test already existed and was exactly the one the escalating
+session named: `tests/backend.rs:340` asserted `create_resource_sync` was *not*
+overridden, and it failed the moment the slot was installed. It was flipped
+into `class_init_replaces_the_default_create_resource_sync_rather_than_leaving_it`
+plus a neighbours-inherited test now pinned from the far side by
+`create_resource`/`create_resource_finish`. New behavioural tests: 6 in
+`jmap-collection-sync/tests/create.rs` (against `jmap-mockd`, including that an
+address book and a calendar created with the same server-assigned id stay two
+children, and the created-equals-discovered join) and 9 in
+`jmap-backend-collection/tests/create_resource.rs` (against a real
+`EServerSideSource` and a real mock — kind and name read back, no extension
+created by the read, the resource id round-trip that stops a duplicate, the
+`SourceConfig` the book backend will read, and the three server-side-source
+properties).
+
+New user-facing strings are gettext-marked at introduction per the standing
+directive, reusing `connect::Collection::noun()` rather than adding a second
+pair of "address book"/"calendar" msgids; `po/POTFILES.in` gained
+`create_resource.rs` and `po/evolution-jmap.pot` was regenerated with
+`po/extract.sh`. `CreateFailure`'s own `Display` stays untranslated on purpose
+— `jmap-collection-sync` builds without gettext, so the user-facing spelling of
+`Unserved` is written on the backend side.
+
+Full gate before pushing: `cargo fmt --check` clean; `cargo clippy
+--all-targets --locked -- -D warnings` (default-members) and `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets -- -D warnings` both clean; `cargo test --locked` (85 binaries)
+and the same seven-crate `cargo test` (1190 passed) both green, 0 failed in
+either. Disk stayed comfortable (~4.9G free).
+
+**NEEDS HUMAN VERIFICATION IN REAL EVOLUTION.** Nothing headless can drive
+File → New → Address Book against a live `evolution-source-registry`, so D1 is
+*not* tagged complete. What to check in the VM: with a JMAP account that has
+contacts (or calendars) switched on, the account should appear as a choice in
+the "New Address Book"/"New Calendar" type list; creating one should make it
+appear on the server and in the sidebar immediately (not only after a restart);
+and it should survive a restart under the same uid rather than being duplicated
+by the next populate. An account with both parts switched off should *not* be
+offered.
+
+## 2026-08-19 (session N+1) — claiming Track F (newer-Evolution/EDS spike)
+
+Surveyed the roadmap: M7/real-server readiness/M9/M10 are all done or
+operator-verified; Track D's only remaining scoped piece is `delete_resource_sync`
+(the destructive vtable half, deliberately left for a dedicated session — see
+D1's own note) and Track A6's only remaining item (Pattern C, an `Owned<T>`
+RAII wrapper for libical/GObject pointers in `jmap-backend-cal/marshal.rs`) is
+new unsafe/ownership-transfer reasoning — both match this session's
+escalate-rather-than-risk-it criteria, and a tractable alternative exists, so
+per the driver's own preference ("prefer a different tractable Sonnet-sized
+item first"), not claiming either this iteration.
+
+**Claiming Track F instead: the newer-Evolution/EDS spike** (deliverable
+`docs/NEWER-EVOLUTION-SPIKE.md`). This is audit/build work, not new FFI
+authorship — compile+test `jmap-config`+`evo-sys` against the pinned newer
+container `ci/eds-matrix.sh` already uses (image cached locally, resolves to
+EDS 3.60.2, confirmed via `sudo docker images`), characterize any
+`EMailConfig*`/config-GUI API drift 3.52→3.60, and judge go/no-go on
+`compat.rs`-style multi-version gating per the maintainer's own criterion
+("recommend 3.52-only if it would be messy"). Note: `ci/eds-matrix.sh`
+already runs `-p jmap-config` (and `-p evo-sys`) as part of its crate set, so
+M10's prior green run may have already answered this spike's core question as
+a side effect — this session confirms that explicitly and writes it up rather
+than assuming.
+
+## 2026-08-19 (survey) — no tractable Sonnet increment; escalating Track D1's `delete_resource_sync`
+
+Fresh survey (`git fetch`: local `master` = `origin/master` at `6be9c4f`, no
+new maintainer commit). CURRENT PRIORITY is fully done except
+operator-confirmation items already logged as such. Walked Round 2 in the
+maintainer's lead order:
+
+- **Track D1's `delete_resource_sync`** — the only remaining piece of the
+  lead track — is GObject-vtable FFI, destructive (a wrong kind/id costs a
+  server-side collection with no undo), and was already treated as
+  escalation-worthy alongside `create_resource_sync` (which went to opus at
+  `7dd8a00`/`03994b7`). Not attempting on Sonnet.
+- **Track D2's write-back** (a local calendar-colour edit reaching the
+  server) looked possibly newly-unblocked now that `create_resource_sync`
+  landed, so this session actually researched it rather than assuming it was
+  escalation-worthy by category alone: downloaded/read
+  `evolution-ews-3.52.4` (cached at `/tmp/evolution-ews-3.52.4`) for
+  precedent. Finding: **evolution-ews has no server round-trip for calendar
+  colour at all** — `e-ews-folder.c`'s colour handling
+  (`e_ews_folder_utils_pick_color_spec`) only ever *assigns* a colour locally
+  from a fixed palette when a folder is first discovered; it is never read
+  from the server and never written back. So there is no incumbent
+  EDS/EWS pattern to mirror for "local edit → push to server" the way
+  `child_added`/`create_resource_sync` had one to copy. Building it needs a
+  new design: detecting an `ESourceSelectable` colour change (a GObject
+  `"notify::color"` signal on the child `ESource`, fired on whatever thread
+  touches the source) and getting that safely across to a `Calendar/set`
+  call made from `ECalMetaBackend`'s sync worker thread — genuine new
+  signal-lifecycle/concurrency FFI reasoning, not a mechanical port. Logging
+  this as a finding in `docs/ROADMAP.md`'s D2 entry rather than attempting
+  it; it is not "CLAIMABLE NOW" until that design exists.
+- **Track F** (newer-Evolution/EDS spike) was claimed at `6be9c4f`
+  (2026-08-19 10:40:39Z), 14 minutes before this survey (`date -u` read
+  10:54:42Z) — a live concurrent claim, nowhere near the 24h deadlock
+  threshold. Left untouched.
+- **A5** (FFI soundness audit) is explicitly flagged escalation-worthy in
+  the roadmap's own text and has been declined on that basis by every prior
+  session that surveyed it (see this file's Track A6 Pattern E claim entry);
+  no new information this session changes that judgement.
+- **A6 Pattern C** (libical/GObject RAII wrapper) and **Track E's
+  `get_free_busy_sync` vfunc** are unchanged, both flagged FFI/escalation-worthy
+  in the roadmap text itself.
+- **B1, C2's third-party-notices decision, C4** remain NEEDS-DECISION.
+
+No tractable Sonnet-sized item exists this iteration. Per the escalation
+protocol, writing `claude-opus-5` to `~/.night-shift-escalate` and stopping
+here without claiming any work — Track D1's `delete_resource_sync` is the
+best next step (top of the maintainer's lead order, genuinely FFI/destructive,
+and now buildable on tested foundations: `login_of`, `kind_of`,
+`address_book_destroy`/`calendar_destroy`, `requested_of`/`adopt_created`'s
+shape are all already landed from the create-side work). The next session on
+this thread should start from Track D1's roadmap paragraph and the
+"Deliberately NOT in this increment" note in this file's `create_resource_sync`
+delivery entry, which already names what delete needs: the `remote-deletable`
+flag (set from `populate` alongside `remote-creatable`, same
+`Populating::offer_creation` gate), the vfunc override (parent's default is
+also `G_IO_ERROR_NOT_SUPPORTED`, needs the same non-chain-up treatment as
+create), calling `address_book_destroy`/`calendar_destroy`, and removing the
+child `ESource` from the registry server on success — TDD against a red test
+analogous to `tests/backend.rs:340`'s flipped create assertion.

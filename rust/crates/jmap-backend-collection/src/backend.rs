@@ -17,7 +17,6 @@
 //! that from being invisible.
 
 use std::ffi::CStr;
-use std::mem::MaybeUninit;
 use std::ptr;
 
 use std::ffi::CString;
@@ -27,24 +26,31 @@ use eds_sys::{
     ECollectionBackend, ECollectionBackendClass, ENamedParameters, ESource,
     ESourceAuthenticationResult, e_backend_get_source, e_backend_schedule_authenticate,
     e_backend_schedule_credentials_required, e_collection_backend_claim_all_resources,
-    e_collection_backend_freeze_populate, e_collection_backend_get_type,
-    e_collection_backend_is_new_source, e_collection_backend_list_calendar_sources,
-    e_collection_backend_list_contacts_sources, e_collection_backend_new_child,
-    e_collection_backend_ref_server, e_collection_backend_thaw_populate,
-    e_source_registry_debug_print, e_source_registry_server_add_source,
+    e_collection_backend_freeze_populate, e_collection_backend_get_cache_dir,
+    e_collection_backend_get_type, e_collection_backend_is_new_source,
+    e_collection_backend_list_calendar_sources, e_collection_backend_list_contacts_sources,
+    e_collection_backend_new_child, e_collection_backend_ref_server,
+    e_collection_backend_thaw_populate, e_server_side_source_set_remote_creatable,
+    e_source_get_uid, e_source_registry_debug_print, e_source_registry_server_add_source,
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
-use glib_sys::{GError, GFALSE, GList, GType, g_list_free, gchar};
+use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar};
 use gobject_sys::{g_object_unref, g_type_class_peek};
-use jmap_backend_core::error::cstring_lossy;
-use jmap_backend_core::marshal::dup_string;
+use jmap_backend_core::cancel::observe;
+use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
+#[cfg(feature = "testing")]
+use jmap_backend_core::instance::zeroed_box;
+use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::subclass::ObjectSubclass;
-use jmap_backend_core::trampoline::{guard, guard_value, log_critical};
+use jmap_backend_core::trampoline::{guard, guard_bool, guard_value, log_critical};
 use jmap_collection_sync::Parts;
 
-use crate::authenticate::authenticate_with;
+use crate::authenticate::{authenticate_with, login_of};
 use crate::child_added::follow_collection;
 use crate::collection_source::{parts_of, user_of};
+use crate::create_resource::{
+    CreateError, adopt_created, create_on_server, kind_noun, requested_of, stored_password_of,
+};
 use crate::fan_out::{Collection, Populated, fan_out};
 use crate::populate::Populating;
 use crate::resource_id::resource_id_of;
@@ -83,10 +89,11 @@ impl JmapCollectionBackend {
     /// That is why the populate *body* is [`crate::populate`]'s, behind a trait,
     /// and why the only thing `tests/backend.rs` can say about the slot is that
     /// it is installed and is not the one it replaced.
+    #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value.
-        Box::new(unsafe { MaybeUninit::zeroed().assume_init() })
+        unsafe { zeroed_box() }
     }
 }
 
@@ -110,6 +117,13 @@ unsafe impl ObjectSubclass for JmapCollectionBackend {
         vfuncs.dup_resource_id = Some(dup_resource_id);
         vfuncs.populate = Some(populate);
         vfuncs.child_added = Some(child_added);
+        // The one slot whose EDS default is a *refusal* rather than a wrong
+        // answer: `collection_backend_create_resource()` returns
+        // `G_IO_ERROR_NOT_SUPPORTED` and nothing else, so leaving this
+        // uninstalled is an account that cannot create address books, which is
+        // visible. Which is why this override, unlike `child_added`'s, must not
+        // chain up — see `crate::create_resource`.
+        vfuncs.create_resource_sync = Some(create_resource_sync);
         // A grandparent's slot, not the collection backend's own: EDS's own
         // default for it accepts every account without contacting anything, so
         // the one thing worse than not writing here is writing to the wrong
@@ -328,6 +342,177 @@ unsafe extern "C" fn authenticate_sync(
     }
 }
 
+/// What EDS calls when the user asks Evolution for a new address book or
+/// calendar *in this account* — the one request that creates something on the
+/// server rather than mirroring what is there.
+///
+/// The decisions are [`crate::create_resource`]'s and
+/// [`jmap_collection_sync::create`]'s; what is here is the four things only a
+/// live instance can answer — the account source, its uid, the collection's cache
+/// directory and the registry server — and the order they are needed in.
+///
+/// **No chain-up.** The parent's implementation is the
+/// `G_IO_ERROR_NOT_SUPPORTED` this override replaces; calling it on a path this
+/// code handled would report a create that worked as a failure. See
+/// [`crate::create_resource`] on where that is written down in EDS's source.
+///
+/// The publish is last and unconditional once the source is written: EDS's own
+/// documentation of the vfunc makes adding an `ESource` to the server part of the
+/// contract, not an optimisation, and an unexported child would make a create
+/// that succeeded look as though nothing had happened until the next populate.
+/// It is not gated on `e_collection_backend_is_new_source` the way
+/// [`crate::fan_out`]'s is — that question is about a child drawn from the
+/// backend's cache, and this source came from EDS's `remote_create` handler,
+/// which never consults it.
+///
+/// A panic becomes `FALSE` with the error set, which is
+/// [`guard_bool`](jmap_backend_core::trampoline::guard_bool)'s contract and the
+/// right one here: the collection may or may not exist on the server afterwards,
+/// and the next populate is what reconciles that — exactly as it does for a
+/// create whose source write failed.
+unsafe extern "C" fn create_resource_sync(
+    backend: *mut ECollectionBackend,
+    scratch_source: *mut ESource,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> gboolean {
+    let create = || {
+        // The kind and the name, off the scratch source EDS built from the
+        // keyfile Evolution sent. A source naming no kind is EDS's documented
+        // "cannot be determined without ambiguity".
+        // SAFETY: EDS hands us the scratch source it created, alive for the call.
+        let Some(requested) = (unsafe { requested_of(scratch_source) }) else {
+            // SAFETY: `error` is what an EDS vfunc receives, and nothing has
+            // written to it yet.
+            return unsafe { fail_bool(error, &CreateError::UnknownKind, CreateError::to_gerror) };
+        };
+
+        // `(transfer none)`, and NULL only for a backend EDS did not construct
+        // from a source — which is also the case in which there is no account to
+        // read a server off and no uid to parent the child to, so it is an error
+        // here rather than the logged critical `populate` answers it with.
+        // SAFETY: EDS hands us one of its own backends, alive for the call, and
+        // `ECollectionBackend` derives from `EBackend`.
+        let account = unsafe { e_backend_get_source(backend.cast()) };
+        if account.is_null() {
+            // SAFETY: as above.
+            return unsafe {
+                fail_invalid(
+                    error,
+                    "the JMAP collection backend has no account to create a collection in",
+                )
+            };
+        }
+
+        // The account's own credentials, from the store `authenticate_sync`'s
+        // come out of — see `crate::create_resource` on why they are looked up
+        // rather than remembered. An OAuth 2.0 account ignores this and gets a
+        // fresh token inside `login_of`.
+        // SAFETY: a live backend, a valid account source and a cancellable that
+        // is NULL or EDS's own.
+        let password = unsafe {
+            let server = e_collection_backend_ref_server(backend);
+            let password = stored_password_of(server, account, cancellable);
+            if !server.is_null() {
+                // SAFETY: the reference `ref_server` handed over, not used again.
+                g_object_unref(server.cast());
+            }
+            password
+        };
+
+        // SAFETY: a valid account source and a cancellable that satisfies
+        // `login_of`'s contract by this vfunc's own.
+        let login =
+            unsafe { login_of(account, parts_of(account), password.as_deref(), cancellable) };
+        let login = match login {
+            Ok(login) => login,
+            // SAFETY: `error` is untouched so far.
+            Err(failure) => {
+                return unsafe {
+                    fail_bool(error, &CreateError::from(failure), CreateError::to_gerror)
+                };
+            }
+        };
+
+        // Held for the length of the create and no longer, as in
+        // `authenticate_sync`.
+        // SAFETY: `cancellable` is NULL or a valid `GCancellable` EDS keeps alive
+        // for the duration of the vfunc.
+        let _cancel = unsafe { observe(cancellable) };
+
+        let child =
+            match create_on_server(&login.server.target, login.credentials.clone(), &requested) {
+                Ok(child) => child,
+                // SAFETY: as above.
+                Err(failure) => {
+                    return unsafe { fail_bool(error, &failure, CreateError::to_gerror) };
+                }
+            };
+
+        // SAFETY: a valid account source; both getters answer NULL or a string
+        // the object owns.
+        let (account_uid, cache_dir) = unsafe {
+            (
+                read_string(e_source_get_uid(account)),
+                read_string(e_collection_backend_get_cache_dir(backend)),
+            )
+        };
+        let Some(account_uid) = account_uid else {
+            // A source with no uid cannot be a parent, and every source the
+            // registry loaded has one — its file name.
+            // SAFETY: as above.
+            return unsafe {
+                fail_invalid(
+                    error,
+                    "the JMAP collection backend's account has no uid to parent a new \
+                     collection to",
+                )
+            };
+        };
+
+        // SAFETY: the scratch source is the `EServerSideSource` EDS's
+        // `remote_create` handler built, alive for the call.
+        if let Err(setting) = unsafe {
+            adopt_created(
+                scratch_source,
+                &child,
+                &login.server.connection,
+                &account_uid,
+                cache_dir.as_deref(),
+            )
+        } {
+            // The collection is on the server and this child is not written, so
+            // nothing is exported — see `adopt_created` on why that is the honest
+            // answer and what the next populate does about it.
+            // SAFETY: as above.
+            return unsafe {
+                fail_bool(
+                    error,
+                    &CreateError::Unwritable(child.kind, setting),
+                    CreateError::to_gerror,
+                )
+            };
+        }
+
+        // The second of EDS's two documented obligations: a created resource
+        // that is not added to the server is one Evolution does not see until
+        // the next populate, so the create would look as if nothing had
+        // happened.
+        Collection::publish(&Live(backend), scratch_source);
+        debug_print(&format!(
+            "create_resource_sync: created {} {}",
+            kind_noun(child.kind),
+            child.resource_id
+        ));
+        GTRUE
+    };
+
+    // SAFETY: `error` is what an EDS vfunc receives — NULL or a pointer to a
+    // NULL `GError`. Every path above that sets it then returns, so a panic can
+    // never unwind past an already-set error into the guard's own.
+    unsafe { guard_bool("create_resource_sync", error, create) }
+}
+
 /// What one fan-out did, on the two channels a vfunc that has already answered
 /// still has.
 ///
@@ -492,6 +677,36 @@ unsafe impl Populating for Live {
         // SAFETY: as above; NULL credentials are what an anonymous authenticate
         // is, and what `jmap_backend_core::marshal::password` reads as absent.
         unsafe { e_backend_schedule_authenticate(self.0.cast(), ptr::null()) };
+    }
+
+    fn offer_creation(&self, offer: bool) {
+        // The account source, not a child: this is the flag Evolution reads to
+        // decide whether "New Address Book" may target this account.
+        //
+        // In `populate` rather than in a `constructed` override, which is what
+        // evolution-ews uses: this crate has no `constructed`, and adding one
+        // would mean writing a slot in `GObjectClass` — a third class struct,
+        // further up than `authenticate_sync`'s `EBackendClass` — for a
+        // one-line effect. `populate` is the first thing EDS calls on a
+        // collection backend and it runs again on every reconnect and every
+        // account change, which is exactly the cadence a flag derived from the
+        // account's own settings wants.
+        // SAFETY: a valid backend for the length of the vfunc this runs inside;
+        // `e_backend_get_source` is `(transfer none)`. The account source of a
+        // backend the registry constructed is an `EServerSideSource` — a source
+        // that somehow is not gets EDS's own `g_return_if_fail` critical rather
+        // than undefined behaviour — and NULL is answered by doing nothing,
+        // since a backend with no account has no flag to write.
+        unsafe {
+            let source = e_backend_get_source(self.0.cast());
+            if source.is_null() {
+                return;
+            }
+            e_server_side_source_set_remote_creatable(
+                source.cast(),
+                if offer { GTRUE } else { GFALSE },
+            );
+        }
     }
 }
 

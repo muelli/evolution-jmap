@@ -30,7 +30,7 @@ use eds_sys::{
 use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::{Server, parts_of, server_of, user_of};
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind, Parts};
 use jmap_proto::Id;
@@ -255,7 +255,10 @@ fn an_account_names_the_server_its_children_will_repeat() {
             secure: true,
         }
     );
-    assert_eq!(server.origin, "https://jmap.example.com:8443");
+    assert_eq!(
+        server.target,
+        ConnectTarget::Origin("https://jmap.example.com:8443".into())
+    );
 }
 
 #[test]
@@ -288,12 +291,15 @@ fn the_server_this_backend_contacts_is_the_one_its_children_are_given() {
     assert_eq!(value("Authentication", "Host"), Some("jmap.example.com"));
     assert_eq!(value("Authentication", "Port"), Some("8443"));
     assert_eq!(value("Security", "Method"), Some("tls"));
+    let ConnectTarget::Origin(origin) = &server.target else {
+        panic!(
+            "an explicit port names an endpoint, not a domain: {:?}",
+            server.target
+        );
+    };
     assert!(
-        server
-            .origin
-            .contains(value("Authentication", "Host").expect("a host")),
-        "the origin {} was assembled from some other host than the children got",
-        server.origin
+        origin.contains(value("Authentication", "Host").expect("a host")),
+        "the origin {origin} was assembled from some other host than the children got",
     );
 }
 
@@ -309,7 +315,10 @@ fn a_port_the_account_does_not_name_is_left_unnamed_rather_than_zero() {
     let server = source.server_of().expect("a port is not required");
 
     assert_eq!(server.connection.port, None);
-    assert_eq!(server.origin, "https://jmap.example.com");
+    assert_eq!(
+        server.target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
 }
 
 #[test]
@@ -326,7 +335,10 @@ fn an_account_with_no_security_extension_is_secure_and_is_not_given_one() {
     let server = source.server_of().expect("a well-formed account");
 
     assert!(server.connection.secure);
-    assert_eq!(server.origin, "https://jmap.example.com");
+    assert_eq!(
+        server.target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
     assert!(
         !source.has_extension(E_SOURCE_EXTENSION_SECURITY),
         "reading the security setting gave the account a [Security] extension it did not have"
@@ -396,7 +408,10 @@ fn a_plain_http_account_is_refused_unless_it_stays_on_the_machine() {
         .secure(false);
     let server = local.server_of().expect("loopback needs no TLS");
 
-    assert_eq!(server.origin, "http://127.0.0.1:31415");
+    assert_eq!(
+        server.target,
+        ConnectTarget::Origin("http://127.0.0.1:31415".into())
+    );
     assert!(!server.connection.secure);
 }
 

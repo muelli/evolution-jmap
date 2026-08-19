@@ -29,6 +29,7 @@ use jmap_backend_collection::authenticate::Login;
 use jmap_backend_collection::collection_source::Server;
 use jmap_backend_collection::fan_out::{Adopted, Populated, adopt, apply_fanout, fan_out};
 use jmap_backend_collection::resource_id::resource_id_of;
+use jmap_backend_core::source::ConnectTarget;
 use jmap_client::Credentials;
 use jmap_collection_sync::child_source::{Connection, EXTENSION_AUTHENTICATION};
 use jmap_collection_sync::{
@@ -254,7 +255,7 @@ fn written_child(kind: ChildKind, collection: &str) -> Source {
 fn login(origin: &str, parts: Parts) -> Login {
     Login {
         server: Server {
-            origin: origin.to_owned(),
+            target: ConnectTarget::Origin(origin.to_owned()),
             connection: connection(),
         },
         parts,

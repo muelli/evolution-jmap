@@ -1,2 +1,12 @@
 /rust/target/
+/rust/mutants.out/
 /build/
+
+# dpkg-buildpackage / debhelper build products (debian/rules, Track C3)
+/obj-debian/
+/debian/evolution-jmap/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.debhelper.log
+/debian/*.substvars

@@ -65,6 +65,18 @@ endif()
 # Reproducible builds: keep absolute source paths out of C objects.
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffile-prefix-map=${CMAKE_SOURCE_DIR}=/build")
 
+# Directories install() creates (the leading path to every installed file,
+# e.g. usr/lib/evolution-data-server/) otherwise inherit the builder's umask,
+# which on this VM (and plausibly others) is 0002 and so stages them 0775 —
+# lintian's non-standard-dir-perm, and a real difference: a package whose
+# directories are group-writable is writable by any process running under the
+# builder's group, not just root. Fixed before any install() rule runs, since
+# the permission is read at the time each one is processed.
+set(CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
+	OWNER_READ OWNER_WRITE OWNER_EXECUTE
+	GROUP_READ GROUP_EXECUTE
+	WORLD_READ WORLD_EXECUTE)
+
 include(cmake/Rust.cmake)
 include(cmake/Backends.cmake)
 include(cmake/Translations.cmake)

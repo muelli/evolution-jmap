@@ -119,6 +119,21 @@ impl Fanout {
     }
 }
 
+/// The name to show for a collection the server called `name`, which is never
+/// blank — see [`Resource::name`] for why.
+///
+/// Public because a `create_resource_sync` has to apply the same rule to the
+/// collection it has just made as a listing applies to the ones it finds: the
+/// server answers a create with the object it created, and a server that
+/// normalised the requested name to nothing would otherwise produce the one row
+/// in Evolution's sidebar with no text in it.
+pub fn shown_name(name: &str, id: &Id) -> String {
+    match name.trim() {
+        "" => id.to_string(),
+        name => name.to_owned(),
+    }
+}
+
 /// The child-worthy collections of a `/get` listing, in the order the server
 /// asked for them to be shown.
 fn resources<C: Collection>(listing: Vec<C>) -> Vec<Resource> {
@@ -127,10 +142,7 @@ fn resources<C: Collection>(listing: Vec<C>) -> Vec<Resource> {
         .filter(|collection| collection.is_subscribed() != Some(false))
         .filter_map(|collection| {
             let id = collection.id()?.clone();
-            let name = match collection.name().trim() {
-                "" => id.to_string(),
-                name => name.to_owned(),
-            };
+            let name = shown_name(collection.name(), &id);
             Some((
                 collection.sort_order(),
                 Resource {

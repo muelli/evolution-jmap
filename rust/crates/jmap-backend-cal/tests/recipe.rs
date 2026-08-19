@@ -33,7 +33,7 @@ use eds_sys::{
     e_source_task_list_get_type, g_file_new_for_path, g_object_unref,
 };
 use jmap_backend_cal::factory::{COMPONENT_KIND, FACTORY_NAME};
-use jmap_backend_core::source::SourceConfig;
+use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 
 /// The repository root, from the crate this test lives in.
 fn repository() -> PathBuf {
@@ -174,7 +174,10 @@ fn the_recipes_keyfile_describes_the_mock_server() {
 
     // `jmap-mockd`'s default port, in the clear, which `SourceConfig` allows
     // for loopback and nothing else.
-    assert_eq!(config.origin, "http://127.0.0.1:8080");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Origin("http://127.0.0.1:8080".into())
+    );
     // No user, on purpose: a source that names one makes the backend ask EDS
     // for a password before it sends anything, and the recipe's first run would
     // be a prompt rather than a connection.

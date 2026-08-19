@@ -34,9 +34,9 @@
 // for it would already have to have shifted `get_display_name` for this test
 // to still pass — but it is not independently dispatched, and this comment
 // says so rather than letting the test's name imply more than it checked.
-// The next increment's own test (registering `JmapConfigLookup` against a
-// real `EConfigLookup` under M9's harness) is where `run` actually gets
-// called for the first time.
+// `jmap-functional/tests/config-lookup.rs` is the test that registers
+// `JmapConfigLookup` against a real `EConfigLookup` under M9's harness and
+// calls `run` for the first time.
 
 use evo_sys::*;
 use std::ffi::{CStr, c_void};

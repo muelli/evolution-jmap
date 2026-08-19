@@ -69,10 +69,9 @@ use glib_sys::{
     GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_new, g_ptr_array_set_size, g_strdup, gboolean,
     gchar,
 };
-use gobject_sys::g_type_check_instance_is_a;
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::error::fail_bool;
+use jmap_backend_core::marshal::{checked_borrow, read_string};
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_mail_sync::Filing;
 use jmap_proto::Id;
@@ -137,14 +136,26 @@ unsafe extern "C" fn transfer_messages_to_sync(
             // *destination's* class when it is a vtrash folder, so a folder of
             // someone else's arriving here is a case the wrapper allows for.
             let Some(into) = mailbox_of(destination) else {
-                return fail(error, &StoreError::NoFolder(name_of(destination)));
+                return fail_bool(
+                    error,
+                    &StoreError::NoFolder(name_of(destination)),
+                    StoreError::to_gerror,
+                );
             };
             let Some(out_of) = JmapFolder::borrow(source).and_then(JmapFolder::mailbox) else {
-                return fail(error, &StoreError::NoFolder(name_of(source)));
+                return fail_bool(
+                    error,
+                    &StoreError::NoFolder(name_of(source)),
+                    StoreError::to_gerror,
+                );
             };
             let summary = camel_folder_get_folder_summary(source);
             if summary.is_null() {
-                return fail(error, &StoreError::NoFolder(name_of(source)));
+                return fail_bool(
+                    error,
+                    &StoreError::NoFolder(name_of(source)),
+                    StoreError::to_gerror,
+                );
             }
 
             let moving = delete_originals != GFALSE;
@@ -195,7 +206,7 @@ unsafe extern "C" fn transfer_messages_to_sync(
             }
 
             match failure {
-                Some(problem) => fail(error, &problem),
+                Some(problem) => fail_bool(error, &problem, StoreError::to_gerror),
                 None => GTRUE,
             }
         })
@@ -247,12 +258,7 @@ unsafe fn file_message(
 unsafe fn mailbox_of<'a>(folder: *mut CamelFolder) -> Option<&'a Id> {
     // SAFETY: the contract above; the type check is what makes the borrow
     // below sound, exactly as it is for the store behind a folder.
-    unsafe {
-        if folder.is_null() || g_type_check_instance_is_a(folder.cast(), folder_type()) == GFALSE {
-            return None;
-        }
-        JmapFolder::borrow(folder)?.mailbox()
-    }
+    unsafe { checked_borrow::<_, JmapFolder>(folder, folder_type())?.mailbox() }
 }
 
 /// The uids Camel named, copied out of its array.
@@ -344,16 +350,4 @@ unsafe fn name_of(folder: *mut CamelFolder) -> String {
     // SAFETY: the accessor returns a string the folder owns and outlives the
     // call; `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
-}
-
-/// Reports a failure and answers with it.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &StoreError) -> gboolean {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    GFALSE
 }

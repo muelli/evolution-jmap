@@ -25,8 +25,12 @@
 
 use std::ffi::CStr;
 
-use eds_sys::{E_SOURCE_CREDENTIAL_PASSWORD, ENamedParameters, e_named_parameters_get};
-use glib_sys::{GSList, g_strdup, gchar};
+use eds_sys::{
+    E_SOURCE_CREDENTIAL_PASSWORD, ENamedParameters, ESource, e_named_parameters_get,
+    e_source_get_extension, e_source_has_extension,
+};
+use glib_sys::{GFALSE, GSList, GType, g_strdup, gchar};
+use gobject_sys::g_type_check_instance_is_a;
 
 use crate::error::cstring_lossy;
 
@@ -93,6 +97,117 @@ pub unsafe fn dup_string(value: &str) -> *mut gchar {
     let text = cstring_lossy(value);
     // SAFETY: `text` is NUL-terminated and valid for the call.
     unsafe { g_strdup(text.as_ptr()) }
+}
+
+/// The Rust view of a Camel/GObject instance dispatch already vouches for.
+///
+/// A class's vfuncs are only ever dispatched by GObject on an instance of
+/// that class, so the first argument of `connect_sync`, `get_folder_sync` and
+/// their kin needs no type check before the cast — unlike a pointer that
+/// arrived via an ordinary property or argument, which does (see the
+/// `checked`-family callers instead). This is the trusted half only: a bare
+/// null check, then the cast.
+///
+/// # Safety
+///
+/// `ptr` must be NULL or point at a live instance of `T`.
+pub unsafe fn dispatched_borrow<'a, C, T>(ptr: *mut C) -> Option<&'a T> {
+    // SAFETY: the caller's contract is exactly what makes this cast sound.
+    unsafe { ptr.cast::<T>().as_ref() }
+}
+
+/// The Rust view of a GObject instance that arrived via an ordinary property
+/// or argument rather than vfunc dispatch — so, unlike [`dispatched_borrow`],
+/// the class dispatch guarantee does not hold and `gtype` must be checked
+/// before the cast is sound.
+///
+/// # Safety
+///
+/// `ptr` must be NULL or point at a live `GTypeInstance`.
+pub unsafe fn checked_borrow<'a, C, T>(ptr: *mut C, gtype: GType) -> Option<&'a T> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: `ptr` is a live `GTypeInstance` by the caller's contract; the
+    // type check just performed is what makes the cast below sound.
+    unsafe {
+        if g_type_check_instance_is_a(ptr.cast(), gtype) == GFALSE {
+            return None;
+        }
+        ptr.cast::<T>().as_ref()
+    }
+}
+
+/// As [`checked_borrow`], but returns the raw pointer rather than a borrow —
+/// for callers where `T` is a foreign C type this crate only forwards to
+/// further C calls, not a Rust struct it can safely hand out a reference to.
+///
+/// # Safety
+///
+/// `ptr` must be NULL or point at a live `GTypeInstance`.
+pub unsafe fn checked_borrow_ptr<C, T>(ptr: *mut C, gtype: GType) -> Option<*mut T> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: see `checked_borrow`.
+    unsafe {
+        if g_type_check_instance_is_a(ptr.cast(), gtype) == GFALSE {
+            return None;
+        }
+        Some(ptr.cast::<T>())
+    }
+}
+
+/// As [`checked_borrow_ptr`], but for a caller that must distinguish a NULL
+/// pointer (`Ok(None)`, "nothing here") from one that failed the `gtype`
+/// check (`Err(err)`) — for example when a wrong-type argument is a
+/// user-facing refusal, not the same "absent" answer a NULL gets.
+///
+/// # Safety
+///
+/// `ptr` must be NULL or point at a live `GTypeInstance`.
+pub unsafe fn checked_borrow_ptr_or<C, T, E>(
+    ptr: *mut C,
+    gtype: GType,
+    err: E,
+) -> Result<Option<*mut T>, E> {
+    if ptr.is_null() {
+        return Ok(None);
+    }
+    // SAFETY: see `checked_borrow`.
+    unsafe {
+        if g_type_check_instance_is_a(ptr.cast(), gtype) == GFALSE {
+            return Err(err);
+        }
+        Ok(Some(ptr.cast::<T>()))
+    }
+}
+
+/// Reads `source`'s extension named `name`, without creating it if absent.
+///
+/// `e_source_get_extension` *creates* the extension it cannot find, which is
+/// the wrong answer everywhere a source is only being read — a `.source`
+/// keyfile the caller does not own, or an account's own file that must not
+/// gain a group merely because something looked at it. This collapses the
+/// `e_source_has_extension` guard and the fetch it guards to one call,
+/// wherever the pointer needs no further validation than "does the caller's
+/// own name find it".
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` that outlives the call, and the
+/// extension `name` names, once registered, must be of type `T` — the same
+/// contract a bare `.cast::<T>()` on `e_source_get_extension`'s result
+/// already carries.
+pub unsafe fn extension_if_present<T>(source: *mut ESource, name: &CStr) -> Option<*mut T> {
+    // SAFETY: `source` is valid by the caller's contract, and `name` is
+    // NUL-terminated by its own type.
+    if unsafe { e_source_has_extension(source, name.as_ptr()) } == GFALSE {
+        return None;
+    }
+    // SAFETY: the extension is present, so this returns the source's own,
+    // which it owns and which outlives the call, by the caller's contract.
+    Some(unsafe { e_source_get_extension(source, name.as_ptr()).cast::<T>() })
 }
 
 /// The password EDS fetched from libsecret, if it has one yet.
