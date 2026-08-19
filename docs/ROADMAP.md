@@ -303,25 +303,26 @@ decide. All three are now answered:
    refine that message's wording for a first-time user, but add no new code
    path.
 
-2. **M10 → compile drift FIXED; 3 behavioral tests still fail on newer EDS.**
-   First dispatch (run 32027119218) failed because `eds-sys` would not
-   *compile* against the newer-EDS container (46 errors, `e_vcard_to_string`
-   drift). The Opus-escalated fix (`c28adbb` eds-sys, `a8bb65e` jmap-mail)
-   resolved that — the re-dispatch (run 32063091331) now **compiles and runs**
-   on EDS 3.60. What remains: `eds-sys`'s `contacts` test fails **3 of 26**
-   assertions (`assertion left == right`) because newer EDS maps some
-   vCard/contact fields differently than the 3.52-pinned expectations:
-   - `contact_date_fields_are_structured_e_contact_date_types`
-   - `e_contact_field_id_from_vcard_maps_x_lines`
-   - `structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`
-
-   **Top unblocked item:** make those 3 pass on BOTH EDS versions — version-aware
-   expectations, or fix the mapping if 3.60's behavior is the correct one — so
-   the leg goes green and M10 can be tagged. Reproduce with the newer-EDS
-   container in `ci/eds-matrix.sh` (as the earlier session did). Still an
-   FFI/EDS-semantics task, reasonable to escalate. Fix in `rust/`; do NOT edit
-   the CI job or loosen the assertions to hide a real behavioral difference.
-   The maintainer re-runs the dispatch to confirm green (runner has no `gh`).
+2. **M10 → DONE, both legs green.** Compile drift was fixed first (`c28adbb`
+   eds-sys, `a8bb65e` jmap-mail); the 3 behavioral `eds-sys` `contacts`
+   assertions that then failed on newer EDS
+   (`contact_date_fields_are_structured_e_contact_date_types`,
+   `e_contact_field_id_from_vcard_maps_x_lines`,
+   `structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`)
+   were made version-aware in `00271f9` the same day, per
+   `docs/eds-version-matrix.md`'s "(B) Fixed 2026-08-17". That doc update
+   never made it back to this section, so this text kept describing the
+   pre-fix state and a later session (`1ce7237`) reasonably but wrongly
+   un-tagged `M10 COMPLETE` from `docs/MILESTONES.md` on the strength of it —
+   a docs-sync bug, not a code regression. **Re-verified 2026-08-19**: the
+   `eds-version-matrix` job runs nothing GitHub-specific — it is
+   `ci/eds-matrix.sh` inside the digest-pinned public
+   `docker.io/library/fedora` image named in `ci.yml`, reproducible on any
+   Docker host, no `gh`/dispatch needed. Pulled that exact digest on this
+   runner (resolves to EDS 3.60.2, confirmed via `pkg-config`), ran
+   `ci/eds-matrix.sh` against current `master` (`eb9f785`) fresh: **1132
+   passed, 0 failed**, the 3 named assertions included. `M10 COMPLETE` is
+   re-added to `docs/MILESTONES.md`.
 
 3. **Stalwart → provisioned.** `stalwart-1` (europe-west3-c) is running the
    real JMAP server. IMPORTANT: its firewall admits only the *operator's* host

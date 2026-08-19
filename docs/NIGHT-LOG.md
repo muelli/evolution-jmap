@@ -35154,3 +35154,69 @@ Then fix the 3 assertions per the maintainer's instruction: version-aware
 expectations, or fix the mapping if 3.60's behaviour is the correct one — in
 `rust/`, not by touching the CI job or loosening the assertions. Will not
 edit `.github/workflows/ci-image.yml` or anything under `infra/`.
+
+## 2026-08-19 — Delivered: M10 re-verified green on newer EDS; fixed a docs-sync bug, not a code bug
+
+Followed through on this session's claim. Built the exact `eds-version-matrix`
+job locally: `sudo docker run` the digest-pinned
+`docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898`
+`ci.yml` names, `dnf install`ed the same packages the job's `run:` step lists,
+installed stable Rust the same way, mounted this worktree read-write, and ran
+`ci/eds-matrix.sh` against current `master` (`eb9f785`) — `pkg-config
+--modversion evolution-data-server-1.2` confirmed EDS 3.60.2 inside the
+container, matching `docs/eds-version-matrix.md`. Result: **1132 tests
+passed, 0 failed**, across every crate `ci/eds-matrix.sh` runs, including the
+3 assertions the roadmap's CURRENT PRIORITY text named as still-failing
+(`contact_date_fields_are_structured_e_contact_date_types`,
+`e_contact_field_id_from_vcard_maps_x_lines`,
+`structured_name_geo_and_metadata_vcard_lines_and_modification_in_eds`) — all
+three pass.
+
+**Why this wasn't already known:** it already was, just not where the last
+several sessions were looking. `git log` shows the actual fix landed same-day
+back on 2026-08-17 — `00271f9` ("make contact-model test assertions
+version-aware for 3.60") — verified green in this exact container at the
+time (`b7946df`, "record M10 eds-matrix green session") and fully written up
+in `docs/eds-version-matrix.md`'s "(B) Fixed 2026-08-17" section, which has
+said "0 failures on both legs" ever since. What never got updated to match
+was `docs/ROADMAP.md`'s CURRENT PRIORITY item 2 / MAINTAINER DECISIONS text —
+it was written 15 minutes *before* `00271f9` landed and kept describing the
+pre-fix "3 assertions still fail" state. A later session (`1ce7237`,
+2026-08-18) found an `M10 COMPLETE` line in `docs/MILESTONES.md` that
+predated the fix too (`a26578b`, based on a CI dispatch at a commit before
+`00271f9`) and — reasonably, from what it could see — un-tagged it by
+deferring to ROADMAP.md's text, without cross-checking
+`docs/eds-version-matrix.md`, which already had the true, current answer. At
+least two sessions between (`e19c69e`/"fifteenth re-verification",
+`aaf895a`/"sixteenth re-verification") tried to recheck this and reported
+being blocked by docker/disk access rather than by any actual failure —
+consistent with this being a stale-docs problem compounded by
+environment-access noise, not a real regression anyone ever reproduced.
+
+**Fixed the docs, not the code** (no `rust/` changes — nothing needed one):
+- `docs/ROADMAP.md`: MAINTAINER DECISIONS #2 rewritten to state M10 is done,
+  both legs green, and to record this session's independent re-verification
+  plus the docs-sync root cause above, so the next session sees the current
+  truth without re-deriving it.
+- `docs/MILESTONES.md`: `M10 COMPLETE 00271f9 2026-08-17` re-added (citing
+  the commit whose fix this session's run actually verified, per the file's
+  own convention — see `M9`/`M7`/etc. citing their completing commit, not
+  the tagging commit).
+- Also worth recording for whoever hits it next: the container's `dnf
+  install`/`cargo build` writes as root on a `-v host:container` bind mount,
+  so a run that fills the disk mid-build (as this session's first attempt
+  did — `rust/target` had regrown past headroom from a prior session, see
+  the standing disk-fills-from-cargo-target issue) leaves root-owned files
+  the host user cannot `cargo clean`; `sudo rm -rf rust/target` is what
+  actually recovers, not a plain `cargo clean`.
+- No test/code changed, so no gate beyond the container run itself was
+  needed for this fix; `git status` after the container run was clean
+  (Cargo.lock untouched — offline resolution matched).
+
+Real-server readiness's two named items remain maintainer-gated. The
+SRV-autodiscovery thread's remaining half (wiring `connect_domain` into the
+password path + `config_lookup.rs::probe_host`, and a `GResolver`-backed
+`Resolver`) is still the next tractable-but-FFI item, flagged escalation-worthy
+by the prior session — not attempted here since this session found a
+higher-value, lower-risk item (a genuinely unblocked, pure-verification M10
+close-out) instead.
