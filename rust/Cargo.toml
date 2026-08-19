@@ -54,6 +54,9 @@ getrandom = "0.3"
 sha2 = "0.10"
 pkg-config = "0.3"
 bindgen = "0.72"
+# Property-based testing of the untrusted-server boundary (dev-dependency
+# only): stable-friendly, unlike cargo-fuzz which needs nightly.
+proptest = "1"
 # The iCalendar/vCard text layer, from Stalwart's CalDAV/CardDAV stack.
 # default-features = false leaves out the JSCalendar/JSContact halves: the
 # JMAP side of the mapping is ours and is already tested against the mock.
