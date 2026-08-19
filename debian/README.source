@@ -1,0 +1,61 @@
+SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+SPDX-License-Identifier: GPL-3.0-or-later
+
+This is a starting-point skeleton (docs/ROADMAP.md Track C3), not a package
+ready for an official Debian upload (that step, Track C4, is a human/social
+process, not agent work). What it gets a packager past, and what it
+deliberately leaves open:
+
+Builds via dh + CMake/Ninja, reusing the same cmake/{Rust,Backends,
+Packaging}.cmake the CPack .deb (Track C1, already lintian-clean) is built
+from — debian/rules only overrides the four dh_auto_* steps CMake's
+buildsystem needs (configure with -G Ninja, build, install per-component to
+skip the demo module under src/, clean). It has been built end-to-end with
+`dpkg-buildpackage -us -uc -b` on the CI-image dependency set
+(ci/install-deps.sh) plus `debhelper`, which that list does not otherwise
+need (Track C1's CPack path has no dh dependency); not added to
+ci/install-deps.sh here since nothing in CI runs this path yet.
+
+**The open problem this does NOT solve: Rust crate vendoring.**
+`cargo build` pulls ~140 crates (rust/Cargo.lock) from crates.io. An actual
+Debian archive build happens on a buildd with no network access, so this
+only builds today because whichever machine runs it already has those
+crates in `~/.cargo/registry` from earlier `cargo build`/`cargo test` runs —
+convenient for local iteration, but not what an official build allows, and
+not proof this would survive one. Two real paths forward, same choice
+docs/packaging/copyright already flags for Track C2 (which needs it decided
+for exactly the flip side of this problem — DEP-5 has no `Files:` pattern
+for sources that are not vendored):
+  (a) `cargo vendor` the full dependency graph into the source package (an
+      `orig.tar` that ships ~140 crates' source, checked with
+      `dh-cargo`/`cargo-checksum.json`) — the common approach for Rust
+      leaf packages already in Debian; or
+  (b) `debcargo`-generate a `librust-*-dev` binary package per dependency
+      and depend on them — the "every crate is its own Debian source
+      package" approach official archive policy prefers, and a large,
+      ongoing undertaking against a ~140-crate graph that changes with
+      every `cargo update`.
+Neither is attempted here — this skeleton documents the gap rather than
+guessing at (a) or (b), per the roadmap text's own instruction not to
+pretend it away. Whoever picks this up should decide (a) vs (b) before
+`debian/rules` can be trusted to build from a bare `.dsc` rather than from a
+working tree with a warm cargo cache.
+
+**Also not verified — no network for real:** `debian/watch` follows the
+usual GitHub-tags convention (`v0.1.0`, `v0.2.0` per the existing tags), but
+`uscan`/`devscripts` are not installed on this VM, so it has not been run
+against the real GitHub tags page. `debian/source/format` is `3.0 (quilt)`
+with an empty patch queue (`debian/patches/` does not exist yet) — there is
+nothing to patch upstream for today.
+
+`debian/changelog` and `debian/copyright` are symlinks to
+`docs/packaging/changelog`/`docs/packaging/copyright` rather than separate
+copies: those files are already in the right formats (the changelog is
+genuine Debian changelog syntax; the copyright is DEP-5) and already kept
+current — the changelog by hand alongside `CMakeLists.txt`'s `VERSION`, the
+copyright by Track C2's `tools/generate-debian-copyright.py` — so this
+avoids a second, driftable copy of either. `dh_auto_test` is a deliberate
+no-op (see the comment in debian/rules): the same Rust test suite runs
+through `ci/checks.sh`/CTest against this exact source, and re-running it
+here would need the same crates.io access the install step above already
+cannot promise on a real buildd.
