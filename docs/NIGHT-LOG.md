@@ -39218,3 +39218,22 @@ C, both still open-ended items better suited to a session that budgets for
 them deliberately. Nothing here needs human verification: refcount-preserving
 refactor of code with no user-visible surface, on a crate whose real-`ESource`
 integration tests already exercise every touched site end to end.
+
+## 2026-08-19 (claim) — Claiming Track A6's `jmap-mail` remainder: migrate manual `g_object_unref` sites to `Owned<T>`
+
+Continuing the A6 (unsafe reduction/idiom audit) thread: Pattern C's
+`Owned<T>` RAII wrapper (`jmap-backend-core::owned`) has already migrated
+`jmap-backend-cal/src/marshal.rs` and all six `jmap-backend-collection`
+manual-unref sites; `jmap-mail` is the one crate the roadmap names as still
+open. Surveyed the crate: ~19 `g_object_unref` call sites across
+`mime.rs`, `expunge.rs`, `folder.rs`, `cache.rs`, `message.rs`,
+`message_info.rs`, `service.rs`, `summary.rs`, `synchronize.rs` (more than
+the roadmap's "~10" estimate, but the same shape throughout — a
+`(transfer full)` pointer, a manual NULL check, a use, and a manual unref on
+every exit path). Taking the same mechanical migration this session,
+crate-wide, mirroring the `let Some(x) = Owned::from_raw(...) else { ... }`
+and scope-drop idioms Pattern C and the `jmap-backend-collection` session
+established. No behaviour change intended; existing tests are the acceptance
+suite, with a new refcount regression test only where a site's control flow
+makes the invariant non-obvious by inspection (as `jmap-backend-collection`'s
+`adopt` needed and its simpler sites did not).
