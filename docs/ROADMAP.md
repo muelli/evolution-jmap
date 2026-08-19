@@ -223,6 +223,11 @@ tracks follow; the maintainer may reorder anytime.
 - **C1 `[claude]` Lintian-clean .deb.** Run `lintian` on the CPack `.deb`; fix
   warnings (Section, Priority, extended description, Depends/Recommends). Add a
   CI check that lintian stays clean.
+  - **DONE 2026-08-19** — `lintian --pedantic` was clean on Section/Priority/
+    extended description/Depends already; the four real findings — unstripped
+    binaries, a missing `changelog`/`copyright` under `/usr/share/doc/`, and
+    group-writable (0775) directories from the builder's umask — are fixed,
+    and a `package-deb-lintian` CTest keeps it that way. See NIGHT-LOG.
 - **C2 `[claude]` Machine-readable DEP-5 `debian/copyright`** generated from the
   REUSE metadata we already maintain — the single biggest ease-of-packaging win.
 - **C3 `[claude]` `debian/` skeleton** (control, rules using `dh` over the

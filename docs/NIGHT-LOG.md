@@ -35416,3 +35416,101 @@ Followed through on this session's claim. `color: Option<String>` now flows
 - **Still open, as the roadmap text already said:** write-back — a locally
   edited calendar colour reaching the server via `Calendar/set` — rides on
   D1's EDS-side `create_resource_sync` wiring, which is not done yet.
+
+## 2026-08-19 (claim) — Claiming Track C1: lintian-clean .deb
+
+Fresh survey after D2: `docs/MILESTONES.md` has every milestone COMPLETE.
+CURRENT PRIORITY's one open item, JMAP SRV autodiscovery, is already
+correctly flagged by the prior two sessions as needing a
+`g_resolver_lookup_service()`-backed `Resolver` — checked `gio-sys` 0.22.8's
+vendored bindings before deciding (`g_resolver_lookup_service`,
+`GSrvTarget`/`g_srv_target_get_hostname`/`_get_port`, `g_resolver_free_targets`
+are all already there, so no new bindgen work is needed, refining that
+finding), but wiring it in still means new unsafe FFI reasoning about
+transfer-full `GList`/`GSrvTarget` ownership and `GError` freeing across two
+call sites — the "new unsafe/FFI work" category the night-shift brief says to
+escalate rather than risk a plausible-but-wrong commit on. Not re-claiming it
+this session; it needs the escalation the prior session already logged, not
+a repeat survey. Per the roadmap's Round 2 lead order (Claude lane leads with
+Track D, whose own remaining item — D1's `create_resource_sync` vtable wiring
+— is the same category), moved to Track A/C for a tractable item instead.
+
+Picked **C1** (lintian-clean `.deb`): concrete, tool-verifiable, no FFI, and
+unlike A2/A4 (mutation testing / fuzzing the protocol core) it is not betting
+session time on a probably-negative result — this codebase's untrusted-input
+boundary is already free of the unwrap/index/panic patterns those would
+hunt for (checked by grep before ruling them out for tonight), so a fuzz
+harness would likely report "nothing found," a legitimate but low-value use
+of the increment. `lintian` was not installed; `sudo apt-get install -y
+lintian` (passwordless sudo, as `ci/install-deps.sh` already assumes)
+succeeded, and a `cmake --build build && cpack` produced a real `.deb` to
+point it at.
+
+## 2026-08-19 — Delivered: Track C1, `lintian --pedantic` clean on the CPack `.deb`, kept that way by CI
+
+`lintian --pedantic evolution-jmap_0.2.0_amd64.deb` on today's `.deb` found
+14 lines, all real:
+
+- **`unstripped-binary-or-object` × 5** (every module). `install(PROGRAMS
+  ...)` has no per-target `STRIP` the way `install(TARGETS ...)` does, and
+  `CPACK_STRIP_FILES TRUE` was tried first and left all five untouched —
+  confirmed by rebuilding with only that variable set and re-running lintian
+  before reaching for the alternative. Fixed with an explicit
+  `install(CODE "execute_process(COMMAND \"${CMAKE_STRIP}\" ...)")` appended
+  to `add_cargo_cdylib()` (`cmake/Rust.cmake`), which strips the file in
+  place wherever the generated install script runs it — a real
+  `cmake --install` and CPack's own re-run into its staging tree alike.
+- **`no-changelog` / `no-copyright-file`.** Debian policy asks every package
+  for both under `/usr/share/doc/<package>/`; neither existed. Added
+  `docs/packaging/changelog` (plain-text, real version history for 0.1.0/
+  0.2.0) and `docs/packaging/copyright` (hand-written DEP-5 — the shipped
+  five components are all GPL-3.0-or-later per `REUSE.toml`/`LICENSES/`, the
+  LGPL example-module is not one of the five packaged components; the file
+  says outright that it does not yet enumerate every statically-linked Rust
+  crate's own license, which is Track C2's machine-generated job). The
+  changelog is gzipped at build time (`cmake/Packaging.cmake`, a
+  `configure_file`+`add_custom_command` pair) with `gzip -n` specifically —
+  without `-n` the compressed *bytes* embed the wall-clock compression time,
+  which would have broken `package-deb-reproducible` even though CPack's own
+  entry-timestamp normalisation (`cpack-project-config.cmake.in`) does not
+  reach inside an already-compressed file to fix that. Both files added to
+  `EXPECTED_PACKAGE_FILES` (the `check-deb-package.cmake` equality list).
+- **`non-standard-dir-perm 0775 != 0755` × 8** (every directory the package
+  creates). This VM's umask is `0002`, and `install()`'s directory-creation
+  step inherits it unless told otherwise. Fixed with
+  `CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS` set explicitly in the root
+  `CMakeLists.txt`, before `include(cmake/Rust.cmake)` — has to be set before
+  any `install()` call runs, since the permission is read at that point, not
+  deferred to packaging time.
+
+Re-ran `lintian --pedantic` after each fix in turn to attribute which change
+closed which finding rather than fixing all four at once and hoping; final
+run is clean (exit 0, no output).
+
+**CI check added**, per C1's own ask: `cmake/tests/check-deb-lintian.cmake`
+(mirrors `check-deb-package.cmake`'s and `check-deb-reproducible.cmake`'s
+shape — `cpack -G DEB` into a scratch stage dir, then run the tool),
+registered as CTest `package-deb-lintian` in `cmake/Packaging.cmake` — but
+only `if(LINTIAN_EXECUTABLE)`, since not every machine building this tree has
+lintian and the two existing packaging tests both hard-require their tools
+(`cpack`/`dpkg`) rather than skip. `lintian` added to `ci/install-deps.sh`'s
+package list so the CI `build` job (which already runs the full `ctest`) has
+it; `.github/workflows/ci-image.yml` untouched.
+
+Full gate: `ninja -C build` clean, `cpack`/`dpkg-deb --contents`/`lintian`
+manually inspected at each step, `ctest --test-dir build` **17/17 passed**
+(includes the new `package-deb-lintian` alongside the pre-existing
+`package-deb`/`package-deb-reproducible`) — six tests failed on the first
+full run with "No space left on device" from `rust/target/debug` (the known
+disk-fills-from-cargo-target issue, unrelated to this change); `cargo clean
+--profile dev` freed 24 GiB and the re-run was 17/17 green. `cargo fmt
+--check`, `cargo clippy --all-targets --locked -- -D warnings`, and `cargo
+test --locked` all clean on `default-members` (no Rust source touched this
+session — the whole increment is CMake plumbing plus two new plain-prose doc
+files, both already covered by `REUSE.toml`'s existing `docs/**`
+plain-prose annotation, so no new SPDX headers or REUSE.toml edits needed).
+
+**Left for Track C2, not attempted here:** the copyright file's own text says
+so — a full, machine-generated DEP-5 accounting of every third-party Rust
+crate's license (mostly MIT/Apache-2.0 per `rust/Cargo.lock`) is a separate,
+larger piece of work the roadmap already tracks under C2.
