@@ -99,7 +99,7 @@
 //! [`credentials`]: jmap_backend_core::connect::credentials
 
 use eds_sys::ESource;
-use gobject_sys::g_object_unref;
+use jmap_backend_core::owned::Owned;
 use jmap_collection_sync::{ChildKind, Parts};
 
 use crate::resource_id::resource_id_of;
@@ -257,26 +257,24 @@ pub unsafe fn populate<P: Populating + ?Sized>(
 
     let mut report = Restored::default();
     for source in collection.claim_all_resources() {
-        if source.is_null() {
+        // SAFETY: `claim_all_resources` is `(transfer full)`; the reference
+        // `Owned` takes here is released at the end of the loop body whichever
+        // branch below is taken — an exported child is held by the registry
+        // server's own reference, and an unexported one is held by nothing and
+        // should be.
+        let Some(source) = (unsafe { Owned::<ESource>::from_raw(source) }) else {
             continue;
-        }
+        };
 
         // SAFETY: a non-NULL source EDS loaded from this collection's cache
         // directory, alive for as long as this scope's reference to it.
-        match unsafe { resource_id_of(source) } {
+        match unsafe { resource_id_of(source.as_ptr()) } {
             Some(resource_id) => {
-                collection.publish(source);
+                collection.publish(source.as_ptr());
                 report.children.push(resource_id);
             }
             None => report.unidentified += 1,
         }
-
-        // The reference the claim transferred. Dropped whatever happened: an
-        // exported child is held by the registry server, and an unexported one
-        // is held by nothing and should be.
-        // SAFETY: the reference `claim_all_resources` handed over, not used
-        // again.
-        unsafe { g_object_unref(source.cast()) };
     }
 
     // Whether this account is one Evolution may create a collection in, and the
