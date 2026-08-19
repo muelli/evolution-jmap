@@ -36152,3 +36152,66 @@ decision, not a mechanical port. Logging these three as open follow-ups
 rather than guessing.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: `extension_if_present` helper, UNSAFE-AUDIT Pattern D
+
+Followed through on this session's claim. `jmap_backend_core::marshal` gained
+`pub unsafe fn extension_if_present<T>(source: *mut ESource, name: &CStr) ->
+Option<*mut T>`, alongside `read_string` — the module's other type-agnostic
+FFI helper — collapsing the "`e_source_has_extension` guard, then
+`e_source_get_extension` and cast" idiom the audit found duplicated ~10+
+times to one call: `None` when the extension is absent, `Some` of the cast
+pointer when it is present, never triggering `e_source_get_extension`'s
+create-on-miss side effect.
+
+Six call sites, all the ones whose shape was a plain single-source
+guard-then-cast, now use it in place of their own copy:
+`jmap-backend-collection/src/resource_id.rs::resource_id_of` (the
+`[Resource]` guard), `collection_source.rs::parts_of` (`[Collection]`),
+`user_of` (`[Authentication]`), `server_of` (both its `[Security]` and
+`[Authentication]` guards), `mail_child.rs::mail_service_of` (`[Mail
+Account]`/`[Mail Transport]`), and `jmap-backend-core/src/oauth2.rs::
+source_uses_oauth2` (`[Authentication]`). `jmap-backend-core/src/source.rs::
+SourceConfig::from_source`'s `[Security]` guard — the same idiom, one more
+site — also moved onto the helper.
+
+No behaviour change: every touched function keeps returning the same
+`None`/error/default it did before for an absent extension, and every one of
+these functions' existing tests stayed green unmodified —
+`jmap-backend-collection/tests/{resource_id,collection_source,mail_child}.rs`
+and `jmap-backend-core/tests/{source,oauth2}.rs` — several of which
+specifically assert the guarded extension is *not* created by the read
+(`resource_id.rs`'s `a_child_with_no_identity_is_not_claimed_and_is_not_
+given_one`, three separate assertions in `collection_source.rs`), so a
+mistake in the port that started calling `get_extension` unconditionally
+would have failed loudly rather than silently.
+
+Deliberately not touched, per the claim: `child_added.rs::follow_collection`
+and `mail_child.rs::follow_server` mix this idiom with a second source read
+that is genuinely create-if-absent in the same function — composing the
+helper there is a real call-shape change, not a substitution, and is left
+open; and `SourceConfig::from_source`'s `AUTHENTICATION`/`RESOURCE` reads,
+which skip the `has_extension` guard entirely today (unlike its own
+`SECURITY` guard, which *was* converted) — fixing that is a behaviour
+decision (does reading an account's source get to leave it exactly as it
+was, or has something always quietly created those two groups and nothing
+noticed), not a mechanical port, and nothing in `jmap-backend-core/tests/
+source.rs` currently distinguishes the two so it needs its own red test
+first. Both logged as open follow-ups in `docs/UNSAFE-AUDIT.md`'s Pattern D
+section rather than guessed at here. The GResolver-backed real `Resolver`
+(FFI, `g_resolver_lookup_service()`) remains the standing escalation
+candidate for the SRV-autodiscovery thread, untouched this session.
+
+Full gate: `cargo fmt --check` clean (after `cargo fmt` fixed two lines this
+refactor's `let`-else/`.map()` shapes reflowed); `cargo build --workspace`
+clean; `cargo clippy --all-targets --locked -- -D warnings` (default-members)
+clean; `cargo clippy -p evolution-jmap-client -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail -p jmap-backend-collection
+-p jmap-config --all-targets -- -D warnings` (the six touched EDS-gated
+crates plus their siblings, direct-built since this VM has the headers)
+clean; `cargo test --locked` (default-members) and the same seven-crate
+`cargo test --locked` both green, every `test result: ok`, 0 failed. No new
+files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
+`cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
+run — its constituent checks were run individually as above, per the
+standing workaround.

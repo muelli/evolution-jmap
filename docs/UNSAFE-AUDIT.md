@@ -205,7 +205,35 @@ consolidation in the collection crate specifically, and the one this
 audit's brief named directly ("ESource extension casting duplicated across
 book/cal/collection with no shared helper").
 
-Rough effort: **~2–3 hours.**
+- **DONE 2026-08-19 (the clean sites)** — `extension_if_present<T>` landed in
+  `jmap-backend-core::marshal` (alongside `read_string`, the module's other
+  type-agnostic FFI helper), and every call site whose shape was a plain
+  single-source "guard then cast" now uses it:
+  `jmap-backend-collection/resource_id.rs::resource_id_of`,
+  `collection_source.rs::parts_of`/`user_of`/`server_of` (both its guards),
+  `mail_child.rs::mail_service_of`, and `jmap-backend-core/oauth2.rs::
+  source_uses_oauth2`. No behaviour change — every touched function's
+  existing test suite (`resource_id.rs`, `collection_source.rs`,
+  `oauth2.rs` in their respective `tests/`) stayed green unmodified,
+  several of which specifically assert non-creation of the guarded
+  extension. See NIGHT-LOG "Track A6 Pattern D: `extension_if_present`
+  helper".
+  **Still open, deliberately not folded into the same increment:**
+  - `child_added.rs::follow_collection` and `mail_child.rs::follow_server`
+    mix this "read if present" idiom with a genuine create-if-absent read on
+    a *second* source in the same function; composing the helper there
+    changes the call shape, not a 1:1 substitution.
+  - `jmap-backend-core/source.rs::SourceConfig::from_source`'s
+    `AUTHENTICATION`/`RESOURCE` reads skip the `has_extension` guard
+    entirely today (unlike every sibling function's `SECURITY` guard, which
+    *was* converted) — routing them through `extension_if_present` would
+    fix a latent side effect (an account source silently gaining an empty
+    `[Authentication]`/`[Resource]` group merely by being read), which is a
+    behaviour decision nothing currently tests for, not a mechanical port.
+
+Rough effort: **~2–3 hours** for the clean sites (delivered); the three
+open items above are smaller follow-ups each, but need a decision or a
+composed (non-mechanical) call shape rather than a straight port.
 
 ### Pattern E — IMPROVE (low priority): small repeated GError-builder / `fail()` helpers
 
@@ -345,6 +373,10 @@ point, so its gaps aren't copied forward.
    one `extension_if_present<T>` helper in `jmap-backend-core`. **~2–3
    hours.** Named directly by this audit's own brief; clear highest-value
    consolidation in the collection crate.
+   - **DONE 2026-08-19 for the clean sites** — see Pattern D's own section
+     above for what landed and what is still open (`follow_collection`/
+     `follow_server`'s composed shape, `SourceConfig::from_source`'s
+     unguarded `AUTHENTICATION`/`RESOURCE` reads).
 3. **Pattern B** (checked/trusted borrow helpers, ~13 sites across
    `jmap-mail`) — two generic helpers in `jmap-backend-core`. **~2–3 hours.**
 4. **Pattern C** (no RAII wrapper for libical/GObject ref-counted

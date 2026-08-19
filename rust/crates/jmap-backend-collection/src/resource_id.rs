@@ -54,11 +54,10 @@ use std::ffi::CStr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_RESOURCE,
-    ESource, ESourceResource, e_source_get_extension, e_source_has_extension,
-    e_source_resource_get_identity,
+    ESource, ESourceResource, e_source_has_extension, e_source_resource_get_identity,
 };
 use glib_sys::GFALSE;
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{extension_if_present, read_string};
 use jmap_collection_sync::child_source::{EXTENSION_ADDRESS_BOOK, EXTENSION_CALENDAR};
 use jmap_collection_sync::resource_id_for;
 
@@ -104,21 +103,15 @@ pub unsafe fn resource_id_of(child_source: *mut ESource) -> Option<String> {
     })?;
 
     // Tested for rather than fetched: `e_source_get_extension` would create it.
-    // SAFETY: as above.
-    if unsafe { e_source_has_extension(child_source, E_SOURCE_EXTENSION_RESOURCE.as_ptr()) }
-        == GFALSE
-    {
-        return None;
-    }
-
-    // SAFETY: the extension is present, so this returns the source's own, which
-    // the source owns and which outlives the call; the identity it holds is
-    // NULL or a NUL-terminated string with the same lifetime.
-    let identity = unsafe {
-        let resource: *mut ESourceResource =
-            e_source_get_extension(child_source, E_SOURCE_EXTENSION_RESOURCE.as_ptr()).cast();
-        read_string(e_source_resource_get_identity(resource))
+    // SAFETY: `child_source` is non-NULL by the check above, valid by this
+    // function's contract, and the extension named is `ESourceResource`'s own.
+    let resource = unsafe {
+        extension_if_present::<ESourceResource>(child_source, E_SOURCE_EXTENSION_RESOURCE)
     }?;
+    // SAFETY: `resource` is a live extension the source owns, by the guard
+    // above; the identity it holds is NULL or a NUL-terminated string with
+    // the same lifetime.
+    let identity = unsafe { read_string(e_source_resource_get_identity(resource)) }?;
 
     resource_id_for(extension, &identity)
 }

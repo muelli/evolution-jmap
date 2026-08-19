@@ -72,11 +72,11 @@ use eds_sys::{
     e_source_authentication_get_port, e_source_authentication_get_type,
     e_source_authentication_get_user, e_source_collection_get_calendar_enabled,
     e_source_collection_get_contacts_enabled, e_source_collection_get_mail_enabled,
-    e_source_collection_get_type, e_source_get_enabled, e_source_get_extension,
-    e_source_has_extension, e_source_security_get_secure, e_source_security_get_type,
+    e_source_collection_get_type, e_source_get_enabled, e_source_security_get_secure,
+    e_source_security_get_type,
 };
 use glib_sys::GFALSE;
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{extension_if_present, read_string};
 use jmap_backend_core::source::{ConnectTarget, SourceError, connect_target};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
@@ -120,15 +120,11 @@ pub unsafe fn parts_of(source: *mut ESource) -> Parts {
     // write to it — see the module comment.
     // SAFETY: as above.
     let collection =
-        (unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_COLLECTION.as_ptr()) }
-            != GFALSE)
-            .then(|| {
-                // SAFETY: the extension is present, so this returns the source's
-                // own, which it owns and which outlives the call.
+        unsafe { extension_if_present::<ESourceCollection>(source, E_SOURCE_EXTENSION_COLLECTION) }
+            .map(|collection| {
+                // SAFETY: the extension is present, so this is the source's own,
+                // which it owns and which outlives the call.
                 unsafe {
-                    let collection: *mut ESourceCollection =
-                        e_source_get_extension(source, E_SOURCE_EXTENSION_COLLECTION.as_ptr())
-                            .cast();
                     Parts {
                         mail: e_source_collection_get_mail_enabled(collection) != GFALSE,
                         contacts: e_source_collection_get_contacts_enabled(collection) != GFALSE,
@@ -167,16 +163,9 @@ pub unsafe fn user_of(source: *mut ESource) -> Option<String> {
     // Tested for rather than fetched, as everywhere in this module: this is the
     // account's own file, and `e_source_get_extension` would add the group.
     // SAFETY: a valid source by the contract above, and a header constant.
-    if unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }
-        == GFALSE
-    {
-        return None;
-    }
-
-    // SAFETY: the extension is present and is owned by the source.
-    let auth: *mut ESourceAuthentication = unsafe {
-        e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast()
-    };
+    let auth = unsafe {
+        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
+    }?;
     // SAFETY: a live extension; the getter returns NULL or a string it owns.
     unsafe { read_string(e_source_authentication_get_user(auth)) }
 }
@@ -198,32 +187,22 @@ pub unsafe fn server_of(source: *mut ESource) -> Result<Server, SourceError> {
     // cannot tell an account with no `[Security]` group from one whose owner
     // switched TLS off.
     // SAFETY: a valid source by the contract above, and a header constant.
-    let secure = if unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()) }
-        == GFALSE
-    {
-        true
-    } else {
-        // SAFETY: the extension is present, so this returns the source's own,
-        // which outlives the call.
-        let security: *mut ESourceSecurity =
-            unsafe { e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast() };
+    let secure = match unsafe {
+        extension_if_present::<ESourceSecurity>(source, E_SOURCE_EXTENSION_SECURITY)
+    } {
+        None => true,
         // SAFETY: a live extension of the type the name selects.
-        (unsafe { e_source_security_get_secure(security) }) != GFALSE
+        Some(security) => unsafe { e_source_security_get_secure(security) != GFALSE },
     };
 
     // And the same guard again, for the same reason: an account with no
     // `[Authentication]` names no host, which is what an empty one would have
     // said too — without adding the group to the user's file.
     // SAFETY: as above.
-    if unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }
-        == GFALSE
-    {
+    let Some(auth) = (unsafe {
+        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
+    }) else {
         return Err(SourceError::MissingHost);
-    }
-
-    // SAFETY: the extension is present and is owned by the source.
-    let auth: *mut ESourceAuthentication = unsafe {
-        e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast()
     };
     // SAFETY: a live extension; each getter returns NULL or a NUL-terminated
     // string owned by it.
