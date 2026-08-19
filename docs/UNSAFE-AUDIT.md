@@ -265,10 +265,27 @@ natural, smaller follow-up once the type exists.
   arithmetic on a plain `G_TYPE_OBJECT`). Four deliberate breaks — over-release
   the clone, leak the resolved definition, keep a reference on the returned
   component, leak the event children — each fail at least one of those tests.
-  **Still open, unchanged:** the `jmap-mail` (~10 sites) and
-  `jmap-backend-collection` (`backend.rs::export`, `fan_out.rs`,
-  `populate.rs`) sites, which is the "natural, smaller follow-up" above — the
-  type they need now exists in a crate both already depend on.
+  **`jmap-backend-collection` DONE 2026-08-19** — its six manual-unref sites
+  (`create_resource.rs::stored_password_of`, `backend.rs::login_for`/
+  `Live::export`, `fan_out.rs::apply_fanout`/`adopt`, `populate.rs`'s
+  claimed-resources loop) are migrated too; see `docs/NIGHT-LOG.md`'s
+  "jmap-backend-collection half DONE 2026-08-19" for the one case
+  (`adopt`'s three-way match) that needed a new refcount test rather than
+  relying on the existing behavioural suite.
+  **`jmap-mail` DONE 2026-08-19** — all ~19 sites the crate turned out to
+  have (more than this audit's original ~10 estimate, but the same shape
+  throughout) are migrated: `mime.rs::write_message`,
+  `expunge.rs::is_deleted`, `folder.rs`'s two `search_by_*` vfuncs,
+  `cache.rs` (`MessageCache`'s own hand-written `Drop` is gone, replaced by
+  holding an `Owned<CamelDataCache>` behind its `Mutex`, plus `load`/
+  `store`'s stream handling), `message.rs::listed_size`/`parse`,
+  `message_info.rs::address_list`, `service.rs::name_of`/`connect_sync`/
+  `attempt`, `summary.rs::apply_message`, `synchronize.rs::push_row`. No new
+  test: every site is a single early-return or a single unconditional unref,
+  the "simpler sites" shape the `jmap-backend-collection` entry above
+  distinguished from `adopt`'s three-way match, and the crate's existing
+  behavioural suite already exercises all of them. Pattern C is now fully
+  closed across the codebase.
 
 ### Pattern D — IMPROVE: "has_extension, then get_extension, then cast" idiom, ~10+ copies
 
@@ -542,7 +559,9 @@ point, so its gaps aren't copied forward.
    timezone cluster first. **~1 day.** Highest safety value of the five, but
    the largest single increment — plan it as its own session with the
    existing round-trip/fixture tests as the acceptance bar, not folded into
-   a quick pass.
+   a quick pass. **DONE 2026-08-19** (the wrapper, `jmap-backend-cal/
+   marshal.rs`, `jmap-backend-collection`, and `jmap-mail`, in that order
+   across several sessions); see Pattern C's own section above.
 5. **Pattern E** (`fail()`/`invalid_arg()` duplication) — **~2 hours**,
    lowest priority; fold into whichever of the above touches those files
    anyway rather than scheduling separately. **DONE 2026-08-19** (both

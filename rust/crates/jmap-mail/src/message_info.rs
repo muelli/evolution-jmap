@@ -97,9 +97,10 @@ use glib_sys::{
     g_checksum_free, g_checksum_get_digest, g_checksum_new, g_checksum_update, g_free, gboolean,
     gchar,
 };
-use gobject_sys::{g_object_new, g_object_unref, g_type_class_peek};
+use gobject_sys::{g_object_new, g_type_class_peek};
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::marshal::checked_borrow;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_mail_sync::{KeywordChange, Keywords, MessageFlags, MessageSummary};
@@ -839,24 +840,23 @@ fn address_list(addresses: &[EmailAddress]) -> Option<String> {
         return None;
     }
 
-    // SAFETY: the address object is constructed, filled and unreffed here and
-    // reaches nothing else; every string handed over is NUL-terminated and
-    // copied, and `camel_address_format` returns a `g_malloc`ed string this
-    // function frees.
+    // SAFETY: the address object is constructed, filled here and released when
+    // `address` drops at the end of the scope, and reaches nothing else; every
+    // string handed over is NUL-terminated and copied, and `camel_address_format`
+    // returns a `g_malloc`ed string this function frees.
     unsafe {
-        let address = camel_internet_address_new();
+        let address = Owned::from_raw(camel_internet_address_new())?;
         for entry in addresses {
             let name = entry.name.as_deref().map(c_string);
             let email = c_string(&entry.email);
             camel_internet_address_add(
-                address,
+                address.as_ptr(),
                 name.as_ref().map_or(ptr::null(), |name| name.as_ptr()),
                 email.as_ptr(),
             );
         }
 
-        let formatted = camel_address_format(address.cast::<CamelAddress>());
-        g_object_unref(address.cast());
+        let formatted = camel_address_format(address.as_ptr().cast::<CamelAddress>());
         if formatted.is_null() {
             return None;
         }

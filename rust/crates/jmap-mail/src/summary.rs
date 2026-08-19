@@ -119,9 +119,10 @@ use eds_sys::{
 use glib_sys::{
     GError, GFALSE, GTRUE, GType, g_free, g_string_free, g_string_new, gboolean, gchar,
 };
-use gobject_sys::{g_object_new, g_object_unref, g_type_class_peek};
+use gobject_sys::{g_object_new, g_type_class_peek};
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::marshal::checked_borrow;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_mail_sync::MessageSummary;
@@ -714,31 +715,33 @@ unsafe fn apply_message(
     let uid = c_string(message.uid.as_str());
 
     // SAFETY: the uid outlives every call it is passed to; `summary_get`
-    // returns a reference this function owns and drops, and `summary_add`
-    // takes a reference of its own to the row built here.
+    // returns a reference this function owns and releases when `info` drops
+    // at the end of its scope, and `summary_add` takes a reference of its own
+    // to the row built here — this function's own reference to that one
+    // releases the same way.
     unsafe {
-        if camel_folder_summary_check_uid(summary, uid.as_ptr()) != GFALSE {
-            let info = camel_folder_summary_get(summary, uid.as_ptr());
-            if !info.is_null() {
-                // Reported only when the row really moved. A refresh is a poll,
-                // so nearly every row it meets is the row it left there, and a
-                // folder that announced all of them would redraw the message
-                // list the user is reading every time the timer went off.
-                if update_message_info(info, message) {
-                    changes.change(message.uid.as_str());
-                }
-                g_object_unref(info.cast());
-                return false;
+        if camel_folder_summary_check_uid(summary, uid.as_ptr()) != GFALSE
+            && let Some(info) = Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr()))
+        {
+            // Reported only when the row really moved. A refresh is a poll,
+            // so nearly every row it meets is the row it left there, and a
+            // folder that announced all of them would redraw the message
+            // list the user is reading every time the timer went off.
+            if update_message_info(info.as_ptr(), message) {
+                changes.change(message.uid.as_str());
             }
-            // A uid the summary lists and has no row for is a summary whose
-            // database went missing under it. Rebuilding the row from the
-            // listing is the recovery; falling through does exactly that.
-        }
-
-        let info = new_message_info(message);
-        if info.is_null() {
             return false;
         }
+        // Falls through here for a uid the summary has not checked in at all
+        // (the ordinary new-message case, handled below), and also for one it
+        // has checked in but has no row for — a summary whose database went
+        // missing under it. Rebuilding the row from the listing is the
+        // recovery for that second case, and exactly what falling through
+        // does.
+
+        let Some(info) = Owned::from_raw(new_message_info(message)) else {
+            return false;
+        };
         // `force_keep_uid`, because the uid is the JMAP `Email` id: unique in
         // the mailbox, immutable, and what every later request names the
         // message by, so a row numbered from the summary's own counter is one
@@ -746,7 +749,7 @@ unsafe fn apply_message(
         // Camel renumbers only a uid that is empty or already loaded, and the
         // second cannot get this far past the check above. The value is the
         // one that stays right if it ever does.
-        camel_folder_summary_add(summary, info, GTRUE);
+        camel_folder_summary_add(summary, info.as_ptr(), GTRUE);
         // And straight back off the work list `add` just put it on. Camel marks
         // an added row as having to reach the server, which is right for the
         // caller that function was written for — a message the user composed and
@@ -754,8 +757,7 @@ unsafe fn apply_message(
         // described it. Left set, the bit would have
         // [`crate::synchronize`] write every message of every mailbox back to
         // the server it was just listed from.
-        clear_pending_write(info);
-        g_object_unref(info.cast());
+        clear_pending_write(info.as_ptr());
         changes.add(message.uid.as_str());
         true
     }

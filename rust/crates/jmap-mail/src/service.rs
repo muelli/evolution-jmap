@@ -66,10 +66,11 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, g_error_new_literal, gboolean, gchar};
-use gobject_sys::{GObject, g_object_unref, g_type_class_peek};
+use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::{dup_string, read_string};
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_client::Credentials;
@@ -263,25 +264,24 @@ unsafe extern "C" fn get_name(service: *mut CamelService, brief: gboolean) -> *m
 ///
 /// `service` must be a valid `CamelService`.
 unsafe fn name_of(service: *mut CamelService, brief: bool) -> String {
-    // SAFETY: the contract above; the reference is given back below.
-    let settings = unsafe { camel_service_ref_settings(service) };
+    // SAFETY: the contract above; the reference is released when `settings`
+    // drops at the end of the scope.
+    let settings = unsafe { Owned::from_raw(camel_service_ref_settings(service)) };
     // SAFETY: `settings` is NULL or the `CamelSettings` Camel just handed over.
-    let read = unsafe { network(settings) }.map(|network| {
-        // SAFETY: `network` implements the interface, checked above; the `dup_`
-        // accessors return g_malloc'd copies `take_string` frees, rather than
-        // pointers into storage another thread may replace.
-        unsafe {
-            (
-                take_string(camel_network_settings_dup_host(network)),
-                camel_network_settings_get_port(network),
-                take_string(camel_network_settings_dup_user(network)),
-            )
-        }
-    });
-    if !settings.is_null() {
-        // SAFETY: the reference `ref_settings` handed over.
-        unsafe { g_object_unref(settings.cast::<GObject>()) };
-    }
+    let read = unsafe { network(settings.as_ref().map_or(ptr::null_mut(), Owned::as_ptr)) }.map(
+        |network| {
+            // SAFETY: `network` implements the interface, checked above; the
+            // `dup_` accessors return g_malloc'd copies `take_string` frees,
+            // rather than pointers into storage another thread may replace.
+            unsafe {
+                (
+                    take_string(camel_network_settings_dup_host(network)),
+                    camel_network_settings_get_port(network),
+                    take_string(camel_network_settings_dup_user(network)),
+                )
+            }
+        },
+    );
 
     let (host, port, user) = read.unwrap_or((None, 0, None));
     describe(host.as_deref(), port, user.as_deref(), brief)
@@ -314,18 +314,22 @@ unsafe extern "C" fn connect_sync<T: Connected>(
             // The one object allowed to read a stored password or prompt for a
             // new one. A service without a session is a service nothing can
             // authenticate, which is the same dead end as having no store.
-            let session = camel_service_ref_session(service);
-            if session.is_null() {
+            // `session` releases the reference when it drops at the end of the
+            // scope.
+            let Some(session) = Owned::from_raw(camel_service_ref_session(service)) else {
                 return fail_disconnected(error);
-            }
+            };
 
             // NULL mechanism: JMAP authenticates over HTTP and offers no SASL
             // mechanisms to pick between, which is also why
             // `query_auth_types_sync` is left alone.
-            let connected =
-                camel_session_authenticate_sync(session, service, ptr::null(), cancellable, error);
-            g_object_unref(session.cast::<GObject>());
-            connected
+            camel_session_authenticate_sync(
+                session.as_ptr(),
+                service,
+                ptr::null(),
+                cancellable,
+                error,
+            )
         })
     }
 }
@@ -368,22 +372,20 @@ unsafe fn attempt<T: Connected>(
 ) -> Result<(), StoreError> {
     let connected = unsafe { instance::<T>(service) }.ok_or(StoreError::Disconnected)?;
 
-    // Camel hands out a reference; the config is read before it is given back,
-    // and nothing borrowed from the settings outlives the call.
+    // Camel hands out a reference; the config is read before it is released,
+    // and nothing borrowed from the settings outlives the call. `settings`
+    // releases the reference when it drops at the end of the scope.
     // SAFETY: `service` is a valid CamelService, so the settings it returns are
     // a valid CamelSettings — of the class `settings_type` names, which is what
     // `from_settings` requires.
-    let settings = unsafe { camel_service_ref_settings(service) };
-    let config = unsafe { ServerConfig::from_settings(settings) };
-    // SAFETY: as above; read before `settings` is given back, exactly like
-    // `config` itself.
-    let uses_oauth2 = unsafe { oauth2::uses_oauth2(settings) };
+    let settings = unsafe { Owned::from_raw(camel_service_ref_settings(service)) };
+    let settings_ptr = settings.as_ref().map_or(ptr::null_mut(), Owned::as_ptr);
+    let config = unsafe { ServerConfig::from_settings(settings_ptr) };
     // SAFETY: as above.
-    let uses_api_token = unsafe { api_token::uses_api_token(settings) };
-    if !settings.is_null() {
-        // SAFETY: the reference `ref_settings` handed over.
-        unsafe { g_object_unref(settings.cast::<GObject>()) };
-    }
+    let uses_oauth2 = unsafe { oauth2::uses_oauth2(settings_ptr) };
+    // SAFETY: as above.
+    let uses_api_token = unsafe { api_token::uses_api_token(settings_ptr) };
+    drop(settings);
     let config = config?;
 
     // SAFETY: the cancellable is Camel's, and it outlives the call — which is
@@ -397,19 +399,18 @@ unsafe fn attempt<T: Connected>(
     // docs for why asking a second time here cannot disagree with them.
     let credentials = if uses_oauth2 {
         // The one object allowed to fetch an OAuth 2.0 token, as it is the
-        // only object allowed to fetch a password.
+        // only object allowed to fetch a password. `session` releases the
+        // reference `ref_session` handed over when it drops at the end of the
+        // scope.
         // SAFETY: `service` is a valid CamelService by this function's
         // contract.
-        let session = unsafe { camel_service_ref_session(service) };
-        if session.is_null() {
+        let Some(session) = (unsafe { Owned::from_raw(camel_service_ref_session(service)) }) else {
             return Err(StoreError::Disconnected);
-        }
-        // SAFETY: `session` just checked non-NULL, `service` valid by this
-        // function's contract, and `cancellable` satisfies `access_token`'s
-        // contract by this function's own.
-        let token = unsafe { oauth2::access_token(session, service, cancellable) };
-        // SAFETY: the reference `ref_session` handed over.
-        unsafe { g_object_unref(session.cast::<GObject>()) };
+        };
+        // SAFETY: `service` valid by this function's contract, and
+        // `cancellable` satisfies `access_token`'s contract by this
+        // function's own.
+        let token = unsafe { oauth2::access_token(session.as_ptr(), service, cancellable) };
         Credentials::bearer(token?)
     } else if uses_api_token {
         // The pasted token rides the same password prompt Basic uses — see
