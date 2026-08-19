@@ -22,4 +22,5 @@ evolution-jmap-proto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tiny_http = { workspace = true }
+percent-encoding = { workspace = true }
 base64 = { workspace = true }
