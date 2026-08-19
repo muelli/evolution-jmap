@@ -36839,3 +36839,97 @@ between runs, and hand off `jmap-client` to a follow-up session same as
 other Round 2 tracks have split across sessions.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track A2, mutation testing of `jmap-proto` (first pass)
+
+Followed through on this session's Track A2 claim. Running `cargo mutants
+-p evolution-jmap-proto` hit a real bug before it ever got to a mutant:
+the **baseline** `cargo test` failed in cargo-mutants' copied tree, so no
+mutants were tested at all. Root cause: `crates/jmap-proto/tests/
+milestones.rs`'s `repo_root()` (and its sibling in `crates/jmap-backend-
+core/tests/potfiles.rs`) locates the checkout root by a hardcoded
+`ancestors().nth(3)` from `CARGO_MANIFEST_DIR` — true only when the crate
+sits three directories below the actual repo root. cargo-mutants copies
+just the `rust/` workspace subtree into a scratch dir to build/test each
+mutant, so in that copy `nth(3)` lands on `/tmp` (or wherever the scratch
+dir's parent is), `docs/MILESTONES.md` is naturally absent there (`docs/`
+was never copied — it lives beside `rust/`, not inside it), and
+`milestones_file_exists_and_parses` hard-failed on a `path.exists()`
+assertion that two sibling tests in the same file already knew to treat as
+"not in a checkout, skip" (`if !path.exists() { return; }`) rather than a
+bug. Fixed by making `repo_root()` return `Option<PathBuf>` — search
+ancestors for one that actually has a `.git` (the true checkout-root
+marker, present in a real checkout, absent from cargo-mutants' partial
+copy) — and having all four call sites in `milestones.rs` skip (not fail)
+when no such ancestor is found, matching the tolerance the other three
+tests already had. Only `milestones.rs` was touched; `potfiles.rs` has the
+identical pattern but lives in the EDS-gated `jmap-backend-core` (out of
+this session's `jmap-proto`-only scope), left as a note for whoever next
+runs `cargo-mutants -p jmap-backend-core`. TDD: two new unit tests,
+`find_repo_root_finds_the_nearest_git_ancestor` /
+`_returns_none_without_a_git_ancestor`, using scratch dirs under the system
+temp dir (guaranteed no `.git` ancestor, unlike `CARGO_TARGET_TMPDIR`,
+which sits inside this checkout and would have silently passed the
+"none" case by finding this repo's own `.git` on the way up).
+
+With the baseline fixed, `cargo mutants -p evolution-jmap-proto --baseline
+run` completed: **97 mutants, 28 unviable, 54 missed** on the first real
+pass. Triaged the missed list and added killing tests in `tests/core.rs`
+for the real behavioural gaps, prioritising `session.rs`'s RFC 8620
+primary-account resolution — the most complex untested logic in the crate,
+and squarely the "untrusted wire contract" surface A2 names — over
+mechanical one-liners:
+- `Session::resolve_primary_account`/`primary_account`/`sole_personal_account`
+  (previously *zero* tests): added cases for a trusted `primaryAccounts`
+  entry, an unnamed capability, the documented "contradiction" case (the
+  fixture's own `contacts` entry names an account that never claims
+  `contacts` — already in `core/session.json`, just never asserted
+  against), the sole-personal-account fallback when `primaryAccounts` omits
+  an entry, and two mutants that needed narrow fixtures to distinguish from
+  each other: `is_personal && has_capability` requires *both* — one test
+  with personal-but-lacking-the-capability, another with capability-but-
+  not-personal, since either alone can be masked by `resolve_primary_account`'s
+  own follow-up capability check.
+- `Session::max_objects_in_get` (the fourth of four sibling core-capability
+  limits — the other three already had a "names it" + "omits it" test
+  pair; this one had neither).
+- `Response::responses_for` (grouping by call id, in order — untested
+  entirely), `Invocation::is_error` (only the "true" case was asserted;
+  added the missing "false" case), `Id`'s `AsRef<str>`/`Display`, and
+  `State`/`UtcDate`'s `as_str`/`Display` (all one-liners with no test at
+  all).
+- `QueryRequest`'s `is_default_position`/`is_false`/`default_true` serde
+  helpers (control whether `position`/`calculateTotal`/`isAscending`
+  appear on the wire for `Foo/query` — untested despite being real
+  wire-format logic) and `GetRequest::ids` (the builder never asserted to
+  actually set `ids`).
+
+Re-ran `cargo mutants` after each batch to confirm kills rather than
+trusting the read: **54 → 35 → 27 missed**, all without weakening or
+`#[ignore]`-ing anything. Final state: **27 missed, 42 caught, 28
+unviable**. The 27 remaining are one uniform, distinct category — "delete
+a field from a `Self { .. }` struct-literal expression" (plus the matching
+"replace whole builder with `Default::default()`") in `calendars.rs`'s
+`CalendarEvent::simple`/`CalendarEventQueryFilter::{in_calendar,
+time_range}`, `contacts.rs`'s `ContactCard::simple`/
+`ContactCardQueryFilter::in_address_book`, and `mail.rs`'s `EmailImport::
+{keyword,received_at}`/`EmailQueryFilter::in_mailbox` — convenience
+constructors whose fields are asserted end-to-end against `jmap-mockd` in
+`jmap-client`'s integration tests (out of `cargo mutants -p
+evolution-jmap-proto`'s scope, since that only runs jmap-proto's own
+suite) but never against a plain in-crate assertion that the field the
+constructor claims to set is actually set. Real, mechanical, same fix
+shape repeated ~9 times (one round-trip assertion per constructor) — left
+for a follow-up increment rather than padding this one further; logged
+here rather than silently dropped. `jmap-client`'s own mutation-testing
+half (the other name on Track A2) is still fully unstarted, same as the
+claim already flagged.
+
+Housekeeping: `rust/mutants.out/` (cargo-mutants' output directory) was
+untracked cruft after each run; added it to `.gitignore` rather than
+leaving it for `git status` to keep noticing. Gate run before pushing:
+`cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
+and `cargo test --locked` (default-members) all clean/green. No source
+files changed (only two `tests/` files and `.gitignore`), so the EDS-gated
+seven-crate leg was not re-run — nothing in it depends on jmap-proto's
+test-only files.
