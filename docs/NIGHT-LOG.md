@@ -35306,3 +35306,47 @@ written and what chains up to the parent. Doing it well deserves its own
 session rather than being folded into what was otherwise a fully safe,
 TDD-only increment; `docs/ROADMAP.md`'s D1 entry is updated to PARTIAL with
 this split spelled out for whoever picks it up next.
+
+## 2026-08-19 (claim) — Claiming Track D2: thread `Calendar.color` through to an `ESourceSelectable` "Color" setting
+
+Fresh survey: `docs/MILESTONES.md` has M1–M10 and CALCARD all `COMPLETE`.
+CURRENT PRIORITY's remaining named items are either maintainer-deferred
+(OAuth2 real-server validation — do not re-touch) or already flagged by prior
+sessions as genuinely FFI/escalation-risk with no safe Sonnet-sized slice
+left: the SRV-autodiscovery thread's remaining half needs a
+`g_resolver_lookup_service()` binding (`GList`/`GSrvTarget` transfer-full
+ownership) and D1's remaining half is `ECollectionBackendClass`
+`create_resource_sync`/`delete_resource_sync` vtable wiring "of the same kind
+as `child_added`'s" — both explicitly called out as needing their own careful
+session rather than a quick pass. Per ROADMAP's "Lead order" note the Claude
+lane leads Round 2 with Track D; **D2 (Calendar colour)** is the tractable
+item in that track: `Calendar.color` is already parsed
+(`jmap-proto/src/calendars.rs:29`) and then dropped.
+
+Checked the FFI shape before claiming it: `jmap-backend-collection/src/child_source.rs::write`
+already writes every other child setting (Host, Port, User, Method, Security)
+as one `match` arm per `(group, key)` calling an EDS setter on an extension
+fetched through the file's own generic `extension::<T>()` helper — a closed,
+heavily-commented, already-proven pattern, not new vtable/ownership design.
+`ESourceCalendar` (`/usr/include/evolution-data-server/libedataserver/e-source-calendar.h`)
+derives from `ESourceSelectable`
+(`e-source-selectable.h`, `e_source_selectable_set_color`), so the "Calendar"
+extension `e_source_calendar_get_type()` already registers can be read back
+through the parent's setter with the same cast-and-call idiom already used
+for e.g. `ESourceSecurity`. `eds-sys/build.rs`'s allowlists are wildcards
+(`"ESource.*"` types, `"e_source_.*"` functions) that already cover
+`ESourceSelectable`/`e_source_selectable_set_color` — no allowlist edit
+needed.
+
+**Plan:** thread `color: Option<String>` from `jmap-proto::Calendar` through
+`jmap-collection-sync`'s `Resource` → `Child` → `Child::settings()` (a new
+`("Calendar", "Color", …)` triple, gated on `ChildKind::Calendar` and emitted
+only when present — mirrors how `Port`/`User`/`Method` are already optional),
+then one new match arm in `jmap-backend-collection/src/child_source.rs::write`
+calling `e_source_selectable_set_color`. Write-back to the server (if the user
+edits the colour locally) rides on D1's `Calendar/set`, whose EDS-side wiring
+is not done yet — out of scope here, same as ROADMAP's D2 text says. TDD:
+red test first in `jmap-collection-sync`'s existing `child_source.rs` test
+module (the `Setting` triple), then in
+`jmap-backend-collection/tests/child_source.rs` (round-trip through a real
+`ESource` via `e_source_selectable_get_color`).
