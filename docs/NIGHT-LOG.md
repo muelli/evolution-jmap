@@ -35924,3 +35924,50 @@ new behaviour, just a previously-unwritten assertion). No new files, so no
 unavailable on this VM (see memory), so `ci/checks.sh` itself was not run —
 its constituent checks were run individually as above, per the standing
 workaround.
+
+## 2026-08-19 (claim) — Claiming JMAP SRV autodiscovery call site (a): real backend connect paths
+
+Fresh survey: every milestone is COMPLETE; ROADMAP's CURRENT PRIORITY item 5
+(JMAP SRV autodiscovery) is the one open thread, PARTIAL with call site (a) —
+the real backend connect paths (`jmap-backend-book`/`cal`'s `connect.rs`,
+`jmap-mail/src/connect.rs`, `jmap-backend-collection/src/fan_out.rs`) still
+calling `Client::connect(&config.origin, …)` on a pre-assembled
+`scheme://host[:port]` string with no SRV/well-known-domain distinction —
+named as the next step.
+
+Dispatched a research agent first to confirm this is really where the
+password-path 404 lives rather than in `jmap-config`'s M7 setup UI (a
+plausible alternate culprit, and the roadmap's item 5 originally pointed at
+`client.rs:135` before `connect_domain` existed). Confirmed: a plain
+email+password Fastmail-style setup writes `Authentication:Host` = the bare
+email domain via `jmap-config/src/defaults.rs::from_identity`/`domain_of`,
+which is *correct* per RFC 8620 §2.2 ("domain is the entry point") — no UI
+autodiscovery step is missing. The gap is purely at connect time: nothing
+between "a bare domain landed in `Authentication:Host`, port unset" and "the
+request goes out" tries `_jmap._tcp.<domain>` first. So call site (a) is the
+real, sole remaining gap, and now has a design answer: `jmap_backend_core::
+source::origin(host, port, secure)` already receives enough information
+(port `0` is EDS's "not set" sentinel) to tell "a bare domain, https implied"
+apart from "an explicit endpoint" — every existing backend test that wires a
+mock server through `SourceConfig`/`ServerConfig` sets an explicit port, so
+this distinction is free, not a guess.
+
+**Design:** add `jmap_backend_core::source::ConnectTarget` (`Origin(String)`
+for an explicit endpoint or an IP literal — SRV lookups on an IP make no
+sense; `Domain(String)` for port-unset+secure+non-IP-literal, RFC 8620 §2.2's
+own shape) alongside a `connect_target()` constructor sharing `origin()`'s
+existing host validation and TLS rule (`origin()` itself becomes a thin
+wrapper over it, so `jmap-backend-collection`'s `Server.origin` — used in
+several test assertions — keeps its exact current string unchanged). A new
+`jmap_backend_core::source::connect(target, credentials)` dispatches
+`Origin` to today's `Client::connect` and `Domain` to `ClientBuilder::
+connect_domain` (the already-TDD'd `Resolver` seam from the session-discovery
+half of this thread), both call sites' four backends switch to it.
+Behaviour is unchanged today (`NoSrvResolver`, the only resolver anything
+constructs yet, never finds a record — same as `probe_host`'s (b) fix), but
+every one of these four connect paths now has the seam the eventual
+GResolver-backed resolver plugs into, closing out call site (a) alongside
+(b). The GResolver FFI implementation itself remains unstarted and the
+standing escalation candidate for this thread.
+
+Claiming this increment now.
