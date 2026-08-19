@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+version=4
+opts=filenamemangle=s/.*\/v?(\d\S*)\.tar\.gz/evolution-jmap-$1.tar.gz/ \
+  https://github.com/muelli/evolution-jmap/tags \
+  (?:.*/)?v?(\d[\d.]*)\.tar\.gz
