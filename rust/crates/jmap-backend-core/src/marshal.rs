@@ -158,6 +158,31 @@ pub unsafe fn checked_borrow_ptr<C, T>(ptr: *mut C, gtype: GType) -> Option<*mut
     }
 }
 
+/// As [`checked_borrow_ptr`], but for a caller that must distinguish a NULL
+/// pointer (`Ok(None)`, "nothing here") from one that failed the `gtype`
+/// check (`Err(err)`) — for example when a wrong-type argument is a
+/// user-facing refusal, not the same "absent" answer a NULL gets.
+///
+/// # Safety
+///
+/// `ptr` must be NULL or point at a live `GTypeInstance`.
+pub unsafe fn checked_borrow_ptr_or<C, T, E>(
+    ptr: *mut C,
+    gtype: GType,
+    err: E,
+) -> Result<Option<*mut T>, E> {
+    if ptr.is_null() {
+        return Ok(None);
+    }
+    // SAFETY: see `checked_borrow`.
+    unsafe {
+        if g_type_check_instance_is_a(ptr.cast(), gtype) == GFALSE {
+            return Err(err);
+        }
+        Ok(Some(ptr.cast::<T>()))
+    }
+}
+
 /// Reads `source`'s extension named `name`, without creating it if absent.
 ///
 /// `e_source_get_extension` *creates* the extension it cannot find, which is

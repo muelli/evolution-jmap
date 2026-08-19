@@ -187,13 +187,16 @@ two helpers exist; touches 9 files across `jmap-mail`, so needs a careful
   directly instead. No behaviour change in any of the five: same `Option`
   for the same inputs, and every existing test in `jmap-mail` stayed green
   unmodified.
-  **Still open — `envelope.rs::internet` only.** Its
-  `Result<Option<*mut T>, EnvelopeError>` distinguishes a NULL input (valid,
-  "no address") from a wrong-type input (a user-facing
-  `EnvelopeError::NotInternet`, not just `None`) — a third return shape
-  neither helper above fits without either losing that distinction or
-  forcing an unrelated error type through a generic helper's signature. Left
-  as its own smaller follow-up rather than guessed at here.
+  **DONE 2026-08-19 — `envelope.rs::internet`, closing Pattern B.**
+  `jmap_backend_core::marshal` grew `checked_borrow_ptr_or<C, T, E>(ptr,
+  gtype, err) -> Result<Option<*mut T>, E>`: same shape as
+  `checked_borrow_ptr`, but a failed type check returns the caller's `err`
+  instead of collapsing into `None` — the third return shape
+  `envelope.rs::internet`'s `Result<Option<*mut T>, EnvelopeError>` needed.
+  `internet` now delegates to it with `EnvelopeError::NotInternet(which)`.
+  No behaviour change: `jmap-mail/tests/envelope.rs`'s existing NULL/right-
+  type/wrong-type cases all stayed green unmodified. All ~13 sites in
+  Pattern B now go through one of three shared helpers.
 
 ### Pattern C — IMPROVE (the one real safety-adjacent gap): no RAII wrapper for libical/GObject ref-counted pointers
 
@@ -437,9 +440,11 @@ point, so its gaps aren't copied forward.
      — `checked_borrow`/`checked_borrow_ptr` land and cover 5 of the 6 sites
      (`folder.rs::parent_store`, `server.rs::network`, `summary.rs::
      JmapSummary::borrow`, `message_info.rs::JmapMessageInfo::borrow`,
-     `transfer.rs::mailbox_of`). **Still open:** `envelope.rs::internet`
-     alone, whose `Result`-with-a-user-facing-error shape doesn't fit either
-     helper — see Pattern B's own section above.
+     `transfer.rs::mailbox_of`).
+   - **DONE 2026-08-19 (later still) for the last site** —
+     `checked_borrow_ptr_or` covers `envelope.rs::internet`'s
+     `Result`-with-a-user-facing-error shape. Pattern B is now fully closed;
+     see Pattern B's own section above.
 4. **Pattern C** (no RAII wrapper for libical/GObject ref-counted
    pointers) — `Owned<T>` newtype, migrate `jmap-backend-cal/marshal.rs`'s
    timezone cluster first. **~1 day.** Highest safety value of the five, but
