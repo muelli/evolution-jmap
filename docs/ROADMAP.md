@@ -110,11 +110,16 @@ they close, prioritise in this order:
        ~~use the metadata's `urn:ietf:params:oauth:scope:*` names~~ and
        ~~confirm `/oauth/register` is open (no initial access token)~~ **DONE
        2026-08-19** — see below; the *discovered* token endpoint (`/oauth/refresh`)
-       was already used, not hardcoded. **Still open:** check whether an RFC 8707
-       `resource` indicator is required (unconfirmed against a primary source;
-       needs either an empirical `/authorize` probe against a real
-       registration, which needs the redirect landing somewhere this runner can
-       read, or the operator's consent round-trip).
+       was already used, not hardcoded. ~~check whether an RFC 8707 `resource`
+       indicator is required at `/authorize`~~ **PARTIALLY DONE 2026-08-19** —
+       empirically probed (a fresh throwaway DCR client, `GET /authorize` with
+       no `resource` param): the endpoint answers a plain `302` to the
+       login/consent UI, not a rejection, refuting the unconfirmed web-search
+       claim that it requires one. **Still open:** whether the *token*
+       endpoint enforces `resource` once a real authorization code exists —
+       that needs an actual consent round-trip (real credentials), which
+       stays the operator's step. See `docs/OAUTH-FASTMAIL.md`'s updated
+       "RFC 8707" entry for the full probe.
        Fastmail DOES support RFC 7591 dynamic registration (confirmed in the doc),
        so the autodiscovery-only design is viable.
      - **DONE 2026-08-19 — registration confirmed open, and a real scope bug
@@ -743,6 +748,22 @@ tracks follow; the maintainer may reorder anytime.
   while `lib.rs:125` says it is now written — verify and fix as part of the
   sweep. Fixing HIGH-confidence stale comments in the same pass is fine (comments
   don't affect tests); leave anything uncertain as a logged finding.
+  - **DONE 2026-08-19 (roadmap annotation added 2026-08-19 — same docs-sync
+    gap as A1/A2/A3 above; the work landed the same day, just never reflected
+    here)** — `e01b092`. `docs/STALE-COMMENTS-AUDIT.md` records the sweep. The seed was
+    confirmed stale (`jmap-config/src/textdomain.rs` no longer exists; the
+    actual comment lives in `jmap-config/tests/textdomain.rs:17`) and fixed
+    alongside six siblings in the same family — prose written while M7 was
+    still in progress and never updated once it shipped, spanning
+    `jmap-config/src/module.rs`, `src/backend.rs`, `src/config_lookup.rs`,
+    `jmap-backend-collection/tests/oauth2_service.rs`, `jmap-client/src/
+    oauth.rs`, `jmap-config/tests/account.rs`, and `evo-sys/src/lib.rs` +
+    `evo-sys/tests/gtk.rs` (the last pair fixed on a MEDIUM-confidence finding
+    checked directly against `ci/gui-smoke.sh` rather than trusted at face
+    value). No calcard/percent-encoding leftovers or other stale
+    milestone references found. Full gate green (comment-only changes; see
+    `docs/NIGHT-LOG.md`'s "Delivered: Track A7" entry for the exact commands
+    run). See `docs/STALE-COMMENTS-AUDIT.md` for the full write-up.
 
 ### Track B — Observability (NEEDS-DECISION on approach, then CLAIMABLE)
 - **B1 `[claude]` journald structured logging, TRACE→ERROR.** Replace the ~54

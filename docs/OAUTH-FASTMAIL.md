@@ -115,6 +115,40 @@ the scope-naming item together.
   One web-search summary claimed Fastmail's `/authorize` rejects requests
   lacking a `resource` = the JMAP session URL; unconfirmed against a primary
   source. Verify empirically whether authorize/token need it.
+  **PARTIALLY CONFIRMED 2026-08-19 — the `/authorize` half, empirically, not
+  merely inferred.** This runner has the same ordinary internet egress to
+  `api.fastmail.com` the registration probes above used. Registered one more
+  throwaway public client (`POST /oauth/register`, same shape as above), then
+  `GET /oauth/authorize` with `client_id`, `redirect_uri`, `response_type=code`,
+  a PKCE `code_challenge`/`code_challenge_method=S256`, and `scope` — but
+  **no** `resource` parameter at all:
+
+  ```
+  $ curl -s -D - -o /dev/null -G https://api.fastmail.com/oauth/authorize \
+      --data-urlencode "client_id=66de41ae" \
+      --data-urlencode "redirect_uri=org.gnome.evolution.jmap:/redirect" \
+      --data-urlencode "response_type=code" \
+      --data-urlencode "code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" \
+      --data-urlencode "code_challenge_method=S256" \
+      --data-urlencode "scope=urn:ietf:params:oauth:scope:mail ..."
+  HTTP/2 302
+  location: https://app.fastmail.com/oauth/?client_id=66de41ae&redirect_uri=...&response_type=code&code_challenge=...&code_challenge_method=S256&scope=...&state=...
+  ```
+
+  No rejection, no error redirect naming `invalid_request`/`resource` — a
+  plain `302` handing the request off to the login/consent UI at
+  `app.fastmail.com`, request parameters echoed back verbatim. Reproduced
+  twice with two different freshly-registered `client_id`s, same result both
+  times. This **refutes** the unconfirmed web-search claim above: Fastmail's
+  authorization endpoint does not require (or even notice the absence of) a
+  `resource` parameter at this stage. **Still open, and still needs the
+  operator:** whether the **token** endpoint (`/oauth/refresh`) cares once a
+  real authorization code exists — that needs an actual consent round-trip
+  (real credentials, real login), which is inherently a human step this
+  runner cannot fake. No request in this probe was completed past the
+  redirect — nothing was submitted to the login page, no account was touched,
+  and the two probe clients registered here are throwaway (unusable without
+  a code obtained through that login page).
 
 ## Prerequisite already met
 
