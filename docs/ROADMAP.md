@@ -511,6 +511,24 @@ in design §4–§6; the ordered increments:
    `session.rs`. `jmap-client`: new `principals.rs` — `principals()` (Principal/get),
    `principal_query()` (Principal/query). `jmap-mock`: Principal/get|query handlers,
    advertise the two URNs, seed a couple of Principals. Pure-additive (design §4.1–4.3).
+   - **DONE 2026-08-19** — landed exactly as scoped: `jmap-proto::principals`
+     (feature `principals`, on by default alongside `mail`/`contacts`/
+     `calendars`) with `Principal`/`PrincipalQueryFilter`, and
+     `CAPABILITY_PRINCIPALS`/`CAPABILITY_PRINCIPALS_OWNER` in `session.rs`;
+     `jmap-client::principals()`/`principal_query()`; `jmap-mock`'s
+     `Principal/get`/`Principal/query` handlers, `AccountState::
+     seed_principal`/`seed_current_user_principal`, and a session document
+     that advertises both URNs (server-wide, and per-account with real
+     content — `currentUserPrincipalId`, and `accountIdForPrincipal`/
+     `principalId` once an account has an owning principal — unlike the
+     other four account capabilities' uniform empty-object placeholder).
+     TDD'd in `jmap-client/tests/principals.rs` (list, query-by-email hit
+     and miss, and the session document itself). Full gate green: `cargo
+     fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+     (default-members) and the seven-crate EDS-gated clippy both clean;
+     `cargo test --locked` and the seven-crate `cargo test` both green.
+     Path A (`getAvailability`, the mock computation, and the escalation-
+     worthy free/busy vfunc) is next on this thread.
 2. **Path A — availability.** `Principal/getAvailability` request/response +
    `BusyPeriod` in proto; `get_availability()` client method (using-set names BOTH
    principals AND calendars); mock computes `BusyPeriod`s from seeded CalendarEvents

@@ -37322,3 +37322,81 @@ is the one open, unclaimed, non-FFI, headless, TDD-able increment left.
 Claiming it now, scoped exactly to Phase 0 (not Path A's
 `getAvailability`/free-busy vfunc, which is a separate, larger, partly
 escalation-worthy increment per the design's own phasing).
+
+## 2026-08-19 — Delivered: Track E Phase 0, the RFC 9670 `Principal` shared floor
+
+Followed through on the claim, scoped exactly to `docs/PRINCIPALS-DESIGN.md`
+§4.1–§4.3 (Phase 0 only — not Path A's `getAvailability`/free-busy, a
+separate, larger, partly escalation-worthy increment).
+
+**`jmap-proto`**: new feature-gated `principals.rs` (feature `principals`,
+added to `default` alongside `mail`/`contacts`/`calendars` so every existing
+consumer picks it up unchanged, exactly like those three) with `Principal`
+(`id`, `type` → `principal_type`, `name`, `description`, `email`,
+`timeZone`, a `capabilities: BTreeMap<String, Value>` bag — deliberately
+untyped, so one server's unknown per-principal capability, e.g. a future
+draft revision of the calendars extension's `mayGetAvailability`, can't sink
+the whole `Principal/get` — `accounts`, and the usual `extra` catch-all) and
+`PrincipalQueryFilter` (`name`/`email`/`text`). `session.rs` gained
+`CAPABILITY_PRINCIPALS`/`CAPABILITY_PRINCIPALS_OWNER`. Two unit tests: a
+camelCase round trip and an unmodeled-property-survives-in-`extra` check —
+the same two invariants every other proto type in this crate is tested for.
+
+**`jmap-client`**: new `principals.rs` (private module, `impl Client`,
+same shape as `calendars.rs`/`contacts.rs`) — `principals(account_id)`
+(`Principal/get`, `ids: null`) and `principal_query(account_id, filter)`
+(`Principal/query`), `using` set `[CORE, PRINCIPALS]`.
+
+**`jmap-mock`**: `AccountState` gained `principals: Store<Principal>` and
+`current_user_principal_id: Option<Id>` (RFC 9670 §2.5's "which principal is
+*me* in this account"); new `principals.rs` module with `principal_get`/
+`principal_query` handlers (mirroring `contacts.rs`'s `address_book_get`/
+`contact_card_query` almost line for line) and two `AccountState` seeding
+helpers, `seed_principal`/`seed_current_user_principal`. `dispatch.rs` grew
+the two registry arms. `server.rs`'s `session_document` now advertises both
+URNs server-wide (empty-object placeholders, like the other four) **and**
+per-account with real content, which the other four don't have: `principals`
+carries `currentUserPrincipalId` (`null` until a test seeds one) and, only
+once an account has an owning principal, `principals:owner` carries
+`accountIdForPrincipal`/`principalId` — built as its own block rather than
+folded into `ACCOUNT_CAPABILITIES`'s uniform `json!({})` map, since those two
+are the first account capabilities here whose object isn't empty.
+
+TDD: `jmap-client/tests/principals.rs` — seeds two principals (the account's
+"me" and one attendee) against the mock, then asserts `principals()` lists
+both with the right ids/emails, `principal_query(email: "…")` resolves the
+attendee by exact email and returns nothing for an unknown one, and the
+session document's `principals` account capability names the seeded
+`currentUserPrincipalId`. All four passed on the first run (types and
+handlers were written from the design doc's exact shapes, not iterated into
+shape by failing tests) — the `cannot find method`/`cannot find type` in
+`jmap-client` before `principals.rs` existed was this increment's actual red
+state, confirmed by building before either file was in place.
+
+No behaviour change to anything that existed before this: mail, contacts,
+and calendar tests are all untouched and stayed green — this is additive
+surface only, exactly as Phase 0 is scoped to be. `docs/ROADMAP.md` records
+Phase 0 DONE; Path A (the `getAvailability` proto/client/mock slice, then
+the escalation-worthy `ECalBackend` free/busy vfunc) is next on this thread
+for a future session.
+
+Gate before pushing: `cargo fmt --check` clean (after one `cargo fmt` pass —
+line-wrapping only, in the new files); `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) and `cargo clippy -p evolution-jmap-client
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+seven EDS-gated crates, this VM having the headers) both clean; `cargo test
+--locked` (default-members) and the same seven-crate `cargo test` both
+green, every `test result: ok`, 0 failed. Disk filled mid-session
+(`rust/target/debug` hit the limit again during the seven-crate build,
+"No space left on device") — `cargo clean --profile dev` (23.2 GiB freed)
+recovered it, consistent with the standing disk-fills-from-cargo-target
+note; both gates re-ran clean afterward.
+
+Ending the session here — one focused, fully-tested increment, pushed.
+`docs/PRINCIPALS-DESIGN.md`'s Track E Path A (getAvailability + free/busy)
+and Phase B (`myRights`/`shareWith` typed rights, per-source read-only
+rewire) remain open for a future session; everything else surveyed at claim
+time is unchanged — FFI/refcount escalation-worthy (SRV `Resolver`, A5, A6
+Pattern C, D1's vtable wiring) or NEEDS-DECISION (B1, C2's third-party
+notices, C4).

@@ -3,7 +3,7 @@
 
 [package]
 name = "evolution-jmap-proto"
-description = "JMAP protocol types: RFC 8620 core, RFC 8621 mail, RFC 9610 contacts, JMAP Calendars draft"
+description = "JMAP protocol types: RFC 8620 core, RFC 8621 mail, RFC 9610 contacts, JMAP Calendars draft, RFC 9670 principals"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,10 +14,11 @@ publish = false
 name = "jmap_proto"
 
 [features]
-default = ["mail", "contacts", "calendars"]
+default = ["mail", "contacts", "calendars", "principals"]
 mail = []
 contacts = []
 calendars = []
+principals = []
 
 [dependencies]
 serde = { workspace = true }
