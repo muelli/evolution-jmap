@@ -36111,3 +36111,44 @@ run — its constituent checks were run individually as above, per the
 standing workaround. Disk filled to 391M free mid-session running the full
 five-crate test sweep; `cargo clean --profile dev` recovered 23.3G, standing
 note confirmed again.
+
+## 2026-08-19 (claim) — Claiming UNSAFE-AUDIT Track A6 Pattern D: `extension_if_present` helper
+
+Fresh survey: every milestone is COMPLETE. CURRENT PRIORITY's one open thread
+(JMAP SRV autodiscovery, item 5) has both call sites wired; all that is left
+on it is the `g_resolver_lookup_service()`-backed real `Resolver` — FFI work
+this thread has repeatedly flagged as the standing escalation candidate, not
+attempted again this session. Round 2's lead order points at Track D next,
+but its one open item (D1's `create_resource_sync`/`delete_resource_sync`
+EDS-vtable wiring) is the same GObject-vtable-FFI category. Track E is
+NEEDS-DECISION (blocked on the maintainer). So this session claims a
+tractable, non-novel-FFI item instead: `docs/UNSAFE-AUDIT.md`'s Track A6
+Pattern D, one of the IMPROVE patterns the audit scoped as a separate
+follow-up (Pattern A's follow-up was delivered two sessions ago).
+
+**Pattern D** is the "`has_extension`, then `get_extension`, then cast" idiom
+repeated ~10+ times across `jmap-backend-core` and `jmap-backend-collection`
+— reading an `ESource` extension without triggering
+`e_source_get_extension`'s create-on-miss side effect. The audit named the
+fix directly: a shared `extension_if_present<T>(source, name) -> Option<*mut
+T>` in `jmap-backend-core`. This is a mechanical consolidation of an
+already-understood, already-tested pattern (not new unsafe/FFI surface), so
+it stays on this side of the escalation line, unlike Pattern C's libical/
+GObject RAII wrapper (~1 day, its own session) or the GResolver work.
+
+Scope for this increment: the helper plus every call site whose shape is a
+clean single-source guard-then-cast — `resource_id.rs::resource_id_of`,
+`collection_source.rs::parts_of`/`user_of`/`server_of` (both its guards),
+`mail_child.rs::mail_service_of`, and `oauth2.rs::source_uses_oauth2`.
+Deliberately NOT touched: `child_added.rs::follow_collection` and
+`mail_child.rs::follow_server`, which mix this idiom with a genuine
+create-if-absent read on a second source in the same function (composing the
+helper there is a real call-shape change, not a 1:1 substitution); and
+`jmap-backend-core/src/source.rs::SourceConfig::from_source`'s
+`AUTHENTICATION`/`RESOURCE` reads, which — per the audit's own §2 — skip the
+`has_extension` guard entirely today, a latent side effect nothing currently
+tests for, so routing them through `extension_if_present` is a behaviour
+decision, not a mechanical port. Logging these three as open follow-ups
+rather than guessing.
+
+Claiming this increment now.
