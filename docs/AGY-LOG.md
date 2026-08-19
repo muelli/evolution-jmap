@@ -192,3 +192,21 @@ Running record of headless polish increments on the `antigravity` branch.
     - `prop_ical_roundtrip_reaches_fixed_point_stability`: parsing raw iCalendar input, emitting, and re-parsing reaches a fixed point (`ical1 == ical2`).
 - **Calcard behaviour-difference findings:** None. All fuzzed random inputs, malformed envelopes, and arbitrary UTF-8 strings parse safely or error out cleanly with zero panics and full round-trip fixed-point stability.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+## 2026-08-19 — KIND + MEMBER group cards characterization & roundtrip fidelity (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 2. `KIND` + `MEMBER` (group cards): characterize how a vCard `KIND:group` with `MEMBER` lines maps through JSContact and to EDS (`E_CONTACT_LIST` / list members), and whether it round-trips without dropping members.
+- **Changes:**
+  - Added comprehensive characterization and round-trip suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `vcard_kind_group_and_member_lines_characterization`: verifies inbound vCard 3.0 / RFC 6473 / RFC 6350 group cards with `KIND:group` and multiple `MEMBER` lines (`urn:uuid:...`, `mailto:...`), confirming clean parsing, full name and note extraction, and safe omission of unmapped group markers during outbound vCard 3.0 emission.
+    - `vcard_apple_and_eds_group_list_extensions_characterization`: verifies parsing of Apple CardDAV group cards (`X-ADDRESSBOOKSERVER-KIND:group`, `X-ADDRESSBOOKSERVER-MEMBER:...`) and EDS contact distribution lists (`X-EVOLUTION-LIST:TRUE` / `E_CONTACT_IS_LIST`, `X-EVOLUTION-LIST-SHOW-ADDRESSES`, `X-EVOLUTION-DEST-EMAIL`).
+    - `vcard_non_group_kind_variants_characterization`: validates RFC 6473 `KIND` variants (`individual`, `org`, `location`, `device`, `application`, `x-custom`) ensuring non-group entity markers parse safely without corrupting name, organization, or note fields.
+    - `jscontact_group_card_with_members_map_in_extra_characterization`: verifies server-originated JSContact cards with `kind: "group"` and `members` map in `extra` emit clean vCard 3.0 envelopes without leaking unmodeled JSON into the vCard stream or panicking.
+    - `group_card_coexisting_with_full_suite_of_contact_properties_roundtrip`: validates a group card coexisting with all 12 standard mapped contact properties (`FN`, `NICKNAME`, `EMAIL`, `TEL`, `ADR`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `URL`, `CATEGORIES`, `PHOTO`, `X-EVOLUTION-SPOUSE`), asserting 100% roundtrip fidelity without component shifting.
+    - `group_card_with_parameter_variations_and_empty_values`: validates lowercase parameter names, explicit `VALUE` types, empty values, and custom parameters on `KIND` and `MEMBER` lines.
+  - Updated `prop_vcard_roundtrip_reaches_fixed_point_stability` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to evaluate fixed-point convergence across canonicalized roundtrip passes (`vcard2 == vcard3`).
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `KIND` (RFC 6473 / RFC 6350) and `MEMBER` (RFC 6350) in vCard 3.0 are unmapped by design in `jmap-vcard`: `ContactCard` in `jmap-proto` models individual contact fields while unmodeled properties ride in `extra` on the JMAP layer. `card_to_vcard` safely drops unmodeled `kind`/`members` rather than inventing non-standard vCard 3.0 lines, and `jmap-book-sync`'s `PatchObject` leaves unmodeled server fields untouched.
+  2. Evolution Contact Lists (`E_CONTACT_IS_LIST` / `X-EVOLUTION-LIST:TRUE`) are distinct from individual contact cards: EDS serializes distribution list email destinations as `X-EVOLUTION-DEST-EMAIL`, which `vcard_to_card` safely ignores to prevent misinterpreting list members as personal email addresses of an individual contact. Synchronizing contact distribution lists between EDS and JMAP group cards (`kind: "group"`) is a product-level feature requiring dedicated sync-layer list handling.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
