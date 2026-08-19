@@ -21,36 +21,24 @@
 //! template to find out which; percent-encoding everything outside
 //! §2.3's unreserved set is the one answer that is correct in both.
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+
+/// RFC 3986 §2.3's unreserved set (`ALPHA / DIGIT / "-" / "." / "_" / "~"`),
+/// expressed as what to escape rather than what to keep.
+const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
 /// Percent-encode a value for substitution into a URL template.
 ///
-/// Unreserved characters (RFC 3986 §2.3: `ALPHA / DIGIT / "-" / "." / "_" /
-/// "~"`) pass through; every other byte becomes `%XX`. Encoding by byte rather
-/// than by `char` is what makes non-ASCII right: `%` escapes octets, so a
-/// multi-byte UTF-8 character becomes one escape per byte.
+/// Unreserved characters pass through; every other byte becomes `%XX`, in
+/// uppercase hex per RFC 3986 §2.1. `percent-encoding` encodes by octet, so a
+/// multi-byte UTF-8 character becomes one escape per byte, which is what
+/// makes non-ASCII right.
 pub(crate) fn encode_template_value(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => {
-                encoded.push('%');
-                encoded.push(hex_digit(byte >> 4));
-                encoded.push(hex_digit(byte & 0x0f));
-            }
-        }
-    }
-    encoded
-}
-
-/// One nibble as an uppercase hex digit, which is the case RFC 3986 §2.1 says
-/// to produce (both are legal to read; only one is canonical to write).
-fn hex_digit(nibble: u8) -> char {
-    char::from(match nibble {
-        0..=9 => b'0' + nibble,
-        _ => b'A' + (nibble - 10),
-    })
+    utf8_percent_encode(value, UNRESERVED).to_string()
 }
 
 /// Replace `url`'s scheme and authority with `origin`'s, keeping its path and

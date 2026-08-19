@@ -41,6 +41,10 @@ rust-version = "1.97"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "3"
+# RFC 3986 percent-coding, for URL-template substitution and OAuth2 form
+# bodies. Already in the tree transitively via ureq; listed here to depend on
+# it directly instead of hand-rolling the same codec.
+percent-encoding = "2"
 base64 = "0.22"
 tiny_http = "0.12"
 # RFC 7636 PKCE code-verifier randomness (jmap-client's OAuth2 token exchange).
