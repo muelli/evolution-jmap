@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::limits;
+use crate::resolver::{NoSrvResolver, Resolver};
 use crate::transport::{
     CancelFlag, HttpMethod, HttpRequest, HttpResponse, Transport, TransportError,
 };
@@ -61,6 +62,7 @@ pub struct ClientBuilder {
     transport: Option<Box<dyn Transport>>,
     cancel: Option<CancelFlag>,
     rebase_urls_to_origin: bool,
+    resolver: Box<dyn Resolver>,
 }
 
 impl Default for ClientBuilder {
@@ -70,6 +72,7 @@ impl Default for ClientBuilder {
             transport: None,
             cancel: None,
             rebase_urls_to_origin: false,
+            resolver: Box::new(NoSrvResolver),
         }
     }
 }
@@ -112,6 +115,14 @@ impl ClientBuilder {
         self
     }
 
+    /// The [`Resolver`] [`connect_domain`](Self::connect_domain) consults for
+    /// a `_jmap._tcp` SRV record before falling back to the bare domain.
+    /// Defaults to [`NoSrvResolver`], which never finds one.
+    pub fn resolver(mut self, resolver: impl Resolver + 'static) -> Self {
+        self.resolver = Box::new(resolver);
+        self
+    }
+
     /// Fetch the session object from `origin` (scheme + host + port) and
     /// return a ready client.
     pub fn connect(self, origin: &str, credentials: Credentials) -> Result<Client, Error> {
@@ -144,6 +155,19 @@ impl ClientBuilder {
         };
         client.refresh_session()?;
         Ok(client)
+    }
+
+    /// Fetch the session object for an email domain, trying a `_jmap._tcp`
+    /// SRV target via [`resolver`](Self::resolver) first (RFC 8620 §2.2) and
+    /// falling back to `https://<domain>/.well-known/jmap` when the resolver
+    /// finds no record — [`NoSrvResolver`]'s permanent answer, and so what
+    /// happens when [`resolver`](Self::resolver) is never called.
+    pub fn connect_domain(self, domain: &str, credentials: Credentials) -> Result<Client, Error> {
+        let origin = match self.resolver.lookup_srv(domain) {
+            Some(target) => format!("https://{}:{}", target.host, target.port),
+            None => format!("https://{domain}"),
+        };
+        self.connect(&origin, credentials)
     }
 }
 
