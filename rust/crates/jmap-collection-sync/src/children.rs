@@ -90,6 +90,9 @@ pub struct Child {
     pub collection_id: Id,
     /// The account's default collection of this kind.
     pub is_default: bool,
+    /// [`Resource::color`], carried straight through — `None` for every
+    /// address book child, and for a calendar the server named none.
+    pub color: Option<String>,
     /// The *account* is read-only, so nothing in this child may be created,
     /// changed or removed. Per-collection rights (`myRights` on the collection
     /// object) are a second, finer question that is not read yet, so a
@@ -170,6 +173,7 @@ fn children<'a>(
         account_id: account.id.clone(),
         collection_id: resource.id.clone(),
         is_default: resource.is_default,
+        color: resource.color.clone(),
         read_only: account.read_only,
     })
 }
@@ -194,6 +198,7 @@ mod tests {
             id: Id::new(id),
             name: name.to_owned(),
             is_default: false,
+            color: None,
         }
     }
 
@@ -350,6 +355,17 @@ mod tests {
         assert!(children[0].is_default);
         assert_eq!(children[0].display_name, "Personal");
         assert!(!children[1].is_default);
+    }
+
+    #[test]
+    fn a_calendars_color_reaches_its_child() {
+        let mut colored = resource("Cal1", "Work");
+        colored.color = Some("#ff8800".to_owned());
+        let fanout = fanout(Vec::new(), vec![colored, resource("Cal2", "Home")]);
+
+        let children = fanout.children();
+        assert_eq!(children[0].color, Some("#ff8800".to_owned()));
+        assert_eq!(children[1].color, None);
     }
 
     #[test]
