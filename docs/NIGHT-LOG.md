@@ -38213,3 +38213,35 @@ also `G_IO_ERROR_NOT_SUPPORTED`, needs the same non-chain-up treatment as
 create), calling `address_book_destroy`/`calendar_destroy`, and removing the
 child `ESource` from the registry server on success — TDD against a red test
 analogous to `tests/backend.rs:340`'s flipped create assertion.
+
+## 2026-08-19 (on opus, per the escalation at `1ff28e7`) — claiming Track D1's `delete_resource_sync`
+
+The driver re-ran this iteration on `claude-opus-5` as the previous survey
+asked. Claiming the destructive half of Track D1: `ECollectionBackendClass::
+delete_resource_sync` plus the `remote-deletable` flag that makes it reachable.
+
+Read first, not inferred — EDS 3.52.4's `e-collection-backend.c` /
+`e-server-side-source.c` and evolution-ews 3.52.4's `e-ews-backend.c`, both
+already unpacked under `/tmp`. Three things that shape the increment:
+
+- The parent's `delete_resource` is the same `G_IO_ERROR_NOT_SUPPORTED`
+  refusal `create_resource` is, so this override must not chain up either.
+- `remote-deletable` goes on the **child** source, not on the account — the
+  opposite of `remote-creatable`. `server_side_source_remote_delete_sync()`
+  refuses on the child's own flag and then resolves the collection backend
+  through `e_source_registry_server_ref_backend()`, so the flag has to be set
+  on every child, and only on the children this backend actually owns.
+- evolution-ews's `ews_backend_delete_resource_sync` is the shape to mirror:
+  read the server-side id off the source's own extension, refuse with
+  `G_IO_ERROR_INVALID_ARGUMENT` if the source does not carry one, delete on the
+  server, and only then `e_source_remove_sync()` — which is EDS's documented
+  "the implementor must also remove @source from the backend's server".
+
+Plan: the flag lands in the `child_added` vfunc, which is EDS's own funnel for
+every child of a collection (cached, fanned-out and freshly created alike) and
+the very place EDS sets `removable = FALSE`; gating it on
+`resource_id_of(child)` answering `Some` is what keeps it off the mail sources
+and off anything this backend did not write. The decision half goes to
+`jmap-collection-sync/src/delete.rs` beside `create.rs` (which JMAP account,
+which `/set` destroy) so it is testable against `jmap-mockd` without headers;
+the EDS ends go to `jmap-backend-collection/src/delete_resource.rs`.
