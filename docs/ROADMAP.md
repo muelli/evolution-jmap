@@ -518,6 +518,26 @@ heuristic); write-side `shareWith`/`ShareNotification` deferred to a later phase
 **DECISION (maintainer): approve the doc's plan to start Path A, or adjust — no
 implementation until then.**
 
+### Track F — Portability to newer Evolution/EDS (SPIKE FIRST — gated on "no spaghetti")
+The **data/backend** side is already version-portable: `eds-sys/build.rs` probes
+the installed headers and `eds-sys/src/compat.rs` selects `#[cfg]`-gated wrappers
+(`eds_vcard_version_enum`, `camel_*`, …); M10's `eds-version-matrix` proves it
+green on EDS 3.52 **and** 3.60. The **config/GUI** side is the untested axis.
+Reassuringly, our setup UI uses the `EMailConfigServiceBackend`/
+`EMailConfigServicePage` API (`jmap-config/src/backend.rs`), **not** the
+`GtkUIManager` that Evolution ≥3.56 dropped — so that particular churn does not
+touch us, and there is zero `GtkUIManager` usage in `jmap-config`/`evo-sys`.
+**Spike (`[claude]`, deliverable `docs/NEWER-EVOLUTION-SPIKE.md`):** compile
+`jmap-config` + `evo-sys` against the newer-Evolution/EDS container already used
+by `ci/eds-matrix.sh`; characterize any `EMailConfig*` (or other shell/UI) API
+drift 3.52 → 3.56/3.60; then judge honestly whether extending the existing
+`compat.rs`-style build.rs-probed `#[cfg]` gating absorbs it cleanly or whether it
+would sprawl. **Maintainer directive: recommend 3.52-only if it would be messy —
+staying single-version beats carrying spaghetti.** Do NOT implement multi-version
+support in the spike; produce the go/no-go + effort estimate and let the
+maintainer decide. (If it turns out nothing drifts, the bonus finding is that we
+may already build on newer Evolution unchanged.)
+
 ### Not doing (protocol-gated)
 - **Tasks (VTODO) / Memos (VJOURNAL).** BLOCKED upstream: draft-ietf-jmap-calendars
   models events only; there is no standardized JMAP task/note object (JSTask is a
