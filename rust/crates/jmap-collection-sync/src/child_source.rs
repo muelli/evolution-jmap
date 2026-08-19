@@ -202,6 +202,15 @@ impl Child {
             "Method",
             if connection.secure { "tls" } else { "none" },
         ));
+        // Only a calendar has a color to begin with (`Resource::color` is
+        // always `None` for an address book), and only when the server named
+        // one — an absent color is left unwritten rather than written empty,
+        // the same rule `Port`/`User`/`Method` above follow.
+        if self.kind == ChildKind::Calendar
+            && let Some(color) = &self.color
+        {
+            settings.push(Setting::new(EXTENSION_CALENDAR, "Color", &**color));
+        }
         settings
     }
 }
@@ -252,6 +261,7 @@ mod tests {
             account_id: Id::new("A1"),
             collection_id: Id::new(collection),
             is_default: false,
+            color: None,
             read_only: false,
         }
     }
@@ -424,6 +434,39 @@ mod tests {
                 .any(|setting| setting.key == "Enabled" || setting.key == "Parent"),
             "EDS sets Parent and binds Enabled; a backend that writes either \
              is fighting it"
+        );
+    }
+
+    #[test]
+    fn a_calendars_color_is_written_and_an_address_books_never_is() {
+        let mut calendar = child(ChildKind::Calendar, "Cal1", "Work");
+        calendar.color = Some("#ff8800".to_owned());
+
+        assert!(
+            triples(&calendar.settings(&connection())).contains(&("Calendar", "Color", "#ff8800"))
+        );
+
+        // An address book's `color` is always `None` in practice (see
+        // `Resource::color`), but the emitter itself gates on the kind rather
+        // than trusting that — a `Setting` under `[Address Book] Color` is one
+        // `jmap-backend-collection::child_source::apply` has no property for.
+        let mut book = child(ChildKind::AddressBook, "AB1", "Personal");
+        book.color = Some("#ff8800".to_owned());
+        assert!(
+            !book
+                .settings(&connection())
+                .iter()
+                .any(|setting| setting.key == "Color"),
+            "an address book child must never carry a Color setting"
+        );
+    }
+
+    #[test]
+    fn a_calendar_the_server_named_no_color_for_writes_none() {
+        let settings = child(ChildKind::Calendar, "Cal1", "Work").settings(&connection());
+        assert!(
+            !settings.iter().any(|setting| setting.key == "Color"),
+            "an unset color is left unwritten rather than written empty"
         );
     }
 }

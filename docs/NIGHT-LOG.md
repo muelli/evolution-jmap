@@ -35350,3 +35350,69 @@ red test first in `jmap-collection-sync`'s existing `child_source.rs` test
 module (the `Setting` triple), then in
 `jmap-backend-collection/tests/child_source.rs` (round-trip through a real
 `ESource` via `e_source_selectable_get_color`).
+
+## 2026-08-19 — Delivered: Track D2, `Calendar.color` reaches an `ESourceSelectable` "Color" setting
+
+Followed through on this session's claim. `color: Option<String>` now flows
+`jmap_proto::calendars::Calendar` → `jmap_collection_sync::Resource` →
+`Child` → a `("Calendar", "Color", …)` `Setting`, and one new match arm in
+`jmap-backend-collection/src/child_source.rs::write` writes it onto the real
+`ESource` via `e_source_selectable_set_color`.
+
+- **`jmap-collection-sync/src/resources.rs`**: `Resource` grew `color:
+  Option<String>`; the `Collection` trait both `AddressBook` and `Calendar`
+  implement grew a `color()` method — `AddressBook` always answers `None`
+  (JMAP defines no such property on it), `Calendar` answers `self.color.clone()`.
+- **`jmap-collection-sync/src/children.rs`**: `Child` grew the same field,
+  carried straight through from the `Resource` a populate discovered.
+- **`jmap-collection-sync/src/child_source.rs`**: `Child::settings()` pushes
+  a `("Calendar", "Color", …)` triple only when `self.kind ==
+  ChildKind::Calendar` *and* a color is present — gated on the kind rather
+  than trusting `Resource::color`'s own `AddressBook` invariant, and omitted
+  entirely (not written empty) when the server named none, matching the
+  `Port`/`User`/`Method` rule already documented in this file.
+- **`jmap-backend-collection/src/child_source.rs`**: one new `(EXTENSION_CALENDAR,
+  "Color")` match arm calling `e_source_selectable_set_color`. No new
+  extension lookup or `eds-sys` allowlist change needed: `ESourceCalendar`
+  derives from `ESourceSelectable` (`e-source-calendar.h` /
+  `e-source-selectable.h`), so the "Calendar" extension object
+  `e_source_calendar_get_type()` already registers answers the selectable
+  setter too, through the same generic `extension::<T>()` cast-and-call
+  helper every other setting in this file already uses — this is the same
+  low-risk, closed-set FFI idiom as `Host`/`Port`/`Method`/`Security`, not new
+  vtable or ownership design, which is why it was tractable here while D1's
+  remaining `create_resource_sync`/`delete_resource_sync` vtable wiring and
+  the SRV thread's `GResolver` binding are still parked as their own,
+  harder sessions.
+- **Finding, not a bug — recorded in the test rather than "fixed":**
+  `ESourceSelectable:color` is not NULL by default the way most freshly
+  created extension properties are. `jmap-backend-collection/tests/child_source.rs`'s
+  `a_calendar_the_server_named_no_color_for_gets_no_color_setting` found EDS's
+  own compiled-in default is `"#62a0ea"` (GNOME's accent blue) — so a
+  calendar the server names no color for reads back as *that*, not as no
+  color at all. This is exactly why `Child::settings()` leaves the setting
+  out rather than writing an empty string: writing `""` would stomp that
+  sensible default with a blank one.
+- **Tests** (red-then-green): `jmap-collection-sync`'s own `resources.rs`
+  (color threads from `Calendar`/is always `None` from `AddressBook`),
+  `children.rs` (color reaches the child), `child_source.rs` (the `Setting`
+  triple, present/absent), and `jmap-backend-collection/tests/child_source.rs`
+  (the same round-tripped through a real `ESource`, plus the default-color
+  finding above).
+- Full gate: `cargo fmt --check` clean (`cargo fmt` reflowed two lines this
+  session wrote, applied), `cargo clippy --all-targets --locked -- -D
+  warnings` (default-members) clean, `cargo clippy -p jmap-backend-collection
+  --all-targets --locked -- -D warnings` clean, `cargo test --locked` green
+  (default-members) and `cargo test -p jmap-backend-collection -p
+  jmap-backend-book -p jmap-backend-cal -p jmap-backend-core -p jmap-config -p
+  jmap-mail -p eds-sys --locked` green (every crate this change's types reach,
+  built directly since this VM has the EDS headers even though these crates
+  stay out of `default-members`). `cargo build --workspace --tests` still
+  fails on `example-module` — confirmed pre-existing and unrelated by
+  reproducing the identical link error (`e_mail_shell_view_get_type` etc.
+  undefined) against a clean `git stash` of master; a VM environment gap in
+  the full Evolution UI libs, not this change. No new files, so no new SPDX
+  headers needed.
+- **Still open, as the roadmap text already said:** write-back — a locally
+  edited calendar colour reaching the server via `Calendar/set` — rides on
+  D1's EDS-side `create_resource_sync` wiring, which is not done yet.

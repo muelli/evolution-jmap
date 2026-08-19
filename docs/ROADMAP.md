@@ -263,6 +263,26 @@ tracks follow; the maintainer may reorder anytime.
   emit an ESourceSelectable `("Calendar","Color", …)` setting in
   `jmap-collection-sync/src/child_source.rs`; write-back rides on D1's
   `Calendar/set`.
+  - **DONE 2026-08-19 (read path)** — `color: Option<String>` now flows
+    `Calendar` → `Resource` → `Child` → a `("Calendar", "Color", …)`
+    `Setting`, emitted only when the server named one (same
+    omitted-vs-empty rule as `Port`/`User`/`Method`), and
+    `jmap-backend-collection/src/child_source.rs::write` grew one match arm
+    calling `e_source_selectable_set_color` — `ESourceCalendar` derives from
+    `ESourceSelectable`, so the "Calendar" extension already fetched for
+    `BackendName` answers it too, no second extension or allowlist change
+    needed. TDD'd at both layers (`jmap-collection-sync`'s `Setting`-triple
+    tests, `jmap-backend-collection/tests/child_source.rs`'s round trip
+    through a real `ESource`). **Finding recorded in the test, not treated as
+    a bug:** `ESourceSelectable:color` is not NULL-by-default — EDS's own
+    GParamSpec defaults it to `#62a0ea` (GNOME's accent blue) — so a calendar
+    the server named no color for reads back as that default, not as no
+    color at all; leaving the setting unwritten (rather than writing an
+    empty string) is what makes that the *only* thing overriding it.
+    **Still open:** write-back (a local colour edit reaching the server)
+    rides on D1's `Calendar/set`, whose EDS-side `create_resource_sync`
+    wiring is not done yet — out of scope here, as the roadmap text already
+    said.
 
 ### Track E — Sharing + scheduling (SPIKE DONE → NEEDS-DECISION on the doc)
 Design spike **complete**: see `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). It

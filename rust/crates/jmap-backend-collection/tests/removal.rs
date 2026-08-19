@@ -92,6 +92,7 @@ fn child(kind: ChildKind, collection: &str) -> Child {
         account_id: Id::new("A1"),
         collection_id: Id::new(collection),
         is_default: false,
+        color: None,
         read_only: false,
     }
 }
@@ -109,6 +110,7 @@ fn resource(id: &str) -> Resource {
         id: Id::new(id),
         name: format!("Collection {id}"),
         is_default: false,
+        color: None,
     }
 }
 

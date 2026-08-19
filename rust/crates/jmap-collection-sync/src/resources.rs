@@ -61,6 +61,10 @@ pub struct Resource {
     /// The account's default collection for its kind — where a card or an event
     /// created without a collection lands.
     pub is_default: bool,
+    /// `Calendar.color`, threaded straight through. `None` for an address
+    /// book (JMAP defines no such property on `AddressBook`) and for a
+    /// calendar the server named none.
+    pub color: Option<String>,
 }
 
 /// Everything one JMAP login fans out into.
@@ -133,6 +137,7 @@ fn resources<C: Collection>(listing: Vec<C>) -> Vec<Resource> {
                     id,
                     name,
                     is_default: collection.is_default() == Some(true),
+                    color: collection.color(),
                 },
             ))
         })
@@ -170,6 +175,9 @@ trait Collection {
     fn sort_order(&self) -> u32;
     fn is_default(&self) -> Option<bool>;
     fn is_subscribed(&self) -> Option<bool>;
+    /// `Calendar.color`. `None` for every `AddressBook`, which has no such
+    /// property to begin with.
+    fn color(&self) -> Option<String>;
 }
 
 impl Collection for AddressBook {
@@ -188,6 +196,9 @@ impl Collection for AddressBook {
     fn is_subscribed(&self) -> Option<bool> {
         self.is_subscribed
     }
+    fn color(&self) -> Option<String> {
+        None
+    }
 }
 
 impl Collection for Calendar {
@@ -205,6 +216,9 @@ impl Collection for Calendar {
     }
     fn is_subscribed(&self) -> Option<bool> {
         self.is_subscribed
+    }
+    fn color(&self) -> Option<String> {
+        self.color.clone()
     }
 }
 
@@ -287,5 +301,37 @@ mod tests {
             !resources[1].is_default,
             "an absent isDefault is not the default"
         );
+    }
+
+    #[test]
+    fn a_calendars_color_is_carried_and_an_address_books_never_is() {
+        // `AddressBook` has no `color` property to begin with, so its
+        // `Resource` is always `None`; a `Calendar`'s is whatever the server
+        // named, verbatim.
+        let calendar = Calendar {
+            id: Some(Id::new("Cal1")),
+            name: "Work".to_owned(),
+            color: Some("#ff8800".to_owned()),
+            ..Calendar::default()
+        };
+        assert_eq!(
+            resources(vec![calendar])[0].color,
+            Some("#ff8800".to_owned())
+        );
+
+        assert_eq!(
+            resources(vec![book(Some("AB1"), "Personal")])[0].color,
+            None
+        );
+    }
+
+    #[test]
+    fn a_calendar_the_server_named_no_color_for_carries_none() {
+        let calendar = Calendar {
+            id: Some(Id::new("Cal1")),
+            name: "Work".to_owned(),
+            ..Calendar::default()
+        };
+        assert_eq!(resources(vec![calendar])[0].color, None);
     }
 }
