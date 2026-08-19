@@ -94,10 +94,10 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
-use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::fail_bool;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_mail_sync::KeywordChange;
 use jmap_proto::Id;
@@ -258,19 +258,19 @@ pub(crate) unsafe fn push_row(
     uid: &CStr,
 ) -> Result<(), StoreError> {
     // SAFETY: the contract above, and `summary_get` hands back a reference this
-    // function owns and releases below.
-    let info = unsafe { camel_folder_summary_get(summary, uid.as_ptr()) };
-    if info.is_null() {
+    // function owns and releases when `info` drops at the end of the scope.
+    let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
+    else {
         // A uid the summary named a moment ago and has no row for now: the row
         // was removed by a refresh running alongside. There is nothing to send
         // and nothing left to clear.
         return Ok(());
-    }
+    };
 
     // SAFETY: `info` is a live row for as long as this function's reference is.
     let result = unsafe {
-        let before = server_keywords(info).unwrap_or_default();
-        let after = row_keywords(info);
+        let before = server_keywords(info.as_ptr()).unwrap_or_default();
+        let after = row_keywords(info.as_ptr());
         let change = KeywordChange::between(&before, &after);
 
         // A uid Camel stored and we cannot read back as text is not one the
@@ -286,19 +286,17 @@ pub(crate) unsafe fn push_row(
         };
         match &result {
             Ok(()) => {
-                set_server_keywords(info, after);
-                camel_message_info_set_folder_flagged(info, GFALSE);
+                set_server_keywords(info.as_ptr(), after);
+                camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
             }
             Err(StoreError::NoMessage(_)) => {
-                camel_message_info_set_folder_flagged(info, GFALSE);
+                camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
             }
             Err(_) => {}
         }
         result
     };
 
-    // SAFETY: the reference taken above.
-    unsafe { g_object_unref(info.cast()) };
     match result {
         Err(StoreError::NoMessage(_)) => Ok(()),
         other => other,

@@ -77,12 +77,11 @@ use std::ptr;
 
 use eds_sys::{CamelDataWrapper, CamelMimeMessage, camel_data_wrapper_write_to_output_stream_sync};
 use gio_sys::{
-    GMemoryOutputStream, GOutputStream, g_memory_output_stream_get_data,
-    g_memory_output_stream_get_data_size, g_memory_output_stream_new_resizable,
-    g_output_stream_flush,
+    GMemoryOutputStream, g_memory_output_stream_get_data, g_memory_output_stream_get_data_size,
+    g_memory_output_stream_new_resizable, g_output_stream_flush,
 };
 use glib_sys::{GError, GFALSE, GQuark, g_error_free, g_error_new_literal};
-use gobject_sys::g_object_unref;
+use jmap_backend_core::owned::Owned;
 
 /// What is reported when Camel refused to write a message out and said nothing
 /// about why.
@@ -109,31 +108,33 @@ const UNEXPLAINED: &std::ffi::CStr = c"the message could not be written out";
 pub unsafe fn write_message(message: *mut CamelMimeMessage) -> Result<Vec<u8>, Unwritable> {
     // SAFETY: a fresh resizable memory stream, the message by this function's
     // contract, and an error out-parameter that is a local starting NULL.
+    // `stream` releases its reference wherever this scope ends, on every path
+    // below.
     unsafe {
-        let stream: *mut GOutputStream = g_memory_output_stream_new_resizable();
+        let Some(stream) = Owned::from_raw(g_memory_output_stream_new_resizable()) else {
+            return Err(Unwritable(ptr::null_mut()));
+        };
         let mut failure: *mut GError = ptr::null_mut();
         let written = camel_data_wrapper_write_to_output_stream_sync(
             message.cast::<CamelDataWrapper>(),
-            stream,
+            stream.as_ptr(),
             ptr::null_mut(),
             &mut failure,
         );
-        let flushed =
-            written >= 0 && g_output_stream_flush(stream, ptr::null_mut(), &mut failure) != GFALSE;
+        let flushed = written >= 0
+            && g_output_stream_flush(stream.as_ptr(), ptr::null_mut(), &mut failure) != GFALSE;
 
         if !flushed {
-            g_object_unref(stream.cast());
             return Err(Unwritable(failure));
         }
 
-        let stream = stream.cast::<GMemoryOutputStream>();
-        let data = g_memory_output_stream_get_data(stream).cast::<u8>();
-        let len = g_memory_output_stream_get_data_size(stream);
+        let memory_stream = stream.as_ptr().cast::<GMemoryOutputStream>();
+        let data = g_memory_output_stream_get_data(memory_stream).cast::<u8>();
+        let len = g_memory_output_stream_get_data_size(memory_stream);
         let source = match data.is_null() {
             true => Vec::new(),
             false => std::slice::from_raw_parts(data, len as usize).to_vec(),
         };
-        g_object_unref(stream.cast());
         Ok(crlf(source))
     }
 }

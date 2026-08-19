@@ -62,10 +62,10 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, g_error_new_literal, gchar, gssize};
-use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::guard_ptr;
 use jmap_proto::Id;
 
@@ -177,19 +177,15 @@ unsafe extern "C" fn get_message_sync(
 /// NUL-terminated string.
 unsafe fn listed_size(folder: *mut CamelFolder, message_uid: *const gchar) -> Option<u32> {
     // SAFETY: the contract above; the summary is borrowed from the folder, and
-    // `summary_get` hands back a reference this function owns and releases.
+    // `summary_get` hands back a reference this function owns and releases
+    // when `info` drops at the end of the scope.
     unsafe {
         let summary = camel_folder_get_folder_summary(folder);
         if summary.is_null() {
             return None;
         }
-        let info = camel_folder_summary_get(summary, message_uid);
-        if info.is_null() {
-            return None;
-        }
-        let size = camel_message_info_get_size(info);
-        g_object_unref(info.cast());
-        Some(size)
+        let info = Owned::from_raw(camel_folder_summary_get(summary, message_uid))?;
+        Some(camel_message_info_get_size(info.as_ptr()))
     }
 }
 
@@ -206,12 +202,27 @@ unsafe fn listed_size(folder: *mut CamelFolder, message_uid: *const gchar) -> Op
 unsafe fn parse(source: &[u8], error: *mut *mut GError) -> *mut CamelMimeMessage {
     // SAFETY: a fresh message is a valid `CamelDataWrapper`, `source` is a live
     // buffer of the length given, and the error out-parameter is a local that
-    // starts NULL.
+    // starts NULL. `message` releases its reference wherever this scope ends,
+    // unless `into_raw` hands it to the caller on the success path below.
     unsafe {
-        let message = camel_mime_message_new();
+        let Some(message) = Owned::from_raw(camel_mime_message_new()) else {
+            // Unreachable in practice — `camel_mime_message_new` has no failure
+            // mode to report — but a NULL construction is not one this parse
+            // succeeded at either, so it gets the same "unexplained" report as
+            // a parse the wrapper itself refused with no error set, below.
+            set_raw_gerror(
+                error,
+                g_error_new_literal(
+                    camel_folder_error_quark(),
+                    CAMEL_FOLDER_ERROR_INVALID as i32,
+                    c"the downloaded message could not be parsed".as_ptr(),
+                ),
+            );
+            return ptr::null_mut();
+        };
         let mut inner: *mut GError = ptr::null_mut();
         let parsed = camel_data_wrapper_construct_from_data_sync(
-            message.cast::<CamelDataWrapper>(),
+            message.as_ptr().cast::<CamelDataWrapper>(),
             source.as_ptr().cast(),
             // A message larger than `gssize` cannot be described to Camel at
             // all; saturating leaves a truncated parse, which fails loudly,
@@ -222,7 +233,6 @@ unsafe fn parse(source: &[u8], error: *mut *mut GError) -> *mut CamelMimeMessage
             &mut inner,
         );
         if parsed == GFALSE {
-            g_object_unref(message.cast());
             if inner.is_null() {
                 // A parser that failed without saying why still has to be
                 // reported as a failure: Camel logs a critical of its own for a
@@ -239,7 +249,7 @@ unsafe fn parse(source: &[u8], error: *mut *mut GError) -> *mut CamelMimeMessage
             set_raw_gerror(error, inner);
             return ptr::null_mut();
         }
-        message
+        message.into_raw()
     }
 }
 
