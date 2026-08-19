@@ -59,14 +59,39 @@ they close, prioritise in this order:
      send/deliver/read, contacts, and calendar all round-trip and persist across
      a reboot (NIGHT-LOG "operator-verified real-server end-to-end"). The
      real-server dimension of M7 and of this item is human-confirmed.
-   - **DEFERRED (maintainer, 2026-08-19): OAuth 2.0 real-server validation.**
-     The client's RFC 8414 issuer check correctly rejects the throwaway Stalwart
-     (plain HTTP, `defaultHostname = example.com`, reached via a forward) — see
-     NIGHT-LOG "OAuth 2.0 discovery's issuer check". OAuth2 is fully mock-tested
-     and behaving correctly; exercising it against a real server needs a
-     TLS-proper deployment (real hostname + cert), parked for later. Do NOT
-     relax the issuer match to make it pass — it is the mix-up-attack defence, a
-     deliberate maintainer call, not a bug. Do not re-surface it as a blocker.
+   - **OAuth 2.0 real-server validation — NOW UNBLOCKED, CLAIMABLE (maintainer,
+     2026-08-19).** This was deferred *only* because the sole real server was the
+     throwaway Stalwart (plain HTTP, `defaultHostname = example.com`), which the
+     client's RFC 8414 issuer check *correctly* rejects (mix-up-attack defence —
+     **do NOT relax the issuer match** to make anything pass; that is deliberate,
+     not a bug). The operator has a real **Fastmail** account (proper TLS, real
+     hostname + cert) and is willing to use it, so the TLS prerequisite is met —
+     un-defer. OAuth2 is fully mock-tested; what has never run is the flow against
+     a real provider. Two concrete blockers remain, neither of them TLS:
+     - **(a) No working entry point.** OAuth is autodiscovery-only (decision #1),
+       triggered by "Look Up Account Details" → the `config_lookup` worker running
+       `discover_and_register`. But Look Up still returns imapx — it is not
+       surfacing a JMAP result, so discovery/registration never runs. (Manual
+       OAuth selection is not a shortcut: discovery must happen regardless and is
+       wired to Look Up.) **First task: make the Look Up worker actually surface a
+       JMAP result and run `discover_and_register` against the SRV-resolved host**
+       — the same "imapx, not JMAP" symptom the operator hit, now that item 5's
+       SRV resolver exists to reach `api.fastmail.com`. Diagnose whether the
+       worker even runs in the installed Evolution (the module's transitive
+       `libevolution-mail.so` needs `LD_LIBRARY_PATH=/usr/lib/evolution`; the
+       307th session only hand-drove it under `dbus-run-session`).
+     - **(b) The Fastmail-specific flow gaps, from `docs/OAUTH-FASTMAIL.md`:**
+       `config_lookup::REDIRECT_URI = "jmap-oauth2:/redirect"` lacks the required
+       dot (Fastmail needs a dotted reverse-DNS private-use scheme); use the
+       metadata's `urn:ietf:params:oauth:scope:*` names and the *discovered* token
+       endpoint (`/oauth/refresh`); confirm `/oauth/register` is open (no initial
+       access token); check whether an RFC 8707 `resource` indicator is required.
+       Fastmail DOES support RFC 7591 dynamic registration (confirmed in the doc),
+       so the autodiscovery-only design is viable.
+     **Verify:** operator does the consent browser round-trip in the VM against
+     real Fastmail — the inherently human step. Sequence after the Bearer method
+     (item 6) if quota is tight (Bearer is the faster path to *a* working Fastmail
+     connection and proves the SRV chain), but this is claimable now.
 3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
 4. **Maintainer-directed externalisation quick win.**
    The externalisation audit (`docs/EXTERNALISATION-AUDIT.md`) found the codebase
