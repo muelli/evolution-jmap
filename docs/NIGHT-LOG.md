@@ -35220,3 +35220,199 @@ password path + `config_lookup.rs::probe_host`, and a `GResolver`-backed
 by the prior session — not attempted here since this session found a
 higher-value, lower-risk item (a genuinely unblocked, pure-verification M10
 close-out) instead.
+
+## 2026-08-19 (claim) — Claiming Track D1: `AddressBook/set` + `Calendar/set` create/destroy (protocol/client/mock layer only)
+
+Fresh survey: M1–M10 are all `COMPLETE` in `docs/MILESTONES.md`. M7's setup UI
+and the real-server-readiness items in ROADMAP's CURRENT PRIORITY are done or
+maintainer-deferred (OAuth2 issuer check — do not re-touch, see MAINTAINER
+DECISIONS). The SRV-autodiscovery thread's remaining half is real
+`unsafe`/FFI (`g_resolver_lookup_service`, `GList`/`GSrvTarget` ownership) with
+zero observable behaviour until that FFI lands, already flagged
+escalation-worthy by the prior session — not reattempted here. Per ROADMAP's
+own "Lead order" note, with both remaining CURRENT PRIORITY items landed, the
+Claude lane leads Round 2 with **Track D** (EDS parity).
+
+Claiming **D1 — create/delete a calendar and an address book**, protocol/client/
+mock half only. `AddressBook`/`Calendar` are plain data types with no
+hierarchy, and `jmap-proto`'s generic `SetRequest<T>`/`SetResponse<T>` plus
+`jmap-mock`'s `simple_set` helper already do everything `ContactCard/set` and
+`CalendarEvent/set` need — the same machinery covers `AddressBook/set` and
+`Calendar/set` with no protocol changes, mirroring `contact_card_set`/
+`calendar_event_set`'s validation shape (server-set `id` rejected on create,
+`name` required non-empty). Add `Client::address_book_create`/
+`address_book_destroy` and `Client::calendar_create`/`calendar_destroy`,
+mirroring `contact_create`/`contact_destroy` and `event_create`/
+`event_destroy` exactly. TDD against `jmap-mock`, in the existing
+`jmap-client/tests/contacts.rs` and `tests/calendars.rs`.
+
+**Explicitly out of scope for this increment** (left for a follow-up, and not
+claimed as done): wiring EDS's `create_resource_sync`/`delete_resource_sync`
+vfuncs on `ECollectionBackendClass`
+(`jmap-backend-collection/src/backend.rs:110`, `tests/backend.rs:340`) to call
+these new client methods and mint/remove the child `ESource` — that is
+GObject-vtable FFI work of the same kind as `child_added`'s, worth doing
+carefully in its own session rather than folded into a "just add the wire
+methods" increment. This session lands the half that is pure, safe,
+TDD-able Rust with no unsafe/FFI surface, so the FFI half has something
+correct to call into.
+
+## 2026-08-19 — Delivered: `AddressBook/set` + `Calendar/set` create/destroy (protocol/client/mock)
+
+Followed through on this session's claim. `AddressBook` and `Calendar` are
+plain data types with no hierarchy the way `Mailbox` has (no `parentId`, no
+uniqueness-among-siblings rule), so no `jmap-proto` changes were needed: the
+existing generic `SetRequest<T>`/`SetResponse<T>` and `jmap-mock`'s
+`simple_set` helper (already used by `ContactCard/set` and
+`CalendarEvent/set`) cover both new methods completely.
+
+- **`jmap-mock/src/contacts.rs`**: new `address_book_set`, `simple_set` over
+  `account.address_books`; the only per-create checks are the ones every
+  `/set` create here shares — server-set `id` rejected, `name` required
+  non-empty (mirrors `contact_card_set`'s and `mailbox_set`'s shape).
+- **`jmap-mock/src/calendars.rs`**: new `calendar_set`, same shape over
+  `account.calendars`.
+- **`jmap-mock/src/dispatch.rs`**: routes `"AddressBook/set"` and
+  `"Calendar/set"` to them.
+- **`jmap-client/src/contacts.rs`**: `Client::address_book_create` /
+  `address_book_destroy` (+ private `address_book_set` helper), byte-for-byte
+  mirroring `contact_create`/`contact_destroy`'s created/not_created and
+  destroyed/not_destroyed handling.
+- **`jmap-client/src/calendars.rs`**: `Client::calendar_create` /
+  `calendar_destroy` (+ private `calendar_set` helper), mirroring
+  `event_create`/`event_destroy` the same way.
+- **Tests** (red-then-green, in the existing
+  `jmap-client/tests/{contacts,calendars}.rs`): create returns a server-set
+  id and is visible in a subsequent `/get`; create rejects an empty `name`
+  and a client-supplied `id`, both as `invalidProperties`; destroy removes it
+  from the store and a second destroy answers `notFound`. Confirmed red
+  before the client methods existed (`no method named` `address_book_destroy`/
+  `calendar_destroy` `found for struct Client`), green after.
+- Full gate: `cargo fmt --check` clean (one line `cargo fmt` reflowed in
+  `calendars.rs`, applied), `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo clippy -p
+  evolution-jmap-client --all-targets --locked --features live-server --
+  -D warnings` clean, `cargo test --locked` green with 0 failures across
+  every crate. No new files, so no new SPDX headers needed; `cargo
+  deny`/`reuse lint` unavailable on this VM as usual.
+
+**Deliberately left for a follow-up, not claimed as done:** wiring
+`create_resource_sync`/`delete_resource_sync` on `ECollectionBackendClass`
+(`jmap-backend-collection/src/backend.rs`) to call these new client methods
+and mint/remove the child `ESource` on the EDS side. That is GObject-vtable
+FFI work — same category as `child_added`'s override, which this crate's own
+comments describe as needing care about which class struct offset is
+written and what chains up to the parent. Doing it well deserves its own
+session rather than being folded into what was otherwise a fully safe,
+TDD-only increment; `docs/ROADMAP.md`'s D1 entry is updated to PARTIAL with
+this split spelled out for whoever picks it up next.
+
+## 2026-08-19 (claim) — Claiming Track D2: thread `Calendar.color` through to an `ESourceSelectable` "Color" setting
+
+Fresh survey: `docs/MILESTONES.md` has M1–M10 and CALCARD all `COMPLETE`.
+CURRENT PRIORITY's remaining named items are either maintainer-deferred
+(OAuth2 real-server validation — do not re-touch) or already flagged by prior
+sessions as genuinely FFI/escalation-risk with no safe Sonnet-sized slice
+left: the SRV-autodiscovery thread's remaining half needs a
+`g_resolver_lookup_service()` binding (`GList`/`GSrvTarget` transfer-full
+ownership) and D1's remaining half is `ECollectionBackendClass`
+`create_resource_sync`/`delete_resource_sync` vtable wiring "of the same kind
+as `child_added`'s" — both explicitly called out as needing their own careful
+session rather than a quick pass. Per ROADMAP's "Lead order" note the Claude
+lane leads Round 2 with Track D; **D2 (Calendar colour)** is the tractable
+item in that track: `Calendar.color` is already parsed
+(`jmap-proto/src/calendars.rs:29`) and then dropped.
+
+Checked the FFI shape before claiming it: `jmap-backend-collection/src/child_source.rs::write`
+already writes every other child setting (Host, Port, User, Method, Security)
+as one `match` arm per `(group, key)` calling an EDS setter on an extension
+fetched through the file's own generic `extension::<T>()` helper — a closed,
+heavily-commented, already-proven pattern, not new vtable/ownership design.
+`ESourceCalendar` (`/usr/include/evolution-data-server/libedataserver/e-source-calendar.h`)
+derives from `ESourceSelectable`
+(`e-source-selectable.h`, `e_source_selectable_set_color`), so the "Calendar"
+extension `e_source_calendar_get_type()` already registers can be read back
+through the parent's setter with the same cast-and-call idiom already used
+for e.g. `ESourceSecurity`. `eds-sys/build.rs`'s allowlists are wildcards
+(`"ESource.*"` types, `"e_source_.*"` functions) that already cover
+`ESourceSelectable`/`e_source_selectable_set_color` — no allowlist edit
+needed.
+
+**Plan:** thread `color: Option<String>` from `jmap-proto::Calendar` through
+`jmap-collection-sync`'s `Resource` → `Child` → `Child::settings()` (a new
+`("Calendar", "Color", …)` triple, gated on `ChildKind::Calendar` and emitted
+only when present — mirrors how `Port`/`User`/`Method` are already optional),
+then one new match arm in `jmap-backend-collection/src/child_source.rs::write`
+calling `e_source_selectable_set_color`. Write-back to the server (if the user
+edits the colour locally) rides on D1's `Calendar/set`, whose EDS-side wiring
+is not done yet — out of scope here, same as ROADMAP's D2 text says. TDD:
+red test first in `jmap-collection-sync`'s existing `child_source.rs` test
+module (the `Setting` triple), then in
+`jmap-backend-collection/tests/child_source.rs` (round-trip through a real
+`ESource` via `e_source_selectable_get_color`).
+
+## 2026-08-19 — Delivered: Track D2, `Calendar.color` reaches an `ESourceSelectable` "Color" setting
+
+Followed through on this session's claim. `color: Option<String>` now flows
+`jmap_proto::calendars::Calendar` → `jmap_collection_sync::Resource` →
+`Child` → a `("Calendar", "Color", …)` `Setting`, and one new match arm in
+`jmap-backend-collection/src/child_source.rs::write` writes it onto the real
+`ESource` via `e_source_selectable_set_color`.
+
+- **`jmap-collection-sync/src/resources.rs`**: `Resource` grew `color:
+  Option<String>`; the `Collection` trait both `AddressBook` and `Calendar`
+  implement grew a `color()` method — `AddressBook` always answers `None`
+  (JMAP defines no such property on it), `Calendar` answers `self.color.clone()`.
+- **`jmap-collection-sync/src/children.rs`**: `Child` grew the same field,
+  carried straight through from the `Resource` a populate discovered.
+- **`jmap-collection-sync/src/child_source.rs`**: `Child::settings()` pushes
+  a `("Calendar", "Color", …)` triple only when `self.kind ==
+  ChildKind::Calendar` *and* a color is present — gated on the kind rather
+  than trusting `Resource::color`'s own `AddressBook` invariant, and omitted
+  entirely (not written empty) when the server named none, matching the
+  `Port`/`User`/`Method` rule already documented in this file.
+- **`jmap-backend-collection/src/child_source.rs`**: one new `(EXTENSION_CALENDAR,
+  "Color")` match arm calling `e_source_selectable_set_color`. No new
+  extension lookup or `eds-sys` allowlist change needed: `ESourceCalendar`
+  derives from `ESourceSelectable` (`e-source-calendar.h` /
+  `e-source-selectable.h`), so the "Calendar" extension object
+  `e_source_calendar_get_type()` already registers answers the selectable
+  setter too, through the same generic `extension::<T>()` cast-and-call
+  helper every other setting in this file already uses — this is the same
+  low-risk, closed-set FFI idiom as `Host`/`Port`/`Method`/`Security`, not new
+  vtable or ownership design, which is why it was tractable here while D1's
+  remaining `create_resource_sync`/`delete_resource_sync` vtable wiring and
+  the SRV thread's `GResolver` binding are still parked as their own,
+  harder sessions.
+- **Finding, not a bug — recorded in the test rather than "fixed":**
+  `ESourceSelectable:color` is not NULL by default the way most freshly
+  created extension properties are. `jmap-backend-collection/tests/child_source.rs`'s
+  `a_calendar_the_server_named_no_color_for_gets_no_color_setting` found EDS's
+  own compiled-in default is `"#62a0ea"` (GNOME's accent blue) — so a
+  calendar the server names no color for reads back as *that*, not as no
+  color at all. This is exactly why `Child::settings()` leaves the setting
+  out rather than writing an empty string: writing `""` would stomp that
+  sensible default with a blank one.
+- **Tests** (red-then-green): `jmap-collection-sync`'s own `resources.rs`
+  (color threads from `Calendar`/is always `None` from `AddressBook`),
+  `children.rs` (color reaches the child), `child_source.rs` (the `Setting`
+  triple, present/absent), and `jmap-backend-collection/tests/child_source.rs`
+  (the same round-tripped through a real `ESource`, plus the default-color
+  finding above).
+- Full gate: `cargo fmt --check` clean (`cargo fmt` reflowed two lines this
+  session wrote, applied), `cargo clippy --all-targets --locked -- -D
+  warnings` (default-members) clean, `cargo clippy -p jmap-backend-collection
+  --all-targets --locked -- -D warnings` clean, `cargo test --locked` green
+  (default-members) and `cargo test -p jmap-backend-collection -p
+  jmap-backend-book -p jmap-backend-cal -p jmap-backend-core -p jmap-config -p
+  jmap-mail -p eds-sys --locked` green (every crate this change's types reach,
+  built directly since this VM has the EDS headers even though these crates
+  stay out of `default-members`). `cargo build --workspace --tests` still
+  fails on `example-module` — confirmed pre-existing and unrelated by
+  reproducing the identical link error (`e_mail_shell_view_get_type` etc.
+  undefined) against a clean `git stash` of master; a VM environment gap in
+  the full Evolution UI libs, not this change. No new files, so no new SPDX
+  headers needed.
+- **Still open, as the roadmap text already said:** write-back — a locally
+  edited calendar colour reaching the server via `Calendar/set` — rides on
+  D1's EDS-side `create_resource_sync` wiring, which is not done yet.
