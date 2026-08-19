@@ -37822,3 +37822,59 @@ else surveyed at claim time is unchanged: CURRENT PRIORITY is fully done
 pending operator/maintainer confirmation; Track D1/E's remaining pieces and
 A5 remain escalation-worthy FFI; Track B1/C2/C4 remain NEEDS-DECISION;
 Track F remains a live concurrent claim (`81dac75`), not stale.
+
+## 2026-08-19 — escalating Track D1's vtable wiring (GObject-vtable FFI), not attempting it
+
+Fresh survey before claiming anything: `git fetch` shows local `master`
+already equals `origin/master` (`1e0547d`) — no new maintainer commit, and
+`~/.night-shift-escalate` was empty (the prior SRV-`Resolver` escalation was
+already delivered on opus at `aa711bf`). All milestones M1–M10 + CALCARD are
+`COMPLETE`; CURRENT PRIORITY's remaining items are all operator-verification
+waits, not code work (Fastmail SRV end-to-end, OAuth2 real-server, both
+explicitly deferred to the operator).
+
+Walked Round 2 in the maintainer's stated lead order (Track D first for the
+`[claude]` lane): Track A's `[claude]` items are done (A2, A4, A7) or
+explicitly escalation-worthy (A5, A6 Pattern C — both named as such in
+`docs/UNSAFE-AUDIT.md`); Track B1 and C2/C4 are NEEDS-DECISION; C1/C3 are
+DONE; **Track D1's remaining piece is next in the lead order** — wiring
+`create_resource_sync`/`delete_resource_sync` on `ECollectionBackendClass`
+to call the now-landed `AddressBook/set`/`Calendar/set` and mint/remove the
+child `ESource`, mirroring `child_added`'s existing vtable-trampoline
+pattern (`jmap-backend-collection/src/backend.rs`, chaining to
+`parent_class()` through `unsafe extern "C" fn` vfuncs) — real GObject-vtable
+FFI, the exact category this task's escalation criteria names by name.
+Track D2's write-back is blocked on D1. Track E's remaining piece
+(`ECalBackend get_free_busy_sync` + `BusyPeriod→VFREEBUSY`) is the same FFI
+category but sits behind D1 in the lead order. Track F was claimed at
+`81dac75` (2026-08-19 08:24:53Z, roughly 90 minutes before this session) —
+still well under the 24h staleness threshold, so left untouched as a live
+concurrent claim, not re-picked.
+
+So the best next step in priority order is Track D1's vtable wiring, and
+it is genuinely FFI/vtable risk, not just "uses `unsafe`": two new vfunc
+bodies need to override `ECollectionBackendClass::create_resource_sync`/
+`delete_resource_sync`, correctly chain to (or deliberately not chain to)
+the parent implementation, construct/destroy a child `ESource` with the
+right ownership (transfer-full vs transfer-none on the returned/consumed
+GObject), and map `AddressBook/set`/`Calendar/set` failures back through
+`GError` correctly — exactly the "plausible-but-wrong-but-compiles" shape
+this project's own escalation criteria and FFI-soundness audit (A5) call
+out, and untestable by any existing fake vtable in this codebase today.
+
+Not attempting it on Sonnet. Wrote `claude-opus-5` to
+`~/.night-shift-escalate` and stopping here without claiming the work, no
+lock taken. The next session on opus should start from Track D1's roadmap
+paragraph: add `create_resource_sync`/`delete_resource_sync` overrides in
+`jmap-backend-collection/src/backend.rs`, following the `child_added`
+trampoline's existing shape (guard/catch_unwind, chain-to-parent pattern),
+calling `Client::address_book_create`/`calendar_create` (and the `_destroy`
+pair) already landed in `jmap-client`, and minting/removing the child
+`ESource` the way mail folders already do via `Mailbox/set`
+(`jmap-mail/src/manage.rs:227`). TDD against `jmap-mock`'s now-existing
+`AddressBook/set`/`Calendar/set` handlers; `tests/backend.rs:340`'s current
+assertion (that these vfuncs are NOT overridden) is the red test to flip.
+Everything else surveyed at claim time is unchanged: A5, A6 Pattern C, and
+Track E's vfunc remain escalation-worthy FFI; Track B1/C2/C4 remain
+NEEDS-DECISION; Track F remains a live concurrent claim (`81dac75`), not
+stale.
