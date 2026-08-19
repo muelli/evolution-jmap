@@ -71,10 +71,10 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
-use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_proto::Id;
 
@@ -241,15 +241,12 @@ unsafe fn deleted_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
 /// NUL-terminated.
 unsafe fn is_deleted(summary: *mut CamelFolderSummary, uid: *const gchar) -> bool {
     // SAFETY: the contract above, and `summary_get` hands back a reference this
-    // function owns and releases below.
+    // function owns and releases when `info` drops at the end of the scope.
     unsafe {
-        let info = camel_folder_summary_get(summary, uid);
-        if info.is_null() {
+        let Some(info) = Owned::from_raw(camel_folder_summary_get(summary, uid)) else {
             return false;
-        }
-        let deleted = camel_message_info_get_flags(info) & CAMEL_MESSAGE_DELETED != 0;
-        g_object_unref(info.cast());
-        deleted
+        };
+        camel_message_info_get_flags(info.as_ptr()) & CAMEL_MESSAGE_DELETED != 0
     }
 }
 

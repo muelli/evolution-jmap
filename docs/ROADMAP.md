@@ -585,6 +585,25 @@ tracks follow; the maintainer may reorder anytime.
     test --locked` (default-members) and all seven EDS-gated crates' own
     `cargo test --locked` green, 0 failed. **Still open on A6:** the
     `jmap-mail` (~10 sites) migration and the rest of A6's IMPROVE list.
+  - **`jmap-mail` half DONE 2026-08-19** — the crate turned out to have ~19
+    manual `g_object_unref` sites (more than the ~10 estimated above, same
+    shape throughout), across `mime.rs`, `expunge.rs`, `folder.rs`,
+    `cache.rs`, `message.rs`, `message_info.rs`, `service.rs`, `summary.rs`,
+    `synchronize.rs` — all now migrated onto `Owned<T>`. The one structural
+    change beyond the mechanical swap: `cache.rs`'s `MessageCache` held its
+    `CamelDataCache` as a bare pointer behind a `Mutex` with its own
+    hand-written `Drop`; that field is now `Mutex<Owned<CamelDataCache>>`
+    and the hand-written `Drop` impl is gone, `Owned`'s own doing the same
+    job. No new test: every site this session touched is a single
+    early-return or a single unconditional unref (the "simpler sites" shape,
+    not `adopt`'s three-way match), and `jmap-mail`'s existing behavioural
+    suite already exercises every one of them end to end. Full gate green:
+    `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+    (default-members) and the seven-crate EDS-gated clippy both clean;
+    `cargo test --locked` (default-members) and all seven EDS-gated crates'
+    own `cargo test --locked` green, 0 failed. **A6's Pattern C item is now
+    fully closed** (see `docs/UNSAFE-AUDIT.md`); what remains open on A6
+    generally is the rest of its IMPROVE list beyond Pattern C.
 - **A7 `[claude]` Stale-comments audit.** Deliverable
   `docs/STALE-COMMENTS-AUDIT.md`: comments that no longer match the code —
   renamed/removed items, changed behaviour, done TODOs, resolved-milestone refs

@@ -46,6 +46,8 @@ use glib_sys::{GType, gchar};
 use gobject_sys::g_object_new;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::marshal::{checked_borrow, dispatched_borrow};
+#[cfg(camel_folder_search_object)]
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
@@ -288,17 +290,17 @@ unsafe extern "C" fn search_by_expression(
     error: *mut *mut glib_sys::GError,
 ) -> *mut glib_sys::GPtrArray {
     unsafe {
-        let search = eds_sys::camel_folder_search_new();
-        eds_sys::camel_folder_search_set_folder(search, folder);
-        let result = eds_sys::camel_folder_search_search(
-            search,
+        let Some(search) = Owned::from_raw(eds_sys::camel_folder_search_new()) else {
+            return ptr::null_mut();
+        };
+        eds_sys::camel_folder_search_set_folder(search.as_ptr(), folder);
+        eds_sys::camel_folder_search_search(
+            search.as_ptr(),
             expression,
             ptr::null_mut(),
             cancellable,
             error,
-        );
-        gobject_sys::g_object_unref(search.cast());
-        result
+        )
     }
 }
 
@@ -316,12 +318,11 @@ unsafe extern "C" fn search_by_uids(
     error: *mut *mut glib_sys::GError,
 ) -> *mut glib_sys::GPtrArray {
     unsafe {
-        let search = eds_sys::camel_folder_search_new();
-        eds_sys::camel_folder_search_set_folder(search, folder);
-        let result =
-            eds_sys::camel_folder_search_search(search, expression, uids, cancellable, error);
-        gobject_sys::g_object_unref(search.cast());
-        result
+        let Some(search) = Owned::from_raw(eds_sys::camel_folder_search_new()) else {
+            return ptr::null_mut();
+        };
+        eds_sys::camel_folder_search_set_folder(search.as_ptr(), folder);
+        eds_sys::camel_folder_search_search(search.as_ptr(), expression, uids, cancellable, error)
     }
 }
 

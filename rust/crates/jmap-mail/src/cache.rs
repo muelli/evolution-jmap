@@ -127,7 +127,7 @@ use gio_sys::{
     g_io_stream_get_output_stream, g_output_stream_write_all,
 };
 use glib_sys::{GError, GFALSE, GTRUE, g_clear_error};
-use gobject_sys::g_object_unref;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::log_critical;
 
 /// The subdirectory entries live in, below the account's cache directory.
@@ -163,13 +163,16 @@ pub struct MessageCache {
     /// message opens are three operations that may all be in flight. The lock is
     /// held for the length of one entry's IO and never across a network fetch,
     /// which is the part of an open worth overlapping.
-    cache: Mutex<*mut CamelDataCache>,
+    cache: Mutex<Owned<CamelDataCache>>,
 }
 
-// SAFETY: the pointer is the only one to a `CamelDataCache` this process holds
-// (it is created here and unreffed in `drop`, and no accessor hands it out), and
-// every use of it goes through the `Mutex` above — so there is no way to reach
-// the object from two threads at once.
+// SAFETY: the reference is the only one to a `CamelDataCache` this process
+// holds (it is created here and released when the `Owned` drops with this
+// struct, and no accessor hands it out), and every use of it goes through the
+// `Mutex` above — so there is no way to reach the object from two threads at
+// once. `Owned` itself is neither `Send` nor `Sync` (its own docs say why),
+// but that is a default this manual pair of impls is explicitly overriding on
+// the strength of the invariant just stated.
 unsafe impl Send for MessageCache {}
 unsafe impl Sync for MessageCache {}
 
@@ -196,9 +199,12 @@ impl MessageCache {
         let path = CString::new(directory).ok()?;
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: a NUL-terminated path alive across the call, and an
-        // out-parameter that is writable and currently NULL.
-        let cache = unsafe { camel_data_cache_new(path.as_ptr(), &mut error) };
-        if cache.is_null() {
+        // out-parameter that is writable and currently NULL. The reference
+        // `camel_data_cache_new` hands back is ours, and `cache` releases it on
+        // whatever path does not return it in `Self`.
+        let Some(cache) =
+            (unsafe { Owned::from_raw(camel_data_cache_new(path.as_ptr(), &mut error)) })
+        else {
             log_critical(&format!(
                 "no message cache under {directory}: {}",
                 // SAFETY: `error` is NULL or an owned GError the failed call
@@ -209,7 +215,7 @@ impl MessageCache {
             // asked for and is the only holder of.
             unsafe { g_clear_error(&mut error) };
             return None;
-        }
+        };
         // A cache that was created and an error are not both possible, but a
         // GError left behind by a call that succeeded would leak.
         // SAFETY: as above.
@@ -223,9 +229,9 @@ impl MessageCache {
         // SAFETY: the cache is the live object just created, and neither call
         // borrows anything.
         unsafe {
-            camel_data_cache_set_expire_enabled(cache, GTRUE);
+            camel_data_cache_set_expire_enabled(cache.as_ptr(), GTRUE);
             camel_data_cache_set_expire_access(
-                cache,
+                cache.as_ptr(),
                 time_t::try_from(unused_for.as_secs()).unwrap_or(time_t::MAX),
             );
         }
@@ -247,27 +253,36 @@ impl MessageCache {
 
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: a live cache (the pointer is non-NULL by construction and
-        // only `drop` invalidates it), two NUL-terminated strings alive across
-        // the call, and a NULL error out-parameter.
-        let stream =
-            unsafe { camel_data_cache_get(*cache, MESSAGES.as_ptr(), key.as_ptr(), &mut error) };
-        // A miss is the ordinary answer here — the file does not exist — so it
-        // is not logged; the GError still has to go.
+        // only `Drop` invalidates it), two NUL-terminated strings alive across
+        // the call, and a NULL error out-parameter. The reference the call
+        // hands back on a hit is ours; `stream` releases it wherever this
+        // scope ends.
+        let Some(stream) = (unsafe {
+            Owned::from_raw(camel_data_cache_get(
+                cache.as_ptr(),
+                MESSAGES.as_ptr(),
+                key.as_ptr(),
+                &mut error,
+            ))
+        }) else {
+            // A miss is the ordinary answer here — the file does not exist — so
+            // it is not logged; the GError still has to go.
+            // SAFETY: as above.
+            unsafe { g_clear_error(&mut error) };
+            return None;
+        };
         // SAFETY: as above.
         unsafe { g_clear_error(&mut error) };
-        if stream.is_null() {
-            return None;
-        }
 
         // SAFETY: `stream` is an owned `GIOStream` from the call above; the
         // input stream it hands over is borrowed from it and outlived by it.
-        let source = unsafe { read_all(g_io_stream_get_input_stream(stream)) };
-        // SAFETY: closing and dropping the reference this function owns. Closing
-        // an already-failed stream is defined, and its error is not interesting:
-        // whether the entry was read is what `source` says.
+        let source = unsafe { read_all(g_io_stream_get_input_stream(stream.as_ptr())) };
+        // SAFETY: closing the reference this function owns; `stream` itself
+        // releases it wherever this scope ends. Closing an already-failed
+        // stream is defined, and its error is not interesting: whether the
+        // entry was read is what `source` says.
         unsafe {
-            g_io_stream_close(stream, ptr::null_mut(), ptr::null_mut());
-            g_object_unref(stream.cast());
+            g_io_stream_close(stream.as_ptr(), ptr::null_mut(), ptr::null_mut());
         }
 
         let source = source?;
@@ -305,7 +320,12 @@ impl MessageCache {
         // SAFETY: as above, and the removal's own failure is nothing this can
         // act on.
         unsafe {
-            camel_data_cache_remove(*cache, MESSAGES.as_ptr(), key.as_ptr(), ptr::null_mut());
+            camel_data_cache_remove(
+                cache.as_ptr(),
+                MESSAGES.as_ptr(),
+                key.as_ptr(),
+                ptr::null_mut(),
+            );
         }
         None
     }
@@ -348,17 +368,24 @@ impl MessageCache {
         let cache = self.lock();
 
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: as in `load`. `add` replaces any entry already under the key.
-        let stream =
-            unsafe { camel_data_cache_add(*cache, MESSAGES.as_ptr(), key.as_ptr(), &mut error) };
-        if stream.is_null() {
+        // SAFETY: as in `load`. `add` replaces any entry already under the
+        // key. The reference the call hands back is ours; `stream` releases
+        // it wherever this scope ends.
+        let Some(stream) = (unsafe {
+            Owned::from_raw(camel_data_cache_add(
+                cache.as_ptr(),
+                MESSAGES.as_ptr(),
+                key.as_ptr(),
+                &mut error,
+            ))
+        }) else {
             log_critical(&format!("message {uid} could not be cached: {}", unsafe {
                 describe(error)
             }));
             // SAFETY: an owned GError or NULL.
             unsafe { g_clear_error(&mut error) };
             return false;
-        }
+        };
 
         // SAFETY: `stream` is an owned `GIOStream`; the output stream is
         // borrowed from it, `source` is a live buffer of the length given, and
@@ -366,7 +393,7 @@ impl MessageCache {
         let stored = unsafe {
             let mut written: usize = 0;
             let written_all = g_output_stream_write_all(
-                g_io_stream_get_output_stream(stream),
+                g_io_stream_get_output_stream(stream.as_ptr()),
                 // gio-sys types the buffer as `*mut`, which the C declaration
                 // does not: `g_output_stream_write_all` takes a `const void *`.
                 // The cast restores what the header says.
@@ -382,13 +409,13 @@ impl MessageCache {
             // second `g_set_error` over an out-parameter that is already set,
             // and the write's reason is the one worth reporting.
             let mut on_close: *mut GError = ptr::null_mut();
-            let closed = g_io_stream_close(stream, ptr::null_mut(), &mut on_close) != GFALSE;
+            let closed =
+                g_io_stream_close(stream.as_ptr(), ptr::null_mut(), &mut on_close) != GFALSE;
             if error.is_null() {
                 error = on_close;
             } else {
                 g_clear_error(&mut on_close);
             }
-            g_object_unref(stream.cast());
             written_all && closed && written == source.len()
         };
 
@@ -402,7 +429,12 @@ impl MessageCache {
             // SAFETY: as in `load`, and the removal's own failure is nothing
             // this can act on.
             unsafe {
-                camel_data_cache_remove(*cache, MESSAGES.as_ptr(), key.as_ptr(), ptr::null_mut());
+                camel_data_cache_remove(
+                    cache.as_ptr(),
+                    MESSAGES.as_ptr(),
+                    key.as_ptr(),
+                    ptr::null_mut(),
+                );
             }
         }
         // SAFETY: an owned GError or NULL.
@@ -425,19 +457,11 @@ impl MessageCache {
     }
 
     /// A poisoned lock means an operation panicked mid-entry. What the lock
-    /// guards is a pointer to a live Camel object, which that cannot damage, so
-    /// carrying on beats taking the account down with whatever already failed.
-    fn lock(&self) -> MutexGuard<'_, *mut CamelDataCache> {
+    /// guards is a reference to a live Camel object, which that cannot damage,
+    /// so carrying on beats taking the account down with whatever already
+    /// failed.
+    fn lock(&self) -> MutexGuard<'_, Owned<CamelDataCache>> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl Drop for MessageCache {
-    fn drop(&mut self) {
-        let cache = *self.cache.get_mut().unwrap_or_else(PoisonError::into_inner);
-        // SAFETY: the one reference this type took in `open`, and `&mut self`
-        // means nothing is using it.
-        unsafe { g_object_unref(cache.cast()) };
     }
 }
 

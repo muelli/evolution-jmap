@@ -39237,3 +39237,75 @@ established. No behaviour change intended; existing tests are the acceptance
 suite, with a new refcount regression test only where a site's control flow
 makes the invariant non-obvious by inspection (as `jmap-backend-collection`'s
 `adopt` needed and its simpler sites did not).
+
+## 2026-08-19 (done) — Track A6's `jmap-mail` remainder: migrated to `Owned<T>`
+
+Delivered the increment claimed above. `jmap-mail` turned out to have ~19
+manual `g_object_unref` sites, not the roadmap's estimated ~10, but every one
+the same shape: a `(transfer full)` pointer, a manual NULL check, a use, and a
+manual unref on every exit path. All migrated onto `jmap_backend_core::owned::
+Owned<T>`, in `mime.rs::write_message`, `expunge.rs::is_deleted`,
+`folder.rs`'s two `search_by_*` vfuncs (`#[cfg(camel_folder_search_object)]`,
+so the new `Owned` import is gated the same way — it would otherwise be
+unused and `-D warnings` on newer EDS, where the base class does this itself),
+`cache.rs`, `message.rs::listed_size`/`parse`, `message_info.rs::address_list`,
+`service.rs::name_of`/`connect_sync`/`attempt`, `summary.rs::apply_message`,
+`synchronize.rs::push_row`.
+
+**One structural change beyond the mechanical swap.** `cache.rs`'s
+`MessageCache` held its `CamelDataCache` as a bare pointer behind a `Mutex`
+with its own hand-written `impl Drop`. That field is now `Mutex<Owned
+<CamelDataCache>>` and the hand-written `Drop` is gone — `Owned`'s own does
+the same job, one line shorter and with the same reasoning `Owned`'s own docs
+already give, rather than a second copy of it. The manual `unsafe impl Send`/
+`Sync` for `MessageCache` stays (and needed a comment explaining why it still
+holds: `Owned` itself is deliberately neither `Send` nor `Sync`, but the
+struct's own invariant — the `Mutex` is the only path to the reference — is
+what licenses the override regardless).
+
+**One correctness improvement found along the way, not just a refactor.**
+`message.rs::parse`'s original code unreffed `message` unconditionally on the
+`camel_data_wrapper_construct_from_data_sync` failure path without having
+checked it for NULL first — harmless in practice, since
+`camel_mime_message_new()` has no realistic failure mode, but a latent
+`g_object_unref(NULL)` (a logged GLib critical, not a crash) all the same.
+`Owned::from_raw`'s `Option` makes that check free rather than an extra branch
+to remember, so `parse` now reports the same "unexplained parse failure" for
+an unreachable NULL construction as it already does for a wrapper that
+refused with no error set — one behaviour, reached two ways, rather than an
+unchecked assumption.
+
+**No new tests.** Every site this session touched is a single early-return or
+a single unconditional unref — the "simpler sites" shape the
+`jmap-backend-collection` session's entry above distinguished from `adopt`'s
+three-way match — and `jmap-mail`'s existing behavioural suite (`cache.rs`,
+`summary.rs`, `synchronize.rs`, `message.rs`, and the rest's own test files,
+all passing unmodified) already exercises every one of them end to end.
+
+**Gate.** `cargo fmt --check` clean (workspace-wide, after `cargo fmt`
+resolved two line-length reflows). `cargo clippy --all-targets --locked -- -D
+warnings` (default-members) and `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+seven EDS-gated crates) both clean — two clippy findings fixed along the way
+(`message_info.rs::address_list`'s `let...else` rewritten to `?`, per
+clippy's own suggestion; `summary.rs::apply_message`'s nested `if` collapsed
+into a `let`-chain `&&`, also per clippy's suggestion, with the fallthrough
+comment reworded since the two cases it now covers — an unseen uid and a seen
+uid with a missing row — used to be one `if` apart). `cargo test --locked`
+(default-members, 90 test-result blocks, 0 failed) and each of the seven
+EDS-gated crates' own `cargo test --locked` (0 failed) all green, including
+`jmap-mail`'s full suite (30 files, 0 failed). No new dependency, no new
+user-facing string (no `po/` change).
+
+**Scope, stated plainly.** This closes A6's Pattern C item across the whole
+codebase: `jmap-backend-cal/marshal.rs`, `jmap-backend-collection`'s six sites
+(prior session), and now `jmap-mail`'s ~19 are all on `Owned<T>`. Updated
+`docs/UNSAFE-AUDIT.md`'s Pattern C section and its priority-list item 4 to say
+so (the `jmap-backend-collection` half had landed without a doc update;
+folded into the same edit rather than filing a separate one). **Still open on
+A6 generally:** the rest of its IMPROVE list beyond Pattern C (Patterns D's
+two unguarded-read sites, A5's FFI soundness audit as a related but distinct
+item). Nothing here needs human verification: a refcount-preserving refactor
+of code with no user-visible surface, on a crate whose own test suite already
+exercises every touched site.
