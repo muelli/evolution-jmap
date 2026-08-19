@@ -35514,3 +35514,47 @@ plain-prose annotation, so no new SPDX headers or REUSE.toml edits needed).
 so — a full, machine-generated DEP-5 accounting of every third-party Rust
 crate's license (mostly MIT/Apache-2.0 per `rust/Cargo.lock`) is a separate,
 larger piece of work the roadmap already tracks under C2.
+
+## 2026-08-19 (claim) — Claiming Track C2: generate `docs/packaging/copyright`'s own-file stanzas from `REUSE.toml`
+
+Fresh survey: every milestone in `docs/MILESTONES.md` is `COMPLETE`. CURRENT
+PRIORITY's one open item, SRV autodiscovery, is unchanged since the last two
+sessions checked it — still needs a `g_resolver_lookup_service()`-backed
+`Resolver` (real unsafe FFI, `GList`/`GSrvTarget` transfer-full ownership),
+already flagged escalation-worthy twice; not re-surveying it a third time.
+Per the roadmap's Round 2 lead order, Track D's only remaining item (D1's
+`create_resource_sync`/`delete_resource_sync` vtable wiring) is the same FFI
+category. Track C1 (previous session) left an explicit next step: Track C2.
+
+**Scoping it before starting, since "generate the DEP-5 accounting of every
+third-party Cargo crate" turns out bigger and riskier than it first reads.**
+`cargo metadata --locked` on the whole workspace (164 packages, including the
+EDS-gated crates this VM can build) shows ~20 distinct license expressions
+across ~140 third-party crates (`MIT OR Apache-2.0`, `Apache-2.0 WITH
+LLVM-exception`, etc.) — real work, but DEP-5's `Files:` field is a glob over
+paths *in the source package*, and none of those crates' sources are vendored
+into this repo or shipped in the CPack `.deb` (which links them statically
+into five `.so`s and ships no Rust source at all) — so there is no path
+pattern that honestly satisfies the field for them. Inventing one risks a
+technically-malformed copyright file that could regress C1's newly-green
+`lintian --pedantic` gate, which is exactly the "plausible but wrong"
+outcome the night-shift brief says to avoid rather than push through. That
+enumeration is real work Track C2 still owns, but it wants a maintainer call
+on representation (a non-Files license-notice appendix vs. full dh-cargo
+vendoring under Track C3) more than it wants a guess from this session — left
+open below, not attempted.
+
+**Claiming the smaller, unambiguous slice instead**, which is squarely
+"generated from the REUSE metadata we already maintain" and closes a real
+inaccuracy in today's hand-written file: `docs/packaging/copyright`'s
+`Files: *` stanza currently claims the entire source tree is
+`GPL-3.0-or-later`, but `REUSE.toml` itself says otherwise — `src/**`,
+`CMakeLists.txt`, `cmake_uninstall.cmake.in`, and
+`rust/crates/example-module/**` are Red-Hat-copyright `LGPL-2.1-or-later`
+(the ported example module). Generating the file's own-source stanzas from
+`REUSE.toml` (`tools/generate-debian-copyright.py`, driven by its
+`[[annotations]]`) fixes that inaccuracy and makes future REUSE.toml edits
+(a new override, a license change) update the copyright file by re-running
+the generator instead of by someone remembering to hand-edit a second file.
+A CMake/CTest check keeps the committed file from drifting out of sync with
+the generator's output, the same pattern C1 used for lintian.
