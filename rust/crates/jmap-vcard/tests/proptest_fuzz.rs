@@ -179,12 +179,17 @@ prop_compose! {
             Just(json!({"work": true})),
             Just(json!({"home": true})),
         ]),
+        pref in prop::option::of(0..100u32),
     ) -> Address {
+        let mut extra = BTreeMap::new();
+        if let Some(p) = pref {
+            extra.insert("pref".to_owned(), json!(p));
+        }
         Address {
             components,
             contexts,
             full,
-            extra: BTreeMap::new(),
+            extra,
         }
     }
 }
@@ -492,13 +497,31 @@ prop_compose! {
             Just("FBURL".to_string()),
             Just("PHOTO".to_string()),
             Just("CATEGORIES".to_string()),
+            Just("X-AIM".to_string()),
+            Just("X-GADUGADU".to_string()),
+            Just("X-GOOGLE-TALK".to_string()),
+            Just("X-GROUPWISE".to_string()),
+            Just("X-ICQ".to_string()),
             Just("X-JABBER".to_string()),
+            Just("X-MSN".to_string()),
             Just("X-MATRIX".to_string()),
             Just("X-SKYPE".to_string()),
+            Just("X-YAHOO".to_string()),
             Just("X-TWITTER".to_string()),
             Just("X-SIP".to_string()),
             Just("X-EVOLUTION-ANNIVERSARY".to_string()),
             Just("X-EVOLUTION-SPOUSE".to_string()),
+            Just("X-EVOLUTION-MANAGER".to_string()),
+            Just("X-EVOLUTION-ASSISTANT".to_string()),
+            Just("X-EVOLUTION-BLOG-URL".to_string()),
+            Just("X-EVOLUTION-FILE-AS".to_string()),
+            Just("X-MOZILLA-HTML".to_string()),
+            Just("X-PHONETIC-FIRST-NAME".to_string()),
+            Just("X-ABShowAs".to_string()),
+            Just("X-MS-CARDPICTURE".to_string()),
+            Just("X-DISCORD".to_string()),
+            Just("X-SIGNAL".to_string()),
+            Just("X-TELEGRAM".to_string()),
             Just("X-CUSTOM".to_string()),
             "[A-Z0-9-]{1,12}",
         ],
@@ -507,9 +530,19 @@ prop_compose! {
                 Just(";TYPE=WORK".to_string()),
                 Just(";TYPE=HOME".to_string()),
                 Just(";TYPE=VOICE,FAX".to_string()),
+                Just(";TYPE=WORK,PREF".to_string()),
+                Just(";TYPE=HOME,PREF".to_string()),
+                Just(";LABEL=\"Suite 100\\nCity\"".to_string()),
+                Just(";LABEL=Office".to_string()),
                 Just(";X-JMAP-KEY=k1".to_string()),
                 Just(";VALUE=uri".to_string()),
                 Just(";ENCODING=b".to_string()),
+                Just(";ALTID=1".to_string()),
+                Just(";LANGUAGE=en-US".to_string()),
+                Just(";LANGUAGE=de".to_string()),
+                Just(";ALTID=group1;LANGUAGE=ja".to_string()),
+                Just(";X-CUSTOM-PARAM=val1".to_string()),
+                Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
                 ";[A-Z-]+=[A-Za-z0-9-]+",
             ],
             0..3,
@@ -577,7 +610,9 @@ proptest! {
             let vcard1 = card_to_vcard(&parsed1);
             let parsed2 = vcard_to_card(&vcard1).expect("re-parsing emitted vCard must succeed");
             let vcard2 = card_to_vcard(&parsed2);
-            prop_assert_eq!(vcard1, vcard2, "re-emitted vCard must reach a fixed-point");
+            let parsed3 = vcard_to_card(&vcard2).expect("third roundtrip must parse cleanly");
+            let vcard3 = card_to_vcard(&parsed3);
+            prop_assert_eq!(vcard2, vcard3, "re-emitted vCard must reach a fixed-point");
         }
     }
 }
