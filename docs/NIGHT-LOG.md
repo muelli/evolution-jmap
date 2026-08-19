@@ -35622,3 +35622,41 @@ crates genuinely would be separate source files DEP-5 can point at. The new
 `docs/packaging/copyright`'s own default-stanza comment states this gap and
 both options inline, so the next session (or the maintainer) has it without
 re-deriving it.
+
+## 2026-08-19 (claim) — Claiming Track A7: stale-comments audit
+
+Fresh survey: every milestone in `docs/MILESTONES.md` is `COMPLETE`. CURRENT
+PRIORITY's one open item, SRV autodiscovery, is unchanged since the last two
+sessions checked it — still needs a `g_resolver_lookup_service()`-backed
+`Resolver` (real unsafe FFI, `GList`/`GSrvTarget` transfer-full ownership),
+already flagged escalation-worthy twice; not re-surveying it a third time.
+Track D's only remaining item (D1's `create_resource_sync`/
+`delete_resource_sync` vtable wiring) is the same FFI category. Track C is
+NEEDS-DECISION (C2's third-party enumeration) or a bigger skeleton (C3);
+Track B is NEEDS-DECISION on approach; Track E is NEEDS-DECISION on the
+maintainer approving the design doc's plan. Of the remaining CLAIMABLE `[claude]`
+Track A items (A2, A4, A5, A6, A7), A5 is explicitly escalation-worthy
+(FFI soundness), and this VM's disk is tight (6.4G free per `df -h .` — a
+prior session already hit "No space left on device" from
+`rust/target/debug`) which makes A2's mutation-testing rebuild-per-mutant
+loop a real risk for an unbounded session. A7 needs neither: it is a reading
+and grepping pass over comments already in the tree, checked against the
+current code they describe, bounded in scope, and it already has a seed —
+the roadmap's own text names `jmap-config/src/textdomain.rs:17-18` claiming
+`insert_widgets` "is unwritten" while `lib.rs:125` says it is now written.
+
+Checked the seed before claiming: `jmap-config/src/textdomain.rs` no longer
+exists (renamed at some point) — the actual stale comment is in
+`jmap-config/tests/textdomain.rs:17`, whose module doc says "None of them
+exists yet — `insert_widgets` is unwritten", while `jmap-config/src/lib.rs:125`
+and `jmap-config/src/backend.rs:59` both say `insert_widgets` "now builds
+every field". Confirmed stale — will fix in this pass along with whatever
+else the sweep finds.
+
+**Plan:** grep for resolved-milestone references ("once M7 lands", "not yet
+implemented", "TODO", "unwritten", "is not written", stale `calcard`/
+percent-codec leftovers per the roadmap's own examples), read each hit against
+the current code, confidence-tag every finding, write
+`docs/STALE-COMMENTS-AUDIT.md`, and fix the HIGH-confidence ones in the same
+pass (comment-only changes don't affect tests, per the roadmap's own
+carve-out for this item).
