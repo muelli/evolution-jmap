@@ -7,9 +7,41 @@ use std::collections::BTreeSet;
 
 use jmap_client::{ChangeSet, Client, Credentials};
 use jmap_mock::MockServer;
-use jmap_proto::Id;
 use jmap_proto::contacts::ContactCard;
+use jmap_proto::{Id, State};
 use serde_json::json;
+
+/// `ChangeSet::is_empty` is a caller-facing shortcut over its three sets, not
+/// exercised elsewhere in this crate — every other test reads the sets
+/// directly (`full.created`, `middle.updated`, ...).
+#[test]
+fn change_set_is_empty_iff_all_three_sets_are() {
+    let nothing = ChangeSet {
+        new_state: State::new("s1"),
+        created: BTreeSet::new(),
+        updated: BTreeSet::new(),
+        destroyed: BTreeSet::new(),
+    };
+    assert!(nothing.is_empty());
+
+    let only_created = ChangeSet {
+        created: BTreeSet::from([Id::new("a")]),
+        ..nothing.clone()
+    };
+    assert!(!only_created.is_empty());
+
+    let only_updated = ChangeSet {
+        updated: BTreeSet::from([Id::new("a")]),
+        ..nothing.clone()
+    };
+    assert!(!only_updated.is_empty());
+
+    let only_destroyed = ChangeSet {
+        destroyed: BTreeSet::from([Id::new("a")]),
+        ..nothing
+    };
+    assert!(!only_destroyed.is_empty());
+}
 
 #[test]
 fn changes_since_state_tracks_crud() {
@@ -218,4 +250,49 @@ fn following_every_page_answers_what_one_page_would_have() {
     // answer is not something the caller can observe.
     let paged = edit_history(Some(1));
     assert_eq!(paged.changes, whole.changes);
+}
+
+/// `edit_history`'s scenario never updates a card that existed *before* the
+/// window without also creating or destroying it inside the window, so it
+/// never reaches `ChangeSet::classify`'s "updated only" arm — every id it
+/// folds is either created-then-updated (classified created) or destroyed.
+/// This is the one case that arm exists for.
+#[test]
+fn a_card_from_before_the_window_edited_inside_it_classifies_as_updated() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let book = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_address_book("Personal", true)
+    };
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let existing = client
+        .contact_create(
+            &account_id,
+            &ContactCard::simple(book, "Existing", "existing@example.com"),
+        )
+        .unwrap()
+        .id
+        .unwrap();
+    let since = client.contact_state(&account_id).unwrap();
+
+    client
+        .contact_update(
+            &account_id,
+            &existing,
+            json!({"name/full": "Existing, Renamed"}),
+        )
+        .unwrap();
+
+    let changes = client
+        .all_changes(&account_id, "ContactCard", &since)
+        .unwrap();
+    assert_eq!(changes.updated, BTreeSet::from([existing]));
+    assert!(changes.created.is_empty());
+    assert!(changes.destroyed.is_empty());
 }

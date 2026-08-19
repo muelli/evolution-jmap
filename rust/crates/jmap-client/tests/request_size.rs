@@ -211,6 +211,27 @@ fn an_id_that_cannot_fit_alone_is_refused_without_a_request() {
     );
 }
 
+/// The boundary itself: a request whose body is exactly `maxSizeRequest`
+/// octets is under the limit, not over it, so it is sent rather than refused.
+/// Distinguishes "over the limit" from "at or over the limit" — a server that
+/// states a limit of N octets is stating what it will accept, not the first
+/// size it refuses.
+#[test]
+fn a_request_exactly_at_the_limit_is_sent() {
+    let echo = json!({"hello": "world"});
+    let request = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL])
+        .call("Core/echo", &echo, "c1")
+        .unwrap();
+    let body_len = serde_json::to_vec(&request).unwrap().len() as u64;
+
+    let server = MockServer::builder().size_request(body_len).start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let response = client.api_call(&request).unwrap();
+    let invocation = response.responses_for("c1").next().unwrap();
+    assert!(!invocation.is_error(), "a request at the limit was refused");
+}
+
 /// The backstop under every caller that builds its own request: an oversized
 /// one is refused before it is sent, with the two numbers, rather than spending
 /// a round trip on a 400 that cannot be told from the other request-level

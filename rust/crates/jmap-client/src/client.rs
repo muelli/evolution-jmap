@@ -441,3 +441,18 @@ impl Client {
         Ok(response)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// White-box: `timeout`'s field is private, so only an in-crate test can
+    /// see that the builder kept the value passed rather than falling back to
+    /// a fresh default (both look identical from outside the crate until a
+    /// connection is slow enough to time out).
+    #[test]
+    fn timeout_replaces_the_default() {
+        let builder = ClientBuilder::default().timeout(Duration::from_secs(5));
+        assert_eq!(builder.timeout, Duration::from_secs(5));
+    }
+}
