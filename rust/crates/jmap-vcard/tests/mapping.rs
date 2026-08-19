@@ -7032,3 +7032,446 @@ fn inbound_vcard_pref_parameter_variations_and_reordering() {
     assert!(adr_lines[0].contains("X-JMAP-KEY=a2"));
     assert!(adr_lines[1].contains("X-JMAP-KEY=a1"));
 }
+
+#[test]
+fn adr_all_seven_structured_components_roundtrip() {
+    // RFC 2426 §3.2.1 and RFC 6350 §6.3.1 define seven structured components in order:
+    // 0: postOfficeBox, 1: apartment (extended address), 2: name (street),
+    // 3: locality, 4: region, 5: postcode, 6: country.
+    let full_address = Address {
+        components: Some(vec![
+            AddressComponent::new("postOfficeBox", "PO Box 777"),
+            AddressComponent::new("apartment", "Suite 400, Floor 4"),
+            AddressComponent::new("name", "500 Silicon Way"),
+            AddressComponent::new("locality", "Mountain View"),
+            AddressComponent::new("region", "California"),
+            AddressComponent::new("postcode", "94043"),
+            AddressComponent::new("country", "United States of America"),
+        ]),
+        contexts: Some(json!({"work": true})),
+        full: Some("Acme Corp\nPO Box 777\nSuite 400\nMountain View, CA 94043\nUSA".to_owned()),
+        extra: BTreeMap::new(),
+    };
+
+    let card = one_address("a1", full_address);
+    let vcard = card_to_vcard(&card);
+    let unfolded_vcard = unfolded(&vcard);
+
+    let adr_line = line(&unfolded_vcard, "ADR");
+    assert_eq!(
+        adr_line,
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK:PO Box 777;Suite 400\\, Floor 4;500 Silicon Way;Mountain View;California;94043;United States of America"
+    );
+
+    let label_line = line(&unfolded_vcard, "LABEL");
+    assert_eq!(
+        label_line,
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK:Acme Corp\\nPO Box 777\\nSuite 400\\nMountain View\\, CA 94043\\nUSA"
+    );
+
+    // Read back and verify exact component extraction
+    let back = vcard_to_card(&vcard).expect("parse back");
+    let addresses = back.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.keys().collect::<Vec<_>>(), vec!["a1"]);
+    let back_addr = &addresses["a1"];
+
+    assert_eq!(back_addr.contexts, Some(json!({"work": true})));
+    assert_eq!(
+        back_addr.full.as_deref(),
+        Some("Acme Corp\nPO Box 777\nSuite 400\nMountain View, CA 94043\nUSA")
+    );
+    assert_eq!(
+        components_of(back_addr),
+        vec![
+            ("postOfficeBox", "PO Box 777"),
+            ("apartment", "Suite 400, Floor 4"),
+            ("name", "500 Silicon Way"),
+            ("locality", "Mountain View"),
+            ("region", "California"),
+            ("postcode", "94043"),
+            ("country", "United States of America"),
+        ]
+    );
+
+    // Second round-trip convergence (fixed point)
+    let vcard2 = card_to_vcard(&back);
+    assert_eq!(vcard, vcard2);
+}
+
+#[test]
+fn adr_label_parameter_parsing_and_emission_fidelity() {
+    // vCard 4.0 / RFC 6350 §6.3.1 allows a `LABEL` parameter directly on the `ADR` property line:
+    // `ADR;TYPE=WORK;LABEL="...":PO Box 123;...`
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Developer\r\n",
+        "ADR;TYPE=WORK;LABEL=\"Alice Dev\\n100 Tech Blvd\\nSuite 200\\nAustin, TX 78701\\nUSA\":PO Box 100;Suite 200;100 Tech Blvd;Austin;TX;78701;USA\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(raw_vcard).expect("parse raw ADR with LABEL param");
+    let addresses = card.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.keys().collect::<Vec<_>>(), vec!["a1"]);
+    let addr = &addresses["a1"];
+
+    assert_eq!(addr.contexts, Some(json!({"work": true})));
+    assert_eq!(
+        addr.full.as_deref(),
+        Some("Alice Dev\n100 Tech Blvd\nSuite 200\nAustin, TX 78701\nUSA")
+    );
+    assert_eq!(
+        components_of(addr),
+        vec![
+            ("postOfficeBox", "PO Box 100"),
+            ("apartment", "Suite 200"),
+            ("name", "100 Tech Blvd"),
+            ("locality", "Austin"),
+            ("region", "TX"),
+            ("postcode", "78701"),
+            ("country", "USA"),
+        ]
+    );
+
+    // Emitting via card_to_vcard produces both standard vCard 3.0 ADR and standalone LABEL lines
+    let vcard = card_to_vcard(&card);
+    let unfolded_vcard = unfolded(&vcard);
+    assert!(unfolded_vcard.contains(
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK:PO Box 100;Suite 200;100 Tech Blvd;Austin;TX;78701;USA"
+    ));
+    assert!(unfolded_vcard.contains("LABEL;X-JMAP-KEY=a1;TYPE=WORK:Alice Dev\\n100 Tech Blvd\\nSuite 200\\nAustin\\, TX 78701\\nUSA"));
+
+    // Parsing back round-trips with identical Address components and label
+    let back = vcard_to_card(&vcard).expect("parse back");
+    assert_eq!(back.addresses, card.addresses);
+
+    // Test ADR with empty structured components but non-empty LABEL parameter
+    let empty_components_with_label_param = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Bob Builder\r\n",
+        "ADR;TYPE=HOME;LABEL=\"Rural Route 5\\nBox 12\\nSomewhere, KS 66002\":;;;;;;\r\n",
+        "END:VCARD\r\n"
+    );
+    let card2 =
+        vcard_to_card(empty_components_with_label_param).expect("parse empty ADR with LABEL param");
+    let addresses2 = card2.addresses.as_ref().expect("addresses");
+    let addr2 = &addresses2["a1"];
+    assert_eq!(addr2.components, None);
+    assert_eq!(
+        addr2.full.as_deref(),
+        Some("Rural Route 5\nBox 12\nSomewhere, KS 66002")
+    );
+    assert_eq!(addr2.contexts, Some(json!({"private": true})));
+
+    // Standalone LABEL emission and round-trip
+    let vcard_label_only = card_to_vcard(&card2);
+    let unfolded_label_only = unfolded(&vcard_label_only);
+    assert!(!unfolded_label_only.contains("\r\nADR"));
+    assert!(
+        unfolded_label_only.contains(
+            "LABEL;X-JMAP-KEY=a1;TYPE=HOME:Rural Route 5\\nBox 12\\nSomewhere\\, KS 66002"
+        )
+    );
+    let back2 = vcard_to_card(&vcard_label_only).expect("parse label-only");
+    assert_eq!(back2.addresses, card2.addresses);
+}
+
+#[test]
+fn adr_empty_and_sparse_components_permutations() {
+    // 1. Single component addresses: each individual component alone on an ADR line
+    let cases = [
+        ("ADR:PO Box 1;;;;;;", vec![("postOfficeBox", "PO Box 1")]),
+        ("ADR:;Penthouse B;;;;;", vec![("apartment", "Penthouse B")]),
+        ("ADR:;;123 Main St;;;;", vec![("name", "123 Main St")]),
+        ("ADR:;;;Berlin;;;", vec![("locality", "Berlin")]),
+        ("ADR:;;;;Bavaria;;", vec![("region", "Bavaria")]),
+        ("ADR:;;;;;10115;", vec![("postcode", "10115")]),
+        ("ADR:;;;;;;Germany", vec![("country", "Germany")]),
+    ];
+
+    for (line_str, expected_components) in cases {
+        let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Test\r\n{line_str}\r\nEND:VCARD\r\n");
+        let card = vcard_to_card(&vcard).expect("parse single component ADR");
+        let addresses = card.addresses.as_ref().expect("addresses");
+        assert_eq!(components_of(&addresses["a1"]), expected_components);
+
+        let re_emitted = card_to_vcard(&card);
+        let back = vcard_to_card(&re_emitted).expect("parse re-emitted");
+        assert_eq!(back.addresses, card.addresses);
+    }
+
+    // 2. Intermediate empty components (e.g. indices 0, 2, 4, 6 present; 1, 3, 5 empty)
+    let sparse_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Sparse Address\r\n",
+        "ADR;TYPE=WORK:PO Box 99;;Highway 1;;California;;United States\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(sparse_vcard).expect("parse sparse ADR");
+    let addresses = card.addresses.as_ref().expect("addresses");
+    assert_eq!(
+        components_of(&addresses["a1"]),
+        vec![
+            ("postOfficeBox", "PO Box 99"),
+            ("name", "Highway 1"),
+            ("region", "California"),
+            ("country", "United States"),
+        ]
+    );
+    let re_emitted = card_to_vcard(&card);
+    assert_eq!(
+        line(&re_emitted, "ADR"),
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK:PO Box 99;;Highway 1;;California;;United States"
+    );
+
+    // 3. Truncated components (fewer than 7 components on the wire)
+    let truncated_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Truncated ADR\r\n",
+        "ADR:;;Broadway;New York\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(truncated_vcard).expect("parse truncated ADR");
+    let addresses = card.addresses.as_ref().expect("addresses");
+    assert_eq!(
+        components_of(&addresses["a1"]),
+        vec![("name", "Broadway"), ("locality", "New York"),]
+    );
+
+    // 4. All components empty produces None
+    let all_empty_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Empty ADR\r\n",
+        "ADR:;;;;;;\r\n",
+        "ADR:;;;\r\n",
+        "ADR:\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(all_empty_vcard).expect("parse all empty ADR");
+    assert_eq!(card.addresses, None);
+}
+
+#[test]
+fn adr_multi_value_and_escaped_delimiters_roundtrip() {
+    // Structured values containing escaped commas, semicolons, and newlines in ADR and LABEL
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Delimiter Test\r\n",
+        "ADR;TYPE=WORK:Post Box 10\\;A;Suite 200\\, Bldg 3;123 Main St.\\, #4;Springfield\\; East;Illinois\\, Central;62701\\-1234;United States of America\r\n",
+        "LABEL;TYPE=WORK:Acme Corp\\, Inc.\\n123 Main St.\\, #4\\nSpringfield\\; East\\, IL 62701\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse delimited ADR");
+    let addresses = card.addresses.as_ref().expect("addresses");
+    let addr = &addresses["a1"];
+
+    assert_eq!(
+        components_of(addr),
+        vec![
+            ("postOfficeBox", "Post Box 10;A"),
+            ("apartment", "Suite 200, Bldg 3"),
+            ("name", "123 Main St., #4"),
+            ("locality", "Springfield; East"),
+            ("region", "Illinois, Central"),
+            ("postcode", "62701-1234"),
+            ("country", "United States of America"),
+        ]
+    );
+    assert_eq!(
+        addr.full.as_deref(),
+        Some("Acme Corp, Inc.\n123 Main St., #4\nSpringfield; East, IL 62701")
+    );
+
+    // Outbound serialization and round-trip verification
+    let re_emitted = card_to_vcard(&card);
+    let back = vcard_to_card(&re_emitted).expect("parse re-emitted");
+    assert_eq!(back.addresses, card.addresses);
+}
+
+#[test]
+fn multiple_addresses_with_mixed_labels_and_contexts_pairing() {
+    // Card with 4 addresses:
+    // a1: Work address with full components + LABEL param
+    // a2: Home address with partial components + standalone LABEL
+    // a3: Label-only address (no ADR)
+    // a4: Structured address without LABEL
+    let mut addresses = BTreeMap::new();
+    addresses.insert(
+        "a1".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("postOfficeBox", "Box 10"),
+                AddressComponent::new("apartment", "Suite 1"),
+                AddressComponent::new("name", "100 Work Way"),
+                AddressComponent::new("locality", "Work City"),
+                AddressComponent::new("region", "WA"),
+                AddressComponent::new("postcode", "98101"),
+                AddressComponent::new("country", "USA"),
+            ]),
+            contexts: Some(json!({"work": true})),
+            full: Some("Work Label\n100 Work Way\nSeattle, WA".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    addresses.insert(
+        "a2".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("name", "200 Home St"),
+                AddressComponent::new("locality", "Home Town"),
+                AddressComponent::new("country", "USA"),
+            ]),
+            contexts: Some(json!({"private": true})),
+            full: Some("Home Label\n200 Home St\nHome Town, USA".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    addresses.insert(
+        "a3".to_owned(),
+        Address {
+            components: None,
+            contexts: None,
+            full: Some("Postal Delivery Only\nPO Box 9999\nRemote City".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    addresses.insert(
+        "a4".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("name", "400 Unlabelled St"),
+                AddressComponent::new("locality", "Plain City"),
+                AddressComponent::new("country", "USA"),
+            ]),
+            contexts: None,
+            full: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Multi Address User".to_owned()),
+            ..Name::default()
+        }),
+        addresses: Some(addresses),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let back = vcard_to_card(&vcard).expect("parse multi address vcard");
+
+    assert_eq!(back.addresses, card.addresses);
+    let back_addrs = back.addresses.unwrap();
+    assert_eq!(back_addrs.len(), 4);
+    assert_eq!(back_addrs["a1"].components.as_ref().unwrap().len(), 7);
+    assert_eq!(back_addrs["a2"].components.as_ref().unwrap().len(), 3);
+    assert_eq!(back_addrs["a3"].components, None);
+    assert_eq!(back_addrs["a4"].full, None);
+}
+
+#[test]
+fn adr_predicates_and_component_restoration_comprehensive() {
+    // 1. states_address_component on all 7 standard kinds and joined kinds
+    for kind in [
+        "postOfficeBox",
+        "apartment",
+        "name",
+        "locality",
+        "region",
+        "postcode",
+        "country",
+        "number",
+    ] {
+        assert!(
+            states_address_component(&AddressComponent::new(kind, "Value")),
+            "kind {kind} should be stateable"
+        );
+        assert!(
+            !states_address_component(&AddressComponent::new(kind, "")),
+            "empty kind {kind} should not be stateable"
+        );
+    }
+    // Unmapped kinds return false
+    for unmapped in [
+        "floor",
+        "building",
+        "room",
+        "landmark",
+        "district",
+        "subdistrict",
+        "direction",
+    ] {
+        assert!(
+            !states_address_component(&AddressComponent::new(unmapped, "Value")),
+            "unmapped kind {unmapped} should not be stateable"
+        );
+    }
+
+    // 2. states_address evaluation
+    let valid_comp_addr = Address {
+        components: Some(vec![AddressComponent::new("locality", "Berlin")]),
+        full: None,
+        ..Address::default()
+    };
+    assert!(states_address(&valid_comp_addr));
+
+    let valid_label_addr = Address {
+        components: None,
+        full: Some("Some Label".to_owned()),
+        ..Address::default()
+    };
+    assert!(states_address(&valid_label_addr));
+
+    let unmapped_only_addr = Address {
+        components: Some(vec![AddressComponent::new("floor", "3")]),
+        full: None,
+        ..Address::default()
+    };
+    assert!(!states_address(&unmapped_only_addr));
+
+    let empty_label_only_addr = Address {
+        components: None,
+        full: Some("".to_owned()),
+        ..Address::default()
+    };
+    assert!(!states_address(&empty_label_only_addr));
+
+    // 3. address_label evaluation
+    assert_eq!(address_label(&valid_label_addr), Some("Some Label"));
+    assert_eq!(address_label(&empty_label_only_addr), None);
+    assert_eq!(address_label(&valid_comp_addr), None);
+
+    // 4. restore_address_components
+    let original = vec![
+        AddressComponent::new("name", "Hauptstraße"),
+        AddressComponent::new("number", "42"),
+        AddressComponent::new("locality", "Berlin"),
+    ];
+    let edited_same = vec![
+        AddressComponent::new("name", "Hauptstraße 42"),
+        AddressComponent::new("locality", "Berlin"),
+    ];
+    let restored = restore_address_components(&original, &edited_same);
+    assert_eq!(
+        restored,
+        vec![
+            AddressComponent::new("name", "Hauptstraße"),
+            AddressComponent::new("number", "42"),
+            AddressComponent::new("locality", "Berlin"),
+        ]
+    );
+
+    let edited_modified = vec![
+        AddressComponent::new("name", "Nebenstraße 99"),
+        AddressComponent::new("locality", "Berlin"),
+    ];
+    let restored_modified = restore_address_components(&original, &edited_modified);
+    assert_eq!(
+        restored_modified,
+        vec![
+            AddressComponent::new("name", "Nebenstraße 99"),
+            AddressComponent::new("locality", "Berlin"),
+        ]
+    );
+}

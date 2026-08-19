@@ -1959,7 +1959,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
             continue;
         }
         let contexts = read_flags(&CONTEXTS, entry);
-        let key = label_entry(entry, contexts.as_ref(), &addresses);
+        let key = label_entry(entry, contexts.as_ref(), &addresses, &full);
         let address = addresses.entry(key).or_insert_with(|| Address {
             contexts,
             ..Address::default()
@@ -2265,7 +2265,8 @@ fn read_address(entry: &VCardEntry) -> Option<Address> {
         };
         components.push(AddressComponent::new(kind, value));
     }
-    if components.is_empty() {
+    let full = entry_param(entry, "LABEL").filter(|label| !label.is_empty());
+    if components.is_empty() && full.is_none() {
         return None;
     }
     let mut extra = BTreeMap::new();
@@ -2273,10 +2274,9 @@ fn read_address(entry: &VCardEntry) -> Option<Address> {
         extra.insert("pref".to_owned(), serde_json::Value::from(1));
     }
     Some(Address {
-        components: Some(components),
+        components: (!components.is_empty()).then_some(components),
         contexts: read_flags(&CONTEXTS, entry),
-        // Filled in by the `LABEL` line, if the card has one for this address.
-        full: None,
+        full,
         extra,
     })
 }
@@ -2342,17 +2342,18 @@ fn label_entry(
     entry: &VCardEntry,
     contexts: Option<&Value>,
     addresses: &BTreeMap<String, Address>,
+    full: &str,
 ) -> String {
-    let unlabelled = |address: &Address| address.full.is_none();
+    let unlabelled_or_matching =
+        |address: &Address| address.full.is_none() || address.full.as_deref() == Some(full);
     if let Some(key) = entry_param(entry, X_JMAP_KEY).filter(|key| !key.is_empty())
-        && addresses.get(&key).is_none_or(unlabelled)
+        && addresses.get(&key).is_none_or(unlabelled_or_matching)
     {
         return key;
     }
-    if let Some((key, _)) = addresses
-        .iter()
-        .find(|(_, address)| unlabelled(address) && address.contexts.as_ref() == contexts)
-    {
+    if let Some((key, _)) = addresses.iter().find(|(_, address)| {
+        unlabelled_or_matching(address) && address.contexts.as_ref() == contexts
+    }) {
         return key.clone();
     }
     entry_key(entry, "a", addresses)
