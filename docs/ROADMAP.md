@@ -531,6 +531,23 @@ tracks follow; the maintainer may reorder anytime.
   a duplicate:** A5 is *soundness* (catch_unwind, transfer-full/none, nullability,
   GCancellable); A6 is *reduction / containment / idiom*. Do them together or
   A5-then-A6.
+  - **Pattern C DONE 2026-08-19 (on opus, per the escalation at `db5b098`) —**
+    the audit's one safety-adjacent finding is closed for the target it named:
+    `jmap_backend_core::owned::Owned<T>` (a GObject reference with a `Drop`)
+    plus the full migration of `jmap-backend-cal/src/marshal.rs`, which now has
+    zero hand-written `g_object_unref` calls. Notable, because it says something
+    about this kind of change generally: the acceptance suite the audit
+    prescribed (the existing round-trip/fixture tests) passed unchanged with the
+    migration deliberately broken into an over-release — GLib answers a
+    double-unref with a *critical*, not a crash, and a critical is printed and
+    ignored by default. So the increment also added the tests that do bite
+    (`jmap-backend-cal/tests/references.rs`, `jmap-backend-core/tests/owned.rs`)
+    and checked them against four deliberate breaks. Details in
+    `docs/UNSAFE-AUDIT.md`'s Pattern C entry.
+    **Still open on A6:** the `jmap-mail` (~10) and `jmap-backend-collection`
+    (~4) manual-unref sites — the same mechanical migration, now that the type
+    exists in a crate both already depend on — and the rest of A6's IMPROVE
+    list.
 - **A7 `[claude]` Stale-comments audit.** Deliverable
   `docs/STALE-COMMENTS-AUDIT.md`: comments that no longer match the code —
   renamed/removed items, changed behaviour, done TODOs, resolved-milestone refs

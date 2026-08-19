@@ -670,6 +670,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-cal",
  "jmap-backend-core",
+ "libc",
  "serde_json",
 ]
 

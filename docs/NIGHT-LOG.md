@@ -39010,3 +39010,100 @@ comment; then migrate `jmap-backend-cal/src/marshal.rs`'s timezone cluster
 existing `tests/marshal.rs`/`tests/zones.rs` round-trip suites as the
 acceptance gate. `jmap-mail`/`jmap-backend-collection` sites are the
 follow-up the audit already scopes as separate, not this increment.
+
+### Delivered: Track A6 Pattern C — `Owned<T>`, and the discovery that the prescribed acceptance suite does not bite
+
+**What landed.** `jmap_backend_core::owned::Owned<T>`: a GObject strong
+reference with a `Drop`. Four operations, each one a transfer annotation made
+into a type — `from_raw` (transfer full in; `Option`, so NULL-checking and
+taking ownership are one decision that cannot be half-done), `as_ptr` (lend it
+to a borrowing call), `into_raw` (hand the reference on to a C function that
+takes it), `Drop` (`g_object_unref`). `NonNull` inside, so it is neither `Send`
+nor `Sync` for free. Scoped deliberately to GObject instances — which is what
+libical-glib's `ICalComponent`/`ICalProperty`/`ICalParameter`/`ICalTimezone`
+are, and EDS's and Camel's objects too, so the follow-up sites in `jmap-mail`
+and `jmap-backend-collection` need no second wrapper. `gchar *` and `GDateTime`
+keep their own free functions rather than being forced through a wrong unref.
+
+`jmap-backend-cal/src/marshal.rs` is fully migrated: `component_from_ical`,
+`icalendar_with_time_zones`, `icalendar_from_instances`, `holds_event`,
+`find_master`, `take_event_time_zones`, `child_components` (now returns
+`Vec<Owned<ICalComponent>>`, which deletes the caller's unref loop),
+`take_referenced_time_zones`, `defines_time_zone`, `rename_time_zone`,
+`referenced_tzids`. The file no longer imports `gobject_sys` at all and the
+crate has exactly one unref site left, inside `Owned::drop`;
+`marshal::component_unref` stays as the public way a vfunc releases what
+`component_from_ical` handed it, now a one-line `drop(Owned::from_raw(…))`.
+Three shapes did most of the work: `let Some(x) = Owned::from_raw(getter())
+else { continue }` for the four early exits in `take_referenced_time_zones`,
+`Owned::from_raw(getter()).is_some()` for the three "I only wanted to know it
+exists" probes (`holds_event`, `find_master`, `defines_time_zone`), and
+`while let Some(p) = Owned::from_raw(next)` for the first/next iterations.
+`icalendar_from_instances`'s `?` on a failed render is now an exit path that
+releases the envelope by itself, which is precisely the shape that used to need
+a hand-written unref above it.
+
+**The finding worth more than the refactor.** `docs/UNSAFE-AUDIT.md` named the
+existing round-trip/fixture tests as this item's acceptance suite. They are not
+sufficient, and this is not a guess: with the clone in
+`take_referenced_time_zones` deliberately handed over *and* released
+(`copy.as_ptr()` instead of `copy.into_raw()` — a textbook double-unref),
+`tests/marshal.rs`, `tests/zones.rs`, `tests/ops.rs`, `tests/hostile.rs` and
+`tests/backend.rs` **all stayed green**, and so did the whole 131-test crate
+suite. GLib answers `g_object_unref` on a dead pointer with a
+`GLib-GObject-CRITICAL`, which by default is printed to stderr and execution
+continues — so the test run passes with the criticals scrolling past in the
+captured output nobody reads. A refcount migration signed off on that suite
+alone would have been signed off on nothing.
+
+So the increment also added the tests that do bite:
+- `jmap-backend-core/tests/owned.rs` — the wrapper's own arithmetic, read off
+  a real `G_TYPE_OBJECT`'s `ref_count`: taking ownership changes nothing,
+  `drop` releases exactly one, `as_ptr` releases none, `into_raw` releases
+  none, and a thousand take/drop cycles leave the count where they found it.
+- `jmap-backend-cal/tests/references.rs` — the same question on real libical
+  objects, three ways. (a) The component a load hands back carries the same
+  count libical's own `i_cal_component_new_from_string` gives, so the traversal
+  provably kept nothing. (b) `g_log_set_always_fatal(CRITICAL | WARNING)`, which
+  is the piece that turns an over-release into a red run instead of noise on
+  stderr. (c) Repeated loads must reach a window of 10,000 that retains
+  *exactly zero* bytes by `mallinfo2().uordblks` — an exact fixed point rather
+  than a byte threshold, because libical's own caching makes any tight
+  threshold flaky and any loose one blind. Measured convergence: ~350 kB
+  retained in the first window, single-digit kB in the second, 0 by the third
+  or fourth; cap is 8.
+
+**Each of those verified against a deliberate break**, rather than assumed to
+be sensitive: (1) over-release the clone → fatal critical, run red; (2)
+`mem::forget` the resolved zone definition → the leak window never reaches
+zero (192 bytes per load, and worth noting: an RSS-based first draft of that
+test passed this break, which is why it is `mallinfo2` now); (3) an extra
+`g_object_ref` on the returned component → the refcount test fails by one; (4)
+`mem::forget` the event children → both the leak test (81 kB per load) and the
+refcount test fail, the latter because a libical child wrapper holds a
+reference to its parent.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy both clean.
+`cargo test --locked` — 90 suites, 0 failed. Per-crate for the EDS-gated set:
+core 114, book 69, cal 131, mail 440, collection 156, config 143 passed, 0
+failed. And, because this is a change to reference counting inside a real
+factory process rather than to pure logic, the functional legs too:
+`cmake -S . -B build -G Ninja -DENABLE_FUNCTIONAL_TESTS=ON && ninja -C build &&
+ctest --test-dir build -L functional` → **5/5 passed**, `functional-cal`
+included, which drives this exact marshalling through a real
+`evolution-calendar-factory`. `rust/Cargo.lock` gained one dependency edge
+(`libc` as a dev-dependency of `jmap-backend-cal`, for `mallinfo2`) and no new
+package — `libc 0.2.189` was already there as `jmap-backend-core`'s dev-dep.
+All three new files carry SPDX `GPL-3.0-or-later` headers; `ci/checks.sh` still
+cannot run on this VM ([[checks-sh-blocked-on-vm]]). Disk fine (21G free).
+
+**Scope, stated plainly.** This closes Pattern C for the target the audit named
+as highest-value and leaves the follow-up it also named: the ~10 `jmap-mail`
+sites and the ~4 in `jmap-backend-collection`. Those are now a mechanical
+migration rather than a design question — `Owned` lives in `jmap-backend-core`,
+which both crates already depend on — and `docs/UNSAFE-AUDIT.md`'s Pattern C
+entry and `docs/ROADMAP.md`'s A6 entry both record that split rather than
+claiming A6 as a whole. Nothing here needs human verification: it is a
+refcount-preserving refactor of code with no user-visible surface, proven in a
+real EDS process by the functional run.
