@@ -82,13 +82,13 @@ use eds_sys::{
     EClientError, ESource, ESourceAuthentication, ESourceResource, ESourceSecurity,
     e_client_error_create, e_source_authentication_get_host, e_source_authentication_get_port,
     e_source_authentication_get_type, e_source_authentication_get_user, e_source_get_extension,
-    e_source_has_extension, e_source_resource_get_identity, e_source_resource_get_type,
-    e_source_security_get_secure, e_source_security_get_type,
+    e_source_resource_get_identity, e_source_resource_get_type, e_source_security_get_secure,
+    e_source_security_get_type,
 };
 use glib_sys::GError;
 
 use crate::error::cstring_lossy;
-use crate::marshal::read_string;
+use crate::marshal::{extension_if_present, read_string};
 
 /// What a backend needs from its `ESource` in order to build a client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,19 +191,13 @@ impl SourceConfig {
         // says.
         // SAFETY: the source is valid for the whole call and the name is a
         // header constant.
-        let secure =
-            match unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()) } {
-                0 => true,
-                _ => {
-                    // SAFETY: as above; the extension exists and is owned by the
-                    // source, which outlives this call.
-                    let security = unsafe {
-                        e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr())
-                            .cast::<ESourceSecurity>()
-                    };
-                    !security.is_null() && unsafe { e_source_security_get_secure(security) } != 0
-                }
-            };
+        let secure = match unsafe {
+            extension_if_present::<ESourceSecurity>(source, E_SOURCE_EXTENSION_SECURITY)
+        } {
+            None => true,
+            // SAFETY: a live extension, by `extension_if_present`'s contract.
+            Some(security) => unsafe { e_source_security_get_secure(security) != 0 },
+        };
 
         // SAFETY: as above; the returned extensions are owned by the source
         // and live as long as it does.

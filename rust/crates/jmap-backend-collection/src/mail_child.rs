@@ -99,6 +99,7 @@ use glib_sys::{GFALSE, GTRUE, gboolean, gpointer};
 use gobject_sys::{
     G_BINDING_SYNC_CREATE, GBinding, GValue, g_value_get_boolean, g_value_set_static_string,
 };
+use jmap_backend_core::marshal::extension_if_present;
 use jmap_backend_core::trampoline::guard;
 
 use crate::prepare_mail::MAIL_BACKEND_NAME;
@@ -164,16 +165,11 @@ pub unsafe fn mail_service_of(child: *mut ESource) -> Option<&'static CStr> {
 
     SERVICES.into_iter().find(|extension| {
         // SAFETY: a valid source by this function's contract, and a header
-        // constant.
-        if unsafe { e_source_has_extension(child, extension.as_ptr()) } == GFALSE {
+        // constant; both mail extensions derive from `ESourceBackend`.
+        let Some(backend) = (unsafe { extension_if_present::<ESourceBackend>(child, extension) })
+        else {
             return false;
-        }
-
-        // SAFETY: the extension is present, so this returns the source's own,
-        // which it owns and which outlives the call; both mail extensions derive
-        // from `ESourceBackend`.
-        let backend: *mut ESourceBackend =
-            unsafe { e_source_get_extension(child, extension.as_ptr()) }.cast();
+        };
         // SAFETY: a live extension; the getter returns NULL or a
         // NUL-terminated string owned by it.
         let name = unsafe { e_source_backend_get_backend_name(backend) };
