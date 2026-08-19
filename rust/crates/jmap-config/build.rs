@@ -15,8 +15,11 @@
 // publishes the directories as metadata instead — `cargo:libdirs`, which Cargo
 // hands to the dependents of a crate with a `links` key as
 // `DEP_EVOLUTION_SHELL_LIBDIRS` — and this turns them back into an rpath for
-// the test binaries here, and for the module this crate will eventually be
-// installed as.
+// the test binaries here. It does NOT reach `jmap-config-module`, the
+// separate cdylib crate the account-setup module is actually built from
+// (rustc-link-arg is package-scoped, and that crate is a different package) —
+// that crate carries its own copy of this exact build script for the same
+// reason.
 
 use std::env;
 

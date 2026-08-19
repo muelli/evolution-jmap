@@ -18,3 +18,7 @@ crate-type = ["cdylib"]
 [dependencies]
 jmap-config = { workspace = true }
 gobject-sys = { workspace = true }
+# Metadata-only, for this crate's own build.rs: not called from any Rust code
+# here, but needs to be a direct (non-build) dependency for Cargo to set
+# `DEP_EVOLUTION_SHELL_LIBDIRS` from its `links` key. See build.rs.
+evo-sys = { workspace = true }

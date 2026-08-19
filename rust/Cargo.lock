@@ -743,6 +743,7 @@ dependencies = [
 name = "jmap-config-module"
 version = "0.2.0"
 dependencies = [
+ "evo-sys",
  "gobject-sys",
  "jmap-config",
 ]
