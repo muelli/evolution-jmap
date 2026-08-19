@@ -37178,3 +37178,47 @@ Ending the session here — one focused, fully-tested increment, pushed.
 Everything else surveyed remains FFI/refcount escalation-worthy (SRV
 autodiscovery's GResolver `Resolver`, A5, A6 Pattern C, D1's vtable wiring)
 or NEEDS-DECISION (B1, C2's third-party notices, C4, Track E).
+
+## 2026-08-19 (claim) — Claiming Track A6 Pattern E: the `invalid_arg`/`no_account_gerror` GError-builder consolidation
+
+Fresh survey, same ground the last several sessions have mapped: all
+milestones COMPLETE; CURRENT PRIORITY's one open thread (SRV
+autodiscovery's `g_resolver_lookup_service()`-backed `Resolver`) and Round
+2's Track D (D1's vtable wiring) and A6 Pattern C (libical/GObject RAII)
+are all the same standing FFI/refcount escalation candidates, unchanged.
+Track B/C2/C4/E are NEEDS-DECISION. Track A's other `[claude]` items are
+done (A2, A4, A6 Pattern A/B/D's clean sites, A7) or escalation-worthy
+(A5, A6 Pattern C).
+
+That leaves `docs/UNSAFE-AUDIT.md`'s Pattern E — the `invalid_arg()`/
+`no_account_gerror()` GError-builder, independently reimplemented
+byte-for-byte identically in three crates
+(`jmap-backend-book/src/ops.rs:304`, `jmap-backend-cal/src/ops.rs:383`,
+`jmap-backend-collection/src/authenticate.rs:240` — confirmed by reading
+all three: each is exactly `cstring_lossy(message)` then
+`e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, ...)`, and each of the
+two symbols involved has exactly one other use in its file, the import
+line, so removing both cleanly drops the duplicate). The audit itself
+tags this "low priority... fold into other work in those files rather
+than its own increment" — a deliberate deprioritisation, not a ban, and
+made on the assumption something higher-priority would come along to fold
+it into. Nothing has, for many sessions running; the audit's own
+higher-priority item on this same list (Pattern C) is the escalation
+candidate, and every other lane is exhausted or gated. Doing this small,
+purely mechanical, zero-behaviour-change consolidation now — the same
+shape as the Pattern B/D helpers already landed this thread — is a better
+use of this session than a `BLOCKED` report when a genuine, safe,
+in-scope increment exists. Scoping to exactly the audit's named
+recommendation (`invalid_arg_gerror`); the `fail`/`fail_bool` half of
+Pattern E is generic over return type (`gboolean`, `*mut T`,
+`CamelAuthenticationResult` all appear across the ~10 call sites) and
+would need real design work to unify cleanly, which is what the audit's
+deprioritisation was actually protecting against — leaving that half
+open, as the audit's own text already scoped it as the "lowest priority"
+part.
+
+Claiming this increment now: add
+`jmap_backend_core::error::invalid_arg_gerror(message: &str) -> *mut GError`
+next to the module's existing `to_gerror`/`set_gerror`/`cstring_lossy`,
+red-test first, then have the three call sites delegate to it, keeping
+every existing test in those three crates green unmodified.
