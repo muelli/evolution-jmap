@@ -63,11 +63,11 @@ use std::ffi::CStr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_SECURITY, ESource,
-    e_binding_bind_property, e_source_authentication_get_type, e_source_get_extension,
-    e_source_has_extension, e_source_security_get_type,
+    e_binding_bind_property, e_source_authentication_get_type, e_source_security_get_type,
 };
-use glib_sys::{GFALSE, gpointer};
+use glib_sys::gpointer;
 use gobject_sys::G_BINDING_SYNC_CREATE;
+use jmap_backend_core::marshal::extension_if_present;
 
 use crate::mail_child::{follow_server, mail_service_of};
 
@@ -135,21 +135,10 @@ pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
         // the module comment on why an absent group is left absent.
         // SAFETY: valid sources by this function's contract, and a header
         // constant.
-        let present = unsafe {
-            e_source_has_extension(collection, name.as_ptr()) != GFALSE
-                && e_source_has_extension(child, name.as_ptr()) != GFALSE
-        };
-        if !present {
+        let (Some(from), Some(to)) = (unsafe { extension_if_present(collection, name) }, unsafe {
+            extension_if_present(child, name)
+        }) else {
             continue;
-        }
-
-        // SAFETY: both extensions are present, so each call returns the
-        // source's own, which it owns and which outlives it.
-        let (from, to) = unsafe {
-            (
-                e_source_get_extension(collection, name.as_ptr()),
-                e_source_get_extension(child, name.as_ptr()),
-            )
         };
 
         for property in properties {
