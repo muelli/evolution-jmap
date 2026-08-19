@@ -220,11 +220,18 @@ they close, prioritise in this order:
      neither works (rather own code than no code).** Given the workspace is
      deliberately blocking / tokio-free and the resolver is built in the
      EDS-integration layer where GLib is already linked, the recommended answer
-     is **GLib's `GResolver` via `g_resolver_lookup_service()`**: an existing,
-     well-maintained library, synchronous, **zero new Cargo dependency** — the
-     only new code is a thin `eds-sys`/`glib` FFI binding plus a `Resolver` impl
-     mapping its `GSrvTarget` list (RFC 2782 order: lowest priority, then highest
-     weight) to `SrvTarget`. A pure-Rust SRV crate is acceptable *only* if it is
+     is **GLib's `GResolver` via `g_resolver_lookup_service()`**, and the binding
+     is **already in the tree**: `gio-sys` 0.22 is already in `Cargo.lock`
+     (sibling of the `glib-sys`/`gobject-sys` this project already uses, MIT,
+     `deny.toml`-allowlisted) and exposes `g_resolver_get_default`,
+     `g_resolver_lookup_service`, and the `GSrvTarget` accessors
+     (`g_srv_target_get_hostname/_port/_priority/_weight`). So there is **no new
+     dependency and no hand-written FFI to maintain** — just a `Resolver` impl
+     that calls them and maps the returned `GSrvTarget` `GList` (RFC 2782 order:
+     lowest priority, then highest weight) to `SrvTarget`, freeing the list after.
+     `g_resolver_lookup_service` is frozen GLib API (since 2.22, 2009), so drift
+     risk is minimal — this is the opposite of the EDS-vCard surface that drifted
+     on 3.60. A pure-Rust SRV crate is acceptable *only* if it is
      blocking, license-allowlisted (`deny.toml`), and drags no async runtime into
      the lean tree — most (e.g. hickory) are tokio-based, so evaluate before
      adding; hand-rolled DNS packet parsing is the last resort, not the default.
