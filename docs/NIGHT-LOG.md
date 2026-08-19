@@ -36404,3 +36404,38 @@ same seven-crate `cargo test --locked` both green, every `test result: ok`,
 individually as above, per the standing workaround. 3.5G free on disk after
 the full sweep — did not hit the standing "No space left on device" wall
 this session.
+
+## 2026-08-19 (claim) — Claiming UNSAFE-AUDIT Pattern A, fix 2 (shared `zeroed_box` helper)
+
+Fresh survey: all milestones COMPLETE (`docs/MILESTONES.md`); CURRENT
+PRIORITY's one open thread (SRV autodiscovery) is down to the
+`g_resolver_lookup_service()`-backed real `Resolver` — FFI, the standing
+escalation candidate. Round 2's lead-order Track D's one open item (D1's
+EDS-vtable wiring for `create_resource_sync`/`delete_resource_sync`) is the
+same GObject-vtable-FFI category, also standing-escalation. Track E is
+NEEDS-DECISION. Continuing the thread the last three sessions worked
+(`docs/UNSAFE-AUDIT.md` Track A6): Pattern D and Pattern B are now done or
+down to sites that need a design call; Pattern A's `#[cfg(feature =
+"testing")]` gating (fix 1) landed two sessions ago, but its fix 2 — hoisting
+the zeroing itself into one shared `jmap_backend_core` helper instead of six
+near-identical copies of the same safety paragraph — is still open and is
+first in the audit's own prioritized list. It is small, mechanical, and
+touches only already-`testing`-gated code, so no new correctness risk: a
+good next Sonnet-sized increment.
+
+**Design:** `jmap_backend_core::instance` (home of `Slot<T>`, which already
+documents the "GObject hands `instance_init` zeroed memory" fact this trades
+on) gains `pub unsafe fn zeroed_box<T>() -> Box<T>`, `#[cfg(feature =
+"testing")]`-gated, with the "every field of `T` must be valid at all-zero"
+contract stated once. `jmap-backend-core` gets its own `testing = []`
+feature; each of the five call-site crates' existing `testing` feature
+becomes `testing = ["jmap-backend-core/testing"]` so enabling a crate's own
+`testing` (already wired via its self dev-dependency, per Pattern A fix 1)
+reaches through to unlock the helper. All six `detached()` sites
+(`jmap-backend-book`, `jmap-backend-cal`, `jmap-backend-collection`,
+`jmap-config`'s `backend.rs`, `jmap-mail`'s `store.rs`/`transport.rs`) switch
+their `Box::new(unsafe { MaybeUninit::zeroed().assume_init() })` to
+`zeroed_box()`, dropping the now-unused `MaybeUninit` import at each site. No
+behaviour change: same all-zero `Box<Self>` for the same six types.
+
+Claiming this increment now.
