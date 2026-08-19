@@ -36645,3 +36645,60 @@ binary cannot see `pub(crate)` items), using `proptest!` over an unconstrained
 value — arbitrary Unicode, not just ASCII attack strings.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track A4 complete, `proptest` fuzzing of `jmap-client`'s untrusted-server URL handling
+
+Followed through on this session's claim. `jmap-client/Cargo.toml` gained a
+`proptest = { workspace = true }` dev-dependency (already a workspace dep
+since the `jmap-proto` half of A4; adding jmap-client as a second dependent
+only appended one line to `Cargo.lock` — no new crate versions, so no new
+licenses to check). `jmap-client/src/url.rs`'s existing `#[cfg(test)] mod
+tests` gained a `proptest!` block with two properties, each over an
+unconstrained `.*` string strategy (arbitrary Unicode, not restricted to
+ASCII attack characters — a multi-byte character straddling where
+`rebase_origin` slices for `://` or the first `/` is exactly the case manual
+inspection is least trustworthy about):
+
+- `rebase_origin_never_panics_on_hostile_input(url, origin)` — stands in for
+  a malicious/buggy server's `apiUrl`/`downloadUrl`/`uploadUrl`/
+  `eventSourceUrl` reaching `Client::connect`'s `rebase_origin` calls
+  (`client.rs:236-240`), fully server-controlled on both arguments.
+- `encode_template_value_never_panics_on_hostile_input(value)` — stands in
+  for a server-supplied `blobId`/`accountId` or this crate's own `name`
+  substituted into a blob-URL template.
+
+Both properties passed on the first run (proptest's default 256 cases each),
+confirming rather than merely asserting by inspection that both functions
+are panic-safe on hostile input — consistent with prior sessions' manual
+reasoning (`rebase_origin`'s slice indices all come from `str::find`, which
+only returns valid char-boundary offsets; `encode_template_value` delegates
+to the maintained `percent_encoding` crate) but now backed by generated
+cases rather than resting on that reasoning alone. As expected going in,
+this landed as a regression net, not a bug fix — no panic found, same as
+A3's own wording allows for.
+
+This closes out Track A4's stated scope in full: both halves (the
+`jmap-proto` deserialization boundary, done two sessions ago, and this
+session's `jmap-client` URL-handling boundary) now have proptest coverage
+against the untrusted-server surface.
+
+Hit the standing disk-fills-from-cargo-target wall again this session:
+`rust/target/debug` at 23G, `/` at 100% full, a `cargo test` failing with a
+linker SIGBUS (signal 7) — same root cause as two sessions ago, same fix:
+`cargo clean --profile dev` recovered 24G and every subsequent run was
+clean.
+
+Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets --offline
+-- -D warnings` (default-members) clean; `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets --offline -- -D warnings` (the EDS-gated crates, direct-built
+since this VM has the headers) clean; `cargo test --offline`
+(default-members) and the same seven-crate `cargo test --offline` both
+green, every `test result: ok`, 0 failed, exit 0. No new files, so no
+`REUSE.toml`/SPDX changes needed. `reuse`/`pipx`/`uvx`/`cargo-deny` remain
+unavailable on this VM, so `ci/checks.sh` itself was not run — its
+constituent checks were run individually as above, per the standing
+workaround (`--offline` used in place of `--locked` since `Cargo.lock`
+itself changed by one line this session; the lock file's actual content was
+reviewed by hand instead).

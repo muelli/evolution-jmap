@@ -269,6 +269,28 @@ tracks follow; the maintainer may reorder anytime.
     which only ever returns valid char-boundary offsets, so it looks
     panic-safe by inspection; a proptest harness proving that (rather than
     inspecting it) is the next session's increment on this thread.
+  - **DONE 2026-08-19** — the `jmap-client` half landed:
+    `jmap-client/src/url.rs`'s `#[cfg(test)]` module gained a `proptest!`
+    block with two properties over an unconstrained `.*` (arbitrary Unicode)
+    string strategy — `rebase_origin_never_panics_on_hostile_input(url,
+    origin)`, standing in for a malicious/buggy server's fully-controlled
+    `apiUrl`/`downloadUrl`/`uploadUrl`/`eventSourceUrl`, and
+    `encode_template_value_never_panics_on_hostile_input(value)`, standing in
+    for a server-supplied `blobId`/`accountId` substituted into a blob-URL
+    template. Both had to live inside `url.rs` itself rather than a `tests/`
+    integration binary, since both functions are `pub(crate)`. Both
+    properties pass on the first run (256 cases each), confirming rather
+    than resting on the prior session's by-inspection reasoning — another
+    regression net, no panic found, consistent with A3's wording. The
+    "no auth leak on redirect" half of A4's acceptance criterion is separate
+    coverage, not proptest: `UreqTransport::new`'s `redirect_auth_headers =
+    SameHost` and `jmap-client/tests/redirect_auth.rs` (from the 86fea00 fix)
+    already assert a cross-host redirect drops the `Authorization` header;
+    this session did not add fuzzing over arbitrary redirect targets on top
+    of that fixed-case test, so treat that as the one narrower thing left on
+    this thread if a future session wants to broaden it — Track A4 itself is
+    otherwise complete (both named halves, `jmap-proto` and `jmap-client`,
+    done).
 - **A5 `[claude]` FFI soundness audit.** Worth doing, and timely — Tracks D/B add
   FFI surface and M10 already exposed cross-version FFI drift. Scope: every vfunc
   trampoline `catch_unwind`-wrapped; transfer-full vs transfer-none ownership on
