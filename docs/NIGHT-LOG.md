@@ -37134,3 +37134,47 @@ to `jmap-backend-core::marshal`, then have `envelope.rs::internet` delegate
 to it, keeping every existing `envelope.rs`/`jmap-mail` test green
 unmodified (same `Option`/`Err` outcomes for the same inputs — TDD here
 means proving that equivalence, not adding new behaviour).
+
+## 2026-08-19 — Delivered: Track A6 Pattern B remainder (`envelope.rs::internet`), closing Pattern B
+
+Followed through on the claim. Red first: added three unit tests to
+`jmap-backend-core/tests/marshal.rs` (`a_null_pointer_is_ok_none_not_the_
+supplied_error`, `a_pointer_of_the_right_type_is_ok_some`,
+`a_pointer_of_the_wrong_type_is_the_supplied_error`) calling a
+`marshal::checked_borrow_ptr_or` that did not exist yet — confirmed the
+build failed with `cannot find function` before writing it. Green: added
+`checked_borrow_ptr_or<C, T, E>(ptr, gtype, err) -> Result<Option<*mut T>, E>`
+to `jmap-backend-core::marshal`, same null-check-then-
+`g_type_check_instance_is_a`-then-cast shape as `checked_borrow`/
+`checked_borrow_ptr`, but returning the caller's `err` on a failed type
+check instead of collapsing that into `None` — exactly the third return
+shape `envelope.rs::internet` needed and the other two helpers don't
+provide. `envelope.rs::internet` now delegates to it with
+`EnvelopeError::NotInternet(which)` as the error, dropping its own
+`g_type_check_instance_is_a` call and the now-unused `gobject_sys` import.
+No behaviour change: `jmap-mail/tests/envelope.rs`'s existing 11 tests
+(covering NULL, right-type, and wrong-type inputs to `internet` via
+`read_envelope`) all stayed green unmodified, proving the refactor
+preserves every outcome rather than asserting it by inspection.
+
+This closes `docs/UNSAFE-AUDIT.md`'s Pattern B in full (updated there) —
+all ~13 "check the GType, then cast" call sites now go through one of
+three shared, individually-audited helpers (`dispatched_borrow`,
+`checked_borrow`/`checked_borrow_ptr`, `checked_borrow_ptr_or`) instead of
+independently reimplementing the pattern.
+
+Gate before pushing: `cargo fmt --check` clean (after `cargo fmt`);
+`cargo clippy --all-targets --locked -- -D warnings` (default-members) and
+`cargo clippy -p evolution-jmap-client -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+EDS-gated crates) both clean; `cargo test --locked` (default-members) and
+the same seven-crate `cargo test` both green, every `test result: ok`, 0
+failed. `rust/target` was cleaned (`cargo clean --profile dev`, 18G freed)
+at the start of this session per the standing disk-fills-from-cargo-target
+note, before any build ran.
+
+Ending the session here — one focused, fully-tested increment, pushed.
+Everything else surveyed remains FFI/refcount escalation-worthy (SRV
+autodiscovery's GResolver `Resolver`, A5, A6 Pattern C, D1's vtable wiring)
+or NEEDS-DECISION (B1, C2's third-party notices, C4, Track E).
