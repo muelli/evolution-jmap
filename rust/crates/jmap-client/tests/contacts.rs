@@ -6,7 +6,7 @@
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
+use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use serde_json::json;
 
 fn server_with_book() -> (MockServer, Id, Id) {
@@ -54,6 +54,90 @@ fn contact_create_requires_existing_address_book() {
     let card = ContactCard::simple("AB999", "Ghost", "ghost@example.com");
     match client.contact_create(&account_id, &card) {
         Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
+        other => panic!("expected Set error, got {other:?}"),
+    }
+}
+
+#[test]
+fn address_book_create() {
+    let (server, account_id, _personal) = server_with_book();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let book = AddressBook {
+        name: "Work".to_owned(),
+        ..AddressBook::default()
+    };
+    let created = client.address_book_create(&account_id, &book).unwrap();
+
+    let id = created.id.expect("server assigned id");
+    assert_eq!(created.name, "Work");
+
+    // White box: it is really in the store.
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    assert!(account.address_books.contains(&id));
+
+    drop(state);
+    let books = client.address_books(&account_id).unwrap();
+    assert_eq!(books.len(), 2, "the seeded book plus the new one");
+}
+
+#[test]
+fn address_book_create_requires_name() {
+    let (server, account_id, _book) = server_with_book();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let unnamed = AddressBook::default();
+    match client.address_book_create(&account_id, &unnamed) {
+        Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
+        other => panic!("expected Set error, got {other:?}"),
+    }
+}
+
+#[test]
+fn address_book_create_rejects_client_supplied_id() {
+    let (server, account_id, _book) = server_with_book();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let book = AddressBook {
+        id: Some(Id::new("AB999")),
+        name: "Sneaky".to_owned(),
+        ..AddressBook::default()
+    };
+    match client.address_book_create(&account_id, &book) {
+        Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
+        other => panic!("expected Set error, got {other:?}"),
+    }
+}
+
+#[test]
+fn address_book_destroy() {
+    let (server, account_id, _personal) = server_with_book();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let created = client
+        .address_book_create(
+            &account_id,
+            &AddressBook {
+                name: "Temporary".to_owned(),
+                ..AddressBook::default()
+            },
+        )
+        .unwrap();
+    let id = created.id.unwrap();
+
+    client.address_book_destroy(&account_id, &id).unwrap();
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    assert!(!account.address_books.contains(&id));
+    drop(state);
+
+    // Destroying again fails with notFound.
+    match client.address_book_destroy(&account_id, &id) {
+        Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "notFound"),
         other => panic!("expected Set error, got {other:?}"),
     }
 }

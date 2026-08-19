@@ -273,6 +273,7 @@ fn the_server_this_backend_contacts_is_the_one_its_children_are_given() {
         account_id: Id::new("A1"),
         collection_id: Id::new("AB1"),
         is_default: false,
+        color: None,
         read_only: false,
     };
 

@@ -78,6 +78,7 @@ impl Source {
             account_id: Id::new("A1"),
             collection_id: Id::new("AB1"),
             is_default: false,
+            color: None,
             read_only: false,
         };
         // SAFETY: a live source.

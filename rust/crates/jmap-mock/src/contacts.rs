@@ -40,6 +40,31 @@ pub fn address_book_get(state: &mut ServerState, arguments: Value) -> Result<Val
     })
 }
 
+/// `AddressBook/set` (RFC 9610 §2): making and removing an address book.
+///
+/// No hierarchy and no cross-object placement rules the way `Mailbox/set`
+/// has, so [`simple_set`] is the whole of it — the only per-create check is
+/// the one every `/set` create shares (server-set `id` rejected) plus the one
+/// RFC 9610 states for `name`.
+pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+    let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let response = simple_set(&mut account.address_books, request, |id, book| {
+        if book.id.is_some() {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("id is set by the server and must not be given in a create"));
+        }
+        if book.name.is_empty() {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("name must not be empty"));
+        }
+        book.id = Some(id.clone());
+        Ok(())
+    })?;
+    to_result(&response)
+}
+
 pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;

@@ -6,7 +6,7 @@
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
+use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
 use serde_json::json;
 
 fn server_with_calendar() -> (MockServer, Id, Id) {
@@ -61,6 +61,90 @@ fn event_create_requires_calendar_and_start() {
     without_start.start = None;
     match client.event_create(&account_id, &without_start) {
         Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
+        other => panic!("expected Set error, got {other:?}"),
+    }
+}
+
+#[test]
+fn calendar_create() {
+    let (server, account_id, _personal) = server_with_calendar();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let calendar = Calendar {
+        name: "Work".to_owned(),
+        ..Calendar::default()
+    };
+    let created = client.calendar_create(&account_id, &calendar).unwrap();
+
+    let id = created.id.expect("server assigned id");
+    assert_eq!(created.name, "Work");
+
+    // White box: it is really in the store.
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    assert!(account.calendars.contains(&id));
+
+    drop(state);
+    let calendars = client.calendars(&account_id).unwrap();
+    assert_eq!(calendars.len(), 2, "the seeded calendar plus the new one");
+}
+
+#[test]
+fn calendar_create_requires_name() {
+    let (server, account_id, _calendar) = server_with_calendar();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let unnamed = Calendar::default();
+    match client.calendar_create(&account_id, &unnamed) {
+        Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
+        other => panic!("expected Set error, got {other:?}"),
+    }
+}
+
+#[test]
+fn calendar_create_rejects_client_supplied_id() {
+    let (server, account_id, _calendar) = server_with_calendar();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let calendar = Calendar {
+        id: Some(Id::new("CAL999")),
+        name: "Sneaky".to_owned(),
+        ..Calendar::default()
+    };
+    match client.calendar_create(&account_id, &calendar) {
+        Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
+        other => panic!("expected Set error, got {other:?}"),
+    }
+}
+
+#[test]
+fn calendar_destroy() {
+    let (server, account_id, _personal) = server_with_calendar();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let created = client
+        .calendar_create(
+            &account_id,
+            &Calendar {
+                name: "Temporary".to_owned(),
+                ..Calendar::default()
+            },
+        )
+        .unwrap();
+    let id = created.id.unwrap();
+
+    client.calendar_destroy(&account_id, &id).unwrap();
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    assert!(!account.calendars.contains(&id));
+    drop(state);
+
+    // Destroying again fails with notFound.
+    match client.calendar_destroy(&account_id, &id) {
+        Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "notFound"),
         other => panic!("expected Set error, got {other:?}"),
     }
 }

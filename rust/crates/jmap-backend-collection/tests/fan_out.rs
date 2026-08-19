@@ -200,6 +200,7 @@ fn resource(id: &str) -> Resource {
         id: Id::new(id),
         name: format!("Collection {id}"),
         is_default: false,
+        color: None,
     }
 }
 
@@ -239,6 +240,7 @@ fn written_child(kind: ChildKind, collection: &str) -> Source {
         account_id: Id::new(DEFAULT_ACCOUNT_ID),
         collection_id: Id::new(collection),
         is_default: false,
+        color: None,
         read_only: false,
     };
     // SAFETY: a live source of this process's own.

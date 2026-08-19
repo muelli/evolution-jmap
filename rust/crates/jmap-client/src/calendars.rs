@@ -26,6 +26,44 @@ impl Client {
         Ok(response.list)
     }
 
+    /// Create a calendar; returns the stored calendar (with server-set id).
+    pub fn calendar_create(&self, account_id: &Id, calendar: &Calendar) -> Result<Calendar, Error> {
+        let request =
+            SetRequest::<Calendar>::new(account_id.clone()).create("new", calendar.clone());
+        let response = self.calendar_set(&request)?;
+        if let Some(created) = response
+            .created
+            .as_ref()
+            .and_then(|created| created.get("new"))
+        {
+            return Ok(created.clone());
+        }
+        Err(set_failure(
+            response.not_created.as_ref().and_then(|map| map.get("new")),
+        ))
+    }
+
+    /// Destroy a calendar.
+    pub fn calendar_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
+        let request = SetRequest::<Calendar>::new(account_id.clone()).destroy(id.clone());
+        let response = self.calendar_set(&request)?;
+        if response
+            .destroyed
+            .as_ref()
+            .is_some_and(|destroyed| destroyed.contains(id))
+        {
+            return Ok(());
+        }
+        Err(set_failure(
+            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
+        ))
+    }
+
+    fn calendar_set(&self, request: &SetRequest<Calendar>) -> Result<SetResponse<Calendar>, Error> {
+        let arguments = self.single_call(USING, "Calendar/set", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
     /// Create a calendar event; returns the stored event (with server-set
     /// id, uid, …).
     pub fn event_create(

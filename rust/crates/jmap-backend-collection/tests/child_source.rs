@@ -20,8 +20,9 @@ use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_SECURITY,
-    ESource, ESourceSecurity, e_source_get_display_name, e_source_get_extension,
+    ESource, ESourceSecurity, ESourceSelectable, e_source_get_display_name, e_source_get_extension,
     e_source_has_extension, e_source_new_with_uid, e_source_security_get_secure,
+    e_source_selectable_get_color,
 };
 use glib_sys::GFALSE;
 use gobject_sys::g_object_unref;
@@ -89,6 +90,19 @@ impl TestSource {
         }
     }
 
+    /// `ESourceSelectable:color` read back off the "Calendar" extension —
+    /// `ESourceCalendar` derives from `ESourceSelectable`, so the same object
+    /// answers both.
+    fn color(&self) -> Option<String> {
+        // SAFETY: a live source; the extension is created on demand and owned
+        // by it, and the returned string is borrowed from it too.
+        unsafe {
+            let selectable: *mut ESourceSelectable =
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_CALENDAR.as_ptr()).cast();
+            read_string(e_source_selectable_get_color(selectable))
+        }
+    }
+
     /// The child read the way the address book and calendar backends read the
     /// source they are handed.
     fn config(&self) -> SourceConfig {
@@ -127,6 +141,7 @@ fn child(kind: ChildKind, collection: &str, name: &str) -> Child {
         account_id: Id::new("A1"),
         collection_id: Id::new(collection),
         is_default: false,
+        color: None,
         read_only: false,
     }
 }
@@ -366,4 +381,46 @@ fn a_collection_name_with_an_interior_nul_still_produces_a_usable_child() {
 
     assert_eq!(source.display_name(), Some("Person".to_owned()));
     assert_eq!(source.resource_id(), Some("addressbook:AB1".to_owned()));
+}
+
+#[test]
+fn a_calendars_color_reaches_the_child_and_reads_back_as_the_one_written() {
+    // The round trip a real backend depends on: `Child::settings` describes
+    // the color as a `("Calendar", "Color", …)` triple, and this is that
+    // triple landing on an actual `ESourceSelectable:color` rather than on
+    // some other property `e_source_selectable_get_color` does not read.
+    let mut colored = child(ChildKind::Calendar, "Cal1", "Work");
+    colored.color = Some("#ff8800".to_owned());
+    let source = TestSource::new().written(&colored, &connection());
+
+    assert_eq!(source.color(), Some("#ff8800".to_owned()));
+}
+
+#[test]
+fn a_calendar_the_server_named_no_color_for_gets_no_color_setting() {
+    // `ESourceSelectable:color` is not NULL-by-default the way a freshly
+    // created extension's other properties are: EDS's own GParamSpec gives it
+    // a built-in default ("#62a0ea", GNOME's accent blue), so a calendar the
+    // server named no color for is not left with *no* color, it is left with
+    // whatever every other selectable source starts at. That is the point —
+    // `Child::settings` leaving the setting out (see the module comment on
+    // omitted-vs-empty) means this backend never overrides that default with
+    // an empty string, which is what `e_source_selectable_set_color(sel, "")`
+    // would have done.
+    let uncolored = child(ChildKind::Calendar, "Cal1", "Work");
+    let source = TestSource::new().written(&uncolored, &connection());
+
+    assert!(
+        !uncolored
+            .settings(&connection())
+            .iter()
+            .any(|setting| setting.key == "Color"),
+        "an unset color must not be a Setting at all"
+    );
+    assert_eq!(
+        source.color(),
+        Some("#62a0ea".to_owned()),
+        "EDS's own compiled-in default for a selectable source with no color \
+         ever written to it"
+    );
 }
