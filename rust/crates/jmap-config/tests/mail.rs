@@ -39,13 +39,12 @@ use eds_sys::{
     ESourceMailAccount, ESourceMailIdentity, ESourceMailSubmission, ESourceSecurity,
     camel_network_settings_get_security_method, e_collection_backend_factory_prepare_mail,
     e_source_authentication_get_method, e_source_backend_get_backend_name,
-    e_source_camel_generate_subtype,
-    e_source_camel_get_extension_name, e_source_camel_get_settings,
-    e_source_collection_get_identity, e_source_get_extension, e_source_get_parent,
-    e_source_get_uid, e_source_has_extension, e_source_mail_account_get_identity_uid,
-    e_source_mail_identity_get_address, e_source_mail_submission_get_transport_uid, e_source_new,
-    e_source_new_with_uid, e_source_security_get_secure,
-    e_util_can_use_collection_as_credential_source,
+    e_source_camel_generate_subtype, e_source_camel_get_extension_name,
+    e_source_camel_get_settings, e_source_collection_get_identity, e_source_get_extension,
+    e_source_get_parent, e_source_get_uid, e_source_has_extension,
+    e_source_mail_account_get_identity_uid, e_source_mail_identity_get_address,
+    e_source_mail_submission_get_transport_uid, e_source_new, e_source_new_with_uid,
+    e_source_security_get_secure, e_util_can_use_collection_as_credential_source,
 };
 use glib_sys::GFALSE;
 use gobject_sys::{g_object_unref, g_type_create_instance};
