@@ -251,6 +251,24 @@ tracks follow; the maintainer may reorder anytime.
   into `transport.rs`. The server is NOT trusted: assert no panic and no auth
   leak on redirect (same surface as the 86fea00 redirect-auth fix). Aligns with
   the standing "Recurring security re-audit" directive.
+  - **PARTIAL 2026-08-19** — the `jmap-proto` deserialization half landed:
+    `jmap-proto/tests/malicious_input.rs` feeds a bounded-depth, bounded-
+    breadth arbitrary-JSON `proptest` strategy into `Session`, `Request`,
+    `Response`, `MethodError`, and `RequestError` deserialization, asserting
+    only "no panic" (`Ok`/`Err` both pass). No `arbitrary` crate needed — a
+    hand-rolled recursive JSON strategy in `proptest` alone was enough,
+    keeping the new dev-dependency to one crate. All five properties pass on
+    the first run; a manual read of the deserialization paths first
+    (`Invocation`'s hand-rolled `Deserialize` delegates to serde's own
+    length-checked tuple machinery, not custom indexing) found no panic
+    site, so this is a regression net rather than a bug fix, consistent with
+    A3's "fix any panic found" wording allowing for none. **Still open:**
+    the `jmap-client` half (hostile `apiUrl`/redirect targets into
+    `transport.rs`/`url::rebase_origin`) — a manual read of `rebase_origin`
+    during scoping found every slice index it uses comes from `str::find`,
+    which only ever returns valid char-boundary offsets, so it looks
+    panic-safe by inspection; a proptest harness proving that (rather than
+    inspecting it) is the next session's increment on this thread.
 - **A5 `[claude]` FFI soundness audit.** Worth doing, and timely — Tracks D/B add
   FFI surface and M10 already exposed cross-version FFI drift. Scope: every vfunc
   trampoline `catch_unwind`-wrapped; transfer-full vs transfer-none ownership on

@@ -36471,6 +36471,37 @@ This was the last open item on Pattern A and the first item on the audit's
 own prioritized follow-up list — both its fixes (test-only gating, then this
 shared helper) are now done. `docs/UNSAFE-AUDIT.md` updated accordingly.
 
+Hit the standing disk-fills-from-cargo-target wall mid-session: the
+seven-crate direct `cargo test` failed with a linker `Bus error` (SIGBUS,
+signal 7) rather than the usual "No space left on device" message — same
+root cause, different symptom, worth recording in case a future session
+sees the same signal and wonders whether it is something new. `df` showed
+`/` at 100% (238M free, `rust/target/debug` at 23G); `cargo clean --profile
+dev` recovered 24G and the same test run then passed clean.
+
+Full gate: `cargo fmt --check` clean (after one `cargo fmt` pass to settle
+import ordering across the six touched files — a mechanical reordering, not
+a content change); `cargo build -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-backend-collection -p jmap-config -p jmap-mail`
+(no `testing` feature) clean; `cargo clippy --all-targets --locked --
+-D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-client
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
+-p jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+touched EDS-gated crates plus their siblings, direct-built since this VM has
+the headers) clean; `cargo test --locked` (default-members) and the same
+seven-crate `cargo test` both green, every `test result: ok`, 0 failed (the
+one `camel-CRITICAL **: ... assertion ... failed` line is a test's own
+expected assertion, not a failure). No new files, so no `REUSE.toml`/SPDX
+changes needed; `reuse`/`pipx`/`uvx`/`cargo-deny` remain unavailable on this
+VM, so `ci/checks.sh` itself was not run — its constituent checks were run
+individually as above, per the standing workaround.
+
+**Left for a future session, per the audit's own list:** Pattern C (no RAII
+wrapper for libical/GObject ref-counted pointers — refcount reasoning,
+escalation-worthy) and Pattern E (small `fail()`/`invalid_arg()` duplication,
+low priority, fold into other work in those files rather than its own
+increment). Ending the session here — one focused increment, pushed.
+
 ## 2026-08-19 (claim) — Claiming Track A4: proptest fuzzing of `jmap-proto` deserialization (untrusted-server boundary)
 
 Fresh survey: all milestones COMPLETE (`docs/MILESTONES.md`); CURRENT
@@ -36514,33 +36545,70 @@ it into this crate's increment.
 
 Claiming this increment now.
 
-Hit the standing disk-fills-from-cargo-target wall mid-session: the
-seven-crate direct `cargo test` failed with a linker `Bus error` (SIGBUS,
-signal 7) rather than the usual "No space left on device" message — same
-root cause, different symptom, worth recording in case a future session
-sees the same signal and wonders whether it is something new. `df` showed
-`/` at 100% (238M free, `rust/target/debug` at 23G); `cargo clean --profile
-dev` recovered 24G and the same test run then passed clean.
+## 2026-08-19 — Delivered: Track A4 (partial), `proptest` fuzzing of `jmap-proto` deserialization
 
-Full gate: `cargo fmt --check` clean (after one `cargo fmt` pass to settle
-import ordering across the six touched files — a mechanical reordering, not
-a content change); `cargo build -p jmap-backend-core -p jmap-backend-book -p
-jmap-backend-cal -p jmap-backend-collection -p jmap-config -p jmap-mail`
-(no `testing` feature) clean; `cargo clippy --all-targets --locked --
--D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-client
--p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
--p jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
-touched EDS-gated crates plus their siblings, direct-built since this VM has
-the headers) clean; `cargo test --locked` (default-members) and the same
-seven-crate `cargo test` both green, every `test result: ok`, 0 failed (the
-one `camel-CRITICAL **: ... assertion ... failed` line is a test's own
-expected assertion, not a failure). No new files, so no `REUSE.toml`/SPDX
-changes needed; `reuse`/`pipx`/`uvx`/`cargo-deny` remain unavailable on this
-VM, so `ci/checks.sh` itself was not run — its constituent checks were run
-individually as above, per the standing workaround.
+Followed through on this session's claim. `rust/Cargo.toml` gained a
+workspace `proptest = "1"` (dev-dependency only, stable-friendly — no
+`cargo-fuzz`/nightly needed), and `jmap-proto` a matching `[dev-dependencies]`
+entry. New `jmap-proto/tests/malicious_input.rs`: a bounded-depth (4),
+bounded-breadth (8-wide, 64 desired size) recursive `proptest` strategy
+generating arbitrary JSON — null/bool/i64/short-string leaves, array/object
+branches — serialized to text and fed straight into `serde_json::from_str`
+for `Session`, `Request`, `Response`, `MethodError`, and `RequestError`. The
+only property asserted is "no panic"; `Ok` and `Err` both satisfy it, since
+the point is that garbage input from an untrusted server must fail cleanly,
+not that it must be rejected in any particular way. Depth/breadth are capped
+for generation cost, not to under-approximate hostility: a `Deserialize`
+impl that indexes/unwraps/slices on an assumed shape (missing field, wrong
+type, short array) is exercised exactly as well by a shallow-wide document
+as a deep one — unbounded nesting depth is a `serde_json` parser concern,
+not this crate's `Deserialize` impls'.
 
-**Left for a future session, per the audit's own list:** Pattern C (no RAII
-wrapper for libical/GObject ref-counted pointers — refcount reasoning,
-escalation-worthy) and Pattern E (small `fail()`/`invalid_arg()` duplication,
-low priority, fold into other work in those files rather than its own
-increment). Ending the session here — one focused increment, pushed.
+No `arbitrary` crate needed: a hand-rolled JSON `Strategy` in `proptest`
+alone (`Just`/`prop_oneof!`/`prop_recursive`/`prop::collection::{vec,
+btree_map}`) was sufficient, keeping the new dependency surface to one
+crate's dev-deps rather than two. All five properties passed on their first
+run (256 cases each, `proptest`'s default). A manual read of every
+deserialization path first, specifically hunting for the panic risk this
+harness would need to catch: `Id` is a transparent `String` newtype (no
+custom logic); `request.rs`'s hand-rolled `Invocation::deserialize`
+delegates to `<(String, Value, String)>::deserialize`, i.e. serde's own
+length-checked tuple machinery, not manual array indexing. So this landed
+as a regression net rather than a bug fix — the same outcome A3's own
+wording ("fix any panic found") already allows for, since the point of the
+harness is the ongoing guarantee, not a one-time find.
+
+New transitive dependencies pulled in by `proptest` (`rand`, `rand_core`,
+`rand_chacha`, `rand_xorshift`, `bit-set`, `bit-vec`, `fnv`, `quick-error`,
+`rusty-fork`, `tempfile`, `fastrand`, `ppv-lite86`, `wait-timeout`,
+`unarray`, `errno`, `linux-raw-sys`, `rustix`) checked individually via
+`cargo metadata`: every one is `MIT OR Apache-2.0` (or an equivalent
+dual/OR-license spelling) — no copyleft or non-standard license entered the
+tree.
+
+**Left open, per the claim:** the `jmap-client` half of A4 — hostile
+`apiUrl`/redirect targets into `transport.rs`/`url::rebase_origin`. Scoping
+this session read `rebase_origin` closely enough to be fairly confident it
+is already panic-safe (every slice index comes from `str::find`, which only
+returns valid char-boundary offsets), but "looks safe by inspection" is
+exactly the kind of claim this audit exists to stop making on faith — a
+`jmap-client`-side `proptest` harness proving it, rather than asserting it,
+is the natural next increment on this thread, together with a redirect
+scenario through `jmap-mock` asserting the `Authorization` header does not
+reach a cross-host target (regression coverage for the class of bug
+86fea00 already fixed once).
+
+Full gate: `cargo fmt --check` clean; `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) clean; `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets -- -D warnings` (the EDS-gated crates, direct-built since this
+VM has the headers) clean; `cargo test --locked` (default-members) and the
+same seven-crate `cargo test --locked` both green, every `test result: ok`,
+0 failed. No `REUSE.toml` changes needed — the new test file carries its own
+SPDX header, matching every other test file in the tree; `Cargo.lock` is not
+a REUSE-covered source file. `reuse`/`pipx`/`uvx`/`cargo-deny` remain
+unavailable on this VM, so `ci/checks.sh` itself was not run — its
+constituent checks were run individually as above, per the standing
+workaround. Disk at 7.7G free after the sweep — did not hit the standing
+"No space left on device" wall this session.
