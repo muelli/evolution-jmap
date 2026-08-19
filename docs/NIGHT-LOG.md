@@ -38697,3 +38697,36 @@ mail/contacts/calendars) then connects mail, contacts and calendars all three
 — which is also the operator confirmation item 5's SRV chain has been waiting
 on; and a wrong or missing token re-prompts rather than looping silently or
 sending an empty `Authorization: Bearer` header.
+
+## 2026-08-19 (claim) — Claiming Track F: the newer-Evolution/EDS portability spike (third attempt)
+
+Fresh survey: `git fetch` shows local `master` = `origin/master` at
+`db03372` (item 6, API-token auth, delivered and pending operator
+verification). CURRENT PRIORITY items 1/3/4 are done; items 5 and 6 are
+code-complete pending only operator confirmation; item 2's OAuth Look-Up
+entry point needs a live Evolution session to even diagnose (per its own
+text), so it is not headlessly tractable this iteration. Walked Round 2:
+Track A5/A6-Pattern-C, Track D2's write-back, and D1's remaining pieces are
+all FFI/concurrency-design work this session should not risk; Track B/C2/C4
+are NEEDS-DECISION; Track E's Phase B/C are explicitly blocked pending
+maintainer approval of Path A (itself done, pending operator confirmation).
+
+Track F (queued `0b186d8`) has been claimed twice before (`81dac75` at
+08:24Z, `6be9c4f` at 10:40Z) with no `docs/NEWER-EVOLUTION-SPIKE.md` ever
+written and no delivered/blocked follow-up logged for either claim — both
+sessions apparently pivoted to other work without releasing the claim. Ten
+hours old is well short of this project's 24h stale-lock threshold, but
+since both attempts left no artifact and no explanation, and no other
+NIGHT-LOG entry references Track F being in progress or blocked, treating
+it as abandoned rather than waiting is the pragmatic call: it is a spike
+(compile + characterize, no new `unsafe`/FFI authorship), matches this
+session's Sonnet-appropriate criteria, and is otherwise the only unclaimed
+non-decision-gated thread left. Verified the prerequisite the earlier claims
+noted: `docker` works here and the exact digest-pinned
+`fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898`
+image `ci.yml`'s `eds-version-matrix` job uses pulls successfully. Claiming
+it now: compile `jmap-config` + `evo-sys` (+ the other EDS-gated crates
+`ci/eds-matrix.sh` already runs) against that container, characterize any
+`EMailConfig*`/shell-API drift 3.52→3.60, and write the go/no-go verdict to
+`docs/NEWER-EVOLUTION-SPIKE.md` per the roadmap's own criterion (recommend
+3.52-only if multi-version gating would be messy).
