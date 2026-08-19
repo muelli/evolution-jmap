@@ -68,17 +68,61 @@ they close, prioritise in this order:
      relax the issuer match to make it pass — it is the mix-up-attack defence, a
      deliberate maintainer call, not a bug. Do not re-surface it as a blocker.
 3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
-4. **Maintainer-directed externalisation quick win — CLAIMABLE NOW (2026-08-19).**
+4. **Maintainer-directed externalisation quick win.**
    The externalisation audit (`docs/EXTERNALISATION-AUDIT.md`) found the codebase
-   already well-externalised; one clean win remains: unify the hand-rolled
-   percent codec onto the `percent-encoding` crate — **already in the tree via
-   `ureq`, so no new dependency**, MIT/Apache-2.0, on the allowlist. Sites:
-   `jmap-client/src/url.rs` (`encode_template_value` + `hex_digit`, also reused by
-   `oauth.rs::form_body`) and `jmap-mock/src/server.rs` (`percent_decode` +
-   `hex_value` + `parse_form_body`). Behaviour-preserving TDD: keep the existing
-   URL-template, OAuth form-body, and mock tests green — mind that form bodies'
-   `+`↔space is form-specific, not RFC 3986 percent-coding. Exact sets are in the
-   audit doc §1. A small, self-contained increment; do it and log it.
+   already well-externalised; one clean win remained: unify the hand-rolled
+   percent codec onto the `percent-encoding` crate. **DONE 2026-08-19** —
+   `jmap-client/src/url.rs`'s `encode_template_value`/`hex_digit` and
+   `jmap-mock/src/server.rs`'s `percent_decode`/`hex_value` now delegate to
+   `percent_encoding::utf8_percent_encode`/`percent_decode_str`, promoted from a
+   transitive (`ureq`) to a direct dependency of both crates — no new package in
+   `Cargo.lock`. `hex_digit`/`hex_value` are gone; `parse_form_body`'s `+`↔space
+   handling stayed hand-written (form-specific, not RFC 3986). Every existing
+   `url.rs`/`oauth.rs`/`server.rs` test stayed green, unmodified.
+5. **JMAP SRV autodiscovery — CLAIMABLE NOW (operator-found 2026-08-19).**
+   Operator tested a real `muelli@fastmail.com` account through real Evolution:
+   the password path fails with **HTTP 404**. Root cause (confirmed from the
+   source and DNS): `client.rs:135` hardcodes session discovery to
+   `https://{domain}/.well-known/jmap` with `{domain}` = the email domain
+   (`fastmail.com`), but Fastmail serves JMAP at `api.fastmail.com`, published
+   the RFC 8620 §2.2 way via a SRV record — the operator resolved
+   `_jmap._tcp.fastmail.com` from the VM and got `0 1 443 api.fastmail.com.`,
+   while `https://fastmail.com/.well-known/jmap` returns 404. The transport
+   already follows redirects (incl. to `/jmap/session`), so the *only* missing
+   step is the SRV lookup.
+   **Do:** implement RFC 8620 §2.2 autodiscovery — before the bare-domain
+   `.well-known/jmap`, look up `_jmap._tcp.{domain}`; if a target is returned,
+   build the session URL from `https://{target-host}[:port]/.well-known/jmap`;
+   fall back to today's bare-domain URL when there is no SRV record (preserves
+   the Stalwart/self-hosted path and every current test).
+   **Two sites share this bare-domain assumption — fix both, or you fix the
+   password 404 while OAuth-detect stays broken:** (a) `client.rs:135` (session
+   discovery, the password/Bearer path); and (b) the "Look Up Account Details"
+   worker `config_lookup.rs::probe_host` (line ~143), which returns the bare
+   email domain for its RFC 8414 / JMAP discovery. (b) is *why OAuth was not
+   detected for the operator's Fastmail account and why the assistant fell back
+   to suggesting imapx* — the worker probed `fastmail.com`, found no JMAP, and
+   returned nothing, so Evolution's generic ISPDB autoconfig won. The OAuth
+   machinery (discovery, dynamic registration, `EOAuth2Service`, the lookup
+   worker) is otherwise built and mock-verified; this SRV gap is what keeps it
+   from firing against a real SRV-published provider.
+   **Design (pre-decided, to keep `jmap-client` dependency-lean — do NOT add a
+   Rust DNS crate to it):** add a `Resolver` trait seam to the client; the pure
+   crate's default resolver does no SRV (today's behaviour), and the EDS
+   integration supplies a real one backed by GIO's `g_resolver_lookup_service()`
+   (GResolver does SRV natively — no new dependency; needs a small `eds-sys`/glib
+   binding). **TDD:** red test first in `jmap-client/tests/` — `connect("example.com")`
+   with an injected fake resolver returning `_jmap._tcp.example.com → api.example.com:443`
+   must request the session from `api.example.com`, asserted via the `Transport`
+   fake / `jmap-mock`; plus a no-SRV test proving the bare-domain fallback is
+   unchanged. **Cannot** be verified against Fastmail from the runner (no creds;
+   Fastmail also needs an app-password/API token, not the login password — a
+   separate 401 concern, not this 404); the operator confirms end-to-end in the
+   VM. Reasonable to escalate if the `Resolver` seam or the GResolver binding
+   proves gnarly. (The revise-path setup-UI prefill bug the same operator session
+   found is already FIXED and operator-verified in `1afebc1`; the OAuth-2.0
+   "can't be set up" the operator saw is the intended autodiscovery-only message
+   from decision #1 below — not a bug, do not touch it.)
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
@@ -86,6 +130,148 @@ cases, and similar refinements are real but LOW-LEVERAGE right now — record
 them in `docs/BACKLOG.md` for a later hardening pass and move on. Correctness
 still governs *how* the priority work is done (TDD, honest verification); this
 directive governs *what* to work on.
+
+## ROUND 2 BACKLOG (2026-08-19) — hardening, observability, packaging, EDS parity
+
+The CURRENT PRIORITY goal (usable end-to-end) is met. This is the maintainer's
+next-mountain list, grouped into tracks. Status tags: **CLAIMABLE** = unblocked,
+headless, no decision needed; **NEEDS-DECISION** = a design/product call is open
+(do NOT start it; it is listed for visibility). Lane tag: `[claude]` heavier /
+priority lane, `[agy]` in-lane polish (headless, test-gated). Log completions as
+usual. Do not reopen closed backends except where an item names one.
+
+**Lead order (maintainer, 2026-08-19):** once the two remaining CURRENT PRIORITY
+items (M10's 3 tests, the percent-encoding win) land, the Claude lane leads
+Round 2 with **Track D** (EDS parity — restores evolution-ews parity and has no
+protocol gap). Track E is a **design spike first** (see Track E). The other
+tracks follow; the maintainer may reorder anytime.
+
+### Track A — Quality & security (CLAIMABLE)
+- **A1 `[agy]` Mutation testing of the mapping crates.** Run `cargo-mutants`
+  (stable; `cargo install` it if absent) on `jmap-vcard` and `jmap-ical`. For
+  each *surviving* mutant that is a real behavioural gap, add a round-trip test
+  that kills it; log deliberately-left equivalent mutants with a one-line why.
+- **A2 `[claude]` Mutation testing of the protocol/client core.** Same tool on
+  `jmap-proto` and `jmap-client` — they carry the untrusted-server wire
+  contract. Strengthen tests to kill high-value survivors.
+- **A3 `[agy]` Structure-aware fuzzing of the vCard/iCal round-trips.**
+  `proptest` + `arbitrary` as dev-deps on **stable** (NOT `cargo-fuzz`: it needs
+  nightly and breaks the pinned-stable reproducibility). Generate random
+  JSContact/JSCalendar and random vCard/iCal; assert (a) no panic, (b) round-trip
+  stability. Fix any panic found.
+- **A4 `[claude]` Malicious-input hardening of the untrusted-server boundary.**
+  proptest/arbitrary harness feeding hostile JMAP *responses* into `jmap-proto`
+  deserialization + `jmap-client`, and hostile session `apiUrl`/redirect targets
+  into `transport.rs`. The server is NOT trusted: assert no panic and no auth
+  leak on redirect (same surface as the 86fea00 redirect-auth fix). Aligns with
+  the standing "Recurring security re-audit" directive.
+- **A5 `[claude]` FFI soundness audit.** Worth doing, and timely — Tracks D/B add
+  FFI surface and M10 already exposed cross-version FFI drift. Scope: every vfunc
+  trampoline `catch_unwind`-wrapped; transfer-full vs transfer-none ownership on
+  every returned GObject/string (g_free correctness); nullability at each
+  boundary; `GCancellable` honoured on the sync vfuncs. Deliverable:
+  `docs/FFI-SOUNDNESS-AUDIT.md` + TDD fixes for findings. Escalation-worthy.
+- **A6 `[claude]` Unsafe reduction / idiom audit.** Deliverable
+  `docs/UNSAFE-AUDIT.md`: inventory every `unsafe` in `rust/` by category, tag
+  each cluster **KEEP** (intrinsic, well-contained) / **IMPROVE** (a concrete
+  safer or more idiomatic refactor — a pointer-owning newtype with `Drop`, a
+  typed accessor, or an existing safe `glib`/`gobject` binding replacing a
+  hand-rolled FFI call) / **INVESTIGATE**, then a short prioritized IMPROVE list
+  with rough effort. Audit only — land improvements as separate follow-ups. Be
+  balanced: "already solid, here's why" is a valid finding. **Complements A5, not
+  a duplicate:** A5 is *soundness* (catch_unwind, transfer-full/none, nullability,
+  GCancellable); A6 is *reduction / containment / idiom*. Do them together or
+  A5-then-A6.
+- **A7 `[claude]` Stale-comments audit.** Deliverable
+  `docs/STALE-COMMENTS-AUDIT.md`: comments that no longer match the code —
+  renamed/removed items, changed behaviour, done TODOs, resolved-milestone refs
+  ("once M7 lands" when M7 is done), `calcard`/percent-codec leftovers. Precise
+  and conservative; confidence-tag each and include a "looked suspicious but
+  fine" section so the sweep is trustworthy. **Seed already found:**
+  `jmap-config/src/textdomain.rs:17-18` says `insert_widgets` "is unwritten"
+  while `lib.rs:125` says it is now written — verify and fix as part of the
+  sweep. Fixing HIGH-confidence stale comments in the same pass is fine (comments
+  don't affect tests); leave anything uncertain as a logged finding.
+
+### Track B — Observability (NEEDS-DECISION on approach, then CLAIMABLE)
+- **B1 `[claude]` journald structured logging, TRACE→ERROR.** Replace the ~54
+  ad-hoc `println!`/`eprintln!`/`g_message` sites with the `tracing` crate.
+  Recommended sink: `tracing-journald` (writes the journal native protocol
+  directly — no libsystemd FFI, keeps the dep/repro posture clean; MIT/Apache,
+  allowlist-ok) behind an env filter (default WARN, opt-in to TRACE via e.g.
+  `EVOLUTION_JMAP_LOG`). Init ONCE per process via `OnceLock`/`try_init` — the
+  backends load as cdylibs into shared EDS factory processes, so double-init must
+  be a no-op. Structured fields: account id, JMAP method, object type, request
+  id. DECISION: `tracing`+`tracing-journald` vs. routing through glib `g_log`
+  (EDS already funnels g_log to the journal, but that loses Rust-side structured
+  fields and TRACE granularity). Recommend the former.
+
+### Track C — Packaging (mostly CLAIMABLE; official Debian is a human process)
+- **C1 `[claude]` Lintian-clean .deb.** Run `lintian` on the CPack `.deb`; fix
+  warnings (Section, Priority, extended description, Depends/Recommends). Add a
+  CI check that lintian stays clean.
+- **C2 `[claude]` Machine-readable DEP-5 `debian/copyright`** generated from the
+  REUSE metadata we already maintain — the single biggest ease-of-packaging win.
+- **C3 `[claude]` `debian/` skeleton** (control, rules using `dh` over the
+  cmake/cargo build, watch file) so a Debian packager starts from a working tree.
+  Document the Rust-in-Debian reality (dh-cargo wants every crate dep packaged /
+  vendored) rather than pretend it away.
+- **C4 NEEDS-DECISION (maintainer/social):** filing an ITP and uploading to
+  Debian proper is a human process, not agent work. Flagged only.
+
+### Track D — EDS parity features (CLAIMABLE; restores evolution-ews parity)
+- **D1 `[claude]` Create/delete a calendar and an address book.** We mirror
+  existing server collections but cannot create new ones (audit: no
+  `AddressBook/set`/`Calendar/set`, and `create_resource`/`delete_resource` are
+  left as EDS defaults — `jmap-backend-collection/src/backend.rs:110`, with
+  `tests/backend.rs:340` asserting they are NOT overridden). Add `AddressBook/set`
+  + `Calendar/set` create to jmap-proto/jmap-client + mock, then wire
+  `create_resource_sync`/`delete_resource_sync` to call them and mint/remove the
+  child ESource — mail folders already do exactly this via `Mailbox/set`
+  (`jmap-mail/src/manage.rs:227`, `jmap-client/src/mail.rs:164`); mirror it.
+- **D2 `[claude]` Calendar colour.** `Calendar.color` is parsed
+  (`jmap-proto/src/calendars.rs:29`) then dropped — thread it Resource→Child and
+  emit an ESourceSelectable `("Calendar","Color", …)` setting in
+  `jmap-collection-sync/src/child_source.rs`; write-back rides on D1's
+  `Calendar/set`.
+
+### Track E — Sharing + scheduling (SPIKE DONE → NEEDS-DECISION on the doc)
+Design spike **complete**: see `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). It
+corrected two premises after checking datatracker — the earlier framing here was
+wrong:
+- **Free/busy slot-picking is NOT in RFC 9670.** `Principal/getAvailability`
+  lives in the **JMAP-for-Calendars draft** (this repo already pins draft -27);
+  RFC 9670 supplies the shared `Principal` vocabulary + capability URNs
+  (`urn:ietf:params:jmap:principals`, `…:principals:owner`) that the availability
+  and sharing methods both build on.
+- **Mail has permissions but not sharing.** `Mailbox` carries `myRights`
+  (RFC 8621) but there is **no standard `Mailbox.shareWith`** — a *mailbox* cannot
+  be shared under current specs, only its rights read. Calendar/AddressBook
+  `shareWith` live in their respective drafts.
+
+Today we advertise/consume none of it (`jmap-proto/src/session.rs:14-18`);
+server-sent `myRights` lands unread in the serde `extra` bag, and read-only is an
+account-wide heuristic (`jmap-collection-sync/src/children.rs:93`).
+**Recommended plan (from the doc):** a small shared "Principal floor" (proto type
++ two capability constants + client/mock support), then **Path A (free/busy
+availability) first** — it answers the scheduling ask soonest, is
+read-only/low-blast-radius, and its very first step is a half-day Stalwart probe
+to confirm the server actually answers `getAvailability` before committing to the
+(unsafe-FFI, EDS-only) `ECalBackend` free/busy vfunc. Rough effort: **~2.5–3.5
+weeks** for floor + Path A (scheduling); **~+1 week** for Path B (per-source
+`myRights` correctness, mostly published-RFC surface, replaces the read-only
+heuristic); write-side `shareWith`/`ShareNotification` deferred to a later phase
+(least spec-stable, only destructive surface). OAuth (M7) does not block it.
+**DECISION (maintainer): approve the doc's plan to start Path A, or adjust — no
+implementation until then.**
+
+### Not doing (protocol-gated)
+- **Tasks (VTODO) / Memos (VJOURNAL).** BLOCKED upstream: draft-ietf-jmap-calendars
+  models events only; there is no standardized JMAP task/note object (JSTask is a
+  separate, less-mature draft). The cal factory registers VEVENT only, on purpose
+  (`jmap-backend-cal/src/factory.rs:41-53`) — empty Task/Memo factories would look
+  broken, not absent. Revisit if/when a JMAP task object standardizes. Recorded,
+  not queued.
 
 ## MAINTAINER DECISIONS (2026-08-17) — resolves the three open items
 

@@ -817,42 +817,14 @@ fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
 /// A `%` that is not followed by two hex digits is kept as itself rather than
 /// rejected: this is a test server, and a malformed escape should surface as
 /// the 404 of an id that matches nothing, not as a parse error that hides
-/// which id was asked for. Decoded octets that are not UTF-8 go through
-/// [`String::from_utf8_lossy`] for the same reason — a `jmap_proto::Id` is a
-/// `String`, so bytes that spell no string can only miss the lookup.
+/// which id was asked for — `percent_decode_str`'s own leniency matches that.
+/// Decoded octets that are not UTF-8 go through `decode_utf8_lossy` for the
+/// same reason — a `jmap_proto::Id` is a `String`, so bytes that spell no
+/// string can only miss the lookup.
 fn percent_decode(segment: &str) -> String {
-    let bytes = segment.as_bytes();
-    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match (bytes[index], bytes.get(index + 1), bytes.get(index + 2)) {
-            (b'%', Some(high), Some(low)) => match (hex_value(*high), hex_value(*low)) {
-                (Some(high), Some(low)) => {
-                    decoded.push((high << 4) | low);
-                    index += 3;
-                }
-                _ => {
-                    decoded.push(b'%');
-                    index += 1;
-                }
-            },
-            _ => {
-                decoded.push(bytes[index]);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
-}
-
-/// One hex digit's value, in either case, or `None` if it is not one.
-fn hex_value(digit: u8) -> Option<u8> {
-    match digit {
-        b'0'..=b'9' => Some(digit - b'0'),
-        b'a'..=b'f' => Some(digit - b'a' + 10),
-        b'A'..=b'F' => Some(digit - b'A' + 10),
-        _ => None,
-    }
+    percent_encoding::percent_decode_str(segment)
+        .decode_utf8_lossy()
+        .into_owned()
 }
 
 fn respond_json(request: tiny_http::Request, status: u16, body: &Value) {
