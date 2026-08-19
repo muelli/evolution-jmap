@@ -38245,3 +38245,140 @@ and off anything this backend did not write. The decision half goes to
 `jmap-collection-sync/src/delete.rs` beside `create.rs` (which JMAP account,
 which `/set` destroy) so it is testable against `jmap-mockd` without headers;
 the EDS ends go to `jmap-backend-collection/src/delete_resource.rs`.
+
+### Delivered: Track D1's `delete_resource_sync` — Evolution can now delete a JMAP address book or calendar
+
+`ECollectionBackendClass::delete_resource_sync` is overridden, and every child
+of a JMAP collection is made `remote-deletable`. That second half is not a
+nicety: `server_side_source_remote_delete_sync()` refuses on the *child's* own
+flag before it ever resolves a backend, so without it the vfunc would be
+unreachable dead code — the exact mirror-image of the `remote-creatable` gate
+the create side needed, except that flag lives on the account source and this
+one lives on each child.
+
+The split is the create side's, deliberately: `jmap-collection-sync/src/
+delete.rs` (`Doomed`, `DeleteFailure`, `delete_collection`) resolves the JMAP
+account through the existing `CollectionLayout` and sends the `AddressBook/set`
+or `Calendar/set` destroy, with no EDS header in sight;
+`jmap-backend-collection/src/delete_resource.rs` holds the EDS ends —
+`DeleteError`, `doomed_of`, `offer_deletion`, `delete_on_server`.
+
+**Four things read out of the EDS 3.52.4 and evolution-ews 3.52.4 sources
+rather than inferred** (both already unpacked under `/tmp` from earlier
+sessions):
+
+1. `collection_backend_delete_resource()` is the same one-line
+   `G_IO_ERROR_NOT_SUPPORTED` refusal `collection_backend_create_resource()` is.
+   So this is the second override in the crate that must **not** chain up — the
+   parent *is* what it replaces.
+2. `remote-deletable` is a **child** property. `server_side_source_remote_delete_sync()`
+   checks `e_source_get_remote_deletable (source)` first and only then calls
+   `e_source_registry_server_ref_backend()`. Setting it on the account, by
+   symmetry with `remote-creatable`, would have offered nothing anywhere.
+3. The order is destroy-then-remove, and that is the error handling rather than
+   a style choice. EDS's own doc comment on the vfunc says "After the server-side
+   resource is successfully deleted, the implementor must also remove @source
+   from the @backend's #ECollectionBackend:server", and the other order is
+   actively worse: a source removed first and a destroy that then failed is a
+   collection still on the server, which the next populate rediscovers and
+   writes a *new* child for — the delete appears to work, undoes itself, and
+   loses the old source's uid and offline cache on the way. Destroy-first fails
+   the recoverable direction: the child is stale, the next populate removes it
+   through `crate::removal`, and the user has been told.
+4. `e_source_remove_sync` on a server-side source **is** that registry removal —
+   `server_side_source_remove()` calls `e_source_registry_server_remove_source()`
+   and then deletes the key file. So there was nothing new to write: `removal.rs`
+   grew a shared `remove_source` (extracted from `remove_obsolete`, which now
+   calls it) and the vfunc reuses the populate's own call. `ews_backend_delete_resource_sync`
+   ends on the identical line, which is the confirmation that this is the whole
+   obligation and not half of it.
+
+**One deliberate deviation from evolution-ews.** EWS sets `remote-deletable` at
+each of the three sites that mint a child (`ews_backend_new_child`, the
+foreign/public re-add loop, and its `create_resource_sync`). This backend sets
+it in exactly one place — the `child_added` vfunc — because that is EDS's own
+funnel for every source that appears under a collection: the children a fan-out
+just wrote, the cached ones a populate exported before any server was contacted,
+and the one a create just published. It is also where EDS itself writes
+`removable = FALSE` on every child, so the precedent for "a per-child flag
+belongs in child_added" is EDS's own. One funnel is the same behaviour with no
+site left to forget.
+
+**What may be deleted is the whole safety of the feature**, and it is one
+question asked once. `offer_deletion` and the vfunc are both gated on
+`doomed_of` — `resource_id_of` (the very string `dup_resource_id` hands EDS)
+parsed by `parse_resource_id`. A source with no `[Address Book]`/`[Calendar]`
+extension or no `[Resource] Identity` answers `None` and is neither offered nor
+acted on. That matters because `child_added` fires for this account's mail
+sources too, and because the vfunc is handed whichever source the user clicked
+"Delete" on: a guess there is not a wrong error message, it is a destroy sent to
+a JMAP server naming an id read out of somebody else's keyfile. Reading it
+through `resource_id_of` rather than off the extensions directly also means the
+delete cannot name a different object than the child's own resource id does.
+
+The kind travels in `Doomed` alongside the id and is never inferred from it. Ids
+are scoped per account *and per object type* (RFC 8620 §1.2), so an
+`AddressBook` and a `Calendar` may both be `X1` — on a server that numbers its
+objects from one, they will be — and a delete that picked the `/set` call by
+anything but the source's own extension would destroy the user's calendar
+because they asked to remove an address book, and the destroy would *succeed*.
+`jmap-collection-sync/tests/delete.rs` has that exact case.
+
+Also factored, because the delete needed the same prelude the create does:
+`backend.rs::login_for` — account source → stored password → `Login` — so the
+OAuth2-vs-password rule stays written once for both resource vfuncs, the way
+`login_of` already keeps it written once for `authenticate_sync` and the create.
+`stored_password_of` took a `context: &str` so its criticals name the vfunc that
+is actually running.
+
+TDD: the pre-existing `tests/backend.rs` assertion that `delete_resource_sync`
+is NOT overridden was the red test and was flipped into
+`class_init_replaces_the_default_delete_resource_sync_rather_than_leaving_it`;
+`delete_resource` and `delete_resource_finish` now pin that slot from the far
+side the way `create_resource`/`create_resource_finish` pin the create one. New:
+7 tests in `jmap-collection-sync/tests/delete.rs` (against `jmap-mockd` —
+including the same-id address-book-vs-calendar case above, and that a delete
+leaves every other collection of its kind alone) and 8 in
+`jmap-backend-collection/tests/delete_resource.rs` (against real `ESource`s for
+the read half and a real `EServerSideSource` for the flag — a child is offered,
+a stranger is not, a half-written source names nothing, and reading never
+creates an extension). `tests/create_resource.rs`'s
+`a_created_child_is_not_yet_offered_for_deletion` became
+`adopting_a_created_child_is_not_what_offers_it_for_deletion`: the assertion is
+unchanged but it now pins the *single-funnel* decision rather than an unfinished
+feature.
+
+**A gettext trap worth recording**, found by regenerating the POT rather than by
+reasoning: Rust strips a `\`-continuation's newline **and** the next line's
+leading whitespace; xgettext strips neither. A wrapped msgid literal therefore
+produces a `.pot` entry with a run of spaces in the middle that the runtime
+lookup can never match. One of the new strings was written that way, the POT
+showed it, and it is now one long line with a comment saying why. Worth a look
+elsewhere in the tree if anyone is doing a translation pass.
+
+New user-facing strings are gettext-marked at introduction per the standing
+directive, reusing `create_resource::collection_of` (now `pub(crate)`) so
+"address book"/"calendar" stay the msgids `Collection::noun()` already carries;
+`po/POTFILES.in` gained `delete_resource.rs` and `po/evolution-jmap.pot` was
+regenerated with `po/extract.sh`. `DeleteFailure`'s own `Display` stays
+untranslated on purpose, as `CreateFailure`'s does — `jmap-collection-sync`
+builds without gettext.
+
+Full gate before pushing: `cargo fmt --check` clean; `cargo clippy --all-targets
+--locked -- -D warnings` (default-members) and `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets -- -D warnings` both clean; `cargo test --locked` (1358 passed)
+and the same seven-crate `cargo test` (1199 passed) both green, 0 failed in
+either. Disk stayed comfortable (~20G free).
+
+**NEEDS HUMAN VERIFICATION IN REAL EVOLUTION.** Nothing headless can drive
+right-click → Delete against a live `evolution-source-registry`, so D1 stays
+untagged. What to check in the VM, with a JMAP account that has contacts (or
+calendars) switched on: a JMAP address book should now offer "Delete" in its
+context menu; deleting one should take it off the server *and* out of the
+sidebar immediately (not only after a restart), and it should stay gone across
+a restart rather than being rediscovered; the account's own mail sources and
+any non-JMAP address book should be unaffected; and a delete attempted while
+the server is unreachable should report an error and leave the source in place
+rather than removing it locally.

@@ -552,7 +552,8 @@ tracks follow; the maintainer may reorder anytime.
     Evolution offer "Delete" and answer the click with EDS's "does not support
     deleting remote resources". `tests/backend.rs` and
     `tests/create_resource.rs` both assert the current state on purpose, so the
-    gap is visible rather than forgotten. TDD: the pre-existing
+    gap is visible rather than forgotten. *(Closed the same day — see the
+    `delete_resource_sync` entry below.)* TDD: the pre-existing
     `tests/backend.rs:340` assertion (that `create_resource_sync` is NOT
     overridden) was the red test and was flipped; new
     `jmap-collection-sync/tests/create.rs` (6 tests against `jmap-mockd`,
@@ -567,6 +568,66 @@ tracks follow; the maintainer may reorder anytime.
     both green, 0 failed. **NEEDS HUMAN VERIFICATION in real Evolution** — no
     headless test can drive "New Address Book" against a live registry, so do
     not tag D1 complete on this.
+  - **DONE 2026-08-19 (on opus, per the escalation at `1ff28e7`) —
+    `delete_resource_sync` landed; D1's code side is complete, pending
+    operator confirmation.** `ECollectionBackendClass::delete_resource_sync` is
+    now overridden in `jmap-backend-collection/src/backend.rs`, and every child
+    of a JMAP collection is made `remote-deletable` — without which the vfunc is
+    unreachable, since `server_side_source_remote_delete_sync()` refuses on the
+    child's own flag before it ever looks for a backend. The split mirrors the
+    create side exactly: `jmap-collection-sync/src/delete.rs` (`Doomed`,
+    `DeleteFailure`, `delete_collection`) resolves the JMAP account through the
+    existing `CollectionLayout` and calls `AddressBook/set`/`Calendar/set`
+    destroy; `jmap-backend-collection/src/delete_resource.rs` holds the EDS ends
+    (`DeleteError`, `doomed_of`, `offer_deletion`, `delete_on_server`).
+    **Four decisions taken from the EDS 3.52.4 and evolution-ews 3.52.4 sources
+    rather than inferred:** (a) the parent's `delete_resource` is the same
+    `G_IO_ERROR_NOT_SUPPORTED` refusal `create_resource` is, so this override
+    must not chain up either; (b) `remote-deletable` goes on the **child**
+    source, the opposite of `remote-creatable`'s account source; (c) the order
+    is destroy-then-`e_source_remove_sync`, which is EDS's documented "the
+    implementor must also remove @source from the backend's server" and also
+    the only recoverable order — a source removed first and a destroy that then
+    failed is a collection still on the server that the next populate puts back
+    under a *new* uid, losing the old child's offline cache for nothing; (d)
+    `e_source_remove_sync` on a server-side source *is* the registry removal
+    (`server_side_source_remove()` calls `e_source_registry_server_remove_source`
+    and deletes the key file), so `crate::removal` grew a shared `remove_source`
+    and the vfunc reuses the populate's call rather than writing a second one.
+    **One deliberate deviation from evolution-ews:** EWS sets `remote-deletable`
+    at each of the three sites that mint a child; this backend sets it once, in
+    the `child_added` vfunc — EDS's own funnel for every child of a collection
+    (fanned-out, cached-and-exported, or just published by a create) and the very
+    place EDS writes `removable = FALSE`. One funnel is the same behaviour with
+    no site left to forget, and it is gated on `doomed_of` answering `Some`, so
+    the account's mail sources and anything this backend did not write are never
+    offered. That gate is the whole safety of the feature: the vfunc is handed
+    whichever source the user clicked on, and a guess there is not a wrong error
+    message, it is a destroy sent to a JMAP server naming an id read out of
+    somebody else's keyfile. The kind is carried in `Doomed` and never inferred
+    from the id, because an `AddressBook` and a `Calendar` may share one (RFC
+    8620 §1.2) and picking the `/set` call wrong destroys the other object and
+    reports success — `tests/delete.rs` has that case explicitly. Also factored:
+    `backend.rs::login_for`, the account→password→`Login` prelude both resource
+    vfuncs need, so the OAuth2-vs-password rule stays written once (and
+    `stored_password_of` took a `context` so its criticals name the right vfunc).
+    TDD: the pre-existing `tests/backend.rs` assertion that `delete_resource_sync`
+    is *not* overridden was the red test and was flipped (with `delete_resource`/
+    `delete_resource_finish` now pinning the slot from the far side); new
+    `jmap-collection-sync/tests/delete.rs` (7 tests against `jmap-mockd`) and
+    `jmap-backend-collection/tests/delete_resource.rs` (8 tests against real
+    `ESource`s, a real `EServerSideSource` and a real mock). New user-facing
+    strings are gettext-marked and `po/POTFILES.in`/`po/evolution-jmap.pot`
+    regenerated — one of them found a real trap worth recording: Rust strips a
+    `\`-continuation's newline *and* the next line's leading spaces while
+    xgettext strips neither, so a wrapped msgid literal is one no translation
+    ever matches. Full gate green: `cargo fmt --check`; `cargo clippy
+    --all-targets --locked -- -D warnings` (default-members) and the seven-crate
+    EDS-gated clippy both clean; `cargo test --locked` (1358 passed) and the
+    seven-crate `cargo test` (1199 passed) both green, 0 failed.
+    **NEEDS HUMAN VERIFICATION in real Evolution** — nothing headless can drive
+    right-click → Delete against a live registry, so D1 is still not tagged
+    complete.
 - **D2 `[claude]` Calendar colour.** `Calendar.color` is parsed
   (`jmap-proto/src/calendars.rs:29`) then dropped — thread it Resource→Child and
   emit an ESourceSelectable `("Calendar","Color", …)` setting in
