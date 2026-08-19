@@ -13,7 +13,15 @@ use jmap_proto::contacts::{
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
     Relation, Title,
 };
-use jmap_vcard::{card_to_vcard, states_keyword, states_media, states_organization, vcard_to_card};
+use jmap_vcard::{
+    VCardError, address_label, anniversary_date, card_to_vcard, maps_context, maps_phone_feature,
+    online_service_handle, online_service_uri, restore_address_components, restore_name_components,
+    same_photo, same_service, states_a_point_in_time, states_address, states_address_component,
+    states_anniversary, states_calendar, states_context, states_email, states_keyword, states_link,
+    states_media, states_name_component, states_nickname, states_note,
+    states_nothing_but_the_marriage, states_online_service, states_org_unit, states_organization,
+    states_phone, states_phone_feature, states_spouse, states_title, title_kind, vcard_to_card,
+};
 use serde_json::{Value, json};
 
 fn fixture_card() -> ContactCard {
@@ -23,6 +31,10 @@ fn fixture_card() -> ContactCard {
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+fn unfolded(vcard: &str) -> String {
+    vcard.replace("\r\n ", "").replace("\r\n\t", "")
 }
 
 fn line<'a>(vcard: &'a str, prefix: &str) -> &'a str {
@@ -593,6 +605,342 @@ fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
 
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.titles, card.titles);
+}
+
+#[test]
+fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully() {
+    // RFC 2426 §3.5.5 and EDS field slotting:
+    // Component 1: Organization name (`Acme Ltd` -> `E_CONTACT_ORG`)
+    // Component 2: Department (`Research` -> `E_CONTACT_ORG_UNIT`)
+    // Component 3: Office (`Optics` -> `E_CONTACT_OFFICE`)
+    // Component 4: Fourth unit (`Lenses` -> unmapped in EDS, survives edits)
+    let card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Ltd".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("Research"),
+                        OrgUnit::new("Optics"),
+                        OrgUnit::new("Lenses"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let org = &card.organizations.as_ref().unwrap()["o1"];
+    assert!(states_organization(org));
+    for unit in org.units.as_ref().unwrap() {
+        assert!(states_org_unit(unit));
+    }
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;Optics;Lenses"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
+
+    // Verify inbound vCard without X-JMAP-KEY preserves all 4 components into o1.
+    let unkeyed_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG:Acme Ltd;Research;Optics;Lenses\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_unkeyed = vcard_to_card(unkeyed_vcard).expect("parse");
+    let unkeyed_orgs = from_unkeyed.organizations.expect("organizations");
+    assert_eq!(unkeyed_orgs.keys().collect::<Vec<_>>(), vec!["o1"]);
+    assert_eq!(unkeyed_orgs["o1"].name.as_deref(), Some("Acme Ltd"));
+    assert_eq!(
+        unkeyed_orgs["o1"].units.as_deref(),
+        Some(
+            [
+                OrgUnit::new("Research"),
+                OrgUnit::new("Optics"),
+                OrgUnit::new("Lenses")
+            ]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_roundtrip() {
+    // 1. Deep 6-component hierarchy: OrgName + 5 units.
+    let deep_card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Global Tech".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("Engineering"),
+                        OrgUnit::new("Infrastructure"),
+                        OrgUnit::new("Storage Systems"),
+                        OrgUnit::new("Flash Division"),
+                        OrgUnit::new("Team Beta"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let deep_vcard = card_to_vcard(&deep_card);
+    assert_eq!(
+        line(&unfolded(&deep_vcard), "ORG"),
+        "ORG;X-JMAP-KEY=o1:Global Tech;Engineering;Infrastructure;Storage Systems;Flash Division;Team Beta"
+    );
+    let deep_back = vcard_to_card(&deep_vcard).expect("parse");
+    assert_eq!(deep_back.organizations, deep_card.organizations);
+
+    // 2. Nameless organisation with 4 units: leading semicolon preserves unit positions.
+    let nameless_card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: None,
+                    units: Some(vec![
+                        OrgUnit::new("Engineering"),
+                        OrgUnit::new("Security"),
+                        OrgUnit::new("Cryptography"),
+                        OrgUnit::new("Quantum"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let nameless_vcard = card_to_vcard(&nameless_card);
+    assert_eq!(
+        line(&nameless_vcard, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security;Cryptography;Quantum"
+    );
+    let nameless_back = vcard_to_card(&nameless_vcard).expect("parse");
+    assert_eq!(nameless_back.organizations, nameless_card.organizations);
+
+    // 3. Intermediate empty component (such as EDS clearing E_CONTACT_OFFICE in place):
+    // empty unit is filtered on read, emitting only non-empty units without sliding into name.
+    let cleared_office_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;;Lenses\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_cleared = vcard_to_card(cleared_office_vcard).expect("parse");
+    let cleared_orgs = from_cleared.organizations.as_ref().expect("organizations");
+    assert_eq!(cleared_orgs["o1"].name.as_deref(), Some("Acme Ltd"));
+    assert_eq!(
+        cleared_orgs["o1"].units.as_deref(),
+        Some([OrgUnit::new("Research"), OrgUnit::new("Lenses")].as_slice())
+    );
+    let rewritten_vcard = card_to_vcard(&from_cleared);
+    assert_eq!(
+        line(&rewritten_vcard, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;Lenses"
+    );
+    let rewritten_back = vcard_to_card(&rewritten_vcard).expect("parse");
+    assert_eq!(rewritten_back.organizations, from_cleared.organizations);
+}
+
+#[test]
+fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
+    let card = ContactCard {
+        organizations: Some(
+            [
+                (
+                    "o1".to_owned(),
+                    Organization {
+                        name: Some("Acme Corp".to_owned()),
+                        units: Some(vec![
+                            OrgUnit::new("Research"),
+                            OrgUnit::new("Optics"),
+                            OrgUnit::new("Lenses"),
+                        ]),
+                        ..Organization::default()
+                    },
+                ),
+                (
+                    "o2".to_owned(),
+                    Organization {
+                        name: Some("MegaCorp Industries".to_owned()),
+                        units: Some(vec![
+                            OrgUnit::new("Cloud"),
+                            OrgUnit::new("Datacenter"),
+                            OrgUnit::new("Hardware"),
+                            OrgUnit::new("Power"),
+                        ]),
+                        ..Organization::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        titles: Some(
+            [
+                (
+                    "t1".to_owned(),
+                    Title {
+                        name: "Chief Scientist".to_owned(),
+                        kind: None,
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "t2".to_owned(),
+                    Title {
+                        name: "Distinguished Engineer".to_owned(),
+                        kind: Some("title".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "r1".to_owned(),
+                    Title {
+                        name: "Technical Lead".to_owned(),
+                        kind: Some("role".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "r2".to_owned(),
+                    Title {
+                        name: "Steering Committee Member".to_owned(),
+                        kind: Some("role".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+                (
+                    "x1".to_owned(),
+                    Title {
+                        name: "Honorary Fellow".to_owned(),
+                        kind: Some("x-honour".to_owned()),
+                        ..Title::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    for title in card.titles.as_ref().unwrap().values() {
+        if title.kind.as_deref() == Some("x-honour") {
+            assert!(!states_title(title));
+        } else {
+            assert!(states_title(title));
+        }
+    }
+
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o1:Acme Corp;Research;Optics;Lenses\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o2:MegaCorp Industries;Cloud;Datacenter;Hardware;Power\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t1:Chief Scientist\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("TITLE;X-JMAP-KEY=t2:Distinguished Engineer\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ROLE;X-JMAP-KEY=r1:Technical Lead\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("ROLE;X-JMAP-KEY=r2:Steering Committee Member\r\n"),
+        "{vcard}"
+    );
+    // Unmapped vendor title kind gets no vCard line.
+    assert!(!vcard.contains("Honorary Fellow"), "{vcard}");
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
+
+    // Expected titles in roundtrip: t1, t2, r1, r2 with canonical kind (None for default title).
+    let expected_titles = [
+        (
+            "t1".to_owned(),
+            Title {
+                name: "Chief Scientist".to_owned(),
+                kind: None,
+                ..Title::default()
+            },
+        ),
+        (
+            "t2".to_owned(),
+            Title {
+                name: "Distinguished Engineer".to_owned(),
+                kind: None,
+                ..Title::default()
+            },
+        ),
+        (
+            "r1".to_owned(),
+            Title {
+                name: "Technical Lead".to_owned(),
+                kind: Some("role".to_owned()),
+                ..Title::default()
+            },
+        ),
+        (
+            "r2".to_owned(),
+            Title {
+                name: "Steering Committee Member".to_owned(),
+                kind: Some("role".to_owned()),
+                ..Title::default()
+            },
+        ),
+    ]
+    .into();
+    assert_eq!(back.titles, Some(expected_titles));
+}
+
+#[test]
+fn multi_component_org_with_escaped_punctuation_roundtrips() {
+    let card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme, Inc.".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("R&D; Applied Science"),
+                        OrgUnit::new("Optics, Lasers & Sensors"),
+                        OrgUnit::new("Lab #4 (Room 101; Wing B)"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&unfolded(&vcard), "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme\\, Inc.;R&D\\; Applied Science;Optics\\, Lasers & Sensors;Lab #4 (Room 101\\; Wing B)"
+    );
+
+    let back = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(back.organizations, card.organizations);
 }
 
 /// The kinds and values of an address's components, in the order it lists
@@ -3018,24 +3366,20 @@ fn a_gadu_gadu_uri_that_says_more_than_a_handle_gets_no_line() {
 }
 
 #[test]
-fn conventional_action_query_or_unregistered_im_uris_get_no_vcard_line() {
-    // AIM, MSN, and Yahoo conventionally employ query/action URI formats
-    // (e.g. `aim:goim?screenname=...`, `msnim:chat?contact=...`, `ymsgr:sendim?...`)
-    // or unreserved schemes which are rejected because they do not represent bare
-    // handles, and ICQ lacks a registered IANA scheme. When given only a `uri`
-    // (and no `user`), card_to_vcard safely omits them so EDS fields are not corrupted.
+fn action_query_im_uris_get_no_vcard_line() {
+    // AIM, MSN, Yahoo, and ICQ URIs with action/query parameters (e.g. `?screenname=`,
+    // `?contact=`, `?uin=`) or path segments do not represent bare handles. When given
+    // only such a `uri` (and no `user`), card_to_vcard safely omits them so EDS fields
+    // are not corrupted.
     for (service, uri, header) in [
         ("AIM", "aim:goim?screenname=alice", "X-AIM"),
         ("AIM", "aim:addbuddy?screenname=alice", "X-AIM"),
-        ("AIM", "aim:alice", "X-AIM"),
         ("MSN", "msnim:chat?contact=bob@example.com", "X-MSN"),
         ("MSN", "msnim:add?contact=bob@example.com", "X-MSN"),
-        ("MSN", "msnim:bob@example.com", "X-MSN"),
         ("Yahoo", "ymsgr:sendim?carol", "X-YAHOO"),
         ("Yahoo", "ymsgr:chat?carol", "X-YAHOO"),
-        ("Yahoo", "ymsgr:carol", "X-YAHOO"),
         ("ICQ", "icq:message?uin=12345678", "X-ICQ"),
-        ("ICQ", "icq:12345678", "X-ICQ"),
+        ("Matrix", "matrix:u/vera:matrix.example", "X-MATRIX"),
     ] {
         let vcard = card_to_vcard(&at_uri(Some(service), uri));
         assert!(
@@ -3043,6 +3387,68 @@ fn conventional_action_query_or_unregistered_im_uris_get_no_vcard_line() {
             "{service} uri '{uri}' was unexpectedly drawn on {header}: {vcard}"
         );
     }
+}
+
+#[test]
+fn bare_im_service_uris_are_drawn_and_roundtripped() {
+    // Bare URI schemes for all supported IM services (AIM, ICQ, MSN, Yahoo, GroupWise, Matrix)
+    // resolve to their respective handles and round-trip faithfully.
+    for (service, uri, handle, header) in [
+        ("AIM", "aim:alice_aim", "alice_aim", "X-AIM"),
+        ("ICQ", "icq:12345678", "12345678", "X-ICQ"),
+        ("MSN", "msn:bob@example.com", "bob@example.com", "X-MSN"),
+        ("MSN", "msnim:bob@example.com", "bob@example.com", "X-MSN"),
+        ("Yahoo", "yahoo:carol_yahoo", "carol_yahoo", "X-YAHOO"),
+        ("Yahoo", "ymsgr:carol_yahoo", "carol_yahoo", "X-YAHOO"),
+        ("GroupWise", "groupwise:dave_gw", "dave_gw", "X-GROUPWISE"),
+        ("Matrix", "matrix:elena_matrix", "elena_matrix", "X-MATRIX"),
+    ] {
+        let card = at_uri(Some(service), uri);
+        let vcard = card_to_vcard(&card);
+        assert_eq!(
+            line(&vcard, header),
+            format!("{header};X-JMAP-KEY=s1;TYPE=HOME:{handle}"),
+            "service: {service}, uri: {uri}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse");
+        let services = parsed.online_services.expect("online services");
+        assert_eq!(services["s1"].user.as_deref(), Some(handle));
+        assert_eq!(services["s1"].uri, None);
+        assert_eq!(services["s1"].service.as_deref(), Some(service));
+    }
+}
+
+#[test]
+fn online_service_uri_constructs_canonical_uri_for_all_supported_services() {
+    use jmap_vcard::contact::online_service_uri;
+
+    for (service, handle, expected_uri) in [
+        ("AIM", "alice", "aim:alice"),
+        ("Gadu-Gadu", "12345", "gg:12345"),
+        ("Google Talk", "bob@example.com", "xmpp:bob@example.com"),
+        ("GroupWise", "carol", "groupwise:carol"),
+        ("ICQ", "67890", "icq:67890"),
+        ("Jabber", "dave@example.com", "xmpp:dave@example.com"),
+        ("MSN", "elena@example.com", "msn:elena@example.com"),
+        ("Matrix", "frank", "matrix:frank"),
+        ("Skype", "grace", "skype:grace"),
+        ("Yahoo", "heidi", "yahoo:heidi"),
+    ] {
+        assert_eq!(
+            online_service_uri(service, handle).as_deref(),
+            Some(expected_uri),
+            "canonical URI for {service}"
+        );
+    }
+
+    // Services without registered schemes or invalid handles return None
+    assert_eq!(online_service_uri("Signal", "ivan"), None);
+    assert_eq!(
+        online_service_uri("AIM", "invalid handle with spaces"),
+        None
+    );
+    assert_eq!(online_service_uri("Yahoo", "invalid?query"), None);
 }
 
 #[test]
@@ -3887,4 +4293,1331 @@ fn emits_a_comprehensive_vcard_via_calcard_and_roundtrips() {
         back.phones.as_ref().unwrap().len(),
         card.phones.as_ref().unwrap().len()
     );
+}
+
+#[test]
+fn multi_type_phone_numbers_characterization_and_roundtrip() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:test-multi-type-phones\r\n",
+        "FN:Multi Phone Test\r\n",
+        "TEL;X-JMAP-KEY=p_work_voice_fax;TYPE=WORK,VOICE,FAX:+49 30 111111\r\n",
+        "TEL;X-JMAP-KEY=p_home_voice_fax;TYPE=HOME,VOICE,FAX:+49 30 222222\r\n",
+        "TEL;X-JMAP-KEY=p_bare_voice_fax;TYPE=VOICE,FAX:+49 30 333333\r\n",
+        "TEL;X-JMAP-KEY=p_work_cell_voice;TYPE=WORK,CELL,VOICE:+49 170 444444\r\n",
+        "TEL;X-JMAP-KEY=p_work_cell_fax;TYPE=WORK,CELL,FAX:+49 170 555555\r\n",
+        "TEL;X-JMAP-KEY=p_home_pager_voice;TYPE=HOME,PAGER,VOICE:+49 30 666666\r\n",
+        "TEL;X-JMAP-KEY=p_work_voice_video;TYPE=WORK,VOICE,VIDEO:+49 30 777777\r\n",
+        "TEL;X-JMAP-KEY=p_bare_fax_video;TYPE=FAX,VIDEO:+49 30 888888\r\n",
+        "TEL;X-JMAP-KEY=p_all_features;TYPE=HOME,CELL,PAGER,FAX,VOICE,VIDEO:+49 170 999999\r\n",
+        "TEL;X-JMAP-KEY=p_pref_work_fax;TYPE=PREF,WORK,VOICE,FAX:+49 30 000000\r\n",
+        "TEL;X-JMAP-KEY=p_separate_params;TYPE=WORK;TYPE=VOICE;TYPE=FAX:+49 30 123456\r\n",
+        "TEL;X-JMAP-KEY=p_mixed_case;type=work,voice,fax;type=pref:+49 30 234567\r\n",
+        "TEL;X-JMAP-KEY=p_unmapped_types;TYPE=ISDN,CAR,VOICE;TYPE=WORK:+49 30 345678\r\n",
+        "TEL;X-JMAP-KEY=p_bare_plain:+49 30 456789\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse multi-type vcard");
+    let phones = card.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 14);
+
+    // 1. TEL;TYPE=WORK,VOICE,FAX: parses work context and both voice & fax features
+    let p_wvf = &phones["p_work_voice_fax"];
+    assert_eq!(p_wvf.number, "+49 30 111111");
+    assert_eq!(p_wvf.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wvf.features, Some(json!({"voice": true, "fax": true})));
+    assert_eq!(p_wvf.pref, None);
+    assert!(states_phone_feature(p_wvf.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_wvf.features.as_ref(), "voice"));
+    assert!(states_context(p_wvf.contexts.as_ref(), "work"));
+    assert!(!states_context(p_wvf.contexts.as_ref(), "private"));
+
+    // 2. TEL;TYPE=HOME,VOICE,FAX: parses private context and both voice & fax features
+    let p_hvf = &phones["p_home_voice_fax"];
+    assert_eq!(p_hvf.number, "+49 30 222222");
+    assert_eq!(p_hvf.contexts, Some(json!({"private": true})));
+    assert_eq!(p_hvf.features, Some(json!({"voice": true, "fax": true})));
+    assert!(states_phone_feature(p_hvf.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_hvf.features.as_ref(), "voice"));
+    assert!(states_context(p_hvf.contexts.as_ref(), "private"));
+
+    // 3. TEL;TYPE=VOICE,FAX: bare features with no context
+    let p_bvf = &phones["p_bare_voice_fax"];
+    assert_eq!(p_bvf.number, "+49 30 333333");
+    assert_eq!(p_bvf.contexts, None);
+    assert_eq!(p_bvf.features, Some(json!({"voice": true, "fax": true})));
+    assert!(states_phone_feature(p_bvf.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_bvf.features.as_ref(), "voice"));
+
+    // 4. TEL;TYPE=WORK,CELL,VOICE: mobile outranks voice
+    let p_wcv = &phones["p_work_cell_voice"];
+    assert_eq!(p_wcv.number, "+49 170 444444");
+    assert_eq!(p_wcv.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wcv.features, Some(json!({"mobile": true, "voice": true})));
+    assert!(states_phone_feature(p_wcv.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(p_wcv.features.as_ref(), "voice"));
+
+    // 5. TEL;TYPE=WORK,CELL,FAX: mobile outranks fax
+    let p_wcf = &phones["p_work_cell_fax"];
+    assert_eq!(p_wcf.number, "+49 170 555555");
+    assert_eq!(p_wcf.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wcf.features, Some(json!({"mobile": true, "fax": true})));
+    assert!(states_phone_feature(p_wcf.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(p_wcf.features.as_ref(), "fax"));
+
+    // 6. TEL;TYPE=HOME,PAGER,VOICE: pager outranks voice
+    let p_hpv = &phones["p_home_pager_voice"];
+    assert_eq!(p_hpv.number, "+49 30 666666");
+    assert_eq!(p_hpv.contexts, Some(json!({"private": true})));
+    assert_eq!(p_hpv.features, Some(json!({"pager": true, "voice": true})));
+    assert!(states_phone_feature(p_hpv.features.as_ref(), "pager"));
+    assert!(!states_phone_feature(p_hpv.features.as_ref(), "voice"));
+
+    // 7. TEL;TYPE=WORK,VOICE,VIDEO: voice outranks unmapped video
+    let p_wvv = &phones["p_work_voice_video"];
+    assert_eq!(p_wvv.number, "+49 30 777777");
+    assert_eq!(p_wvv.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wvv.features, Some(json!({"voice": true, "video": true})));
+    assert!(states_phone_feature(p_wvv.features.as_ref(), "voice"));
+    assert!(!states_phone_feature(p_wvv.features.as_ref(), "video"));
+
+    // 8. TEL;TYPE=FAX,VIDEO: fax outranks video
+    let p_bfv = &phones["p_bare_fax_video"];
+    assert_eq!(p_bfv.number, "+49 30 888888");
+    assert_eq!(p_bfv.contexts, None);
+    assert_eq!(p_bfv.features, Some(json!({"fax": true, "video": true})));
+    assert!(states_phone_feature(p_bfv.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_bfv.features.as_ref(), "video"));
+
+    // 9. TEL;TYPE=HOME,CELL,PAGER,FAX,VOICE,VIDEO: full hierarchy resolves to CELL
+    let p_all = &phones["p_all_features"];
+    assert_eq!(p_all.number, "+49 170 999999");
+    assert_eq!(p_all.contexts, Some(json!({"private": true})));
+    assert_eq!(
+        p_all.features,
+        Some(json!({
+            "mobile": true,
+            "pager": true,
+            "fax": true,
+            "voice": true,
+            "video": true
+        }))
+    );
+    assert!(states_phone_feature(p_all.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(p_all.features.as_ref(), "pager"));
+    assert!(!states_phone_feature(p_all.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(p_all.features.as_ref(), "voice"));
+    assert!(!states_phone_feature(p_all.features.as_ref(), "video"));
+
+    // 10. TEL;TYPE=PREF,WORK,VOICE,FAX: pref extracted alongside types
+    let p_pref = &phones["p_pref_work_fax"];
+    assert_eq!(p_pref.number, "+49 30 000000");
+    assert_eq!(p_pref.pref, Some(1));
+    assert_eq!(p_pref.contexts, Some(json!({"work": true})));
+    assert_eq!(p_pref.features, Some(json!({"voice": true, "fax": true})));
+
+    // 11. Separate TYPE parameters parse identically to comma-separated
+    let p_sep = &phones["p_separate_params"];
+    assert_eq!(p_sep.number, "+49 30 123456");
+    assert_eq!(p_sep.contexts, Some(json!({"work": true})));
+    assert_eq!(p_sep.features, Some(json!({"voice": true, "fax": true})));
+
+    // 12. Mixed case TYPE parameters and values parse correctly
+    let p_case = &phones["p_mixed_case"];
+    assert_eq!(p_case.number, "+49 30 234567");
+    assert_eq!(p_case.pref, Some(1));
+    assert_eq!(p_case.contexts, Some(json!({"work": true})));
+    assert_eq!(p_case.features, Some(json!({"voice": true, "fax": true})));
+
+    // 13. Unmapped types (ISDN, CAR) are ignored while mapped types (VOICE, WORK) survive
+    let p_unm = &phones["p_unmapped_types"];
+    assert_eq!(p_unm.number, "+49 30 345678");
+    assert_eq!(p_unm.contexts, Some(json!({"work": true})));
+    assert_eq!(p_unm.features, Some(json!({"voice": true})));
+
+    // 14. Bare plain telephone with no types
+    let p_bare = &phones["p_bare_plain"];
+    assert_eq!(p_bare.number, "+49 30 456789");
+    assert_eq!(p_bare.contexts, None);
+    assert_eq!(p_bare.features, None);
+    assert_eq!(p_bare.pref, None);
+    assert!(!states_phone_feature(p_bare.features.as_ref(), "voice"));
+    assert!(!states_context(p_bare.contexts.as_ref(), "work"));
+
+    // Now verify outbound vCard emission for each phone entry
+    let emitted = card_to_vcard(&card);
+
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_voice_fax"),
+        "TEL;X-JMAP-KEY=p_work_voice_fax;TYPE=WORK,FAX:+49 30 111111"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_home_voice_fax"),
+        "TEL;X-JMAP-KEY=p_home_voice_fax;TYPE=HOME,FAX:+49 30 222222"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_bare_voice_fax"),
+        "TEL;X-JMAP-KEY=p_bare_voice_fax;TYPE=FAX:+49 30 333333"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_cell_voice"),
+        "TEL;X-JMAP-KEY=p_work_cell_voice;TYPE=WORK,CELL:+49 170 444444"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_cell_fax"),
+        "TEL;X-JMAP-KEY=p_work_cell_fax;TYPE=WORK,CELL:+49 170 555555"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_home_pager_voice"),
+        "TEL;X-JMAP-KEY=p_home_pager_voice;TYPE=HOME,PAGER:+49 30 666666"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_voice_video"),
+        "TEL;X-JMAP-KEY=p_work_voice_video;TYPE=WORK,VOICE:+49 30 777777"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_bare_fax_video"),
+        "TEL;X-JMAP-KEY=p_bare_fax_video;TYPE=FAX:+49 30 888888"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_all_features"),
+        "TEL;X-JMAP-KEY=p_all_features;TYPE=HOME,CELL:+49 170 999999"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_pref_work_fax"),
+        "TEL;X-JMAP-KEY=p_pref_work_fax;TYPE=WORK,FAX,PREF:+49 30 000000"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_separate_params"),
+        "TEL;X-JMAP-KEY=p_separate_params;TYPE=WORK,FAX:+49 30 123456"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_mixed_case"),
+        "TEL;X-JMAP-KEY=p_mixed_case;TYPE=WORK,FAX,PREF:+49 30 234567"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_unmapped_types"),
+        "TEL;X-JMAP-KEY=p_unmapped_types;TYPE=WORK,VOICE:+49 30 345678"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_bare_plain"),
+        "TEL;X-JMAP-KEY=p_bare_plain:+49 30 456789"
+    );
+}
+
+#[test]
+fn maps_phone_feature_predicate_characterization() {
+    // All supported JSContact phone features mapped to vCard 3.0 TYPE values
+    assert!(maps_phone_feature("mobile"));
+    assert!(maps_phone_feature("pager"));
+    assert!(maps_phone_feature("fax"));
+    assert!(maps_phone_feature("voice"));
+    assert!(maps_phone_feature("video"));
+
+    // Unsupported, unmapped, or type-confusion keys
+    assert!(!maps_phone_feature("cell")); // vCard spelling, not JSContact key
+    assert!(!maps_phone_feature("car"));
+    assert!(!maps_phone_feature("isdn"));
+    assert!(!maps_phone_feature("modem"));
+    assert!(!maps_phone_feature("bbs"));
+    assert!(!maps_phone_feature("main"));
+    assert!(!maps_phone_feature("text"));
+    assert!(!maps_phone_feature("textphone"));
+    assert!(!maps_phone_feature("work"));
+    assert!(!maps_phone_feature("home"));
+    assert!(!maps_phone_feature(""));
+}
+
+#[test]
+fn phone_feature_slot_resolution_order_is_fully_determined() {
+    // 1. Single feature slot resolution
+    for (feature, expected_type) in [
+        ("mobile", "CELL"),
+        ("pager", "PAGER"),
+        ("fax", "FAX"),
+        ("voice", "VOICE"),
+        ("video", "VIDEO"),
+    ] {
+        let line = phone_line(None, Some(json!({feature: true})));
+        assert_eq!(
+            line,
+            format!("TEL;X-JMAP-KEY=p1;TYPE={expected_type}:+49 30 111")
+        );
+        assert!(states_phone_feature(Some(&json!({feature: true})), feature));
+    }
+
+    // 2. Pairwise feature precedence: mobile beats all
+    for other in ["pager", "fax", "voice", "video"] {
+        let features = json!({"mobile": true, other: true});
+        let line = phone_line(None, Some(features.clone()));
+        assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=CELL:+49 30 111");
+        assert!(states_phone_feature(Some(&features), "mobile"));
+        assert!(!states_phone_feature(Some(&features), other));
+    }
+
+    // 3. Pairwise feature precedence: pager beats fax, voice, video
+    for other in ["fax", "voice", "video"] {
+        let features = json!({"pager": true, other: true});
+        let line = phone_line(None, Some(features.clone()));
+        assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=PAGER:+49 30 111");
+        assert!(states_phone_feature(Some(&features), "pager"));
+        assert!(!states_phone_feature(Some(&features), other));
+    }
+
+    // 4. Pairwise feature precedence: fax beats voice, video
+    for other in ["voice", "video"] {
+        let features = json!({"fax": true, other: true});
+        let line = phone_line(None, Some(features.clone()));
+        assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=FAX:+49 30 111");
+        assert!(states_phone_feature(Some(&features), "fax"));
+        assert!(!states_phone_feature(Some(&features), other));
+    }
+
+    // 5. Pairwise feature precedence: voice beats video
+    let features = json!({"voice": true, "video": true});
+    let line = phone_line(None, Some(features.clone()));
+    assert_eq!(line, "TEL;X-JMAP-KEY=p1;TYPE=VOICE:+49 30 111");
+    assert!(states_phone_feature(Some(&features), "voice"));
+    assert!(!states_phone_feature(Some(&features), "video"));
+
+    // 6. Multiple contexts with multiple features: DEFAULT_SLOT (HOME) + winning feature
+    let line_multi_ctx_feat = phone_line(
+        Some(json!({"work": true, "private": true})),
+        Some(json!({"voice": true, "fax": true})),
+    );
+    assert_eq!(
+        line_multi_ctx_feat,
+        "TEL;X-JMAP-KEY=p1;TYPE=HOME,FAX:+49 30 111"
+    );
+    let contexts = json!({"work": true, "private": true});
+    assert!(states_context(Some(&contexts), "private"));
+    assert!(!states_context(Some(&contexts), "work"));
+}
+
+#[test]
+fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
+    // Characterization of bare-year dates (RFC 9553 §2.8.1 PartialDate with year only):
+    // 1. vCard 3.0 (RFC 2426 §3.1.5) requires BDAY to be a full date (YYYY-MM-DD or YYYYMMDD).
+    // 2. EDS (libebook-contacts) e_contact_date_from_string returns NULL for partial dates.
+    // 3. When EDS writes an EContactDate via e_contact_date_to_string, it CLAMPs year into 1000..=9999,
+    //    month into 1..=12, and day into 1..=31. Emitting an unanchored bare year or partial date
+    //    would cause EDS to clamp missing fields to 01-01 (e.g. 1984-01-01), corrupting the user's date.
+    // 4. Therefore, jmap-vcard drops bare-year dates on emission, leaving diff_entries to preserve
+    //    the server-side PartialDate untouched without creating phantom vCard lines.
+
+    // 1. Predicates on bare-year dates
+    let birth_bare_year = Anniversary {
+        kind: "birth".to_owned(),
+        date: Some(json!({"@type": "PartialDate", "year": 1984})),
+        ..Anniversary::default()
+    };
+    assert!(!states_anniversary(&birth_bare_year));
+    assert_eq!(anniversary_date(&birth_bare_year), None);
+    assert!(!states_a_point_in_time(&birth_bare_year));
+
+    let wedding_bare_year = Anniversary {
+        kind: "wedding".to_owned(),
+        date: Some(json!({"@type": "PartialDate", "year": 1996})),
+        ..Anniversary::default()
+    };
+    assert!(!states_anniversary(&wedding_bare_year));
+    assert_eq!(anniversary_date(&wedding_bare_year), None);
+    assert!(!states_a_point_in_time(&wedding_bare_year));
+
+    let death_bare_year = Anniversary {
+        kind: "death".to_owned(),
+        date: Some(json!({"@type": "PartialDate", "year": 2019})),
+        ..Anniversary::default()
+    };
+    assert!(!states_anniversary(&death_bare_year));
+    assert_eq!(anniversary_date(&death_bare_year), None);
+
+    // 2. Outbound emission across various bare-year representations
+    for bare_date in [
+        json!({"year": 1984}),
+        json!({"@type": "PartialDate", "year": 1984}),
+        json!({"year": 800}),  // historical year below clamp threshold
+        json!({"year": 999}),  // boundary below clamp threshold
+        json!({"year": 1000}), // earliest clamp threshold
+        json!({"year": 2026}), // current era
+        json!({"@type": "PartialDate", "year": 1984, "calendarScale": "gregorian"}),
+    ] {
+        let vcard_birth = card_to_vcard(&one_anniversary("birth", bare_date.clone()));
+        assert!(!vcard_birth.contains("BDAY"), "{bare_date}: {vcard_birth}");
+
+        let vcard_wedding = card_to_vcard(&one_anniversary("wedding", bare_date.clone()));
+        assert!(
+            !vcard_wedding.contains("X-EVOLUTION-ANNIVERSARY"),
+            "{bare_date}: {vcard_wedding}"
+        );
+        assert!(
+            !vcard_wedding.contains("ANNIVERSARY"),
+            "{bare_date}: {vcard_wedding}"
+        );
+    }
+
+    // 3. Inbound parsing of bare-year and partial date lines from vCards
+    for vcard_input in [
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:1984\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:1984-06\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:--06-21\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY;VALUE=date:1984\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY;VALUE=text:1984\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nX-EVOLUTION-ANNIVERSARY:1996\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nX-EVOLUTION-ANNIVERSARY:1996-08\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nX-EVOLUTION-ANNIVERSARY:--08-03\r\nEND:VCARD\r\n",
+    ] {
+        let card = vcard_to_card(vcard_input).expect("parse");
+        assert_eq!(
+            card.anniversaries, None,
+            "inbound bare date should not parse into card: {vcard_input}"
+        );
+    }
+
+    // 4. Roundtrip of a card with coexisting bare-year and full-date anniversaries
+    let mixed_card = ContactCard {
+        anniversaries: Some(
+            [
+                (
+                    "y1".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(json!({"@type": "PartialDate", "year": 1984})),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y2".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(
+                            json!({"@type": "PartialDate", "year": 1984, "month": 6, "day": 21}),
+                        ),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y3".to_owned(),
+                    Anniversary {
+                        kind: "wedding".to_owned(),
+                        date: Some(json!({"@type": "PartialDate", "year": 1996})),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y4".to_owned(),
+                    Anniversary {
+                        kind: "wedding".to_owned(),
+                        date: Some(
+                            json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}),
+                        ),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y5".to_owned(),
+                    Anniversary {
+                        kind: "death".to_owned(),
+                        date: Some(json!({"@type": "PartialDate", "year": 2019})),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y6".to_owned(),
+                    Anniversary {
+                        kind: "death".to_owned(),
+                        date: Some(
+                            json!({"@type": "PartialDate", "year": 2019, "month": 10, "day": 15}),
+                        ),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y7".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(
+                            json!({"@type": "PartialDate", "year": 800, "month": 6, "day": 21}),
+                        ),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y8".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(json!({"@type": "PartialDate", "year": 800})),
+                        ..Anniversary::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&mixed_card);
+    assert_eq!(line(&emitted, "BDAY"), "BDAY;X-JMAP-KEY=y2:1984-06-21");
+    assert_eq!(
+        line(&emitted, "X-EVOLUTION-ANNIVERSARY"),
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y4:1996-08-03"
+    );
+    // Unstated entries are absent
+    assert!(!emitted.contains("X-JMAP-KEY=y1"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y3"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y5"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y6"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y7"), "{emitted}");
+    assert!(!emitted.contains("X-JMAP-KEY=y8"), "{emitted}");
+
+    // Inbound roundtrip parses the emitted lines back losslessly
+    let roundtripped = vcard_to_card(&emitted).expect("parse back");
+    let recovered = roundtripped.anniversaries.expect("anniversaries");
+    assert_eq!(recovered.len(), 2);
+    assert_eq!(recovered["y2"].kind, "birth");
+    assert_eq!(
+        recovered["y2"].date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 6, "day": 21}))
+    );
+    assert_eq!(recovered["y4"].kind, "wedding");
+    assert_eq!(
+        recovered["y4"].date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+}
+
+#[test]
+fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
+    // Tests that PartialDate objects carrying custom or alternative calendar attributes
+    // with bare years are safely handled and do not panic or emit malformed vCard lines.
+    let card = ContactCard {
+        anniversaries: Some(
+            [
+                (
+                    "y1".to_owned(),
+                    Anniversary {
+                        kind: "birth".to_owned(),
+                        date: Some(json!({
+                            "@type": "PartialDate",
+                            "year": 2567,
+                            "calendarScale": "buddhist"
+                        })),
+                        ..Anniversary::default()
+                    },
+                ),
+                (
+                    "y2".to_owned(),
+                    Anniversary {
+                        kind: "wedding".to_owned(),
+                        date: Some(json!({
+                            "@type": "PartialDate",
+                            "year": 5784,
+                            "calendarScale": "hebrew"
+                        })),
+                        ..Anniversary::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert!(!vcard.contains("BDAY"), "{vcard}");
+    assert!(!vcard.contains("ANNIVERSARY"), "{vcard}");
+    assert!(!vcard.contains("2567"), "{vcard}");
+    assert!(!vcard.contains("5784"), "{vcard}");
+
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    assert_eq!(parsed.anniversaries, None);
+}
+
+#[test]
+fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
+    // 1. `states_org_unit` predicate characterization:
+    // A unit is stated on the wire only if its name is non-empty.
+    // An empty name with or without sortAs in extra is unstated.
+    let empty_unit = OrgUnit::new("");
+    assert!(!states_org_unit(&empty_unit));
+
+    let empty_with_sort_as = OrgUnit {
+        name: "".to_owned(),
+        extra: [("sortAs".to_owned(), json!("Alpha"))].into(),
+    };
+    assert!(!states_org_unit(&empty_with_sort_as));
+
+    let normal_unit = OrgUnit::new("Engineering");
+    assert!(states_org_unit(&normal_unit));
+
+    let normal_with_sort_as = OrgUnit {
+        name: "Engineering".to_owned(),
+        extra: [("sortAs".to_owned(), json!("Eng"))].into(),
+    };
+    assert!(states_org_unit(&normal_with_sort_as));
+
+    let whitespace_unit = OrgUnit::new("   ");
+    assert!(states_org_unit(&whitespace_unit));
+
+    // 2. `states_organization` predicate with combinations of empty units:
+    // Org with empty name and only empty units states nothing.
+    let empty_org = Organization {
+        name: None,
+        units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
+        ..Organization::default()
+    };
+    assert!(!states_organization(&empty_org));
+
+    let empty_named_org = Organization {
+        name: Some("".to_owned()),
+        units: Some(vec![OrgUnit::new("")]),
+        ..Organization::default()
+    };
+    assert!(!states_organization(&empty_named_org));
+
+    // Org with employer name states an ORG line even if all units are empty.
+    let named_org_empty_units = Organization {
+        name: Some("Acme Corp".to_owned()),
+        units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
+        ..Organization::default()
+    };
+    assert!(states_organization(&named_org_empty_units));
+
+    // Org with no employer name but at least one non-empty unit states an ORG line.
+    let nameless_org_valid_unit = Organization {
+        name: None,
+        units: Some(vec![OrgUnit::new(""), OrgUnit::new("Finance")]),
+        ..Organization::default()
+    };
+    assert!(states_organization(&nameless_org_valid_unit));
+}
+
+#[test]
+fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
+    // 1. Org with employer name and only empty-name units:
+    // Emits employer name alone on the ORG line; empty units are dropped from wire format.
+    let card1 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Corp".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new(""),
+                        OrgUnit {
+                            name: "".to_owned(),
+                            extra: [("sortAs".to_owned(), json!("Secret"))].into(),
+                        },
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let vcard1 = card_to_vcard(&card1);
+    assert_eq!(line(&vcard1, "ORG"), "ORG;X-JMAP-KEY=o1:Acme Corp");
+    let back1 = vcard_to_card(&vcard1).expect("parse");
+    let org1 = &back1.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org1.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(org1.units, None);
+
+    // 2. Org with employer name, leading/intermediate empty units, and valid units:
+    // Empty units are omitted from ORG components, leaving non-empty units in sequence.
+    let card2 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Corp".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new(""),
+                        OrgUnit::new("Research"),
+                        OrgUnit {
+                            name: "".to_owned(),
+                            extra: [("sortAs".to_owned(), json!("OpticsSort"))].into(),
+                        },
+                        OrgUnit::new("Optics"),
+                        OrgUnit::new(""),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let vcard2 = card_to_vcard(&card2);
+    assert_eq!(
+        line(&vcard2, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme Corp;Research;Optics"
+    );
+    let back2 = vcard_to_card(&vcard2).expect("parse");
+    let org2 = &back2.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org2.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(
+        org2.units.as_deref(),
+        Some([OrgUnit::new("Research"), OrgUnit::new("Optics")].as_slice())
+    );
+
+    // 3. Nameless org with leading empty unit and valid units:
+    // Leading semicolon keeps unit in department slot; empty unit is omitted.
+    let card3 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: None,
+                    units: Some(vec![OrgUnit::new(""), OrgUnit::new("Engineering")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let vcard3 = card_to_vcard(&card3);
+    assert_eq!(line(&vcard3, "ORG"), "ORG;X-JMAP-KEY=o1:;Engineering");
+    let back3 = vcard_to_card(&vcard3).expect("parse");
+    let org3 = &back3.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org3.name, None);
+    assert_eq!(
+        org3.units.as_deref(),
+        Some([OrgUnit::new("Engineering")].as_slice())
+    );
+
+    // 4. Inbound vCards with various empty component patterns:
+    // - ORG with empty employer and empty unit components:
+    let empty_components_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG;X-JMAP-KEY=o1:;;;\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_empty = vcard_to_card(empty_components_vcard).expect("parse");
+    assert_eq!(from_empty.organizations, None);
+
+    // - ORG with empty intermediate components and trailing empty semicolons:
+    let multi_empty_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ORG;X-JMAP-KEY=o1:Acme Corp;;Research;;Development;\r\n",
+        "END:VCARD\r\n"
+    );
+    let from_multi_empty = vcard_to_card(multi_empty_vcard).expect("parse");
+    let org_multi = &from_multi_empty.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org_multi.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(
+        org_multi.units.as_deref(),
+        Some([OrgUnit::new("Research"), OrgUnit::new("Development")].as_slice())
+    );
+}
+
+#[test]
+fn name_and_address_component_predicates_and_context_mapping_fidelity() {
+    // states_name_component: requires non-empty value AND mapped kind
+    assert!(states_name_component(&NameComponent::new("given", "Alice")));
+    assert!(states_name_component(&NameComponent::new(
+        "surname", "Smith"
+    )));
+    assert!(!states_name_component(&NameComponent::new("given", "")));
+    assert!(!states_name_component(&NameComponent::new(
+        "unmapped_kind",
+        "Alice"
+    )));
+    assert!(!states_name_component(&NameComponent::new(
+        "unmapped_kind",
+        ""
+    )));
+
+    // maps_context: covers "work" and "private"
+    assert!(maps_context("work"));
+    assert!(maps_context("private"));
+    assert!(!maps_context("other"));
+    assert!(!maps_context("billing"));
+    assert!(!maps_context("home"));
+    assert!(!maps_context(""));
+
+    // states_address_component: requires non-empty value AND mapped kind (including joined kind)
+    assert!(states_address_component(&AddressComponent::new(
+        "name",
+        "Main Street"
+    )));
+    assert!(states_address_component(&AddressComponent::new(
+        "number", "42"
+    )));
+    assert!(states_address_component(&AddressComponent::new(
+        "locality", "Berlin"
+    )));
+    assert!(!states_address_component(&AddressComponent::new(
+        "locality", ""
+    )));
+    assert!(!states_address_component(&AddressComponent::new(
+        "unmapped_kind",
+        "Sector 7"
+    )));
+    assert!(!states_address_component(&AddressComponent::new(
+        "unmapped_kind",
+        ""
+    )));
+
+    // states_address: requires address_fields or address_label
+    assert!(states_address(&Address {
+        components: Some(vec![AddressComponent::new("locality", "Berlin")]),
+        ..Address::default()
+    }));
+    assert!(states_address(&Address {
+        full: Some("123 Main St, Berlin".into()),
+        ..Address::default()
+    }));
+    assert!(!states_address(&Address {
+        full: Some("".into()),
+        ..Address::default()
+    }));
+    assert!(!states_address(&Address {
+        components: Some(vec![AddressComponent::new("locality", "")]),
+        ..Address::default()
+    }));
+    assert!(!states_address(&Address {
+        components: Some(vec![AddressComponent::new("unmapped_kind", "Value")]),
+        ..Address::default()
+    }));
+    assert!(!states_address(&Address::default()));
+    assert_eq!(
+        address_label(&Address {
+            full: Some("Main Street".into()),
+            ..Address::default()
+        }),
+        Some("Main Street")
+    );
+    assert_eq!(
+        address_label(&Address {
+            full: Some("".into()),
+            ..Address::default()
+        }),
+        None
+    );
+
+    // states_email, states_phone, states_note, states_link, states_nickname, title_kind
+    assert!(states_email(&ContactEmail {
+        address: "alice@example.com".into(),
+        ..ContactEmail::default()
+    }));
+    assert!(!states_email(&ContactEmail {
+        address: "".into(),
+        ..ContactEmail::default()
+    }));
+    assert!(states_phone(&ContactPhone {
+        number: "+49 30 123456".into(),
+        ..ContactPhone::default()
+    }));
+    assert!(!states_phone(&ContactPhone {
+        number: "".into(),
+        ..ContactPhone::default()
+    }));
+    assert!(states_note(&Note {
+        note: "Important contact".into(),
+        ..Note::default()
+    }));
+    assert!(!states_note(&Note {
+        note: "".into(),
+        ..Note::default()
+    }));
+    assert!(states_link(&Link {
+        uri: "https://example.com".into(),
+        ..Link::default()
+    }));
+    assert!(!states_link(&Link {
+        uri: "".into(),
+        ..Link::default()
+    }));
+    assert!(states_nickname(&Nickname {
+        name: "Ali".into(),
+        ..Nickname::default()
+    }));
+    assert!(!states_nickname(&Nickname {
+        name: "".into(),
+        ..Nickname::default()
+    }));
+    assert_eq!(title_kind(None), "title");
+    assert_eq!(title_kind(Some("role")), "role");
+}
+
+#[test]
+fn calendar_and_spouse_predicates_fidelity() {
+    // states_calendar: requires non-empty uri AND mapped kind (calendar, freeBusy)
+    assert!(states_calendar(&Calendar {
+        kind: Some("calendar".into()),
+        uri: "https://calendar.example.com".into(),
+        ..Calendar::default()
+    }));
+    assert!(states_calendar(&Calendar {
+        kind: Some("freeBusy".into()),
+        uri: "https://fb.example.com".into(),
+        ..Calendar::default()
+    }));
+    assert!(!states_calendar(&Calendar {
+        kind: Some("calendar".into()),
+        uri: "".into(),
+        ..Calendar::default()
+    }));
+    assert!(!states_calendar(&Calendar {
+        kind: Some("unmapped_kind".into()),
+        uri: "https://calendar.example.com".into(),
+        ..Calendar::default()
+    }));
+    assert!(!states_calendar(&Calendar {
+        kind: None,
+        uri: "https://calendar.example.com".into(),
+        ..Calendar::default()
+    }));
+    assert!(!states_calendar(&Calendar {
+        kind: None,
+        uri: "".into(),
+        ..Calendar::default()
+    }));
+
+    // states_spouse and states_nothing_but_the_marriage:
+    let rel_spouse_only = Relation {
+        relation: Some([("spouse".into(), json!(true))].into()),
+        extra: [("@type".into(), json!("Relation"))].into(),
+    };
+    assert!(states_spouse("Bob", &rel_spouse_only));
+    assert!(states_nothing_but_the_marriage(&rel_spouse_only));
+
+    let rel_no_extra = Relation {
+        relation: Some([("spouse".into(), json!(true))].into()),
+        extra: BTreeMap::new(),
+    };
+    assert!(states_nothing_but_the_marriage(&rel_no_extra));
+
+    let rel_with_kin = Relation {
+        relation: Some([("spouse".into(), json!(true)), ("kin".into(), json!(true))].into()),
+        extra: [("@type".into(), json!("Relation"))].into(),
+    };
+    assert!(states_spouse("Bob", &rel_with_kin));
+    assert!(!states_nothing_but_the_marriage(&rel_with_kin));
+
+    let rel_kin_only = Relation {
+        relation: Some([("kin".into(), json!(true))].into()),
+        extra: [("@type".into(), json!("Relation"))].into(),
+    };
+    assert!(!states_spouse("Bob", &rel_kin_only));
+    assert!(!states_nothing_but_the_marriage(&rel_kin_only));
+
+    let rel_with_custom_extra = Relation {
+        relation: Some([("spouse".into(), json!(true))].into()),
+        extra: [
+            ("@type".into(), json!("Relation")),
+            ("customField".into(), json!("value")),
+        ]
+        .into(),
+    };
+    assert!(states_spouse("Bob", &rel_with_custom_extra));
+    assert!(!states_nothing_but_the_marriage(&rel_with_custom_extra));
+
+    let rel_empty = Relation {
+        relation: None,
+        extra: [("@type".into(), json!("Relation"))].into(),
+    };
+    assert!(!states_spouse("Bob", &rel_empty));
+    assert!(states_nothing_but_the_marriage(&rel_empty));
+}
+
+#[test]
+fn media_photo_and_online_service_predicates_and_comparisons() {
+    // states_media and same_photo
+    let m_uri1 = Media {
+        kind: Some("photo".into()),
+        uri: "https://example.com/photo1.jpg".into(),
+        ..Media::default()
+    };
+    let m_uri2 = Media {
+        kind: Some("photo".into()),
+        uri: "https://example.com/photo1.jpg".into(),
+        ..Media::default()
+    };
+    let m_uri3 = Media {
+        kind: Some("photo".into()),
+        uri: "https://example.com/photo2.jpg".into(),
+        ..Media::default()
+    };
+    let m_logo = Media {
+        kind: Some("logo".into()),
+        uri: "https://example.com/logo.png".into(),
+        ..Media::default()
+    };
+    let m_sound = Media {
+        kind: Some("sound".into()),
+        uri: "https://example.com/audio.mp3".into(),
+        ..Media::default()
+    };
+    let m_empty_uri = Media {
+        kind: Some("photo".into()),
+        uri: "".into(),
+        ..Media::default()
+    };
+    let m_none_kind = Media {
+        kind: None,
+        uri: "https://example.com/photo.jpg".into(),
+        ..Media::default()
+    };
+    let m_data1 = Media {
+        kind: Some("photo".into()),
+        uri: "data:image/jpeg;base64,aGVsbG8=".into(),
+        ..Media::default()
+    };
+    let m_data2 = Media {
+        kind: Some("photo".into()),
+        uri: "data:image/jpeg;base64,aGVsbG8=".into(),
+        ..Media::default()
+    };
+    let m_data_case = Media {
+        kind: Some("photo".into()),
+        uri: "data:image/JPEG;base64,aGVsbG8=".into(),
+        ..Media::default()
+    };
+    let m_data_diff_bytes = Media {
+        kind: Some("photo".into()),
+        uri: "data:image/jpeg;base64,d29ybGQ=".into(),
+        ..Media::default()
+    };
+    let m_data_diff_type = Media {
+        kind: Some("photo".into()),
+        uri: "data:image/png;base64,aGVsbG8=".into(),
+        ..Media::default()
+    };
+    let m_data_invalid = Media {
+        kind: Some("photo".into()),
+        uri: "data:image/jpeg;base64,!!!invalid!!!".into(),
+        ..Media::default()
+    };
+
+    assert!(states_media(&m_uri1));
+    assert!(states_media(&m_data1));
+    assert!(!states_media(&m_logo));
+    assert!(!states_media(&m_sound));
+    assert!(!states_media(&m_empty_uri));
+    assert!(!states_media(&m_none_kind));
+    assert!(!states_media(&m_data_invalid));
+
+    assert!(same_photo(&m_logo, &m_sound)); // Both evaluate to None
+    assert!(same_photo(&m_uri1, &m_uri2));
+    assert!(!same_photo(&m_uri1, &m_uri3));
+    assert!(!same_photo(&m_uri1, &m_logo));
+    assert!(same_photo(&m_data1, &m_data2));
+    assert!(same_photo(&m_data1, &m_data_case));
+    assert!(!same_photo(&m_data1, &m_data_diff_bytes));
+    assert!(!same_photo(&m_data1, &m_data_diff_type));
+    assert!(!same_photo(&m_data1, &m_uri1));
+
+    // states_online_service, same_service, online_service_handle, online_service_uri
+    let s_matrix = OnlineService {
+        service: Some("Matrix".into()),
+        user: Some("@alice:matrix.org".into()),
+        ..OnlineService::default()
+    };
+    let s_matrix_uri = OnlineService {
+        service: Some("Matrix".into()),
+        uri: Some("matrix:alice".into()),
+        ..OnlineService::default()
+    };
+    let s_matrix_crlf = OnlineService {
+        service: Some("Matrix".into()),
+        user: Some("@alice\r:matrix.org".into()),
+        ..OnlineService::default()
+    };
+    let s_matrix_spaced = OnlineService {
+        service: Some("Matrix".into()),
+        user: Some(" @alice:matrix.org ".into()),
+        ..OnlineService::default()
+    };
+    let s_matrix_empty = OnlineService {
+        service: Some("Matrix".into()),
+        user: Some("".into()),
+        ..OnlineService::default()
+    };
+    let s_unmapped = OnlineService {
+        service: Some("UnmappedService".into()),
+        user: Some("alice".into()),
+        ..OnlineService::default()
+    };
+    let s_wrong_scheme_uri = OnlineService {
+        service: Some("Matrix".into()),
+        uri: Some("https:alice".into()),
+        ..OnlineService::default()
+    };
+
+    assert!(states_online_service(&s_matrix));
+    assert!(states_online_service(&s_matrix_uri));
+    assert!(!states_online_service(&s_matrix_crlf));
+    assert!(!states_online_service(&s_matrix_spaced));
+    assert!(!states_online_service(&s_matrix_empty));
+    assert!(!states_online_service(&s_unmapped));
+    assert!(!states_online_service(&s_wrong_scheme_uri));
+
+    assert_eq!(online_service_handle(&s_matrix), Some("@alice:matrix.org"));
+    assert_eq!(online_service_handle(&s_matrix_uri), Some("alice"));
+    assert_eq!(
+        online_service_uri("Matrix", "alice"),
+        Some("matrix:alice".into())
+    );
+    assert_eq!(
+        online_service_uri("Matrix", "invalid name with space"),
+        None
+    );
+    assert_eq!(online_service_uri("UnmappedService", "alice"), None);
+
+    assert!(same_service(None, None));
+    assert!(same_service(Some("Matrix"), Some("matrix")));
+    assert!(same_service(Some("Gadu-Gadu"), Some("GaduGadu")));
+    assert!(!same_service(Some("Matrix"), Some("Jabber")));
+    assert!(!same_service(Some("Matrix"), None));
+    assert!(!same_service(None, Some("Matrix")));
+}
+
+#[test]
+fn anniversary_date_validation_and_point_in_time_predicates() {
+    let bday_valid = Anniversary {
+        kind: "birth".into(),
+        date: Some(json!({"year": 1990, "month": 5, "day": 12})),
+        ..Anniversary::default()
+    };
+    let wedding_valid = Anniversary {
+        kind: "wedding".into(),
+        date: Some(json!({"year": 2010, "month": 6, "day": 20})),
+        ..Anniversary::default()
+    };
+    let death_unmapped = Anniversary {
+        kind: "death".into(),
+        date: Some(json!({"year": 2020, "month": 1, "day": 1})),
+        ..Anniversary::default()
+    };
+    let bday_month_zero = Anniversary {
+        kind: "birth".into(),
+        date: Some(json!({"year": 1990, "month": 0, "day": 12})),
+        ..Anniversary::default()
+    };
+    let bday_month_13 = Anniversary {
+        kind: "birth".into(),
+        date: Some(json!({"year": 1990, "month": 13, "day": 12})),
+        ..Anniversary::default()
+    };
+    let bday_day_zero = Anniversary {
+        kind: "birth".into(),
+        date: Some(json!({"year": 1990, "month": 5, "day": 0})),
+        ..Anniversary::default()
+    };
+    let bday_day_32 = Anniversary {
+        kind: "birth".into(),
+        date: Some(json!({"year": 1990, "month": 5, "day": 32})),
+        ..Anniversary::default()
+    };
+    let bday_year_zero = Anniversary {
+        kind: "birth".into(),
+        date: Some(json!({"year": 0, "month": 5, "day": 12})),
+        ..Anniversary::default()
+    };
+    let bday_year_10000 = Anniversary {
+        kind: "birth".into(),
+        date: Some(json!({"year": 10000, "month": 5, "day": 12})),
+        ..Anniversary::default()
+    };
+    let bday_timestamp = Anniversary {
+        kind: "birth".into(),
+        date: Some(json!({"utc": "1990-05-12T10:30:00Z"})),
+        ..Anniversary::default()
+    };
+
+    assert!(states_anniversary(&bday_valid));
+    assert!(states_anniversary(&wedding_valid));
+    assert!(!states_anniversary(&death_unmapped));
+    assert!(!states_anniversary(&bday_month_zero));
+    assert!(!states_anniversary(&bday_month_13));
+    assert!(!states_anniversary(&bday_day_zero));
+    assert!(!states_anniversary(&bday_day_32));
+    assert!(!states_anniversary(&bday_year_zero));
+    assert!(!states_anniversary(&bday_year_10000));
+
+    assert_eq!(anniversary_date(&bday_valid), Some("1990-05-12".into()));
+    assert_eq!(anniversary_date(&bday_month_zero), None);
+    assert_eq!(anniversary_date(&bday_day_32), None);
+
+    assert!(states_a_point_in_time(&bday_timestamp));
+    assert!(!states_a_point_in_time(&bday_valid));
+    assert!(!states_a_point_in_time(&Anniversary {
+        kind: "birth".into(),
+        date: None,
+        ..Anniversary::default()
+    }));
+}
+
+#[test]
+fn restore_address_and_name_components_reconstruction() {
+    let current_addr = vec![
+        AddressComponent::new("name", "Hauptstr."),
+        AddressComponent::new("number", "42"),
+        AddressComponent::new("locality", "Berlin"),
+    ];
+    let edited_addr_unchanged = vec![
+        AddressComponent::new("name", "Hauptstr. 42"),
+        AddressComponent::new("locality", "Berlin"),
+    ];
+    let restored_addr = restore_address_components(&current_addr, &edited_addr_unchanged);
+    assert_eq!(restored_addr, current_addr);
+
+    let edited_addr_changed = vec![
+        AddressComponent::new("name", "Nebenstr. 10"),
+        AddressComponent::new("locality", "Berlin"),
+    ];
+    let restored_addr_changed = restore_address_components(&current_addr, &edited_addr_changed);
+    assert_eq!(restored_addr_changed, edited_addr_changed);
+
+    let current_name = vec![
+        NameComponent::new("given", "Anna"),
+        NameComponent::new("given", "Lena"),
+        NameComponent::new("surname", "Müller"),
+    ];
+    let edited_name_unchanged = vec![
+        NameComponent::new("given", "Anna Lena"),
+        NameComponent::new("surname", "Müller"),
+    ];
+    let restored_name = restore_name_components(&current_name, &edited_name_unchanged);
+    assert_eq!(restored_name, current_name);
+
+    let edited_name_changed = vec![
+        NameComponent::new("given", "Maria"),
+        NameComponent::new("surname", "Müller"),
+    ];
+    let restored_name_changed = restore_name_components(&current_name, &edited_name_changed);
+    assert_eq!(restored_name_changed, edited_name_changed);
+}
+
+#[test]
+fn vcard_parser_errors_and_error_display_formatting() {
+    // Unterminated vCard error
+    let unterminated = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\n";
+    let err_unterminated = vcard_to_card(unterminated).expect_err("should fail unterminated");
+    assert_eq!(err_unterminated, VCardError::Unterminated);
+    assert_eq!(
+        err_unterminated.to_string(),
+        "truncated vCard: missing END:VCARD"
+    );
+
+    // Not a vCard error (e.g. empty input or iCalendar envelope)
+    let not_vcard = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n";
+    let err_not_vcard = vcard_to_card(not_vcard).expect_err("should fail not a vCard");
+    assert_eq!(err_not_vcard, VCardError::NotAVCard);
+    assert_eq!(
+        err_not_vcard.to_string(),
+        "not a vCard: missing BEGIN:VCARD"
+    );
+
+    let empty_not_vcard = vcard_to_card("").expect_err("empty string is not a vcard");
+    assert_eq!(empty_not_vcard, VCardError::NotAVCard);
+
+    // Malformed line error formatting
+    let malformed_vcard =
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nINVALID CONTENT LINE WITHOUT COLON\r\nEND:VCARD\r\n";
+    let malformed_err = vcard_to_card(malformed_vcard).expect_err("should fail malformed line");
+    assert_eq!(
+        malformed_err,
+        VCardError::Malformed("INVALID CONTENT LINE WITHOUT COLON".into())
+    );
+    assert_eq!(
+        malformed_err.to_string(),
+        "malformed vCard content line: INVALID CONTENT LINE WITHOUT COLON"
+    );
+}
+
+#[test]
+fn label_entry_with_empty_key_and_duplicate_keys_allocates_fresh_keys() {
+    // Inbound vCard with empty X-JMAP-KEY parameter on LABEL must not assign "" as map key
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "ADR;TYPE=HOME:;;123 Home St;Berlin;;10115;Germany\r\n",
+        "LABEL;TYPE=HOME;X-JMAP-KEY=\"\":123 Home St\\nBerlin\\n10115\\nGermany\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard).expect("parse");
+    let addresses = card.addresses.expect("addresses");
+    assert_eq!(addresses.len(), 1);
+    assert!(addresses.contains_key("a1"));
+    assert_eq!(
+        addresses["a1"].full.as_deref(),
+        Some("123 Home St\nBerlin\n10115\nGermany")
+    );
+
+    // Inbound vCard with multiple unkeyed emails allocates sequential e1, e2, e3
+    let vcard_emails = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "EMAIL:alice@example.com\r\n",
+        "EMAIL:bob@example.com\r\n",
+        "EMAIL:charlie@example.com\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_emails = vcard_to_card(vcard_emails).expect("parse");
+    let emails = card_emails.emails.expect("emails");
+    assert_eq!(emails.len(), 3);
+    assert!(emails.contains_key("e1"));
+    assert!(emails.contains_key("e2"));
+    assert!(emails.contains_key("e3"));
+}
+
+#[test]
+fn inbound_vcard_with_various_parameter_types_and_component_categories() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "CATEGORIES:Work,Personal,VIP\r\n",
+        "TEL;TYPE=WORK,PREF:+49301234567\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard).expect("parse");
+    let keywords = card.keywords.expect("keywords");
+    assert!(keywords.contains_key("Work"));
+    assert!(keywords.contains_key("Personal"));
+    assert!(keywords.contains_key("VIP"));
+    let phones = card.phones.expect("phones");
+    let phone = phones.values().next().expect("phone");
+    assert_eq!(phone.pref, Some(1));
+}
+
+#[test]
+fn inbound_vcard_with_unquoted_integer_jmap_keys() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "EMAIL;X-JMAP-KEY=123:alice@example.com\r\n",
+        "TEL;X-JMAP-KEY=456:+49301234567\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard).expect("parse");
+    let emails = card.emails.expect("emails");
+    assert!(
+        emails.contains_key("123"),
+        "unquoted integer key '123' must be preserved"
+    );
+    let phones = card.phones.expect("phones");
+    assert!(
+        phones.contains_key("456"),
+        "unquoted integer key '456' must be preserved"
+    );
+}
+
+#[test]
+fn inbound_vcard_with_multi_component_name_field() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "N:Smith;Alice,Bob;Middle;;Dr.\r\n",
+        "FN:Alice,Bob Smith\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard).expect("parse");
+    let name = card.name.expect("name");
+    let components = name.components.expect("components");
+    let given = components
+        .iter()
+        .find(|c| c.kind == "given")
+        .expect("given component");
+    assert_eq!(given.value, "Alice,Bob");
 }

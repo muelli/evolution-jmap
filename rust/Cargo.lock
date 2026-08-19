@@ -351,6 +351,7 @@ version = "0.2.0"
 dependencies = [
  "calcard",
  "evolution-jmap-proto",
+ "proptest",
  "serde_json",
 ]
 
@@ -398,6 +399,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "proptest",
  "serde_json",
 ]
 

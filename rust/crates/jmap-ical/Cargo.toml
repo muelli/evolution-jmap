@@ -19,4 +19,6 @@ serde_json = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 
 [dev-dependencies]
+proptest = "1"
 serde_json = { workspace = true }
+

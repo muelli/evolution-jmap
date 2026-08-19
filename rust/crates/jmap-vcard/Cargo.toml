@@ -26,3 +26,4 @@ serde_json = { workspace = true }
 # not only against checked-in fixtures.
 evolution-jmap-client = { workspace = true }
 evolution-jmap-mock = { workspace = true }
+proptest = "1"

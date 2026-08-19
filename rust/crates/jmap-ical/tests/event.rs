@@ -11,7 +11,7 @@ use jmap_ical::{
     ICalError, defines_time_zone, event_to_ical, ical_to_event, maps_alerts, maps_keyword,
     maps_locations, maps_recurrence_override, maps_recurrence_rule, maps_time_zone,
     maps_virtual_locations, names_time_zone, prune_time_zones, sends_recurrence_override,
-    unstateable_until,
+    time_zone_definition, unstateable_until,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use serde_json::{Value, json};
@@ -9092,5 +9092,769 @@ fn emits_a_comprehensive_icalendar_via_calcard_and_roundtrips() {
     assert_eq!(
         rt_overrides["2026-08-20T14:00:00"]["title"].as_str(),
         Some("Calcard Retrospective (Adjusted)")
+    );
+}
+
+#[test]
+fn ical_error_display_and_source_formatting() {
+    use std::error::Error;
+
+    let err1 = ICalError::NotACalendar;
+    assert_eq!(
+        format!("{err1}"),
+        "not an iCalendar object: missing BEGIN:VCALENDAR"
+    );
+    assert!(err1.source().is_none());
+
+    let err2 = ICalError::Unterminated("VEVENT".to_owned());
+    assert_eq!(format!("{err2}"), "truncated iCalendar: missing END:VEVENT");
+    assert!(err2.source().is_none());
+
+    let err3 = ICalError::Mismatched {
+        expected: "VEVENT".to_owned(),
+        found: "VTODO".to_owned(),
+    };
+    assert_eq!(
+        format!("{err3}"),
+        "END:VTODO closes nothing; END:VEVENT was due"
+    );
+    assert!(err3.source().is_none());
+
+    let err4 = ICalError::Trailing("INVALID_EXTRA_LINE".to_owned());
+    assert_eq!(
+        format!("{err4}"),
+        "content after END:VCALENDAR: INVALID_EXTRA_LINE"
+    );
+    assert!(err4.source().is_none());
+
+    let err5 = ICalError::TooDeep("VALARM".to_owned());
+    assert_eq!(
+        format!("{err5}"),
+        format!(
+            "iCalendar components nested more than {} deep at BEGIN:VALARM",
+            jmap_ical::MAX_DEPTH
+        )
+    );
+    assert!(err5.source().is_none());
+
+    let err6 = ICalError::NoEvent;
+    assert_eq!(format!("{err6}"), "iCalendar object contains no VEVENT");
+    assert!(err6.source().is_none());
+}
+
+#[test]
+fn timezone_observance_onsets_and_transition_offset_resolution() {
+    // 1. VTIMEZONE with RDATE transition and non-zero offset
+    let ics_rdate = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Example//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/RDateZone\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19700101T000000\r\n",
+        "TZOFFSETFROM:+0200\r\n",
+        "TZOFFSETTO:+0200\r\n",
+        "RDATE;VALUE=DATE-TIME:19970101T020000\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:19970601T020000\r\n",
+        "TZOFFSETFROM:+0200\r\n",
+        "TZOFFSETTO:+0300\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-rdate-1\r\n",
+        "DTSTART;TZID=Test/RDateZone:19970501T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=19970701T000000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_rdate = ical_to_event(ics_rdate).expect("parse rdate zone");
+    let rules = event_rdate.recurrence_rules.expect("rules");
+    assert_eq!(rules[0].until.as_deref(), Some("1997-07-01T03:00:00"));
+
+    // 2. VTIMEZONE with RRULE carrying BYSECOND, BYMINUTE, BYHOUR
+    let ics_bysec = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Example//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/PreciseZone\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19900101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU;BYHOUR=3;BYMINUTE=30;BYSECOND=45\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:19900101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0200\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU;BYHOUR=2;BYMINUTE=15;BYSECOND=30\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-precise-1\r\n",
+        "DTSTART;TZID=Test/PreciseZone:19950101T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=19950601T120000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_bysec = ical_to_event(ics_bysec).expect("parse precise zone");
+    let rules_bysec = event_bysec.recurrence_rules.expect("rules");
+    assert_eq!(rules_bysec[0].until.as_deref(), Some("1995-06-01T14:00:00"));
+
+    // 3. VTIMEZONE with local UNTIL in RRULE (without trailing Z)
+    let ics_local_until = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Example//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/LocalUntilZone\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19800101T000000\r\n",
+        "TZOFFSETFROM:+0200\r\n",
+        "TZOFFSETTO:+0200\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU;UNTIL=19951031T030000\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:19800101T000000\r\n",
+        "TZOFFSETFROM:+0200\r\n",
+        "TZOFFSETTO:+0300\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU;UNTIL=19950331T020000\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-localuntil-1\r\n",
+        "DTSTART;TZID=Test/LocalUntilZone:19900101T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=19900601T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_local_until = ical_to_event(ics_local_until).expect("parse local until zone");
+    let rules_lu = event_local_until.recurrence_rules.expect("rules");
+    assert_eq!(rules_lu[0].until.as_deref(), Some("1990-06-01T13:00:00"));
+
+    // 4. VTIMEZONE with COUNT in RRULE
+    let ics_count = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Example//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/CountZone\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:20100101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU;COUNT=3\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:20100101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0200\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU;COUNT=3\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-count-1\r\n",
+        "DTSTART;TZID=Test/CountZone:20110501T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20110701T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_count = ical_to_event(ics_count).expect("parse count zone");
+    let rules_cnt = event_count.recurrence_rules.expect("rules");
+    assert_eq!(rules_cnt[0].until.as_deref(), Some("2011-07-01T12:00:00"));
+
+    // 5. VTIMEZONE with negative BYMONTHDAY in WeekdayAmong and positive nth BYDAY
+    let ics_neg_day = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Example//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/NegDayZone\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:20000101T000000\r\n",
+        "TZOFFSETFROM:+0000\r\n",
+        "TZOFFSETTO:+0000\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=SU;BYMONTHDAY=-1,-2,-3,-4,-5,-6,-7\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:20000101T000000\r\n",
+        "TZOFFSETFROM:+0000\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=1SU;BYHOUR=2\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-negday-1\r\n",
+        "DTSTART;TZID=Test/NegDayZone:20050401T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20050601T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_neg_day = ical_to_event(ics_neg_day).expect("parse neg day zone");
+    let rules_nd = event_neg_day.recurrence_rules.expect("rules");
+    assert_eq!(rules_nd[0].until.as_deref(), Some("2005-06-01T11:00:00"));
+
+    // 6. Target instant before all onsets in multi-observance zone
+    let ics_pre_onsets = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Example//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/EarlyTargetZone\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19900101T000000\r\n",
+        "TZOFFSETFROM:+0300\r\n",
+        "TZOFFSETTO:+0300\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:20000101T000000\r\n",
+        "TZOFFSETFROM:+0300\r\n",
+        "TZOFFSETTO:+0400\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-pre-1\r\n",
+        "DTSTART;TZID=Test/EarlyTargetZone:19800101T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=19800601T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_pre = ical_to_event(ics_pre_onsets).expect("parse pre onsets");
+    let rules_pre = event_pre.recurrence_rules.expect("rules");
+    assert_eq!(rules_pre[0].until.as_deref(), Some("1980-06-01T13:00:00"));
+}
+
+#[test]
+fn calendar_event_mapping_and_override_predicates_fidelity() {
+    // 1. drawn_participants with non-owner attendee does NOT emit ORGANIZER
+    let mut non_owner_event = fixture_event();
+    non_owner_event.participants = Some({
+        let mut parts = std::collections::BTreeMap::new();
+        parts.insert(
+            "p1".to_owned(),
+            json!({
+                "@type": "Participant",
+                "sendTo": {"imip": "mailto:guest@example.com"},
+                "name": "Guest Attendee",
+                "roles": {"attendee": true}
+            }),
+        );
+        parts
+    });
+    let ics_no_owner = event_to_ical(&non_owner_event);
+    assert!(without(&ics_no_owner, "ORGANIZER"));
+    assert_eq!(
+        line(&ics_no_owner, "ATTENDEE;"),
+        "ATTENDEE;CN=\"Guest Attendee\";ROLE=REQ-PARTICIPANT:mailto:guest@example.com"
+    );
+
+    // 2. read_alert with RELATED=START, RELATED=END, RELATED=INVALID
+    let ics_alerts = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Example//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:alert-related-test\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Alert 1\r\n",
+        "TRIGGER;RELATED=START:-PT15M\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Alert 2\r\n",
+        "TRIGGER;RELATED=END:PT10M\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Alert 3\r\n",
+        "TRIGGER;RELATED=INVALID:-PT5M\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_alerts = ical_to_event(ics_alerts).expect("parse alerts");
+    let alerts = event_alerts.alerts.expect("alerts");
+    assert_eq!(alerts.len(), 2);
+    // Alert 1 defaults to start (relativeTo not set or not "end")
+    assert_eq!(alerts["a1"]["trigger"]["offset"].as_str(), Some("-PT15M"));
+    assert!(alerts["a1"]["trigger"].get("relativeTo").is_none());
+    // Alert 2 specifies end
+    assert_eq!(alerts["a2"]["trigger"]["offset"].as_str(), Some("PT10M"));
+    assert_eq!(alerts["a2"]["trigger"]["relativeTo"].as_str(), Some("end"));
+
+    // 3. maps_recurrence_override with excluded boolean vs non-boolean
+    let series_event = fixture_event();
+    assert!(maps_recurrence_override(
+        &series_event,
+        "2026-08-20T10:00:00",
+        &json!({"excluded": true})
+    ));
+    assert!(maps_recurrence_override(
+        &series_event,
+        "2026-08-20T10:00:00",
+        &json!({"excluded": false})
+    ));
+    assert!(!maps_recurrence_override(
+        &series_event,
+        "2026-08-20T10:00:00",
+        &json!({"excluded": "true"})
+    ));
+    assert!(!maps_recurrence_override(
+        &series_event,
+        "2026-08-20T10:00:00",
+        &json!({"excluded": 1})
+    ));
+
+    // 4. time_zone_definition lookup
+    let mut custom_tz_event = fixture_event();
+    let custom_def = json!({
+        "@type": "TimeZone",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-01-01T00:00:00",
+            "offsetFrom": "+01:00",
+            "offsetTo": "+01:00"
+        }]
+    });
+    custom_tz_event.time_zones = Some({
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("/custom/tz".to_owned(), custom_def.clone());
+        map
+    });
+    assert_eq!(
+        time_zone_definition(&custom_tz_event, "/custom/tz"),
+        Some(&custom_def)
+    );
+    assert_eq!(time_zone_definition(&custom_tz_event, "/nonexistent"), None);
+    custom_tz_event.time_zones = None;
+    assert_eq!(time_zone_definition(&custom_tz_event, "/custom/tz"), None);
+
+    // 5. modified_instance inherits uid, description, status, show_without_time
+    let mut parent_event = fixture_event();
+    parent_event.uid = Some("parent-uid-12345".to_owned());
+    parent_event.description = Some("Parent event detailed description".to_owned());
+    parent_event.status = Some("confirmed".to_owned());
+    parent_event.show_without_time = Some(false);
+    parent_event.recurrence_rules = Some(vec![RecurrenceRule::new("daily")]);
+    parent_event.recurrence_overrides = Some({
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            "2026-08-20T10:00:00".to_owned(),
+            json!({
+                "title": "Modified Instance Title"
+            }),
+        );
+        map
+    });
+    let ics_override = event_to_ical(&parent_event);
+    assert_eq!(vevents(&ics_override), 2);
+    let override_vevent = vevent(&ics_override, 1);
+    assert!(override_vevent.contains("UID:parent-uid-12345\r\n"));
+    assert!(override_vevent.contains("DESCRIPTION:Parent event detailed description\r\n"));
+    assert!(override_vevent.contains("STATUS:CONFIRMED\r\n"));
+    assert!(override_vevent.contains("SUMMARY:Modified Instance Title\r\n"));
+    assert!(override_vevent.contains("RECURRENCE-ID;TZID=Europe/Berlin:20260820T100000\r\n"));
+
+    // 6. parse_ical errors: Trailing and Mismatched
+    let ics_trailing = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u1\r\n",
+        "DTSTART:20260101T000000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+        "GARBAGE_TRAILING_CONTENT\r\n"
+    );
+    assert!(matches!(
+        ical_to_event(ics_trailing),
+        Err(ICalError::Trailing(_))
+    ));
+
+    let ics_mismatched = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u2\r\n",
+        "DTSTART:20260101T000000Z\r\n",
+        "END:VTODO\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    assert!(matches!(
+        ical_to_event(ics_mismatched),
+        Err(ICalError::Mismatched { .. })
+    ));
+
+    // 7. unfold with multi-line folds, leading spaces and tabs
+    let ics_folded = concat!(
+        " \r\n",
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-folded\r\n",
+        "DTSTART:20260101T000000Z\r\n",
+        "SUMMARY:This is a very long folded \r\n",
+        " summary line that continues\r\n",
+        "\t with a tab\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_folded = ical_to_event(ics_folded).expect("parse folded");
+    assert_eq!(
+        event_folded.title.as_deref(),
+        Some("This is a very long folded summary line that continues with a tab")
+    );
+
+    // 8. stated_zones with IANA timezone and X-LIC-LOCATION
+    let ics_iana_tz = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Europe/Berlin\r\n",
+        "X-LIC-LOCATION:Europe/Berlin\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19700101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-berlin\r\n",
+        "DTSTART;TZID=Europe/Berlin:20260101T100000\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_berlin = ical_to_event(ics_iana_tz).expect("parse berlin");
+    assert_eq!(event_berlin.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    // 9. read_definition ignoring empty VTIMEZONE with no observances
+    let ics_empty_tz = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:EmptyZone\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-empty-tz\r\n",
+        "DTSTART:20260101T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_empty_tz = ical_to_event(ics_empty_tz).expect("parse empty tz");
+    assert!(event_empty_tz.time_zones.is_none());
+
+    // 10. invented keys deduplication in read_virtual_locations and read_links
+    let ics_invented_keys = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-inv-keys\r\n",
+        "DTSTART:20260101T100000Z\r\n",
+        "CONFERENCE;X-JMAP-KEY=v1:https://room1.example.com\r\n",
+        "CONFERENCE:https://room2.example.com\r\n",
+        "ATTACH;X-JMAP-KEY=k1:https://files.example.com/doc1.pdf\r\n",
+        "ATTACH:https://files.example.com/doc2.pdf\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_inv = ical_to_event(ics_invented_keys).expect("parse invented keys");
+    let vlocs = event_inv.virtual_locations.expect("vlocs");
+    assert_eq!(vlocs.len(), 2);
+    assert!(vlocs.contains_key("v1"));
+    assert!(vlocs.contains_key("v2"));
+    let links = event_inv.links.expect("links");
+    assert_eq!(links.len(), 2);
+    assert!(links.contains_key("k1"));
+    assert!(links.contains_key("k2"));
+
+    // 11. names_a_time_of_day with by_hour only on all-day event
+    let mut allday_event = fixture_event();
+    allday_event.show_without_time = Some(true);
+    allday_event.start = Some("2026-01-01T00:00:00".to_owned());
+    allday_event.time_zone = None;
+    allday_event.recurrence_rules = Some(vec![RecurrenceRule {
+        by_hour: Some(vec![10]),
+        ..RecurrenceRule::new("daily")
+    }]);
+    let ics_allday_byhour = event_to_ical(&allday_event);
+    assert!(!ics_allday_byhour.contains("VALUE=DATE:"));
+    assert!(ics_allday_byhour.contains("DTSTART:20260101T000000\r\n"));
+
+    // 12. instance_shows_without_time with empty duration override
+    let mut allday_override_event = fixture_event();
+    allday_override_event.show_without_time = Some(true);
+    allday_override_event.start = Some("2026-01-01T00:00:00".to_owned());
+    allday_override_event.duration = Some("P1D".to_owned());
+    allday_override_event.time_zone = None;
+    allday_override_event.recurrence_rules = Some(vec![RecurrenceRule::new("daily")]);
+    allday_override_event.recurrence_overrides = Some({
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            "2026-01-02T00:00:00".to_owned(),
+            json!({
+                "duration": ""
+            }),
+        );
+        map
+    });
+    let ics_allday_ov = event_to_ical(&allday_override_event);
+    assert!(ics_allday_ov.contains("DTSTART;VALUE=DATE:20260101\r\n"));
+
+    // 13. NDay parsing with zero ordinal and signed ordinals in BYDAY
+    let ics_byday_nday = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-byday-nday\r\n",
+        "DTSTART:20260101T100000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=0MO,+2TU,-3FR\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_byday = ical_to_event(ics_byday_nday).expect("parse byday");
+    let rrules = event_byday.recurrence_rules.expect("rrules");
+    let by_days = rrules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_days.len(), 3);
+    assert_eq!(by_days[0].day, "0mo");
+    assert_eq!(by_days[0].nth_of_period, None);
+    assert_eq!(by_days[1].day, "tu");
+    assert_eq!(by_days[1].nth_of_period, Some(2));
+    assert_eq!(by_days[2].day, "fr");
+    assert_eq!(by_days[2].nth_of_period, Some(-3));
+
+    // 14. Subsecond precision and short times in to_local_date_time
+    let ics_subsecond = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-subsec\r\n",
+        "DTSTART:20260115T123456.789Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_subsec = ical_to_event(ics_subsecond).expect("parse subsec");
+    assert_eq!(event_subsec.start.as_deref(), Some("2026-01-15T12:34:56"));
+
+    let ics_short_time_zone = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/ShortTime\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:20260115T12345\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-short\r\n",
+        "DTSTART;TZID=Test/ShortTime:20260115T120000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20260120T120000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_short = ical_to_event(ics_short_time_zone).expect("parse short");
+    assert_eq!(
+        event_short.recurrence_rules.as_ref().unwrap()[0]
+            .until
+            .as_deref(),
+        Some("2026-01-20T13:00:00")
+    );
+
+    // 15. Fractional offsets (+05:30, +05:45, boundary +23:00, +05:59) and date movement across boundaries
+    let ics_fractional_tz = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Example//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Asia/Kolkata\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19700101T000000\r\n",
+        "TZOFFSETFROM:+0530\r\n",
+        "TZOFFSETTO:+0530\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-kolkata-1\r\n",
+        "DTSTART;TZID=Asia/Kolkata:20240101T010000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20240105T183000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_kolkata = ical_to_event(ics_fractional_tz).expect("parse kolkata");
+    let kolkata_rules = event_kolkata.recurrence_rules.expect("kolkata rules");
+    assert_eq!(
+        kolkata_rules[0].until.as_deref(),
+        Some("2024-01-06T00:00:00")
+    );
+
+    // 16. Century and era leap year roundtrips in proleptic Gregorian calendar
+    for year in [1900, 2000, 2100, 2400] {
+        let event_century = CalendarEvent {
+            start: Some(format!("{year}-02-28T10:00:00")),
+            time_zone: Some("Etc/UTC".to_owned()),
+            recurrence_rules: Some(vec![RecurrenceRule {
+                until: Some(format!("{year}-03-02T10:00:00")),
+                ..RecurrenceRule::new("daily")
+            }]),
+            ..CalendarEvent::default()
+        };
+        let ics_cent = event_to_ical(&event_century);
+        let parsed_cent = ical_to_event(&ics_cent).expect("century parse");
+        let rules_cent = parsed_cent.recurrence_rules.expect("century rules");
+        assert_eq!(
+            rules_cent[0].until.as_deref(),
+            Some(format!("{year}-03-02T10:00:00").as_str())
+        );
+    }
+
+    // 17. Multi-digit ordinals in BYDAY
+    let ics_multidigit_nday = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-multidigit-nday\r\n",
+        "DTSTART:20260101T100000Z\r\n",
+        "RRULE:FREQ=YEARLY;BYDAY=+10MO,-12FR\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_multidigit = ical_to_event(ics_multidigit_nday).expect("parse multidigit nday");
+    let md_rules = event_multidigit.recurrence_rules.expect("md_rules");
+    let md_days = md_rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(md_days.len(), 2);
+    assert_eq!(md_days[0].day, "mo");
+    assert_eq!(md_days[0].nth_of_period, Some(10));
+    assert_eq!(md_days[1].day, "fr");
+    assert_eq!(md_days[1].nth_of_period, Some(-12));
+}
+
+#[test]
+fn timezone_advanced_transition_permutations_and_boundary_fidelity() {
+    // 1. VTIMEZONE with zero month-day refusal in RRULE
+    let ics_zero_monthday = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/ZeroMonthDay\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19700101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=0\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-zero-mday\r\n",
+        "DTSTART;TZID=Test/ZeroMonthDay:20260101T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20260105T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_zmd = ical_to_event(ics_zero_monthday).expect("parse zero mday");
+    assert_eq!(
+        event_zmd.recurrence_rules.as_ref().unwrap()[0]
+            .until
+            .as_deref(),
+        Some("2026-01-05T10:00:00Z")
+    );
+
+    // 2. VTIMEZONE with precise RDATE onset and offset transition
+    let ics_precise_rdate = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/PreciseRDate\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19700101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:19700101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0200\r\n",
+        "RDATE;VALUE=DATE-TIME:20260329T020000\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-precise-rdate-1\r\n",
+        "DTSTART;TZID=Test/PreciseRDate:20260101T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20260329T003000Z\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-precise-rdate-2\r\n",
+        "DTSTART;TZID=Test/PreciseRDate:20260101T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20260329T013000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_prd1 = ical_to_event(ics_precise_rdate).expect("parse prd");
+    assert_eq!(
+        event_prd1.recurrence_rules.as_ref().unwrap()[0]
+            .until
+            .as_deref(),
+        Some("2026-03-29T01:30:00")
+    );
+
+    // 3. VTIMEZONE with positive nth weekdays (2SU, 3TH) and restated minutes only
+    let ics_pos_nth = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/PosNthZone\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19900101T020000\r\n",
+        "TZOFFSETFROM:+0200\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU;BYMINUTE=30\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:19900101T020000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0200\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU;BYMINUTE=30\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-pos-nth\r\n",
+        "DTSTART;TZID=Test/PosNthZone:20240101T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20240401T120000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_pos_nth = ical_to_event(ics_pos_nth).expect("parse pos nth");
+    assert_eq!(
+        event_pos_nth.recurrence_rules.as_ref().unwrap()[0]
+            .until
+            .as_deref(),
+        Some("2024-04-01T14:00:00")
+    );
+
+    // 4. VTIMEZONE with negative nth weekdays (-2SA, -3TU) and boundary offsets (+23:00, +05:59)
+    let ics_neg_nth = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Test/NegNthZone\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19900101T020000\r\n",
+        "TZOFFSETFROM:+0559\r\n",
+        "TZOFFSETTO:+0559\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-2SA\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:19900101T020000\r\n",
+        "TZOFFSETFROM:+0559\r\n",
+        "TZOFFSETTO:+2300\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=4;BYDAY=-3TU\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:u-neg-nth\r\n",
+        "DTSTART;TZID=Test/NegNthZone:20240101T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20240501T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_neg_nth = ical_to_event(ics_neg_nth).expect("parse neg nth");
+    assert_eq!(
+        event_neg_nth.recurrence_rules.as_ref().unwrap()[0]
+            .until
+            .as_deref(),
+        Some("2024-05-02T09:00:00")
     );
 }
