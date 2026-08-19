@@ -38939,3 +38939,54 @@ Both new/changed Rust files carry SPDX `GPL-3.0-or-later` headers;
 `ci/checks.sh` still cannot run on this VM ([[checks-sh-blocked-on-vm]]).
 Disk stayed comfortable throughout (24G free before the session; watched,
 no `cargo clean` needed this time).
+
+## 2026-08-19 (survey) — no tractable Sonnet increment; escalating Track A6 Pattern C
+
+Fresh survey: `git fetch` shows local `master` = `origin/master` at
+`ac00396` (item 2(a)'s RUNPATH fix, no new maintainer commit since). Walked
+CURRENT PRIORITY and Round 2 in full:
+
+- **CURRENT PRIORITY** items 1/3/4/5/6 are code-complete, each pending only
+  operator confirmation already logged as such (M7, the SRV `Resolver`, the
+  Bearer auth method). Item 2(a)'s module-loading half is now fixed
+  (`ac00396`); what remains of it — whether `discover_and_register` actually
+  runs end to end against a real SRV-published provider — needs the
+  operator's live Evolution session, same as before. Item 2(b)'s
+  Fastmail-specific gaps (`docs/OAUTH-FASTMAIL.md`: dotted redirect URI —
+  already fixed at `37055`'s entry; the metadata's `urn:ietf:params:oauth:
+  scope:*` names vs. this client's deliberate no-scope-parameter design
+  choice, and whether `/oauth/register`/`resource` needs anything extra) can
+  only be resolved by watching what a real Fastmail authorization server
+  actually does across a browser consent round-trip — not something this
+  runner can drive headlessly, and not something to probe unilaterally
+  against a real third party's production OAuth registration endpoint
+  without the operator's own account and say-so.
+- **Round 2**: Track D1/D2 Phase-appropriate pieces, Track E Phase 0/Path A
+  are done (D2 write-back and Track E Phase B/C need a design/maintainer
+  decision first, same as every prior survey found). Track B1/C2/C4 remain
+  NEEDS-DECISION. Track F is closed. Track A1–A4, A7 are done. That leaves
+  exactly what every recent survey has also landed on: **A5** (FFI soundness
+  audit) and **A6 Pattern C** (libical/GObject RAII wrapper for
+  `jmap-backend-cal/marshal.rs`'s ~15 manual `component_unref`/
+  `g_object_unref` sites, plus ~15 more across `jmap-mail`/
+  `jmap-backend-collection`), both flagged escalation-worthy in the roadmap's
+  own text and declined by every session that has surveyed Round 2 since
+  Track D1/Track E were the standing escalation targets. Those two are now
+  done, so A5/A6-Pattern-C are next by elimination, not new information.
+
+No tractable Sonnet-sized item exists this iteration. Escalating **A6 Pattern
+C** specifically, not A5: `docs/UNSAFE-AUDIT.md`'s Pattern C entry already
+gives it a concrete scope (a small `Owned<T>`/per-type RAII wrapper with
+`Drop`, migrating `jmap-backend-cal/marshal.rs`'s timezone cluster first,
+~1 day estimate, existing round-trip/fixture tests as the acceptance suite) —
+a single escalated session can plausibly land it. A5 is an open-ended audit
+deliverable (`docs/FFI-SOUNDNESS-AUDIT.md` + fixes across every vfunc
+trampoline) that does not fit the same one-shot shape; better suited to a
+session that can budget for it deliberately rather than picking it up by
+default here. Writing `claude-opus-5` to `~/.night-shift-escalate` and
+stopping without claiming any work. The correctness stakes are exactly the
+escalation criteria's own wording: getting `Owned<T>`'s `Drop`/`as_ptr`
+transfer-full-vs-transfer-none semantics wrong in `marshal.rs`'s densest
+function (`take_referenced_time_zones`, ~4 distinct owned-pointer exit paths
+in 45 lines) risks a plausible-but-wrong double-free or leak that the
+existing tests may not catch, not a compile error.
