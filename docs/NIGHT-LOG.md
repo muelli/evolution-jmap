@@ -37419,3 +37419,92 @@ thread is unchanged from what recent sessions found: CURRENT PRIORITY's SRV
 escalation-worthy; Track B/C2/C4 are NEEDS-DECISION; A6 Pattern E's
 `fail`/`fail_bool` half needs real design. Claiming Path A's non-FFI slice
 now.
+
+## 2026-08-19 — Delivered: Track E Path A's proto/client/mock slice (`Principal/getAvailability`)
+
+Followed through on the claim, scoped exactly to the non-FFI half of Path A
+(`docs/PRINCIPALS-DESIGN.md` §4.2–§4.3) — not the `ECalBackend
+get_free_busy_sync` vfunc, which stays escalation-worthy FFI and untouched.
+
+**`jmap-proto`**: `principals.rs` gained `GetAvailabilityRequest`
+(`accountId`, `id`, `utcStart`/`utcEnd` as `UtcDate`, `showDetails`,
+`eventProperties`), `GetAvailabilityResponse { list: Vec<BusyPeriod> }`, and
+`BusyPeriod` (`utcStart`, `utcEnd`, `busyStatus`, `event:
+Option<CalendarEvent>`) — bespoke shapes per the design, not the generic
+`GetRequest`/`GetResponse`. The `principals` feature now depends on
+`calendars` (`Cargo.toml`) since `BusyPeriod.event` needs `CalendarEvent`;
+every existing consumer has both on by default already, so this is invisible
+to them. Four new round-trip/shape unit tests.
+
+**`jmap-client`**: `get_availability(account_id, principal_id, utc_start,
+utc_end, show_details)` on `principals.rs`, using a dedicated
+`AVAILABILITY_USING` set naming both `CAPABILITY_PRINCIPALS` and
+`CAPABILITY_CALENDARS` (design §4.2's requirement — the object is a
+principal but the method is a calendars-draft extension).
+
+**`jmap-mock`**: `Principal/getAvailability` handler (registered in
+`dispatch.rs`) computing `BusyPeriod`s from the account's seeded
+`CalendarEvent`s:
+- `notFound` when the principal doesn't exist, or when its per-principal
+  `urn:ietf:params:jmap:calendars` capability explicitly says
+  `mayGetAvailability: false` (absent the capability entirely, allowed) —
+  the exact two seeding shapes design §4.3 calls for.
+- An event counts as busy unless its `status` is `cancelled` or its
+  `freeBusyStatus` is explicitly `free` (RFC 8984 §4.4.2 defaults an unset
+  `freeBusyStatus` to `busy`, so `None` counts as busy here, same "nothing
+  said" vs "said busy" distinction `CalendarEvent`'s own doc comments already
+  draw for this field).
+- Window matching reuses `calendars.rs::event_matches`'s existing
+  documented simplification: `start`/`utcStart`/`utcEnd` compared textually,
+  correct for `Etc/UTC` fixtures, not arbitrary time zones.
+- `busyStatus` is `tentative` when the event's `status` is, else
+  `confirmed`; the draft's third value, `unavailable`, has no source concept
+  in this crate's `CalendarEvent` model and is never produced — documented,
+  not silently wrong.
+- `event` is populated with the full `CalendarEvent` only when `showDetails`
+  is true; `eventProperties` projection is parsed but not applied (no test
+  needs it yet — logged as a known gap, not implemented-and-silent).
+- A busy period's `utcEnd` comes from a new small helper (`busy_end`) that
+  adds a simple `PT<h>H<m>M<s>S` duration to the event's local start as
+  same-day second-of-day arithmetic only — deliberately not real calendar
+  arithmetic (`UtcDate`'s own doc says this crate never does date math); an
+  unparseable duration, or one that would cross midnight, leaves the period
+  zero-length (`end == start`) instead of guessing. Six unit tests cover the
+  duration parser and this helper directly.
+- The draft's other named error, `tooLarge` (window too wide), is **not**
+  implemented: there's no clean way to bound window width without doing the
+  same calendar-date arithmetic just ruled out, and no test needs it yet —
+  logged as an open gap rather than faked.
+
+TDD: `jmap-client/tests/principals.rs` grew three cases —
+`get_availability_returns_busy_periods_in_the_window_sorted_by_start` (four
+events: two in-window busy ones sorted by start, one out-of-window, one
+explicitly `free` — asserts exactly the two expected ones with correct
+`utcStart`/`utcEnd`/`busyStatus`), `get_availability_includes_the_event_
+when_show_details_is_true`, and `get_availability_is_not_found_when_the_
+principal_denies_it`. All new tests were red before the handler/client
+method existed (confirmed by building before either was in place — `cannot
+find method`/`cannot find type`), green after. Every existing test in every
+touched crate stayed green unmodified — this is additive surface, same as
+Phase 0.
+
+Gate before pushing: `cargo fmt --check` clean (after one `cargo fmt` pass —
+line-wrapping only); `cargo clippy --all-targets --locked -- -D warnings`
+(default-members) and `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+seven EDS-gated crates) both clean; `cargo test --locked` (default-members)
+and the same seven-crate `cargo test` both green, every `test result: ok`,
+0 failed. Disk stayed comfortable this session (7.3G free after the builds),
+no `cargo clean` needed.
+
+Ending the session here — one focused, fully-tested increment, pushed.
+`docs/ROADMAP.md` records Path A's proto/client/mock slice DONE, with the
+`ECalBackend get_free_busy_sync` vfunc (+ `BusyPeriod→VFREEBUSY` marshaller
+in `jmap-ical`) left as the one remaining, escalation-worthy piece of Path A.
+`tooLarge` and `eventProperties` projection are logged above as deliberate,
+documented gaps rather than silently dropped. Everything else surveyed at
+claim time is unchanged: CURRENT PRIORITY's SRV `Resolver` (GResolver, FFI),
+A5, A6 Pattern C, D1's vtable wiring remain escalation-worthy; Track B/C2/C4
+remain NEEDS-DECISION; A6 Pattern E's `fail`/`fail_bool` half needs real
+design.

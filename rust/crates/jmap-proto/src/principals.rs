@@ -17,7 +17,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::calendars::CalendarEvent;
 use crate::id::Id;
+use crate::state::UtcDate;
 
 /// A principal (RFC 9670 §2): a person, group, resource, or room a JMAP
 /// server knows about.
@@ -72,6 +74,69 @@ impl PrincipalQueryFilter {
     }
 }
 
+/// `Principal/getAvailability` (draft-ietf-jmap-calendars §2.2 — spec'd in
+/// the calendars draft even though the object queried is a `Principal`; see
+/// `docs/PRINCIPALS-DESIGN.md` §2.3). A bespoke request/response shape, not
+/// the generic `GetRequest`/`GetResponse` in `methods.rs`, because the
+/// argument set is its own — mirrors how `EmailImportRequest` is bespoke in
+/// `mail.rs`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAvailabilityRequest {
+    pub account_id: Id,
+    pub id: Id,
+    pub utc_start: UtcDate,
+    pub utc_end: UtcDate,
+    #[serde(default)]
+    pub show_details: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_properties: Option<Vec<String>>,
+}
+
+impl GetAvailabilityRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        id: impl Into<Id>,
+        utc_start: impl Into<UtcDate>,
+        utc_end: impl Into<UtcDate>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            id: id.into(),
+            utc_start: utc_start.into(),
+            utc_end: utc_end.into(),
+            show_details: false,
+            event_properties: None,
+        }
+    }
+
+    pub fn show_details(mut self) -> Self {
+        self.show_details = true;
+        self
+    }
+}
+
+/// `Principal/getAvailability` response: the merged `BusyPeriod`s in the
+/// requested window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAvailabilityResponse {
+    pub list: Vec<BusyPeriod>,
+}
+
+/// One busy interval (draft-ietf-jmap-calendars §2.2). `busy_status` is one
+/// of `confirmed`, `tentative`, `unavailable`; `event` is populated only
+/// when the request asked for `showDetails` and the caller may see it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusyPeriod {
+    pub utc_start: UtcDate,
+    pub utc_end: UtcDate,
+    pub busy_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<CalendarEvent>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +180,75 @@ mod tests {
 
         let json = serde_json::to_value(&principal).unwrap();
         assert_eq!(json["somethingFuture"], 42);
+    }
+
+    #[test]
+    fn get_availability_request_round_trips_with_camel_case_arguments() {
+        let request = GetAvailabilityRequest::new(
+            Id::new("A1"),
+            Id::new("P1"),
+            UtcDate::new("2026-09-01T00:00:00Z"),
+            UtcDate::new("2026-09-02T00:00:00Z"),
+        )
+        .show_details();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["accountId"], "A1");
+        assert_eq!(json["id"], "P1");
+        assert_eq!(json["utcStart"], "2026-09-01T00:00:00Z");
+        assert_eq!(json["utcEnd"], "2026-09-02T00:00:00Z");
+        assert_eq!(json["showDetails"], true);
+        assert!(json.get("eventProperties").is_none());
+
+        let round_tripped: GetAvailabilityRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped, request);
+    }
+
+    #[test]
+    fn busy_period_round_trips_with_and_without_an_event() {
+        let without_event = BusyPeriod {
+            utc_start: UtcDate::new("2026-09-01T13:00:00Z"),
+            utc_end: UtcDate::new("2026-09-01T14:00:00Z"),
+            busy_status: "confirmed".to_owned(),
+            event: None,
+        };
+        let json = serde_json::to_value(&without_event).unwrap();
+        assert!(json.get("event").is_none());
+        assert_eq!(
+            serde_json::from_value::<BusyPeriod>(json).unwrap(),
+            without_event
+        );
+
+        let with_event = BusyPeriod {
+            event: Some(CalendarEvent {
+                title: Some("Dentist".to_owned()),
+                ..CalendarEvent::default()
+            }),
+            ..without_event
+        };
+        let json = serde_json::to_value(&with_event).unwrap();
+        assert_eq!(json["event"]["title"], "Dentist");
+        assert_eq!(
+            serde_json::from_value::<BusyPeriod>(json).unwrap(),
+            with_event
+        );
+    }
+
+    #[test]
+    fn get_availability_response_round_trips_a_list_of_busy_periods() {
+        let response = GetAvailabilityResponse {
+            list: vec![BusyPeriod {
+                utc_start: UtcDate::new("2026-09-01T13:00:00Z"),
+                utc_end: UtcDate::new("2026-09-01T14:00:00Z"),
+                busy_status: "tentative".to_owned(),
+                event: None,
+            }],
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["list"][0]["busyStatus"], "tentative");
+        assert_eq!(
+            serde_json::from_value::<GetAvailabilityResponse>(json).unwrap(),
+            response
+        );
     }
 }

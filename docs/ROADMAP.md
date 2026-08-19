@@ -538,6 +538,46 @@ in design §4–§6; the ordered increments:
    `Principal/query` (design §4.2–4.4). That vfunc is **L / escalation-worthy**
    (unsafe FFI, EDS-only testing); everything above it is ordinary additive work.
    **Build and test against the mock — it is fully headless-testable that way.**
+   - **PARTIAL 2026-08-19 (proto/client/mock slice DONE, vfunc still open)** —
+     landed exactly the non-FFI half: `jmap-proto::principals` gained
+     `GetAvailabilityRequest`/`GetAvailabilityResponse`/`BusyPeriod` (bespoke
+     shapes per design §4.1, `principals` feature now pulls in `calendars` for
+     `BusyPeriod.event: Option<CalendarEvent>`); `jmap-client::get_availability
+     (account_id, principal_id, utc_start, utc_end, show_details)` naming both
+     `CAPABILITY_PRINCIPALS` and `CAPABILITY_CALENDARS` in its `using` set;
+     `jmap-mock`'s `Principal/getAvailability` handler computes `BusyPeriod`s
+     from the account's seeded `CalendarEvent`s — skips `cancelled` events and
+     ones explicitly marked `freeBusyStatus: "free"` (RFC 8984 §4.4.2 defaults
+     unset to busy), returns `notFound` when the principal's per-principal
+     `urn:ietf:params:jmap:calendars` capability says `mayGetAvailability:
+     false` (absent the capability, allowed), and includes the full event only
+     when `showDetails` is true (`eventProperties` projection not implemented —
+     no test needs it yet). `busyStatus` is `tentative` when the source event's
+     `status` is, else `confirmed`; the draft's third value, `unavailable`, has
+     no source concept in this crate's `CalendarEvent` and is not produced.
+     TDD'd: proto round-trip tests in `principals.rs`; three new
+     `jmap-client/tests/principals.rs` cases (in-window busy periods sorted by
+     start with an out-of-window and an explicitly-free event both excluded,
+     `showDetails` including the event, and the denied-principal `notFound`);
+     mock-side unit tests for the small duration-to-end helper. **Deliberate
+     scope limits, both left open and documented in place, not silently
+     dropped:** (a) the draft's other named error, `tooLarge` (window too
+     wide) — no clean way to check window width without the calendar-date
+     arithmetic `UtcDate`'s own doc says this crate avoids, and no test needs
+     it yet; (b) computing a `BusyPeriod`'s end from the event's `duration`
+     is a same-day, second-of-day-only helper (`jmap-mock/src/
+     principals.rs::busy_end`) — no month/leap-year/midnight-crossing
+     arithmetic, consistent with `UtcDate`'s "this crate never does date
+     arithmetic" stance; a duration it can't parse or that would cross
+     midnight falls back to a zero-length period rather than guessing. Full
+     gate green: `cargo fmt --check`; `cargo clippy --all-targets --locked --
+     -D warnings` (default-members) and the seven-crate EDS-gated clippy both
+     clean; `cargo test --locked` and the seven-crate `cargo test` both green,
+     every `test result: ok`, 0 failed. **Still open, and the last piece of
+     Path A:** the `ECalBackend get_free_busy_sync` vfunc + `BusyPeriod→
+     VFREEBUSY` marshaller — FFI, unsafe, EDS-only testing, escalation-worthy
+     as already flagged, left for a session that wants to take that on
+     deliberately (or an escalation to a stronger model).
 
 **OPERATOR CONFIRMATION (you-task, like the OAuth Fastmail test).** The runner
 cannot reach Stalwart (MAINTAINER DECISIONS #3), so the design's "half-day probe:
