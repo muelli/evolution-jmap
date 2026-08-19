@@ -25,8 +25,11 @@
 
 use std::ffi::CStr;
 
-use eds_sys::{E_SOURCE_CREDENTIAL_PASSWORD, ENamedParameters, e_named_parameters_get};
-use glib_sys::{GSList, g_strdup, gchar};
+use eds_sys::{
+    E_SOURCE_CREDENTIAL_PASSWORD, ENamedParameters, ESource, e_named_parameters_get,
+    e_source_get_extension, e_source_has_extension,
+};
+use glib_sys::{GFALSE, GSList, g_strdup, gchar};
 
 use crate::error::cstring_lossy;
 
@@ -93,6 +96,33 @@ pub unsafe fn dup_string(value: &str) -> *mut gchar {
     let text = cstring_lossy(value);
     // SAFETY: `text` is NUL-terminated and valid for the call.
     unsafe { g_strdup(text.as_ptr()) }
+}
+
+/// Reads `source`'s extension named `name`, without creating it if absent.
+///
+/// `e_source_get_extension` *creates* the extension it cannot find, which is
+/// the wrong answer everywhere a source is only being read — a `.source`
+/// keyfile the caller does not own, or an account's own file that must not
+/// gain a group merely because something looked at it. This collapses the
+/// `e_source_has_extension` guard and the fetch it guards to one call,
+/// wherever the pointer needs no further validation than "does the caller's
+/// own name find it".
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` that outlives the call, and the
+/// extension `name` names, once registered, must be of type `T` — the same
+/// contract a bare `.cast::<T>()` on `e_source_get_extension`'s result
+/// already carries.
+pub unsafe fn extension_if_present<T>(source: *mut ESource, name: &CStr) -> Option<*mut T> {
+    // SAFETY: `source` is valid by the caller's contract, and `name` is
+    // NUL-terminated by its own type.
+    if unsafe { e_source_has_extension(source, name.as_ptr()) } == GFALSE {
+        return None;
+    }
+    // SAFETY: the extension is present, so this returns the source's own,
+    // which it owns and which outlives the call, by the caller's contract.
+    Some(unsafe { e_source_get_extension(source, name.as_ptr()).cast::<T>() })
 }
 
 /// The password EDS fetched from libsecret, if it has one yet.

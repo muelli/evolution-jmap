@@ -66,15 +66,14 @@ use std::ptr;
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, ESource, ESourceAuthentication,
     e_oauth2_services_is_oauth2_alias_static, e_source_authentication_get_method,
-    e_source_authentication_get_type, e_source_get_extension,
-    e_source_get_oauth2_access_token_sync, e_source_has_extension,
+    e_source_authentication_get_type, e_source_get_oauth2_access_token_sync,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, g_error_free, g_free};
 
 use crate::connect::ConnectError;
 use crate::i18n::translate;
-use crate::marshal::read_string;
+use crate::marshal::{extension_if_present, read_string};
 
 /// The generic spelling of "this source authenticates with OAuth 2.0", as
 /// opposed to the name of one particular service.
@@ -129,20 +128,16 @@ pub unsafe fn source_uses_oauth2(source: *mut ESource) -> bool {
     // else's object.
     // SAFETY: a valid source by this function's contract, and a header
     // constant for the name.
-    if unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }
-        == GFALSE
-    {
+    let Some(auth) = (unsafe {
+        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
+    }) else {
         return false;
-    }
-
-    // SAFETY: as above; the extension exists, is owned by the source, and the
-    // string the getter answers with is owned by the extension and outlives
-    // this call.
-    let method = unsafe {
-        let auth = e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
-            .cast::<ESourceAuthentication>();
-        read_string(e_source_authentication_get_method(auth))
     };
+
+    // SAFETY: the extension exists, is owned by the source, and the string
+    // the getter answers with is owned by the extension and outlives this
+    // call.
+    let method = unsafe { read_string(e_source_authentication_get_method(auth)) };
 
     method_is_oauth2(method.as_deref())
 }
