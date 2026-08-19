@@ -1,4 +1,5 @@
 /rust/target/
+/rust/mutants.out/
 /build/
 
 # dpkg-buildpackage / debhelper build products (debian/rules, Track C3)
