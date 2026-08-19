@@ -26,4 +26,5 @@ $SUDO apt-get install -y --no-install-recommends \
     libedata-book1.2-dev \
     libecal2.0-dev \
     libedata-cal2.0-dev \
-    evolution-dev
+    evolution-dev \
+    lintian
