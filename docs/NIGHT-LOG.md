@@ -35220,3 +35220,39 @@ password path + `config_lookup.rs::probe_host`, and a `GResolver`-backed
 by the prior session — not attempted here since this session found a
 higher-value, lower-risk item (a genuinely unblocked, pure-verification M10
 close-out) instead.
+
+## 2026-08-19 (claim) — Claiming Track D1: `AddressBook/set` + `Calendar/set` create/destroy (protocol/client/mock layer only)
+
+Fresh survey: M1–M10 are all `COMPLETE` in `docs/MILESTONES.md`. M7's setup UI
+and the real-server-readiness items in ROADMAP's CURRENT PRIORITY are done or
+maintainer-deferred (OAuth2 issuer check — do not re-touch, see MAINTAINER
+DECISIONS). The SRV-autodiscovery thread's remaining half is real
+`unsafe`/FFI (`g_resolver_lookup_service`, `GList`/`GSrvTarget` ownership) with
+zero observable behaviour until that FFI lands, already flagged
+escalation-worthy by the prior session — not reattempted here. Per ROADMAP's
+own "Lead order" note, with both remaining CURRENT PRIORITY items landed, the
+Claude lane leads Round 2 with **Track D** (EDS parity).
+
+Claiming **D1 — create/delete a calendar and an address book**, protocol/client/
+mock half only. `AddressBook`/`Calendar` are plain data types with no
+hierarchy, and `jmap-proto`'s generic `SetRequest<T>`/`SetResponse<T>` plus
+`jmap-mock`'s `simple_set` helper already do everything `ContactCard/set` and
+`CalendarEvent/set` need — the same machinery covers `AddressBook/set` and
+`Calendar/set` with no protocol changes, mirroring `contact_card_set`/
+`calendar_event_set`'s validation shape (server-set `id` rejected on create,
+`name` required non-empty). Add `Client::address_book_create`/
+`address_book_destroy` and `Client::calendar_create`/`calendar_destroy`,
+mirroring `contact_create`/`contact_destroy` and `event_create`/
+`event_destroy` exactly. TDD against `jmap-mock`, in the existing
+`jmap-client/tests/contacts.rs` and `tests/calendars.rs`.
+
+**Explicitly out of scope for this increment** (left for a follow-up, and not
+claimed as done): wiring EDS's `create_resource_sync`/`delete_resource_sync`
+vfuncs on `ECollectionBackendClass`
+(`jmap-backend-collection/src/backend.rs:110`, `tests/backend.rs:340`) to call
+these new client methods and mint/remove the child `ESource` — that is
+GObject-vtable FFI work of the same kind as `child_added`'s, worth doing
+carefully in its own session rather than folded into a "just add the wire
+methods" increment. This session lands the half that is pure, safe,
+TDD-able Rust with no unsafe/FFI surface, so the FFI half has something
+correct to call into.
