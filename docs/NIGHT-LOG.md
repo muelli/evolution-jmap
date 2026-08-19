@@ -34992,3 +34992,54 @@ scope and behaviour-preservation notes are in
 `url.rs`, `oauth.rs`, and `server.rs` green is the acceptance bar; the
 `+`↔space handling in `parse_form_body` stays hand-written (form-specific,
 not RFC 3986).
+
+## 2026-08-19 — Delivered: percent codec unified onto the `percent-encoding` crate
+
+- **`rust/Cargo.toml`**: added `percent-encoding = "2"` to
+  `[workspace.dependencies]`; it was already at v2.3.2 in `Cargo.lock`
+  (transitively via `ureq`), so promoting it to a direct dependency of
+  `jmap-client` and `jmap-mock` added **zero new packages** to the lock file
+  (`git diff rust/Cargo.lock` is two one-line additions, both just the new
+  edge in each crate's own dependency list).
+- **`jmap-client/src/url.rs`**: `encode_template_value` now calls
+  `percent_encoding::utf8_percent_encode(value, UNRESERVED)`, where
+  `UNRESERVED` is `NON_ALPHANUMERIC.remove('-').remove('.').remove('_')
+  .remove('~')` — RFC 3986 §2.3's set expressed as what to escape. `hex_digit`
+  is gone. `oauth.rs::form_body` needed no change: it already calls
+  `encode_template_value` by name, whose signature is unchanged.
+- **`jmap-mock/src/server.rs`**: `percent_decode` now calls
+  `percent_encoding::percent_decode_str(segment).decode_utf8_lossy()`.
+  `hex_value` is gone. `path_segments` and `parse_form_body` needed no
+  change — both already call `percent_decode` by name; `parse_form_body`'s
+  `+`→space handling stayed hand-written before the call, as planned (it is
+  form-media-type convention, not RFC 3986 percent-coding).
+- Verified `percent_decode_str`'s leniency on a malformed `%XX` matches the
+  hand-rolled behaviour before trusting it: read the crate's own
+  `PercentDecode::next` (`after_percent_sign` returns `None` on a bad or
+  truncated escape, and `.unwrap_or(byte)` keeps the literal `%` without
+  consuming the following bytes) — the same "keep it verbatim, don't reject"
+  contract `server.rs`'s tests already assert
+  (`percent_decode("a%zz") == "a%zz"`, `percent_decode("%2") == "%2"`, etc.),
+  so no test needed changing to accommodate the swap.
+- No test edited. `cargo test --locked` (default-members): all suites green,
+  0 failures — including every existing `url.rs`, `oauth.rs`, and `server.rs`
+  test, unchanged. `cargo fmt --check` clean. `cargo clippy --all-targets
+  --locked -- -D warnings` (default-members) and `cargo clippy -p
+  evolution-jmap-client --all-targets --locked --features live-server --
+  -D warnings` both clean. `cargo deny`/`reuse lint` unavailable on this VM as
+  usual; no new source files, so no new SPDX headers needed.
+- Net: ~80 fewer hand-rolled lines across the two crates, one path each
+  crate's percent-coding runs through now maintained upstream rather than
+  by this project, per `docs/EXTERNALISATION-AUDIT.md` §1's "WORTH IT"
+  verdict. `docs/ROADMAP.md` priority item 4 is marked DONE.
+- Hit the VM's disk-full issue mid-session (`/` at 100%, linker `Bus error`
+  crashes on several test binaries) — `rust/target/debug` had grown to 24G;
+  `cargo clean --profile dev` recovered 24.2GiB and the same `cargo test`
+  run then passed cleanly. Not a code issue; noting it since it looked like
+  a build failure at first.
+
+Real-server readiness's remaining named items are unchanged (maintainer-gated
+OAuth2 issuer mismatch, EDS 3.60+ mapping decisions). ROADMAP's "Lead order"
+note said the Claude lane leads Round 2 once M10's 3 tests and this win both
+land — M10 is still open (needs a CI dispatch this runner cannot trigger), so
+Round 2 is not yet unlocked by this session's work alone.

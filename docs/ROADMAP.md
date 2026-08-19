@@ -68,17 +68,17 @@ they close, prioritise in this order:
      relax the issuer match to make it pass — it is the mix-up-attack defence, a
      deliberate maintainer call, not a bug. Do not re-surface it as a blocker.
 3. Then **M9** (functional + GUI-smoke CI) and **M10** (EDS version matrix).
-4. **Maintainer-directed externalisation quick win — CLAIMABLE NOW (2026-08-19).**
+4. **Maintainer-directed externalisation quick win.**
    The externalisation audit (`docs/EXTERNALISATION-AUDIT.md`) found the codebase
-   already well-externalised; one clean win remains: unify the hand-rolled
-   percent codec onto the `percent-encoding` crate — **already in the tree via
-   `ureq`, so no new dependency**, MIT/Apache-2.0, on the allowlist. Sites:
-   `jmap-client/src/url.rs` (`encode_template_value` + `hex_digit`, also reused by
-   `oauth.rs::form_body`) and `jmap-mock/src/server.rs` (`percent_decode` +
-   `hex_value` + `parse_form_body`). Behaviour-preserving TDD: keep the existing
-   URL-template, OAuth form-body, and mock tests green — mind that form bodies'
-   `+`↔space is form-specific, not RFC 3986 percent-coding. Exact sets are in the
-   audit doc §1. A small, self-contained increment; do it and log it.
+   already well-externalised; one clean win remained: unify the hand-rolled
+   percent codec onto the `percent-encoding` crate. **DONE 2026-08-19** —
+   `jmap-client/src/url.rs`'s `encode_template_value`/`hex_digit` and
+   `jmap-mock/src/server.rs`'s `percent_decode`/`hex_value` now delegate to
+   `percent_encoding::utf8_percent_encode`/`percent_decode_str`, promoted from a
+   transitive (`ureq`) to a direct dependency of both crates — no new package in
+   `Cargo.lock`. `hex_digit`/`hex_value` are gone; `parse_form_body`'s `+`↔space
+   handling stayed hand-written (form-specific, not RFC 3986). Every existing
+   `url.rs`/`oauth.rs`/`server.rs` test stayed green, unmodified.
 5. **JMAP SRV autodiscovery — CLAIMABLE NOW (operator-found 2026-08-19).**
    Operator tested a real `muelli@fastmail.com` account through real Evolution:
    the password path fails with **HTTP 404**. Root cause (confirmed from the
