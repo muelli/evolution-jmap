@@ -36471,6 +36471,49 @@ This was the last open item on Pattern A and the first item on the audit's
 own prioritized follow-up list — both its fixes (test-only gating, then this
 shared helper) are now done. `docs/UNSAFE-AUDIT.md` updated accordingly.
 
+## 2026-08-19 (claim) — Claiming Track A4: proptest fuzzing of `jmap-proto` deserialization (untrusted-server boundary)
+
+Fresh survey: all milestones COMPLETE (`docs/MILESTONES.md`); CURRENT
+PRIORITY's one open thread (SRV autodiscovery) is down to the
+`g_resolver_lookup_service()`-backed real `Resolver` (FFI, standing
+escalation candidate). Round 2's lead-order Track D's one open item (D1's
+EDS-vtable wiring) is the same GObject-vtable-FFI category. Track E is
+NEEDS-DECISION. UNSAFE-AUDIT (Track A6) is down to Pattern C
+(refcount-reasoning, escalation-worthy) and Pattern E (explicitly "fold
+into other work, not its own increment") — the last four sessions' thread
+is exhausted of Sonnet-sized items. So, per this session's brief ("if the
+only thing left is edge-case polish, switch to priority work" — and here
+even the backlog's easy items are used up), moving to a fresh Round 2
+Track A item: **A4, malicious-input hardening of the untrusted-server
+boundary** — CLAIMABLE, `[claude]` lane, unclaimed (grepped `docs/
+NIGHT-LOG.md` for "mutation"/"proptest"/"malicious-input": no prior A2/A4/A5
+session; `proptest`/`arbitrary` are not yet a dependency anywhere in
+`rust/Cargo.lock`). Unlike A2 (`cargo-mutants` on `jmap-proto`/
+`evolution-jmap-client`, a rebuild-per-mutant loop flagged in an earlier
+session as expensive on this VM's disk) this needs no extra tooling — just
+`proptest`, stable-friendly and additive.
+
+**Scoping this increment to one half of A4's stated scope:** a `proptest`
+harness in `jmap-proto` feeding arbitrary/hostile JSON into `Session`,
+`Request`, and `Response` deserialization (the three envelope types a
+malicious or buggy server response has to pass through before this crate's
+typed surface sees anything), asserting no panic — `Ok`/`Err` are both fine,
+a panic is not. Manual read of the deserialization paths first (`id.rs`'s
+`Id` is a transparent `String` newtype; `request.rs`'s `Invocation` hand-rolls
+`Deserialize` via a `(String, Value, String)` tuple, which is serde's own
+length-checked tuple machinery, not custom indexing) found no obvious panic
+site, so this is expected to be a regression net rather than a bug hunt —
+consistent with A3's own "fix any panic found" wording allowing for none.
+Left for a follow-up, not attempted here: the second half of A4 (hostile
+`apiUrl`/redirect targets into `jmap-client`'s `transport.rs` /
+`url::rebase_origin`) — a manual read of `rebase_origin` during scoping
+found every `str` slice index it uses comes from `str::find`, which only
+ever returns valid char-boundary offsets, so it looks panic-safe by
+inspection already; worth a proptest harness of its own rather than folding
+it into this crate's increment.
+
+Claiming this increment now.
+
 Hit the standing disk-fills-from-cargo-target wall mid-session: the
 seven-crate direct `cargo test` failed with a linker `Bus error` (SIGBUS,
 signal 7) rather than the usual "No space left on device" message — same
