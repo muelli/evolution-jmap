@@ -79,6 +79,39 @@ they close, prioritise in this order:
    URL-template, OAuth form-body, and mock tests green — mind that form bodies'
    `+`↔space is form-specific, not RFC 3986 percent-coding. Exact sets are in the
    audit doc §1. A small, self-contained increment; do it and log it.
+5. **JMAP SRV autodiscovery — CLAIMABLE NOW (operator-found 2026-08-19).**
+   Operator tested a real `muelli@fastmail.com` account through real Evolution:
+   the password path fails with **HTTP 404**. Root cause (confirmed from the
+   source and DNS): `client.rs:135` hardcodes session discovery to
+   `https://{domain}/.well-known/jmap` with `{domain}` = the email domain
+   (`fastmail.com`), but Fastmail serves JMAP at `api.fastmail.com`, published
+   the RFC 8620 §2.2 way via a SRV record — the operator resolved
+   `_jmap._tcp.fastmail.com` from the VM and got `0 1 443 api.fastmail.com.`,
+   while `https://fastmail.com/.well-known/jmap` returns 404. The transport
+   already follows redirects (incl. to `/jmap/session`), so the *only* missing
+   step is the SRV lookup.
+   **Do:** implement RFC 8620 §2.2 autodiscovery — before the bare-domain
+   `.well-known/jmap`, look up `_jmap._tcp.{domain}`; if a target is returned,
+   build the session URL from `https://{target-host}[:port]/.well-known/jmap`;
+   fall back to today's bare-domain URL when there is no SRV record (preserves
+   the Stalwart/self-hosted path and every current test).
+   **Design (pre-decided, to keep `jmap-client` dependency-lean — do NOT add a
+   Rust DNS crate to it):** add a `Resolver` trait seam to the client; the pure
+   crate's default resolver does no SRV (today's behaviour), and the EDS
+   integration supplies a real one backed by GIO's `g_resolver_lookup_service()`
+   (GResolver does SRV natively — no new dependency; needs a small `eds-sys`/glib
+   binding). **TDD:** red test first in `jmap-client/tests/` — `connect("example.com")`
+   with an injected fake resolver returning `_jmap._tcp.example.com → api.example.com:443`
+   must request the session from `api.example.com`, asserted via the `Transport`
+   fake / `jmap-mock`; plus a no-SRV test proving the bare-domain fallback is
+   unchanged. **Cannot** be verified against Fastmail from the runner (no creds;
+   Fastmail also needs an app-password/API token, not the login password — a
+   separate 401 concern, not this 404); the operator confirms end-to-end in the
+   VM. Reasonable to escalate if the `Resolver` seam or the GResolver binding
+   proves gnarly. (The revise-path setup-UI prefill bug the same operator session
+   found is already FIXED and operator-verified in `1afebc1`; the OAuth-2.0
+   "can't be set up" the operator saw is the intended autodiscovery-only message
+   from decision #1 below — not a bug, do not touch it.)
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
