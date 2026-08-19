@@ -170,24 +170,35 @@ tracks follow; the maintainer may reorder anytime.
   `jmap-collection-sync/src/child_source.rs`; write-back rides on D1's
   `Calendar/set`.
 
-### Track E — Sharing + scheduling (NEEDS-DECISION — one capability unlocks both)
-"See another party's free/busy and pick a slot" AND "share a calendar / address
-book / mailbox" are the **same** JMAP capability: `urn:ietf:params:jmap:principals`
-(**RFC 9670**, JMAP Sharing / Principals) — it defines `Principal/getAvailability`
-(free/busy → slot picking) and the `shareWith`/`myRights` ACL surface, and
-Stalwart implements it. Today we advertise/consume none of it
-(`jmap-proto/src/session.rs:14-18`); server-sent `myRights` lands unread in the
-serde `extra` bag. Sizable: proto models, client methods, mock support, an
-availability hook, and mapping ACLs onto Evolution's per-source
-read-only/permission flags (replacing the account-wide `read_only` heuristic in
-`jmap-collection-sync/src/children.rs:94`). **DECISION (maintainer, 2026-08-19):
-SPIKE FIRST.** Before any code, `[claude]` CLAIMABLE: produce
-`docs/PRINCIPALS-DESIGN.md` — scope RFC 9670 against our
-`jmap-proto`/`jmap-client`/`jmap-mock` and against what Stalwart exposes, with an
-effort estimate and recommended phasing (free/busy-for-slot-picking first vs.
-`shareWith`/`myRights` ACLs first). Do NOT implement until the maintainer
-approves the doc. It remains the highest-leverage single addition — it answers
-two asks (sharing + scheduling) at once.
+### Track E — Sharing + scheduling (SPIKE DONE → NEEDS-DECISION on the doc)
+Design spike **complete**: see `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). It
+corrected two premises after checking datatracker — the earlier framing here was
+wrong:
+- **Free/busy slot-picking is NOT in RFC 9670.** `Principal/getAvailability`
+  lives in the **JMAP-for-Calendars draft** (this repo already pins draft -27);
+  RFC 9670 supplies the shared `Principal` vocabulary + capability URNs
+  (`urn:ietf:params:jmap:principals`, `…:principals:owner`) that the availability
+  and sharing methods both build on.
+- **Mail has permissions but not sharing.** `Mailbox` carries `myRights`
+  (RFC 8621) but there is **no standard `Mailbox.shareWith`** — a *mailbox* cannot
+  be shared under current specs, only its rights read. Calendar/AddressBook
+  `shareWith` live in their respective drafts.
+
+Today we advertise/consume none of it (`jmap-proto/src/session.rs:14-18`);
+server-sent `myRights` lands unread in the serde `extra` bag, and read-only is an
+account-wide heuristic (`jmap-collection-sync/src/children.rs:93`).
+**Recommended plan (from the doc):** a small shared "Principal floor" (proto type
++ two capability constants + client/mock support), then **Path A (free/busy
+availability) first** — it answers the scheduling ask soonest, is
+read-only/low-blast-radius, and its very first step is a half-day Stalwart probe
+to confirm the server actually answers `getAvailability` before committing to the
+(unsafe-FFI, EDS-only) `ECalBackend` free/busy vfunc. Rough effort: **~2.5–3.5
+weeks** for floor + Path A (scheduling); **~+1 week** for Path B (per-source
+`myRights` correctness, mostly published-RFC surface, replaces the read-only
+heuristic); write-side `shareWith`/`ShareNotification` deferred to a later phase
+(least spec-stable, only destructive surface). OAuth (M7) does not block it.
+**DECISION (maintainer): approve the doc's plan to start Path A, or adjust — no
+implementation until then.**
 
 ### Not doing (protocol-gated)
 - **Tasks (VTODO) / Memos (VJOURNAL).** BLOCKED upstream: draft-ietf-jmap-calendars
